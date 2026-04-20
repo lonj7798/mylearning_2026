@@ -1,0 +1,20 @@
+# Constitutional AI: Harmlessness from AI Feedback
+- **Authors:** Yuntao Bai, Saurav Kadavath, Sandipan Kundu, Amanda Askell, Jackson Kernion, Andy Jones, Anna Chen, Anna Goldie, Azalia Mirhoseini, Cameron McKinnon, Carol Chen, Catherine Olsson, Christopher Olah, Danny Hernandez, Dawn Drain, Deep Ganguli, Dustin Li, Eli Tran-Johnson, Ethan Perez, Jamie Kerr, Jared Mueller, Jeffrey Ladish, Joshua Landau, Kamal Ndousse, Kamile Lukosuite, Liane Lovitt, Michael Sellitto, Nelson Elhage, Nicholas Schiefer, Noemi Mercado, Nova DasSarma, Robert Lasenby, Robin Larson, Sam Ringer, Scott Johnston, Shauna Kravec, Sheer El Showk, Stanislav Fort, Tamera Lanham, Timothy Telleen-Lawton, Tom Conerly, Tom Henighan, Tristan Hume, Samuel R. Bowman, Zac Hatfield-Dodds, Ben Mann, Dario Amodei, Nicholas Joseph, Sam McCandlish, Tom Brown, Jared Kaplan
+- **Year:** 2022
+- **URL:** https://arxiv.org/abs/2212.08073
+- **Core Insight:** AI self-critique guided by principles can replace much human feedback; Anthropic's alignment approach.
+- **Guideline:** Define explicit constitutional principles, then use the model itself to critique and revise its outputs (RLAIF). This scales alignment supervision beyond human labeling bottlenecks while maintaining transparency through chain-of-thought reasoning.
+- **Relevant chapters:** Alignment, RLAIF, Safety, Constitutional principles, Self-improvement
+
+## Abstract
+As AI systems become more capable, we would like to enlist their help to supervise other AIs. We experiment with methods for training a harmless AI assistant through self-improvement, without any human labels identifying harmful outputs. The only human oversight is provided through a list of rules or principles, and so we refer to the method as 'Constitutional AI'. The process involves both a supervised learning and a reinforcement learning phase. In the supervised phase we sample from an initial model, then generate self-critiques and revisions, and then finetune the original model on revised responses. In the RL phase, we sample from the finetuned model, use a model to evaluate which of the two samples is better, and then train a preference model from this dataset of AI preferences. We then train with RL using the preference model as the reward signal, i.e. we use 'RL from AI Feedback' (RLAIF). As a result we are able to train a harmless but non-evasive AI assistant that engages with harmful queries by explaining its objections to them. Both the SL and RL methods can leverage chain-of-thought style reasoning to improve the human-judged performance and transparency of AI decision making. These methods make it possible to control AI behavior more precisely and with far fewer human labels.
+
+## Key Contributions
+- Introduced Constitutional AI (CAI): a two-phase method (supervised self-critique + RLAIF) for training harmless AI assistants without human labels on harmful outputs
+- Coined "RLAIF" (Reinforcement Learning from AI Feedback) where AI-generated preference labels replace human preference labels for training the reward model
+- Demonstrated that a model can self-critique and revise its own outputs using explicit constitutional principles, producing improved training data through the SL phase
+- Showed that the resulting models are harmless but not evasive -- they engage with harmful queries by explaining objections rather than refusing entirely
+- Proved that chain-of-thought reasoning during critique improves both performance and transparency, making the alignment process more interpretable
+
+## Why This Paper Matters
+Constitutional AI introduced a scalable alternative to human-only feedback for alignment. By defining explicit principles and using the model's own judgment for supervision, it reduces the human labeling bottleneck that limits RLHF. This is Anthropic's foundational alignment methodology and directly informs how Claude is trained. The RLAIF concept has become widely adopted, and the idea that AI systems can help supervise other AI systems is central to scaling alignment as models become more capable.
