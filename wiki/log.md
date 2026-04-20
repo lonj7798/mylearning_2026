@@ -12,3 +12,11 @@ Newest entries are at the bottom.
 Files updated: index.md, log.md
 New pages: learning-style.md, strengths.md, weaknesses.md, push-tactics.md, session-log.md
 Index rebuilt.
+
+## [2026-04-20] Session #4
+- course: boson-agent | chapter: ch-04 | phase: read
+- session ended: 2026-04-20T06:22:33.335Z
+
+## [2026-04-20] Session #5
+- course: boson-agent | chapter: ch-04 | phase: read
+- session ended: 2026-04-20T06:23:16.072Z
