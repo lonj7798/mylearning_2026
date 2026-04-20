@@ -162,7 +162,7 @@ Three frameworks, one gradient. This convergence is why cross-entropy is the uni
 
 Cross-entropy is **not a metric** in the mathematical sense. It violates all three metric axioms: $H(P, P) = H(P) \neq 0$ in general (non-negativity at identity fails), $H(P, Q) \neq H(Q, P)$ (symmetry fails), and it doesn't satisfy the triangle inequality. It works as a loss function for gradient descent, but interpreting it as a "distance between distributions" is imprecise. KL divergence is closer (it's zero iff $P = Q$) but also asymmetric.
 
-*Source: Eli Bendersky's derivation at eli.thegreenplace.net*
+*Source: Eli Bendersky's derivation ([[bendersky-cross-entropy|blog]]) at eli.thegreenplace.net*
 
 ---
 
@@ -185,7 +185,7 @@ $$\text{PPL}(X) = \exp\left\{-\frac{1}{T}\sum_{t=1}^{T} \log P_\theta(x_t \mid x
 
 **3. Lower perplexity doesn't always mean better downstream performance.** Perplexity measures how well the model predicts the training distribution. But the tasks we care about (reasoning, coding, following instructions) are downstream properties. A model with PPL 10 might outperform a model with PPL 8 on reasoning benchmarks if its training data or architecture better captures compositional structure. Perplexity is necessary but not sufficient.
 
-*Source: Hugging Face Perplexity Documentation*
+*Source: Hugging Face Perplexity Documentation ([[hf-perplexity|blog]])*
 
 ---
 
@@ -233,7 +233,7 @@ This mismatch is called **exposure bias**, and the conventional wisdom is that i
 
 **The conventional view:** "Teacher forcing is fine for training; problems only appear at inference due to exposure bias."
 
-**The deeper problem (Bachmann & Nagarajan, ICML 2024):** Teacher forcing can cause failure **even in-distribution**. On planning tasks, teacher forcing lets the model "cheat" — it can fit surface statistics of the training data (e.g., predicting the next step of a plan by pattern matching) without learning the actual computational procedure that generates the plan. The model achieves low training loss but hasn't learned the intended function.
+**The deeper problem (Bachmann & Nagarajan, ICML 2024 — [[pitfalls-next-token|paper]]):** Teacher forcing can cause failure **even in-distribution**. On planning tasks, teacher forcing lets the model "cheat" — it can fit surface statistics of the training data (e.g., predicting the next step of a plan by pattern matching) without learning the actual computational procedure that generates the plan. The model achieves low training loss but hasn't learned the intended function.
 
 This is not just a theoretical concern. It's directly relevant to why chain-of-thought prompting works: it converts "predict the answer directly" (which may require implicit planning the AR model can't do) into "predict the next reasoning step" (which is more locally predictable).
 
@@ -277,7 +277,7 @@ AR models lack an explicit planning mechanism. They commit to tokens sequentiall
 BERT's bidirectional context is strictly more informative per token than AR's left-only context. But AR models compute loss on 100% of tokens vs ~15% for MLM. At scale, this 6.7× difference in gradient signal per sequence overwhelms the representational advantage. **Guideline:** When choosing an objective for large-scale pre-training, training signal density per FLOP matters more than per-token information access.
 
 ### Insight 2: Low training loss ≠ learned the intended function
-**Paper:** Bachmann & Nagarajan, "The Pitfalls of Next-Token Prediction" (ICML 2024)
+**Paper:** Bachmann & Nagarajan, "The Pitfalls of Next-Token Prediction" ([[pitfalls-next-token|paper]]) (ICML 2024)
 
 Teacher forcing lets models achieve low loss by fitting surface statistics without learning the actual computation that generates the data. This isn't just "exposure bias at inference" — it's a training-time failure where the model finds a shortcut that works on the training distribution but doesn't generalize to the task's actual structure. **Guideline:** When evaluating whether a model has "learned" a capability, low loss is necessary but not sufficient. Probe the model's reasoning process, not just its outputs.
 
@@ -311,9 +311,9 @@ Sequential left-to-right commitment means AR models cannot natively plan ahead. 
 - Radford et al. "Language Models are Unsupervised Multitask Learners" (GPT-2, 2019)
 - Brown et al. "Language Models are Few-Shot Learners" (GPT-3, 2020)
 - Devlin et al. "BERT: Pre-training of Deep Bidirectional Transformers" (2018)
-- Bachmann & Nagarajan "The Pitfalls of Next-Token Prediction" (ICML 2024)
+- [[pitfalls-next-token|Bachmann & Nagarajan "The Pitfalls of Next-Token Prediction" (ICML 2024) — paper]]
 - Schick et al. "Autoregressive LLMs are Computationally Universal" (2024)
 - "Autoregressive vs. Masked Diffusion Language Models: A Controlled Comparison" (arXiv 2603.22075, 2026)
-- Eli Bendersky: "Cross-Entropy and KL Divergence" (eli.thegreenplace.net)
-- Hugging Face: "Perplexity of Fixed-Length Models" (huggingface.co/docs)
+- [[bendersky-cross-entropy|Eli Bendersky: "Cross-Entropy and KL Divergence" (eli.thegreenplace.net) — blog]]
+- [[hf-perplexity|Hugging Face: "Perplexity of Fixed-Length Models" (huggingface.co/docs) — blog]]
 - Sebastian Raschka: "How Does Next-Token Prediction Train an LLM?" (sebastianraschka.com)
