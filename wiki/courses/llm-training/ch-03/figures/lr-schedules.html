@@ -1,0 +1,256 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>LR Schedules — Warmup, Cosine, Inverse-Sqrt, WSD</title>
+<style>
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+         max-width: 920px; margin: 2em auto; padding: 0 1em; color: #222; }
+  h1 { font-size: 1.4em; margin-bottom: 0.2em; }
+  .subtitle { color: #666; margin-top: 0; }
+  .panel { border: 1px solid #ddd; border-radius: 6px; padding: 1em; margin: 1em 0;
+           background: #fafafa; }
+  .controls { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+              gap: 1em; }
+  .control { display: flex; flex-direction: column; }
+  label { font-size: 0.85em; color: #555; margin-bottom: 0.2em; }
+  input[type="range"] { width: 100%; }
+  canvas { background: white; border: 1px solid #ccc; display: block; margin: 1em auto; }
+  .legend { display: flex; gap: 1.5em; justify-content: center; font-size: 0.9em;
+            flex-wrap: wrap; }
+  .swatch { display: inline-block; width: 12px; height: 12px; margin-right: 4px;
+            vertical-align: middle; border-radius: 2px; }
+  .value { font-variant-numeric: tabular-nums; color: #333; font-weight: 600; }
+  .note { font-size: 0.88em; color: #555; line-height: 1.5; }
+  code { background: #eef; padding: 1px 4px; border-radius: 3px; font-size: 0.9em; }
+  .yaxis-toggle { text-align: center; font-size: 0.85em; color: #555; }
+</style>
+</head>
+<body>
+
+<h1>LR Schedules — Warmup, Cosine, Inverse-Sqrt, WSD</h1>
+<p class="subtitle">
+  Four modern learning-rate schedules plotted over <span class="value" id="totalLabel">50000</span>
+  steps at a peak LR of <span class="value" id="peakLabel">3.0e-4</span>.
+  End of warmup marked by the dashed vertical line.
+</p>
+
+<div class="panel">
+  <div class="controls">
+    <div class="control">
+      <label>Total steps T</label>
+      <input type="range" id="total" min="1000" max="500000" step="1000" value="50000">
+      <span class="value" id="totalValue">50000</span>
+    </div>
+    <div class="control">
+      <label>Peak LR (log scale)</label>
+      <input type="range" id="peakLog" min="-5" max="-3" step="0.05" value="-3.523">
+      <span class="value" id="peakValue">3.0e-4</span>
+    </div>
+    <div class="control">
+      <label>Warmup fraction</label>
+      <input type="range" id="warmupFrac" min="0" max="0.10" step="0.002" value="0.02">
+      <span class="value"><span id="warmupFracLabel">2.0</span>%</span>
+    </div>
+    <div class="control">
+      <label>Min LR ratio (of peak)</label>
+      <input type="range" id="minRatio" min="0" max="0.3" step="0.01" value="0.10">
+      <span class="value"><span id="minRatioLabel">0.10</span></span>
+    </div>
+    <div class="control">
+      <label>WSD decay fraction</label>
+      <input type="range" id="decayFrac" min="0.05" max="0.30" step="0.01" value="0.15">
+      <span class="value"><span id="decayFracLabel">15</span>%</span>
+    </div>
+  </div>
+</div>
+
+<canvas id="plot" width="880" height="400"></canvas>
+
+<div class="legend">
+  <span><span class="swatch" style="background:#1976d2"></span>Warmup + Cosine</span>
+  <span><span class="swatch" style="background:#d32f2f"></span>Warmup + Inverse-sqrt</span>
+  <span><span class="swatch" style="background:#388e3c"></span>WSD (warmup-stable-decay)</span>
+  <span><span class="swatch" style="background:#f57c00"></span>Constant after warmup</span>
+  <span><span class="swatch" style="background:#aaa"></span>end of warmup</span>
+</div>
+
+<div class="panel note">
+  <strong>Why the horizon matters (Chinchilla Figure A1).</strong>
+  Cosine has a fixed endpoint: <code>lr(T) = min_lr</code>. If you stop early, the LR never really
+  decayed — your final optimization still has high step size and settles in a sharper-than-ideal
+  minimum. If you train <em>past</em> the cosine horizon, LR is pinned at <code>min_lr</code> and
+  you waste compute. Hoffmann et al. measured the penalty at roughly 0.3–1% validation perplexity
+  for a 2× horizon mismatch. <strong>Always size cosine to the token budget you will actually
+  complete.</strong>
+  <br><br>
+  <strong>Why WSD is checkpoint-able.</strong>
+  The stable phase is a flat line at <code>peak_lr</code> — every point on it is statistically
+  equivalent as a training state. You can save a checkpoint at, say, 60% of T, then fork a
+  short decay phase from it to produce a deployable model <em>at that token count</em>, while
+  the main trunk keeps going. DeepSeek and MiniCPM exploit this to produce many model variants
+  from a single trunk, a trick cosine cannot match because every step of cosine has a different
+  LR. Inverse-sqrt scales naturally with model width via the <code>d_model^(-0.5)</code> factor
+  but loses ~0.3% to cosine on a fixed budget; constant LR after warmup leaves 1–3% on the table
+  versus a proper decay.
+</div>
+
+<script>
+const cvs = document.getElementById('plot');
+const ctx = cvs.getContext('2d');
+
+const d_model = 1024;  // only used for inverse-sqrt absolute scale; we renormalize to peak_lr
+const N_SAMPLES = 600;
+
+function lrCosine(t, warmup, T, peak, minLr) {
+  if (t < warmup) return peak * t / Math.max(1, warmup);
+  const progress = (t - warmup) / Math.max(1, T - warmup);
+  const p = Math.min(1, Math.max(0, progress));
+  return minLr + 0.5 * (peak - minLr) * (1 + Math.cos(Math.PI * p));
+}
+
+function lrInvSqrt(t, warmup, peak) {
+  // Vaswani form: lr ~ min(t^-0.5, t * warmup^-1.5), normalized so peak is reached at t=warmup.
+  if (t < 1) t = 1;
+  const w = Math.max(1, warmup);
+  const raw = Math.min(Math.pow(t, -0.5), t * Math.pow(w, -1.5));
+  const atPeak = Math.pow(w, -0.5);     // value of raw at t=warmup
+  return peak * (raw / atPeak);
+}
+
+function lrWSD(t, warmup, T, peak, minLr, decayFrac) {
+  const decaySteps = Math.max(1, Math.floor(T * decayFrac));
+  const decayStart = T - decaySteps;
+  if (t < warmup) return peak * t / Math.max(1, warmup);
+  if (t < decayStart) return peak;
+  const p = Math.min(1, (t - decayStart) / decaySteps);
+  return peak + (minLr - peak) * p;   // linear decay peak -> minLr
+}
+
+function lrConstant(t, warmup, peak) {
+  if (t < warmup) return peak * t / Math.max(1, warmup);
+  return peak;
+}
+
+function render() {
+  const T = +document.getElementById('total').value;
+  const peakLog = +document.getElementById('peakLog').value;
+  const peak = Math.pow(10, peakLog);
+  const warmupFrac = +document.getElementById('warmupFrac').value;
+  const warmup = Math.max(1, Math.floor(T * warmupFrac));
+  const minRatio = +document.getElementById('minRatio').value;
+  const minLr = peak * minRatio;
+  const decayFrac = +document.getElementById('decayFrac').value;
+
+  document.getElementById('totalValue').textContent = T.toLocaleString();
+  document.getElementById('totalLabel').textContent = T.toLocaleString();
+  document.getElementById('peakValue').textContent = peak.toExponential(1);
+  document.getElementById('peakLabel').textContent = peak.toExponential(1);
+  document.getElementById('warmupFracLabel').textContent = (warmupFrac * 100).toFixed(1);
+  document.getElementById('minRatioLabel').textContent = minRatio.toFixed(2);
+  document.getElementById('decayFracLabel').textContent = Math.round(decayFrac * 100);
+
+  const schedules = [
+    { name: 'cos',  color: '#1976d2', fn: t => lrCosine(t, warmup, T, peak, minLr) },
+    { name: 'isq',  color: '#d32f2f', fn: t => lrInvSqrt(t, warmup, peak) },
+    { name: 'wsd',  color: '#388e3c', fn: t => lrWSD(t, warmup, T, peak, minLr, decayFrac) },
+    { name: 'con',  color: '#f57c00', fn: t => lrConstant(t, warmup, peak) },
+  ];
+
+  // sample
+  const xs = [];
+  const ys = schedules.map(() => []);
+  for (let i = 0; i < N_SAMPLES; i++) {
+    const t = Math.round((i / (N_SAMPLES - 1)) * T);
+    xs.push(t);
+    schedules.forEach((s, k) => ys[k].push(s.fn(t)));
+  }
+
+  // plot
+  ctx.clearRect(0, 0, cvs.width, cvs.height);
+  const pad = { l: 70, r: 20, t: 20, b: 48 };
+  const W = cvs.width - pad.l - pad.r;
+  const H = cvs.height - pad.t - pad.b;
+
+  const yMax = peak * 1.1;
+  const yMin = 0;
+  const xFor = t => pad.l + (t / T) * W;
+  const yFor = v => pad.t + H - ((v - yMin) / (yMax - yMin)) * H;
+
+  // grid
+  ctx.strokeStyle = '#eee';
+  ctx.lineWidth = 1;
+  for (let i = 0; i <= 5; i++) {
+    const y = pad.t + (H * i) / 5;
+    ctx.beginPath(); ctx.moveTo(pad.l, y); ctx.lineTo(pad.l + W, y); ctx.stroke();
+  }
+
+  // axis labels
+  ctx.fillStyle = '#555';
+  ctx.font = '11px sans-serif';
+  ctx.textAlign = 'right';
+  for (let i = 0; i <= 5; i++) {
+    const v = yMax * (1 - i / 5);
+    const y = pad.t + (H * i) / 5;
+    ctx.fillText(v.toExponential(1), pad.l - 6, y + 4);
+  }
+  ctx.textAlign = 'center';
+  for (let i = 0; i <= 5; i++) {
+    const step = Math.round((i / 5) * T);
+    ctx.fillText(step.toLocaleString(), xFor(step), pad.t + H + 18);
+  }
+  ctx.fillText('step t', pad.l + W / 2, pad.t + H + 38);
+
+  ctx.save();
+  ctx.translate(16, pad.t + H / 2);
+  ctx.rotate(-Math.PI / 2);
+  ctx.fillText('learning rate', 0, 0);
+  ctx.restore();
+
+  // plot schedules
+  schedules.forEach((s, k) => {
+    ctx.strokeStyle = s.color;
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    for (let i = 0; i < N_SAMPLES; i++) {
+      const x = xFor(xs[i]);
+      const y = yFor(Math.min(ys[k][i], yMax));
+      if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+    }
+    ctx.stroke();
+  });
+
+  // end-of-warmup marker
+  ctx.strokeStyle = '#aaa';
+  ctx.setLineDash([4, 4]);
+  ctx.beginPath();
+  ctx.moveTo(xFor(warmup), pad.t);
+  ctx.lineTo(xFor(warmup), pad.t + H);
+  ctx.stroke();
+  ctx.setLineDash([]);
+  ctx.fillStyle = '#666';
+  ctx.textAlign = 'left';
+  ctx.fillText('end of warmup', xFor(warmup) + 4, pad.t + 12);
+
+  // start-of-WSD-decay marker
+  const decayStart = T - Math.floor(T * decayFrac);
+  ctx.strokeStyle = '#c9e4c9';
+  ctx.setLineDash([2, 3]);
+  ctx.beginPath();
+  ctx.moveTo(xFor(decayStart), pad.t);
+  ctx.lineTo(xFor(decayStart), pad.t + H);
+  ctx.stroke();
+  ctx.setLineDash([]);
+  ctx.fillStyle = '#388e3c';
+  ctx.fillText('WSD decay starts', xFor(decayStart) + 4, pad.t + 26);
+}
+
+['total', 'peakLog', 'warmupFrac', 'minRatio', 'decayFrac'].forEach(id => {
+  document.getElementById(id).addEventListener('input', render);
+});
+
+render();
+</script>
+
+</body>
+</html>

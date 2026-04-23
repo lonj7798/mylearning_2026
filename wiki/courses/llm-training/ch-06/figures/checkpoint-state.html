@@ -1,0 +1,257 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Checkpoint State — what must be saved to resume a training run</title>
+<style>
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+         max-width: 1080px; margin: 2em auto; padding: 0 1em; color: #222;
+         background: #fafafa; }
+  h1 { font-size: 1.35em; margin-bottom: 0.2em; }
+  .subtitle { color: #666; margin-top: 0; font-size: 0.95em; }
+  .layout { display: grid; grid-template-columns: 1.2fr 1fr; gap: 1.2em;
+            margin-top: 1.2em; }
+  .panel { border: 1px solid #dcdcdc; border-radius: 6px; background: #fff;
+           padding: 0.9em 1.1em; }
+  h2 { font-size: 1.05em; margin: 0 0 0.6em 0; color: #333;
+       border-bottom: 1px solid #eee; padding-bottom: 0.3em; }
+  .state-list { list-style: none; padding: 0; margin: 0; }
+  .state-item { display: grid; grid-template-columns: 20px 1fr auto; gap: 0.6em;
+                align-items: center; padding: 0.45em 0.3em;
+                border-bottom: 1px dashed #eee; }
+  .state-item:last-child { border-bottom: none; }
+  .state-item input[type="checkbox"] { width: 16px; height: 16px; cursor: pointer; }
+  .state-label { font-weight: 600; color: #222; font-size: 0.95em; }
+  .state-meta  { font-size: 0.78em; color: #777; margin-left: 0.1em; }
+  .chip { display: inline-block; font-size: 0.7em; padding: 1px 6px;
+          border-radius: 10px; background: #eef; color: #335; margin-left: 0.3em;
+          vertical-align: middle; }
+  .chip.global { background: #fde7e7; color: #802020; }
+  .chip.rank   { background: #e6f4ea; color: #1b5e20; }
+  .chip.opt    { background: #fff4e0; color: #7a4a00; }
+  .verdict-row { display: flex; align-items: center; justify-content: space-between;
+                 padding: 0.5em 0.2em; border-bottom: 1px solid #eee; }
+  .verdict-row:last-child { border-bottom: none; }
+  .verdict-name { font-weight: 600; font-size: 0.95em; }
+  .verdict-badge { font-family: 'SF Mono', Menlo, monospace; font-size: 0.85em;
+                   padding: 3px 10px; border-radius: 4px; font-weight: 600; }
+  .ok    { background: #e6f4ea; color: #1b5e20; border: 1px solid #b7dfc2; }
+  .fail  { background: #fde7e7; color: #8b1a1a; border: 1px solid #e9b8b8; }
+  .warn  { background: #fff4e0; color: #7a4a00; border: 1px solid #e6ca93; }
+  .failures { list-style: none; padding: 0; margin: 0.2em 0 0 0; }
+  .failures li { border-left: 3px solid #c03030; background: #fff6f6;
+                 padding: 0.5em 0.7em; margin-bottom: 0.4em;
+                 font-size: 0.85em; line-height: 1.45; border-radius: 3px; }
+  .failures li .f-title { font-weight: 600; color: #8b1a1a; }
+  .empty-state { color: #777; font-size: 0.9em; padding: 0.6em 0; font-style: italic; }
+  .controls { margin-top: 0.6em; font-size: 0.85em; }
+  button { font-size: 0.85em; padding: 4px 10px; margin-right: 0.4em;
+           border: 1px solid #bbb; background: #f4f4f4; border-radius: 4px;
+           cursor: pointer; }
+  button:hover { background: #e8e8e8; }
+  .note { font-size: 0.82em; color: #666; margin-top: 1em; line-height: 1.5; }
+  code { background: #eef; padding: 1px 4px; border-radius: 3px;
+         font-family: 'SF Mono', Menlo, monospace; font-size: 0.85em; }
+</style>
+</head>
+<body>
+
+<h1>Checkpoint State — what must be saved to resume a training run</h1>
+<p class="subtitle">
+  Toggle each component below. The panel on the right updates two live verdicts
+  (<strong>bit-exact resume</strong> / <strong>approximate resume</strong>) and
+  lists the silent-failure modes triggered by every unchecked component.
+</p>
+
+<div class="layout">
+
+  <div class="panel">
+    <h2>Checkpoint contents</h2>
+    <ul class="state-list" id="stateList"></ul>
+    <div class="controls">
+      <button id="btnAll">Check all</button>
+      <button id="btnNone">Clear all</button>
+      <button id="btnWeightsOnly">Weights only (the hobby-scale bug)</button>
+      <button id="btnBitExact">Minimum for bit-exact</button>
+    </div>
+  </div>
+
+  <div>
+    <div class="panel">
+      <h2>Resume verdict</h2>
+      <div class="verdict-row">
+        <span class="verdict-name">Bit-exact resume</span>
+        <span class="verdict-badge" id="verdictBitExact">—</span>
+      </div>
+      <div class="verdict-row">
+        <span class="verdict-name">Approximate resume</span>
+        <span class="verdict-badge" id="verdictApprox">—</span>
+      </div>
+      <div class="verdict-row">
+        <span class="verdict-name">Resume at all (not from scratch)</span>
+        <span class="verdict-badge" id="verdictAtAll">—</span>
+      </div>
+    </div>
+
+    <div class="panel" style="margin-top: 1em;">
+      <h2>Active silent-failure modes</h2>
+      <ul class="failures" id="failureList"></ul>
+    </div>
+  </div>
+
+</div>
+
+<div class="note">
+  Chip legend: <span class="chip global">global</span> identical across ranks
+  &nbsp;·&nbsp; <span class="chip rank">per-rank</span> each rank saves its own
+  &nbsp;·&nbsp; <span class="chip opt">fp16 only</span> not needed under bf16.
+  Source: <code>[[early-stopping-and-checkpointing]]</code>, <code>[[fsdp-sft]]</code>,
+  <code>[[mixed-precision]]</code>, Karpathy's bit-exact-resume rule.
+</div>
+
+<script>
+// --- state definitions ---------------------------------------------------
+const COMPONENTS = [
+  { id: "weights",  label: "Model weights",
+    meta: "bf16, sharded under FSDP", scope: "rank",
+    req_resume: true, req_approx: true, req_exact: true,
+    failure: { title: "No model at all",
+      body: "Without weights the run restarts from random init. Everything downstream is irrelevant." } },
+  { id: "optim_mv", label: "Optimizer 1st and 2nd moments (m, v)",
+    meta: "fp32, sharded", scope: "rank",
+    req_resume: true, req_approx: true, req_exact: true,
+    failure: { title: "Adam moments re-warm → loss spike on resume",
+      body: "Without m and v the adaptive denominator resets; effective LR is wrong for 20–1000 steps depending on β₂. The canonical hobby-scale bug." } },
+  { id: "optim_master", label: "Optimizer master fp32 weights",
+    meta: "fp32, sharded — AdamW state entry", scope: "rank",
+    req_resume: true, req_approx: true, req_exact: true,
+    failure: { title: "Master weights reconstructed from bf16",
+      body: "7 mantissa bits of accumulated progress are lost; silent ~0.1% perplexity drift that compounds at every resume." } },
+  { id: "sched",    label: "LR scheduler state (step counter, phase)",
+    meta: "int + float, global", scope: "global",
+    req_resume: true, req_approx: true, req_exact: true,
+    failure: { title: "Cosine / WSD off-by-one",
+      body: "Loading sched state after the first .step() skips one LR update. Over WSD decay (10–20% of run), this systematically shifts the decay shape." } },
+  { id: "step",     label: "Global step counter",
+    meta: "int, global", scope: "global",
+    req_resume: true, req_approx: true, req_exact: true,
+    failure: { title: "Time-based events fire at wrong wall-time",
+      body: "Eval, save, and decay-phase transitions all key off step; mismatch silently shifts each event." } },
+  { id: "data_iter", label: "Data-iterator position (per rank + global step)",
+    meta: "per-rank iter state + mix pointer", scope: "rank",
+    req_resume: true, req_approx: true, req_exact: true,
+    failure: { title: "Training replays already-seen tokens — silent divergence",
+      body: "The single most dangerous bug. Loss drops ~0.01 for 500 steps after resume (re-seeing), then drifts upward as the model over-memorizes the replayed shard." } },
+  { id: "rng_rank", label: "Per-rank RNG state",
+    meta: "cpu + cuda + python + numpy", scope: "rank",
+    req_resume: false, req_approx: false, req_exact: true,
+    failure: { title: "Resume is non-reproducible (dropout / NEFTune / augmentation draws diverge)",
+      body: "Loss after resume differs by ~1e-4 even with identical weights; Karpathy's bit-exact-resume check fails. Macro-trajectory still sound." } },
+  { id: "scaler",   label: "Loss-scaler state (fp16 only)",
+    meta: "scale factor S + growth counter", scope: "global",
+    req_resume: false, req_approx: true, req_exact: true, fp16_only: true,
+    failure: { title: "Scaler re-warms from 2^15 → 2000 steps of token-efficiency loss",
+      body: "If the run had stabilized at S=2^18, resumed gradients are 8× too small; clip threshold effectively 8× tighter. bf16 runs have no scaler, so this bug does not exist under bf16." } },
+  { id: "grad_hist", label: "Grad-norm / loss history log",
+    meta: "durable log, not reset on resume", scope: "global",
+    req_resume: false, req_approx: false, req_exact: false,
+    failure: { title: "Audit trail broken — cannot diagnose a pre-spike drift",
+      body: "[[olmo-2]]'s spike-mitigation stack depends on persistent pre_clip_grad_norm history. Resetting the log at resume blinds the feedback loop." } },
+];
+
+// --- DOM build ----------------------------------------------------------
+const stateList    = document.getElementById("stateList");
+const failureList  = document.getElementById("failureList");
+const vBitExact    = document.getElementById("verdictBitExact");
+const vApprox      = document.getElementById("verdictApprox");
+const vAtAll       = document.getElementById("verdictAtAll");
+
+COMPONENTS.forEach(c => {
+  const li = document.createElement("li");
+  li.className = "state-item";
+  const chip = c.scope === "global"
+    ? '<span class="chip global">global</span>'
+    : '<span class="chip rank">per-rank</span>';
+  const opt  = c.fp16_only ? '<span class="chip opt">fp16 only</span>' : '';
+  li.innerHTML = `
+    <input type="checkbox" id="cb-${c.id}" checked>
+    <label for="cb-${c.id}">
+      <span class="state-label">${c.label}</span>${chip}${opt}
+      <div class="state-meta">${c.meta}</div>
+    </label>
+  `;
+  stateList.appendChild(li);
+  li.querySelector("input").addEventListener("change", render);
+});
+
+document.getElementById("btnAll").addEventListener("click", () => setAll(true));
+document.getElementById("btnNone").addEventListener("click", () => setAll(false));
+document.getElementById("btnWeightsOnly").addEventListener("click", () => {
+  setAll(false);
+  document.getElementById("cb-weights").checked = true;
+  render();
+});
+document.getElementById("btnBitExact").addEventListener("click", () => {
+  setAll(false);
+  COMPONENTS.filter(c => c.req_exact && !c.fp16_only).forEach(c => {
+    document.getElementById("cb-" + c.id).checked = true;
+  });
+  render();
+});
+
+function setAll(v) {
+  COMPONENTS.forEach(c => { document.getElementById("cb-" + c.id).checked = v; });
+  render();
+}
+
+function checked(id) { return document.getElementById("cb-" + id).checked; }
+
+// --- verdict logic ------------------------------------------------------
+function render() {
+  // Resume-at-all: need weights.
+  const weightsOk = checked("weights");
+
+  // Approximate resume: weights, optim (m,v + master), sched, step, data, (scaler if fp16).
+  const approxNeeded = ["weights", "optim_mv", "optim_master", "sched", "step", "data_iter"];
+  const approxMissing = approxNeeded.filter(id => !checked(id));
+  // Scaler: only required if user has opted in (treat as required in the interactive model —
+  // we reflect the fp16 case, since bf16 has no such checkbox in practice).
+  if (!checked("scaler")) approxMissing.push("scaler");
+
+  // Bit-exact resume: approximate + per-rank RNG.
+  const exactMissing = [...approxMissing];
+  if (!checked("rng_rank")) exactMissing.push("rng_rank");
+
+  // Set badges.
+  setBadge(vAtAll,    weightsOk ? "yes" : "no",
+           weightsOk ? "ok" : "fail");
+  setBadge(vApprox,   approxMissing.length === 0 ? "yes" : "no",
+           approxMissing.length === 0 ? "ok" : "fail");
+  setBadge(vBitExact, exactMissing.length === 0 ? "yes" : "no",
+           exactMissing.length === 0 ? "ok" : "fail");
+
+  // Build failure list.
+  failureList.innerHTML = "";
+  const missing = COMPONENTS.filter(c => !checked(c.id));
+  if (missing.length === 0) {
+    failureList.innerHTML =
+      '<div class="empty-state">All components saved. Resume is bit-exact; the audit trail survives; Karpathy is satisfied.</div>';
+    return;
+  }
+  missing.forEach(c => {
+    const li = document.createElement("li");
+    li.innerHTML = `<span class="f-title">${c.failure.title}</span><br>${c.failure.body}`;
+    failureList.appendChild(li);
+  });
+}
+
+function setBadge(el, text, cls) {
+  el.textContent = text;
+  el.className = "verdict-badge " + cls;
+}
+
+render();
+</script>
+
+</body>
+</html>

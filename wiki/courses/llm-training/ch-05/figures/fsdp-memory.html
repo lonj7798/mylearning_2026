@@ -1,0 +1,243 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>FSDP Memory — Per-GPU Memory Calculator</title>
+<style>
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+         max-width: 1040px; margin: 2em auto; padding: 0 1em; color: #222; }
+  h1 { font-size: 1.4em; margin-bottom: 0.2em; }
+  .subtitle { color: #666; margin-top: 0; }
+  .panel { border: 1px solid #ddd; border-radius: 6px; padding: 1em; margin: 1em 0;
+           background: #fafafa; }
+  .controls { display: grid; grid-template-columns: repeat(3, 1fr); gap: 0.9em 1.2em; }
+  .control { display: flex; flex-direction: column; }
+  label { font-size: 0.82em; color: #555; margin-bottom: 0.2em; }
+  input[type="range"] { width: 100%; }
+  select { padding: 2px 4px; font-size: 0.9em; }
+  .toggle { display: flex; gap: 0.6em; align-items: center; font-size: 0.9em; }
+  .value { font-variant-numeric: tabular-nums; color: #333; font-weight: 600; }
+  table { width: 100%; border-collapse: collapse; margin-top: 0.5em; font-size: 0.92em; }
+  th, td { padding: 6px 10px; text-align: right; border-bottom: 1px solid #eee; }
+  th { background: #f0f0f0; font-weight: 600; color: #333; }
+  th:first-child, td:first-child { text-align: left; color: #555; }
+  tr.total td { font-weight: 700; border-top: 2px solid #999; }
+  tr.fits td { font-weight: 700; }
+  td.ok   { background: #e6f4ea; color: #1e6b33; }
+  td.bad  { background: #fce8e6; color: #b3261e; }
+  .note { font-size: 0.88em; color: #444; line-height: 1.55; }
+  code { background: #eef; padding: 1px 4px; border-radius: 3px; font-size: 0.9em; }
+  .formula { font-family: 'Courier New', monospace; background: #f4f4f4;
+             padding: 0.6em 0.8em; border-radius: 4px; font-size: 0.85em;
+             white-space: pre; overflow-x: auto; }
+</style>
+</head>
+<body>
+
+<h1>FSDP Memory — Per-GPU Memory Calculator</h1>
+<p class="subtitle">
+  Interactive comparison of <strong>DDP</strong>, <strong>ZeRO-2</strong> (SHARD_GRAD_OP),
+  <strong>ZeRO-3 / FSDP FULL_SHARD</strong>, and <strong>HYBRID_SHARD</strong> under the
+  memory formulas from the FSDP paper (Zhao 2023).
+</p>
+
+<div class="panel">
+  <div class="controls">
+    <div class="control">
+      <label>Parameters P (log-scale): <span class="value" id="pLabel">7B</span></label>
+      <input type="range" id="pSlider" min="0" max="300" step="1" value="84">
+    </div>
+    <div class="control">
+      <label>Total GPUs N: <span class="value" id="nLabel">8</span></label>
+      <input type="range" id="nSlider" min="1" max="8" step="1" value="3">
+    </div>
+    <div class="control">
+      <label>GPUs per node (HYBRID): <span class="value" id="gpnLabel">8</span></label>
+      <input type="range" id="gpnSlider" min="0" max="2" step="1" value="2">
+    </div>
+    <div class="control">
+      <label>Parameter dtype</label>
+      <select id="dtype">
+        <option value="2">bf16 (2 B/param)</option>
+        <option value="2">fp16 (2 B/param)</option>
+        <option value="4">fp32 (4 B/param)</option>
+      </select>
+    </div>
+    <div class="control">
+      <label>Optimizer</label>
+      <select id="opt">
+        <option value="12">AdamW (12 B/param, fp32)</option>
+        <option value="3">8-bit AdamW (3 B/param)</option>
+        <option value="0">SGD (0 B/param)</option>
+      </select>
+    </div>
+    <div class="control toggle">
+      <label style="margin:0;">
+        <input type="checkbox" id="ckpt" checked> Activation checkpointing (keep ~20%)
+      </label>
+    </div>
+    <div class="control">
+      <label>Hidden dim: <span class="value" id="hLabel">4096</span></label>
+      <input type="range" id="hSlider" min="1024" max="16384" step="512" value="4096">
+    </div>
+    <div class="control">
+      <label>Layers: <span class="value" id="lLabel">80</span></label>
+      <input type="range" id="lSlider" min="8" max="128" step="2" value="80">
+    </div>
+    <div class="control">
+      <label>Max seq length: <span class="value" id="sLabel">4096</span></label>
+      <input type="range" id="sSlider" min="512" max="32768" step="512" value="4096">
+    </div>
+    <div class="control">
+      <label>Batch per GPU: <span class="value" id="bLabel">1</span></label>
+      <input type="range" id="bSlider" min="1" max="16" step="1" value="1">
+    </div>
+    <div class="control">
+      <label>GPU memory budget (GB): <span class="value" id="budgetLabel">80</span></label>
+      <input type="range" id="budgetSlider" min="24" max="192" step="8" value="80">
+    </div>
+  </div>
+</div>
+
+<div class="panel">
+  <table id="memTable">
+    <thead>
+      <tr><th>Component</th><th>DDP</th><th>ZeRO-2</th><th>ZeRO-3 / FULL</th><th>HYBRID</th></tr>
+    </thead>
+    <tbody>
+      <tr><td>Parameters</td>        <td id="p_ddp"></td><td id="p_z2"></td><td id="p_z3"></td><td id="p_hy"></td></tr>
+      <tr><td>Gradients</td>         <td id="g_ddp"></td><td id="g_z2"></td><td id="g_z3"></td><td id="g_hy"></td></tr>
+      <tr><td>Optimizer state</td>   <td id="o_ddp"></td><td id="o_z2"></td><td id="o_z3"></td><td id="o_hy"></td></tr>
+      <tr><td>Activations</td>       <td id="a_ddp"></td><td id="a_z2"></td><td id="a_z3"></td><td id="a_hy"></td></tr>
+      <tr><td>AllGather temp</td>    <td id="t_ddp"></td><td id="t_z2"></td><td id="t_z3"></td><td id="t_hy"></td></tr>
+      <tr class="total"><td>Total (GB)</td><td id="tot_ddp"></td><td id="tot_z2"></td><td id="tot_z3"></td><td id="tot_hy"></td></tr>
+      <tr class="fits"><td>Fits in budget?</td><td id="fit_ddp"></td><td id="fit_z2"></td><td id="fit_z3"></td><td id="fit_hy"></td></tr>
+    </tbody>
+  </table>
+</div>
+
+<div class="panel note">
+  <strong>Formulas</strong> (from <code>fsdp-sft.md</code>; <code>b</code> = param bytes,
+  <code>o</code> = optimizer bytes/param, <code>N</code> = data-parallel ranks,
+  <code>K</code> = GPUs per node for HYBRID):
+  <div class="formula">DDP           : b·P  + b·P  + o·P                 + activations
+ZeRO-2        : b·P  + b·P/N + o·P/N             + activations
+ZeRO-3 FULL   : b·P/N + b·P/N + o·P/N  + 2·b·P    + activations    (AllGather temp ≈ 2P bytes)
+HYBRID_SHARD  : like FULL with N → K (per-node FULL; replicate across nodes)</div>
+  Activations use the simplified estimate
+  <code>2 · batch · seq · hidden · layers</code> bytes (bf16); with checkpointing we keep
+  ~20% of that.
+</div>
+
+<div class="panel note">
+  <strong>What to notice.</strong>
+  <ul style="margin:0.4em 0 0 1.2em; padding:0;">
+    <li><strong>DDP gives up at ~7B on 80 GB.</strong> 16·7 = 112 GB per rank, independent of
+      <code>N</code>. More GPUs do not help; sharding does.</li>
+    <li><strong>FSDP FULL_SHARD + bf16 + activation-ckpt is the floor at 70B.</strong> The
+      <code>16P/N</code> term collapses with <code>N</code>, but the
+      <code>2P</code> AllGather temp buffer never shrinks — that is the asymptote.</li>
+    <li><strong>HYBRID beats FULL when cross-node bandwidth dominates.</strong> It shards only
+      within a node (small <code>K</code>), so <code>16P/K</code> is larger than <code>16P/N</code>,
+      but the inter-node collective becomes a classic DDP AllReduce instead of per-block
+      AllGather — a throughput win on slow fabric.</li>
+    <li><strong>The AllGather temp caps the savings.</strong> At large <code>P/N</code>, the
+      <code>2P</code> temp term dominates the sharded <code>16P/N</code> term; doubling GPUs
+      past that point is wasted.</li>
+  </ul>
+</div>
+
+<script>
+const $ = id => document.getElementById(id);
+
+// log-scale parameter axis: 1B .. 1T  (index 0..300)
+function pFromSlider(i) {
+  // 10^(9 + i/100)  -> 1e9 at i=0, 1e12 at i=300
+  return Math.pow(10, 9 + i / 100);
+}
+function fmtP(p) {
+  if (p >= 1e12) return (p / 1e12).toFixed(2) + 'T';
+  if (p >= 1e9)  return (p / 1e9 ).toFixed(1) + 'B';
+  if (p >= 1e6)  return (p / 1e6 ).toFixed(0) + 'M';
+  return p.toExponential(1);
+}
+const N_CHOICES   = [2, 4, 8, 16, 32, 64, 128, 256, 512];
+const GPN_CHOICES = [2, 4, 8];
+
+const GB = 1024 ** 3;
+
+function compute() {
+  const P       = pFromSlider(+$('pSlider').value);
+  const N       = N_CHOICES[+$('nSlider').value];
+  const K       = Math.min(GPN_CHOICES[+$('gpnSlider').value], N);
+  const b       = +$('dtype').value;          // bytes/param for weights + grads
+  const o       = +$('opt').value;            // bytes/param for optimizer state
+  const ckpt    = $('ckpt').checked;
+  const H       = +$('hSlider').value;
+  const L       = +$('lSlider').value;
+  const S       = +$('sSlider').value;
+  const B       = +$('bSlider').value;
+  const budget  = +$('budgetSlider').value;
+
+  $('pLabel').textContent      = fmtP(P);
+  $('nLabel').textContent      = N;
+  $('gpnLabel').textContent    = K;
+  $('hLabel').textContent      = H;
+  $('lLabel').textContent      = L;
+  $('sLabel').textContent      = S;
+  $('bLabel').textContent      = B;
+  $('budgetLabel').textContent = budget;
+
+  // activation bytes per GPU: 2 * batch * seq * hidden * layers  (bf16 residual stream)
+  let actBytes = 2 * B * S * H * L;
+  if (ckpt) actBytes *= 0.20;
+  const actGB = actBytes / GB;
+
+  // AllGather temp buffer (sharded strategies only): ~2P bytes (largest FSDP unit,
+  // we use the full-weight upper bound = b*P to match the paper's 2P-for-bf16 convention).
+  const tempGB = (b * P) / GB;
+
+  // per-strategy components
+  const strategies = {
+    ddp: { p: b*P,   g: b*P,   o: o*P,   a: actBytes, t: 0 },
+    z2:  { p: b*P,   g: b*P/N, o: o*P/N, a: actBytes, t: 0 },
+    z3:  { p: b*P/N, g: b*P/N, o: o*P/N, a: actBytes, t: b*P },
+    hy:  { p: b*P/K, g: b*P/K, o: o*P/K, a: actBytes, t: b*P },
+  };
+
+  const keys = ['ddp', 'z2', 'z3', 'hy'];
+  const suf  = { p:'p_', g:'g_', o:'o_', a:'a_', t:'t_' };
+
+  for (const k of keys) {
+    const s = strategies[k];
+    $('p_' + k).textContent = (s.p / GB).toFixed(1);
+    $('g_' + k).textContent = (s.g / GB).toFixed(1);
+    $('o_' + k).textContent = (s.o / GB).toFixed(1);
+    $('a_' + k).textContent = (s.a / GB).toFixed(1);
+    $('t_' + k).textContent = s.t === 0 ? '0' : (s.t / GB).toFixed(1);
+    const total = (s.p + s.g + s.o + s.a + s.t) / GB;
+    $('tot_' + k).textContent = total.toFixed(1);
+    const fitCell = $('fit_' + k);
+    if (total <= budget) {
+      fitCell.textContent = 'yes (' + (budget - total).toFixed(0) + ' GB free)';
+      fitCell.className   = 'ok';
+    } else {
+      fitCell.textContent = 'NO (' + (total - budget).toFixed(0) + ' GB over)';
+      fitCell.className   = 'bad';
+    }
+  }
+}
+
+const ids = ['pSlider','nSlider','gpnSlider','dtype','opt','ckpt',
+             'hSlider','lSlider','sSlider','bSlider','budgetSlider'];
+ids.forEach(id => {
+  const el = $(id);
+  el.addEventListener('input',  compute);
+  el.addEventListener('change', compute);
+});
+
+compute();
+</script>
+
+</body>
+</html>
