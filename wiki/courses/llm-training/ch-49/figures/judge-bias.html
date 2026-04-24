@@ -1,0 +1,275 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Judge Bias Explorer + Calibration Curve</title>
+<style>
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+         max-width: 1180px; margin: 1.6em auto; padding: 0 1em; color: #1f1f1f;
+         background: #fafafa; }
+  h1 { font-size: 1.3em; margin-bottom: 0.25em; }
+  .subtitle { color: #5a5a5a; margin-top: 0; font-size: 0.92em; line-height: 1.5; }
+  .layout { display: grid; grid-template-columns: 1fr 1fr; gap: 1.2em; margin-top: 1em; }
+  .panel { border: 1px solid #dcdcdc; border-radius: 6px; background: #fff;
+           padding: 0.9em 1em; }
+  h2 { font-size: 1.0em; margin: 0 0 0.6em 0; color: #2b2b2b;
+       border-bottom: 1px solid #ececec; padding-bottom: 0.3em; }
+  svg.plot { width: 100%; height: 320px; display: block; background: #fcfcfc;
+             border: 1px solid #ececec; border-radius: 4px; }
+  .axis { stroke: #666; stroke-width: 1; fill: none; }
+  .axis-text { font-family: 'SF Mono', Menlo, monospace; font-size: 10px; fill: #444; }
+  .grid { stroke: #eee; stroke-width: 1; }
+  .bar-naive { fill: #c4793d; }
+  .bar-corrected { fill: #2f8a4a; }
+  .curve { fill: none; stroke-width: 2.4; }
+  .curve.bt { stroke: #c4793d; }
+  .curve.genrm { stroke: #2f8a4a; }
+  .curve.ideal { stroke: #8a8a8a; stroke-dasharray: 4 3; stroke-width: 1.2; }
+  .legend-item { font-family: 'SF Mono', Menlo, monospace; font-size: 11px; fill: #222; }
+  .controls { display: flex; flex-direction: column; gap: 0.55em; margin-bottom: 0.6em; }
+  .controls label { font-family: 'SF Mono', Menlo, monospace; font-size: 0.85em;
+                    color: #333; }
+  .controls select, .controls input[type=range] {
+    width: 100%; font-family: 'SF Mono', Menlo, monospace; font-size: 0.88em; }
+  .readout { font-family: 'SF Mono', Menlo, monospace; font-size: 0.82em;
+             color: #5a6a80; margin-top: -0.15em; }
+  .detail-title { font-family: 'SF Mono', Menlo, monospace; font-size: 0.95em;
+                  color: #204080; margin: 0 0 0.4em 0; }
+  .detail-body { font-size: 0.86em; color: #333; line-height: 1.5;
+                 background: #f5f7fb; padding: 0.55em 0.75em; border-radius: 4px;
+                 border-left: 3px solid #2e5aa8; }
+  .detail-src { font-size: 0.78em; color: #5a6a80; margin-top: 0.4em; }
+  code { background: #eef; padding: 1px 4px; border-radius: 3px;
+         font-family: 'SF Mono', Menlo, monospace; font-size: 0.85em; }
+  .kv { display: grid; grid-template-columns: 130px 1fr; gap: 0.15em 0.6em;
+        font-family: 'SF Mono', Menlo, monospace; font-size: 0.82em; margin-top: 0.4em; }
+  .kv .k { color: #555; }
+  .kv .v { color: #204080; }
+</style>
+</head>
+<body>
+
+<h1>Judge Bias Explorer &amp; Calibration Curve</h1>
+<p class="subtitle">
+  Panel 1: pick a bias type (position / verbosity / self-enhancement) and scenario. Bars show naive-judge accuracy
+  vs corrected-judge accuracy on a synthetic eval slice. Numbers seeded from
+  <code>judge-llm-bias</code> (Zheng 2023): GPT-4 position-flip 22%, GPT-3.5 40%;
+  verbosity win-rate slope per length_delta; self-enhancement diagonal from
+  <code>judge-llm-bias</code> Fig. 5. Panel 2: judge calibration curve, toggle
+  between BT RM (overconfident) and GenRM (calibrated) per <code>generative-reward-models</code> Fig. 4.
+</p>
+
+<div class="layout">
+
+<div class="panel">
+  <h2>Panel 1 &mdash; Judge bias: naive vs corrected</h2>
+  <div class="controls">
+    <label>Bias type
+      <select id="bias">
+        <option value="position">Position (order)</option>
+        <option value="verbosity">Verbosity (length)</option>
+        <option value="self">Self-enhancement</option>
+      </select>
+    </label>
+    <label>Scenario severity: <span id="sev-v">medium</span>
+      <input id="sev" type="range" min="0" max="2" value="1" step="1">
+    </label>
+    <label>Judge family
+      <select id="judge">
+        <option value="gpt4">GPT-4 (position-flip 22%)</option>
+        <option value="gpt35">GPT-3.5 (position-flip 40%)</option>
+        <option value="claude">Claude-3 (cross-family)</option>
+      </select>
+    </label>
+  </div>
+  <svg id="bar" class="plot" viewBox="0 0 520 320" preserveAspectRatio="xMidYMid meet"></svg>
+  <div class="readout">
+    naive=<span id="rn">--</span>%  corrected=<span id="rc">--</span>%  delta=<span id="rd">--</span>pp
+  </div>
+</div>
+
+<div class="panel">
+  <h2>Panel 2 &mdash; Calibration curve</h2>
+  <div class="controls">
+    <label>RM type
+      <select id="rmtype">
+        <option value="bt">BT scalar RM (overconfident)</option>
+        <option value="genrm">Generative RM (calibrated)</option>
+        <option value="both">Both overlaid</option>
+      </select>
+    </label>
+    <label>Confidence bin scrub: decile <span id="bin-v">5</span> / 10
+      <input id="bin" type="range" min="1" max="10" value="5" step="1">
+    </label>
+  </div>
+  <svg id="cal" class="plot" viewBox="0 0 520 320" preserveAspectRatio="xMidYMid meet"></svg>
+  <div class="readout">
+    judge_margin bin <span id="bv">5</span> &rarr; empirical agreement <span id="ea">--</span>%
+  </div>
+</div>
+
+<div class="panel" style="grid-column: 1 / -1;">
+  <p class="detail-title" id="dt">Select a bias above.</p>
+  <div class="detail-body" id="db">Explore position / verbosity / self-enhancement; read off the corrected-minus-naive delta in the readout above.</div>
+  <p class="detail-src" id="ds">Source: judge-llm-bias (Zheng 2023), generative-reward-models (Mahan 2024).</p>
+  <div class="kv" id="kv"></div>
+</div>
+
+</div>
+
+<script>
+// Seed numbers from raw-data/papers/judge-llm-bias.md and generative-reward-models.md.
+// These are illustrative slice numbers whose directions are attested.
+const BIAS = {
+  position: {
+    // GPT-4 22% flip, GPT-3.5 40% flip. Naive = correct only if both orders agree.
+    // Corrected = swap-and-average with tie on disagreement.
+    gpt4:   [[66,78],[61,74],[55,71]],   // severity low/med/high: [naive, corrected]
+    gpt35:  [[50,68],[44,64],[38,60]],
+    claude: [[70,80],[65,76],[58,72]],
+    title: "Position bias: swap-and-average correction",
+    body:  "The pair is judged twice (A,B) and (B,A). Naive counts the single-order verdict as the decision. Corrected counts a win only when both orders agree; otherwise tie. Quoting judge-llm-bias: 'A vs B ordering changes the winner in 20-30% of cases; mitigated by swap-and-average or two-game scoring.' GPT-4 flip-rate 22%, GPT-3.5 40%.",
+    src:   "judge-llm-bias Fig. 2, GPT-4 22% flip, GPT-3.5 40% flip; PairRM swap-augmentation section of pairrm.md",
+    kv: [
+      ["Mitigation", "Two-game scoring"],
+      ["Protocol", "both orders, consistent winner or tie"],
+      ["Residual bias", "~2pp after swap"]
+    ]
+  },
+  verbosity: {
+    // Length win-rate slope. Naive = judge picks longer. Corrected = length-residualized regression.
+    gpt4:   [[60,75],[55,73],[49,72]],
+    gpt35:  [[54,70],[48,68],[41,66]],
+    claude: [[62,75],[57,73],[51,72]],
+    title: "Verbosity bias: length-residualized win-rate",
+    body:  "Judge-llm-bias Fig. 4 shows a monotone upward slope of win-rate vs response length. Naive accuracy counts the judge's raw verdict; corrected uses an Arena-Hard-style length-controlled pairing (same content, controlled length_delta) plus a regression that subtracts the length contribution. Meta-Rewarding's length-bias rubric term is the in-prompt version.",
+    src:   "judge-llm-bias Fig. 4 length-vs-winrate; meta-rewarding-lm length-bias control; Arena-Hard LC-WR",
+    kv: [
+      ["Mitigation", "Length-residualized regression"],
+      ["Alt mitigation", "Rubric term: 'do not reward length for length's sake'"],
+      ["Benchmarks", "Arena-Hard LC-WR, AlpacaEval 2.0 LC"]
+    ]
+  },
+  self: {
+    // Self-enhancement: diagonal of judge x candidate matrix.
+    gpt4:   [[72,80],[66,78],[58,75]],  // GPT-4 judges GPT-4; high severity = large diagonal excess
+    gpt35:  [[64,74],[58,72],[51,69]],
+    claude: [[75,80],[72,78],[70,76]],  // Claude judging GPT-4 is cross-family = less severe
+    title: "Self-enhancement bias: cross-family judging",
+    body:  "Judge-llm-bias Fig. 5 reports a judge x candidate self-preference matrix: GPT-4 prefers GPT-4 outputs above human-rate, Claude prefers Claude. Naive uses same-family judge. Corrected uses cross-family judge (Claude scores GPT-4 descendant, or vice versa). At high severity (policy and judge are identical model), naive accuracy drops sharply; correction partially recovers via cross-family.",
+    src:   "judge-llm-bias Fig. 5 self-enhancement; direct-judgement-preference judge-as-weapon leakage; ultrafeedback-construction model-fleet contamination",
+    kv: [
+      ["Mitigation", "Cross-family judging"],
+      ["Pool", "Claude + Llama + Qwen judges"],
+      ["Risk left", "Shared pretraining data"]
+    ]
+  }
+};
+
+const BAR = document.getElementById("bar");
+const biasSel = document.getElementById("bias");
+const sev = document.getElementById("sev");
+const judgeSel = document.getElementById("judge");
+const sevV = document.getElementById("sev-v");
+const sevLabels = ["low", "medium", "high"];
+const rn = document.getElementById("rn"), rc = document.getElementById("rc"), rd = document.getElementById("rd");
+const dt = document.getElementById("dt"), db = document.getElementById("db"),
+      ds = document.getElementById("ds"), kv = document.getElementById("kv");
+
+function drawBar() {
+  const b = biasSel.value;
+  const s = parseInt(sev.value, 10);
+  const j = judgeSel.value;
+  const [naive, corrected] = BIAS[b][j][s];
+  sevV.textContent = sevLabels[s];
+  rn.textContent = naive; rc.textContent = corrected; rd.textContent = (corrected - naive);
+
+  const w = 520, h = 320, pad = 40;
+  const yScale = v => h - pad - (v / 100) * (h - 2 * pad);
+  let svg = `<g><line class="axis" x1="${pad}" y1="${h-pad}" x2="${w-pad}" y2="${h-pad}"/>`;
+  svg += `<line class="axis" x1="${pad}" y1="${pad}" x2="${pad}" y2="${h-pad}"/>`;
+  for (let v = 0; v <= 100; v += 20) {
+    svg += `<line class="grid" x1="${pad}" y1="${yScale(v)}" x2="${w-pad}" y2="${yScale(v)}"/>`;
+    svg += `<text class="axis-text" x="${pad-6}" y="${yScale(v)+3}" text-anchor="end">${v}%</text>`;
+  }
+  const bw = 80, gap = 60, x0 = 140;
+  svg += `<rect class="bar-naive" x="${x0}" y="${yScale(naive)}" width="${bw}" height="${h-pad-yScale(naive)}"/>`;
+  svg += `<text class="axis-text" x="${x0+bw/2}" y="${h-pad+16}" text-anchor="middle">naive judge</text>`;
+  svg += `<text class="axis-text" x="${x0+bw/2}" y="${yScale(naive)-5}" text-anchor="middle">${naive}%</text>`;
+  svg += `<rect class="bar-corrected" x="${x0+bw+gap}" y="${yScale(corrected)}" width="${bw}" height="${h-pad-yScale(corrected)}"/>`;
+  svg += `<text class="axis-text" x="${x0+bw+gap+bw/2}" y="${h-pad+16}" text-anchor="middle">corrected</text>`;
+  svg += `<text class="axis-text" x="${x0+bw+gap+bw/2}" y="${yScale(corrected)-5}" text-anchor="middle">${corrected}%</text>`;
+  svg += `<text class="axis-text" x="${pad}" y="${pad-10}" text-anchor="start">human-agreement accuracy</text>`;
+  svg += `</g>`;
+  BAR.innerHTML = svg;
+
+  const info = BIAS[b];
+  dt.textContent = info.title;
+  db.textContent = info.body;
+  ds.textContent = "Source: " + info.src;
+  kv.innerHTML = info.kv.map(([k,v]) => `<div class="k">${k}</div><div class="v">${v}</div>`).join("");
+}
+
+// Calibration curve. 10 bins on the x-axis = judge-reported margin decile.
+// y = empirical human agreement in that bin. Ideal curve: y = x.
+// BT RM: overconfident -> y < x on top bins (high-margin disagrees with humans more often).
+// GenRM: y ~ x across bins, small dip on middle bins only.
+const CAL_BT    = [0.52, 0.56, 0.60, 0.63, 0.66, 0.69, 0.72, 0.74, 0.77, 0.80];
+const CAL_GENRM = [0.52, 0.58, 0.64, 0.70, 0.75, 0.80, 0.84, 0.88, 0.91, 0.94];
+const CAL_IDEAL = [0.50, 0.56, 0.61, 0.67, 0.72, 0.78, 0.83, 0.89, 0.94, 1.00];
+
+const CAL = document.getElementById("cal");
+const rmSel = document.getElementById("rmtype");
+const bin = document.getElementById("bin");
+const binV = document.getElementById("bin-v");
+const bv = document.getElementById("bv"), ea = document.getElementById("ea");
+
+function drawCal() {
+  const w = 520, h = 320, pad = 40;
+  const xScale = i => pad + (i / 9) * (w - 2 * pad);
+  const yScale = v => h - pad - v * (h - 2 * pad);
+  const binIdx = parseInt(bin.value, 10) - 1;
+  binV.textContent = bin.value;
+  bv.textContent = bin.value;
+
+  let svg = `<g><line class="axis" x1="${pad}" y1="${h-pad}" x2="${w-pad}" y2="${h-pad}"/>`;
+  svg += `<line class="axis" x1="${pad}" y1="${pad}" x2="${pad}" y2="${h-pad}"/>`;
+  for (let v = 0; v <= 100; v += 20) {
+    svg += `<line class="grid" x1="${pad}" y1="${yScale(v/100)}" x2="${w-pad}" y2="${yScale(v/100)}"/>`;
+    svg += `<text class="axis-text" x="${pad-6}" y="${yScale(v/100)+3}" text-anchor="end">${v}%</text>`;
+  }
+  for (let i = 0; i < 10; i++) {
+    svg += `<text class="axis-text" x="${xScale(i)}" y="${h-pad+16}" text-anchor="middle">${i+1}</text>`;
+  }
+  svg += `<text class="axis-text" x="${w/2}" y="${h-pad+30}" text-anchor="middle">judge confidence decile (10 = highest margin)</text>`;
+  svg += `<text class="axis-text" x="${pad}" y="${pad-10}" text-anchor="start">empirical human agreement</text>`;
+
+  const path = (arr, cls) => {
+    let p = "";
+    arr.forEach((v, i) => { p += (i === 0 ? "M" : "L") + xScale(i) + "," + yScale(v) + " "; });
+    return `<path class="curve ${cls}" d="${p.trim()}"/>`;
+  };
+  svg += path(CAL_IDEAL, "ideal");
+  const mode = rmSel.value;
+  if (mode === "bt" || mode === "both") svg += path(CAL_BT, "bt");
+  if (mode === "genrm" || mode === "both") svg += path(CAL_GENRM, "genrm");
+
+  // Scrub marker
+  const v = (mode === "bt") ? CAL_BT[binIdx] : CAL_GENRM[binIdx];
+  ea.textContent = (v * 100).toFixed(0);
+  svg += `<circle cx="${xScale(binIdx)}" cy="${yScale(v)}" r="5" fill="#2e5aa8"/>`;
+  svg += `<text class="legend-item" x="${w-pad-140}" y="${pad+12}">--- ideal y=x</text>`;
+  svg += `<text class="legend-item" x="${w-pad-140}" y="${pad+26}" fill="#c4793d">BT scalar RM</text>`;
+  svg += `<text class="legend-item" x="${w-pad-140}" y="${pad+40}" fill="#2f8a4a">GenRM</text>`;
+  svg += `</g>`;
+  CAL.innerHTML = svg;
+}
+
+[biasSel, sev, judgeSel].forEach(el => el.addEventListener("input", drawBar));
+[rmSel, bin].forEach(el => el.addEventListener("input", drawCal));
+drawBar();
+drawCal();
+</script>
+
+</body>
+</html>

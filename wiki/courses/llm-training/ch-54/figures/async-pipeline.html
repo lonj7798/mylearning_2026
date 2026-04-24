@@ -1,0 +1,274 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>ch-54 — Async rollout pipeline</title>
+<style>
+  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+         background: #fafafa; color: #222; margin: 0; padding: 24px; }
+  h1 { font-size: 20px; margin: 0 0 4px; }
+  h2 { font-size: 14px; margin: 18px 0 6px; color: #444; }
+  .sub { font-size: 13px; color: #666; margin-bottom: 16px; line-height: 1.45; }
+  .panel { background: #fff; border: 1px solid #ddd; border-radius: 6px; padding: 16px; margin-bottom: 18px; }
+  .controls { display: flex; flex-wrap: wrap; gap: 18px; margin-bottom: 12px; }
+  .control { display: flex; flex-direction: column; font-size: 12px; min-width: 160px; }
+  .control label { color: #555; margin-bottom: 4px; }
+  .control input[type=range] { width: 160px; }
+  .control .v { font-family: ui-monospace, "SF Mono", monospace; color: #0a6; }
+  canvas { display: block; border: 1px solid #eee; background: #fff; }
+  .legend { font-size: 12px; margin-top: 8px; line-height: 1.6; }
+  .legend span.sw { display: inline-block; width: 12px; height: 12px; vertical-align: middle; margin: 0 4px 0 10px; border-radius: 2px; }
+  .readout { font-family: ui-monospace, "SF Mono", monospace; font-size: 12px; color: #333;
+             background: #f5f5f5; padding: 8px 10px; border-radius: 4px; margin-top: 6px;
+             display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px 14px; }
+  .readout b { color: #0a6; }
+  .warn { color: #b84a1c; }
+  .note { font-size: 12px; color: #666; margin-top: 8px; line-height: 1.5; }
+  .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+  @media (max-width: 900px) { .grid { grid-template-columns: 1fr; } }
+  code { font-family: ui-monospace, "SF Mono", monospace; background: #f3f3f3; padding: 1px 4px; border-radius: 3px; }
+  button { font-family: inherit; font-size: 12px; padding: 4px 10px; border: 1px solid #888;
+           background: #fff; border-radius: 4px; cursor: pointer; }
+  button.active { background: #0a6; color: #fff; border-color: #0a6; }
+</style>
+</head>
+<body>
+
+<h1>Async rollout pipeline — queue, staleness, IS correction</h1>
+<div class="sub">
+  ch-54 companion. Live simulation of the [[async-rollout]] architecture: R rollout workers fill a bounded queue;
+  a single learner pops, trains, and broadcasts weights. Adjust queue depth <code>d</code>, rollout:learner speed
+  ratio <code>ρ</code>, partial-rollout, and IS-correction mode. Watch throughput rise with <code>d</code>,
+  but watch <code>vllm_kl</code> and clipfrac creep up as staleness <code>k</code> grows.
+</div>
+
+<div class="panel">
+  <h2>Controls</h2>
+  <div class="controls">
+    <div class="control">
+      <label>Queue depth d <span class="v" id="vD">1</span></label>
+      <input type="range" id="d" min="1" max="4" step="1" value="1">
+    </div>
+    <div class="control">
+      <label>Rollout:learner ratio ρ <span class="v" id="vRho">2.0</span></label>
+      <input type="range" id="rho" min="0.5" max="4.0" step="0.1" value="2.0">
+    </div>
+    <div class="control">
+      <label>Rollout workers R <span class="v" id="vR">2</span></label>
+      <input type="range" id="R" min="1" max="4" step="1" value="2">
+    </div>
+    <div class="control">
+      <label>Partial rollout</label>
+      <div><button id="partialBtn">off</button></div>
+    </div>
+    <div class="control">
+      <label>IS correction mode</label>
+      <div>
+        <button class="is-btn" data-mode="off">off</button>
+        <button class="is-btn active" data-mode="tis">tis</button>
+        <button class="is-btn" data-mode="icepop">icepop</button>
+      </div>
+    </div>
+    <div class="control">
+      <label>&nbsp;</label>
+      <div><button id="resetBtn">reset</button></div>
+    </div>
+  </div>
+  <div class="readout">
+    <span>throughput: <b id="rThru">0.00</b> upd/s</span>
+    <span>effective k: <b id="rK">0.00</b></span>
+    <span>vllm_kl (proxy): <b id="rKl">0.000</b></span>
+    <span>PPO clipfrac: <b id="rCF">0.00</b></span>
+  </div>
+</div>
+
+<div class="grid">
+  <div class="panel">
+    <h2>A — pipeline topology</h2>
+    <canvas id="cTop" width="560" height="220"></canvas>
+    <div class="note" id="topoNote">
+      Dots flow rollout→queue→learner. Red dots are stale (<code>k ≥ 3</code>); the red-bar near the learner
+      is the weight-broadcast pause (verl <code>engine to paused state</code>, OpenRLHF <code>vllm_lock</code>).
+    </div>
+  </div>
+  <div class="panel">
+    <h2>B — staleness &amp; vllm_kl (proxy)</h2>
+    <canvas id="cStale" width="560" height="220"></canvas>
+    <div class="legend">
+      <span class="sw" style="background:#4a7"></span>effective k (queue depth + partial)
+      <span class="sw" style="background:#d64"></span>vllm_kl proxy (after IS)
+      <span class="sw" style="background:#aaa"></span>PPO clipfrac
+    </div>
+    <div class="note">
+      vllm_kl proxy is <code>k · 0.04 · leak(mode)</code>. <code>leak</code> is 1.0 for off, 0.2 for tis
+      (matches <code>PolicyLoss.forward</code> clip to <code>[0.5, 2.0]</code>), 0.05 for icepop
+      (per-token mask). Clipfrac pegs at 1 once <code>vllm_kl &gt; 0.10</code> — the canary in
+      [[async-rollout]] §Failure signature.
+    </div>
+  </div>
+</div>
+
+<div class="panel">
+  <h2>What this simulates vs what is a cartoon</h2>
+  <div class="note">
+    <b>Attested numbers</b>: throughput ratio 1.6–2.0× at sync→async on 8×H100 / 7B ([[async-rollout]] Figure 5);
+    queue depth <code>d=1..2</code> as the production default (both OpenRLHF and verl); <code>vllm_kl &gt; 0.1</code>
+    with clipfrac pegged as the failure signature; clip range <code>[0.5, 2.0]</code> on the IS weight from
+    [[openrlhf-ppo]] <code>vllm_is_truncated_threshold</code>. <br>
+    <b>Cartoons</b>: the 0.04 nat/step drift constant is illustrative; real drift depends on LR · token entropy.
+    Dot colors are simulated staleness, not real tokens. The "partial rollout" mode here just halves the
+    in-flight penalty — the real [[verl-rollout]] implementation interrupts decoding mid-sequence via the
+    priority queue.
+  </div>
+</div>
+
+<script>
+(() => {
+  const $ = (id) => document.getElementById(id);
+  const ctxT = $("cTop").getContext("2d");
+  const ctxS = $("cStale").getContext("2d");
+
+  const state = { d:1, rho:2.0, R:2, partial:false, isMode:"tis",
+    t:0, queue:[], trainT:0, history:[], lastBroadcast:0, thruAcc:0, thruN:0 };
+  const leak = m => m === "off" ? 1.0 : m === "tis" ? 0.20 : 0.05;
+  function reset() { Object.assign(state, { t:0, queue:[], trainT:0, history:[],
+    lastBroadcast:0, thruAcc:0, thruN:0 }); }
+
+  $("d").addEventListener("input", e => { state.d = +e.target.value; $("vD").textContent = state.d; });
+  $("rho").addEventListener("input", e => { state.rho = +e.target.value; $("vRho").textContent = state.rho.toFixed(1); });
+  $("R").addEventListener("input", e => { state.R = +e.target.value; $("vR").textContent = state.R; });
+  $("partialBtn").addEventListener("click", e => {
+    state.partial = !state.partial;
+    e.target.textContent = state.partial ? "on" : "off";
+    e.target.classList.toggle("active", state.partial);
+  });
+  document.querySelectorAll(".is-btn").forEach(b => {
+    b.addEventListener("click", () => {
+      state.isMode = b.dataset.mode;
+      document.querySelectorAll(".is-btn").forEach(x => x.classList.remove("active"));
+      b.classList.add("active");
+    });
+  });
+  $("resetBtn").addEventListener("click", reset);
+
+  function step(dt) {
+    state.t += dt;
+    // Producer: R workers yield rollouts at rate R·ρ; queue capped at d.
+    if (Math.random() < state.R * state.rho * dt && state.queue.length < state.d)
+      state.queue.push({ age: 0 });
+    state.queue.forEach(q => q.age += dt);
+    // Consumer: 1.0s cycle + 0.15s broadcast pause.
+    state.trainT += dt;
+    if (state.trainT >= 1.0 && state.queue.length > 0) {
+      const popped = state.queue.shift();
+      const kEff = popped.age;
+      const klRaw = kEff * 0.04 * leak(state.isMode);
+      const klEff = state.partial ? klRaw * 0.5 : klRaw;
+      const cf = Math.min(1.0, Math.max(0.05, (klEff - 0.02) * 8));
+      state.history.push({ t: state.t, k: kEff, kl: klEff, cf });
+      if (state.history.length > 300) state.history.shift();
+      state.lastBroadcast = state.t; state.trainT = 0;
+      state.thruAcc += 1; state.thruN += 1.15;
+    }
+  }
+
+  function drawTop() {
+    const c = ctxT; c.clearRect(0, 0, 560, 220);
+    c.strokeStyle = "#888"; c.lineWidth = 1.5; c.font = "11px sans-serif";
+    for (let i = 0; i < state.R; i++) {
+      const y = 40 + i * 40;
+      c.strokeRect(30, y, 100, 30);
+      c.fillStyle = "#333"; c.fillText("RolloutActor " + (i+1), 38, y + 19);
+    }
+    c.strokeRect(160, 80, 180, 60);
+    c.fillStyle = "#333"; c.fillText("rollout_queue (d=" + state.d + ", len=" + state.queue.length + ")", 168, 75);
+    for (let i = 0; i < state.d; i++) {
+      const x = 170 + i * 40;
+      c.strokeStyle = "#ccc"; c.strokeRect(x, 95, 30, 30);
+      if (i < state.queue.length) {
+        const age = state.queue[i].age, red = Math.min(220, age * 80);
+        c.fillStyle = "rgb(" + (80+red) + ",160," + Math.max(0,160-red) + ")";
+        c.fillRect(x + 4, 99, 22, 22);
+      }
+    }
+    const tX = 390;
+    c.strokeStyle = "#888"; c.strokeRect(tX, 70, 140, 80);
+    c.fillStyle = "#333";
+    ["TrainingActor", "", "score → GAE/GRPO", "clipped PG step", "backward + broadcast"]
+      .forEach((s, i) => c.fillText(s, tX + 8, 65 + i * 15));
+    if (state.t - state.lastBroadcast < 0.15) {
+      c.fillStyle = "rgba(216,100,60,0.35)"; c.fillRect(tX - 2, 68, 144, 84);
+      c.fillStyle = "#b84a1c"; c.fillText("PAUSE (weight broadcast)", tX + 10, 165);
+    }
+    c.strokeStyle = "#888"; c.beginPath();
+    c.moveTo(130, 110); c.lineTo(160, 110);
+    c.moveTo(340, 110); c.lineTo(390, 110); c.stroke();
+    c.fillStyle = "#555"; c.fillText("generate(π_{t−k})", 132, 100); c.fillText("pop", 352, 100);
+    c.strokeStyle = "#b84a1c"; c.beginPath();
+    c.moveTo(460, 150); c.lineTo(460, 185); c.lineTo(80, 185); c.lineTo(80, 70); c.stroke();
+    c.fillStyle = "#b84a1c"; c.fillText("broadcast_weights (via vllm_lock)", 180, 200);
+  }
+
+  function drawStale() {
+    const c = ctxS, W = 560, H = 220;
+    c.clearRect(0, 0, W, H);
+    // Axes.
+    c.strokeStyle = "#ccc"; c.beginPath();
+    c.moveTo(40, 20); c.lineTo(40, 190); c.lineTo(540, 190); c.stroke();
+    c.fillStyle = "#777"; c.font = "11px sans-serif";
+    c.fillText("time →", 500, 205);
+    c.fillText("k / kl / cf", 5, 30);
+    if (state.history.length < 2) return;
+    const h = state.history;
+    const xScale = 500 / Math.max(30, h.length);
+    const yScaleK = 160 / 5;  // k in [0,5]
+    const drawLine = (key, color, mul=1, cap=5) => {
+      c.strokeStyle = color; c.lineWidth = 1.5;
+      c.beginPath();
+      h.forEach((p, i) => {
+        const x = 40 + i * xScale;
+        const y = 190 - Math.min(cap, p[key] * mul) * (160/cap);
+        if (i === 0) c.moveTo(x, y); else c.lineTo(x, y);
+      });
+      c.stroke();
+    };
+    drawLine("k", "#4a7", 1, 5);
+    drawLine("kl", "#d64", 20, 5);  // kl in [0, 0.25] → scale to [0, 5]
+    drawLine("cf", "#aaa", 5, 5);   // cf in [0, 1] → scale to [0, 5]
+    // Guides: kl=0.1 canary.
+    const yCan = 190 - (0.1 * 20) * (160/5);
+    c.strokeStyle = "#d64"; c.setLineDash([4, 3]);
+    c.beginPath(); c.moveTo(40, yCan); c.lineTo(540, yCan); c.stroke();
+    c.setLineDash([]);
+    c.fillStyle = "#d64"; c.fillText("vllm_kl = 0.10 canary", 420, yCan - 4);
+  }
+
+  function readout() {
+    const last = state.history[state.history.length - 1];
+    const thru = state.thruN > 0 ? state.thruAcc / state.thruN : 0;
+    $("rThru").textContent = thru.toFixed(2);
+    if (last) {
+      $("rK").textContent = last.k.toFixed(2);
+      $("rKl").textContent = last.kl.toFixed(3);
+      $("rCF").textContent = last.cf.toFixed(2);
+      $("rKl").className = last.kl > 0.10 ? "warn" : "";
+      $("rCF").className = last.cf >= 0.95 ? "warn" : "";
+    }
+  }
+
+  reset();
+  let last = performance.now();
+  function loop() {
+    const now = performance.now();
+    const dt = Math.min(0.08, (now - last) / 1000);
+    last = now;
+    step(dt);
+    drawTop(); drawStale(); readout();
+    requestAnimationFrame(loop);
+  }
+  loop();
+})();
+</script>
+
+</body>
+</html>

@@ -1,0 +1,251 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Bootstrap CI + Paired-Comparison Explorer</title>
+<style>
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; max-width: 1200px; margin: 1.4em auto; padding: 0 1em; color: #1f1f1f; background: #fafafa; }
+  h1 { font-size: 1.3em; margin-bottom: 0.25em; }
+  .subtitle { color: #5a5a5a; margin-top: 0; font-size: 0.9em; line-height: 1.5; }
+  .panel { border: 1px solid #dcdcdc; border-radius: 6px; background: #fff; padding: 0.9em 1em; margin-top: 1em; }
+  h2 { font-size: 1.02em; margin: 0 0 0.6em 0; color: #2b2b2b; border-bottom: 1px solid #ececec; padding-bottom: 0.3em; }
+  .layout { display: grid; grid-template-columns: 1fr 340px; gap: 1em; }
+  svg.plot { width: 100%; height: 300px; display: block; background: #fcfcfc; border: 1px solid #ececec; border-radius: 4px; }
+  .axis-line { stroke: #666; stroke-width: 1; fill: none; }
+  .axis-text { font-family: 'SF Mono', Menlo, monospace; font-size: 10px; fill: #444; }
+  .grid { stroke: #f0f0f0; stroke-width: 1; }
+  .curve { fill: none; stroke-width: 2.2; }
+  .curve.item { stroke: #2e5aa8; } .curve.seed { stroke: #c4793d; } .curve.total { stroke: #2f8a4a; stroke-dasharray: 5 3; }
+  .controls label { display: block; font-family: 'SF Mono', Menlo, monospace; font-size: 0.85em; color: #333; margin: 0.5em 0 0.15em 0; }
+  .controls input[type=range] { width: 100%; }
+  .readout { font-family: 'SF Mono', Menlo, monospace; font-size: 0.86em; color: #333; background: #f5f7fb; padding: 0.5em 0.7em; border-radius: 4px; border-left: 3px solid #2e5aa8; margin-top: 0.4em; white-space: pre; }
+  .p-verdict { font-family: 'SF Mono', Menlo, monospace; font-size: 0.9em; padding: 0.45em 0.7em; border-radius: 4px; margin-top: 0.45em; }
+  .sig-yes { background: #e6f4ea; color: #1c6b37; border-left: 3px solid #1c6b37; }
+  .sig-no  { background: #fef0ec; color: #8a2a1a; border-left: 3px solid #8a2a1a; }
+  .legend { font-family: 'SF Mono', Menlo, monospace; font-size: 11px; fill: #222; }
+  code { background: #eef; padding: 1px 4px; border-radius: 3px; font-family: 'SF Mono', Menlo, monospace; font-size: 0.85em; }
+  .hist-bar { fill: #2e5aa8; opacity: 0.72; }
+  .ci-line { stroke: #2e5aa8; stroke-width: 2.5; }
+  .zero-ref { stroke: #999; stroke-dasharray: 3 3; stroke-width: 1; }
+</style>
+</head>
+<body>
+
+<h1>Bootstrap CI + Paired-Comparison Explorer</h1>
+<p class="subtitle">
+  Two panels. <b>Panel 1:</b> dial N (items) and K (seeds); see the 95% CI halfwidth
+  curve and the split between item-count noise and per-run noise. <b>Panel 2:</b>
+  two-checkpoint comparison: dial the true delta and per-item noise, see the
+  paired-bootstrap p-value and sign-test p-value update. All computation is
+  exact monte-carlo in the browser. See <code>read.md §3, §4</code>.
+</p>
+
+<div class="panel">
+  <h2>Panel 1 — CI halfwidth vs N (items) and K (seeds per prompt)</h2>
+  <div class="layout">
+    <svg id="p1plot" class="plot" viewBox="0 0 720 300" preserveAspectRatio="xMidYMid meet"></svg>
+    <div class="controls">
+      <label>N (items): <span id="p1N_val">500</span></label>
+      <input type="range" id="p1N" min="50" max="3000" step="50" value="500">
+      <label>K (seeds per item): <span id="p1K_val">1</span></label>
+      <input type="range" id="p1K" min="1" max="10" step="1" value="1">
+      <label>per-seed sigma (pp): <span id="p1sig_val">1.5</span></label>
+      <input type="range" id="p1sig" min="0" max="4" step="0.1" value="1.5">
+      <label>true accuracy p: <span id="p1p_val">0.50</span></label>
+      <input type="range" id="p1p" min="0.1" max="0.9" step="0.05" value="0.5">
+      <div class="readout" id="p1read"></div>
+    </div>
+  </div>
+</div>
+
+<div class="panel">
+  <h2>Panel 2 — two-checkpoint comparison (paired bootstrap + sign test)</h2>
+  <div class="layout">
+    <svg id="p2plot" class="plot" viewBox="0 0 720 300" preserveAspectRatio="xMidYMid meet"></svg>
+    <div class="controls">
+      <label>N (paired items): <span id="p2N_val">300</span></label>
+      <input type="range" id="p2N" min="30" max="2000" step="10" value="300">
+      <label>true delta (pp): <span id="p2d_val">2.0</span></label>
+      <input type="range" id="p2d" min="-5" max="10" step="0.1" value="2.0">
+      <label>per-item noise sigma (pp): <span id="p2sig_val">8</span></label>
+      <input type="range" id="p2sig" min="1" max="25" step="0.5" value="8">
+      <label>bootstrap B: <span id="p2B_val">2000</span></label>
+      <input type="range" id="p2B" min="500" max="5000" step="500" value="2000">
+      <div class="readout" id="p2read"></div>
+      <div id="p2verdict" class="p-verdict sig-no">pending</div>
+    </div>
+  </div>
+</div>
+
+<script>
+// ---------- utilities ----------
+function gaussian() {  // Box-Muller
+  let u = 0, v = 0;
+  while (u === 0) u = Math.random(); while (v === 0) v = Math.random();
+  return Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * v);
+}
+function quantile(sorted, q) { return sorted[Math.max(0, Math.min(sorted.length - 1, Math.floor(q * sorted.length)))]; }
+function normalCdf(z) {  // Abramowitz 26.2.17
+  const t = 1 / (1 + 0.2316419 * Math.abs(z));
+  const d = 0.3989422804 * Math.exp(-z * z / 2);
+  const p = d * t * (0.31938153 + t * (-0.356563782 + t * (1.781477937 + t * (-1.821255978 + t * 1.330274429))));
+  return z > 0 ? 1 - p : p;
+}
+function signTestP(W, L) {  // two-sided sign test
+  const n = W + L; if (n === 0) return 1.0;
+  if (n < 25) {  // exact tail
+    const binCoef = (n, k) => { let r = 1; for (let i = 0; i < k; i++) r = r * (n - i) / (i + 1); return r; };
+    let tail = 0; for (let k = 0; k <= Math.min(W, L); k++) tail += binCoef(n, k);
+    return Math.min(1, 2 * tail / Math.pow(2, n));
+  }
+  const z = (Math.abs(W - L) - 1) / Math.sqrt(n);  // normal approx w/ continuity correction
+  return Math.max(0, Math.min(1, 2 * (1 - normalCdf(z))));
+}
+
+// ---------- Panel 1 ----------
+function drawPanel1() {
+  const N = +document.getElementById("p1N").value;
+  const K = +document.getElementById("p1K").value;
+  const sig = +document.getElementById("p1sig").value;
+  const p  = +document.getElementById("p1p").value;
+  document.getElementById("p1N_val").textContent = N;
+  document.getElementById("p1K_val").textContent = K;
+  document.getElementById("p1sig_val").textContent = sig.toFixed(1);
+  document.getElementById("p1p_val").textContent = p.toFixed(2);
+
+  // item-count halfwidth: 1.96 * sqrt(p(1-p)/N), in pp
+  // per-seed halfwidth: 1.96 * sig / sqrt(K)
+  // total: sqrt of sum of squares
+  const svg = document.getElementById("p1plot"); svg.innerHTML = "";
+  const Wp = 720, Hp = 300, ml = 48, mr = 14, mt = 16, mb = 32;
+  const pw = Wp - ml - mr, ph = Hp - mt - mb;
+  const xs = [], yItem = [], ySeed = [], yTotal = [];
+  for (let nn = 50; nn <= 3000; nn += 25) {
+    const hwItem = 1.96 * Math.sqrt(p * (1 - p) / nn) * 100;
+    const hwSeed = 1.96 * sig / Math.sqrt(K);
+    xs.push(nn); yItem.push(hwItem); ySeed.push(hwSeed);
+    yTotal.push(Math.sqrt(hwItem * hwItem + hwSeed * hwSeed));
+  }
+  const xmin = 50, xmax = 3000, ymax = Math.max(12, Math.max(...yTotal) * 1.1);
+  const X = n => ml + (n - xmin) / (xmax - xmin) * pw;
+  const Y = v => mt + ph - v / ymax * ph;
+  let parts = "";
+  for (let g = 0; g <= 5; g++) {
+    const y = mt + ph * g / 5;
+    parts += `<line class="grid" x1="${ml}" x2="${ml+pw}" y1="${y}" y2="${y}"/><text class="axis-text" x="${ml-6}" y="${y+3}" text-anchor="end">${(ymax*(5-g)/5).toFixed(1)}</text>`;
+  }
+  for (let n = 500; n <= 3000; n += 500)
+    parts += `<text class="axis-text" x="${X(n)}" y="${mt+ph+14}" text-anchor="middle">${n}</text>`;
+  parts += `<text class="axis-text" x="${ml+pw/2}" y="${Hp-6}" text-anchor="middle">N (items)</text><text class="axis-text" x="${ml-34}" y="${mt+ph/2}" transform="rotate(-90 ${ml-34} ${mt+ph/2})" text-anchor="middle">halfwidth (pp)</text>`;
+  const mkPath = (ys, cls) => { let d = ""; for (let i = 0; i < xs.length; i++) d += (i === 0 ? "M" : "L") + X(xs[i]) + " " + Y(ys[i]); return `<path class="curve ${cls}" d="${d}"/>`; };
+  parts += mkPath(yItem, "item") + mkPath(ySeed, "seed") + mkPath(yTotal, "total");
+  parts += `<line class="zero-ref" x1="${X(N)}" x2="${X(N)}" y1="${mt}" y2="${mt+ph}"/>`;
+  parts += `<text class="legend" x="${ml+10}" y="${mt+14}" fill="#2e5aa8">item-count HW</text><text class="legend" x="${ml+10}" y="${mt+28}" fill="#c4793d">per-seed HW (K=${K})</text><text class="legend" x="${ml+10}" y="${mt+42}" fill="#2f8a4a">combined HW</text>`;
+  svg.innerHTML = parts;
+
+  const hwItemN = 1.96 * Math.sqrt(p*(1-p)/N) * 100;
+  const hwSeedN = 1.96 * sig / Math.sqrt(K);
+  const hwTotN  = Math.sqrt(hwItemN * hwItemN + hwSeedN * hwSeedN);
+  const dominant = hwItemN > hwSeedN ? "item-count noise dominates" : "per-seed noise dominates";
+  document.getElementById("p1read").textContent =
+    `At N=${N}, K=${K}, p=${p.toFixed(2)}, sigma=${sig.toFixed(1)} pp:
+item HW = ${hwItemN.toFixed(2)} pp
+seed HW = ${hwSeedN.toFixed(2)} pp
+total HW = ${hwTotN.toFixed(2)} pp
+--> ${dominant}`;
+}
+
+// ---------- Panel 2 ----------
+function drawPanel2() {
+  const N   = +document.getElementById("p2N").value;
+  const d   = +document.getElementById("p2d").value;    // pp, true paired delta
+  const sig = +document.getElementById("p2sig").value;  // pp, per-item noise
+  const B   = +document.getElementById("p2B").value;
+  document.getElementById("p2N_val").textContent = N;
+  document.getElementById("p2d_val").textContent = d.toFixed(1);
+  document.getElementById("p2sig_val").textContent = sig.toFixed(1);
+  document.getElementById("p2B_val").textContent = B;
+
+  // Simulate N paired per-item deltas ~ Normal(d, sig)
+  const pairs = new Array(N);
+  for (let i = 0; i < N; i++) pairs[i] = d + sig * gaussian();
+
+  // Paired bootstrap on the mean delta
+  const boot = new Array(B);
+  for (let b = 0; b < B; b++) {
+    let s = 0;
+    for (let i = 0; i < N; i++) s += pairs[(Math.random() * N) | 0];
+    boot[b] = s / N;
+  }
+  boot.sort((a, b) => a - b);
+  const loCI = quantile(boot, 0.025);
+  const hiCI = quantile(boot, 0.975);
+  const deltaHat = pairs.reduce((a, b) => a + b, 0) / N;
+  // achieved significance level for H0: delta = 0
+  let pos = 0, neg = 0;
+  for (let i = 0; i < B; i++) { if (boot[i] >= 0) pos++; if (boot[i] <= 0) neg++; }
+  const pBoot = 2 * Math.min(pos / B, neg / B);
+
+  // Sign test
+  let W = 0, L = 0;
+  for (let i = 0; i < N; i++) { if (pairs[i] > 0) W++; else if (pairs[i] < 0) L++; }
+  const pSign = signTestP(W, L);
+
+  const svg = document.getElementById("p2plot"); svg.innerHTML = "";
+  const Wp = 720, Hp = 300, ml = 48, mr = 14, mt = 18, mb = 32;
+  const pw = Wp - ml - mr, ph = Hp - mt - mb;
+  const xmin = Math.min(-3, boot[0] - 0.5), xmax = Math.max(5, boot[boot.length - 1] + 0.5);
+  const X = v => ml + (v - xmin) / (xmax - xmin) * pw;
+  const nbins = 40, bins = new Array(nbins).fill(0);
+  for (let i = 0; i < B; i++) {
+    let k = Math.floor((boot[i] - xmin) / (xmax - xmin) * nbins);
+    bins[Math.max(0, Math.min(nbins - 1, k))]++;
+  }
+  const binMax = Math.max(...bins);
+  const Y = c => mt + ph - (c / binMax) * ph;
+  let parts = "";
+  for (let k = 0; k < nbins; k++) {
+    const x0 = X(xmin + k * (xmax - xmin) / nbins), x1 = X(xmin + (k + 1) * (xmax - xmin) / nbins);
+    const y0 = Y(bins[k]);
+    parts += `<rect class="hist-bar" x="${x0}" y="${y0}" width="${x1-x0-1}" height="${mt+ph-y0}"/>`;
+  }
+  parts += `<line class="axis-line" x1="${ml}" x2="${ml+pw}" y1="${mt+ph}" y2="${mt+ph}"/>`;
+  for (let t = Math.ceil(xmin); t <= Math.floor(xmax); t++)
+    parts += `<text class="axis-text" x="${X(t)}" y="${mt+ph+14}" text-anchor="middle">${t}</text>`;
+  parts += `<text class="axis-text" x="${ml+pw/2}" y="${Hp-6}" text-anchor="middle">bootstrapped delta (pp)</text>`;
+  parts += `<line class="zero-ref" x1="${X(0)}" x2="${X(0)}" y1="${mt}" y2="${mt+ph}"/><line class="ci-line" x1="${X(loCI)}" x2="${X(hiCI)}" y1="${mt+4}" y2="${mt+4}"/><circle cx="${X(deltaHat)}" cy="${mt+4}" r="4" fill="#2e5aa8"/>`;
+  parts += `<text class="legend" x="${X(loCI)}" y="${mt-2}" fill="#2e5aa8">${loCI.toFixed(2)}</text><text class="legend" x="${X(hiCI)-26}" y="${mt-2}" fill="#2e5aa8">${hiCI.toFixed(2)}</text><text class="legend" x="${X(deltaHat)-10}" y="${mt+16}" fill="#2e5aa8">delta_hat=${deltaHat.toFixed(2)}</text>`;
+  svg.innerHTML = parts;
+
+  document.getElementById("p2read").textContent =
+    `N=${N}, B=${B}, true delta=${d.toFixed(1)} pp, noise sigma=${sig.toFixed(1)} pp
+delta_hat     = ${deltaHat.toFixed(2)} pp
+95% paired CI = [${loCI.toFixed(2)}, ${hiCI.toFixed(2)}]
+paired-bootstrap p = ${pBoot.toFixed(4)}
+sign test W=${W} L=${L} p = ${pSign.toFixed(4)}`;
+
+  const v = document.getElementById("p2verdict");
+  const sig05 = pBoot < 0.05 && pSign < 0.05 && (loCI > 0 || hiCI < 0);
+  if (sig05) {
+    v.className = "p-verdict sig-yes";
+    v.textContent = "REJECT H0 at alpha=0.05 (both tests agree; CI excludes 0) -- ship-if-two-run";
+  } else if (pBoot < 0.05 || pSign < 0.05) {
+    v.className = "p-verdict sig-no";
+    v.textContent = "MIXED -- one test rejects, the other does not; do NOT claim significance";
+  } else {
+    v.className = "p-verdict sig-no";
+    v.textContent = "FAIL TO REJECT H0 -- delta within noise; do not ship on this evidence";
+  }
+}
+
+// wire up
+["p1N","p1K","p1sig","p1p"].forEach(id =>
+  document.getElementById(id).addEventListener("input", drawPanel1));
+["p2N","p2d","p2sig","p2B"].forEach(id =>
+  document.getElementById(id).addEventListener("input", drawPanel2));
+drawPanel1();
+drawPanel2();
+</script>
+
+</body>
+</html>

@@ -1,0 +1,347 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>Distillation Lineage — GPT-4/Orca and R1/QwQ families</title>
+<style>
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 24px;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    background: #0f1115; color: #e5e8ee; line-height: 1.45;
+  }
+  h1 { font-size: 18px; font-weight: 600; margin: 0 0 4px 0; }
+  .sub { font-size: 12px; color: #8a93a6; margin-bottom: 18px; }
+  .layout { display: grid; grid-template-columns: 1fr 360px; gap: 18px; }
+  .tree-wrap {
+    background: #161a22; border: 1px solid #242a36; border-radius: 10px;
+    padding: 16px; min-height: 560px; overflow: auto;
+  }
+  .legend {
+    display: flex; gap: 14px; flex-wrap: wrap; font-size: 11px;
+    color: #a8b0c2; margin-bottom: 10px;
+  }
+  .legend .sw { display: inline-block; width: 10px; height: 10px; border-radius: 50%;
+                margin-right: 5px; vertical-align: middle; }
+  svg { width: 100%; height: 560px; display: block; }
+  .node { cursor: pointer; transition: transform 120ms ease; }
+  .node:hover { filter: brightness(1.15); }
+  .node.selected circle { stroke: #ffd166; stroke-width: 3; }
+  .node text { font: 11px -apple-system, sans-serif; fill: #e5e8ee; pointer-events: none;
+               text-anchor: middle; }
+  .edge { stroke: #3a4458; stroke-width: 1.6; fill: none; }
+  .edge.distill { stroke-dasharray: 4 3; }
+  .panel {
+    background: #161a22; border: 1px solid #242a36; border-radius: 10px;
+    padding: 16px; font-size: 13px;
+  }
+  .panel h2 { margin: 0 0 8px 0; font-size: 15px; font-weight: 600; color: #ffd166; }
+  .panel .era { color: #8a93a6; font-size: 11px; text-transform: uppercase;
+                letter-spacing: 0.06em; margin-bottom: 10px; }
+  .row { display: grid; grid-template-columns: 120px 1fr; gap: 6px;
+         padding: 5px 0; border-bottom: 1px solid #242a36; }
+  .row:last-child { border-bottom: none; }
+  .k { color: #8a93a6; font-size: 12px; }
+  .v { color: #e5e8ee; font-size: 12px; word-break: break-word; }
+  .pill { display: inline-block; padding: 1px 7px; border-radius: 9px;
+          font-size: 10px; background: #2a3346; color: #cfd6e6; margin-right: 4px; }
+  .pill.license-permissive { background: #1f3a2a; color: #9be9b2; }
+  .pill.license-contested { background: #3d2a2a; color: #f29b9b; }
+  .pill.license-proprietary { background: #3a2f1f; color: #ffd59b; }
+  .placeholder { color: #6d7690; font-style: italic; font-size: 12px; }
+  .hint { font-size: 11px; color: #6d7690; margin-top: 10px; }
+</style>
+</head>
+<body>
+<h1>Distillation-as-Data — Genealogy Tree</h1>
+<div class="sub">Click a node for teacher model, trace counts, filter stack, license, and flagship student eval. Two eras: chat-teacher (GPT-4 / Orca line) and reasoning-teacher (R1 / QwQ line).</div>
+
+<div class="layout">
+  <div class="tree-wrap">
+    <div class="legend">
+      <span><span class="sw" style="background:#ffd166"></span>Teacher (closed)</span>
+      <span><span class="sw" style="background:#9be9b2"></span>Teacher (open weights)</span>
+      <span><span class="sw" style="background:#7ec4ff"></span>Corpus / Dataset</span>
+      <span><span class="sw" style="background:#d08ef2"></span>Student model</span>
+      <span style="color:#6d7690"><span class="sw" style="background:#3a4458"></span>solid: descendant · dashed: distills-from</span>
+    </div>
+    <svg id="tree" viewBox="0 0 960 560" preserveAspectRatio="xMidYMid meet"></svg>
+  </div>
+
+  <div id="panel" class="panel">
+    <div class="placeholder">Select a node to see its details.</div>
+  </div>
+</div>
+
+<script>
+"use strict";
+
+// ---- Data: every node is either a teacher, a corpus, or a student ----
+const NODES = {
+  // ============ CHAT-TEACHER LINE (GPT-4 era) ============
+  "gpt4": {
+    kind: "teacher", closed: true, x: 120, y: 60, label: "GPT-4",
+    era: "2023 chat teacher",
+    details: {
+      "Model":            "GPT-4 (OpenAI API)",
+      "Role":             "Teacher for Orca line",
+      "Trace style":      "Short-to-medium CoT under system-prompt steering; no native <think> tag",
+      "License":          '<span class="pill license-proprietary">proprietary</span> API ToS restricts training competitors',
+      "Known quirks":     "Refusal patterns (\"As an AI language model…\"), verbose preambles, high English bias"
+    }
+  },
+  "orca1": {
+    kind: "corpus", x: 80, y: 170, label: "Orca-1 corpus",
+    era: "Mukherjee 2023",
+    details: {
+      "Paper":            "arxiv.org/abs/2306.02707",
+      "Teacher":          "GPT-4 (deep) + ChatGPT (broad)",
+      "Size":             "1M GPT-4 + 5M ChatGPT traces (progressive learning)",
+      "Prompt steering":  "16 hand-crafted system messages (CoT / ELI5 / expert / plan-and-execute / definition-unpack / MCQ-elimination / …)",
+      "Filter":           "Format check + task-level correctness where available; mostly trust the teacher",
+      "License":          '<span class="pill license-contested">contested</span> GPT-4 outputs; no public release',
+      "Student":          "Orca-13B (Llama-based)",
+      "Flagship eval":    "BigBench-Hard zero-shot 49.7 (vs Vicuna-13B 44.0)"
+    }
+  },
+  "orca2": {
+    kind: "corpus", x: 200, y: 170, label: "Orca-2 corpus",
+    era: "Mitra 2023",
+    details: {
+      "Paper":            "arxiv.org/abs/2311.11045",
+      "Teacher":          "GPT-4",
+      "Strategy modes":   "5 (direct / step-by-step / explain-then-answer / recall-then-answer / extract-then-answer)",
+      "Key trick":        "Prompt Erasing — student trained without the strategy-selecting system message, learns to pick strategy itself",
+      "License":          '<span class="pill license-contested">contested</span> GPT-4 outputs',
+      "Student":          "Orca-2 7B / 13B",
+      "Significance":     "Bridges 'execute the teacher\u2019s strategy' \u2192 'learn when each strategy applies'"
+    }
+  },
+  "openorca": {
+    kind: "corpus", x: 60, y: 290, label: "Open-Orca / SlimOrca",
+    era: "2023 community reproduction",
+    details: {
+      "Maintainers":      "Open-Orca community",
+      "Size":             "~4.2M (OpenOrca), ~518K (SlimOrca dedup)",
+      "Teacher":          "GPT-3.5 + GPT-4 (FLAN-augmented)",
+      "License":          '<span class="pill license-contested">contested</span> MIT on dataset; outputs governed by OpenAI ToS',
+      "Students":         "Used by Mistral-Orca, OpenOrca-Platypus, many community fine-tunes",
+      "Role":             "First public Orca-style corpus at scale"
+    }
+  },
+  "dolphin": {
+    kind: "corpus", x: 200, y: 290, label: "Dolphin (v1 \u2192 v2.x)",
+    era: "Hartford 2023\u20132025",
+    details: {
+      "Maintainer":       "Eric Hartford / Cognitive Computations",
+      "Size":             "v1: 1M (FLAN+GPT-4) + 3.5M (FLAN+GPT-3.5); v2.x adds community mixes",
+      "Filter":           '"Uncensoring": regex + classifier drop refusal patterns, alignment preambles, bias disclaimers',
+      "License":          '<span class="pill license-permissive">Apache-2.0 dataset</span> — but GPT-4 output license remains contested',
+      "Students":         "Dolphin-Mixtral, Dolphin-Llama3, Dolphin-Qwen, Dolphin-R1",
+      "Lesson":           "Teacher-bias transfer is systematic; refusal filter must be an explicit pipeline stage"
+    }
+  },
+
+  // ============ REASONING-TEACHER LINE (R1 era) ============
+  "r1": {
+    kind: "teacher", closed: false, x: 520, y: 60, label: "DeepSeek-R1",
+    era: "2025 reasoning teacher",
+    details: {
+      "Model":            "DeepSeek-R1 (671B MoE)",
+      "Weight license":   '<span class="pill license-permissive">MIT</span> — outputs explicitly permitted for training',
+      "Trace format":     "&lt;think&gt;…&lt;/think&gt;&lt;answer&gt;…&lt;/answer&gt; long CoT; median ~5K tokens, tail to 30K",
+      "Origin":           "RL (GRPO) on DeepSeek-V3-Base + cold-start SFT + RS-SFT + alignment RL",
+      "Hparams (public)": "GRPO \u03b5=10, KL=0.001, LR 3e-6, G=16, T=1.0, max gen 32,768 tokens",
+      "Quirks":           "Occasional English/Chinese mixing; \"Wait, let me reconsider\" reflection tic; AIME/MATH contamination risk"
+    }
+  },
+  "r1_800k": {
+    kind: "corpus", x: 440, y: 170, label: "R1 RS-SFT 800K",
+    era: "DeepSeek 2025",
+    details: {
+      "Origin":           "Rejection-sampling SFT stage of R1 pipeline; stage-1 RL model generates, V3-judge filters",
+      "Composition":      "~600K reasoning (math / code / science) + ~200K non-reasoning (writing / roleplay / translation)",
+      "Verifier":         "SymPy (math) + unit tests (code) + V3-judge (open-ended)",
+      "License":          '<span class="pill license-permissive">MIT</span> on derivatives via R1\u2019s license',
+      "Opacity":          "Per-source breakdown, reject-yield ratio, judge prompt NOT disclosed"
+    }
+  },
+  "r1_distill": {
+    kind: "student", x: 520, y: 280, label: "R1-Distill (1.5B\u201370B)",
+    era: "DeepSeek 2025",
+    details: {
+      "Student bases":    "Qwen2.5-Math 1.5B / 7B / 14B / 32B; Llama-3.1-8B; Llama-3.3-70B",
+      "Training":         "Pure SFT on 800K corpus; no RL on student",
+      "Flagship":         "R1-Distill-Qwen-32B: AIME24 ~72%, MATH500 ~94%, LiveCodeBench ~57% (beats o1-mini on MATH/AIME)",
+      "Lesson":           "Dense students benefit more from copied reasoning structure than from rediscovering via own RL"
+    }
+  },
+  "stratos": {
+    kind: "corpus", x: 340, y: 280, label: "Bespoke-Stratos-17k",
+    era: "Bespoke Labs 2025",
+    details: {
+      "Teacher":          "DeepSeek-R1 (API)",
+      "Size":             "17,000 (prompt, long-CoT) pairs",
+      "Filter":           "SymPy equivalence on \\boxed{} (math) + unit tests (code) + GPT-4o LLM-judge (science); MinHash dedup",
+      "Reject rate":      "30\u201350% (code dominates rejections)",
+      "Cost":             "~$800 API + ~$4K training on 8\u00d7H100",
+      "License":          '<span class="pill license-permissive">Apache-2.0</span>',
+      "Student":          "Bespoke-Stratos-32B: AIME24 ~63%, MATH500 ~93%, LCB ~57% (within 2\u20133 pts of R1-Distill-Qwen-32B at 1/47 the data)",
+      "Lesson":           "Curation beats scale up to a ceiling; the ceiling is the teacher"
+    }
+  },
+  "openr1": {
+    kind: "corpus", x: 620, y: 170, label: "OpenR1-Math-220k",
+    era: "HuggingFace 2025",
+    details: {
+      "Teacher":          "DeepSeek-R1 (HF-hosted + API mix)",
+      "Size":             "220K math problems \u00d7 ~2 traces \u2248 440K samples",
+      "Filter":           "Math-Verify (open-source SymPy) + format check (\\boxed{}, &lt;/think&gt;)",
+      "Reject rate":      "~20%",
+      "Cost":             "~$10K inference (HF H100 + API mix)",
+      "License":          '<span class="pill license-permissive">Apache-2.0</span>',
+      "Scope":            "Math only (code / science tracks in progress)",
+      "Student":          "OpenR1-Qwen-7B: MATH ~80%, AIME24 ~40%; follow-up GRPO adds +3\u20135 AIME",
+      "Lesson":           "2 traces/problem marginal over 1; most signal from R1 quality not trace multiplicity"
+    }
+  },
+
+  // ============ QWQ TEACHER LINE ============
+  "qwq": {
+    kind: "teacher", closed: false, x: 820, y: 60, label: "QwQ-32B-preview",
+    era: "2024 open reasoning teacher",
+    details: {
+      "Model":            "QwQ-32B-preview (Alibaba)",
+      "Weight license":   '<span class="pill license-permissive">Apache-2.0</span>',
+      "Trace format":     'QwQ-native long-CoT; "Wait", "Hmm" reflection tokens; non-standard wrapper needs reformatting',
+      "Teacher strength": "Weaker than R1 on hardest problems (AIME25); closer to Qwen2.5 base distribution \u2192 less distribution shift for Qwen students",
+      "Key advantage":    "Fully local inference (no API); trace outputs freely redistributable"
+    }
+  },
+  "skyt1": {
+    kind: "corpus", x: 760, y: 170, label: "Sky-T1-data-17K",
+    era: "NovaSky 2025",
+    details: {
+      "Teacher":          "QwQ-32B-preview (local vLLM)",
+      "Size":             "17,000 (prompt, long-CoT) pairs",
+      "Filter":           "SymPy (math) + unit tests (code) + GPT-4o-mini LLM-judge (open-ended)",
+      "Reformatting":     "GPT-4o rewriter strips preamble filler; lifts AIME by +4 points",
+      "Cost":             "$450 total (training-only); teacher inference free (local)",
+      "License":          '<span class="pill license-permissive">Apache-2.0</span>',
+      "Student":          "Sky-T1-32B: AIME24 ~43%, MATH500 ~82%, LCB-Easy ~86%, GPQA-Dia ~57%",
+      "Delta vs R1":      "~20 pts behind R1-Distill on AIME (teacher ceiling)"
+    }
+  },
+  "openthoughts": {
+    kind: "corpus", x: 900, y: 170, label: "OpenThoughts3-1.2M",
+    era: "Guha 2025",
+    details: {
+      "Teacher":          "QwQ-32B (primary); R1 ablation included",
+      "Size":             "1.2M examples (850K math + 250K code + 100K science)",
+      "Filter":           "LLM-labeled difficulty (question side) beats embedding/fastText; 'no filter' beats aggressive answer-side filtering",
+      "Ablations":        "1000+ controlled experiments over pipeline",
+      "Dedup":            "Exact for math/science; NONE for code",
+      "Key finding":      "QwQ-32B beats DeepSeek-R1 as a teacher for Qwen2.5-7B despite R1 scoring higher on target benchmarks",
+      "License":          '<span class="pill license-permissive">Apache-2.0</span>',
+      "Student":          "OpenThinker3-7B: AIME24 69%, AIME25 53%, MATH500 90%, LCB 52%, GPQA-Dia 54% (strongest open-data 7B reasoner)"
+    }
+  }
+};
+
+// ---- Edges: source -> target with kind (descendant vs distill) ----
+const EDGES = [
+  // GPT-4 line
+  ["gpt4",   "orca1",  "distill"],
+  ["gpt4",   "orca2",  "distill"],
+  ["orca1",  "orca2",  "descendant"],
+  ["orca1",  "openorca","descendant"],
+  ["orca1",  "dolphin","descendant"],
+  ["gpt4",   "openorca","distill"],
+  ["gpt4",   "dolphin","distill"],
+
+  // R1 line
+  ["r1",       "r1_800k",   "distill"],
+  ["r1_800k",  "r1_distill","descendant"],
+  ["r1",       "stratos",   "distill"],
+  ["r1",       "openr1",    "distill"],
+
+  // QwQ line
+  ["qwq", "skyt1",        "distill"],
+  ["qwq", "openthoughts", "distill"],
+
+  // Cross-era: OpenThoughts ablates both teachers
+  ["r1",  "openthoughts", "distill"]
+];
+
+// ---- Render ----
+const svg = document.getElementById("tree");
+const svgNS = "http://www.w3.org/2000/svg";
+
+function curve(x1, y1, x2, y2) {
+  const mx = (x1 + x2) / 2;
+  return `M${x1},${y1} C${mx},${y1} ${mx},${y2} ${x2},${y2}`;
+}
+
+function colorFor(node) {
+  if (node.kind === "teacher") return node.closed ? "#ffd166" : "#9be9b2";
+  if (node.kind === "corpus")  return "#7ec4ff";
+  if (node.kind === "student") return "#d08ef2";
+  return "#ccc";
+}
+
+// Draw edges first (under nodes)
+EDGES.forEach(([from, to, kind]) => {
+  const a = NODES[from], b = NODES[to];
+  const p = document.createElementNS(svgNS, "path");
+  p.setAttribute("d", curve(a.x, a.y + 20, b.x, b.y - 20));
+  p.setAttribute("class", `edge ${kind}`);
+  svg.appendChild(p);
+});
+
+// Draw nodes
+const nodeEls = {};
+Object.entries(NODES).forEach(([id, n]) => {
+  const g = document.createElementNS(svgNS, "g");
+  g.setAttribute("class", "node");
+  g.setAttribute("transform", `translate(${n.x},${n.y})`);
+  g.addEventListener("click", () => select(id));
+
+  const c = document.createElementNS(svgNS, "circle");
+  c.setAttribute("r", 18);
+  c.setAttribute("fill", colorFor(n));
+  c.setAttribute("stroke", "#0f1115");
+  c.setAttribute("stroke-width", 2);
+  g.appendChild(c);
+
+  const t = document.createElementNS(svgNS, "text");
+  t.setAttribute("y", 34);
+  t.textContent = n.label;
+  g.appendChild(t);
+
+  svg.appendChild(g);
+  nodeEls[id] = g;
+});
+
+// Panel rendering
+const panel = document.getElementById("panel");
+let selected = null;
+
+function select(id) {
+  if (selected && nodeEls[selected]) nodeEls[selected].classList.remove("selected");
+  selected = id;
+  nodeEls[id].classList.add("selected");
+
+  const n = NODES[id];
+  let html = `<h2>${n.label}</h2><div class="era">${n.era}</div>`;
+  Object.entries(n.details).forEach(([k, v]) => {
+    html += `<div class="row"><div class="k">${k}</div><div class="v">${v}</div></div>`;
+  });
+  html += `<div class="hint">Edges: dashed = distill-from (teacher outputs \u2192 corpus); solid = descendant lineage.</div>`;
+  panel.innerHTML = html;
+}
+
+// Default selection: pick R1 so the centerpiece pipeline shows up first
+select("r1");
+</script>
+</body>
+</html>

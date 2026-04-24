@@ -1,0 +1,356 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>TRL SFTTrainer — call graph mapped to Track-1 concepts</title>
+<style>
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+         max-width: 1180px; margin: 1.6em auto; padding: 0 1em; color: #1f1f1f;
+         background: #fafafa; }
+  h1 { font-size: 1.3em; margin-bottom: 0.25em; }
+  .subtitle { color: #5a5a5a; margin-top: 0; font-size: 0.92em; line-height: 1.5; }
+  .layout { display: grid; grid-template-columns: 1.35fr 1fr; gap: 1.2em;
+            margin-top: 1em; }
+  .panel { border: 1px solid #dcdcdc; border-radius: 6px; background: #fff;
+           padding: 0.85em 1em; }
+  h2 { font-size: 1.02em; margin: 0 0 0.55em 0; color: #2b2b2b;
+       border-bottom: 1px solid #ececec; padding-bottom: 0.25em; }
+  svg { width: 100%; height: 560px; display: block; }
+  .node rect { fill: #fff; stroke: #888; stroke-width: 1.2; cursor: pointer;
+               transition: fill 0.15s, stroke 0.15s; }
+  .node text { font-family: 'SF Mono', Menlo, monospace; font-size: 11px;
+               fill: #1b1b1b; pointer-events: none; text-anchor: middle; }
+  .node .sub { font-size: 9.5px; fill: #666; }
+  .node.selected rect { stroke: #204080; stroke-width: 2.2; fill: #eef3fb; }
+  .node:hover rect { fill: #f4f7fc; stroke: #2e5aa8; }
+  /* failure-band colours: three silent-failure lines */
+  .band-mask    rect { stroke-left: #8b1a1a; }
+  .band-mask    { }
+  .node.band-mask    rect { stroke: #8b1a1a; }
+  .node.band-packing rect { stroke: #7a4a00; }
+  .node.band-order   rect { stroke: #1b5e20; }
+  .node.band-neutral rect { stroke: #888; }
+  path.edge { fill: none; stroke: #9a9a9a; stroke-width: 1.1; marker-end: url(#arrow); }
+  .legend { font-size: 0.82em; color: #444; margin-top: 0.5em; line-height: 1.6; }
+  .legend .chip { display: inline-block; width: 10px; height: 10px;
+                  border-radius: 2px; margin-right: 4px; vertical-align: middle;
+                  border: 1.5px solid; }
+  .chip.mask    { border-color: #8b1a1a; background: #fff4f4; }
+  .chip.packing { border-color: #7a4a00; background: #fff9ed; }
+  .chip.order   { border-color: #1b5e20; background: #eefaf0; }
+  .chip.neutral { border-color: #888; background: #f6f6f6; }
+  #detail { min-height: 540px; }
+  #detail h3 { margin: 0 0 0.4em 0; font-size: 1em; color: #1f1f1f;
+               font-family: 'SF Mono', Menlo, monospace; }
+  #detail .meta { font-size: 0.82em; color: #666; margin-bottom: 0.6em; }
+  #detail .section { margin-top: 0.8em; }
+  #detail .label { font-weight: 600; font-size: 0.85em; color: #333;
+                   text-transform: uppercase; letter-spacing: 0.04em; }
+  #detail .body  { font-size: 0.9em; line-height: 1.5; color: #222; margin-top: 0.2em; }
+  #detail .chapter-tag { display: inline-block; font-size: 0.75em;
+                         padding: 2px 7px; border-radius: 10px;
+                         background: #eef; color: #224; margin-right: 0.3em; }
+  #detail .fail-line   { border-left: 3px solid #c03030; background: #fff6f6;
+                         padding: 0.45em 0.65em; font-size: 0.85em;
+                         margin-top: 0.3em; border-radius: 3px; }
+  .empty { color: #888; font-style: italic; font-size: 0.9em; }
+  code { background: #eef; padding: 1px 4px; border-radius: 3px;
+         font-family: 'SF Mono', Menlo, monospace; font-size: 0.85em; }
+</style>
+</head>
+<body>
+
+<h1>TRL <code>SFTTrainer</code> — call graph, by concept chapter</h1>
+<p class="subtitle">
+  Each box is a concrete call inside TRL's <code>SFTTrainer</code> (or the HF <code>Trainer</code>
+  it extends). Click a box to pin its detail panel. The coloured outline marks which of the
+  <strong>three most-likely-to-fail-silently lines</strong> the call sits on — masking (red),
+  packing/attention (amber), or ordering (green). Neutral-grey boxes are plumbing that rarely fails
+  silently but needs to be in the picture for the map to be complete.
+</p>
+
+<div class="layout">
+
+<div class="panel">
+  <h2>Call graph</h2>
+  <svg id="graph" viewBox="0 0 620 560" preserveAspectRatio="xMidYMid meet">
+    <defs>
+      <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5"
+              markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+        <path d="M 0 0 L 10 5 L 0 10 z" fill="#9a9a9a"/>
+      </marker>
+    </defs>
+    <g id="edges"></g>
+    <g id="nodes"></g>
+  </svg>
+  <div class="legend">
+    <span class="chip mask"></span>masking line &nbsp;
+    <span class="chip packing"></span>packing / attention line &nbsp;
+    <span class="chip order"></span>ordering line (clip/step/scheduler) &nbsp;
+    <span class="chip neutral"></span>plumbing
+  </div>
+</div>
+
+<div class="panel" id="detail">
+  <h3 id="d-title">Click a node to begin</h3>
+  <p class="empty" id="d-empty">The detail panel will show the concept chapter, the one-line silent
+     failure, and the exact TRL / HF symbol the box represents.</p>
+  <div id="d-full" style="display:none">
+    <div class="meta" id="d-meta"></div>
+    <div class="section">
+      <div class="label">Concept coverage</div>
+      <div class="body" id="d-chapters"></div>
+    </div>
+    <div class="section">
+      <div class="label">What this call does</div>
+      <div class="body" id="d-does"></div>
+    </div>
+    <div class="section">
+      <div class="label">Silent failure mode</div>
+      <div class="fail-line" id="d-fail"></div>
+    </div>
+    <div class="section">
+      <div class="label">TRL / HF symbol</div>
+      <div class="body" id="d-symbol"></div>
+    </div>
+  </div>
+</div>
+
+</div>
+
+<script>
+// -------- Data model: one entry per node -------------------------------------
+const NODES = [
+  { id: "entry",  x: 310, y:  28, w: 200, h: 40, band: "neutral",
+    title: "SFTTrainer(...)", sub: "trl/trainer/sft_trainer.py",
+    chapters: ["ch-00"],
+    does: "Constructs the trainer; merges SFTConfig into HF TrainingArguments; " +
+          "delegates dataset prep to _prepare_dataset and training loop to the " +
+          "HF Trainer parent class.",
+    fail: "Rare: version skew between TRL and transformers can silently disable knobs " +
+          "(e.g. train_on_response_only ignored on old TRL). Pin versions.",
+    symbol: "trl.SFTTrainer(model, args=SFTConfig, train_dataset, ...)" },
+
+  { id: "ct", x: 120, y:  98, w: 200, h: 44, band: "mask",
+    title: "apply_chat_template()", sub: "tokenizer.apply_chat_template",
+    chapters: ["ch-04"],
+    does: "Renders messages (list of dicts) into a single string with the model's " +
+          "special tokens (e.g. <|im_start|>, <|eot_id|>); then tokenizes.",
+    fail: "#1 silent bug per hf-alignment-handbook: wrong template vs the base " +
+          "model's tokenizer. Doubled BOS, missing <|eot_id|>, wrong role names all " +
+          "produce a model that looks trained but chat-fails. Decode one packed batch " +
+          "and eyeball before training.",
+    symbol: "tokenizer.apply_chat_template(messages, tokenize=True, add_generation_prompt=False)" },
+
+  { id: "prep", x: 310, y:  98, w: 180, h: 44, band: "neutral",
+    title: "_prepare_dataset()", sub: "SFTTrainer._prepare_dataset",
+    chapters: ["ch-04"],
+    does: "Pipeline: chat-template -> tokenize -> (optional) pack -> construct a " +
+          "collator. Returns a Dataset of tokenized examples.",
+    fail: "Dataset mapping errors caught by HF; generally loud, not silent.",
+    symbol: "SFTTrainer._prepare_dataset(dataset, tokenizer, packing, ...)" },
+
+  { id: "pack", x: 510, y:  98, w: 100, h: 44, band: "packing",
+    title: "Pack", sub: "ConstantLengthDataset",
+    chapters: ["ch-04"],
+    does: "Greedy-packs short sequences into fixed-length blocks; emits cu_seqlens " +
+          "and per-sub-sequence position_ids. See sequence-packing §Mechanics.",
+    fail: "If cu_seqlens is not forwarded to flash_attn_varlen_func, the softmax " +
+          "attends across sub-sequences — silent cross-contamination (partition " +
+          "function leaks across documents). Unit test: run with and without the " +
+          "block-diagonal mask; loss must differ by >1e-3.",
+    symbol: "trl.trainer.ConstantLengthDataset / DataCollatorWithPacking" },
+
+  { id: "collator", x: 120, y: 178, w: 200, h: 44, band: "mask",
+    title: "Masking collator", sub: "DataCollatorForCompletionOnlyLM",
+    chapters: ["ch-04"],
+    does: "Per example (or per sub-sequence inside a packed block), locates the " +
+          "instruction template boundary and sets labels[:response_start] = -100. " +
+          "This is the response-only loss from loss-masking-prompt §Implementation.",
+    fail: "Multi-turn mismatch: only user turns masked, prior assistant turns left " +
+          "unmasked. Gradient matches the model's own past outputs, degenerating to " +
+          "'copy yourself'. Unit test: assert embed grad on prompt tokens is 0.0.",
+    symbol: "trl.trainer.DataCollatorForCompletionOnlyLM" },
+
+  { id: "loader", x: 340, y: 178, w: 160, h: 44, band: "neutral",
+    title: "DataLoader", sub: "accelerator-wrapped",
+    chapters: ["ch-06"],
+    does: "Shards across ranks via DistributedSampler; yields batches of " +
+          "(input_ids, labels, cu_seqlens, attention_mask).",
+    fail: "Per-rank state on resume — covered in ch-06 §5.1; not in scope for " +
+          "first-run lab.",
+    symbol: "accelerator.prepare(DataLoader(...))" },
+
+  { id: "fsdp", x: 80, y: 252, w: 170, h: 44, band: "neutral",
+    title: "FSDP wrap", sub: "auto_wrap_policy",
+    chapters: ["ch-05", "ch-06"],
+    does: "Wraps each LlamaDecoderLayer (or equivalent) as one FSDP unit under " +
+          "FULL_SHARD. Per fsdp-sft: AllGather forward, ReduceScatter backward; " +
+          "optimizer master stays fp32.",
+    fail: "Wrap policy change between save and load breaks DCP shard layout; " +
+          "resume OOMs or silently loads wrong shards. Fix wrap policy at run start.",
+    symbol: "FullyShardedDataParallel(module, auto_wrap_policy=transformer_auto_wrap_policy({LlamaDecoderLayer}))" },
+
+  { id: "autocast", x: 270, y: 252, w: 170, h: 44, band: "neutral",
+    title: "autocast bf16", sub: "torch.autocast",
+    chapters: ["ch-02"],
+    does: "Wraps forward pass in bf16; norm + softmax + CE stay fp32 per " +
+          "mixed-precision §Stability tricks.",
+    fail: "Logging loss in bf16 via a custom callback: curve looks quantized. " +
+          "loss.item() upcasts; loss.to(bfloat16).cpu() does not.",
+    symbol: "with torch.autocast('cuda', dtype=torch.bfloat16): loss = model(**batch).loss" },
+
+  { id: "forward", x: 460, y: 252, w: 150, h: 44, band: "packing",
+    title: "varlen attention", sub: "flash_attn_varlen_func",
+    chapters: ["ch-04"],
+    does: "Block-diagonal causal attention indexed by cu_seqlens; O(Σ L_i) memory " +
+          "not O(L_max²). Consumes the packing output of the ConstantLengthDataset.",
+    fail: "If cu_seqlens is derived from padded batch rather than packed batch, " +
+          "attention silently runs full-length and cross-contaminates sub-sequences.",
+    symbol: "flash_attn_varlen_func(q, k, v, cu_seqlens_q, cu_seqlens_k, max_seqlen)" },
+
+  { id: "loss", x: 180, y: 326, w: 160, h: 44, band: "mask",
+    title: "cross_entropy", sub: "ignore_index = -100",
+    chapters: ["ch-04"],
+    does: "F.cross_entropy(logits[...,:-1,:], labels[...,1:], ignore_index=-100). " +
+          "Masked prompt tokens contribute zero to gradient.",
+    fail: "If labels clone keeps prompt tokens (ignore_index not set), the model " +
+          "learns to generate the prompt — wasted capacity, degraded chat quality.",
+    symbol: "torch.nn.functional.cross_entropy(..., ignore_index=-100)" },
+
+  { id: "backward", x: 400, y: 326, w: 140, h: 44, band: "order",
+    title: "loss.backward()", sub: "accelerator.backward",
+    chapters: ["ch-02"],
+    does: "Computes gradients in bf16 (params) / fp32 (master); accumulates across " +
+          "gradient_accumulation_steps micro-batches.",
+    fail: "Forgetting to clip on the ACCUMULATED gradient (clip each microbatch " +
+          "instead) — clipping statistics are wrong; per gradient-clipping §Common pitfalls.",
+    symbol: "accelerator.backward(loss)" },
+
+  { id: "clip", x: 80, y: 398, w: 180, h: 44, band: "order",
+    title: "clip_grad_norm_", sub: "FSDP-aware, global",
+    chapters: ["ch-01"],
+    does: "Under FSDP, dispatched to FSDP.clip_grad_norm_ — computes norm across " +
+          "all shards, rescales uniformly. Returns the pre-clip norm.",
+    fail: "Per-tensor clip_grad_norm_(p, c) looped over params biases the optimizer " +
+          "toward small tensors. Also: custom code missing the FSDP dispatch " +
+          "under-counts the global norm and clips incorrectly.",
+    symbol: "accelerator.clip_grad_norm_(model.parameters(), max_grad_norm=1.0)" },
+
+  { id: "step", x: 280, y: 398, w: 120, h: 44, band: "order",
+    title: "optimizer.step()", sub: "AdamW, fp32 state",
+    chapters: ["ch-01"],
+    does: "AdamW update on the fp32 master (even under bf16 training). Optimizer " +
+          "state = m, v, master = 12P per fsdp-sft memory formula.",
+    fail: "'weights-only' checkpoint skips optimizer state → on resume Adam's " +
+          "moments re-warm, loss spikes. Covered in ch-06 §5.4.",
+    symbol: "optimizer.step()   # AdamW with (0.9, 0.95)" },
+
+  { id: "sched", x: 420, y: 398, w: 120, h: 44, band: "order",
+    title: "scheduler.step()", sub: "cosine + warmup",
+    chapters: ["ch-03"],
+    does: "Cosine with warmup_ratio=0.1. Must be called AFTER optimizer.step(); " +
+          "otherwise first step runs at the next step's LR (off-by-one).",
+    fail: "Calling scheduler.step() before optimizer.step() OR computing total T " +
+          "before packing reduces step count — cosine finishes early and last 60% " +
+          "of training runs at min_lr.",
+    symbol: "lr_scheduler.step()" },
+
+  { id: "zero", x: 560, y: 398, w: 50, h: 44, band: "neutral",
+    title: "zero", sub: "set_to_none=True",
+    chapters: ["ch-01"],
+    does: "Releases gradient memory. set_to_none=True is strictly better than " +
+          "zero-filling.",
+    fail: "Forgetting to call: gradients from step k bleed into step k+1, " +
+          "effectively inflating the accumulation count. Usually caught fast by " +
+          "exploding norm.",
+    symbol: "optimizer.zero_grad(set_to_none=True)" },
+
+  { id: "log", x: 180, y: 470, w: 180, h: 44, band: "neutral",
+    title: "log + eval + save", sub: "Trainer._maybe_log_save_evaluate",
+    chapters: ["ch-06"],
+    does: "Per step: writes loss, grad_norm (pre-clip), lr, tokens/sec. Per " +
+          "eval_steps: validation loss. Per save_steps: DCP checkpoint.",
+    fail: "Logging loss or grad_norm in fp16/bf16 instead of fp32 → jaggy curves. " +
+          "Save path: rank-0 gather at 70B → OOM (ch-06 §2 naive pattern A).",
+    symbol: "Trainer._maybe_log_save_evaluate()" },
+
+  { id: "ckpt", x: 400, y: 470, w: 180, h: 44, band: "neutral",
+    title: "DCP save", sub: "sharded, full seven-item state",
+    chapters: ["ch-06"],
+    does: "Saves model shard + optimizer shard + scheduler + RNG + dataloader state " +
+          "atomically. Seven-item list from ch-06 §1.",
+    fail: "Missing any of the seven items: data-iter desync, scaler re-warm, " +
+          "cosine off-by-one. All silent.",
+    symbol: "torch.distributed.checkpoint.save(state_dict, checkpoint_id)" }
+];
+
+const EDGES = [
+  ["entry","ct"], ["entry","prep"], ["prep","pack"], ["prep","collator"],
+  ["collator","loader"], ["pack","loader"], ["ct","prep"],
+  ["loader","fsdp"], ["fsdp","autocast"], ["autocast","forward"],
+  ["forward","loss"], ["loss","backward"], ["backward","clip"],
+  ["clip","step"], ["step","sched"], ["sched","zero"],
+  ["step","log"], ["log","ckpt"]
+];
+
+// -------- Rendering ---------------------------------------------------------
+const svg   = document.getElementById("graph");
+const gEdg  = document.getElementById("edges");
+const gNod  = document.getElementById("nodes");
+const nById = Object.fromEntries(NODES.map(n => [n.id, n]));
+
+function center(n) { return { x: n.x + n.w/2, y: n.y + n.h/2 }; }
+function edgePath(a, b) {
+  const c1 = center(a), c2 = center(b);
+  const ay = a.y + a.h, by = b.y;
+  const x1 = c1.x, x2 = c2.x;
+  const midY = (ay + by) / 2;
+  return `M ${x1} ${ay} C ${x1} ${midY}, ${x2} ${midY}, ${x2} ${by}`;
+}
+EDGES.forEach(([aId, bId]) => {
+  const a = nById[aId], b = nById[bId];
+  if (!a || !b) return;
+  const p = document.createElementNS("http://www.w3.org/2000/svg", "path");
+  p.setAttribute("class", "edge");
+  p.setAttribute("d", edgePath(a, b));
+  gEdg.appendChild(p);
+});
+
+NODES.forEach(n => {
+  const g = document.createElementNS("http://www.w3.org/2000/svg", "g");
+  g.setAttribute("class", "node band-" + n.band);
+  g.setAttribute("data-id", n.id);
+  g.innerHTML =
+    `<rect x="${n.x}" y="${n.y}" width="${n.w}" height="${n.h}" rx="4" ry="4"></rect>` +
+    `<text x="${n.x + n.w/2}" y="${n.y + 18}">${n.title}</text>` +
+    `<text class="sub" x="${n.x + n.w/2}" y="${n.y + 33}">${n.sub}</text>`;
+  g.addEventListener("mouseenter", () => showDetail(n));
+  g.addEventListener("click",      () => { pinDetail(n); });
+  gNod.appendChild(g);
+});
+
+function showDetail(n) {
+  document.getElementById("d-empty").style.display = "none";
+  document.getElementById("d-full").style.display  = "block";
+  document.getElementById("d-title").textContent   = n.title;
+  document.getElementById("d-meta").textContent    = n.sub;
+  const chTags = n.chapters.map(c => `<span class="chapter-tag">${c}</span>`).join("");
+  document.getElementById("d-chapters").innerHTML  = chTags;
+  document.getElementById("d-does").textContent    = n.does;
+  document.getElementById("d-fail").textContent    = n.fail;
+  document.getElementById("d-symbol").innerHTML    = `<code>${n.symbol}</code>`;
+}
+let pinned = null;
+function pinDetail(n) {
+  document.querySelectorAll(".node").forEach(el => el.classList.remove("selected"));
+  const sel = document.querySelector(`.node[data-id="${n.id}"]`);
+  if (sel) sel.classList.add("selected");
+  pinned = n; showDetail(n);
+}
+// Initial selection so the panel is not empty on load.
+pinDetail(nById["collator"]);
+</script>
+
+</body>
+</html>

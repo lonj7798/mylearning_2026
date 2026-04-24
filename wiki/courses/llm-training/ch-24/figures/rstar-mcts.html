@@ -1,0 +1,254 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>rStar-Math MCTS + s1/LIMO curation curve</title>
+<style>
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+         max-width: 1160px; margin: 1.5em auto; padding: 0 1em; color: #222; background: #fafafa; }
+  h1 { font-size: 1.3em; margin-bottom: 0.2em; }
+  .subtitle { color: #666; margin-top: 0; font-size: 0.92em; }
+  .layout { display: grid; grid-template-columns: 1.25fr 1fr; gap: 1.1em; margin-top: 1.1em; }
+  .panel { border: 1px solid #dcdcdc; border-radius: 6px; background: #fff; padding: 0.8em 1em; }
+  h2 { font-size: 1em; margin: 0 0 0.5em 0; color: #333; border-bottom: 1px solid #eee; padding-bottom: 0.3em; }
+  button { font-size: 0.85em; padding: 4px 10px; margin-right: 0.4em;
+           border: 1px solid #bbb; background: #f4f4f4; border-radius: 4px; cursor: pointer; }
+  button.primary { background: #2a6fb5; color: #fff; border-color: #1f5995; }
+  svg { background: #fcfcfc; border: 1px solid #eee; border-radius: 4px; display: block; }
+  .node circle { stroke: #555; stroke-width: 1.2; }
+  .node.selected circle { stroke: #c97020; stroke-width: 3; }
+  .node text { font-size: 10px; fill: #333; pointer-events: none; }
+  .link { fill: none; stroke: #aaa; stroke-width: 1.2; }
+  .detail { font-size: 0.85em; background: #f7f7fb; border: 1px dashed #ccd;
+            padding: 0.5em 0.7em; border-radius: 4px; margin-top: 0.5em; min-height: 90px; }
+  .detail code { background: #eef; padding: 1px 4px; border-radius: 3px;
+                 font-family: 'SF Mono', Menlo, monospace; font-size: 0.85em; }
+  .slider-row { display: grid; grid-template-columns: 140px 1fr 100px;
+                align-items: center; gap: 0.5em; margin: 0.4em 0; font-size: 0.88em; }
+  .slider-row input[type="range"] { width: 100%; }
+  .slider-row .val { font-family: 'SF Mono', Menlo, monospace; color: #335; text-align: right; }
+  .chip { display: inline-block; padding: 1px 8px; border-radius: 10px;
+          font-size: 0.72em; margin-right: 0.3em; vertical-align: middle; }
+  .chip.good { background: #e6f4ea; color: #1b5e20; }
+  .chip.bad  { background: #fde7e7; color: #8b1a1a; }
+  .chip.mid  { background: #fff4e0; color: #7a4a00; }
+  .note { font-size: 0.8em; color: #666; margin-top: 0.6em; line-height: 1.45; }
+  .bench-table { width: 100%; border-collapse: collapse; font-size: 0.84em; margin-top: 0.4em; }
+  .bench-table th, .bench-table td { border: 1px solid #e0e0e0; padding: 4px 7px; text-align: right; }
+  .bench-table th:first-child, .bench-table td:first-child { text-align: left; }
+  .bench-table thead { background: #f0f4f8; }
+</style>
+</head>
+<body>
+
+<h1>rStar-Math MCTS expansion + s1/LIMO dataset-size sweep</h1>
+<p class="subtitle">
+  Panel 1: click <b>Expand</b> to sample K=3 (thought, code) steps at the UCB-selected node; code-exec failures prune.
+  Panel 2: sliders over dataset size, trace style, curation quality; anchors from
+  <code>[[s1]]</code>, <code>[[limo]]</code>, <code>[[openmathinstruct-2]]</code>.
+</p>
+
+<div class="layout">
+  <div class="panel">
+    <h2>Panel 1 &mdash; rStar-Math MCTS (code-augmented)</h2>
+    <div>
+      <button id="btnExpand" class="primary">Expand UCB-selected node</button>
+      <button id="btnReset">Reset tree</button>
+      <span id="stepInfo" style="margin-left:0.5em; font-size:0.82em; color:#555;"></span>
+    </div>
+    <svg id="tree" width="640" height="340"></svg>
+    <div class="detail" id="detail">
+      Click <b>Expand</b>. Root problem: <code>"3a + 4b = 12, a = 2. Find b."</code> (gold = 1.5).
+      Each expansion samples K=3 candidate steps; exec-exception prunes; surviving siblings get Q from rollout.
+    </div>
+    <div class="note">
+      <span class="chip good">Q&ge;0.5</span><span class="chip mid">0&lt;Q&lt;0.5</span><span class="chip bad">pruned</span>
+      UCB = Q + c_puct &middot; P &middot; &radic;N<sub>parent</sub> / (1 + N<sub>child</sub>)
+    </div>
+  </div>
+
+  <div>
+    <div class="panel">
+      <h2>Panel 2 &mdash; Curation beats volume</h2>
+      <div class="slider-row">
+        <label for="sizeSlider">Dataset size</label>
+        <input id="sizeSlider" type="range" min="0" max="4" value="2">
+        <span class="val" id="sizeVal">1K</span>
+      </div>
+      <div class="slider-row">
+        <label for="styleSlider">Trace style</label>
+        <input id="styleSlider" type="range" min="0" max="2" value="2">
+        <span class="val" id="styleVal">long-reflective</span>
+      </div>
+      <div class="slider-row">
+        <label for="curSlider">Curation</label>
+        <input id="curSlider" type="range" min="0" max="2" value="2">
+        <span class="val" id="curVal">hand-curated</span>
+      </div>
+      <table class="bench-table">
+        <thead><tr><th>Metric</th><th>Base</th><th>Predicted</th><th>Nearest anchor</th></tr></thead>
+        <tbody>
+          <tr><td>AIME24</td><td>17</td><td id="predA">&mdash;</td><td id="refA">&mdash;</td></tr>
+          <tr><td>MATH500</td><td>84</td><td id="predM">&mdash;</td><td id="refM">&mdash;</td></tr>
+        </tbody>
+      </table>
+      <div class="note" id="regimeNote">Move sliders.</div>
+    </div>
+
+    <div class="panel" style="margin-top: 0.7em;">
+      <h2>Attested anchors</h2>
+      <table class="bench-table">
+        <thead><tr><th>Recipe</th><th>N</th><th>AIME24</th><th>MATH500</th></tr></thead>
+        <tbody>
+          <tr><td>Qwen2.5-32B base</td><td>0</td><td>17</td><td>84</td></tr>
+          <tr><td>Random 1K short-CoT</td><td>1K</td><td>24</td><td>86</td></tr>
+          <tr><td>OpenMathInstruct-2 SFT</td><td>14M</td><td>40</td><td>90</td></tr>
+          <tr><td>s1K curated</td><td>1K</td><td>56.7</td><td>93.0</td></tr>
+          <tr><td>LIMO hand-curated</td><td>817</td><td>63.3</td><td>95.6</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+<script>
+// ===== Panel 1: rStar-Math MCTS =====
+const svg = document.getElementById("tree"), SVGNS = "http://www.w3.org/2000/svg";
+const W = 640, H = 340, C_PUCT = 1.5;
+const BANK = [
+  { t: "Substitute a=2 into the equation.", c: "a=2\nprint(3*a + '4b=12')", ok: false, note: "TypeError: int + str" },
+  { t: "Substitute: 3(2) + 4b = 12.", c: "print(3*2)", ok: true, q: 0.65 },
+  { t: "Divide (12-6)/4.", c: "print((12-6)/4)", ok: true, q: 0.92 },
+  { t: "Guess b=1 and check.", c: "print(3*2 + 4*1 == 12)", ok: true, q: 0.30 },
+  { t: "Solve symbolically with sympy.", c: "from sympy import symbols,solve\nb=symbols('b')\nprint(solve(6+4*b-12,b))", ok: true, q: 0.85 },
+  { t: "Expand 4b = 12 - 6.", c: "print(12 - 6)", ok: true, q: 0.70 },
+  { t: "Try dividing by unknown b.", c: "print(12 / b)", ok: false, note: "NameError: b" },
+  { t: "Boxed final answer 6/4.", c: "print(6/4)", ok: true, q: 0.95, terminal: true, answer: 1.5 },
+  { t: "Halve coefficient blindly.", c: "print(3*2)", ok: true, q: 0.15 },
+];
+let nid = 0, root, selected;
+function mk(parent, t, c, ok, q, note, terminal, answer) {
+  return { id: nid++, parent, children: [], t, c, ok, note, q: ok ? q : 0,
+           n: 0, pruned: !ok, terminal: !!terminal, answer, p: 0.33 };
+}
+function reset() {
+  nid = 0; root = mk(null, "Problem: 3a+4b=12, a=2. Find b.", "# seed", true, 0);
+  root.n = 1; selected = root; draw(); setDetail(root);
+  document.getElementById("stepInfo").textContent = "Step 0 — root only.";
+}
+function ucb(c) {
+  if (c.pruned) return -Infinity;
+  return c.q + C_PUCT * c.p * Math.sqrt(c.parent.n || 1) / (1 + c.n);
+}
+function pickLeaf(n) {
+  while (n.children.filter(c => !c.pruned).length > 0) {
+    const v = n.children.filter(c => !c.pruned).sort((a,b) => ucb(b) - ucb(a));
+    n = v[0]; if (n.terminal) break;
+  }
+  return n;
+}
+function expand() {
+  const leaf = pickLeaf(root); selected = leaf;
+  if (leaf.terminal) { setDetail(leaf, "Terminal reached. Reset to try again."); draw(); return; }
+  const pool = BANK.slice().sort(() => Math.random() - 0.5).slice(0, 3);
+  for (const s of pool) leaf.children.push(mk(leaf, s.t, s.c, s.ok, s.q, s.note, s.terminal, s.answer));
+  const correct = leaf.children.some(c => c.terminal && c.answer === 1.5);
+  let n = leaf;
+  while (n) { n.n += 1; if (correct && !n.pruned) n.q = Math.min(0.95, n.q + 0.12); n = n.parent; }
+  const viable = leaf.children.filter(c => !c.pruned).length;
+  document.getElementById("stepInfo").textContent =
+    `Expanded node ${leaf.id}: ${viable} viable, ${leaf.children.length - viable} pruned.`;
+  draw(); setDetail(leaf);
+}
+function setDetail(n, extra) {
+  const el = document.getElementById("detail");
+  const badge = n.pruned ? '<span class="chip bad">pruned</span>' :
+                n.terminal ? '<span class="chip good">terminal</span>' :
+                n.q >= 0.5 ? '<span class="chip good">Q&ge;0.5</span>' :
+                '<span class="chip mid">Q&lt;0.5</span>';
+  el.innerHTML = `${badge} <b>Node ${n.id}</b> &middot; Q=${n.q.toFixed(2)} &middot; N=${n.n}
+    <br><b>Thought:</b> ${n.t}<br><b>Code:</b> <code>${n.c.replace(/\n/g,' ; ')}</code>
+    ${n.note ? '<br><b>Exec:</b> ' + n.note : ''}
+    ${n.terminal ? '<br><b>Final:</b> ' + n.answer + ' (gold = 1.5)' : ''}
+    ${extra ? '<br><i>' + extra + '</i>' : ''}`;
+}
+function layout() {
+  const levels = [];
+  (function walk(n, d) { (levels[d] = levels[d] || []).push(n); n.children.forEach(c => walk(c, d+1)); })(root, 0);
+  const vM = 28, hM = 30, dy = (H - 2*vM) / Math.max(1, levels.length - 1);
+  levels.forEach((row, d) => {
+    const dx = (W - 2*hM) / (row.length + 1);
+    row.forEach((n, i) => { n.x = hM + dx*(i+1); n.y = vM + dy*d; });
+  });
+}
+function draw() {
+  layout(); svg.innerHTML = "";
+  (function walk(n) { n.children.forEach(c => {
+    const p = document.createElementNS(SVGNS, "path"); p.setAttribute("class", "link");
+    p.setAttribute("d", `M${n.x},${n.y} C${n.x},${(n.y+c.y)/2} ${c.x},${(n.y+c.y)/2} ${c.x},${c.y}`);
+    svg.appendChild(p); walk(c);
+  }); })(root);
+  (function walk(n) {
+    const g = document.createElementNS(SVGNS, "g");
+    g.setAttribute("class", "node" + (n === selected ? " selected" : ""));
+    g.setAttribute("transform", `translate(${n.x},${n.y})`);
+    const c = document.createElementNS(SVGNS, "circle"); c.setAttribute("r", 14);
+    c.setAttribute("fill", n.pruned ? "#fde7e7" : n.terminal ? "#cfe8d4" :
+                           n.q >= 0.5 ? "#e6f4ea" : n.q > 0 ? "#fff4e0" : "#eef");
+    g.appendChild(c);
+    const t = document.createElementNS(SVGNS, "text");
+    t.setAttribute("text-anchor", "middle"); t.setAttribute("y", 4);
+    t.textContent = n === root ? "root" : n.q.toFixed(2);
+    g.appendChild(t);
+    g.addEventListener("click", () => { selected = n; setDetail(n); draw(); });
+    svg.appendChild(g); n.children.forEach(walk);
+  })(root);
+}
+document.getElementById("btnExpand").addEventListener("click", expand);
+document.getElementById("btnReset").addEventListener("click", reset);
+reset();
+
+// ===== Panel 2: dataset-size sweep =====
+const SIZES = [{l:"0 (base)",n:0},{l:"100",n:100},{l:"1K",n:1000},{l:"100K",n:100000},{l:"14M",n:14000000}];
+const STYLES = [{l:"short-CoT",f:0.6},{l:"hybrid CoT+PoT",f:0.8},{l:"long-reflective",f:1.0}];
+const CURS = [{l:"random",f:0.5},{l:"filtered",f:0.75},{l:"hand-curated",f:1.0}];
+function predict(size, style, cur) {
+  const idealA = {0:17,100:38,1000:65,100000:58,14000000:67};
+  const idealM = {0:84,100:90,1000:96,100000:94,14000000:94};
+  return { a: 17 + (idealA[size.n]-17)*style.f*cur.f, m: 84 + (idealM[size.n]-84)*style.f*cur.f };
+}
+function nearest(size, style) {
+  if (size.n === 0) return "Qwen2.5-32B base (17 / 84)";
+  if (size.n <= 1000 && style.f >= 0.9) return "LIMO 817 (63.3 / 95.6)";
+  if (size.n <= 1000 && style.f >= 0.7) return "s1K (56.7 / 93.0)";
+  if (size.n <= 1000) return "Random 1K short-CoT (24 / 86)";
+  if (size.n >= 1000000) return "OpenMathInstruct-2 14M (40 / 90)";
+  return "interpolated";
+}
+function redrawP2() {
+  const size = SIZES[+document.getElementById("sizeSlider").value];
+  const style = STYLES[+document.getElementById("styleSlider").value];
+  const cur = CURS[+document.getElementById("curSlider").value];
+  document.getElementById("sizeVal").textContent = size.l;
+  document.getElementById("styleVal").textContent = style.l;
+  document.getElementById("curVal").textContent = cur.l;
+  const p = predict(size, style, cur), ref = nearest(size, style);
+  document.getElementById("predA").textContent = p.a.toFixed(1);
+  document.getElementById("predM").textContent = p.m.toFixed(1);
+  document.getElementById("refA").textContent = ref;
+  document.getElementById("refM").textContent = ref;
+  const note = document.getElementById("regimeNote");
+  if (size.n >= 1000000 && style.f >= 0.9)
+    note.textContent = "Regime: 14M curated long-CoT is hypothetical; no paper has shipped this.";
+  else if (size.n <= 1000 && style.f >= 0.9 && cur.f >= 0.9)
+    note.textContent = "Regime: s1 / LIMO sweet spot. 1K reflective curated traces match 14M short-CoT SFT.";
+  else if (size.n <= 1000 && cur.f < 0.75)
+    note.textContent = "Regime: random-1K-short-CoT — the control that collapses. Curation does the work.";
+  else note.textContent = "Move sliders. Anchors at random-1K, s1-1K, LIMO-817, and OMI-2-14M.";
+}
+["sizeSlider","styleSlider","curSlider"].forEach(id =>
+  document.getElementById(id).addEventListener("input", redrawP2));
+redrawP2();
+</script>
+</body>
+</html>

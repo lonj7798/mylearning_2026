@@ -1,0 +1,265 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Multi-Turn Dialogue — Turn-Count and Token-Length Distributions</title>
+<style>
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+         max-width: 960px; margin: 2em auto; padding: 0 1em; color: #222; }
+  h1 { font-size: 1.4em; margin-bottom: 0.2em; }
+  .subtitle { color: #666; margin-top: 0; font-size: 0.95em; }
+  .panel { border: 1px solid #ddd; border-radius: 6px; padding: 1em; margin: 1em 0;
+           background: #fafafa; }
+  .datasets { display: flex; flex-wrap: wrap; gap: 0.5em; margin: 0.6em 0; }
+  .pill { padding: 5px 11px; border: 1px solid #bbb; border-radius: 14px;
+          background: #fff; cursor: pointer; font-size: 0.88em; user-select: none;
+          transition: background 0.1s, border 0.1s; }
+  .pill.active { background: #1976d2; color: #fff; border-color: #1976d2; }
+  .pill:hover { border-color: #1976d2; }
+  canvas { background: #fff; border: 1px solid #ccc; display: block; margin: 0.6em auto; }
+  .legend { display: flex; gap: 1.2em; justify-content: center; font-size: 0.88em;
+            flex-wrap: wrap; margin-top: 0.4em; }
+  .swatch { display: inline-block; width: 12px; height: 12px; margin-right: 5px;
+            vertical-align: middle; border-radius: 2px; }
+  .stats { font-size: 0.92em; font-variant-numeric: tabular-nums; }
+  .stats table { border-collapse: collapse; width: 100%; }
+  .stats th, .stats td { padding: 5px 10px; border-bottom: 1px solid #eee; text-align: right; }
+  .stats th:first-child, .stats td:first-child { text-align: left; }
+  .note { font-size: 0.88em; color: #444; line-height: 1.5; }
+  code { background: #eef; padding: 1px 4px; border-radius: 3px; font-size: 0.88em; }
+  .mode { display: flex; gap: 0.6em; align-items: center; margin: 0.4em 0; font-size: 0.9em; }
+  .mode label { cursor: pointer; }
+</style>
+</head>
+<body>
+
+<h1>Turn-Count and Token-Length Distributions — Multi-Turn Dialogue Corpora</h1>
+<p class="subtitle">
+  Toggle datasets to compare per-turn counts, user-token-length, or assistant-token-length.
+  Shapes reconstructed from dataset cards and public previews (see
+  <code>wiki/raw-data/llm-training/papers/</code>).
+</p>
+
+<div class="panel">
+  <div><strong>Datasets</strong> — click to toggle:</div>
+  <div class="datasets" id="datasetPills"></div>
+
+  <div class="mode">
+    <strong>Metric:</strong>
+    <label><input type="radio" name="metric" value="turns" checked> turn count per dialogue</label>
+    <label><input type="radio" name="metric" value="user"> user-turn tokens</label>
+    <label><input type="radio" name="metric" value="assistant"> assistant-turn tokens</label>
+  </div>
+</div>
+
+<canvas id="plot" width="920" height="340"></canvas>
+
+<div class="legend" id="legend"></div>
+
+<div class="panel stats">
+  <table id="statsTable">
+    <thead><tr><th>Dataset</th><th>Median</th><th>Mean</th><th>P90</th><th>Max</th><th>Dialogues</th></tr></thead>
+    <tbody></tbody>
+  </table>
+</div>
+
+<div class="panel note">
+  <strong>What to look for.</strong>
+  <ul>
+    <li><strong>Synthetic medians cluster at 3–7 turns.</strong> <em>Baize</em> (median 4) and <em>UltraChat-Writing</em> (median 4) are tight around the teacher's natural stopping point.</li>
+    <li><strong>CAMEL has the longest tail among synthetic corpora</strong> because termination is semantic (<code>&lt;CAMEL_TASK_DONE&gt;</code>) not a turn cap — hard tasks genuinely run 15–20 rounds.</li>
+    <li><strong>OpenAssistant and WildChat are the real-human baselines.</strong> OASST paths go to 20+ turns with a power-law tail; WildChat is bimodal — many 1–2 turn drops plus a heavy tail of 30+ turn sessions.</li>
+    <li><strong>SODA has the shortest turns</strong> (~20 tokens) — Atomic-triple grounding elicits a chatty social-exchange register, not a Q&amp;A register.</li>
+    <li><strong>User-turn tokens &lt; assistant-turn tokens</strong> in every corpus, but the <em>gap</em> is smaller in synthetic corpora (articulate synthetic users) than in WildChat (real users are short: ~20 tokens median vs. assistant ~180).</li>
+  </ul>
+</div>
+
+<script>
+// Each dataset: a lognormal-ish discrete PMF per metric (turns, user tokens, assistant tokens).
+// Shapes hand-fit from raw-data dataset cards so the comparison visualizes correctly,
+// not an empirical dump. Medians / means / P90 / max below match paper claims where stated.
+const DATA = {
+  "Baize":      { color:"#1976d2",
+    turns:     { median:4,  mean:4.5,  p90:7,  max:10, shape:[0,0,8,18,22,18,13,8,5,3,2,1] },
+    user:      { median:80, mean:95,   p90:170, max:260, binw:20, shape:[5,14,22,20,14,10,7,4,2,1,1] },
+    assistant: { median:110,mean:130,  p90:240, max:360, binw:20, shape:[2,8,14,18,16,13,10,8,5,3,2,1] },
+    count: "111.5K" },
+  "UltraChat-Qworld": { color:"#d32f2f",
+    turns:     { median:6,  mean:6.5,  p90:11, max:14, shape:[0,0,3,6,12,18,18,14,10,8,5,3,2,1] },
+    user:      { median:90, mean:110,  p90:200, max:320, binw:20, shape:[3,10,18,20,16,12,9,6,3,2,1] },
+    assistant: { median:160,mean:190,  p90:340, max:480, binw:30, shape:[1,5,11,14,16,14,12,10,8,5,3,1] },
+    count: "~600K" },
+  "UltraChat-Writing": { color:"#ef6c00",
+    turns:     { median:4,  mean:4.2,  p90:7,  max:8,  shape:[0,0,12,24,28,18,10,6,2] },
+    user:      { median:70, mean:85,   p90:160, max:240, binw:20, shape:[6,16,22,20,14,10,6,3,2,1] },
+    assistant: { median:220,mean:260,  p90:460, max:620, binw:40, shape:[0,3,8,12,16,16,14,12,8,5,3,2,1] },
+    count: "~400K" },
+  "CAMEL-AI-Society": { color:"#388e3c",
+    turns:     { median:7,  mean:8.4,  p90:14, max:20, shape:[0,0,2,4,8,12,15,14,12,10,8,6,4,3,1,0.5] },
+    user:      { median:40, mean:50,   p90:90,  max:150, binw:10, shape:[4,14,22,20,14,10,7,4,3,1,1] },
+    assistant: { median:55, mean:70,   p90:130, max:200, binw:15, shape:[3,10,18,20,16,12,9,6,3,2,1] },
+    count: "~1M" },
+  "SODA":       { color:"#6a1b9a",
+    turns:     { median:7,  mean:7.6,  p90:10, max:12, shape:[0,0,2,4,8,14,18,18,14,10,7,3,1,0.5] },
+    user:      { median:18, mean:22,   p90:40,  max:70,  binw:5,  shape:[6,14,20,18,14,10,7,5,3,2,1] },
+    assistant: { median:22, mean:26,   p90:50,  max:80,  binw:5,  shape:[4,12,18,20,16,11,8,5,3,2,1] },
+    count: "1.5M" },
+  "OpenAssistant-OASST1": { color:"#00838f",
+    turns:     { median:5,  mean:6.8,  p90:14, max:25, shape:[0,0,8,12,14,14,12,10,8,6,5,4,3,2,1,0.5,0.3,0.2,0.1,0.1,0.1,0.1,0.05,0.05] },
+    user:      { median:45, mean:65,   p90:150, max:400, binw:15, shape:[8,16,18,16,12,10,7,5,3,2,1,0.5,0.3,0.2,0.1] },
+    assistant: { median:140,mean:180,  p90:360, max:700, binw:40, shape:[1,6,12,15,16,14,12,10,7,4,2,1,0.5,0.2] },
+    count: "10K trees / 161K msg" },
+  "WildChat":   { color:"#c62828",
+    turns:     { median:3,  mean:6.2,  p90:18, max:55, shape:[0,14,18,14,10,8,6,5,4,3,2.5,2,1.5,1,0.8,0.6,0.4,0.3,0.2,0.2,0.15,0.15,0.1,0.1,0.1] },
+    user:      { median:22, mean:40,   p90:110, max:350, binw:15, shape:[14,18,18,14,10,8,6,4,3,2,1.2,0.8,0.4,0.2,0.1] },
+    assistant: { median:180,mean:240,  p90:500, max:900, binw:40, shape:[0.5,3,8,12,15,14,12,10,8,6,4,3,2,1,0.5,0.3,0.1] },
+    count: "~1M" }
+};
+
+const DEFAULT_ON = new Set(["Baize","UltraChat-Qworld","CAMEL-AI-Society","SODA","OpenAssistant-OASST1","WildChat"]);
+const active = new Set([...DEFAULT_ON]);
+let metric = "turns";
+
+function normalize(shape) {
+  const s = shape.reduce((a,b)=>a+b, 0);
+  return shape.map(v => v / s);
+}
+
+// Build dataset toggle pills
+const pillRow = document.getElementById("datasetPills");
+for (const name of Object.keys(DATA)) {
+  const pill = document.createElement("span");
+  pill.className = "pill" + (active.has(name) ? " active" : "");
+  pill.textContent = name;
+  pill.style.borderColor = DATA[name].color;
+  if (active.has(name)) { pill.style.background = DATA[name].color; pill.style.color = "#fff"; }
+  pill.addEventListener("click", () => {
+    if (active.has(name)) { active.delete(name); pill.classList.remove("active");
+                             pill.style.background = "#fff"; pill.style.color = "#222"; }
+    else { active.add(name); pill.classList.add("active");
+           pill.style.background = DATA[name].color; pill.style.color = "#fff"; }
+    draw();
+  });
+  pillRow.appendChild(pill);
+}
+
+// Metric radios
+for (const r of document.querySelectorAll('input[name="metric"]')) {
+  r.addEventListener("change", e => { metric = e.target.value; draw(); });
+}
+
+const cvs = document.getElementById("plot");
+const ctx = cvs.getContext("2d");
+
+function xAxisSpec() {
+  if (metric === "turns") return { label: "turns per dialogue", binw: 1, xStart: 1, nBins: 26 };
+  if (metric === "user")  return { label: "user-turn tokens (bin width varies; see dataset card)",
+                                   binw: 20, xStart: 0, nBins: 20 };
+  return { label: "assistant-turn tokens (bin width varies; see dataset card)",
+           binw: 40, xStart: 0, nBins: 18 };
+}
+
+function draw() {
+  const W = cvs.width, H = cvs.height;
+  const padL = 50, padR = 20, padT = 20, padB = 56;
+  ctx.clearRect(0,0,W,H);
+
+  const axis = xAxisSpec();
+  const nBins = axis.nBins;
+  const colW = (W - padL - padR) / nBins;
+
+  // Gather PMFs for active datasets
+  const series = [];
+  for (const name of active) {
+    const d = DATA[name][metric];
+    const pmf = normalize(d.shape);
+    series.push({ name, color: DATA[name].color, pmf, stats: d });
+  }
+
+  // Y-scale: max probability across all shown PMFs
+  const yMax = Math.max(0.01, ...series.flatMap(s => s.pmf)) * 1.1;
+
+  // Axes
+  ctx.strokeStyle = "#444"; ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(padL, padT); ctx.lineTo(padL, H-padB); ctx.lineTo(W-padR, H-padB); ctx.stroke();
+
+  // Y ticks
+  ctx.fillStyle = "#666"; ctx.font = "11px sans-serif"; ctx.textAlign = "right";
+  for (let i = 0; i <= 4; i++) {
+    const f = i / 4;
+    const y = (H - padB) - f * (H - padT - padB);
+    ctx.fillText((f * yMax * 100).toFixed(1) + "%", padL - 6, y + 3);
+    ctx.strokeStyle = "#eee"; ctx.beginPath();
+    ctx.moveTo(padL, y); ctx.lineTo(W - padR, y); ctx.stroke();
+  }
+
+  // X ticks
+  ctx.strokeStyle = "#aaa"; ctx.textAlign = "center"; ctx.fillStyle = "#555";
+  const tickEvery = (metric === "turns") ? 2 : 2;
+  for (let i = 0; i <= nBins; i += tickEvery) {
+    const x = padL + i * colW;
+    ctx.beginPath(); ctx.moveTo(x, H-padB); ctx.lineTo(x, H-padB+3); ctx.stroke();
+    const xv = axis.xStart + i * axis.binw;
+    ctx.fillText(String(xv), x, H - padB + 15);
+  }
+  ctx.fillText(axis.label, (W - padR + padL) / 2, H - 8);
+
+  // Bars, grouped. Overlay with alpha for clarity.
+  const groupW = colW * 0.95;
+  for (const s of series) {
+    ctx.fillStyle = s.color + "aa";
+    ctx.strokeStyle = s.color;
+    for (let i = 0; i < s.pmf.length && i < nBins; i++) {
+      const p = s.pmf[i];
+      if (p <= 0) continue;
+      const h = (p / yMax) * (H - padT - padB);
+      const x = padL + i * colW + (colW - groupW) / 2;
+      const y = (H - padB) - h;
+      ctx.fillRect(x, y, groupW, h);
+    }
+  }
+
+  // Overlay per-series line connecting bin tops
+  for (const s of series) {
+    ctx.strokeStyle = s.color; ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    let first = true;
+    for (let i = 0; i < s.pmf.length && i < nBins; i++) {
+      const p = s.pmf[i];
+      const x = padL + (i + 0.5) * colW;
+      const y = (H - padB) - (p / yMax) * (H - padT - padB);
+      if (first) { ctx.moveTo(x, y); first = false; } else { ctx.lineTo(x, y); }
+    }
+    ctx.stroke();
+  }
+
+  // Legend
+  const legend = document.getElementById("legend");
+  legend.innerHTML = "";
+  for (const s of series) {
+    const span = document.createElement("span");
+    span.innerHTML = `<span class="swatch" style="background:${s.color}"></span>${s.name}`;
+    legend.appendChild(span);
+  }
+
+  // Stats table
+  const tbody = document.querySelector("#statsTable tbody");
+  tbody.innerHTML = "";
+  for (const s of series) {
+    const tr = document.createElement("tr");
+    tr.innerHTML = `<td><span class="swatch" style="background:${s.color}"></span>${s.name}</td>
+                    <td>${s.stats.median}</td>
+                    <td>${s.stats.mean}</td>
+                    <td>${s.stats.p90}</td>
+                    <td>${s.stats.max}</td>
+                    <td>${DATA[s.name].count}</td>`;
+    tbody.appendChild(tr);
+  }
+}
+
+draw();
+</script>
+
+</body>
+</html>

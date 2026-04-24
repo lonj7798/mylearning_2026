@@ -1,0 +1,259 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Packed SFT Ablation Cube — 2x2x2 interactive</title>
+<style>
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+         max-width: 1200px; margin: 1.6em auto; padding: 0 1em; color: #1f1f1f;
+         background: #fafafa; }
+  h1 { font-size: 1.3em; margin-bottom: 0.25em; }
+  .subtitle { color: #5a5a5a; margin-top: 0; font-size: 0.92em; line-height: 1.5; }
+  .layout { display: grid; grid-template-columns: 1fr 360px; gap: 1.2em; margin-top: 1em; }
+  .panel { border: 1px solid #dcdcdc; border-radius: 6px; background: #fff;
+           padding: 0.9em 1em; }
+  h2 { font-size: 1.0em; margin: 0 0 0.6em 0; color: #2b2b2b;
+       border-bottom: 1px solid #ececec; padding-bottom: 0.3em; }
+  svg { width: 100%; height: 440px; display: block; }
+  .cube-face { fill: #f0f3f8; stroke: #9aa7b8; stroke-width: 1; opacity: 0.35; }
+  .cube-edge { stroke: #6c7c90; stroke-width: 1.2; fill: none; }
+  .corner-dot { cursor: pointer; transition: r 0.15s; }
+  .corner-dot:hover { r: 14; }
+  .corner-dot.selected { stroke: #e0aa00; stroke-width: 3; }
+  .corner-label { font-family: 'SF Mono', Menlo, monospace; font-size: 10px;
+                  fill: #1b1b1b; text-anchor: middle; pointer-events: none; }
+  .corner-score { font-family: 'SF Mono', Menlo, monospace; font-size: 13px;
+                  font-weight: 600; fill: #1b1b1b; text-anchor: middle; pointer-events: none; }
+  .axis-label { font-family: 'SF Mono', Menlo, monospace; font-size: 11px;
+                fill: #4a5a70; text-anchor: middle; }
+  .axis-arrow { stroke: #4a5a70; stroke-width: 1.2; fill: none;
+                marker-end: url(#arrowhead); }
+  .legend { font-size: 0.82em; color: #444; margin-top: 0.5em; line-height: 1.6; }
+  .legend .chip { display: inline-block; width: 14px; height: 14px;
+                  border-radius: 50%; margin-right: 4px; vertical-align: middle;
+                  border: 1px solid #888; }
+  .detail-title { font-family: 'SF Mono', Menlo, monospace; font-size: 0.95em;
+                  color: #204080; margin: 0 0 0.4em 0; }
+  .detail-score { font-size: 1.4em; font-weight: 700; color: #1b1b1b;
+                  margin: 0.2em 0 0.3em 0; }
+  .detail-score .sub { font-size: 0.6em; color: #666; font-weight: 400; margin-left: 0.4em; }
+  .detail-flags { font-family: 'SF Mono', Menlo, monospace; font-size: 0.82em;
+                  color: #333; background: #f4f6fa; padding: 0.4em 0.6em;
+                  border-radius: 4px; margin: 0.35em 0 0.55em 0; }
+  .detail-just { font-size: 0.88em; color: #333; line-height: 1.5;
+                 background: #f5f7fb; padding: 0.55em 0.75em; border-radius: 4px;
+                 border-left: 3px solid #2e5aa8; }
+  .detail-src { font-size: 0.78em; color: #5a6a80; margin-top: 0.4em; }
+  code { background: #eef; padding: 1px 4px; border-radius: 3px;
+         font-family: 'SF Mono', Menlo, monospace; font-size: 0.85em; }
+  .axis-key { display: flex; flex-direction: column; gap: 0.3em; margin-top: 0.6em;
+              font-size: 0.83em; }
+  .axis-key .row { display: flex; align-items: center; gap: 0.4em; }
+  .axis-key .sw { width: 14px; height: 3px; border-radius: 2px; }
+</style>
+</head>
+<body>
+
+<h1>Packed SFT Ablation Cube</h1>
+<p class="subtitle">
+  2x2x2 cube of the three axes from ch-36: <code>packed</code>, <code>masked</code>,
+  <code>neftune</code>. Click any corner to see an illustrative MT-Bench score and the
+  source-grounded justification. Scores are illustrative; arrow directions are attested
+  by <code>sequence-packing</code>, <code>packed-vs-unpacked-ablation</code>,
+  <code>loss-masking-prompt</code>, and <code>neftune</code>.
+</p>
+
+<div class="layout">
+
+<div class="panel">
+  <h2>Corners — click to inspect</h2>
+  <svg id="cube" viewBox="0 0 720 440" preserveAspectRatio="xMidYMid meet">
+    <defs>
+      <marker id="arrowhead" markerWidth="6" markerHeight="6" refX="5" refY="3" orient="auto">
+        <polygon points="0 0, 6 3, 0 6" fill="#4a5a70"/>
+      </marker>
+    </defs>
+  </svg>
+  <div class="legend">
+    <span class="chip" style="background:#5b9f5b"></span> MT-Bench >= 6.0 &nbsp;
+    <span class="chip" style="background:#c6b24a"></span> 5.0-6.0 &nbsp;
+    <span class="chip" style="background:#c4793d"></span> 4.0-5.0 &nbsp;
+    <span class="chip" style="background:#a64848"></span> < 4.0 &nbsp;
+    <br>
+    Corner position: x=packed, y=masked, z=neftune (near = off, far = on).
+  </div>
+</div>
+
+<div class="panel">
+  <h2>Corner detail</h2>
+  <div id="detail-empty" style="color:#777; font-size:0.88em;">
+    Click any corner dot on the cube to see its illustrative score,
+    flag state, and the attested justification.
+  </div>
+  <div id="detail-body" style="display:none;">
+    <p class="detail-title" id="d-title">-</p>
+    <p class="detail-score"><span id="d-score">-</span><span class="sub" id="d-band">-</span></p>
+    <div class="detail-flags" id="d-flags">-</div>
+    <div class="detail-just" id="d-just">-</div>
+    <p class="detail-src" id="d-src">-</p>
+  </div>
+
+  <h2 style="margin-top:1.2em;">Axis legend</h2>
+  <div class="axis-key">
+    <div class="row"><div class="sw" style="background:#2e5aa8"></div>
+      <span><b>packed</b>: flash_attn_varlen_func with cu_seqlens + reset position_ids</span></div>
+    <div class="row"><div class="sw" style="background:#2e5aa8"></div>
+      <span><b>masked</b>: labels[:prompt_len] = -100 (response-only loss)</span></div>
+    <div class="row"><div class="sw" style="background:#2e5aa8"></div>
+      <span><b>neftune</b>: X_tilde = X + Uniform(-1,1) * alpha / sqrt(L*d), alpha=5</span></div>
+  </div>
+</div>
+
+</div>
+
+<script>
+// Eight corners of the ablation cube. Each flag triple is (packed, masked, neftune).
+// Scores are illustrative but directionally attested by the source papers in ch-36.
+// Base "none" ~= 3.8 (Llama-3.2-3B on 100K mix with no discipline).
+// +masked: +1.8 (response-only is the dominant lever per Shi 2024).
+// +packed (vs unpacked): +0.0 quality, +~2.5x throughput per Krell 2021 / Tulu 3.
+//   BUT on its own (no mask) it slightly HURTS because cross-contamination is worse
+//   when the prompt is also in-loss (Failure Mode 1 of packed-vs-unpacked-ablation).
+// +neftune: +0.5 at 100K (saturates at 939K per Tulu 3; paper-strong at <=100K).
+const CORNERS = [
+  { flags: [0,0,0], pos: [1, 1, 1], score: 3.80, src: "base-none",
+    just: "No mask, no packing, no NEFTune. Loss trains model to regenerate prompts plus completions; nothing prevents overfit. Upper bound on what the raw 100K mix gives a 3B base.",
+    srcref: "loss-masking-prompt; karpathy-training-neural-net-recipe" },
+  { flags: [1,0,0], pos: [6, 1, 1], score: 3.60, src: "pack-only",
+    just: "Packing without prompt masking is slightly WORSE than unpacked+unmasked. With flash_attn_varlen_func correct, quality delta is near zero; but full-loss training on packed data compounds the wasted-capacity problem across sub-sequences, and the LR-vs-sample ratio changes under packing.",
+    srcref: "packed-vs-unpacked-ablation (failure mode 3); loss-masking-prompt" },
+  { flags: [0,1,0], pos: [1, 5, 1], score: 5.60, src: "mask-only",
+    just: "Response-only loss is the single biggest axis. Shi 2024 Table 2 shows ~+1.5-2.0 MT-Bench over full-loss across dataset sizes. Unpacked + masked is the slow-but-correct baseline every lab should beat on throughput, not on quality.",
+    srcref: "loss-masking-prompt (Shi 2024)" },
+  { flags: [1,1,0], pos: [6, 5, 1], score: 5.65, src: "pack+mask",
+    just: "Packed + masked matches unpacked + masked in quality within noise (Tulu 3 ablation: 2.5x throughput, MT-Bench delta within 0.05 pts). The ~0.05 gain over mask-only is measurement noise; the real win is wall-clock.",
+    srcref: "packed-vs-unpacked-ablation; allenai-tulu-sft-recipe" },
+  { flags: [0,0,1], pos: [1, 1, 5], score: 4.30, src: "neft-only",
+    just: "NEFTune on an unmasked, unpacked run helps by ~0.5 pts. The embedding noise partially substitutes for masking's anti-memorization effect -- but it cannot undo the wasted capacity on prompt reconstruction. Not a substitute for masking.",
+    srcref: "neftune (Jain 2023)" },
+  { flags: [1,0,1], pos: [6, 1, 5], score: 4.10, src: "pack+neft",
+    just: "Same story: NEFTune helps vs none, but the full-loss penalty dominates. Packing + NEFTune without masking is a common 'I enabled everything in the YAML' misconfiguration.",
+    srcref: "neftune; loss-masking-prompt" },
+  { flags: [0,1,1], pos: [1, 5, 5], score: 6.10, src: "mask+neft",
+    just: "Mask + NEFTune is the slow-gold-standard. Tulu 3 reports NEFTune saturates at 939K, but at this lab's 100K scale a +0.4-0.6 pt gain is typical (paper-original regime). Unpacked -> 2.5x slower wall-clock.",
+    srcref: "neftune; allenai-tulu-sft-recipe" },
+  { flags: [1,1,1], pos: [6, 5, 5], score: 6.15, src: "full (headline)",
+    just: "All three on. Quality identical to mask+neft within noise; throughput 2.5x higher. This is the checkpoint you ship and the reference policy for Track 4 (RL).",
+    srcref: "sequence-packing; loss-masking-prompt; neftune" },
+];
+
+// Layout: project 3D -> 2D with a simple isometric.
+function proj([x, y, z]) {
+  // Map cube [1..6] range to screen coords.
+  const sx = 120 + (x - 1) * 80 + (z - 1) * 40;
+  const sy = 360 - (y - 1) * 55 - (z - 1) * 35;
+  return [sx, sy];
+}
+
+function bandColor(s) {
+  if (s >= 6.0) return "#5b9f5b";
+  if (s >= 5.0) return "#c6b24a";
+  if (s >= 4.0) return "#c4793d";
+  return "#a64848";
+}
+function bandName(s) {
+  if (s >= 6.0) return "strong";
+  if (s >= 5.0) return "ok";
+  if (s >= 4.0) return "weak";
+  return "broken";
+}
+
+const svg = document.getElementById("cube");
+const NS = "http://www.w3.org/2000/svg";
+
+// Draw the 12 cube edges first.
+const edgePairs = [
+  [[1,1,1],[6,1,1]], [[6,1,1],[6,5,1]], [[6,5,1],[1,5,1]], [[1,5,1],[1,1,1]],
+  [[1,1,5],[6,1,5]], [[6,1,5],[6,5,5]], [[6,5,5],[1,5,5]], [[1,5,5],[1,1,5]],
+  [[1,1,1],[1,1,5]], [[6,1,1],[6,1,5]], [[6,5,1],[6,5,5]], [[1,5,1],[1,5,5]],
+];
+edgePairs.forEach(([a, b]) => {
+  const [x1, y1] = proj(a);
+  const [x2, y2] = proj(b);
+  const line = document.createElementNS(NS, "line");
+  line.setAttribute("x1", x1); line.setAttribute("y1", y1);
+  line.setAttribute("x2", x2); line.setAttribute("y2", y2);
+  line.setAttribute("class", "cube-edge");
+  svg.appendChild(line);
+});
+
+// Draw axis labels with arrows.
+function axis(fromArr, toArr, label) {
+  const [x1, y1] = proj(fromArr);
+  const [x2, y2] = proj(toArr);
+  const line = document.createElementNS(NS, "line");
+  line.setAttribute("x1", x1); line.setAttribute("y1", y1);
+  line.setAttribute("x2", x2); line.setAttribute("y2", y2);
+  line.setAttribute("class", "axis-arrow");
+  svg.appendChild(line);
+  const t = document.createElementNS(NS, "text");
+  t.setAttribute("x", (x1 + x2) / 2);
+  t.setAttribute("y", (y1 + y2) / 2 - 6);
+  t.setAttribute("class", "axis-label");
+  t.textContent = label;
+  svg.appendChild(t);
+}
+axis([1, 0.3, 1], [6, 0.3, 1], "packed ->");
+axis([0.3, 1, 1], [0.3, 5, 1], "masked ->");
+axis([1, 0.3, 1], [1, 0.3, 5], "neftune ->");
+
+// Draw the 8 corner dots.
+const dots = [];
+CORNERS.forEach((c, i) => {
+  const [cx, cy] = proj(c.pos);
+  const dot = document.createElementNS(NS, "circle");
+  dot.setAttribute("cx", cx); dot.setAttribute("cy", cy);
+  dot.setAttribute("r", 11);
+  dot.setAttribute("fill", bandColor(c.score));
+  dot.setAttribute("stroke", "#333"); dot.setAttribute("stroke-width", 1);
+  dot.setAttribute("class", "corner-dot");
+  dot.addEventListener("click", () => select(i));
+  svg.appendChild(dot);
+  dots.push(dot);
+
+  const lbl = document.createElementNS(NS, "text");
+  lbl.setAttribute("x", cx); lbl.setAttribute("y", cy + 28);
+  lbl.setAttribute("class", "corner-label");
+  lbl.textContent = c.flags.join("");
+  svg.appendChild(lbl);
+
+  const scr = document.createElementNS(NS, "text");
+  scr.setAttribute("x", cx); scr.setAttribute("y", cy - 15);
+  scr.setAttribute("class", "corner-score");
+  scr.textContent = c.score.toFixed(2);
+  svg.appendChild(scr);
+});
+
+function select(i) {
+  dots.forEach((d, j) => d.classList.toggle("selected", j === i));
+  const c = CORNERS[i];
+  document.getElementById("detail-empty").style.display = "none";
+  document.getElementById("detail-body").style.display = "block";
+  document.getElementById("d-title").textContent =
+    `Corner ${c.flags.join("")}  (${c.src})`;
+  document.getElementById("d-score").textContent = `MT-Bench ${c.score.toFixed(2)}`;
+  document.getElementById("d-band").textContent = bandName(c.score);
+  document.getElementById("d-flags").textContent =
+    `packed=${c.flags[0] ? "ON" : "off"}   ` +
+    `masked=${c.flags[1] ? "ON" : "off"}   ` +
+    `neftune=${c.flags[2] ? "ON" : "off"}`;
+  document.getElementById("d-just").textContent = c.just;
+  document.getElementById("d-src").textContent = `Attested in: ${c.srcref}`;
+}
+
+// Pre-select the "full" headline corner so the panel is populated.
+select(7);
+</script>
+
+</body>
+</html>

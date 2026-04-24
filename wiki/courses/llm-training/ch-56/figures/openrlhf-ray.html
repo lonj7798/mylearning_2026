@@ -1,0 +1,209 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>OpenRLHF Ray actor graph</title>
+<style>
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; max-width: 1200px; margin: 1.4em auto; padding: 0 1em; color: #1f1f1f; background: #fafafa; }
+  h1 { font-size: 1.25em; margin-bottom: 0.2em; }
+  .sub { color: #5a5a5a; margin-top: 0; font-size: 0.9em; line-height: 1.5; }
+  .layout { display: grid; grid-template-columns: 1fr 380px; gap: 1.2em; margin-top: 1em; }
+  .panel { border: 1px solid #dcdcdc; border-radius: 6px; background: #fff; padding: 0.9em 1em; }
+  h2 { font-size: 0.98em; margin: 0 0 0.6em 0; color: #2b2b2b; border-bottom: 1px solid #ececec; padding-bottom: 0.3em; }
+  svg { width: 100%; display: block; }
+  .legend { font-size: 0.82em; color: #555; margin: 0.4em 0 0 0; display: flex; gap: 1em; flex-wrap: wrap; }
+  .legend span.s { display: inline-block; width: 0.85em; height: 0.85em; vertical-align: middle; margin-right: 0.25em; border-radius: 2px; }
+  .actor-box { stroke: #8391a3; stroke-width: 1.4; fill: #f4f7fb; rx: 6; ry: 6; cursor: pointer; }
+  .actor-box.selected { stroke: #2e5aa8; stroke-width: 2.6; fill: #e4edfb; }
+  .actor-box.policy   { fill: #e5eefb; stroke: #3c6aa8; }
+  .actor-box.value    { fill: #eaf5e2; stroke: #4a8b3a; }
+  .actor-box.reward   { fill: #fbe9d6; stroke: #b36a1e; }
+  .actor-box.ref      { fill: #eee2ef; stroke: #7a4a88; }
+  .actor-box.critic   { fill: #fbe2e6; stroke: #9c3d4e; }
+  .actor-box.vllm     { fill: #dff3f5; stroke: #377c85; }
+  .actor-label { font-family: 'SF Mono', Menlo, monospace; font-size: 12px; fill: #1e2630; text-anchor: middle; pointer-events: none; font-weight: 600; }
+  .actor-sub { font-family: 'SF Mono', Menlo, monospace; font-size: 10px; fill: #556; text-anchor: middle; pointer-events: none; }
+  .edge { stroke: #6a7a90; stroke-width: 1.4; fill: none; marker-end: url(#arrow); }
+  .edge.active { stroke: #2e5aa8; stroke-width: 2.6; }
+  .edge.lock { stroke: #b03a3a; stroke-dasharray: 5 3; }
+  .edge.queue { stroke: #377c85; }
+  .edge-label { font-family: 'SF Mono', Menlo, monospace; font-size: 9.5px; fill: #455; }
+  .detail { font-size: 0.88em; color: #333; line-height: 1.55; }
+  .detail .k { font-family: 'SF Mono', Menlo, monospace; color: #204080; }
+  .detail h3 { font-size: 0.95em; margin: 0.8em 0 0.3em 0; color: #2b2b2b; }
+  .detail code { background: #f3f3f6; padding: 0.05em 0.35em; border-radius: 3px; font-size: 0.88em; }
+  .tag { display: inline-block; background: #fff5d6; color: #7a5c1a; padding: 0.1em 0.4em; border-radius: 3px; font-family: 'SF Mono', Menlo, monospace; font-size: 0.78em; margin-right: 0.3em; }
+  .fail { background: #fbe2e6; color: #8a2030; }
+</style>
+</head>
+<body>
+
+<h1>OpenRLHF Ray actor graph — click an actor</h1>
+<p class="sub">
+  Each role in an OpenRLHF PPO job is a <b>separate Ray actor</b> with its own GPU placement.
+  Click a box to see its responsibilities, the messages it sends and receives, the GPU footprint,
+  and which failure mode its misconfiguration produces. Edge style: <b>solid blue</b> = data flow,
+  <b>dashed red</b> = synchronization (<code>vllm_lock</code> / NCCL broadcast),
+  <b>teal</b> = Ray queue. Source: <code>openrlhf/trainer/ray/*</code> and <code>ppo_trainer_async.py</code>.
+</p>
+
+<div class="legend">
+  <span><span class="s" style="background:#e5eefb"></span>Policy</span>
+  <span><span class="s" style="background:#eaf5e2"></span>Value / Critic</span>
+  <span><span class="s" style="background:#fbe9d6"></span>Reward</span>
+  <span><span class="s" style="background:#eee2ef"></span>Reference</span>
+  <span><span class="s" style="background:#dff3f5"></span>vLLM rollout</span>
+</div>
+
+<div class="layout">
+
+<div class="panel">
+  <h2>Actor graph</h2>
+  <svg id="graph" viewBox="0 0 760 440" preserveAspectRatio="xMidYMid meet">
+    <defs>
+      <marker id="arrow" markerWidth="7" markerHeight="7" refX="6" refY="3.5" orient="auto">
+        <polygon points="0 0, 7 3.5, 0 7" fill="#6a7a90"/>
+      </marker>
+    </defs>
+  </svg>
+
+  <h2 style="margin-top:0.8em">Message flow (selected actor highlighted)</h2>
+  <div id="flowlist" class="detail"></div>
+</div>
+
+<div class="panel">
+  <h2>Actor detail</h2>
+  <div id="detail" class="detail"></div>
+</div>
+
+</div>
+
+<script>
+// --- actor definitions ---
+const ACTORS = {
+  policy: {
+    label: "PolicyActor", sub: "ppo_actor.py",
+    cls: "policy", x: 80, y: 60, w: 170, h: 70,
+    role: "Trains the policy pi_theta with the clipped surrogate loss (PolicyLoss). Runs forward, backward, DeepSpeed ZeRO-3 partition. Receives experiences from the rollout queue; pushes updated weight shards to the vLLM worker via NCCL.",
+    sends: ["weights -> vLLMWorker (NCCL broadcast under vllm_lock)", "logprobs to ExperienceMaker"],
+    recvs: ["rollouts <- rollout_queue", "advantages <- ValueActor (GAE)"],
+    gpus: "Main training pool; ZeRO-3 across N GPUs; bf16 params, fp32 optimizer.",
+    fail: "Entropy collapse if KL-to-ref misconfigured; NCCL hang if vllm_lock is missed.",
+  },
+  value: {
+    label: "ValueActor", sub: "ppo_critic.py",
+    cls: "value", x: 80, y: 180, w: 170, h: 70,
+    role: "Trains V_psi on MSE of returns. Produces per-token value estimates used by GAE for advantage computation.",
+    sends: ["V(s_t) -> ExperienceMaker (for GAE)"],
+    recvs: ["rollouts (same as policy)"],
+    gpus: "Separate pool so backward doesn't contend with policy; same ZeRO config.",
+    fail: "If collocated with policy, step time roughly doubles and ZeRO bucket contention causes instability.",
+  },
+  ref: {
+    label: "ReferenceActor", sub: "frozen pi_SFT",
+    cls: "ref", x: 80, y: 300, w: 170, h: 70,
+    role: "Serves log pi_ref for KL-to-reference. Eval-mode; torch.no_grad; ZeRO-3 CPU-offloadable. Consumed by the experience maker to shape reward: r_t -= kl_ctl.value * (log pi - log pi_ref).",
+    sends: ["log pi_ref -> ExperienceMaker"],
+    recvs: ["token ids from rollouts"],
+    gpus: "Tiny; CPU-offload an option for 70B DPO on 8xH100.",
+    fail: "OOM at 70B when CPU offload is forgotten; silent no-op KL if ref weights don't match tokenizer.",
+  },
+  reward: {
+    label: "RewardActor", sub: "RM forward",
+    cls: "reward", x: 530, y: 300, w: 170, h: 70,
+    role: "Serves r_phi on finished rollouts. Usually a 6-8B Bradley-Terry RM per [[rlhf-instructgpt]]. Optionally swapped for a rule verifier in RLVR jobs.",
+    sends: ["terminal reward r_T -> ExperienceMaker"],
+    recvs: ["completed responses"],
+    gpus: "Separate from trainer to avoid forward contention; RM weights can be int8-quantized with no measurable PPO degradation.",
+    fail: "If collocated with PolicyActor, forward-pass latency doubles the trainer step; reward-hacking risk if verifier is weak.",
+  },
+  vllm: {
+    label: "vLLMWorker", sub: "vllm_worker.py",
+    cls: "vllm", x: 530, y: 60, w: 170, h: 70,
+    role: "Generates rollouts via vLLM (paged-attention KV cache, continuous batching). Accepts weight broadcasts from PolicyActor; the vllm_lock serializes broadcast vs in-flight generation.",
+    sends: ["completed sequences -> rollout_queue"],
+    recvs: ["prompts from dataloader", "weight broadcasts from PolicyActor"],
+    gpus: "M workers, each owning a vLLM engine with its own paged KV cache. Do NOT co-tenant with trainers.",
+    fail: "vllm_kl divergence if IS correction is off; cold KV cache on Ray auto-restart — disable restart in production.",
+  },
+  critic: {
+    label: "ExperienceMaker", sub: "rollout_queue consumer",
+    cls: "critic", x: 305, y: 180, w: 170, h: 70,
+    role: "Central glue. Pulls rollouts, asks Reference for log pi_ref, Reward for r_T, Value for V(s_t). Shapes per-token reward: r_t = r_env_t - kl_ctl.value * (log pi - log pi_ref). Computes GAE. Pushes (obs, adv, ret, log_pi_old) to the policy step.",
+    sends: ["advantages to PolicyActor", "returns to ValueActor"],
+    recvs: ["log_pi_ref, r_phi, V_psi"],
+    gpus: "CPU-bound; Ray driver.",
+    fail: "Queue back-pressure if rollout_slots capacity is too large — stale rollouts. Default capacity 1-2.",
+  },
+};
+
+// --- edges ---
+const EDGES = [
+  { a: "vllm",   b: "critic", label: "rollout_queue", kind: "queue" },
+  { a: "policy", b: "vllm",   label: "weights (NCCL, vllm_lock)", kind: "lock" },
+  { a: "ref",    b: "critic", label: "log pi_ref" },
+  { a: "reward", b: "critic", label: "r_phi" },
+  { a: "value",  b: "critic", label: "V(s_t)" },
+  { a: "critic", b: "policy", label: "advantages" },
+  { a: "critic", b: "value",  label: "returns" },
+];
+
+// --- rendering ---
+const graph = document.getElementById("graph");
+const detail = document.getElementById("detail");
+const flowlist = document.getElementById("flowlist");
+let current = "policy";
+
+function center(a) { return { cx: a.x + a.w/2, cy: a.y + a.h/2 }; }
+
+function renderGraph() {
+  // edges first
+  let svg = "";
+  for (const e of EDGES) {
+    const A = ACTORS[e.a], B = ACTORS[e.b];
+    const ac = center(A), bc = center(B);
+    const cls = "edge" + (e.kind === "lock" ? " lock" : e.kind === "queue" ? " queue" : "")
+              + ((current === e.a || current === e.b) ? " active" : "");
+    // path: straight with slight curve via mid offset
+    const mx = (ac.cx + bc.cx) / 2, my = (ac.cy + bc.cy) / 2 - 8;
+    svg += `<path class="${cls}" d="M ${ac.cx} ${ac.cy} Q ${mx} ${my} ${bc.cx} ${bc.cy}" />`;
+    svg += `<text class="edge-label" x="${mx}" y="${my - 3}" text-anchor="middle">${e.label}</text>`;
+  }
+  // actors
+  for (const [id, a] of Object.entries(ACTORS)) {
+    const sel = id === current ? " selected" : "";
+    svg += `<rect class="actor-box ${a.cls}${sel}" x="${a.x}" y="${a.y}" width="${a.w}" height="${a.h}" data-id="${id}"/>`;
+    svg += `<text class="actor-label" x="${a.x + a.w/2}" y="${a.y + 28}">${a.label}</text>`;
+    svg += `<text class="actor-sub"   x="${a.x + a.w/2}" y="${a.y + 46}">${a.sub}</text>`;
+  }
+  graph.innerHTML = graph.querySelector("defs").outerHTML + svg;
+  // attach click
+  for (const box of graph.querySelectorAll(".actor-box")) {
+    box.addEventListener("click", () => { current = box.dataset.id; renderGraph(); renderDetail(); });
+  }
+}
+
+function renderDetail() {
+  const a = ACTORS[current];
+  detail.innerHTML = `
+    <h3>${a.label} <span class="k">(${a.sub})</span></h3>
+    <p>${a.role}</p>
+    <h3>GPU footprint</h3>
+    <p>${a.gpus}</p>
+    <h3>Failure mode <span class="tag fail">watch for</span></h3>
+    <p>${a.fail}</p>
+  `;
+  let flows = `<h3>Sends</h3><ul>`;
+  for (const s of a.sends) flows += `<li>${s}</li>`;
+  flows += `</ul><h3>Receives</h3><ul>`;
+  for (const r of a.recvs) flows += `<li>${r}</li>`;
+  flows += `</ul>`;
+  flowlist.innerHTML = flows;
+}
+
+renderGraph();
+renderDetail();
+</script>
+
+</body>
+</html>

@@ -1,0 +1,112 @@
+{
+  "chapter_id": "ch-30",
+  "chapter_title": "SFT Design Axes",
+  "track": "sft",
+  "kind": "content",
+  "deps": ["ch-29"],
+  "generated_at": "2026-04-23T00:00:00Z",
+  "course_outline_concepts": [
+    "What SFT means across regimes: single-turn instruction, multi-turn chat, tool-call, reasoning, agentic",
+    "Loss masking per regime: system / user / assistant / tool-call / thought tokens",
+    "Chat-template design decisions and their downstream blast radius",
+    "Packing vs unpacking, NEFTune, prompt-masked vs full-sequence loss as tunable axes",
+    "What SFT can and cannot later be fixed by RL — the pre-determines framing"
+  ],
+  "role_in_track": "Opening chapter of the SFT track (ch-30..ch-36). Frames the five design axes that ch-31..ch-36 will each vary along.",
+  "sources": [
+    {
+      "path": "wiki/raw-data/llm-training/papers/loss-masking-prompt.md",
+      "relevance": 1.0,
+      "role": "primary",
+      "what_to_extract": "Response-only vs full-sequence loss; label = -100 convention; multi-turn masking rule (mask all user turns + assistant 1..k-1, train only on a_k); Shi 2024 ablation result that response-only dominates except in tiny-dataset / strong-base regime; packed-sequence interaction with per-sub-sequence mask reset."
+    },
+    {
+      "path": "wiki/raw-data/llm-training/papers/sequence-packing.md",
+      "relevance": 1.0,
+      "role": "primary",
+      "what_to_extract": "50-89% padding in raw SFT batches; SPFHP and NNLSHP bin-packing; cu_seqlens + position-ID reset contract; FlashAttention varlen API; mathematical equivalence when mask and position IDs are correct."
+    },
+    {
+      "path": "wiki/raw-data/llm-training/papers/neftune.md",
+      "relevance": 1.0,
+      "role": "primary",
+      "what_to_extract": "Uniform noise epsilon ~ U(-1,1) * alpha / sqrt(L*d); alpha in [5,15]; LLaMA-2-7B Alpaca 29.79 -> 64.69 AlpacaEval; saturates at large datasets (Tulu 3 939K finds neutral); stacks with packing / masking / FSDP."
+    },
+    {
+      "path": "wiki/raw-data/llm-training/blogs/hf-alignment-handbook.md",
+      "relevance": 1.0,
+      "role": "primary",
+      "what_to_extract": "SFTConfig(packing=True, train_on_response_only=True); Zephyr-7B-beta recipe (2e-5, cosine, 10% warmup, 1 epoch, global batch 128, FSDP FULL_SHARD); 'verify chat template by decoding a packed batch' lesson; NEFTune alpha=5 stacks cleanly."
+    },
+    {
+      "path": "wiki/raw-data/llm-training/blogs/allenai-tulu-sft-recipe.md",
+      "relevance": 1.0,
+      "role": "primary",
+      "what_to_extract": "Tulu-3 data-mix ratios (27/21/14/11/10/7/10); 8B/70B hyperparameters (5e-6 / 2e-6, 2 epochs, batch 128); NEFTune off at 939K (saturation); removing Persona-Math costs 15 pts GSM8K; removing safety: capability flat, WildJailbreak 98 -> 52."
+    },
+    {
+      "path": "wiki/raw-data/llm-training/papers/tulu-3-sft-mix.md",
+      "relevance": 0.9,
+      "role": "primary",
+      "what_to_extract": "939,344 prompts; 18 component sets; 57/43 public/in-house; skill-specific sub-mix construction then merge + decontaminate + downsample; synthetic fills capability gaps, not replaces corpus."
+    },
+    {
+      "path": "wiki/raw-data/llm-training/papers/packed-vs-unpacked-ablation.md",
+      "relevance": 0.9,
+      "role": "primary",
+      "what_to_extract": "Four failure modes when packing hurts (missing block-diagonal mask, un-reset pos IDs, label mask not re-applied, using flash_attn_func instead of varlen); diagnostic procedure (100-step unpacked baseline, compare loss curves, differences > 0.01 nats = bug); speedup ~= L_max / avg(L_i)."
+    },
+    {
+      "path": "wiki/raw-data/llm-training/papers/rlhf-instructgpt.md",
+      "relevance": 0.7,
+      "role": "grounding",
+      "what_to_extract": "SFT -> RM -> PPO three-stage pipeline; 13K prompts, 16 epochs, cosine, dropout 0.2; SFT is what RL starts from (pre-determines framing); beta * KL(pi || pi_SFT) term keeps RL tethered to the SFT manifold."
+    },
+    {
+      "path": "wiki/raw-data/llm-training/model-reports/llama-3.md",
+      "relevance": 0.9,
+      "role": "template",
+      "what_to_extract": "Llama-3 chat template tokens (<|begin_of_text|>, <|start_header_id|>role<|end_header_id|>, <|eot_id|>); iterative SFT/RS/DPO six rounds; SFT on response tokens only; tool use synthetic pipeline as a dedicated SFT stream."
+    },
+    {
+      "path": "wiki/raw-data/llm-training/model-reports/qwen-3.md",
+      "relevance": 0.9,
+      "role": "template",
+      "what_to_extract": "Hybrid-thinking template with <|im_start|>role / <|im_end|>; thinking budget; long-CoT cold-start SFT + reasoning RL + non-thinking fusion; <think>...</think> scoped content inside assistant turns."
+    },
+    {
+      "path": "wiki/raw-data/llm-training/model-reports/deepseek-v3.md",
+      "relevance": 0.8,
+      "role": "template",
+      "what_to_extract": "SFT + RL post-training on MoE 671B/37B-active; distillation of <think> reasoning from DeepSeek-R1; 5K H800 hours for post-training (small vs 2.664M pretrain); preserves both reasoning quality and output-length control."
+    },
+    {
+      "path": "wiki/raw-data/llm-training/model-reports/deepseek-r1.md",
+      "relevance": 0.6,
+      "role": "template",
+      "what_to_extract": "R1 template: '<think>...</think><answer>...</answer>'; rule-based rewards require a template the parser can split; the template is SFT-frozen before RL starts."
+    }
+  ],
+  "previous_chapters": ["ch-29"],
+  "next_chapters": ["ch-31", "ch-32", "ch-33", "ch-34", "ch-35", "ch-36"],
+  "style_reference": "wiki/courses/llm-training/ch-29/read.md",
+  "deliverables": [
+    "read.md (220-280 lines, content format with per-regime loss-mask table + chat-template matrix across ChatML / Llama-3 / Qwen / DeepSeek)",
+    "figures/sft-axes.html (self-contained interactive config builder, ~200-280 lines, no CDN)",
+    "excerpts/loss-masking-regimes.md",
+    "excerpts/sequence-packing-contract.md",
+    "excerpts/neftune-regularizer.md",
+    "excerpts/chat-template-matrix.md",
+    "excerpts/tulu-3-sft-recipe.md",
+    "excerpts/sft-pre-determines-rl.md"
+  ],
+  "hard_rules": [
+    "No edits outside wiki/courses/llm-training/ch-30/",
+    "No emojis in any deliverable",
+    "No external CDN references in HTML (inline CSS/JS only)",
+    "Quote real chat templates verbatim from the model reports",
+    "Every code sketch must have real function signatures tied to TRL / HF APIs",
+    "Label inferred defaults when not attested",
+    "Chapter opens the SFT track; must frame the axes learners see in ch-31..ch-36 without collapsing those chapters' content"
+  ]
+}

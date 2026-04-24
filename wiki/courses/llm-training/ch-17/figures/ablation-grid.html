@@ -1,0 +1,209 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>ch-17 — Interactive ablation grid (CCNet-style filter stack)</title>
+<style>
+  body {
+    font-family: -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    background: #0f1115; color: #dde3ea; margin: 0; padding: 2rem; line-height: 1.5;
+  }
+  h1 { color: #e7ecf3; font-size: 1.35rem; margin-bottom: 0.3rem; }
+  .subtitle { color: #8892a3; font-size: 0.88rem; margin-bottom: 1.4rem; }
+  .wrap { max-width: 1040px; margin: 0 auto; }
+  .panel {
+    background: #161b22; border: 1px solid #232a36; border-radius: 8px;
+    padding: 1.1rem 1.3rem; margin-bottom: 1.2rem;
+  }
+  .toggles { display: flex; flex-wrap: wrap; gap: 0.8rem; }
+  .toggle {
+    display: inline-flex; align-items: center; gap: 0.45rem;
+    padding: 0.4rem 0.7rem; background: #1c232e; border: 1px solid #2a313d;
+    border-radius: 6px; cursor: pointer; user-select: none; font-size: 0.9rem;
+    transition: background 120ms, border-color 120ms;
+  }
+  .toggle.on { background: #24344a; border-color: #3a5a88; color: #d9e6f7; }
+  .toggle input { accent-color: #5aa3ff; }
+  table { width: 100%; border-collapse: collapse; margin-top: 0.8rem; font-size: 0.92rem; }
+  th, td {
+    padding: 0.55rem 0.65rem; text-align: center; border-bottom: 1px solid #232a36;
+  }
+  th { color: #9aa6b8; font-weight: 500; text-align: left; }
+  th.task, td.task { text-align: center; }
+  th.row-label, td.row-label { text-align: left; color: #bfcad8; min-width: 260px; }
+  td.delta { font-variant-numeric: tabular-nums; font-weight: 500; }
+  .pos { color: #64d28f; }
+  .neg { color: #ef6666; }
+  .neu { color: #7a8290; }
+  .active-row { background: #1a2330; }
+  .cite { color: #8892a3; font-size: 0.82rem; line-height: 1.55; }
+  .cite code { background: #1c232e; padding: 1px 5px; border-radius: 3px; }
+  .footer { font-size: 0.8rem; color: #6b7583; margin-top: 1.2rem; }
+  .pill { display: inline-block; padding: 1px 7px; border-radius: 10px;
+          background: #1f2731; color: #8fa0b8; font-size: 0.75rem; margin-left: 4px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<h1>ch-17 — Interactive ablation grid</h1>
+<div class="subtitle">
+  Toggle filters below. Deltas show illustrative gain (+) or loss (−) over the
+  <em>no-filter</em> baseline on each eval task, scaled to ~125M models from
+  published 1.8B / 7B results in Dolma Table 5 and FineWeb Figure 4.
+  Use this to make predictions <strong>before</strong> running the lab, then sanity-check signs after.
+</div>
+
+<div class="panel">
+  <div style="margin-bottom: 0.5rem; color: #9aa6b8; font-size: 0.88rem;">Filter stack (stage order is Dolma-style, paragraph-dedup last):</div>
+  <div class="toggles" id="toggles"></div>
+</div>
+
+<div class="panel">
+  <table>
+    <thead>
+      <tr>
+        <th class="row-label">Filter configuration</th>
+        <th class="task">ARC-E</th>
+        <th class="task">HellaSwag</th>
+        <th class="task">LAMBADA</th>
+        <th class="task">MMLU-tiny</th>
+      </tr>
+    </thead>
+    <tbody id="grid-body"></tbody>
+  </table>
+  <div class="cite" style="margin-top: 0.9rem;">
+    Baseline row is <code>none</code>: HellaSwag 28.5, ARC-E 35.1, LAMBADA 31.2, MMLU-tiny 25.3
+    (random ≈ 25 on MMLU-tiny; close-to-random is expected at 125M — what matters is the filter delta, not the absolute).
+  </div>
+</div>
+
+<div class="panel">
+  <h2 style="font-size: 1.05rem; margin-top: 0; color: #cdd6e0;">Published-literature deltas this grid draws from</h2>
+  <div class="cite">
+    <p><strong>Dolma Table 5</strong> ablation (Soldaini et al. 2024 §6): URL-dedup +0.4 avg, lang-ID +1.1, Gopher-style quality +1.9, content-filter neutral, paragraph-dedup +0.8. Applied here as the lang-ID (+lang) and perplexity (+ppl) rows since our small-scale run has no URL list and collapses content-filter into quality.</p>
+    <p><strong>FineWeb Figure 4</strong> (Penedo et al. 2024 §3): exact + near-dedup together deliver +2.4 HellaSwag but a <em>known LAMBADA regression</em> because dedup removes documents that locally match LAMBADA's continuation style. The memo should reproduce this sign pattern on its slice.</p>
+    <p><strong>FineWeb §3.3</strong>: per-snapshot MinHash beats global MinHash by ~+0.6 on MMLU — the single most novel ablation in the paper; stretch-goal row in the lab.</p>
+    <p><strong>Lee et al. 2021 §5</strong>: train/val overlap of 3.2% in C4 alone; decontamination FP rate at n=13 is 5–15%, at n=8 is ~50%. Not plotted here — it is a scalar the memo must report.</p>
+  </div>
+</div>
+
+<div class="footer">
+  Delta magnitudes are <strong>illustrative</strong>, scaled down from published 1.8B results.
+  Signs should match; magnitudes at 125M will be noisier (often ±0.5).
+  Build: self-contained, no CDN, no external JS.
+</div>
+
+</div>
+
+<script>
+// Filter definitions. 'delta' is per-task gain over baseline (none), additive.
+// Magnitudes are illustrative, scaled from Dolma T5 / FineWeb F4.
+const FILTERS = [
+  {
+    key: "lang",
+    name: "Language ID (fastText, en ≥ 0.65)",
+    source: "Dolma T5 row 2 / CCNet §3",
+    delta: { arce: 0.8, hs: 1.4, lam: 0.5, mmlu: 0.3 },
+  },
+  {
+    key: "ppl",
+    name: "Perplexity filter (KenLM vs Wikipedia, head+middle)",
+    source: "CCNet §4 / Dolma quality",
+    delta: { arce: 1.6, hs: 1.9, lam: 1.1, mmlu: 0.9 },
+  },
+  {
+    key: "exact",
+    name: "Exact dedup (suffix array, ≥50 tokens)",
+    source: "Lee et al. 2021 §ExactSubstr",
+    delta: { arce: 0.5, hs: 0.8, lam: -0.4, mmlu: 0.3 },
+  },
+  {
+    key: "minhash",
+    name: "MinHash near-dedup (Jaccard ≥ 0.8, per-snapshot)",
+    source: "Lee et al. §NearDup / FineWeb §3.3",
+    delta: { arce: 0.7, hs: 1.2, lam: -0.6, mmlu: 0.5 },
+  },
+];
+
+const TASKS = [
+  { key: "arce",  label: "ARC-E" },
+  { key: "hs",    label: "HellaSwag" },
+  { key: "lam",   label: "LAMBADA" },
+  { key: "mmlu",  label: "MMLU-tiny" },
+];
+
+const BASELINE = { arce: 35.1, hs: 28.5, lam: 31.2, mmlu: 25.3 };
+
+// State: each filter on/off.
+const state = { lang: true, ppl: true, exact: true, minhash: true };
+
+function fmt(d) {
+  if (Math.abs(d) < 0.05) return `<span class="neu">0.0</span>`;
+  const sign = d > 0 ? "+" : "";
+  const cls  = d > 0 ? "pos" : "neg";
+  return `<span class="${cls}">${sign}${d.toFixed(1)}</span>`;
+}
+
+function computeRow(enabled) {
+  const d = { arce: 0, hs: 0, lam: 0, mmlu: 0 };
+  for (const f of FILTERS) if (enabled[f.key]) for (const t of TASKS) d[t.key] += f.delta[t.key];
+  return d;
+}
+
+function renderToggles() {
+  const el = document.getElementById("toggles");
+  el.innerHTML = "";
+  for (const f of FILTERS) {
+    const label = document.createElement("label");
+    label.className = "toggle" + (state[f.key] ? " on" : "");
+    label.innerHTML = `<input type="checkbox" ${state[f.key] ? "checked" : ""}> ${f.name}
+                       <span class="pill">${f.source}</span>`;
+    label.querySelector("input").addEventListener("change", (e) => {
+      state[f.key] = e.target.checked; renderAll();
+    });
+    el.appendChild(label);
+  }
+}
+
+function rowLabel(enabled) {
+  const on = FILTERS.filter(f => enabled[f.key]).map(f => f.key);
+  if (on.length === 0) return "none (raw extracted text)";
+  return "+ " + on.join(" + ");
+}
+
+function renderGrid() {
+  const body = document.getElementById("grid-body");
+  body.innerHTML = "";
+
+  // Fixed cumulative rows: none, +lang, +lang+ppl, +lang+ppl+exact, full-stack.
+  const cumulative = [
+    {},
+    { lang: true },
+    { lang: true, ppl: true },
+    { lang: true, ppl: true, exact: true },
+    { lang: true, ppl: true, exact: true, minhash: true },
+  ];
+
+  cumulative.forEach((enabled) => {
+    const tr = document.createElement("tr");
+    const isActive = FILTERS.every(f => !!enabled[f.key] === !!state[f.key]);
+    if (isActive) tr.classList.add("active-row");
+    const d = computeRow(enabled);
+    tr.innerHTML = `
+      <td class="row-label">${rowLabel(enabled)}</td>
+      <td class="delta">${(BASELINE.arce + d.arce).toFixed(1)} (${fmt(d.arce)})</td>
+      <td class="delta">${(BASELINE.hs + d.hs).toFixed(1)} (${fmt(d.hs)})</td>
+      <td class="delta">${(BASELINE.lam + d.lam).toFixed(1)} (${fmt(d.lam)})</td>
+      <td class="delta">${(BASELINE.mmlu + d.mmlu).toFixed(1)} (${fmt(d.mmlu)})</td>
+    `;
+    body.appendChild(tr);
+  });
+}
+
+function renderAll() { renderToggles(); renderGrid(); }
+renderAll();
+</script>
+
+</body>
+</html>

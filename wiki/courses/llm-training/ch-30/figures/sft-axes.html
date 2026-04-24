@@ -1,0 +1,280 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>SFT Design Axes — Interactive Config Builder (ch-30)</title>
+<style>
+  :root { --bg:#fafaf7; --panel:#fff; --ink:#1b1b1b; --dim:#6a6a6a; --line:#d8d8d4;
+          --accent:#1e4f79; --hot:#8a2f2f; --good:#2f6d3f; --warn:#9a6a1a; --code:#f2f1ec; }
+  body { background:var(--bg); color:var(--ink); font-family:-apple-system,"Helvetica Neue",Arial,sans-serif;
+         font-variant-numeric:tabular-nums; max-width:1080px; margin:24px auto; padding:0 20px; line-height:1.45; }
+  h1 { font-size:20px; margin:0 0 4px 0; }
+  h2 { font-size:14px; margin:18px 0 6px 0; color:var(--accent); letter-spacing:0.4px; }
+  .sub { color:var(--dim); font-size:13px; margin-bottom:18px; }
+  .wrap { display:grid; grid-template-columns:340px 1fr; gap:18px; }
+  .panel { background:var(--panel); border:1px solid var(--line); padding:14px 16px; border-radius:4px; }
+  .axis { margin-bottom:14px; }
+  .axis label { font-size:12px; color:var(--dim); display:block; margin-bottom:4px; text-transform:uppercase; letter-spacing:0.6px; }
+  .axis select, .axis input[type="number"] { width:100%; padding:6px 8px; border:1px solid var(--line);
+         background:#fff; font:inherit; font-size:13px; border-radius:3px; }
+  .axis .toggle { display:flex; gap:10px; align-items:center; font-size:13px; }
+  .pair { display:grid; grid-template-columns:1fr 1fr; gap:10px; }
+  table { width:100%; border-collapse:collapse; font-size:12px; margin-top:6px; }
+  th, td { border:1px solid var(--line); padding:4px 8px; text-align:left; }
+  th { background:#f1efe8; font-weight:600; }
+  tr.hot td { background:#fdf3f0; }
+  pre { background:var(--code); padding:10px 12px; border-radius:3px; font-size:12px;
+        white-space:pre-wrap; word-break:break-all; border-left:3px solid var(--accent); }
+  .kv { display:grid; grid-template-columns:180px 1fr; gap:4px 12px; font-size:13px; }
+  .kv .k { color:var(--dim); }
+  .badge { display:inline-block; padding:1px 8px; border-radius:10px; font-size:11px; font-weight:600; }
+  .b-good { background:#e3f0e6; color:var(--good); }
+  .b-warn { background:#faf1de; color:var(--warn); }
+  .b-hot  { background:#fbe3df; color:var(--hot); }
+  .small { font-size:12px; color:var(--dim); }
+</style>
+</head>
+<body>
+
+<h1>SFT Design Axes — Config Builder</h1>
+<p class="sub">Chapter 30 companion. Toggle the five axes; the right panel recomputes your training-config summary, the per-regime loss-mask row, the chat-template delimiters (verbatim), and the expected packing speedup.</p>
+
+<div class="wrap">
+
+  <div class="panel">
+    <h2>Axis controls</h2>
+
+    <div class="axis">
+      <label>1. Regime</label>
+      <select id="regime">
+        <option value="single">single-turn instruction</option>
+        <option value="chat">multi-turn chat</option>
+        <option value="tool">tool-call</option>
+        <option value="reason">reasoning</option>
+        <option value="agent">agentic</option>
+      </select>
+    </div>
+
+    <div class="axis">
+      <label>2. Loss mask</label>
+      <select id="mask">
+        <option value="response">response-only (default)</option>
+        <option value="full">full-sequence</option>
+        <option value="weighted">prompt-weighted (alpha=0.1)</option>
+      </select>
+    </div>
+
+    <div class="axis">
+      <label>3. Chat template</label>
+      <select id="template">
+        <option value="chatml">ChatML</option>
+        <option value="llama3">Llama-3</option>
+        <option value="qwen3">Qwen-3 (hybrid thinking)</option>
+        <option value="dsv3">DeepSeek-V3</option>
+      </select>
+    </div>
+
+    <div class="axis">
+      <label>4. Packing</label>
+      <div class="toggle">
+        <input type="checkbox" id="packing" checked>
+        <span>enabled (flash_attn_varlen_func)</span>
+      </div>
+      <div class="pair" style="margin-top:6px">
+        <div>
+          <label>L_max</label>
+          <input type="number" id="lmax" value="4096" min="512" max="32768" step="512">
+        </div>
+        <div>
+          <label>avg(L_i)</label>
+          <input type="number" id="lavg" value="600" min="32" max="8192" step="16">
+        </div>
+      </div>
+    </div>
+
+    <div class="axis">
+      <label>5. NEFTune</label>
+      <div class="toggle">
+        <input type="checkbox" id="neftune">
+        <span>enabled (alpha)</span>
+        <input type="number" id="alpha" value="5" min="1" max="20" step="1" style="width:60px">
+      </div>
+      <div class="small" style="margin-top:4px">Dataset size (prompts):
+        <input type="number" id="dsize" value="50000" min="500" max="2000000" step="500" style="width:100px">
+      </div>
+    </div>
+  </div>
+
+  <div class="panel">
+    <h2>Config summary</h2>
+    <div class="kv" id="summary"></div>
+
+    <h2>Per-regime loss-mask row</h2>
+    <table id="maskTable">
+      <thead>
+        <tr>
+          <th>regime</th><th>system</th><th>user</th><th>assistant (current)</th>
+          <th>assistant (prior)</th><th>tool_call</th><th>tool_response</th><th>&lt;think&gt;</th>
+        </tr>
+      </thead>
+      <tbody></tbody>
+    </table>
+
+    <h2>Chat template — verbatim delimiters</h2>
+    <pre id="tmpl"></pre>
+
+    <h2>Packing — expected speedup</h2>
+    <div class="kv" id="pack"></div>
+
+    <h2>Pre-flight checks</h2>
+    <div id="checks"></div>
+  </div>
+</div>
+
+<script>
+// --- data ---------------------------------------------------------------
+const REGIMES = {
+  single: { label: "single-turn instruction", mask: ["N","N","Y","—","—","—","—"] },
+  chat:   { label: "multi-turn chat",         mask: ["N","N","Y","N","—","—","—"] },
+  tool:   { label: "tool-call",               mask: ["N","N","Y","N","Y","N","—"] },
+  reason: { label: "reasoning",               mask: ["N","N","Y","N","—","—","Y"] },
+  agent:  { label: "agentic",                 mask: ["N","N","Y","N","Y","N","Y"] }
+};
+
+const TEMPLATES = {
+  chatml:
+`<|im_start|>system
+You are helpful.<|im_end|>
+<|im_start|>user
+Hi<|im_end|>
+<|im_start|>assistant
+Hello.<|im_end|>`,
+
+  llama3:
+`<|begin_of_text|><|start_header_id|>system<|end_header_id|>
+
+You are helpful.<|eot_id|><|start_header_id|>user<|end_header_id|>
+
+Hi<|eot_id|><|start_header_id|>assistant<|end_header_id|>
+
+Hello.<|eot_id|>`,
+
+  qwen3:
+`<|im_start|>system
+You are helpful.<|im_end|>
+<|im_start|>user
+Solve 2+2<|im_end|>
+<|im_start|>assistant
+<think>2 plus 2 is 4.</think>4<|im_end|>`,
+
+  dsv3:
+`<｜begin▁of▁sentence｜><｜User｜>Hi<｜Assistant｜>Hello.<｜end▁of▁sentence｜>`
+};
+
+const TEMPLATE_SUPPORT = {
+  chatml:{thinking:false,toolcall:"convention"}, llama3:{thinking:false,toolcall:"python_tag (Llama-3.1)"},
+  qwen3:{thinking:true,toolcall:"<tool_call>...</tool_call>"}, dsv3:{thinking:"R1 only",toolcall:"convention"}
+};
+
+// --- helpers ------------------------------------------------------------
+const $ = (id) => document.getElementById(id);
+
+function packingSpeedup(lmax, lavg, on) {
+  if (!on) return { raw: 1.0, realised: 1.0 };
+  const raw = lmax / Math.max(lavg, 1);
+  const realised = Math.min(raw, Math.pow(raw, 0.6) * 1.8);
+  return { raw, realised };
+}
+function neftuneAdvice(ds, on, alpha) {
+  if (!on) return ds <= 100000
+    ? { level:"warn", msg:"off — but at |D| ≤ 100K NEFTune typically adds 5–30 pts AlpacaEval; consider on" }
+    : { level:"good", msg:"off — correct default at this scale (Tülu-3 939K finds NEFTune neutral)" };
+  if (ds >= 500000) return { level:"warn", msg:"on — NEFTune saturates at ≥ 500K; plan an ablation before keeping it" };
+  if (alpha < 5 || alpha > 15) return { level:"warn", msg:"on — paper sweeps alpha in [5,15]; your value is outside this range" };
+  return { level:"good", msg:`on — alpha=${alpha} within attested range [5,15]` };
+}
+function maskAdvice(mask, ds) {
+  if (mask === "response") return { level:"good", msg:"response-only is the attested default (Shi 2024 dominates across scales)" };
+  if (mask === "full") return ds <= 1000
+    ? { level:"warn", msg:"full-sequence: only justified in tiny-dataset / strong-base regime" }
+    : { level:"hot",  msg:"full-sequence: not recommended at this scale; trains model to generate prompts" };
+  return { level:"warn", msg:"prompt-weighted: modest gains in some slices; response-only is simpler and dominates broadly" };
+}
+function templateAdvice(regime, tmpl) {
+  const sup = TEMPLATE_SUPPORT[tmpl];
+  if ((regime === "reason" || regime === "agent") && !sup.thinking)
+    return { level:"hot", msg:`regime needs <think>...</think> but template ${tmpl} has no native thinking tokens` };
+  if ((regime === "tool" || regime === "agent") && sup.toolcall === "convention")
+    return { level:"warn", msg:`tool-call support in ${tmpl} is convention-only; you must fix a marker and enforce it in data` };
+  return { level:"good", msg:"template and regime are compatible" };
+}
+
+function badge(level, msg) {
+  const cls = level === "good" ? "b-good" : level === "warn" ? "b-warn" : "b-hot";
+  return `<div style="margin:4px 0"><span class="badge ${cls}">${level}</span> ${msg}</div>`;
+}
+
+// --- render -------------------------------------------------------------
+function render() {
+  const regime = $("regime").value;
+  const mask = $("mask").value;
+  const tmpl = $("template").value;
+  const packingOn = $("packing").checked;
+  const lmax = parseInt($("lmax").value, 10);
+  const lavg = parseInt($("lavg").value, 10);
+  const neftuneOn = $("neftune").checked;
+  const alpha = parseInt($("alpha").value, 10);
+  const ds = parseInt($("dsize").value, 10);
+
+  // Summary
+  const sp = packingSpeedup(lmax, lavg, packingOn);
+  const summary = [
+    ["Regime", REGIMES[regime].label],
+    ["Loss mask", mask],
+    ["Chat template", tmpl],
+    ["Packing", packingOn ? `on  (L_max=${lmax}, avg(L_i)=${lavg})` : "off"],
+    ["NEFTune", neftuneOn ? `on  (alpha=${alpha})` : "off"],
+    ["Dataset size", ds.toLocaleString() + " prompts"]
+  ];
+  $("summary").innerHTML = summary.map(([k, v]) =>
+    `<div class="k">${k}</div><div>${v}</div>`).join("");
+
+  // Mask table — highlight active regime row
+  const tbody = $("maskTable").querySelector("tbody");
+  tbody.innerHTML = Object.entries(REGIMES).map(([k, r]) => {
+    const hot = k === regime ? " class='hot'" : "";
+    return `<tr${hot}><td>${r.label}</td>${r.mask.map(c => `<td>${c}</td>`).join("")}</tr>`;
+  }).join("");
+
+  // Template
+  $("tmpl").textContent = TEMPLATES[tmpl];
+
+  // Packing
+  $("pack").innerHTML = [
+    ["raw L_max / avg(L_i)", sp.raw.toFixed(2) + "x"],
+    ["realised (after varlen overhead)", sp.realised.toFixed(2) + "x"],
+    ["diagnostic",
+      "train 100 steps unpacked vs packed; loss curves must agree within 0.01 nats"]
+  ].map(([k, v]) => `<div class="k">${k}</div><div>${v}</div>`).join("");
+
+  // Checks
+  const checks = [];
+  checks.push(templateAdvice(regime, tmpl));
+  checks.push(maskAdvice(mask, ds));
+  checks.push(neftuneAdvice(ds, neftuneOn, alpha));
+  if (packingOn && lavg > lmax) checks.push({ level:"hot", msg:"avg(L_i) exceeds L_max — packing ratio undefined" });
+  else if (packingOn && sp.raw < 1.5) checks.push({ level:"warn", msg:"packing speedup < 1.5x; sequences already long, may not earn its keep" });
+  else if (packingOn) checks.push({ level:"good", msg:"packing contract: cu_seqlens + position_ids reset + per-sub-sequence label mask" });
+  else checks.push({ level:"warn", msg:"packing off — 50-89% of tokens may be padding; on-by-default in Tulu-3 / Zephyr" });
+  $("checks").innerHTML = checks.map(c => badge(c.level, c.msg)).join("");
+}
+
+// --- wire up ------------------------------------------------------------
+["regime","mask","template","packing","lmax","lavg","neftune","alpha","dsize"]
+  .forEach(id => $(id).addEventListener("input", render));
+
+render();
+</script>
+
+</body>
+</html>

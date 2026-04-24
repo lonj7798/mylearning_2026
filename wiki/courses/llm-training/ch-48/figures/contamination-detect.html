@@ -1,0 +1,274 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Contamination Detection — n-gram FP/FN and Paraphrase Leakage</title>
+<style>
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+         max-width: 1180px; margin: 1.6em auto; padding: 0 1em; color: #1f1f1f;
+         background: #fafafa; }
+  h1 { font-size: 1.3em; margin-bottom: 0.25em; }
+  .subtitle { color: #5a5a5a; margin-top: 0; font-size: 0.92em; line-height: 1.5; }
+  .panel { border: 1px solid #dcdcdc; border-radius: 6px; background: #fff;
+           padding: 0.9em 1em; margin-top: 1em; }
+  h2 { font-size: 1.0em; margin: 0 0 0.6em 0; color: #2b2b2b;
+       border-bottom: 1px solid #ececec; padding-bottom: 0.3em; }
+  svg.plot { width: 100%; height: 320px; display: block; background: #fcfcfc;
+             border: 1px solid #ececec; border-radius: 4px; }
+  .axis { stroke: #666; stroke-width: 1; fill: none; }
+  .axis-text { font-family: 'SF Mono', Menlo, monospace; font-size: 10px; fill: #444; }
+  .grid { stroke: #eee; stroke-width: 1; }
+  .curve { fill: none; stroke-width: 2.2; }
+  .curve.fp { stroke: #c4793d; }
+  .curve.fn { stroke: #2e5aa8; }
+  .curve.ngram { stroke: #2e5aa8; }
+  .curve.emb { stroke: #2f8a4a; }
+  .marker { fill: #c4793d; stroke: #fff; stroke-width: 2; }
+  .legend-item { font-family: 'SF Mono', Menlo, monospace; font-size: 11px; fill: #222; }
+  .controls { display: flex; flex-wrap: wrap; gap: 0.8em; margin-bottom: 0.6em; align-items: center; }
+  .controls label { font-family: 'SF Mono', Menlo, monospace; font-size: 0.85em;
+                    color: #333; display: flex; flex-direction: column; min-width: 160px; }
+  .controls input[type=range] { width: 100%; }
+  .controls select { font-family: 'SF Mono', Menlo, monospace; font-size: 0.88em; }
+  .readout { font-family: 'SF Mono', Menlo, monospace; font-size: 0.82em;
+             color: #5a6a80; }
+  .verdict { font-size: 0.88em; color: #333; background: #f5f7fb;
+             padding: 0.55em 0.75em; border-radius: 4px;
+             border-left: 3px solid #2e5aa8; margin-top: 0.6em; }
+  code { background: #eef; padding: 1px 4px; border-radius: 3px;
+         font-family: 'SF Mono', Menlo, monospace; font-size: 0.85em; }
+</style>
+</head>
+<body>
+
+<h1>Contamination Detection — Interactive</h1>
+<p class="subtitle">
+  Two panels. <b>Panel 1</b>: pick an n-gram size and overlap cutoff on a synthesized train/eval
+  corpus; the FP/FN curves reveal the detector's operating point. <b>Panel 2</b>: sweep the
+  paraphrase ratio (fraction of eval tokens replaced by synonyms) and watch n-gram recall
+  collapse while embedding-neighbour recall degrades more gently. Models are synthetic but
+  directions are attested by <code>deduplicating-training-data</code> (n-gram / MinHash),
+  <code>llama-3</code> (13-token convention), and <code>faithful-synth-eval</code> (paraphrase tail).
+</p>
+
+<div class="panel">
+  <h2>Panel 1 — FP/FN vs n-gram size and cutoff</h2>
+  <div class="controls">
+    <label>n-gram size: <span id="nval" class="readout">13</span>
+      <input type="range" id="n" min="4" max="50" value="13" step="1">
+    </label>
+    <label>overlap cutoff (frac eval n-grams hit): <span id="cval" class="readout">0.80</span>
+      <input type="range" id="c" min="0.05" max="1.00" value="0.80" step="0.01">
+    </label>
+    <label>corpus contamination base rate: <span id="bval" class="readout">0.02</span>
+      <input type="range" id="b" min="0.00" max="0.20" value="0.02" step="0.005">
+    </label>
+  </div>
+  <svg id="plot1" class="plot" viewBox="0 0 720 320" preserveAspectRatio="xMidYMid meet"></svg>
+  <div class="verdict" id="verdict1"></div>
+</div>
+
+<div class="panel">
+  <h2>Panel 2 — Paraphrase leakage: n-gram vs embedding recall</h2>
+  <div class="controls">
+    <label>paraphrase ratio (frac eval tokens rewritten): <span id="pval" class="readout">0.00</span>
+      <input type="range" id="p" min="0.00" max="1.00" value="0.00" step="0.01">
+    </label>
+    <label>detector:
+      <select id="dsel">
+        <option value="both" selected>both (n-gram and embedding)</option>
+        <option value="ngram">n-gram only</option>
+        <option value="emb">embedding only</option>
+      </select>
+    </label>
+  </div>
+  <svg id="plot2" class="plot" viewBox="0 0 720 320" preserveAspectRatio="xMidYMid meet"></svg>
+  <div class="verdict" id="verdict2"></div>
+</div>
+
+<script>
+// ---- Panel 1 model ----
+// Synthesize a train/eval corpus with known contamination. FP = fraction of clean
+// train docs flagged (spurious n-gram collision). FN = fraction of contaminated
+// eval instances NOT flagged. Both depend on n-gram size n and cutoff c.
+//
+// Model shape (calibrated so n=8,c~0.1 reproduces the ~1-3% FP observation on Wikipedia-
+// style text, and n=50 yields near-zero FP per [[deduplicating-training-data]]):
+//   fp(n, c) = exp( - (n - 3) / 1.8 ) * (1 - c)^1.2
+//   fn(n, c) = 1 - (1 - 0.0025 * n) * (1 - c^0.7)   [simplified]
+// Both clamped to [0, 1].
+function fpModel(n, c) {
+  const raw = Math.exp(-(n - 3) / 1.8) * Math.pow(Math.max(0, 1 - c), 1.2);
+  return Math.max(0, Math.min(1, raw));
+}
+function fnModel(n, c, baseRate) {
+  // longer n-grams and higher cutoff -> more FN. Base rate scales the floor.
+  const perItemRecall = Math.max(0, 1 - c) * Math.max(0, 1 - 0.012 * (n - 3));
+  const fn = 1 - perItemRecall;
+  return Math.max(0, Math.min(1, fn));
+}
+
+function drawAxes(svg, xlab, ylab) {
+  const ns = "http://www.w3.org/2000/svg";
+  // Clear
+  while (svg.firstChild) svg.removeChild(svg.firstChild);
+  const W = 720, H = 320, L = 60, R = 620, T = 30, B = 280;
+  // grid
+  for (let i = 0; i <= 10; i++) {
+    const y = T + (B - T) * i / 10;
+    const line = document.createElementNS(ns, "line");
+    line.setAttribute("x1", L); line.setAttribute("x2", R);
+    line.setAttribute("y1", y); line.setAttribute("y2", y);
+    line.setAttribute("class", "grid"); svg.appendChild(line);
+    const t = document.createElementNS(ns, "text");
+    t.setAttribute("x", L - 6); t.setAttribute("y", y + 3);
+    t.setAttribute("text-anchor", "end");
+    t.setAttribute("class", "axis-text");
+    t.textContent = (1 - i / 10).toFixed(1);
+    svg.appendChild(t);
+  }
+  for (let i = 0; i <= 10; i++) {
+    const x = L + (R - L) * i / 10;
+    const line = document.createElementNS(ns, "line");
+    line.setAttribute("y1", T); line.setAttribute("y2", B);
+    line.setAttribute("x1", x); line.setAttribute("x2", x);
+    line.setAttribute("class", "grid"); svg.appendChild(line);
+    const t = document.createElementNS(ns, "text");
+    t.setAttribute("y", B + 14); t.setAttribute("x", x);
+    t.setAttribute("text-anchor", "middle");
+    t.setAttribute("class", "axis-text");
+    t.textContent = (i / 10).toFixed(1);
+    svg.appendChild(t);
+  }
+  const xt = document.createElementNS(ns, "text");
+  xt.setAttribute("x", (L + R) / 2); xt.setAttribute("y", H - 4);
+  xt.setAttribute("text-anchor", "middle"); xt.setAttribute("class", "axis-text");
+  xt.textContent = xlab; svg.appendChild(xt);
+  const yt = document.createElementNS(ns, "text");
+  yt.setAttribute("transform", `rotate(-90 16 ${(T + B) / 2})`);
+  yt.setAttribute("x", 16); yt.setAttribute("y", (T + B) / 2);
+  yt.setAttribute("text-anchor", "middle"); yt.setAttribute("class", "axis-text");
+  yt.textContent = ylab; svg.appendChild(yt);
+  return { L, R, T, B };
+}
+
+function plotCurve(svg, pts, cls, box) {
+  const ns = "http://www.w3.org/2000/svg";
+  const { L, R, T, B } = box;
+  const d = pts.map((p, i) => {
+    const x = L + (R - L) * p[0];
+    const y = T + (B - T) * (1 - p[1]);
+    return (i === 0 ? "M" : "L") + x.toFixed(1) + "," + y.toFixed(1);
+  }).join(" ");
+  const path = document.createElementNS(ns, "path");
+  path.setAttribute("d", d); path.setAttribute("class", "curve " + cls);
+  svg.appendChild(path);
+}
+
+function marker(svg, x, y, box) {
+  const ns = "http://www.w3.org/2000/svg";
+  const { L, R, T, B } = box;
+  const cx = L + (R - L) * x;
+  const cy = T + (B - T) * (1 - y);
+  const dot = document.createElementNS(ns, "circle");
+  dot.setAttribute("cx", cx); dot.setAttribute("cy", cy);
+  dot.setAttribute("r", 5); dot.setAttribute("class", "marker");
+  svg.appendChild(dot);
+}
+
+function legend(svg, items) {
+  const ns = "http://www.w3.org/2000/svg";
+  let x = 480, y = 42;
+  for (const [label, cls] of items) {
+    const line = document.createElementNS(ns, "line");
+    line.setAttribute("x1", x); line.setAttribute("x2", x + 24);
+    line.setAttribute("y1", y); line.setAttribute("y2", y);
+    line.setAttribute("class", "curve " + cls); svg.appendChild(line);
+    const t = document.createElementNS(ns, "text");
+    t.setAttribute("x", x + 30); t.setAttribute("y", y + 4);
+    t.setAttribute("class", "legend-item"); t.textContent = label;
+    svg.appendChild(t); y += 16;
+  }
+}
+
+function renderPanel1() {
+  const n = parseInt(document.getElementById("n").value);
+  const c = parseFloat(document.getElementById("c").value);
+  const b = parseFloat(document.getElementById("b").value);
+  document.getElementById("nval").textContent = n;
+  document.getElementById("cval").textContent = c.toFixed(2);
+  document.getElementById("bval").textContent = b.toFixed(3);
+  const svg = document.getElementById("plot1");
+  const box = drawAxes(svg, "cutoff (overlap fraction)", "rate");
+  // Two curves at the chosen n: FP vs c, FN vs c.
+  const fpPts = [], fnPts = [];
+  for (let i = 0; i <= 100; i++) {
+    const cc = i / 100;
+    fpPts.push([cc, fpModel(n, cc)]);
+    fnPts.push([cc, fnModel(n, cc, b)]);
+  }
+  plotCurve(svg, fpPts, "fp", box);
+  plotCurve(svg, fnPts, "fn", box);
+  marker(svg, c, fpModel(n, c), box);
+  legend(svg, [["FP rate", "fp"], ["FN rate", "fn"]]);
+  const fp = fpModel(n, c), fn = fnModel(n, c, b);
+  let regime = "balanced";
+  if (n <= 6) regime = "recall-favoured (expect FP > 1%)";
+  else if (n <= 13) regime = "Llama-3 convention; FP <0.1% on web-scale text";
+  else if (n >= 40) regime = "ExactSubstr territory; near-zero FP, paraphrase-blind";
+  document.getElementById("verdict1").textContent =
+    `n=${n}, cutoff=${c.toFixed(2)} -> FP=${(fp*100).toFixed(2)}%, FN=${(fn*100).toFixed(1)}%.  ` +
+    `Regime: ${regime}.  Rule: if your FP > your FN target, shorten n; if FN > FP target, lengthen n.`;
+}
+
+// ---- Panel 2 model ----
+// n-gram recall collapses with paraphrase ratio p: each rewritten token breaks
+// every n-gram it touches, so recall ~ (1-p)^n. Embedding recall degrades as
+// (1 - p^1.3) clamped, reflecting that semantic embeddings are paraphrase-robust
+// to a ceiling but ultimately fail on heavy rewrites.
+function ngramRecall(p, n) {
+  return Math.pow(Math.max(0, 1 - p), n);
+}
+function embRecall(p) {
+  return Math.max(0, 1 - Math.pow(p, 1.3));
+}
+
+function renderPanel2() {
+  const p = parseFloat(document.getElementById("p").value);
+  const which = document.getElementById("dsel").value;
+  document.getElementById("pval").textContent = p.toFixed(2);
+  const svg = document.getElementById("plot2");
+  const box = drawAxes(svg, "paraphrase ratio p", "recall (flagged / truly contaminated)");
+  const ngramPts = [], embPts = [];
+  for (let i = 0; i <= 100; i++) {
+    const pp = i / 100;
+    ngramPts.push([pp, ngramRecall(pp, 13)]);
+    embPts.push([pp, embRecall(pp)]);
+  }
+  if (which !== "emb") plotCurve(svg, ngramPts, "ngram", box);
+  if (which !== "ngram") plotCurve(svg, embPts, "emb", box);
+  marker(svg, p, which === "emb" ? embRecall(p) : ngramRecall(p, 13), box);
+  legend(svg, [["n-gram recall (n=13)", "ngram"], ["embedding recall (cos >=0.9)", "emb"]]);
+  const ng = ngramRecall(p, 13), em = embRecall(p);
+  let takeaway = "";
+  if (p < 0.1) takeaway = "light edit: both detectors catch nearly everything.";
+  else if (p < 0.3) takeaway = "moderate paraphrase: n-gram already missing half; embedding still strong.";
+  else if (p < 0.6) takeaway = "heavy paraphrase: n-gram near zero; embedding carrying the load.";
+  else takeaway = "near-total rewrite: embedding also leaking; no detector is safe.";
+  document.getElementById("verdict2").textContent =
+    `p=${p.toFixed(2)}: n-gram recall=${(ng*100).toFixed(1)}%, embedding recall=${(em*100).toFixed(1)}%.  ` +
+    takeaway + "  The recall gap is what the memo must name.";
+}
+
+for (const id of ["n", "c", "b"]) {
+  document.getElementById(id).addEventListener("input", renderPanel1);
+}
+for (const id of ["p", "dsel"]) {
+  document.getElementById(id).addEventListener("input", renderPanel2);
+}
+renderPanel1();
+renderPanel2();
+</script>
+
+</body>
+</html>

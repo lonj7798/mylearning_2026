@@ -1,0 +1,298 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Training Data Landscape — open pretraining corpora 2020–2025</title>
+<style>
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+         max-width: 1180px; margin: 1.6em auto; padding: 0 1em; color: #222;
+         background: #fafafa; }
+  h1 { font-size: 1.35em; margin-bottom: 0.2em; }
+  .subtitle { color: #666; margin-top: 0; font-size: 0.92em; line-height: 1.45; }
+  .controls { margin: 1em 0 0.6em 0; display: flex; gap: 1em; flex-wrap: wrap; align-items: center; }
+  .toggle { display: inline-flex; border: 1px solid #bbb; border-radius: 5px; overflow: hidden; }
+  .toggle button { background: #fff; border: none; padding: 6px 14px; font-size: 0.9em; cursor: pointer; color: #333; }
+  .toggle button.active { background: #335; color: #fff; }
+  .toggle button + button { border-left: 1px solid #bbb; }
+  .legend { display: flex; flex-wrap: wrap; gap: 0.4em 1em; font-size: 0.82em; color: #333; align-items: center; }
+  .sw { display: inline-block; width: 12px; height: 12px; border-radius: 2px; margin-right: 4px; vertical-align: middle; border: 1px solid rgba(0,0,0,0.12); }
+  .chart { border: 1px solid #dcdcdc; background: #fff; border-radius: 6px; padding: 1em 1.2em; margin-top: 0.3em; }
+  .row { display: grid; grid-template-columns: 170px 1fr 100px; align-items: center; margin-bottom: 8px; gap: 0.6em; }
+  .row-label { font-size: 0.88em; color: #222; font-weight: 600; text-align: right; }
+  .row-sub { font-size: 0.72em; color: #888; font-weight: 400; }
+  .bar { height: 22px; background: #f2f2f2; border-radius: 3px; display: flex; overflow: hidden; }
+  .seg { height: 100%; cursor: pointer; transition: opacity 0.15s; }
+  .seg:hover { opacity: 0.75; }
+  .row-total { font-family: 'SF Mono', Menlo, monospace; font-size: 0.82em; color: #444; }
+  .tooltip { position: absolute; background: #222; color: #fff; padding: 8px 10px; border-radius: 4px; font-size: 0.78em; pointer-events: none; max-width: 340px; line-height: 1.45; z-index: 10; box-shadow: 0 2px 8px rgba(0,0,0,0.25); display: none; }
+  .tooltip .tt { font-weight: 600; margin-bottom: 4px; color: #ffd; }
+  .tooltip .tr { font-family: 'SF Mono', Menlo, monospace; font-size: 0.76em; color: #dde; }
+  .tooltip .tn { margin-top: 5px; color: #ccd; font-style: italic; }
+  .axis { display: grid; grid-template-columns: 170px 1fr 100px; gap: 0.6em; font-size: 0.72em; color: #888; border-top: 1px dashed #ddd; padding-top: 0.3em; margin-top: 0.4em; }
+  .ticks { display: flex; justify-content: space-between; }
+  .note { font-size: 0.82em; color: #555; margin-top: 1em; line-height: 1.55; }
+  .note code { background: #eef; padding: 1px 4px; border-radius: 3px; font-family: 'SF Mono', Menlo, monospace; font-size: 0.85em; }
+  .closed { background: #fff6f0; border-left: 3px solid #d08040; padding: 0.5em 0.8em; font-size: 0.85em; margin-top: 0.8em; color: #533; border-radius: 3px; }
+</style>
+</head>
+<body>
+
+<h1>Training Data Landscape — open pretraining corpora, 2020–2025</h1>
+<p class="subtitle">
+  Composition of nine open pretraining corpora by domain. Toggle between
+  <strong>token-count</strong> (absolute scale; web dominates) and
+  <strong>document-count</strong> (books become invisible because each book is
+  one doc worth many tokens). Hover any segment for source URL and filter
+  notes. The Pile's rainbow-of-22 versus FineWeb's single-colour 15T bar is
+  the 2020-&gt;2026 composition shift made visual.
+</p>
+
+<div class="controls">
+  <div class="toggle" id="viewToggle">
+    <button data-view="tokens" class="active">Token-count view</button>
+    <button data-view="docs">Document-count view</button>
+  </div>
+  <div class="legend" id="legend"></div>
+</div>
+
+<div class="chart" id="chart"></div>
+
+<div class="closed">
+  Not shown: <strong>Llama 3 (15.6T)</strong>, <strong>Qwen3 (36T)</strong>,
+  <strong>DeepSeek-V3 (14.8T)</strong>, <strong>Qwen3.5 (undisclosed)</strong>.
+  These closed frontier corpora publish no per-domain composition; their bars
+  would be one solid "undisclosed" block. Their absence from the figure is
+  the chapter's subject — the 2024-2026 non-disclosure signature.
+</div>
+
+<div class="note">
+  Domain colours are shared across rows so the same slice is visually
+  comparable. The Pile's 22 subsets are compressed into eight parent domains
+  here — see [[the-pile]] for the full table.
+  Sources: <code>[[the-pile]]</code>, <code>[[c4]]</code>,
+  <code>[[ccnet]]</code>, <code>[[dolma]]</code>, <code>[[fineweb]]</code>,
+  <code>[[olmo-2]]</code>, <code>[[olmo-3]]</code>.
+</div>
+
+<div id="tooltip" class="tooltip"></div>
+
+<script>
+const DOMAINS = [
+  { id: "web",         label: "Web",           color: "#3a6ea5" },
+  { id: "code",        label: "Code",          color: "#c05050" },
+  { id: "math",        label: "Math",          color: "#d48b2a" },
+  { id: "academic",    label: "Academic",      color: "#6a4d96" },
+  { id: "books",       label: "Books",         color: "#8a6a3a" },
+  { id: "encyclopedic",label: "Encyclopedic",  color: "#408a6c" },
+  { id: "forums",      label: "Forums / Q&A",  color: "#b05a8a" },
+  { id: "legal_patent",label: "Legal / Patent",color: "#7a7a7a" },
+  { id: "other",       label: "Other",         color: "#aaaaaa" },
+];
+// Each segment: [domain, tokens_bn, docs_mn, url, note]. Totals on row header.
+const CORPORA = [
+  { name: "C4", year: 2019, T: 180, D: 365, segs: [
+    ["web", 180, 365, "https://arxiv.org/abs/1910.10683",
+      "100% CC-derived web after T5 heuristic blocklist + English-only filter; see [[c4]]."],
+  ]},
+  { name: "The Pile", year: 2020, T: 300, D: 210, segs: [
+    ["web", 54, 55, "https://arxiv.org/abs/2101.00027",
+      "Pile-CC (18.1%) + OpenWebText2 (5.0%). Hand-curated, not classifier-filtered."],
+    ["code", 23, 21, "https://arxiv.org/abs/2101.00027",
+      "GitHub subset (7.6%). Pre-Stack; all repos regardless of licence."],
+    ["math", 2, 1, "https://arxiv.org/abs/2101.00027",
+      "DM Mathematics (0.7%). Synthetic problems without step-by-step reasoning — aged poorly."],
+    ["academic", 40, 10, "https://arxiv.org/abs/2101.00027",
+      "PubMed Central (7.6%) + arXiv (4.5%) + PubMed Abstracts (1.5%) + PhilPapers (0.2%) + NIH (0.1%). The Pile's academic depth was its signature."],
+    ["books", 36, 0.1, "https://arxiv.org/abs/2101.00027",
+      "Books3 (8.1%) + Gutenberg/PG-19 (0.9%) + BookCorpus2 (0.5%). Books3 was dropped from every 2024+ derivative after the 2023 litigation."],
+    ["encyclopedic", 2, 7, "https://en.wikipedia.org",
+      "Wikipedia EN (0.5% of Pile; small by token, canonical anchor text)."],
+    ["forums", 17, 80, "https://archive.org/details/stackexchange",
+      "StackExchange (2.6%) + HackerNews (0.3%) + Ubuntu IRC (0.4%) + Enron (0.1%) + OpenSubtitles (1.0%) + YouTube subs (0.3%) + EuroParl (0.3%)."],
+    ["legal_patent", 18, 2, "https://arxiv.org/abs/2101.00027",
+      "FreeLaw (4.1%) + USPTO (1.7%). Structured domain-specialist text — aged well."],
+    ["other", 108, 34, "https://arxiv.org/abs/2101.00027",
+      "Aggregate of smaller subsets plus upsampling overhead."],
+  ]},
+  { name: "RedPajama v1", year: 2023, T: 1200, D: 930, segs: [
+    ["web", 984, 700, "https://github.com/togethercomputer/RedPajama-Data",
+      "67% CC + 15% C4. Together AI's open replication of the Llama 1 published mix."],
+    ["code", 54, 30, "https://github.com/togethercomputer/RedPajama-Data",
+      "4.5% GitHub slice following Llama 1 weights."],
+    ["academic", 30, 2, "https://arxiv.org", "2.5% arXiv."],
+    ["books", 54, 0.1, "https://github.com/togethercomputer/RedPajama-Data",
+      "4.5% books — swapped Books3 for Gutenberg after 2023 legal concerns."],
+    ["encyclopedic", 24, 14, "https://en.wikipedia.org",
+      "2% Wikipedia (multilingual slice included)."],
+    ["forums", 24, 180, "https://archive.org/details/stackexchange", "2% StackExchange."],
+    ["other", 30, 4, "https://github.com/togethercomputer/RedPajama-Data", "Misc / overhead."],
+  ]},
+  { name: "SlimPajama", year: 2023, T: 627, D: 590, segs: [
+    ["web", 520, 450, "https://www.cerebras.net/blog/slimpajama",
+      "RedPajama after global MinHash near-dedup — ~50% total size reduction, majority dropped from web."],
+    ["code", 28, 18, "https://www.cerebras.net/blog/slimpajama", "Deduped GitHub."],
+    ["academic", 18, 1, "https://www.cerebras.net/blog/slimpajama", "Deduped arXiv."],
+    ["books", 32, 0.08, "https://www.cerebras.net/blog/slimpajama", "Gutenberg after near-dedup."],
+    ["encyclopedic", 13, 12, "https://www.cerebras.net/blog/slimpajama", "Wikipedia after near-dedup."],
+    ["forums", 13, 108, "https://www.cerebras.net/blog/slimpajama", "StackExchange after near-dedup."],
+    ["other", 3, 1, "https://www.cerebras.net/blog/slimpajama", "Overhead."],
+  ]},
+  { name: "Dolma v1.7", year: 2024, T: 3000, D: 2000, segs: [
+    ["web", 2400, 1700, "https://arxiv.org/abs/2402.00159",
+      "~80% CC via the Dolma six-stage cascade (URL -> doc dedup -> lang -> quality -> content -> paragraph dedup). See [[dolma]]."],
+    ["code", 240, 150, "https://huggingface.co/datasets/bigcode/the-stack",
+      "~8% The Stack, MinHash-near-deduped on code tokens."],
+    ["academic", 150, 11, "https://github.com/allenai/peS2o",
+      "~5% peS2o — Semantic Scholar OA papers with publication-structure-aware filters."],
+    ["books", 60, 0.07, "https://www.gutenberg.org",
+      "~2% Project Gutenberg. Books3 explicitly excluded."],
+    ["encyclopedic", 60, 13, "https://en.wikipedia.org", "~2% Wikipedia + Wikibooks."],
+    ["forums", 90, 126, "https://arxiv.org/abs/2402.00159",
+      "~3% Reddit, filtered by subreddit-level quality lists."],
+  ]},
+  { name: "OLMo-Mix-1124", year: 2024, T: 3900, D: 2500, segs: [
+    ["web", 2500, 2000, "https://huggingface.co/datasets/mlfoundations/dclm-baseline-1.0",
+      "DCLM baseline + Dolma 1.7 web slice. The dominant ingredient."],
+    ["code", 400, 180, "https://huggingface.co/datasets/bigcode/starcoderdata",
+      "Starcoder data — licence-filtered GitHub, ~8x The Stack v1."],
+    ["math", 55, 6, "https://huggingface.co/datasets/EleutherAI/proof-pile-2",
+      "Proof Pile II — OpenWebMath + algebraic-stack + arXiv-math."],
+    ["academic", 150, 11, "https://github.com/allenai/peS2o", "peS2o, carried from Dolma."],
+    ["books", 55, 0.07, "https://www.gutenberg.org", "Gutenberg."],
+    ["encyclopedic", 60, 13, "https://en.wikipedia.org", "Wikipedia + Wikibooks."],
+    ["forums", 90, 120, "https://arxiv.org/abs/2501.00656", "Reddit + StackExchange."],
+    ["other", 590, 170, "https://arxiv.org/abs/2501.00656",
+      "Cooldown-mix budget (Dolmino, 50B) and pipeline overhead."],
+  ]},
+  { name: "FineWeb", year: 2024, T: 15000, D: 22000, segs: [
+    ["web", 15000, 22000, "https://arxiv.org/abs/2406.17557",
+      "100% CC (96 snapshots) after Trafilatura extraction + Gopher/C4 heuristics + per-dump MinHash + PII. See [[fineweb]]."],
+  ]},
+  { name: "FineWeb-Edu", year: 2024, T: 1300, D: 1500, segs: [
+    ["web", 1300, 1500, "https://huggingface.co/datasets/HuggingFaceFW/fineweb-edu",
+      "FineWeb filtered to classifier score >= 3 (educational value, Llama-3-70B-annotated, 450K labels). ~92% of FineWeb removed."],
+  ]},
+  { name: "Dolma 3 Mix", year: 2025, T: 5900, D: 4000, segs: [
+    ["web", 3700, 3200, "https://arxiv.org/abs/2512.13961",
+      "Classifier-filtered CC with stronger decontamination vs Dolma 1.7."],
+    ["code", 880, 400, "https://arxiv.org/abs/2512.13961",
+      "Stronger code slice than Dolma 1.7; math/code emphasis per OLMo 3 report."],
+    ["math", 300, 20, "https://arxiv.org/abs/2512.13961", "Math problems + solutions."],
+    ["academic", 550, 30, "https://arxiv.org/abs/2512.13961",
+      "Science PDFs processed with olmOCR — the Dolma 3 pipeline innovation."],
+    ["books", 120, 0.1, "https://www.gutenberg.org", "Gutenberg + permissively-licenced books."],
+    ["encyclopedic", 90, 14, "https://en.wikipedia.org", "Wikipedia + Wikibooks."],
+    ["forums", 180, 200, "https://arxiv.org/abs/2512.13961", "Reddit + StackExchange."],
+    ["other", 80, 2, "https://arxiv.org/abs/2512.13961",
+      "Misc; excludes Dolmino (100B) and Longmino (50B) which are separate stages."],
+  ]},
+];
+
+let view = "tokens";
+
+const legend = document.getElementById("legend");
+DOMAINS.forEach(d => {
+  const s = document.createElement("span");
+  s.innerHTML = `<span class="sw" style="background:${d.color}"></span>${d.label}`;
+  legend.appendChild(s);
+});
+
+document.querySelectorAll("#viewToggle button").forEach(b => {
+  b.addEventListener("click", () => {
+    view = b.dataset.view;
+    document.querySelectorAll("#viewToggle button").forEach(x =>
+      x.classList.toggle("active", x === b));
+    render();
+  });
+});
+
+const chart = document.getElementById("chart");
+const tt = document.getElementById("tooltip");
+const color = id => (DOMAINS.find(x => x.id === id) || {}).color || "#aaa";
+const dLabel = id => (DOMAINS.find(x => x.id === id) || {}).label || id;
+const segV = seg => view === "tokens" ? seg[1] : seg[2];
+const totV = c => view === "tokens" ? c.T : c.D;
+const maxT = () => Math.max(...CORPORA.map(totV));
+
+function fmtT(v) {
+  if (v >= 1000) return (v / 1000).toFixed(v >= 10000 ? 0 : 1) + " T";
+  return v.toFixed(0) + " B";
+}
+function fmtD(v) {
+  if (v >= 1000) return (v / 1000).toFixed(1) + " B docs";
+  if (v >= 1) return v.toFixed(0) + " M docs";
+  return (v * 1000).toFixed(0) + " K docs";
+}
+const fmtTot = v => view === "tokens" ? fmtT(v) : fmtD(v);
+
+function render() {
+  chart.innerHTML = "";
+  const M = maxT();
+  CORPORA.forEach(c => {
+    const row = document.createElement("div");
+    row.className = "row";
+    const label = document.createElement("div");
+    label.className = "row-label";
+    label.innerHTML = `${c.name}<div class="row-sub">${c.year}</div>`;
+    const barCell = document.createElement("div");
+    const bar = document.createElement("div");
+    bar.className = "bar";
+    bar.style.width = (100 * totV(c) / M) + "%";
+    const tot = totV(c);
+    c.segs.forEach(seg => {
+      const v = segV(seg);
+      if (v <= 0) return;
+      const s = document.createElement("div");
+      s.className = "seg";
+      s.style.width = (100 * v / tot) + "%";
+      s.style.background = color(seg[0]);
+      s.addEventListener("mousemove", e => showTip(e, c, seg, 100 * v / tot));
+      s.addEventListener("mouseleave", hideTip);
+      bar.appendChild(s);
+    });
+    barCell.appendChild(bar);
+    const totCell = document.createElement("div");
+    totCell.className = "row-total";
+    totCell.textContent = fmtTot(tot);
+    row.appendChild(label); row.appendChild(barCell); row.appendChild(totCell);
+    chart.appendChild(row);
+  });
+  // axis
+  const axis = document.createElement("div");
+  axis.className = "axis";
+  const l = document.createElement("div");
+  const ticks = document.createElement("div");
+  ticks.className = "ticks";
+  for (let i = 0; i <= 4; i++) {
+    const t = document.createElement("span");
+    t.textContent = fmtTot((M * i) / 4);
+    ticks.appendChild(t);
+  }
+  const r = document.createElement("div");
+  r.textContent = view === "tokens" ? "total tokens" : "total documents";
+  r.style.fontStyle = "italic";
+  axis.appendChild(l); axis.appendChild(ticks); axis.appendChild(r);
+  chart.appendChild(axis);
+}
+
+function showTip(e, c, seg, pct) {
+  tt.innerHTML = `
+    <div class="tt">${c.name} — ${dLabel(seg[0])}</div>
+    <div class="tr">${pct.toFixed(1)}% of ${c.name}</div>
+    <div class="tr">${fmtT(seg[1])} tokens · ${fmtD(seg[2])}</div>
+    <div class="tr">url: ${seg[3]}</div>
+    <div class="tn">${seg[4]}</div>`;
+  tt.style.display = "block";
+  let x = e.clientX + 14, y = e.clientY + 14;
+  if (x + tt.offsetWidth > window.innerWidth - 10) x = e.clientX - tt.offsetWidth - 14;
+  if (y + tt.offsetHeight > window.innerHeight - 10) y = e.clientY - tt.offsetHeight - 14;
+  tt.style.left = (x + window.scrollX) + "px";
+  tt.style.top = (y + window.scrollY) + "px";
+}
+function hideTip() { tt.style.display = "none"; }
+
+render();
+</script>
+
+</body>
+</html>

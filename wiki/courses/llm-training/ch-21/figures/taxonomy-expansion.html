@@ -1,0 +1,226 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Taxonomy Expansion — GLAN-style tree fan-out</title>
+<style>
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;max-width:1080px;margin:2em auto;padding:0 1em;color:#222}
+h1{font-size:1.4em;margin-bottom:.2em}
+.subtitle{color:#666;margin-top:0;line-height:1.5}
+.panel{border:1px solid #ddd;border-radius:6px;padding:1em;margin:1em 0;background:#fafafa}
+.controls{display:flex;gap:1.4em;flex-wrap:wrap;align-items:center}
+.control{display:flex;flex-direction:column;min-width:170px}
+label{font-size:.83em;color:#555;margin-bottom:.2em}
+input[type="range"]{width:180px}
+.value{font-variant-numeric:tabular-nums;color:#333;font-weight:600}
+button{background:#1976d2;color:#fff;border:0;border-radius:4px;padding:.5em .9em;font-size:.9em;cursor:pointer}
+button.secondary{background:#777}
+button:active{transform:translateY(1px)}
+svg{background:#fff;border:1px solid #ccc;display:block;margin:1em auto;width:100%;height:520px}
+.stats{display:flex;gap:1.2em;flex-wrap:wrap;font-size:.92em;margin-top:.5em}
+.stat-box{background:#eef5fc;border-left:4px solid #1976d2;padding:.5em .9em;border-radius:3px}
+.stat-box.warn{background:#fff4e6;border-left-color:#e67e22}
+.stat-box.bad{background:#fde8e8;border-left-color:#d32f2f}
+.level-legend{display:flex;gap:1em;font-size:.85em;flex-wrap:wrap;justify-content:center;margin-top:.4em}
+.swatch{display:inline-block;width:12px;height:12px;vertical-align:middle;margin-right:4px;border-radius:2px}
+.note{font-size:.9em;color:#555;line-height:1.55}
+.coverage-bar{height:18px;background:#eee;border-radius:3px;overflow:hidden;margin-top:4px;display:flex}
+.coverage-bar>div{height:100%}
+.bar-covered{background:#1976d2}
+.bar-uncovered{background:repeating-linear-gradient(45deg,#e57373,#e57373 6px,#ef9a9a 6px,#ef9a9a 12px)}
+</style>
+</head>
+<body>
+
+<h1>Taxonomy Expansion — GLAN-style tree fan-out</h1>
+<p class="subtitle">
+  Start with <span class="value" id="rootCountLabel">5</span> root disciplines.
+  Click <strong>Expand</strong> to fan out three levels:
+  <em>disciplines → subjects → lessons → questions</em>.
+  Move the branching-factor sliders to watch the leaf count multiply — or explode.
+  Toggle <strong>Coverage view</strong> to see what the taxonomy <em>doesn't</em> reach.
+</p>
+
+<div class="panel">
+  <div class="controls">
+    <div class="control"><label>Root disciplines</label>
+      <input type="range" id="rootCount" min="1" max="10" step="1" value="5">
+      <span class="value"><span id="rootCountValue">5</span> roots</span></div>
+    <div class="control"><label>Subjects per discipline</label>
+      <input type="range" id="subjectsPer" min="1" max="10" step="1" value="4">
+      <span class="value"><span id="subjectsPerValue">4</span>×</span></div>
+    <div class="control"><label>Lessons per subject</label>
+      <input type="range" id="lessonsPer" min="1" max="10" step="1" value="3">
+      <span class="value"><span id="lessonsPerValue">3</span>×</span></div>
+    <div class="control"><label>Questions per lesson</label>
+      <input type="range" id="questionsPer" min="1" max="20" step="1" value="5">
+      <span class="value"><span id="questionsPerValue">5</span>×</span></div>
+    <div class="control"><label>Depth to expand</label>
+      <input type="range" id="maxDepth" min="0" max="3" step="1" value="0">
+      <span class="value" id="maxDepthLabel">not expanded</span></div>
+    <div class="control" style="align-self:flex-end"><button id="expandBtn">Expand one level</button></div>
+    <div class="control" style="align-self:flex-end"><button class="secondary" id="resetBtn">Reset</button></div>
+    <div class="control" style="align-self:flex-end"><label><input type="checkbox" id="coverageToggle"> Coverage view</label></div>
+  </div>
+  <div class="stats">
+    <div class="stat-box">Total leaves: <span class="value" id="leafCount">0</span></div>
+    <div class="stat-box">Total nodes: <span class="value" id="nodeCount">5</span></div>
+    <div class="stat-box" id="teacherCallsBox">Teacher calls: <span class="value" id="teacherCalls">0</span></div>
+    <div class="stat-box" id="costBox">API cost @ $0.002/call: $<span class="value" id="apiCost">0</span></div>
+  </div>
+</div>
+
+<svg id="tree" viewBox="0 0 1080 520" preserveAspectRatio="xMidYMid meet"></svg>
+
+<div class="level-legend">
+  <span><span class="swatch" style="background:#1976d2"></span>L0 — Discipline (curator-chosen)</span>
+  <span><span class="swatch" style="background:#43a047"></span>L1 — Subject</span>
+  <span><span class="swatch" style="background:#fb8c00"></span>L2 — Lesson</span>
+  <span><span class="swatch" style="background:#8e24aa"></span>L3 — Question (leaf)</span>
+</div>
+
+<div class="panel">
+  <h3 style="margin:0 0 .4em 0">Coverage vs imagination</h3>
+  <div class="note">
+    A GLAN-style tree guarantees every branch the curator drew gets generated. What it <em>cannot</em>
+    generate: combinations crossing branches. Blue = what the tree enumerates; red hatched = combinatorial
+    cross-product the tree misses. Ratio is illustrative, not paper-specific.
+  </div>
+  <div class="coverage-bar">
+    <div class="bar-covered" id="barCovered" style="width:60%"></div>
+    <div class="bar-uncovered" id="barUncovered" style="width:40%"></div>
+  </div>
+  <div class="note" style="margin-top:.6em">
+    <strong>Rule of thumb:</strong> deeper trees get perfect coverage of named branches but grow untouched
+    cross-branch combinations combinatorially. Taxonomy-only pipelines plateau; a seed-supplement
+    (ch-19 bottom-up) reclaims the cross terms.
+  </div>
+</div>
+
+<script>
+(function(){
+const svg=document.getElementById('tree'),NS='http://www.w3.org/2000/svg';
+const ROOT_FIELDS=["Mathematics","Computer Science","Humanities","Natural Sciences","Engineering","Social Sciences","Medicine","Law","Arts","Business"];
+const SUBJECT_HINTS=["Algebra","Geometry","Calculus","Topology","Discrete","Logic","Systems","Networks","AI","Theory","Ethics","History","Rhetoric","Mechanics","Thermo","Quantum","Bio","Chem","Medicine","Law","Art","Finance"];
+const LESSON_HINTS=["Intro","Defs","Theorems","Examples","Exercises","Proofs","Applications","Edge cases","Historical","Review"];
+const QUESTION_HINTS=["solve","prove","explain","derive","compare","classify","apply","critique","summarize","translate"];
+const LC=['#1976d2','#43a047','#fb8c00','#8e24aa'],LR=[10,5,3,2];
+const state={rootCount:5,subjectsPer:4,lessonsPer:3,questionsPer:5,maxDepth:0,coverage:false};
+
+function buildTree(){
+  const roots=[];
+  for(let i=0;i<state.rootCount;i++){
+    const n={name:ROOT_FIELDS[i%ROOT_FIELDS.length],level:0,children:[]};
+    roots.push(n);
+    if(state.maxDepth>=1) for(let j=0;j<state.subjectsPer;j++){
+      const s={name:SUBJECT_HINTS[(i*7+j)%SUBJECT_HINTS.length],level:1,children:[]};
+      n.children.push(s);
+      if(state.maxDepth>=2) for(let k=0;k<state.lessonsPer;k++){
+        const l={name:LESSON_HINTS[(j*3+k)%LESSON_HINTS.length],level:2,children:[]};
+        s.children.push(l);
+        if(state.maxDepth>=3) for(let q=0;q<state.questionsPer;q++)
+          l.children.push({name:QUESTION_HINTS[(k*5+q)%QUESTION_HINTS.length],level:3,children:[]});
+      }
+    }
+  }
+  return roots;
+}
+function countLeaves(r){let c=0;const w=n=>{if(n.level===state.maxDepth)c++;else n.children.forEach(w)};r.forEach(w);return c}
+function countNodes(r){let c=0;const w=n=>{c++;n.children.forEach(w)};r.forEach(w);return c}
+
+function layout(roots){
+  const cx=540,cy=260,rPer=[60,150,230,255],positions=[],edges=[];
+  const sliceRoot=(Math.PI*2)/Math.max(roots.length,1);
+  function place(n,a1,a2,level,pp){
+    const a=(a1+a2)/2,r=rPer[level];
+    n._pos={x:cx+r*Math.cos(a-Math.PI/2),y:cy+r*Math.sin(a-Math.PI/2)};
+    positions.push(n);
+    if(pp) edges.push([pp,n._pos,level]);
+    if(n.children.length){
+      const sl=(a2-a1)/n.children.length;
+      n.children.forEach((k,i)=>place(k,a1+i*sl,a1+(i+1)*sl,level+1,n._pos));
+    }
+  }
+  roots.forEach((r,i)=>place(r,i*sliceRoot,(i+1)*sliceRoot,0,null));
+  return{positions,edges};
+}
+
+function render(){
+  const roots=buildTree(),{positions,edges}=layout(roots);
+  while(svg.firstChild) svg.removeChild(svg.firstChild);
+  edges.forEach(([p,q,lv])=>{
+    const L=document.createElementNS(NS,'line');
+    L.setAttribute('x1',p.x);L.setAttribute('y1',p.y);L.setAttribute('x2',q.x);L.setAttribute('y2',q.y);
+    L.setAttribute('stroke','#bbb');L.setAttribute('stroke-width',Math.max(.4,1.6-.35*lv));
+    svg.appendChild(L);
+  });
+  if(state.coverage && roots.length>1){
+    const cx=540,cy=260,sr=(Math.PI*2)/roots.length;
+    roots.forEach((_,i)=>{
+      const mid=(i+.5)*sr-Math.PI/2,rI=180,rO=250;
+      const x1=cx+rI*Math.cos(mid),y1=cy+rI*Math.sin(mid);
+      const x2=cx+rO*Math.cos(mid),y2=cy+rO*Math.sin(mid);
+      const L=document.createElementNS(NS,'line');
+      L.setAttribute('x1',x1);L.setAttribute('y1',y1);L.setAttribute('x2',x2);L.setAttribute('y2',y2);
+      L.setAttribute('stroke','#d32f2f');L.setAttribute('stroke-dasharray','3 3');L.setAttribute('opacity','.5');
+      svg.appendChild(L);
+    });
+    const t=document.createElementNS(NS,'text');
+    t.setAttribute('x',20);t.setAttribute('y',510);t.setAttribute('fill','#d32f2f');t.setAttribute('font-size','11');
+    t.textContent='Dashed radial lines = branch boundaries the tree cannot cross.';
+    svg.appendChild(t);
+  }
+  positions.forEach(n=>{
+    const c=document.createElementNS(NS,'circle');
+    c.setAttribute('cx',n._pos.x);c.setAttribute('cy',n._pos.y);c.setAttribute('r',LR[n.level]);
+    c.setAttribute('fill',LC[n.level]);c.setAttribute('opacity',n.level===3?.75:.92);
+    svg.appendChild(c);
+    if(n.level===0){
+      const t=document.createElementNS(NS,'text');
+      t.setAttribute('x',n._pos.x+12);t.setAttribute('y',n._pos.y+4);
+      t.setAttribute('font-size','12');t.setAttribute('fill','#222');t.textContent=n.name;
+      svg.appendChild(t);
+    }
+  });
+  const leaves=countLeaves(roots),nodes=countNodes(roots);
+  document.getElementById('leafCount').textContent=leaves.toLocaleString();
+  document.getElementById('nodeCount').textContent=nodes.toLocaleString();
+  document.getElementById('teacherCalls').textContent=nodes.toLocaleString();
+  document.getElementById('apiCost').textContent=(nodes*0.002).toFixed(2);
+  const cb=document.getElementById('costBox');
+  cb.classList.remove('warn','bad');
+  if(nodes>1e5) cb.classList.add('warn');
+  if(nodes>1e6) cb.classList.add('bad');
+  const covered=Math.max(10,85-state.maxDepth*18);
+  document.getElementById('barCovered').style.width=covered+'%';
+  document.getElementById('barUncovered').style.width=(100-covered)+'%';
+}
+
+function bind(){
+  const rc=document.getElementById('rootCount'),sp=document.getElementById('subjectsPer'),
+        lp=document.getElementById('lessonsPer'),qp=document.getElementById('questionsPer'),
+        md=document.getElementById('maxDepth'),ct=document.getElementById('coverageToggle'),
+        dl=document.getElementById('maxDepthLabel');
+  const depthNames=['not expanded','disciplines → subjects','→ lessons','→ questions'];
+  function sync(){
+    state.rootCount=+rc.value;state.subjectsPer=+sp.value;state.lessonsPer=+lp.value;
+    state.questionsPer=+qp.value;state.maxDepth=+md.value;state.coverage=ct.checked;
+    document.getElementById('rootCountValue').textContent=rc.value;
+    document.getElementById('rootCountLabel').textContent=rc.value;
+    document.getElementById('subjectsPerValue').textContent=sp.value;
+    document.getElementById('lessonsPerValue').textContent=lp.value;
+    document.getElementById('questionsPerValue').textContent=qp.value;
+    dl.textContent=depthNames[state.maxDepth];
+    render();
+  }
+  [rc,sp,lp,qp,md,ct].forEach(el=>{el.addEventListener('input',sync);el.addEventListener('change',sync)});
+  document.getElementById('expandBtn').addEventListener('click',()=>{if(state.maxDepth<3){md.value=state.maxDepth+1;sync()}});
+  document.getElementById('resetBtn').addEventListener('click',()=>{md.value=0;sync()});
+  sync();
+}
+bind();
+})();
+</script>
+
+</body>
+</html>

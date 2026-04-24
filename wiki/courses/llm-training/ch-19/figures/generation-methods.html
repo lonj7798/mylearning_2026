@@ -1,0 +1,277 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Generation Methods — Bootstrap, Evol, Extract, Persona, Rephrase</title>
+<style>
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+         max-width: 1180px; margin: 1.6em auto; padding: 0 1em; color: #222;
+         background: #fafafa; }
+  h1 { font-size: 1.35em; margin-bottom: 0.2em; }
+  .subtitle { color: #666; margin-top: 0; font-size: 0.92em; line-height: 1.5; }
+  .controls { display: flex; flex-wrap: wrap; gap: 0.4em; margin: 1em 0 0.6em; }
+  .tab { font-size: 0.85em; padding: 6px 14px; border: 1px solid #bbb; background: #f4f4f4;
+         border-radius: 20px; cursor: pointer; transition: all 0.15s; }
+  .tab:hover { background: #e8e8e8; }
+  .tab.active { background: #2b4a7a; color: #fff; border-color: #2b4a7a; }
+  .seed-panel { border: 1px solid #d0d0d0; border-radius: 6px; background: #fff;
+                padding: 0.8em 1em; margin-bottom: 1em; }
+  .seed-panel label { font-size: 0.78em; color: #666; text-transform: uppercase;
+                      letter-spacing: 0.05em; }
+  .seed-panel .seed-text { font-family: 'SF Mono', Menlo, monospace; font-size: 0.88em;
+                           color: #333; margin-top: 0.3em; padding: 0.4em 0.6em;
+                           background: #f7f7f9; border-left: 3px solid #2b4a7a;
+                           border-radius: 3px; }
+  .layout { display: grid; grid-template-columns: 1fr 1fr; gap: 1em; }
+  .panel { border: 1px solid #dcdcdc; border-radius: 6px; background: #fff;
+           padding: 0.9em 1.1em; }
+  h2 { font-size: 1.02em; margin: 0 0 0.5em 0; color: #2b4a7a;
+       border-bottom: 1px solid #eee; padding-bottom: 0.3em; }
+  .stage { margin-bottom: 0.8em; }
+  .stage-label { font-size: 0.76em; color: #666; text-transform: uppercase;
+                 letter-spacing: 0.06em; margin-bottom: 0.2em; font-weight: 600; }
+  .stage-body { font-size: 0.88em; padding: 0.45em 0.6em; background: #f7f7f9;
+                border-left: 3px solid #b0b0b0; border-radius: 3px; line-height: 1.5; }
+  .stage-body.out { border-left-color: #1b7a3f; background: #f1faf4; }
+  .stage-body.filter { border-left-color: #b05a00; background: #fff9ef; }
+  .stage-body.fail { border-left-color: #a32020; background: #fff4f4; }
+  code { font-family: 'SF Mono', Menlo, monospace; font-size: 0.82em;
+         background: #eef; padding: 1px 4px; border-radius: 3px; }
+  .meta { display: grid; grid-template-columns: repeat(2, 1fr); gap: 0.5em;
+          margin-top: 0.6em; font-size: 0.8em; }
+  .meta-row { padding: 0.3em 0.5em; background: #f5f6f8; border-radius: 3px; }
+  .meta-label { color: #666; font-size: 0.78em; display: block; }
+  .meta-val { color: #222; font-weight: 600; }
+  .note { font-size: 0.8em; color: #666; margin-top: 1.2em; line-height: 1.55;
+          padding: 0.6em 0.8em; border-left: 3px solid #2b4a7a; background: #f5f7fb; }
+</style>
+</head>
+<body>
+
+<h1>Generation Methods — a shared input, five different outputs</h1>
+<p class="subtitle">
+  Select a method below. The left panel shows the pipeline stages for that method
+  applied to a common seed concept ("fractions word problem for 5th-grade math").
+  The right panel shows the resulting instruction and exposes the method's cost,
+  diversity knob, and characteristic failure. Switching methods keeps the seed
+  fixed — so you can see why the five methods land in different regions of
+  instruction-space even given the same starting point.
+</p>
+
+<div class="seed-panel">
+  <label>Shared seed concept</label>
+  <div class="seed-text">A 5th-grade word problem involving fractions, ~3 sentences, single numeric answer.</div>
+</div>
+
+<div class="controls" id="tabs"></div>
+
+<div class="layout">
+  <div class="panel">
+    <h2 id="pipeTitle">Pipeline</h2>
+    <div id="pipeBody"></div>
+  </div>
+
+  <div class="panel">
+    <h2>Generated example &amp; method profile</h2>
+    <div class="stage">
+      <div class="stage-label">Accepted instruction</div>
+      <div class="stage-body out" id="outText"></div>
+    </div>
+    <div class="stage">
+      <div class="stage-label">Why it looks this way</div>
+      <div class="stage-body" id="whyText"></div>
+    </div>
+    <div class="stage">
+      <div class="stage-label">Characteristic failure</div>
+      <div class="stage-body fail" id="failText"></div>
+    </div>
+    <div class="meta">
+      <div class="meta-row">
+        <span class="meta-label">Cost / 1K ex</span>
+        <span class="meta-val" id="metaCost"></span>
+      </div>
+      <div class="meta-row">
+        <span class="meta-label">Diversity (1 - avg cos)</span>
+        <span class="meta-val" id="metaDiv"></span>
+      </div>
+      <div class="meta-row">
+        <span class="meta-label">Required seed</span>
+        <span class="meta-val" id="metaSeed"></span>
+      </div>
+      <div class="meta-row">
+        <span class="meta-label">Teacher / model</span>
+        <span class="meta-val" id="metaTeacher"></span>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="note">
+  The seed concept is identical across tabs; only the <em>method</em> changes.
+  Notice how Self-Instruct stays close to the seed's grade-level phrasing, Evol-Instruct
+  pushes it harder, Magpie drifts toward the aligned model's modal prompt style, Persona-Hub
+  steers by "who is asking," and WRAP is the only method that transforms an existing
+  document rather than generating from task space.
+</div>
+
+<script>
+const METHODS = [
+  {
+    key: "self-instruct",
+    label: "Self-Instruct (Bootstrap)",
+    pipeline: [
+      { label: "Stage 1 — Seed pool", body: "175 human-written tasks. 8 drawn as in-context examples (6 seeds, 2 prior generations).", kind: "in" },
+      { label: "Stage 2 — Prompt teacher", body: "Template: 'Come up with a series of tasks: Task 1: ... Task 8: ... Task 9:' — LM completes Task 9.", kind: "in" },
+      { label: "Stage 3 — Classification branch", body: "LM labels the generated task; if classification, use input-first instance template; else output-first.", kind: "in" },
+      { label: "Stage 4 — Filter", body: "Drop if ROUGE-L > 0.7 vs existing pool. Drop if input==output, image/graph mentioned, or format invalid.", kind: "filter" }
+    ],
+    output: "Sarah bought 3/4 of a pound of cherries. She ate 1/3 of them. How many pounds of cherries does she have left?",
+    why: "In-context examples bias the teacher toward the seed pool's register — short, literal, single-number answer. ROUGE filter rejects near-duplicates but not topical repetition; you get many variants on the same 'Sarah bought X, ate Y' frame.",
+    fail: "Mode collapse. After ~50K accepted examples, ROUGE rejection rate spikes above 80% and new draws become paraphrases of seeds.",
+    cost: "~$1–3 (API teacher)",
+    diversity: "0.45 (word-space only)",
+    seed: "175 hand-written tasks",
+    teacher: "text-davinci-001 era GPT-3"
+  },
+  {
+    key: "evol-instruct",
+    label: "Evol-Instruct (Evolution)",
+    pipeline: [
+      { label: "Stage 1 — Seed", body: "Pick an instruction from the existing 52K Alpaca pool.", kind: "in" },
+      { label: "Stage 2 — Choose operator", body: "Random draw from 6 operators: add-constraints, deepening, concretizing, increased-reasoning-steps, complicate-input, mutation (In-Breadth).", kind: "in" },
+      { label: "Stage 3 — Teacher rewrite", body: "Prompt GPT-4 to apply the chosen operator, then generate a reference response.", kind: "in" },
+      { label: "Stage 4 — Elimination", body: "Drop if teacher's same-or-similar check fails, response contains refusal markers, response copies input, or response is punctuation-only.", kind: "filter" }
+    ],
+    output: "Sarah bought 3/4 pound of cherries at $6.40/lb and 5/8 pound of grapes at $4.80/lb. After eating 1/3 of each, she divides the remaining fruit equally among 4 friends. How much fruit (by weight) does each friend receive, and what was the total cost Sarah paid?",
+    why: "The 'add-constraints' + 'increased-reasoning-steps' operators were applied in successive rounds. Each round adds one dimension (price, second fruit, distribution, two-part question). Four rounds typically produce the long-tail complexity the paper's histogram captures.",
+    fail: "Operator saturation. After ~3 rounds the teacher refuses further depth ('increased reasoning steps' on a problem already at GPT-4's math ceiling produces unsolvable instances the elimination filter drops).",
+    cost: "~$5–10 (multi-round teacher)",
+    diversity: "0.58 (after 4 rounds)",
+    seed: "52K existing SFT set",
+    teacher: "GPT-3.5 / GPT-4"
+  },
+  {
+    key: "wizardmath",
+    label: "WizardMath (Domain Evol)",
+    pipeline: [
+      { label: "Stage 1 — Math seed", body: "GSM8K or MATH problem from the training split.", kind: "in" },
+      { label: "Stage 2 — Bidirectional evolution", body: "Sample direction: downward (reduce constraints, simpler concepts, shorter chain) or upward (add constraints, compose concepts, more reasoning steps).", kind: "in" },
+      { label: "Stage 3 — Teacher generates solution", body: "Step-by-step format; answer-verifier checks exact match (GSM8K) or symbolic equivalence (MATH).", kind: "in" },
+      { label: "Stage 4 — RLEIF", body: "Train IRM on evolved-instruction quality + PRM on step correctness. PPO policy against IRM × PRM.", kind: "filter" }
+    ],
+    output: "A bakery uses 3/4 cup of flour per muffin. They want to adjust the recipe so the same batch of 24 muffins uses 18 cups total. If the new ratio must still be a proper fraction and the number of muffins is halved on weekends, how many cups does one weekend muffin use?",
+    why: "Upward evolution composed the fraction concept with ratio-scaling, then added a conditional clause. The answer-verifier rejected all intermediate variants that had non-fraction solutions — the PRM step additionally rejects solutions with one bad intermediate step even if the final answer is correct.",
+    fail: "Reward hacking. PRM signal is noisy at the step level; overtraining produces solutions that look correct step-by-step but have wrong final answers (hacked partial-credit reward).",
+    cost: "~$10–20 (bidirectional + verify)",
+    diversity: "0.55 (domain-restricted to math)",
+    seed: "GSM8K + MATH splits",
+    teacher: "GPT-4 (evolution) + itself (iteration)"
+  },
+  {
+    key: "magpie",
+    label: "Magpie (Extraction)",
+    pipeline: [
+      { label: "Stage 1 — Pre-query prefix only", body: "Feed Llama-3-Instruct only: <|start_header_id|>user<|end_header_id|>\\n\\n — nothing after. No seed, no API.", kind: "in" },
+      { label: "Stage 2 — Sample to EOS", body: "Model autoregressively generates a plausible user instruction. Temp 1, sample until <|eot_id|>.", kind: "in" },
+      { label: "Stage 3 — Wrap + generate response", body: "Feed the generated instruction back through the full chat template; sample assistant response.", kind: "in" },
+      { label: "Stage 4 — Eight-metric filter", body: "Input length, output length, task category, input quality (1–5), difficulty (1–5), min neighbor distance (MPNet+FAISS), reward (FsfairX), reward-difference. Thresholds τ1=-12, τ2=0.", kind: "filter" }
+    ],
+    output: "Can you give me a simple word problem suitable for a 5th-grade math class that involves fractions? Please include the question and a step-by-step solution.",
+    why: "The extracted instruction reflects Llama-3-Instruct's training distribution of user turns: polite, meta-requesting, often asks for step-by-step format. The model emits what it was trained to *receive*, not what a real user would type cold.",
+    fail: "Distribution narrowing. Raw Magpie output skews toward 'explain X' / 'give me a simple Y' patterns. The 300K filter drops ~90% to recover diversity, and the surviving set still carries the aligned-model's prior.",
+    cost: "~$0.05 (open-weight compute only)",
+    diversity: "0.50 pre-filter, 0.68 post-filter",
+    seed: "None — aligned model only",
+    teacher: "Llama-3-8B-Instruct (Air) / 70B-Instruct (Pro)"
+  },
+  {
+    key: "persona-hub",
+    label: "Persona-Hub (Conditioning)",
+    pipeline: [
+      { label: "Stage 1 — Draw a persona", body: "Random persona from 1B-persona bank (MinHash 0.9 + embedding 0.9 dedup). Example: 'emergency room triage nurse in Montreal'.", kind: "in" },
+      { label: "Stage 2 — Task spec", body: "Instruction: 'Write a word problem about fractions suitable for a 5th-grade class, in the voice of this persona.'", kind: "in" },
+      { label: "Stage 3 — Teacher generation", body: "GPT-4 or Qwen generates problem conditioned on persona + task. Can use zero-shot, few-shot, or persona-enhanced few-shot (demonstrations also have personas).", kind: "in" },
+      { label: "Stage 4 — Validity audit", body: "Heuristic quality filter + domain audit (math: 96.5% validity on 200-problem sample).", kind: "filter" }
+    ],
+    output: "During a busy shift, a nurse has 2/3 of a shift (8 hours total) left. She spends 1/4 of the remaining time on a trauma patient and 1/6 triaging new arrivals. How many hours of her shift remain, and what fraction of her full shift is that?",
+    why: "Persona-conditioning injected domain vocabulary (shift, trauma, triage) that the generic Evol or Self-Instruct would never produce, even though the underlying math (fraction of a fraction) is elementary. Output similarity ≈ 0.50 — well below persona similarity ≈ 0.80.",
+    fail: "Persona ≠ demographics. The model's inferred identities embed training-data biases (e.g., 'emergency room nurse' tends to be gendered). Aggressive dedup is required or persona clusters collapse.",
+    cost: "~$2–8 (teacher + persona)",
+    diversity: "0.72 (post-dedup, highest in the table)",
+    seed: "Persona bank (200K public, 1B gated)",
+    teacher: "GPT-4 / Llama-3 / Qwen"
+  },
+  {
+    key: "wrap",
+    label: "WRAP (Rephrase)",
+    pipeline: [
+      { label: "Stage 1 — Chunk web doc", body: "Input: raw C4 document about a 5th-grade fractions lesson. NLTK sentence-splits, truncate to ~300 tokens (longer chunks cause info loss).", kind: "in" },
+      { label: "Stage 2 — Style prompt", body: "Sample a style: Easy / Medium-Wiki / Hard-Terse / Q-A. Each has a fixed prompt template.", kind: "in" },
+      { label: "Stage 3 — Mistral-7B-Instruct rephrase", body: "Frozen teacher rewrites the chunk in the chosen style. No training on the teacher — it's a paraphrase pass.", kind: "in" },
+      { label: "Stage 4 — Mix 1:1 + cleanup", body: "Strip 'Here's a paraphrase...' boilerplate. Mix real and synthetic 1:1 for pretraining (not SFT).", kind: "filter" }
+    ],
+    output: "Q: Sarah purchased 3/4 pound of cherries. If she consumed 1/3 of them, how many pounds remain?\nA: Start with 3/4 pound. One-third of 3/4 is 1/4. So 3/4 − 1/4 = 2/4 = 1/2 pound remaining.",
+    why: "WRAP is the only method that starts from an *existing* document rather than a task description. The Q/A style is denser in extractable facts per token than the raw web chunk, which is why mixed 1:1 pretraining beats raw C4 at matched compute.",
+    fail: "Boilerplate leakage. Without the cleanup step, Mistral's meta-commentary ('Here's a simpler rephrase...') contaminates pretraining. Chunks >300 tokens lose information during rephrase.",
+    cost: "~$0.10 per 1K tokens (open-weight teacher)",
+    diversity: "0.40 (style-only; content is anchored to source)",
+    seed: "Raw web corpus (C4 / RedPajama)",
+    teacher: "Mistral-7B-Instruct (frozen)"
+  }
+];
+
+const tabs = document.getElementById('tabs');
+const pipeBody = document.getElementById('pipeBody');
+const pipeTitle = document.getElementById('pipeTitle');
+const outText = document.getElementById('outText');
+const whyText = document.getElementById('whyText');
+const failText = document.getElementById('failText');
+const metaCost = document.getElementById('metaCost');
+const metaDiv = document.getElementById('metaDiv');
+const metaSeed = document.getElementById('metaSeed');
+const metaTeacher = document.getElementById('metaTeacher');
+
+function render(key) {
+  const m = METHODS.find(x => x.key === key);
+  pipeTitle.textContent = 'Pipeline — ' + m.label;
+  pipeBody.innerHTML = '';
+  m.pipeline.forEach(s => {
+    const wrap = document.createElement('div');
+    wrap.className = 'stage';
+    const lbl = document.createElement('div');
+    lbl.className = 'stage-label';
+    lbl.textContent = s.label;
+    const body = document.createElement('div');
+    body.className = 'stage-body ' + (s.kind === 'filter' ? 'filter' : '');
+    body.textContent = s.body;
+    wrap.appendChild(lbl);
+    wrap.appendChild(body);
+    pipeBody.appendChild(wrap);
+  });
+  outText.textContent = m.output;
+  whyText.textContent = m.why;
+  failText.textContent = m.fail;
+  metaCost.textContent = m.cost;
+  metaDiv.textContent = m.diversity;
+  metaSeed.textContent = m.seed;
+  metaTeacher.textContent = m.teacher;
+
+  Array.from(tabs.children).forEach(t => {
+    t.classList.toggle('active', t.dataset.key === key);
+  });
+}
+
+METHODS.forEach((m, i) => {
+  const btn = document.createElement('button');
+  btn.className = 'tab' + (i === 0 ? ' active' : '');
+  btn.textContent = m.label;
+  btn.dataset.key = m.key;
+  btn.addEventListener('click', () => render(m.key));
+  tabs.appendChild(btn);
+});
+
+render(METHODS[0].key);
+</script>
+
+</body>
+</html>

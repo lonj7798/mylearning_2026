@@ -1,0 +1,255 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Repetition Decay and Knowledge-Capacity Saturation</title>
+<style>
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+         max-width: 960px; margin: 2em auto; padding: 0 1em; color: #222; }
+  h1 { font-size: 1.4em; margin-bottom: 0.2em; }
+  h2 { font-size: 1.1em; margin-top: 2em; margin-bottom: 0.3em; }
+  .subtitle { color: #666; margin-top: 0; font-size: 0.95em; line-height: 1.5; }
+  .panel { border: 1px solid #ddd; border-radius: 6px; padding: 1em; margin: 1em 0;
+           background: #fafafa; }
+  .controls { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+              gap: 1em; }
+  .control { display: flex; flex-direction: column; }
+  label { font-size: 0.85em; color: #555; margin-bottom: 0.2em; }
+  input[type="range"] { width: 100%; }
+  canvas { background: white; border: 1px solid #ccc; display: block; margin: 0.8em auto; }
+  .legend { display: flex; gap: 1.5em; justify-content: center; font-size: 0.9em;
+            flex-wrap: wrap; margin-top: 0.5em; }
+  .swatch { display: inline-block; width: 12px; height: 12px; margin-right: 4px;
+            vertical-align: middle; border-radius: 2px; }
+  .value { font-variant-numeric: tabular-nums; color: #333; font-weight: 600; }
+  .note { font-size: 0.88em; color: #555; line-height: 1.55; }
+  code { background: #eef; padding: 1px 4px; border-radius: 3px; font-size: 0.9em; }
+  .stats { display: flex; gap: 1.5em; flex-wrap: wrap; font-size: 0.9em; margin-top: 0.5em; }
+  .stat { background: white; border: 1px solid #e0e0e0; padding: 0.5em 0.8em; border-radius: 4px; }
+</style>
+</head>
+<body>
+<h1>Repetition Decay and Knowledge-Capacity Saturation</h1>
+<p class="subtitle">
+  Panel 1: Muennighoff's effective-token count under repetition, with the per-epoch marginal-value curve.
+  Panel 2: Allen-Zhu's 2-bits-per-parameter storage bound and factual-recall saturation as facts are seen repeatedly.
+</p>
+
+<h2>Panel 1 &mdash; Muennighoff repetition decay</h2>
+<div class="panel">
+  <div class="controls">
+    <div class="control"><label>Unique tokens U (billions)</label>
+      <input type="range" id="U" min="0.5" max="30" step="0.5" value="5">
+      <span class="value"><span id="Uvalue">5.0</span>B</span></div>
+    <div class="control"><label>Max epochs R_max</label>
+      <input type="range" id="Rmax" min="1" max="20" step="0.5" value="8">
+      <span class="value" id="RmaxValue">8.0</span></div>
+    <div class="control"><label>Token half-life R_T (Muennighoff fit &asymp; 4)</label>
+      <input type="range" id="RT" min="1" max="12" step="0.1" value="4.0">
+      <span class="value" id="RTvalue">4.0</span></div>
+  </div>
+  <div class="stats">
+    <div class="stat">Total tokens D = <span class="value" id="Dtot">40.0</span>B</div>
+    <div class="stat">Effective tokens D' = <span class="value" id="Deff">4.32</span>B</div>
+    <div class="stat">Effective/total ratio = <span class="value" id="ratio">0.108</span></div>
+    <div class="stat">Marginal value at last epoch = <span class="value" id="lastW">0.135</span></div>
+  </div>
+</div>
+<canvas id="plot1" width="920" height="320"></canvas>
+<div class="legend">
+  <span><span class="swatch" style="background:#1976d2"></span>Cumulative effective tokens D'(R)/U</span>
+  <span><span class="swatch" style="background:#d32f2f"></span>Marginal value w(k) of k-th repeat</span>
+  <span><span class="swatch" style="background:#aaa"></span>R = R_T (~63% asymptote)</span>
+</div>
+<div class="panel note">
+  <strong>The formula.</strong>
+  Muennighoff 2023 fits <code>D' = U &middot; (1 &minus; exp(&minus;R / R_T))</code> with <code>R_T &asymp; 4</code>.
+  Marginal value of the <em>k</em>-th repetition is <code>w(k) = exp(&minus;(k&minus;1) / R_T)</code>.
+  By <code>R = R_T</code> you capture ~63% of the asymptote; by <code>R = 3 &middot; R_T</code> you are at ~95% and
+  fresh tokens are worth more than continued repetition if available.
+</div>
+
+<h2>Panel 2 &mdash; Allen-Zhu capacity saturation</h2>
+<div class="panel">
+  <div class="controls">
+    <div class="control"><label>Parameters N (billions)</label>
+      <input type="range" id="N" min="0.1" max="500" step="0.1" value="7">
+      <span class="value"><span id="Nvalue">7.0</span>B</span></div>
+    <div class="control"><label>Bits per parameter (Allen-Zhu &asymp; 2)</label>
+      <input type="range" id="bpp" min="0.5" max="3" step="0.05" value="2.0">
+      <span class="value" id="bppValue">2.00</span></div>
+    <div class="control"><label>Recall time-constant &tau; (exposures)</label>
+      <input type="range" id="tau" min="10" max="2000" step="10" value="300">
+      <span class="value" id="tauValue">300</span></div>
+  </div>
+  <div class="stats">
+    <div class="stat">Storage ceiling K = bpp&middot;N = <span class="value" id="capBits">14.0</span>B bits</div>
+    <div class="stat">= <span class="value" id="capGB">1.75</span> GB of facts</div>
+    <div class="stat">Recall at k=&tau; = <span class="value" id="recallTau">0.632</span></div>
+  </div>
+</div>
+<canvas id="plot2" width="920" height="320"></canvas>
+<div class="legend">
+  <span><span class="swatch" style="background:#388e3c"></span>Recall probability P(k) = 1 &minus; exp(&minus;k/&tau;)</span>
+  <span><span class="swatch" style="background:#f57c00"></span>Capacity utilisation (log-parameter scale)</span>
+</div>
+<div class="panel note">
+  <strong>Two bounds, one picture.</strong>
+  Allen-Zhu Part 3.3 shows a transformer stores ~<code>2N</code> bits of factual knowledge at saturation
+  &mdash; storage scales <em>linearly</em> with parameters, not with tokens.
+  The recall curve <code>P(k) = 1 &minus; exp(&minus;k/&tau;)</code> shows that within that storage budget,
+  rare facts need ~&tau; exposures before they become reliably extractable.
+  A 7B model's 14&nbsp;Gbit ceiling is reached regardless of training tokens;
+  a fact seen once in 1T tokens is &asymp;0% recoverable at &tau;=300.
+</div>
+
+<script>
+(function () {
+  const L10 = Math.log(10);
+  const cvs1 = document.getElementById('plot1'), ctx1 = cvs1.getContext('2d');
+  const cvs2 = document.getElementById('plot2'), ctx2 = cvs2.getContext('2d');
+
+  const muenEff = (R, RT) => 1.0 - Math.exp(-R / Math.max(1e-6, RT));
+  const muenMarg = (k, RT) => Math.exp(-(k - 1) / Math.max(1e-6, RT));
+
+  function drawGrid(ctx, cvs, pad, W, H) {
+    ctx.clearRect(0, 0, cvs.width, cvs.height);
+    ctx.strokeStyle = '#eee'; ctx.lineWidth = 1;
+    for (let i = 0; i <= 5; i++) {
+      const y = pad.t + H * i / 5;
+      ctx.beginPath(); ctx.moveTo(pad.l, y); ctx.lineTo(pad.l + W, y); ctx.stroke();
+    }
+  }
+  function rotLabel(ctx, text, x, y, color) {
+    ctx.save(); ctx.fillStyle = color; ctx.translate(x, y); ctx.rotate(-Math.PI / 2);
+    ctx.textAlign = 'center'; ctx.fillText(text, 0, 0); ctx.restore();
+  }
+
+  function render1() {
+    const U = +document.getElementById('U').value;
+    const Rmax = +document.getElementById('Rmax').value;
+    const RT = +document.getElementById('RT').value;
+    document.getElementById('Uvalue').textContent = U.toFixed(1);
+    document.getElementById('RmaxValue').textContent = Rmax.toFixed(1);
+    document.getElementById('RTvalue').textContent = RT.toFixed(1);
+    const Dtot = U * Rmax, Deff = U * muenEff(Rmax, RT), lastW = muenMarg(Rmax, RT);
+    document.getElementById('Dtot').textContent = Dtot.toFixed(1);
+    document.getElementById('Deff').textContent = Deff.toFixed(2);
+    document.getElementById('ratio').textContent = (Deff / Math.max(1e-6, Dtot)).toFixed(3);
+    document.getElementById('lastW').textContent = lastW.toFixed(3);
+
+    const pad = { l: 70, r: 60, t: 20, b: 48 };
+    const W = cvs1.width - pad.l - pad.r, H = cvs1.height - pad.t - pad.b;
+    drawGrid(ctx1, cvs1, pad, W, H);
+    const xFor = r => pad.l + (r / Math.max(1e-6, Rmax)) * W;
+    const yFor = v => pad.t + H - v * H;
+
+    ctx1.font = '11px sans-serif';
+    for (let i = 0; i <= 5; i++) {
+      const v = 1.0 - i / 5, y = pad.t + (H * i) / 5 + 4;
+      ctx1.fillStyle = '#555'; ctx1.textAlign = 'right'; ctx1.fillText(v.toFixed(2), pad.l - 6, y);
+      ctx1.fillStyle = '#d32f2f'; ctx1.textAlign = 'left'; ctx1.fillText(v.toFixed(2), pad.l + W + 6, y);
+    }
+    ctx1.fillStyle = '#555'; ctx1.textAlign = 'center';
+    for (let i = 0; i <= 6; i++) {
+      const r = (i / 6) * Rmax;
+      ctx1.fillText(r.toFixed(1), xFor(r), pad.t + H + 18);
+    }
+    ctx1.fillText('epochs R = D / U', pad.l + W / 2, pad.t + H + 38);
+    rotLabel(ctx1, "D'(R) / U", 16, pad.t + H / 2, '#1976d2');
+    rotLabel(ctx1, 'w(k)', cvs1.width - 16, pad.t + H / 2, '#d32f2f');
+
+    const Np = 300;
+    const drawCurve = (color, fn) => {
+      ctx1.strokeStyle = color; ctx1.lineWidth = 2.2; ctx1.beginPath();
+      for (let i = 0; i <= Np; i++) {
+        const [x, y] = fn(i / Np);
+        if (i === 0) ctx1.moveTo(x, y); else ctx1.lineTo(x, y);
+      }
+      ctx1.stroke();
+    };
+    drawCurve('#1976d2', t => { const r = t * Rmax; return [xFor(r), yFor(muenEff(r, RT))]; });
+    drawCurve('#d32f2f', t => { const k = 1 + t * Math.max(0, Rmax - 1); return [xFor(k), yFor(muenMarg(k, RT))]; });
+
+    if (RT <= Rmax) {
+      ctx1.strokeStyle = '#aaa'; ctx1.setLineDash([4, 4]);
+      ctx1.beginPath(); ctx1.moveTo(xFor(RT), pad.t); ctx1.lineTo(xFor(RT), pad.t + H); ctx1.stroke();
+      ctx1.setLineDash([]); ctx1.fillStyle = '#555'; ctx1.textAlign = 'left';
+      ctx1.fillText('R = R_T', xFor(RT) + 4, pad.t + 12);
+    }
+  }
+
+  function render2() {
+    const Nval = +document.getElementById('N').value;
+    const bpp = +document.getElementById('bpp').value;
+    const tau = +document.getElementById('tau').value;
+    document.getElementById('Nvalue').textContent = Nval.toFixed(1);
+    document.getElementById('bppValue').textContent = bpp.toFixed(2);
+    document.getElementById('tauValue').textContent = Math.round(tau);
+    const capBits = bpp * Nval;
+    document.getElementById('capBits').textContent = capBits.toFixed(2);
+    document.getElementById('capGB').textContent = (capBits / 8.0).toFixed(2);
+    document.getElementById('recallTau').textContent = (1 - Math.exp(-1)).toFixed(3);
+
+    const pad = { l: 70, r: 60, t: 20, b: 48 };
+    const W = cvs2.width - pad.l - pad.r, H = cvs2.height - pad.t - pad.b;
+    drawGrid(ctx2, cvs2, pad, W, H);
+
+    const kMin = 1, kMax = Math.max(100, tau * 10);
+    const logKMin = Math.log(kMin) / L10, logKMax = Math.log(kMax) / L10;
+    const xForK = k => pad.l + ((Math.log(k) / L10 - logKMin) / (logKMax - logKMin)) * W;
+    const yFor = v => pad.t + H - v * H;
+
+    const nMin = 0.1, nMax = 500;
+    const logNmin = Math.log(nMin) / L10, logNmax = Math.log(nMax) / L10;
+    ctx2.font = '11px sans-serif';
+    for (let i = 0; i <= 5; i++) {
+      const y = pad.t + (H * i) / 5 + 4;
+      ctx2.fillStyle = '#388e3c'; ctx2.textAlign = 'right';
+      ctx2.fillText((1.0 - i / 5).toFixed(2), pad.l - 6, y);
+      const nVal = Math.pow(10, logNmin + (1 - i / 5) * (logNmax - logNmin));
+      ctx2.fillStyle = '#f57c00'; ctx2.textAlign = 'left';
+      ctx2.fillText((bpp * nVal).toFixed(1) + 'B bits', pad.l + W + 6, y);
+    }
+    ctx2.fillStyle = '#555'; ctx2.textAlign = 'center';
+    [1, 10, 100, 1000, 10000].forEach(k => {
+      if (k >= kMin && k <= kMax) ctx2.fillText(k.toString(), xForK(k), pad.t + H + 18);
+    });
+    ctx2.fillText('exposures per fact k (log scale)', pad.l + W / 2, pad.t + H + 38);
+    rotLabel(ctx2, 'P(recall | k)', 16, pad.t + H / 2, '#388e3c');
+    rotLabel(ctx2, 'capacity = bpp * N', cvs2.width - 16, pad.t + H / 2, '#f57c00');
+
+    ctx2.strokeStyle = '#388e3c'; ctx2.lineWidth = 2.2; ctx2.beginPath();
+    const M = 300;
+    for (let i = 0; i <= M; i++) {
+      const frac = i / M;
+      const k = Math.pow(10, logKMin + frac * (logKMax - logKMin));
+      const v = 1 - Math.exp(-k / Math.max(1e-6, tau));
+      const x = xForK(k), y = yFor(v);
+      if (i === 0) ctx2.moveTo(x, y); else ctx2.lineTo(x, y);
+    }
+    ctx2.stroke();
+
+    if (tau >= kMin && tau <= kMax) {
+      ctx2.strokeStyle = '#aaa'; ctx2.setLineDash([4, 4]);
+      ctx2.beginPath(); ctx2.moveTo(xForK(tau), pad.t); ctx2.lineTo(xForK(tau), pad.t + H); ctx2.stroke();
+      ctx2.setLineDash([]); ctx2.fillStyle = '#555'; ctx2.textAlign = 'left';
+      ctx2.fillText('k = \u03c4', xForK(tau) + 4, pad.t + 12);
+    }
+
+    const capFrac = (bpp * Nval) / (bpp * nMax);
+    ctx2.strokeStyle = '#f57c00'; ctx2.lineWidth = 1.6; ctx2.setLineDash([6, 4]);
+    const yCap = yFor(capFrac);
+    ctx2.beginPath(); ctx2.moveTo(pad.l, yCap); ctx2.lineTo(pad.l + W, yCap); ctx2.stroke();
+    ctx2.setLineDash([]); ctx2.fillStyle = '#f57c00'; ctx2.textAlign = 'right';
+    ctx2.fillText('N = ' + Nval.toFixed(1) + 'B \u2192 ' + (bpp * Nval).toFixed(1) + 'B bits',
+                  pad.l + W - 6, yCap - 4);
+  }
+
+  ['U', 'Rmax', 'RT'].forEach(id => document.getElementById(id).addEventListener('input', render1));
+  ['N', 'bpp', 'tau'].forEach(id => document.getElementById(id).addEventListener('input', render2));
+  render1(); render2();
+})();
+</script>
+</body>
+</html>

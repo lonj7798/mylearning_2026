@@ -1,0 +1,267 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<title>Ch-32 - Multi-Stage Pipeline Explorer</title>
+<style>
+  :root {
+    --bg: #0f1115; --panel: #171a21; --text: #e6e8eb;
+    --muted: #8a95a4; --accent: #5ec8ff; --warn: #ffb86b;
+    --good: #7dd87d; --bad: #ff6b6b; --grid: #2a2f3a;
+    --web: #4a5a7a; --math: #ff9f5e; --code: #7dd87d;
+    --longdoc: #b48cf2; --instruct: #5ec8ff; --pref: #e56b96;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 20px; background: var(--bg); color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    font-size: 13px;
+  }
+  h1 { font-size: 16px; margin: 0 0 4px 0; }
+  p.sub { color: var(--muted); margin: 0 0 14px 0; font-size: 12px; }
+  .controls {
+    background: var(--panel); padding: 12px 16px; border-radius: 6px;
+    margin-bottom: 16px; display: flex; flex-wrap: wrap;
+    gap: 18px; align-items: center;
+  }
+  .toggle { display: flex; gap: 4px; }
+  .toggle button {
+    background: #232833; border: 1px solid #2a2f3a; color: var(--text);
+    padding: 6px 12px; border-radius: 4px; cursor: pointer; font-size: 12px;
+  }
+  .toggle button.active {
+    background: var(--accent); color: #0f1115; border-color: var(--accent);
+    font-weight: 600;
+  }
+  .toggle-label { color: var(--muted); font-size: 11px; margin-right: 4px; }
+  .scale {
+    font-size: 11px; color: var(--muted); display: flex; gap: 10px; align-items: center;
+  }
+  .scale select {
+    background: #232833; border: 1px solid #2a2f3a; color: var(--text);
+    padding: 3px 6px; border-radius: 3px; font-size: 11px;
+  }
+  .panel {
+    background: var(--panel); padding: 16px; border-radius: 6px; margin-bottom: 14px;
+  }
+  .gantt {
+    display: flex; flex-direction: column; gap: 8px;
+  }
+  .row {
+    display: grid; grid-template-columns: 130px 1fr 130px;
+    gap: 8px; align-items: center;
+  }
+  .row .name {
+    font-size: 12px; color: var(--text); font-weight: 500;
+    text-align: right; padding-right: 6px;
+  }
+  .bar-track {
+    position: relative; background: #0b0d11; border-radius: 3px;
+    height: 36px; overflow: hidden; border: 1px solid var(--grid);
+  }
+  .bar {
+    position: absolute; top: 0; bottom: 0; left: 0;
+    display: flex; border-radius: 2px; overflow: hidden;
+    transition: width 300ms ease;
+  }
+  .seg {
+    height: 100%; display: flex; align-items: center; justify-content: center;
+    font-size: 10px; color: #0f1115; font-weight: 600;
+    overflow: hidden; white-space: nowrap;
+  }
+  .seg.web { background: var(--web); color: var(--text); }
+  .seg.math { background: var(--math); }
+  .seg.code { background: var(--code); }
+  .seg.longdoc { background: var(--longdoc); }
+  .seg.instruct { background: var(--instruct); }
+  .seg.pref { background: var(--pref); color: var(--text); }
+  .row .tokens {
+    font-size: 11px; color: var(--accent); font-variant-numeric: tabular-nums;
+    text-align: left; padding-left: 6px;
+  }
+  .row .tokens .eval {
+    display: block; color: var(--muted); font-size: 10px; font-weight: 400;
+    margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .legend {
+    display: flex; gap: 12px; flex-wrap: wrap; font-size: 11px;
+    color: var(--muted); margin-top: 12px;
+  }
+  .legend span.sw {
+    display: inline-block; width: 10px; height: 10px; border-radius: 2px;
+    margin-right: 4px; vertical-align: middle;
+  }
+  .caption {
+    font-size: 11px; color: var(--muted); line-height: 1.6; margin-top: 12px;
+  }
+  .note {
+    background: #151821; border-left: 3px solid var(--warn); color: var(--text);
+    padding: 8px 12px; font-size: 11px; border-radius: 3px; margin-top: 8px;
+  }
+  .note b { color: var(--warn); }
+  .axis {
+    display: flex; justify-content: space-between; font-size: 10px;
+    color: var(--muted); margin-top: 6px; padding: 0 138px 0 130px;
+  }
+</style>
+</head>
+<body>
+
+<h1>Chapter 32 - Multi-Stage Pipeline Explorer</h1>
+<p class="sub">Five-stage Gantt: pretrain -> mid-train -> long-context -> SFT -> RL. Select a lab to see its token allocation and data-mix composition per stage. Width encodes token budget on a log scale.</p>
+
+<div class="controls">
+  <span class="toggle-label">Configuration:</span>
+  <div class="toggle" id="cfg">
+    <button data-cfg="olmo3" class="active">OLMo 3 7B</button>
+    <button data-cfg="llama3">Llama 3 405B</button>
+    <button data-cfg="r1">DeepSeek-R1</button>
+    <button data-cfg="phi4">Phi-4-reasoning</button>
+  </div>
+  <div class="scale">
+    <label>Width scale:</label>
+    <select id="scale">
+      <option value="log" selected>log10</option>
+      <option value="linear">linear</option>
+    </select>
+  </div>
+</div>
+
+<div class="panel">
+  <div class="gantt" id="gantt"></div>
+  <div class="axis">
+    <span>0</span><span id="axisMax">16T tokens</span>
+  </div>
+  <div class="legend">
+    <span><span class="sw" style="background: var(--web);"></span>web/general</span>
+    <span><span class="sw" style="background: var(--math);"></span>math</span>
+    <span><span class="sw" style="background: var(--code);"></span>code</span>
+    <span><span class="sw" style="background: var(--longdoc);"></span>long-doc</span>
+    <span><span class="sw" style="background: var(--instruct);"></span>instruction/CoT</span>
+    <span><span class="sw" style="background: var(--pref);"></span>preference/RL</span>
+  </div>
+  <div class="note" id="note"></div>
+</div>
+
+<div class="caption" id="caption"></div>
+
+<script>
+// stage configs. mix values = fractions summing to 1; tokens in absolute token count.
+// "na" means the stage is inherited or not applicable for this lab (rendered empty).
+const CFGS = {
+  olmo3: {
+    label: "OLMo 3 7B (model-flow, 2025)",
+    stages: [
+      {name: "pretrain",     tokens: 5.9e12, mix: {web:0.55, math:0.08, code:0.20, longdoc:0.05, instruct:0.12, pref:0.0}, eval: "OLMES broad, MMLU"},
+      {name: "mid-training", tokens: 1.0e11, mix: {web:0.15, math:0.30, code:0.25, longdoc:0.10, instruct:0.20, pref:0.0}, eval: "GSM8K, MATH, MMLU-Pro, HumanEval+"},
+      {name: "long-context", tokens: 5.0e10, mix: {web:0.05, math:0.05, code:0.25, longdoc:0.60, instruct:0.05, pref:0.0}, eval: "NIAH, RULER, BABILong"},
+      {name: "SFT",          tokens: 3.0e9,  mix: {web:0.0,  math:0.10, code:0.15, longdoc:0.05, instruct:0.70, pref:0.0}, eval: "MT-Bench, IFEval, format"},
+      {name: "DPO+RLVR",     tokens: 1.5e9,  mix: {web:0.0,  math:0.05, code:0.10, longdoc:0.0,  instruct:0.25, pref:0.60}, eval: "AIME, Codeforces, reward-audit"},
+    ],
+    note: "<b>OLMo 3:</b> explicit mid-train + long-context stages, each with its own Dolmino/Longmino mix (100B / 50B). Cold-start SFT is Dolci-SFT; full recipe is Base -> Think."
+  },
+  llama3: {
+    label: "Llama 3 405B (herd paper, 2024)",
+    stages: [
+      {name: "pretrain",     tokens: 1.56e13, mix: {web:0.55, math:0.08, code:0.25, longdoc:0.04, instruct:0.08, pref:0.0}, eval: "MMLU, HellaSwag, HumanEval"},
+      {name: "mid-training", tokens: 3.0e11,  mix: {web:0.20, math:0.20, code:0.25, longdoc:0.15, instruct:0.20, pref:0.0}, eval: "annealing stage (scale undisclosed)"},
+      {name: "long-context", tokens: 8.0e11,  mix: {web:0.20, math:0.05, code:0.30, longdoc:0.40, instruct:0.05, pref:0.0}, eval: "NIAH 128K, RULER (effective ~96K)"},
+      {name: "SFT",          tokens: 1.0e10,  mix: {web:0.0,  math:0.10, code:0.15, longdoc:0.001,instruct:0.749,pref:0.0}, eval: "6-round rejection-sampled SFT"},
+      {name: "DPO+RLVR",     tokens: 5.0e9,   mix: {web:0.0,  math:0.05, code:0.10, longdoc:0.0,  instruct:0.25, pref:0.60}, eval: "6-round DPO, NLL-stabilized"},
+    ],
+    note: "<b>Llama 3:</b> long-context is proportionally massive (~800B tokens ~ 5% of pretrain), RoPE base rescaled 10K -> 500K across six sub-stages 8K -> 128K. Long-SFT kept at 0.1%."
+  },
+  r1: {
+    label: "DeepSeek-R1 (post-V3, 2025)",
+    stages: [
+      {name: "pretrain",     tokens: 1.48e13, mix: {web:0.50, math:0.10, code:0.25, longdoc:0.04, instruct:0.11, pref:0.0}, eval: "inherited from V3"},
+      {name: "mid-training", tokens: 1.5e11,  mix: {web:0.10, math:0.35, code:0.30, longdoc:0.10, instruct:0.15, pref:0.0}, eval: "inherited from V3"},
+      {name: "long-context", tokens: 2.0e11,  mix: {web:0.10, math:0.10, code:0.30, longdoc:0.45, instruct:0.05, pref:0.0}, eval: "inherited from V3 (128K)"},
+      {name: "SFT",          tokens: 4.0e9,   mix: {web:0.0,  math:0.15, code:0.10, longdoc:0.0,  instruct:0.75, pref:0.0}, eval: "~800K cold-start (600K reason + 200K other)"},
+      {name: "DPO+RLVR",     tokens: 8.0e9,   mix: {web:0.0,  math:0.30, code:0.20, longdoc:0.0,  instruct:0.15, pref:0.35}, eval: "reasoning-RL (GRPO 32K gen) + alignment-RL"},
+    ],
+    note: "<b>DeepSeek-R1:</b> inherits pretrain + mid-train + long-context from V3 (grey-labeled; no independent run). R1's novelty is entirely post-V3: cold-start SFT + multi-stage RL."
+  },
+  phi4: {
+    label: "Phi-4-reasoning (synthetic-heavy, 2025)",
+    stages: [
+      {name: "pretrain",     tokens: 9.0e12, mix: {web:0.20, math:0.25, code:0.25, longdoc:0.05, instruct:0.25, pref:0.0}, eval: "MMLU, targeted synthetic evals"},
+      {name: "mid-training", tokens: 5.0e11, mix: {web:0.05, math:0.40, code:0.20, longdoc:0.05, instruct:0.30, pref:0.0}, eval: "MATH, HumanEval+, MMLU-Pro"},
+      {name: "long-context", tokens: 4.0e10, mix: {web:0.10, math:0.10, code:0.25, longdoc:0.50, instruct:0.05, pref:0.0}, eval: "NIAH (moderate window)"},
+      {name: "SFT",          tokens: 1.0e10, mix: {web:0.0,  math:0.25, code:0.15, longdoc:0.02, instruct:0.58, pref:0.0}, eval: "long-CoT SFT, format"},
+      {name: "DPO+RLVR",     tokens: 3.0e9,  mix: {web:0.0,  math:0.30, code:0.20, longdoc:0.0,  instruct:0.20, pref:0.30}, eval: "preference + verifiable"},
+    ],
+    note: "<b>Phi-4-reasoning:</b> pretrain mix blurs into mid-training (synthetic-heavy); mid-training is proportionally large. The 'can better data skip mid-training?' thought experiment pushed one step further."
+  }
+};
+
+const state = { cfg: "olmo3", scale: "log" };
+
+function fmtTokens(t) {
+  if (t >= 1e12) return (t/1e12).toFixed(1).replace(/\.0$/, "") + "T";
+  if (t >= 1e9) return (t/1e9).toFixed(1).replace(/\.0$/, "") + "B";
+  if (t >= 1e6) return (t/1e6).toFixed(1).replace(/\.0$/, "") + "M";
+  return t.toString();
+}
+
+function barWidthFrac(tokens, maxTokens, scale) {
+  if (tokens <= 0) return 0;
+  if (scale === "linear") return tokens / maxTokens;
+  // log scale: map log10(tokens) onto [log10(1e9), log10(maxTokens)] -> [0, 1]
+  const lo = Math.log10(1e9);
+  const hi = Math.log10(maxTokens);
+  const v = Math.log10(tokens);
+  return Math.max(0.02, (v - lo) / (hi - lo));
+}
+
+function render() {
+  const cfg = CFGS[state.cfg];
+  const maxTokens = Math.max(...Object.values(CFGS).flatMap(c => c.stages.map(s => s.tokens)));
+  const root = document.getElementById("gantt");
+  root.innerHTML = "";
+  cfg.stages.forEach(s => {
+    const row = document.createElement("div");
+    row.className = "row";
+    const wFrac = barWidthFrac(s.tokens, maxTokens, state.scale);
+    const wPct = (wFrac * 100).toFixed(2);
+    const segsHtml = Object.entries(s.mix)
+      .filter(([, f]) => f > 0.001)
+      .map(([k, f]) => `<div class="seg ${k}" style="width:${(f*100).toFixed(1)}%" title="${k}: ${(f*100).toFixed(0)}%">${f >= 0.1 ? Math.round(f*100) : ""}</div>`)
+      .join("");
+    row.innerHTML = `
+      <div class="name">${s.name}</div>
+      <div class="bar-track">
+        <div class="bar" style="width:${wPct}%">${segsHtml}</div>
+      </div>
+      <div class="tokens">${fmtTokens(s.tokens)}<span class="eval">${s.eval}</span></div>
+    `;
+    root.appendChild(row);
+  });
+  document.getElementById("axisMax").textContent = fmtTokens(maxTokens) + " tokens";
+  document.getElementById("note").innerHTML = cfg.note;
+  const totalTokens = cfg.stages.reduce((a, s) => a + s.tokens, 0);
+  document.getElementById("caption").innerHTML =
+    `<b>${cfg.label}.</b> Total tokens across stages: ${fmtTokens(totalTokens)}. ` +
+    `Bar widths use ${state.scale} scale; each bar's internal stacked fill shows the data-mix composition for that stage. ` +
+    `The eval-gate label beside each bar names the benchmark suite used to decide the stage is done. ` +
+    `Toggle configurations to see how the same five stages are allocated differently across labs.`;
+}
+
+document.querySelectorAll("#cfg button").forEach(b => {
+  b.addEventListener("click", () => {
+    document.querySelectorAll("#cfg button").forEach(x => x.classList.remove("active"));
+    b.classList.add("active");
+    state.cfg = b.dataset.cfg;
+    render();
+  });
+});
+document.getElementById("scale").addEventListener("change", e => {
+  state.scale = e.target.value;
+  render();
+});
+
+render();
+</script>
+
+</body>
+</html>

@@ -1,0 +1,240 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>APIGen 3-Layer Verifier — Interactive Walkthrough</title>
+<style>
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+         max-width: 1120px; margin: 2em auto; padding: 0 1em; color: #222;
+         background: #fafafa; }
+  h1 { font-size: 1.35em; margin-bottom: 0.15em; }
+  .subtitle { color: #666; margin-top: 0; font-size: 0.92em; line-height: 1.5; }
+  .note { color: #555; font-size: 0.85em; margin-top: 0.4em; font-style: italic; }
+
+  .pipeline { display: grid; grid-template-columns: 1fr 1fr 1fr 0.9fr;
+              gap: 0.7em; margin-top: 1.4em; }
+  .stage { border: 2px solid #dcdcdc; border-radius: 8px; background: #fff;
+           padding: 0.8em 0.9em; cursor: pointer; transition: all 0.15s ease;
+           position: relative; }
+  .stage:hover { border-color: #5a7dbd; background: #f4f7fc; }
+  .stage.active { border-color: #2e5daa; background: #e9f0fb; box-shadow: 0 2px 6px rgba(40,80,160,0.15); }
+  .stage.final { border-color: #6b8f52; background: #f0f6eb; cursor: default; }
+  .stage.final:hover { background: #f0f6eb; }
+  .stage .idx { font-size: 0.72em; color: #888; font-weight: 600; letter-spacing: 0.4px; }
+  .stage .title { font-weight: 700; font-size: 1.02em; margin-top: 0.15em; }
+  .stage .desc { font-size: 0.8em; color: #555; margin-top: 0.35em; line-height: 1.45; }
+  .stage .pr { font-family: 'SF Mono', Menlo, monospace; font-size: 0.78em;
+               margin-top: 0.55em; color: #2e5daa; font-weight: 600; }
+  .stage.final .pr { color: #3e5e29; }
+  .arrow { font-size: 1.6em; color: #bbb; align-self: center; text-align: center; }
+
+  .flow-row { display: grid;
+              grid-template-columns: 1fr 20px 1fr 20px 1fr 20px 0.9fr;
+              gap: 0.5em; margin-top: 1.4em; align-items: stretch; }
+
+  .panel { border: 1px solid #dcdcdc; border-radius: 6px; background: #fff;
+           padding: 0.9em 1.1em; margin-top: 1.2em; }
+  .panel h2 { font-size: 1.05em; margin: 0 0 0.5em 0; color: #333;
+              border-bottom: 1px solid #eee; padding-bottom: 0.3em; }
+  .panel h3 { font-size: 0.92em; margin: 0.9em 0 0.4em 0; color: #2e5daa; }
+
+  pre { background: #f6f6f9; border: 1px solid #e3e3e8; border-radius: 4px;
+        padding: 0.7em 0.9em; font-size: 0.82em; overflow-x: auto; line-height: 1.45; }
+  code { font-family: 'SF Mono', Menlo, monospace; }
+  .reject { border-left: 4px solid #c03030; background: #fff6f6; }
+  .accept { border-left: 4px solid #3e8c3e; background: #f2fbf0; }
+
+  .metrics { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 0.6em;
+             margin-top: 0.7em; }
+  .metric { background: #f4f6fa; border: 1px solid #e0e5ee; border-radius: 4px;
+            padding: 0.55em 0.7em; }
+  .metric .label { font-size: 0.73em; color: #666; letter-spacing: 0.3px; }
+  .metric .value { font-family: 'SF Mono', Menlo, monospace; font-weight: 700;
+                   font-size: 1.15em; color: #222; margin-top: 0.15em; }
+  .metric.bad .value { color: #8b1a1a; }
+  .metric.good .value { color: #1b5e20; }
+
+  .hint { background: #fffbe8; border: 1px solid #e8d88a; border-radius: 4px;
+          padding: 0.6em 0.85em; font-size: 0.87em; margin-top: 0.7em; color: #5a4500; }
+
+  footer { margin-top: 2em; padding-top: 1em; border-top: 1px solid #ddd;
+           font-size: 0.8em; color: #888; }
+
+  .accept-bar { display: flex; align-items: center; margin-top: 0.3em; gap: 0.4em; font-size: 0.78em; }
+  .bar-outer { flex: 1; height: 8px; background: #e4e4e8; border-radius: 4px; overflow: hidden; }
+  .bar-inner { height: 100%; background: linear-gradient(to right, #6aa86a, #3e8c3e); }
+</style>
+</head>
+<body>
+
+<h1>APIGen 3-Layer Verifier — Interactive Walkthrough</h1>
+<p class="subtitle">
+  APIGen (Salesforce, 2024) accepts a synthetic function-calling sample <em>iff</em> it clears three
+  independent checks, in sequence. Each stage rejects a different failure mode; removing any one
+  costs a measurable fraction of BFCL-V1 score.
+  <br><strong>Click a stage</strong> to see a concrete reject example, pass rate, and the cumulative
+  cost of removing that layer from the full pipeline.
+</p>
+
+<div class="pipeline">
+  <div class="stage" data-stage="format">
+    <div class="idx">STAGE 1</div>
+    <div class="title">Format check</div>
+    <div class="desc">JSON parses. Required fields present. Types match schema (int / str / bool / enum / list).</div>
+    <div class="pr">~75% pass · free</div>
+  </div>
+  <div class="stage" data-stage="execution">
+    <div class="idx">STAGE 2</div>
+    <div class="title">Execution check</div>
+    <div class="desc">Run the call in a Python sandbox with 5-s timeout against the reference implementation.</div>
+    <div class="pr">~90% pass · ~$0.001 / call</div>
+  </div>
+  <div class="stage" data-stage="semantic">
+    <div class="idx">STAGE 3</div>
+    <div class="title">Semantic check</div>
+    <div class="desc">GPT-4 judge sees (query, call, result) and must answer &ldquo;Yes&rdquo;.</div>
+    <div class="pr">~88% pass · ~$0.01 / call</div>
+  </div>
+  <div class="stage final" data-stage="final">
+    <div class="idx">GOLD</div>
+    <div class="title">Accepted</div>
+    <div class="desc">Added to xLAM-FC-60k after MinHash dedup on (query, call).</div>
+    <div class="pr">~60% end-to-end acceptance</div>
+  </div>
+</div>
+
+<div class="accept-bar">
+  <span style="color:#666;">Cumulative acceptance, raw&nbsp;→&nbsp;gold:</span>
+  <div class="bar-outer"><div class="bar-inner" style="width: 60%;"></div></div>
+  <span style="font-family:'SF Mono',Menlo,monospace; color:#1b5e20; font-weight:600;">~60%</span>
+</div>
+
+<div class="panel" id="detail-panel">
+  <h2 id="panel-title">Click a stage above</h2>
+  <div id="panel-body">
+    <p style="color:#666; font-size:0.9em;">
+      Each stage catches a different class of error. The composition is not a single "reject rate"
+      — format is cheap and high-yield, execution is expensive and load-bearing, semantic is the
+      narrow gate at the end. Click any stage to see what it actually rejects.
+    </p>
+    <div class="metrics">
+      <div class="metric">
+        <div class="label">APIs in corpus</div><div class="value">3,673</div>
+      </div>
+      <div class="metric">
+        <div class="label">Gold samples after filter</div><div class="value">60,000</div>
+      </div>
+      <div class="metric">
+        <div class="label">Total rejection</div><div class="value">~40%</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="panel">
+  <h2>Why each layer earns its keep — BFCL-V1 ablation</h2>
+  <pre>Full 3-layer (format + execution + semantic) : 88.24  ←  baseline
+Remove semantic check                        : 82.24  (−6.0)
+Remove execution check                       : 77.34  (−10.9)
+Remove format check                          : 70.14  (−18.1)  ← Glaive-era ceiling</pre>
+  <p class="note">
+    Format alone lands at the 2023 Glaive-style open-FC ceiling (~70%). Execution adds the
+    biggest single-layer lift (+11). Semantic catches the residual 6% — calls that run without
+    error but answer the wrong question (wrong unit, wrong target, right function with wrong arg
+    semantics). Only an LLM judge or a human catches these.
+  </p>
+</div>
+
+<footer>
+  Source: APIGen (Liu et al. 2024, <a href="https://arxiv.org/abs/2406.18518">arXiv:2406.18518</a>).
+  Companion to <code>wiki/courses/llm-training/ch-26/read.md</code> §3.
+</footer>
+
+<script>
+const STAGES = {
+  format: {
+    title: "Stage 1 — Format check",
+    pass: "~75% of raw generations pass",
+    cost: "free (pure JSON/schema validation)",
+    cumulativePass: 75,
+    removedPenalty: "−18.1 BFCL-V1",
+    catches: "Malformed JSON · wrong field name · type mismatch · missing required arg",
+    reject: {
+      query: "Convert 100 US dollars to euros.",
+      call:  '{"name": "currency_convert", "arguments": {"amount": "100", "from": "USD", "to": "EUR"}}',
+      whyReject: 'Schema declares <code>amount: int</code>. The string <code>"100"</code> fails the type check even though it "looks right." Rejected before execution.'
+    },
+    lesson: "Format is the cheap high-yield pre-gate. 70% of the final score's headroom lives above this layer — but the layer itself costs nothing, so it runs first.",
+  },
+  execution: {
+    title: "Stage 2 — Execution check",
+    pass: "~90% of format-passers also execute cleanly",
+    cost: "~$0.001/call (Python sandbox, 5-s timeout)",
+    cumulativePass: 68,
+    removedPenalty: "−10.9 BFCL-V1",
+    catches: "Runtime exceptions · timeout · stale API key · null-handling bugs · unknown city / id / resource",
+    reject: {
+      query: "What's the weather in Zzyzx, California?",
+      call:  '{"name": "get_weather", "arguments": {"location": "Zzyzx, CA", "units": "metric"}}',
+      whyReject: "Reference implementation throws <code>LocationNotFoundError</code>. The call parses and the schema matches, but the argument has no real-world referent. A format-only filter would accept this; execution catches it."
+    },
+    lesson: "Execution is the load-bearing stage. Removing it costs 11 BFCL points — the biggest single-layer hit. This is why APIGen bottlenecked on 3,673 APIs with reference implementations rather than reusing ToolBench's 16K.",
+  },
+  semantic: {
+    title: "Stage 3 — Semantic check",
+    pass: "~88% of execution-passers get a 'Yes' from GPT-4",
+    cost: "~$0.01/call (GPT-4 judge prompt)",
+    cumulativePass: 60,
+    removedPenalty: "−6.0 BFCL-V1",
+    catches: "Right function, wrong argument semantics · wrong unit · wrong target · lucky-success (parsed + ran but satisfies a different query)",
+    reject: {
+      query: "How far is it from Paris to Berlin in miles?",
+      call:  '{"name": "distance", "arguments": {"from": "Paris", "to": "Berlin", "units": "kilometers"}}',
+      whyReject: "Parses. Executes (returns 878 km). But the user asked for <em>miles</em>, not kilometers. GPT-4 judge says &ldquo;No — units mismatch.&rdquo; Only the semantic layer catches this."
+    },
+    lesson: "Semantic is the narrow residual. Only 6 BFCL points of benefit, but they are the points that separate a format-verified corpus from a judge-verified one. This is the layer APIGen added that ToolBench lacked.",
+  },
+  final: {
+    title: "End state — the gold 60K",
+    pass: "~60% cumulative end-to-end acceptance",
+    cost: "implicit across all three stages",
+    cumulativePass: 60,
+    removedPenalty: "—",
+    catches: "—",
+    reject: null,
+    lesson: "To produce 60K gold samples, APIGen generates ~100K raw. The 60K dataset is not 'teacher output' — it is 'teacher output that survived a 40% strict gate.' xLAM-7B (Mistral base, APIGen-60k SFT) takes #1 on BFCL-V1 among <13B models at 88.24% overall, beating ToolLLaMA by ~20 points."
+  },
+};
+
+const panelTitle = document.getElementById('panel-title');
+const panelBody  = document.getElementById('panel-body');
+document.querySelectorAll('.stage').forEach(el => {
+  el.addEventListener('click', () => {
+    document.querySelectorAll('.stage').forEach(s => s.classList.remove('active'));
+    el.classList.add('active');
+    const s = STAGES[el.dataset.stage];
+    panelTitle.textContent = s.title;
+    let html = '';
+    html += `<div class="metrics">`;
+    html += `  <div class="metric"><div class="label">Pass rate</div><div class="value">${s.pass}</div></div>`;
+    html += `  <div class="metric"><div class="label">Cost per call</div><div class="value">${s.cost}</div></div>`;
+    html += `  <div class="metric bad"><div class="label">Remove → BFCL-V1 Δ</div><div class="value">${s.removedPenalty}</div></div>`;
+    html += `</div>`;
+    html += `<h3>What this layer catches</h3>`;
+    html += `<p style="font-size:0.9em; color:#333;">${s.catches}</p>`;
+    if (s.reject) {
+      html += `<h3>Concrete reject example</h3>`;
+      html += `<pre class="reject"><strong>Query:</strong> ${s.reject.query}\n<strong>Call:</strong>  ${s.reject.call}</pre>`;
+      html += `<p style="font-size:0.88em; color:#444;"><strong>Why rejected:</strong> ${s.reject.whyReject}</p>`;
+    }
+    html += `<div class="hint"><strong>Lesson:</strong> ${s.lesson}</div>`;
+    html += `<div class="accept-bar" style="margin-top:0.8em;"><span style="color:#666;">Cumulative acceptance after this stage:</span>`;
+    html += `<div class="bar-outer"><div class="bar-inner" style="width:${s.cumulativePass}%;"></div></div>`;
+    html += `<span style="font-family:'SF Mono',Menlo,monospace; color:#1b5e20; font-weight:600;">~${s.cumulativePass}%</span></div>`;
+    panelBody.innerHTML = html;
+  });
+});
+</script>
+
+</body>
+</html>

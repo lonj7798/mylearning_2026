@@ -1,0 +1,248 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Training Failure Modes — Interactive Diagnostic Tree</title>
+<style>
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+         max-width: 1120px; margin: 2em auto; padding: 0 1em; color: #222;
+         background: #fafafa; line-height: 1.5; }
+  h1 { font-size: 1.35em; margin-bottom: 0.2em; }
+  .subtitle { color: #666; margin-top: 0; font-size: 0.95em; max-width: 820px; }
+  .layout { display: grid; grid-template-columns: 1fr 1.4fr; gap: 1.2em;
+            margin-top: 1.2em; }
+  .panel { border: 1px solid #dcdcdc; border-radius: 6px; background: #fff;
+           padding: 0.9em 1.1em; }
+  h2 { font-size: 1.05em; margin: 0 0 0.6em 0; color: #333;
+       border-bottom: 1px solid #eee; padding-bottom: 0.3em; }
+  .sym-list { list-style: none; padding: 0; margin: 0; }
+  .sym-item { padding: 0.55em 0.7em; margin-bottom: 0.35em;
+              border: 1px solid #ddd; border-radius: 4px; cursor: pointer;
+              background: #f8f8f8; font-size: 0.92em;
+              display: grid; grid-template-columns: 1fr auto; gap: 0.5em;
+              align-items: center; }
+  .sym-item:hover { background: #eef4ff; border-color: #8fa9d9; }
+  .sym-item.active { background: #e4ecff; border-color: #4060a0; font-weight: 600; }
+  .sym-code { font-family: 'SF Mono', Menlo, monospace; font-size: 0.78em;
+              color: #666; font-variant-numeric: tabular-nums; }
+  .branch { font-size: 0.9em; }
+  .branch h3 { font-size: 0.98em; margin: 0.9em 0 0.3em 0; color: #222;
+               border-left: 3px solid #4060a0; padding-left: 0.45em; }
+  .branch .step { margin-bottom: 0.55em; padding: 0.45em 0.6em;
+                  background: #f8f9fb; border-left: 2px solid #bbb;
+                  border-radius: 3px; }
+  .branch .step b { color: #1b2a4e; }
+  .label { font-size: 0.76em; color: #fff; padding: 2px 8px;
+           border-radius: 10px; font-weight: 600; letter-spacing: 0.02em;
+           font-variant-numeric: tabular-nums; }
+  .tag-inv   { background: #8b1a1a; }
+  .tag-diag  { background: #7a4a00; }
+  .tag-fix   { background: #1b5e20; }
+  .tag-log   { background: #4060a0; }
+  .metric-table { width: 100%; border-collapse: collapse;
+                  font-size: 0.82em; margin-top: 0.3em;
+                  font-variant-numeric: tabular-nums; }
+  .metric-table th, .metric-table td { border: 1px solid #e4e4e4;
+                                       padding: 3px 7px; text-align: left; }
+  .metric-table th { background: #f2f2f2; color: #444; font-weight: 600; }
+  .metric-table code { background: #eef; padding: 1px 4px; border-radius: 3px;
+                       font-family: 'SF Mono', Menlo, monospace; font-size: 0.9em; }
+  code { background: #eef; padding: 1px 4px; border-radius: 3px;
+         font-family: 'SF Mono', Menlo, monospace; font-size: 0.85em; }
+  .empty-state { color: #777; font-style: italic; padding: 0.8em 0;
+                 font-size: 0.9em; }
+  .note { font-size: 0.82em; color: #666; margin-top: 1em; line-height: 1.55; }
+  .symptom-badge { font-family: 'SF Mono', Menlo, monospace; font-size: 0.78em;
+                   padding: 2px 7px; border-radius: 3px; background: #fde7e7;
+                   color: #8b1a1a; border: 1px solid #e9b8b8; }
+</style>
+</head>
+<body>
+
+<h1>Training Failure Modes — Interactive Diagnostic Tree</h1>
+<p class="subtitle">
+  Click a symptom on the left. The right panel walks you through the diagnostic
+  branch: which invariant broke, which logged metric confirms the diagnosis,
+  which fix applies, and which log would have caught it sooner. Numbers are
+  pulled from real incident reports referenced in chapter 7.
+</p>
+
+<div class="layout">
+
+  <div class="panel">
+    <h2>Symptoms</h2>
+    <ul class="sym-list" id="symList"></ul>
+    <div class="note">
+      Ordering is by wall-clock cost to diagnose, highest first. In a real
+      incident, work from the top: a hung NCCL collective is 30 GPU-minutes
+      per node per occurrence at the default timeout; entropy collapse is
+      cheaper but compounds if you miss the inflection.
+    </div>
+  </div>
+
+  <div class="panel">
+    <h2 id="branchTitle">Select a symptom</h2>
+    <div id="branchBody" class="branch">
+      <div class="empty-state">Pick a row on the left to expand its branch.</div>
+    </div>
+  </div>
+
+</div>
+
+<script>
+const SYMPTOMS = [
+  {
+    id: "loss-nan",
+    label: "Loss NaN / Inf",
+    code: "isfinite(loss)==0",
+    title: "NaN / Inf in the loss scalar",
+    steps: [
+      { tag: "inv", text: "<b>Invariant broken.</b> Every forward pass must produce a finite loss. <code>assert torch.isfinite(loss)</code> should halt the run at step of origin." },
+      { tag: "diag", text: "<b>Diagnostic tree.</b> NaN has three arithmetic sources (ch-07 §1): softmax overflow, log(0) in KL / CE, /0 in advantage normalization or Adam's <code>v̂</code>. Localize by checking where the NaN first appears in the computation graph." },
+      { tag: "diag", text: "<b>Metric check.</b> If <code>logits.abs().max() > 50</code> under bf16 you're in the softmax-overflow regime; if <code>advantage.std() &lt; 1e-4</code> the RL batch is all-one-reward; if NaN only appears at <code>optimizer.step()</code> the <code>v̂</code>/<code>eps</code> interaction is suspect." },
+      { tag: "fix", text: "<b>Fix.</b> Softmax: add QK-Norm + Z-loss (the OLMo-2 recipe); keep softmax and CE in fp32. KL: use <code>log_softmax</code>, never <code>log(softmax(...))</code>. Advantage: <code>std.clamp_min(1e-6)</code>. Optimizer: bump <code>eps</code> to 1e-5 under fp16 (Adam default 1e-8 is too small)." },
+      { tag: "log", text: "<b>Log that would have caught it sooner.</b> <code>pre_clip_grad_norm</code> and <code>logits.abs().max()</code> every step. A 100× grad-norm spike predicts a NaN 1–5 steps ahead. Add <code>fraction_batches_with_std_below_1e4</code> for RL." },
+    ],
+    metrics: [
+      ["pre_clip_grad_norm", "per step", "> 100× running-mean → imminent NaN"],
+      ["logits.abs().max()", "per step", "> 50 (bf16) → softmax overflow"],
+      ["advantage.std", "per batch", "< 1e-4 → RL /0 risk"],
+      ["optim_eps_effective", "one-time", "< 1e-5 under fp16 → NaN in step"],
+    ],
+  },
+  {
+    id: "loss-spike",
+    label: "Loss Spike",
+    code: "1-step jump 1–20×",
+    title: "Loss spike (single-step or few-step jump)",
+    steps: [
+      { tag: "inv", text: "<b>Invariant broken.</b> Per-step loss stays within k·std of its running mean. k≈5 is the OLMo-2 skip-step threshold." },
+      { tag: "diag", text: "<b>Diagnostic tree.</b> Spike = one out-of-distribution micro-batch × already-large weight step. Check <code>pre_clip_grad_norm</code> at spike step: 100× the running mean confirms. If grad-norm is quiet but loss jumped, the batch is numerically fine but semantically weird (rare domain in the mix) — a curriculum issue, not a stability one." },
+      { tag: "fix", text: "<b>Fix.</b> The three-layer Llama-3 / OLMo-2 mitigation stack: (1) global-norm clip 1.0; (2) skip-step when loss exceeds running_mean + 5·running_std — discard gradient, advance dataloader, keep optimizer state; (3) embedding-norm monitoring across the spike window." },
+      { tag: "log", text: "<b>Log that would have caught it sooner.</b> <code>grad_norm</code> spike 1–5 steps before loss spike is canonical ([[gradient-clipping]]). Log per-shard loss (every 50 steps) to catch a poisoned data shard before it surfaces as a spike." },
+    ],
+    metrics: [
+      ["pre_clip_grad_norm", "per step", "> 100× running mean"],
+      ["loss", "per step", "> mean + 5·std → skip-step"],
+      ["embed_norm", "every ckpt", "Δ > 1e-4 across spike"],
+      ["per_shard_loss", "every 50", "identifies poisoned shard"],
+    ],
+  },
+  {
+    id: "loss-plateau",
+    label: "Loss Plateau",
+    code: "flat above floor",
+    title: "Loss plateau (flat above the expected floor)",
+    steps: [
+      { tag: "inv", text: "<b>Invariant broken.</b> Loss should continue descending at the slope predicted by the run's scaling-law fit. A flat curve above the expected floor means one of three things." },
+      { tag: "diag", text: "<b>Diagnostic tree.</b> Check <code>lr</code> — if 0, cosine decayed to zero or WSD cooldown fired early; scheduler off-by-one on resume also parks LR at an unexpected value. Check <code>clipped_fraction</code> — if 1.0, the clip threshold is too tight; the optimizer never makes a real step. Check <code>active_tokens_per_batch</code> — if ~0, the pipeline is dead (§3)." },
+      { tag: "fix", text: "<b>Fix.</b> Dead LR: reload scheduler state before first <code>.step()</code>; assert <code>scheduler.last_epoch == saved_step</code>. Over-clipping: raise <code>max_grad_norm</code> from e.g. 0.1 to 1.0. Dead pipeline: see the dead-pipeline branch." },
+      { tag: "log", text: "<b>Log that would have caught it sooner.</b> <code>lr</code>, <code>clipped_fraction</code>, <code>active_tokens_per_batch</code> per step. Plateau with these three numbers separates the three causes in seconds." },
+    ],
+    metrics: [
+      ["lr", "per step", "== 0 → scheduler issue"],
+      ["clipped_fraction", "per step", "1.0 → threshold too tight"],
+      ["active_tokens_per_batch", "per step", "~0 → dead pipeline"],
+      ["grad_norm", "per step", "~0 → no real labels in loss"],
+    ],
+  },
+  {
+    id: "nccl-hang",
+    label: "NCCL Hang",
+    code: "tokens/sec → 0",
+    title: "Distributed hang — NCCL / AllReduce rank drop",
+    steps: [
+      { tag: "inv", text: "<b>Invariant broken.</b> All ranks complete the same collectives in the same order. One rank dropping or adding a collective hangs the world group until the NCCL timeout." },
+      { tag: "diag", text: "<b>Diagnostic tree.</b> Cause classes ordered by frequency (ch-07 §5): (1) rank-local branch divergence (some ranks took an <code>if</code> the others skipped); (2) empty micro-batch on one rank; (3) OOM on one rank tearing down NCCL uncleanly; (4) infra — dropped link, sled reboot, ECC error (common at 1024-H100 scale)." },
+      { tag: "diag", text: "<b>Attach protocol.</b> <code>py-spy dump --pid $(pgrep -f train.py)</code> on every rank in parallel via pdsh. If rank K is stopped earlier in the step than peers, K is the rank that dropped the collective. If later, K took a divergent branch." },
+      { tag: "fix", text: "<b>Fix.</b> Tighten NCCL timeout to 5 min (default 30 min); add a per-rank heartbeat thread that alarms on max−min rank wall-time > 60s. Eliminate per-rank control-flow divergence by making all ranks emit the same collective sequence regardless of batch content." },
+      { tag: "log", text: "<b>Log that would have caught it sooner.</b> per-rank heartbeat wall_time; per-rank <code>active_tokens</code>; NCCL collective sequence id; <code>torch.cuda.memory_reserved()</code> per rank (OOM precursor)." },
+    ],
+    metrics: [
+      ["rank_heartbeat_delta", "every 1s", "> 60s → straggler"],
+      ["per_rank_active_tokens", "per step", "0 on any rank → empty batch"],
+      ["cuda_memory_reserved", "per step", "approaching cap → OOM risk"],
+      ["NCCL_TIMEOUT_MS", "config", "= 300000 (5 min), not 1800000"],
+    ],
+  },
+  {
+    id: "clip-every-step",
+    label: "Grad Clip Every Step",
+    code: "clipped_fraction == 1",
+    title: "Gradient clipping triggers every step",
+    steps: [
+      { tag: "inv", text: "<b>Invariant broken.</b> In a stable run, <code>clipped_fraction</code> (fraction of steps where pre-clip norm exceeded threshold) is &lt; 5%. At 100% the clip threshold is below the natural scale of the gradient; the optimizer is always scaling to the threshold regardless of the real signal." },
+      { tag: "diag", text: "<b>Diagnostic tree.</b> (1) Threshold set too low, e.g. 0.1 instead of 1.0 — ch-07 §2 plateau cause. (2) Upstream bug producing genuine gradient explosion: softmax overflow, bad init, LR too high. (3) FSDP global-norm pitfall — <code>clip_grad_norm_</code> called on local shards under-counts the norm, reports a mis-scaled value, and you chase a ghost ([[gradient-clipping]])." },
+      { tag: "fix", text: "<b>Fix.</b> First rule out (3): use <code>FSDP.clip_grad_norm_</code> or DeepSpeed's equivalent, never a per-shard loop. Then inspect the raw <code>pre_clip</code> distribution: if modal norm is ~2 and threshold is 0.1, raise to 1.0. If modal norm is ~100, you have a real explosion — check softmax outputs and LR schedule before touching the clip." },
+      { tag: "log", text: "<b>Log that would have caught it sooner.</b> <code>pre_clip_grad_norm</code> histogram (not just scalar mean). A log-scale hist collapses the 2-vs-100 distinction to visual inspection." },
+    ],
+    metrics: [
+      ["clipped_fraction", "per step", "> 0.5 sustained → investigate"],
+      ["pre_clip_grad_norm histogram", "every 50", "reveals modal scale"],
+      ["||W_embed||", "every ckpt", "rising → real explosion"],
+      ["lr", "per step", "elevated vs schedule → ordering bug"],
+    ],
+  },
+  {
+    id: "entropy-collapse",
+    label: "Entropy Collapse (RL)",
+    code: "H(π) → < 0.1 nats",
+    title: "Entropy collapse in PPO / GRPO rollouts",
+    steps: [
+      { tag: "inv", text: "<b>Invariant broken.</b> Per-token entropy <code>H(π)</code> stays above ~0.5 nats through convergence. Sudden inflection to &lt; 0.1 nats is collapse, not convergence ([[entropy-collapse-ppo]])." },
+      { tag: "diag", text: "<b>Diagnostic tree ([[openrlhf-entropy-debugging]] canonical triage).</b> (1) confirm KL-to-reference is on and finite; (2) bump rollout temperature by 0.1–0.2; (3) raise entropy coefficient an order of magnitude; (4) check advantage normalization per-batch zero-mean unit-var (ON in OpenRLHF/verl, OFF in TRL — recurring footgun); (5) only then suspect the reward signal." },
+      { tag: "fix", text: "<b>Fix.</b> Apply triage in order of cost (above). For TRL runs, <code>advantage_normalization=True</code> is usually the whole fix. For a brand-new reward function, default KL β to 0.01–0.1 of the reward scale and switch to adaptive-KL." },
+      { tag: "log", text: "<b>Log that would have caught it sooner.</b> per-token entropy per update (sudden inflection is visually obvious); per-token KL to reference; PPO ratio max (NaN in ratio = policy collapse mechanism); response-length histogram (reward hacking correlate)." },
+    ],
+    metrics: [
+      ["per_token_entropy", "per update", "< 0.1 nats or inflection"],
+      ["KL(π||π_ref)", "per update", "monotone rising past target"],
+      ["PPO_ratio.max", "per update", "> 10 → skip-step"],
+      ["advantage.std", "per batch", "< 1e-4 → /0 risk"],
+      ["response_length", "every 50", "bimodal → reward hacking"],
+    ],
+  },
+];
+
+const symList = document.getElementById("symList");
+const branchTitle = document.getElementById("branchTitle");
+const branchBody = document.getElementById("branchBody");
+
+SYMPTOMS.forEach(s => {
+  const li = document.createElement("li");
+  li.className = "sym-item";
+  li.dataset.id = s.id;
+  li.innerHTML = `<span>${s.label}</span><span class="sym-code">${s.code}</span>`;
+  li.addEventListener("click", () => selectSymptom(s.id));
+  symList.appendChild(li);
+});
+
+function selectSymptom(id) {
+  const s = SYMPTOMS.find(x => x.id === id);
+  if (!s) return;
+  document.querySelectorAll(".sym-item").forEach(el => {
+    el.classList.toggle("active", el.dataset.id === id);
+  });
+  branchTitle.innerHTML = `${s.title} <span class="symptom-badge">${s.code}</span>`;
+  const TAG_NAMES = { inv: "invariant", diag: "diagnose", fix: "fix", log: "log" };
+  const stepsHtml = s.steps.map(step => {
+    const t = TAG_NAMES[step.tag] || step.tag;
+    return `<div class="step"><span class="label tag-${step.tag}">${t}</span> ${step.text}</div>`;
+  }).join("");
+  const metricRows = s.metrics.map(([m, c, a]) =>
+    `<tr><td><code>${m}</code></td><td>${c}</td><td>${a}</td></tr>`
+  ).join("");
+  const metricHtml = `
+    <h3>Minimum logged metrics for this branch</h3>
+    <table class="metric-table">
+      <thead><tr><th>Metric</th><th>Cadence</th><th>Alarm condition</th></tr></thead>
+      <tbody>${metricRows}</tbody>
+    </table>`;
+  branchBody.innerHTML = stepsHtml + metricHtml;
+}
+
+selectSymptom("loss-nan");
+</script>
+
+</body>
+</html>

@@ -1,0 +1,320 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Data Operations Pipeline — raw shards → trainer</title>
+<style>
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+         max-width: 1180px; margin: 1.5em auto; padding: 0 1em; color: #222;
+         background: #fafafa; }
+  h1 { font-size: 1.35em; margin-bottom: 0.2em; }
+  .subtitle { color: #666; margin-top: 0; font-size: 0.92em; }
+  .layout { display: grid; grid-template-columns: 1.05fr 1.15fr; gap: 1.1em;
+            margin-top: 1em; }
+  .panel { border: 1px solid #dcdcdc; border-radius: 6px; background: #fff;
+           padding: 0.9em 1.1em; }
+  h2 { font-size: 1.02em; margin: 0 0 0.6em 0; color: #333;
+       border-bottom: 1px solid #eee; padding-bottom: 0.3em; }
+  .pipeline { display: flex; flex-direction: column; gap: 4px; }
+  .stage { display: grid; grid-template-columns: 28px 1fr auto; gap: 0.5em;
+           align-items: center; padding: 0.55em 0.7em;
+           border: 1px solid #ccd; border-radius: 6px; background: #f6f8fd;
+           cursor: pointer; user-select: none; transition: background 0.12s; }
+  .stage:hover { background: #eef3ff; }
+  .stage.active { background: #dde8ff; border-color: #556; }
+  .stage .idx { font-family: 'SF Mono', Menlo, monospace; font-size: 0.78em;
+                color: #557; background: #e4ebff; border-radius: 3px;
+                padding: 2px 6px; text-align: center; }
+  .stage .nm { font-weight: 600; font-size: 0.92em; color: #223; }
+  .stage .desc { font-size: 0.75em; color: #666; display: block; margin-top: 1px; }
+  .stage .thr { font-family: 'SF Mono', Menlo, monospace; font-size: 0.74em;
+                color: #4a633a; background: #eaf5e2; border-radius: 3px;
+                padding: 2px 6px; white-space: nowrap; }
+  .arrow { text-align: center; color: #99a; font-size: 0.85em; padding: 0; }
+  .detail h3 { font-size: 0.96em; margin: 0 0 0.25em 0; color: #223; }
+  .detail .lead { font-size: 0.85em; color: #456; margin-bottom: 0.8em;
+                  line-height: 1.45; }
+  .section { margin-top: 0.7em; }
+  .section-title { font-size: 0.75em; text-transform: uppercase; letter-spacing: 0.5px;
+                   color: #667; margin-bottom: 0.35em; font-weight: 600; }
+  .kv { display: grid; grid-template-columns: 115px 1fr; gap: 0.3em 0.7em;
+        font-size: 0.82em; }
+  .kv dt { color: #667; }
+  .kv dd { margin: 0; color: #223; font-family: 'SF Mono', Menlo, monospace;
+           font-size: 0.78em; }
+  .attrs { list-style: none; padding: 0; margin: 0; }
+  .attrs li { border-left: 3px solid #89a; background: #f4f7fa;
+              padding: 0.35em 0.6em; margin-bottom: 0.3em;
+              font-size: 0.8em; line-height: 1.4; border-radius: 3px; }
+  .attrs li code { background: #e4ebff; padding: 1px 4px; border-radius: 3px;
+                   font-family: 'SF Mono', Menlo, monospace; font-size: 0.85em;
+                   color: #335; }
+  .failures { list-style: none; padding: 0; margin: 0; }
+  .failures li { border-left: 3px solid #c84040; background: #fff6f6;
+                 padding: 0.45em 0.65em; margin-bottom: 0.35em;
+                 font-size: 0.8em; line-height: 1.45; border-radius: 3px; }
+  .failures li .ft { font-weight: 600; color: #8b1a1a; display: block;
+                     margin-bottom: 2px; }
+  .failures li .sym { color: #555; font-style: italic; font-size: 0.92em;
+                      display: block; margin-top: 4px; }
+  .note { font-size: 0.78em; color: #667; margin-top: 1.1em; line-height: 1.5; }
+  code.lin { background: #eef; padding: 1px 4px; border-radius: 3px;
+             font-family: 'SF Mono', Menlo, monospace; font-size: 0.82em;
+             color: #335; }
+  .hint { font-size: 0.8em; color: #778; font-style: italic; margin-top: 0.7em; }
+</style>
+</head>
+<body>
+
+<h1>Production Data Pipeline — raw shards to trainer</h1>
+<p class="subtitle">
+  Click any stage on the left. The right panel shows the lineage attributes that stage
+  emits, typical throughput at 15T-token pretrain scale, and the operational failure
+  modes with their observable symptoms. Sources: FineWeb (15T), Llama 3 (15.6T),
+  DeepSeek-V3 (14.8T), Dolma, OLMo 3 model-flow.
+</p>
+
+<div class="layout">
+
+  <div class="panel">
+    <h2>Pipeline stages</h2>
+    <div class="pipeline" id="pipeline"></div>
+    <p class="hint">Each arrow is a <code class="lin">(doc_id, attr) → (doc_id, attr')</code> append. No stage rewrites the doc-id.</p>
+  </div>
+
+  <div class="panel detail" id="detail">
+    <!-- populated by JS -->
+  </div>
+
+</div>
+
+<div class="note">
+  Throughput figures are order-of-magnitude estimates composed from FineWeb's
+  <code class="lin">datatrove</code> report, Llama 3's pretrain compute disclosure,
+  and OLMo 3's "1024 H100" pretrain budget. Your numbers will vary by 2-3x depending
+  on I/O substrate and CPU fleet; the <i>ordering</i> of stages by throughput
+  (tokenize ≫ classifier ≫ exec-filter) is the invariant worth remembering.
+</div>
+
+<script>
+const STAGES = [
+  {
+    id: "raw",
+    name: "Raw shards",
+    desc: "content-addressed by BLAKE3 of original bytes",
+    throughput: "2 GB/s per node",
+    detail: {
+      lead: "Starting substrate. One raw document per line in parquet or tar shards, keyed by doc_id = BLAKE3(bytes). Immutable. Re-crawling the same URL tomorrow produces the same doc_id iff bytes are identical. This is the primary key every downstream attribute references.",
+      attrs: [
+        "<code>doc_id</code>: 32-byte BLAKE3 hash of raw UTF-8 bytes",
+        "<code>url</code>, <code>crawl_date</code>, <code>snapshot_id</code> (e.g. CC-MAIN-2024-30)",
+        "<code>source_bucket</code>: web / code / books / academic / social"
+      ],
+      failures: [
+        { t: "Silent re-crawl of mutated content", b: "Same URL, different bytes, different doc_id. Shows up as 'new documents' in a snapshot that is supposed to be stable. Fix: never treat URL as the primary key — only BLAKE3.", s: "Symptom: dedup cluster sizes grow 1–3% month-over-month without explanation." },
+        { t: "Unicode normalization drift", b: "NFC vs NFD normalization changes bytes, changes doc_id. Pin one normalization globally before any hashing.", s: "Symptom: identical-looking documents get different hashes; downstream dedup misses them." }
+      ]
+    }
+  },
+  {
+    id: "filter1",
+    name: "Filter stage 1 (language + quality)",
+    desc: "fastText lang-ID, Gopher heuristics, C4 rules",
+    throughput: "500 MB/s per node",
+    detail: {
+      lead: "First pass drops roughly 60-70% of raw web text. CCNet skeleton: language ID via fastText, then heuristic quality filters (line length, symbol ratio, stopword ratio, terminal punctuation). Attribute file is additive — the raw shards are untouched.",
+      attrs: [
+        "<code>lang</code>: ISO code + confidence score",
+        "<code>gopher_quality</code>: composite score ∈ [0, 1]",
+        "<code>c4_rules</code>: per-heuristic boolean array [pass, pass, fail, pass, ...]",
+        "<code>length_stats</code>: mean_line_length, max_line_length, n_words"
+      ],
+      failures: [
+        { t: "Language-ID confusion on code-mixed text", b: "Singlish, Hinglish, French-in-English documents get low English confidence and are dropped — but they carry real signal. Fix: downstream union of lang ∈ {en, en-mix} bucket.", s: "Symptom: downstream MMLU fine on English but IFEval multilingual regresses." },
+        { t: "Gopher threshold set on the wrong distribution", b: "Threshold tuned on a clean validation set, applied to noisy raw web. Loses 5–10% of good documents.", s: "Symptom: ablation shows threshold=0.7 and threshold=0.8 give similar MMLU but the 0.7 run gets +0.3% on knowledge-heavy subsets." }
+      ]
+    }
+  },
+  {
+    id: "filter2",
+    name: "Filter stage 2 (content + PII)",
+    desc: "toxic classifier, PII regex cascade, opt-out",
+    throughput: "200 MB/s per node (Tier 2); 20 MB/s (Tier 3)",
+    detail: {
+      lead: "Content + PII filtering. Dolma's three-tier cascade: regex for email/IP/phone (Tier 1, every doc), NER classifier on flagged documents (Tier 2, ~5%), LLM classifier audit (Tier 3, ~1%). Opt-out registry applied as a bloom filter at read time. Every removal is logged to attributes/pii.",
+      attrs: [
+        "<code>pii.emails</code>, <code>pii.phones</code>, <code>pii.ips</code>: counts",
+        "<code>pii.removed_spans</code>: [[start, end, category, tier], ...]",
+        "<code>toxic.hate</code>, <code>toxic.nsfw</code>: classifier scores",
+        "<code>optout.matched</code>: boolean — if true, doc fully dropped",
+        "<code>audit.log_offset</code>: pointer into the PII-removal event log"
+      ],
+      failures: [
+        { t: "Regex false-negative on obfuscated span", b: "john [at] gmail [dot] com or phone written as 'one two three dash...'. Tier 1 misses; Tier 2/3 catch some. Regulator-facing residual risk.", s: "Symptom: post-hoc audit finds PII in released checkpoint; issue a take-down of affected shards." },
+        { t: "PII removal creates new near-duplicates", b: "Two docs that differed only in a scrubbed email are now identical. If PII runs AFTER dedup, these are missed. Must run PII before dedup.", s: "Symptom: dedup cluster sizes drop when PII stage is reordered — diagnostic run is the only way to catch this." },
+        { t: "Opt-out registry stale", b: "New opt-out request comes in mid-pretrain; registry not reloaded; doc survives in the already-tokenized shards.", s: "Symptom: legal surfaces a complaint weeks later, and the doc is already in the checkpoint." }
+      ]
+    }
+  },
+  {
+    id: "dedup",
+    name: "Dedup (exact + MinHash per-dump)",
+    desc: "hash-based exact, MinHash near-dup, cluster IDs",
+    throughput: "100 MB/s per node",
+    detail: {
+      lead: "Two-level dedup: exact (bloom filter on doc-BLAKE3) then approximate (MinHash + LSH, signature size 128–256). FineWeb's result: per-dump MinHash outperforms global dedup on downstream MMLU. Dedup output is a cluster_id per doc; keeping one representative per cluster is a query.",
+      attrs: [
+        "<code>dedup.exact_duplicate_of</code>: doc_id or null",
+        "<code>dedup.minhash_sig</code>: uint64[128]",
+        "<code>dedup.cluster_id</code>: per-dump cluster",
+        "<code>dedup.cluster_rank</code>: 0 = keep, >0 = drop in this mix"
+      ],
+      failures: [
+        { t: "Global dedup removes legitimate rare documents", b: "A high-quality document appearing in 3 CC snapshots gets dedupped to 1 copy globally, but each snapshot is sampled separately at training time — net effect is under-representation. FineWeb's per-dump result.", s: "Symptom: MMLU drops ~0.5% vs per-dump variant; only visible with an ablation run." },
+        { t: "Bloom filter saturation", b: "At >10B unique docs, a false-positive rate of 1% starts dropping real documents. Size the bloom to the true cardinality.", s: "Symptom: exact-dedup rate plateaus at ~99% instead of the expected 95–97%." },
+        { t: "MinHash signature collision tunable too loose", b: "Jaccard ≥ 0.8 threshold discards near-paraphrases that are actually different documents (different URLs, same news story). Affects news-heavy subsets most.", s: "Symptom: news / social bucket shrinks 20%+ after MinHash, other buckets <5%." }
+      ]
+    }
+  },
+  {
+    id: "tokenize",
+    name: "Tokenize",
+    desc: "byte-level BPE, 128K vocab, SentencePiece",
+    throughput: "300 MB/s per CPU-node; GPU tokenizers 10× faster",
+    detail: {
+      lead: "Text → int32 token ids. The tokenizer is the first artifact that's locked: its BLAKE3 hash is embedded in every downstream shard. Offline tokenization is 4× faster for the trainer than on-the-fly, at the cost of a full-corpus rewrite if the tokenizer ever changes. Reserved slots (`<|reserved_0|>` … `<|reserved_N|>`) are preserved for later SFT.",
+      attrs: [
+        "<code>tok.tokenizer_id</code>: BLAKE3(tokenizer.json)",
+        "<code>tok.n_tokens</code>: int",
+        "<code>tok.reserved_map</code>: JSON {name → id} for reserved slots",
+        "<code>tok.byte_fallback</code>: bool"
+      ],
+      failures: [
+        { t: "Tokenizer version mismatch between pretrain and SFT", b: "SFT run reuses pretrain shards but with a re-trained tokenizer (more special tokens). Token IDs are different; model trains on garbage for first 1000 steps. Fix: assert tokenizer_id == checkpoint.tokenizer_id at load.", s: "Symptom: SFT loss starts above pretrain final loss and never recovers." },
+        { t: "New language in Stage 2 without byte fallback", b: "Stage 1 English-only tokenizer can't encode Korean; Stage 2 adds Korean data; tokenizer fails with 'unknown byte'. With byte_fallback=True this degrades gracefully; without it, trainer crashes.", s: "Symptom: dataloader throws OOV errors on 5% of batches." },
+        { t: "No reserved slots — must extend vocab for <think>", b: "Post-pretrain vocab extension without mean-of-neighbors init drifts chat template for ~1000 SFT steps. See read.md §5.", s: "Symptom: ||E_in[<think>]|| is 30× smaller than median embedding norm at SFT start." }
+      ]
+    }
+  },
+  {
+    id: "shuffle",
+    name: "Shuffle",
+    desc: "per-rank deterministic RNG, mix-pointer",
+    throughput: "limited by sort/merge, not I/O",
+    detail: {
+      lead: "Global shuffle is expensive; standard recipe is 'shard-level shuffle + intra-shard shuffle with a local RNG seeded from (rank, epoch)'. Mosaic Streaming keeps dataloader state = (rank_shard_list, within_shard_offset, rng_seed); this fits in a few KB and round-trips cleanly on resume (see ch-06 §5.1).",
+      attrs: [
+        "<code>shuf.seed</code>: int, derived from config",
+        "<code>shuf.scheme</code>: 'shard_local' | 'global' | 'none'",
+        "<code>mix.pointer</code>: which mix-stage this shard belongs to (Dolma 3 / Dolmino / Longmino / ...)"
+      ],
+      failures: [
+        { t: "Non-deterministic shuffle → resume replays", b: "Shuffle uses time-based RNG; resume produces a different permutation; trainer replays already-seen tokens. Single most dangerous silent failure.", s: "Symptom: loss drops ~0.01 for 500 steps after resume, then drifts upward." },
+        { t: "Missing mix-pointer", b: "OLMo 3 model-flow has multiple stages (Dolma 3 → Dolmino → Longmino), each with a different mix. Resume without mix-pointer reverses the curriculum.", s: "Symptom: long-context eval regresses during a resumed long-context stage." }
+      ]
+    }
+  },
+  {
+    id: "pack",
+    name: "Pack (MDS shards, 200MB)",
+    desc: "sequence packing, uniform shard size",
+    throughput: "1 GB/s per node",
+    detail: {
+      lead: "Sequence-pack tokenized documents into fixed-size training examples (typical: 8192 tokens per example). Emit MDS shards at uniform 200 MB each — the sweet spot FineWeb reports (99% of shards within 1.5× median). Too small: open/close overhead dominates. Too large: stragglers.",
+      attrs: [
+        "<code>pack.shard_path</code>, <code>pack.shard_offset</code>: where this doc lives in the final corpus",
+        "<code>pack.seq_len</code>: length of packed example",
+        "<code>pack.cross_sample_mask</code>: attention-mask encoding sample boundaries",
+        "<code>pack.shard_size_bytes</code>: for uniformity QA"
+      ],
+      failures: [
+        { t: "Uneven shard sizes → straggler worker", b: "One shard 5 GB, one shard 10 MB. Rank holding the 5 GB shard blocks the step. 1024-way DP amplifies this.", s: "Symptom: GPU util drops 20% once per epoch when the big shard is picked." },
+        { t: "Cross-sample attention leak", b: "Packed examples require attention masks that forbid cross-sample attention. Bug: mask missing, model silently attends across document boundaries. ch-07 material.", s: "Symptom: perplexity on held-out *unpacked* data is ~5% worse than on packed — only visible with the right eval." }
+      ]
+    }
+  },
+  {
+    id: "train",
+    name: "Trainer",
+    desc: "reads (doc_id → shard_offset) map",
+    throughput: "40 GB/s aggregate at 1024 H100s",
+    detail: {
+      lead: "The final consumer. The trainer loads a <code>(rank_shard_list, within_shard_offset)</code> state into its dataloader and streams int32 token tensors. The full data graph collapses to one map: <code>doc_id → (shard_path, offset)</code>. Everything upstream of this is reproducible from the attribute files.",
+      attrs: [
+        "<code>train.run_id</code>: BLAKE3 of (mix_query, tokenizer_id, code_sha)",
+        "<code>train.step</code>: global step",
+        "<code>train.mix_pointer</code>: current stage"
+      ],
+      failures: [
+        { t: "Mix query not versioned", b: "'The mix' is a script or notebook, not a committed file. Reproducing the mix six months later requires archaeology. Fix: mix query = file in training config repo, hashed into run_id.", s: "Symptom: cannot reproduce the run; new run produces 0.5%+ different eval scores." },
+        { t: "Attribute files deleted to save storage", b: "Someone frees disk by rm'ing attributes/. Future re-derivation of a filtered subset now requires rerunning the filters from scratch.", s: "Symptom: dataset re-derivation project quoted at 2 weeks of compute instead of 2 hours of query." }
+      ]
+    }
+  }
+];
+
+const pipeline = document.getElementById("pipeline");
+const detail   = document.getElementById("detail");
+
+STAGES.forEach((s, i) => {
+  const el = document.createElement("div");
+  el.className = "stage";
+  el.dataset.idx = i;
+  el.innerHTML = `
+    <span class="idx">${i + 1}</span>
+    <div>
+      <span class="nm">${s.name}</span>
+      <span class="desc">${s.desc}</span>
+    </div>
+    <span class="thr">${s.throughput}</span>
+  `;
+  el.addEventListener("click", () => select(i));
+  pipeline.appendChild(el);
+  if (i < STAGES.length - 1) {
+    const a = document.createElement("div");
+    a.className = "arrow";
+    a.textContent = "▼";
+    pipeline.appendChild(a);
+  }
+});
+
+function select(i) {
+  document.querySelectorAll(".stage").forEach(el => {
+    el.classList.toggle("active", +el.dataset.idx === i);
+  });
+  const s = STAGES[i];
+  const d = s.detail;
+  detail.innerHTML = `
+    <h3>${s.name}</h3>
+    <div class="lead">${d.lead}</div>
+    <div class="section">
+      <div class="section-title">Typical at 15T-token pretrain scale</div>
+      <dl class="kv">
+        <dt>Throughput</dt><dd>${s.throughput}</dd>
+        <dt>Stage index</dt><dd>${i + 1} of ${STAGES.length}</dd>
+      </dl>
+    </div>
+    <div class="section">
+      <div class="section-title">Lineage attributes emitted</div>
+      <ul class="attrs">
+        ${d.attrs.map(a => `<li>${a}</li>`).join("")}
+      </ul>
+    </div>
+    <div class="section">
+      <div class="section-title">Common operational failures</div>
+      <ul class="failures">
+        ${d.failures.map(f => `
+          <li>
+            <span class="ft">${f.t}</span>${f.b}
+            ${f.s ? `<span class="sym">${f.s}</span>` : ""}
+          </li>`).join("")}
+      </ul>
+    </div>
+  `;
+}
+
+select(0);
+</script>
+
+</body>
+</html>

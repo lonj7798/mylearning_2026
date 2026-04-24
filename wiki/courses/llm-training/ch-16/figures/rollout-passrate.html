@@ -1,0 +1,271 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Rollout pass-rate filter — where the gradient signal lives</title>
+<style>
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; max-width: 1080px; margin: 2em auto; padding: 0 1em; color: #222; background: #fafafa; }
+  h1 { font-size: 1.35em; margin-bottom: 0.2em; }
+  .subtitle { color: #666; margin-top: 0; font-size: 0.95em; }
+  .layout { display: grid; grid-template-columns: 1.3fr 1fr; gap: 1.2em; margin-top: 1.2em; }
+  .panel { border: 1px solid #dcdcdc; border-radius: 6px; background: #fff; padding: 0.9em 1.1em; }
+  h2 { font-size: 1.05em; margin: 0 0 0.6em 0; color: #333; border-bottom: 1px solid #eee; padding-bottom: 0.3em; }
+  canvas { display: block; width: 100%; height: 260px; }
+  .sliders { margin-top: 0.8em; display: grid; grid-template-columns: 1fr; gap: 0.5em; }
+  .slider-row { display: grid; grid-template-columns: 90px 1fr 56px; align-items: center; gap: 0.7em; }
+  .slider-row label { font-size: 0.9em; color: #333; font-weight: 600; }
+  .slider-row .val  { font-family: 'SF Mono', Menlo, monospace; color: #555; font-size: 0.88em; text-align: right; }
+  input[type=range] { width: 100%; }
+  .stats { list-style: none; padding: 0; margin: 0; }
+  .stats li { display: flex; justify-content: space-between; padding: 0.35em 0.1em; border-bottom: 1px dashed #eee; font-size: 0.92em; }
+  .stats li:last-child { border-bottom: none; }
+  .stats .k { color: #333; font-weight: 600; }
+  .stats .v { font-family: 'SF Mono', Menlo, monospace; color: #1b5e20; }
+  .stats .v.warn { color: #7a4a00; } .stats .v.bad { color: #8b1a1a; }
+  .note { font-size: 0.82em; color: #666; margin-top: 1em; line-height: 1.5; }
+  .zone { font-size: 0.85em; padding: 0.5em 0.7em; margin-top: 0.5em; border-left: 3px solid #888; background: #f6f6f6; border-radius: 3px; }
+  .zone.lo { border-left-color: #8b1a1a; background: #fff6f6; }
+  .zone.hi { border-left-color: #7a4a00; background: #fffaf0; }
+  .zone.ok { border-left-color: #1b5e20; background: #f2f8f3; }
+  button { font-size: 0.85em; padding: 4px 10px; margin-right: 0.4em; border: 1px solid #bbb; background: #f4f4f4; border-radius: 4px; cursor: pointer; }
+  button:hover { background: #e8e8e8; }
+  .presets { margin-top: 0.6em; font-size: 0.85em; }
+  code { background: #eef; padding: 1px 4px; border-radius: 3px; font-family: 'SF Mono', Menlo, monospace; font-size: 0.85em; }
+</style>
+</head>
+<body>
+
+<h1>Rollout pass-rate filter — where the gradient signal lives</h1>
+<p class="subtitle">
+  1000 simulated prompts with pass-rates drawn from a beta-mixture
+  (reflecting real RL pools: many near-easy, many near-impossible, a thin
+  middle). Drag <code>p_lo</code> and <code>p_hi</code> to set the keep-band.
+  The right panel updates kept count, mean reward variance
+  <code>p(1&minus;p)</code> on the kept set, and the zero-gradient zones
+  dropped on each side.
+</p>
+
+<div class="layout">
+
+  <div class="panel">
+    <h2>Pass-rate distribution (1000 prompts)</h2>
+    <canvas id="hist" width="700" height="260"></canvas>
+    <div class="sliders">
+      <div class="slider-row">
+        <label for="lo">p_lo</label>
+        <input type="range" id="lo" min="0" max="100" value="10">
+        <span class="val" id="loVal">0.10</span>
+      </div>
+      <div class="slider-row">
+        <label for="hi">p_hi</label>
+        <input type="range" id="hi" min="0" max="100" value="90">
+        <span class="val" id="hiVal">0.90</span>
+      </div>
+    </div>
+    <div class="presets">
+      <button data-lo="10" data-hi="90">Tülu-3 fixed band</button>
+      <button data-lo="5"  data-hi="50">Kimi K1.5 hard-skew</button>
+      <button data-lo="20" data-hi="80">Cold-start safe</button>
+      <button data-lo="0"  data-hi="100">No filter</button>
+    </div>
+  </div>
+
+  <div>
+    <div class="panel">
+      <h2>Kept-set stats</h2>
+      <ul class="stats" id="stats"></ul>
+    </div>
+
+    <div class="panel" style="margin-top: 1em;">
+      <h2>Zones you are dropping</h2>
+      <div id="zones"></div>
+    </div>
+  </div>
+
+</div>
+
+<div class="note">
+  Under GRPO/RLOO the per-prompt gradient is proportional to reward variance
+  across rollouts. For binary verifiers, variance is <code>p(1&minus;p)</code> —
+  peaks at <code>p = 0.5</code>, goes to 0 at <code>p = 0</code> and
+  <code>p = 1</code>. A prompt with <code>p ≈ 0</code> or
+  <code>p ≈ 1</code> wastes rollouts. Source:
+  <code>[[replay-buffer-rlhf]]</code>, <code>[[kimi-k1-5]]</code>,
+  <code>[[minibatch-sharing-rl]]</code>,
+  <code>[[reinforcement-learning-with-one-training-example]]</code>.
+</div>
+
+<script>
+// deterministic PRNG (mulberry32) so the histogram is reproducible
+function mulberry32(a) { return function() {
+  a |= 0; a = (a + 0x6D2B79F5) | 0; let t = a;
+  t = Math.imul(t ^ (t >>> 15), t | 1);
+  t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+  return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+}; }
+const rand = mulberry32(20260423);
+
+// Beta(a,b) via gamma-ratio; Ga via Marsaglia-Tsang.
+function gammaSample(shape) {
+  if (shape < 1) return gammaSample(shape + 1) * Math.pow(rand(), 1 / shape);
+  const d = shape - 1/3, c = 1 / Math.sqrt(9 * d);
+  while (true) {
+    let x, v;
+    do {
+      const u1 = rand(), u2 = rand();
+      x = Math.sqrt(-2 * Math.log(u1)) * Math.cos(2 * Math.PI * u2);
+      v = 1 + c * x;
+    } while (v <= 0);
+    v = v * v * v; const u = rand();
+    if (u < 1 - 0.0331 * x * x * x * x) return d * v;
+    if (Math.log(u) < 0.5 * x * x + d * (1 - v + Math.log(v))) return d * v;
+  }
+}
+const betaSample = (a, b) => { const ga = gammaSample(a), gb = gammaSample(b); return ga / (ga + gb); };
+
+// Mixture reflecting real RL pools: 35% easy Beta(7,2), 20% impossible
+// Beta(2,8), 30% useful Beta(4,4), 15% borderline Beta(2,2).
+const N = 1000, prompts = [];
+for (let i = 0; i < N; i++) {
+  const u = rand();
+  prompts.push(u < 0.35 ? betaSample(7, 2)
+             : u < 0.55 ? betaSample(2, 8)
+             : u < 0.85 ? betaSample(4, 4)
+             :            betaSample(2, 2));
+}
+
+// histogram bins
+const NBIN = 40, bins = new Array(NBIN).fill(0);
+prompts.forEach(p => { bins[Math.min(NBIN - 1, Math.floor(p * NBIN))]++; });
+
+// DOM refs
+const canvas = document.getElementById('hist'), ctx = canvas.getContext('2d');
+const loSlide = document.getElementById('lo'),  hiSlide = document.getElementById('hi');
+const loVal = document.getElementById('loVal'), hiVal = document.getElementById('hiVal');
+const statsUl = document.getElementById('stats'), zonesEl = document.getElementById('zones');
+
+document.querySelectorAll('.presets button').forEach(btn => {
+  btn.addEventListener('click', () => {
+    loSlide.value = btn.dataset.lo;
+    hiSlide.value = btn.dataset.hi;
+    render();
+  });
+});
+loSlide.addEventListener('input', render);
+hiSlide.addEventListener('input', render);
+
+function drawHist(lo, hi) {
+  const W = canvas.width, H = canvas.height;
+  ctx.clearRect(0, 0, W, H);
+  const padL = 40, padT = 10, padR = 10, padB = 30;
+  const plotW = W - padL - padR, plotH = H - padB - padT;
+  const maxBin = Math.max(...bins);
+  // axes
+  ctx.strokeStyle = '#888'; ctx.lineWidth = 1; ctx.beginPath();
+  ctx.moveTo(padL, padT); ctx.lineTo(padL, padT + plotH);
+  ctx.lineTo(padL + plotW, padT + plotH); ctx.stroke();
+  // bars — green if inside band, grey if excluded
+  const barW = plotW / NBIN;
+  for (let i = 0; i < NBIN; i++) {
+    const p = (i + 0.5) / NBIN, h = (bins[i] / maxBin) * plotH;
+    ctx.fillStyle = (p >= lo && p <= hi) ? '#1b5e20' : '#cfd4cf';
+    ctx.fillRect(padL + i * barW + 0.5, padT + plotH - h, barW - 1, h);
+  }
+  // p(1-p) variance overlay (max 0.25, scaled to 60% of plot height)
+  ctx.strokeStyle = '#b77a00'; ctx.lineWidth = 2; ctx.beginPath();
+  for (let i = 0; i <= 100; i++) {
+    const p = i / 100, v = p * (1 - p);
+    const x = padL + p * plotW, y = padT + plotH - (v / 0.25) * plotH * 0.6;
+    if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+  }
+  ctx.stroke();
+  // band threshold lines
+  ctx.strokeStyle = '#8b1a1a'; ctx.lineWidth = 1.5; ctx.setLineDash([4, 3]);
+  [lo, hi].forEach(t => {
+    const x = padL + t * plotW; ctx.beginPath();
+    ctx.moveTo(x, padT); ctx.lineTo(x, padT + plotH); ctx.stroke();
+  });
+  ctx.setLineDash([]);
+  // x-axis ticks + overlay label
+  ctx.fillStyle = '#555'; ctx.font = '11px sans-serif'; ctx.textAlign = 'center';
+  [0, 0.25, 0.5, 0.75, 1].forEach(t =>
+    ctx.fillText(t.toFixed(2), padL + t * plotW, padT + plotH + 14));
+  ctx.textAlign = 'left'; ctx.fillStyle = '#b77a00';
+  ctx.fillText('p(1−p) — reward variance', padL + 6, padT + 14);
+}
+
+function render() {
+  const lo = (+loSlide.value) / 100;
+  let hi   = (+hiSlide.value) / 100;
+  if (hi < lo) hi = lo;                // guard
+  loVal.textContent = lo.toFixed(2);
+  hiVal.textContent = hi.toFixed(2);
+
+  drawHist(lo, hi);
+
+  const kept   = prompts.filter(p => p >= lo && p <= hi);
+  const nKept  = kept.length;
+  const meanVar = nKept === 0 ? 0
+    : kept.reduce((s, p) => s + p * (1 - p), 0) / nKept;
+  const nearHalf = kept.filter(p => p >= 0.35 && p <= 0.65).length;
+  const droppedLow  = prompts.filter(p => p < lo).length;
+  const droppedHigh = prompts.filter(p => p > hi).length;
+
+  const warnVar = meanVar < 0.15 ? (meanVar < 0.08 ? 'bad' : 'warn') : '';
+  const warnKept = nKept < 100 ? (nKept < 30 ? 'bad' : 'warn') : '';
+
+  statsUl.innerHTML = `
+    <li><span class="k">Kept prompts</span>
+        <span class="v ${warnKept}">${nKept} / ${N}</span></li>
+    <li><span class="k">Mean reward variance p(1−p)</span>
+        <span class="v ${warnVar}">${meanVar.toFixed(3)} / 0.250</span></li>
+    <li><span class="k">Near-0.5 (p ∈ [0.35, 0.65])</span>
+        <span class="v">${nearHalf} prompts</span></li>
+    <li><span class="k">Dropped: too easy (p &gt; p_hi)</span>
+        <span class="v warn">${droppedHigh}</span></li>
+    <li><span class="k">Dropped: too hard (p &lt; p_lo)</span>
+        <span class="v warn">${droppedLow}</span></li>
+    <li><span class="k">Effective rollouts used (K=8)</span>
+        <span class="v">${(nKept * 8).toLocaleString()}</span></li>
+  `;
+
+  let zonesHtml = '';
+  if (droppedHigh > 0) {
+    zonesHtml += `<div class="zone hi">
+      <strong>High-pass zone (p &gt; ${hi.toFixed(2)}):</strong>
+      ${droppedHigh} prompts excluded. Under GRPO/RLOO these are
+      zero-variance groups — every rollout succeeds, <code>σ = 0</code>,
+      advantage is 0. Keeping them wastes <code>${droppedHigh * 8}</code>
+      rollouts per step with zero gradient payoff.
+    </div>`;
+  }
+  if (droppedLow > 0) {
+    zonesHtml += `<div class="zone lo">
+      <strong>Low-pass zone (p &lt; ${lo.toFixed(2)}):</strong>
+      ${droppedLow} prompts excluded. Zero-variance groups in the other
+      direction — every rollout fails. Additionally biases learned critics
+      toward pessimism (see §3.3 stale-advantage discussion).
+    </div>`;
+  }
+  if (nKept > 0 && meanVar > 0.18) {
+    zonesHtml += `<div class="zone ok">
+      <strong>Kept band is well-centered.</strong> Mean variance
+      ${meanVar.toFixed(3)} is close to the theoretical max of 0.250 at
+      <code>p = 0.5</code>. This is where policy-gradient estimators pay off.
+    </div>`;
+  }
+  if (nKept === 0) {
+    zonesHtml = `<div class="zone lo">
+      <strong>Empty keep-band.</strong> No prompts remain — the band is
+      unreachable under the current policy's pass-rate distribution.
+      Re-measure pass-rates, or widen the band, or replace the pool.
+    </div>`;
+  }
+  zonesEl.innerHTML = zonesHtml;
+}
+
+render();
+</script>
+
+</body>
+</html>

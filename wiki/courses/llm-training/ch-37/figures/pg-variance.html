@@ -1,0 +1,325 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<title>Policy-Gradient Variance — Baseline Comparison</title>
+<style>
+  * { box-sizing: border-box; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    background: #fafaf7; color: #1a1a1a;
+    margin: 0; padding: 24px; line-height: 1.45;
+    font-variant-numeric: tabular-nums;
+  }
+  h1 { font-size: 20px; margin: 0 0 8px 0; }
+  .sub { font-size: 13px; color: #555; margin: 0 0 20px 0; max-width: 880px; }
+  .wrap { max-width: 1060px; display: grid; grid-template-columns: 280px 1fr; gap: 24px; }
+  .panel { background: #fff; border: 1px solid #ddd; border-radius: 6px; padding: 16px 18px; }
+  .panel h2 { font-size: 14px; margin: 0 0 12px 0; }
+  .control { margin-bottom: 14px; }
+  .control label { display: block; font-size: 12px; color: #444; margin-bottom: 4px; }
+  .control .val { font-size: 12px; color: #222; font-weight: 600; margin-left: 6px; }
+  .control input[type=range] { width: 100%; }
+  .baseline-group { display: flex; flex-direction: column; gap: 4px; }
+  .baseline-group label {
+    font-size: 12px; padding: 6px 8px; border: 1px solid #ccc;
+    border-radius: 3px; cursor: pointer; background: #fbfbfb;
+    display: flex; align-items: center; gap: 8px;
+  }
+  .baseline-group label.active { background: #eaf0f7; border-color: #3a6ea5; }
+  .baseline-group input { margin: 0; }
+  .chart-wrap { position: relative; }
+  canvas { display: block; background: #fff; border: 1px solid #ddd; border-radius: 4px; }
+  .stats { margin-top: 12px; font-size: 12px; color: #333; }
+  .stats table { border-collapse: collapse; width: 100%; }
+  .stats th, .stats td { text-align: left; padding: 4px 8px; border-bottom: 1px solid #eee; }
+  .stats th { font-weight: 600; color: #555; font-size: 11px; }
+  .stats .num { text-align: right; font-variant-numeric: tabular-nums; }
+  .legend { display: flex; gap: 12px; margin: 8px 0 4px 0; font-size: 11px; color: #444; flex-wrap: wrap; }
+  .swatch { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 4px; vertical-align: middle; }
+  .caveat { font-size: 11px; color: #555; font-style: italic; margin-top: 14px; padding-top: 10px; border-top: 1px dashed #ccc; }
+  button { font-size: 12px; padding: 6px 10px; border: 1px solid #aaa; border-radius: 3px; background: #fff; cursor: pointer; }
+  button:hover { background: #f0f0f0; }
+</style>
+</head>
+<body>
+  <h1>Policy-gradient variance — baseline comparison</h1>
+  <div class="sub">
+    Simulated RLHF-style estimator. Each iteration draws <b>k</b> rollouts per prompt with per-sequence score gradient <code>g_i</code>
+    and scalar reward <code>R_i</code> ~ N(μ_R, σ_R²). The estimator is
+    <code>ĝ = (1/k) Σ_i (R_i − b_i) · g_i</code>. The chart plots the sample variance of <code>ĝ</code> over
+    <b>N</b> independent iterations for each baseline choice. Re-sample to see a different realisation.
+    <i>No model is trained;</i> this is a variance demonstration, not a training curve.
+  </div>
+
+  <div class="wrap">
+    <div class="panel">
+      <h2>Controls</h2>
+
+      <div class="control">
+        <label>Rollouts per prompt k <span class="val" id="kv">4</span></label>
+        <input type="range" id="k" min="1" max="16" value="4" step="1" />
+      </div>
+
+      <div class="control">
+        <label>Reward mean &mu;<sub>R</sub> <span class="val" id="muv">0.50</span></label>
+        <input type="range" id="mu" min="-2" max="2" value="0.5" step="0.1" />
+      </div>
+
+      <div class="control">
+        <label>Reward stdev &sigma;<sub>R</sub> <span class="val" id="sigv">1.00</span></label>
+        <input type="range" id="sig" min="0.1" max="3" value="1.0" step="0.05" />
+      </div>
+
+      <div class="control">
+        <label>Iterations N <span class="val" id="nv">400</span></label>
+        <input type="range" id="n" min="50" max="1200" value="400" step="50" />
+      </div>
+
+      <div class="control">
+        <label>Baselines shown</label>
+        <div class="baseline-group" id="bgroup">
+          <label class="active"><input type="checkbox" data-b="none" checked> none (raw REINFORCE)</label>
+          <label class="active"><input type="checkbox" data-b="const" checked> constant (running mean)</label>
+          <label class="active"><input type="checkbox" data-b="value" checked> learned value V<sub>&phi;</sub>(s)</label>
+          <label class="active"><input type="checkbox" data-b="loo" checked> leave-one-out across k rollouts</label>
+        </div>
+      </div>
+
+      <button id="resample">Re-sample</button>
+
+      <div class="caveat">
+        None = <code>b=0</code>. Constant = exponential-moving-average of <code>R</code> with coef 0.1
+        (Williams 1992 original REINFORCE baseline). Value = <code>V<sub>&phi;</sub>(s) = &mu;<sub>R</sub> + noise(&epsilon;)</code>
+        with &epsilon; = 0.3·&sigma;<sub>R</sub> (imperfect critic). Leave-one-out = <code>b<sub>i</sub> = (1/(k&minus;1))&Sigma;<sub>j&ne;i</sub> R<sub>j</sub></code> per [[rloo]].
+        For k=1 LOO is undefined and is hidden.
+      </div>
+    </div>
+
+    <div class="panel">
+      <h2>Sample variance of &gcirc; across N iterations</h2>
+      <div class="legend" id="legend"></div>
+      <div class="chart-wrap">
+        <canvas id="chart" width="680" height="360"></canvas>
+      </div>
+      <div class="stats">
+        <table>
+          <thead><tr><th>Baseline</th><th class="num">mean(&gcirc;)</th><th class="num">var(&gcirc;)</th><th class="num">rel. var vs none</th></tr></thead>
+          <tbody id="statsbody"></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+<script>
+(function(){
+  const C = {
+    none:  { color: "#a43a3a", label: "none" },
+    const: { color: "#c78a2d", label: "constant EMA" },
+    value: { color: "#3a6ea5", label: "value V_phi" },
+    loo:   { color: "#2d7a4a", label: "leave-one-out" },
+  };
+  const $ = id => document.getElementById(id);
+  const canvas = $("chart");
+  const ctx = canvas.getContext("2d");
+  const W = canvas.width, H = canvas.height;
+
+  // deterministic seed via LCG so "Re-sample" redraws with new seed but same RNG
+  let seed = 1;
+  function rnd(){ seed = (seed*1664525 + 1013904223) & 0xffffffff; return ((seed>>>0) / 0xffffffff); }
+  function gauss(){ // Box-Muller
+    let u=0,v=0; while(u===0) u=rnd(); while(v===0) v=rnd();
+    return Math.sqrt(-2*Math.log(u)) * Math.cos(2*Math.PI*v);
+  }
+
+  function readCfg(){
+    const checked = Array.from(document.querySelectorAll("#bgroup input"))
+      .filter(el => el.checked).map(el => el.dataset.b);
+    return {
+      k: +$("k").value,
+      mu: +$("mu").value,
+      sig: +$("sig").value,
+      N: +$("n").value,
+      baselines: checked
+    };
+  }
+
+  // Score gradient g_i: we use a scalar surrogate for |∇log π|^2 contribution.
+  // We draw g_i ~ N(0, 1) independent of R_i (action-independent baseline identity
+  // still holds in expectation). Estimator ĝ = (1/k) Σ (R_i - b_i) g_i.
+  function estimateOne(k, mu, sig, baseline, emaState){
+    let gs = new Array(k), Rs = new Array(k);
+    for (let i=0;i<k;i++){ gs[i] = gauss(); Rs[i] = mu + sig*gauss(); }
+    let bvec = new Array(k);
+    if (baseline === "none"){ for (let i=0;i<k;i++) bvec[i]=0; }
+    else if (baseline === "const"){
+      // EMA of reward as scalar baseline
+      const meanR = Rs.reduce((a,b)=>a+b,0)/k;
+      emaState.ema = 0.9*emaState.ema + 0.1*meanR;
+      for (let i=0;i<k;i++) bvec[i] = emaState.ema;
+    }
+    else if (baseline === "value"){
+      // imperfect critic that equals μ_R plus noise per prompt (shared across rollouts)
+      const eps = 0.3*sig*gauss();
+      const V = mu + eps;
+      for (let i=0;i<k;i++) bvec[i] = V;
+    }
+    else if (baseline === "loo"){
+      if (k < 2){ for (let i=0;i<k;i++) bvec[i] = 0; }
+      else {
+        const total = Rs.reduce((a,b)=>a+b,0);
+        for (let i=0;i<k;i++) bvec[i] = (total - Rs[i])/(k-1);
+      }
+    }
+    let ghat = 0;
+    for (let i=0;i<k;i++) ghat += (Rs[i] - bvec[i]) * gs[i];
+    ghat /= k;
+    return ghat;
+  }
+
+  function simulate(cfg){
+    const out = {};
+    for (const b of cfg.baselines){
+      // re-seed per-baseline from same base seed for fair comparison
+      seed = cfg._seed;
+      const ema = {ema: cfg.mu};
+      const samples = [];
+      for (let t=0;t<cfg.N;t++){
+        const g = estimateOne(cfg.k, cfg.mu, cfg.sig, b, ema);
+        samples.push(g);
+      }
+      out[b] = samples;
+    }
+    return out;
+  }
+
+  function runningVar(arr, win){
+    // rolling sample variance over window `win`
+    const out = new Array(arr.length).fill(0);
+    for (let i=0;i<arr.length;i++){
+      const lo = Math.max(0, i-win+1);
+      const slice = arr.slice(lo, i+1);
+      const m = slice.reduce((a,b)=>a+b,0)/slice.length;
+      let v = 0; for (const x of slice) v += (x-m)*(x-m);
+      out[i] = slice.length > 1 ? v/(slice.length-1) : 0;
+    }
+    return out;
+  }
+
+  function drawAxes(maxY){
+    ctx.clearRect(0,0,W,H);
+    const pad = {l: 56, r: 16, t: 16, b: 36};
+    const pw = W - pad.l - pad.r, ph = H - pad.t - pad.b;
+    ctx.strokeStyle = "#ccc"; ctx.lineWidth = 1;
+    ctx.strokeRect(pad.l, pad.t, pw, ph);
+    ctx.fillStyle = "#555"; ctx.font = "11px sans-serif";
+    // y ticks
+    for (let i=0;i<=5;i++){
+      const y = pad.t + ph - (i/5)*ph;
+      const val = (i/5)*maxY;
+      ctx.strokeStyle = "#eee"; ctx.beginPath();
+      ctx.moveTo(pad.l, y); ctx.lineTo(pad.l+pw, y); ctx.stroke();
+      ctx.fillStyle = "#555"; ctx.textAlign = "right";
+      ctx.fillText(val.toFixed(2), pad.l-4, y+3);
+    }
+    // x label
+    ctx.textAlign = "center"; ctx.fillStyle = "#333";
+    ctx.fillText("iteration", pad.l + pw/2, H - 8);
+    // y label
+    ctx.save(); ctx.translate(14, pad.t + ph/2); ctx.rotate(-Math.PI/2);
+    ctx.textAlign = "center"; ctx.fillText("rolling var(ĝ)", 0, 0); ctx.restore();
+    return pad;
+  }
+
+  function drawCurves(series, cfg){
+    // compute rolling variance per baseline
+    const curves = {};
+    let maxY = 0;
+    const win = Math.max(20, Math.floor(cfg.N/20));
+    for (const b of cfg.baselines){
+      const v = runningVar(series[b], win);
+      curves[b] = v;
+      for (let i=Math.floor(win/2); i<v.length; i++) if (v[i] > maxY) maxY = v[i];
+    }
+    if (maxY === 0) maxY = 1;
+    maxY = maxY * 1.1;
+    const pad = drawAxes(maxY);
+    const pw = W - pad.l - pad.r, ph = H - pad.t - pad.b;
+    for (const b of cfg.baselines){
+      const v = curves[b];
+      ctx.strokeStyle = C[b].color; ctx.lineWidth = 1.6;
+      ctx.beginPath();
+      for (let i=0;i<v.length;i++){
+        const x = pad.l + (i/(v.length-1||1))*pw;
+        const y = pad.t + ph - (v[i]/maxY)*ph;
+        if (i===0) ctx.moveTo(x,y); else ctx.lineTo(x,y);
+      }
+      ctx.stroke();
+    }
+  }
+
+  function computeStats(series, cfg){
+    const s = {};
+    for (const b of cfg.baselines){
+      const arr = series[b];
+      const m = arr.reduce((a,b)=>a+b,0)/arr.length;
+      let v = 0; for (const x of arr) v += (x-m)*(x-m); v /= (arr.length-1);
+      s[b] = {mean: m, var: v};
+    }
+    return s;
+  }
+
+  function renderLegend(cfg){
+    const el = $("legend"); el.innerHTML = "";
+    for (const b of cfg.baselines){
+      const span = document.createElement("span");
+      span.innerHTML = `<span class="swatch" style="background:${C[b].color}"></span>${C[b].label}`;
+      el.appendChild(span);
+    }
+  }
+
+  function renderStats(stats, cfg){
+    const body = $("statsbody"); body.innerHTML = "";
+    const baseVar = stats.none ? stats.none.var : null;
+    for (const b of cfg.baselines){
+      const tr = document.createElement("tr");
+      const rel = baseVar ? (stats[b].var / baseVar) : NaN;
+      tr.innerHTML = `
+        <td><span class="swatch" style="background:${C[b].color}"></span>${C[b].label}</td>
+        <td class="num">${stats[b].mean.toFixed(3)}</td>
+        <td class="num">${stats[b].var.toFixed(3)}</td>
+        <td class="num">${isFinite(rel) ? rel.toFixed(2)+"x" : "—"}</td>`;
+      body.appendChild(tr);
+    }
+  }
+
+  function refresh(newSeed){
+    const cfg = readCfg();
+    if (newSeed) cfg._seed = ((Date.now() & 0x7fffffff) ^ 0x9e3779b9) >>> 0;
+    else cfg._seed = window.__seed || 42;
+    window.__seed = cfg._seed;
+    const series = simulate(cfg);
+    drawCurves(series, cfg);
+    renderLegend(cfg);
+    const stats = computeStats(series, cfg);
+    renderStats(stats, cfg);
+  }
+
+  // wiring
+  $("k").oninput = e => { $("kv").textContent = e.target.value; refresh(false); };
+  $("mu").oninput = e => { $("muv").textContent = (+e.target.value).toFixed(2); refresh(false); };
+  $("sig").oninput = e => { $("sigv").textContent = (+e.target.value).toFixed(2); refresh(false); };
+  $("n").oninput = e => { $("nv").textContent = e.target.value; refresh(false); };
+  document.querySelectorAll("#bgroup input").forEach(el => {
+    el.addEventListener("change", () => {
+      el.parentElement.classList.toggle("active", el.checked);
+      refresh(false);
+    });
+  });
+  $("resample").onclick = () => refresh(true);
+
+  refresh(true);
+})();
+</script>
+</body>
+</html>

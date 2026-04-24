@@ -1,0 +1,241 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>TRL Stack — Click a layer to see API and scaling pain point</title>
+<style>
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+         max-width: 1100px; margin: 1.4em auto; padding: 0 1em; color: #1f1f1f;
+         background: #fafafa; }
+  h1 { font-size: 1.3em; margin-bottom: 0.25em; }
+  .subtitle { color: #5a5a5a; margin-top: 0; font-size: 0.92em; line-height: 1.5; }
+  .panel { border: 1px solid #dcdcdc; border-radius: 6px; background: #fff;
+           padding: 0.9em 1em; margin-top: 1em; }
+  h2 { font-size: 1.0em; margin: 0 0 0.6em 0; color: #2b2b2b;
+       border-bottom: 1px solid #ececec; padding-bottom: 0.3em; }
+  .stack { display: flex; flex-direction: column; gap: 6px; margin-top: 0.5em; }
+  .layer { padding: 14px 18px; border-radius: 5px; cursor: pointer;
+           transition: transform 0.15s, box-shadow 0.15s;
+           border: 1px solid transparent; }
+  .layer:hover { transform: translateX(4px); box-shadow: 0 2px 6px rgba(0,0,0,0.08); }
+  .layer.selected { border-color: #2e5aa8; box-shadow: 0 2px 8px rgba(46,90,168,0.22); }
+  .layer .title { font-weight: 600; font-size: 1.02em; }
+  .layer .meta { font-size: 0.82em; color: rgba(0,0,0,0.55); margin-top: 3px; }
+  .layer.l-datasets   { background: #eaf4ea; }
+  .layer.l-tokenizer  { background: #e8f0fa; }
+  .layer.l-trainer    { background: #fbefe0; }
+  .layer.l-accel      { background: #fae8e8; }
+  .layer.l-torch      { background: #ececec; }
+  .grid2 { display: grid; grid-template-columns: 1fr 1.05fr; gap: 1em;
+           margin-top: 0.8em; }
+  @media (max-width: 860px) { .grid2 { grid-template-columns: 1fr; } }
+  .box { border: 1px solid #dcdcdc; border-radius: 5px; background: #fff;
+         padding: 0.7em 0.9em; min-height: 190px; }
+  .box h3 { font-size: 0.92em; margin: 0 0 0.4em 0; color: #2b2b2b;
+            border-bottom: 1px solid #f0f0f0; padding-bottom: 0.2em; }
+  pre { background: #1e1e1e; color: #e8e8e8; padding: 0.6em 0.8em;
+        border-radius: 4px; overflow-x: auto; font-size: 0.78em;
+        font-family: 'SF Mono', Menlo, Consolas, monospace; line-height: 1.35; }
+  code { background: #eef; padding: 1px 4px; border-radius: 3px;
+         font-family: 'SF Mono', Menlo, monospace; font-size: 0.82em; }
+  .painpoint { color: #a3322c; font-weight: 600; }
+  .ok { color: #2f7a3b; font-weight: 600; }
+  .legend { font-size: 0.82em; color: #555; margin-top: 0.5em; line-height: 1.6; }
+  .hint { font-style: italic; color: #666; }
+</style>
+</head>
+<body>
+
+<h1>TRL Stack: click a layer to see its API surface and scaling pain point</h1>
+<p class="subtitle">
+  TRL is a thin RL jacket over the HuggingFace ecosystem. Every layer below is
+  a dependency TRL delegates to rather than implementing. Click a layer to see
+  the class/config it exposes (left) and where it starts hurting as you scale
+  (right). Top layers are frictionless; lower layers are where single-process
+  Accelerate design bites.
+</p>
+
+<div class="panel">
+  <h2>Stack (top = data in, bottom = hardware)</h2>
+  <div class="stack">
+    <div class="layer l-datasets selected" data-key="datasets">
+      <div class="title">datasets (HuggingFace)</div>
+      <div class="meta">Arrow-backed loading, map, streaming, cross-process sharding</div>
+    </div>
+    <div class="layer l-tokenizer" data-key="tokenizer">
+      <div class="title">tokenizer + chat template (transformers)</div>
+      <div class="meta">apply_chat_template, packing, response-only mask</div>
+    </div>
+    <div class="layer l-trainer" data-key="trainer">
+      <div class="title">SFTTrainer / DPOTrainer / GRPOTrainer / OnlineDPOTrainer (trl)</div>
+      <div class="meta">trl/trainer/*.py (stable) + trl/experimental/*.py (unstable)</div>
+    </div>
+    <div class="layer l-accel" data-key="accel">
+      <div class="title">Accelerate (DDP / FSDP / DeepSpeed ZeRO)</div>
+      <div class="meta">Single-process-per-GPU orchestration, no Ray, no rollout pool</div>
+    </div>
+    <div class="layer l-torch" data-key="torch">
+      <div class="title">torch + CUDA + NCCL</div>
+      <div class="meta">The actual compute; bf16 / fp16 / gradient checkpointing</div>
+    </div>
+  </div>
+  <p class="hint">Selected layer: <span id="sel-name">datasets</span>. Click any row above.</p>
+</div>
+
+<div class="grid2">
+  <div class="box">
+    <h3>API surface (what you write)</h3>
+    <div id="api-box">Loading...</div>
+  </div>
+  <div class="box">
+    <h3>Scaling pain point</h3>
+    <div id="pain-box">Loading...</div>
+  </div>
+</div>
+
+<div class="panel">
+  <h2>Decision gate summary</h2>
+  <p class="legend">
+    <span class="ok">TRL wins</span> when you stay on one node: datasets + tokenizer
+    + Trainer + Accelerate is the fastest prototype-to-run path in open source.
+    <span class="painpoint">TRL loses</span> the moment you need multi-node rollouts,
+    async actor-rollout decoupling, or straggler-tolerant scheduling.
+    At that point the bottleneck is always the Accelerate layer — swap to verl
+    (Ray + split workers) or OpenRLHF (Ray + colocated vLLM).
+  </p>
+</div>
+
+<script>
+const layerData = {
+  datasets: {
+    api: `<pre>from datasets import load_dataset
+ds = load_dataset("HuggingFaceH4/ultrachat_200k",
+                  split="train_sft", streaming=True)
+ds = ds.map(format_chat, batched=True, remove_columns=ds.column_names)
+# GRPO: dataset only needs { "prompt": "..." }
+# DPO : dataset needs  { "prompt", "chosen", "rejected" }
+# SFT : dataset needs  { "messages": [...] }</pre>
+<p class="legend">Columns are coerced inside each TRL trainer. Streaming avoids
+materializing the whole corpus; Arrow caching keeps repeated <code>map()</code>
+calls cheap. Cross-process sharding is free via
+<code>split_dataset_by_node</code>.</p>`,
+    pain: `<p>Mostly painless at any scale. <span class="ok">No failure mode here</span>
+that is TRL's fault. If your dataset is bigger than one node's disk, switch to
+<code>streaming=True</code> and Arrow streams from the Hub.</p>
+<p class="legend">The one gotcha: any non-HF data format must be coerced into
+<code>{column: value}</code> rows first. Multi-modal + interleaved tool calls
+often require a custom <code>Dataset.from_generator</code>.</p>`,
+  },
+  tokenizer: {
+    api: `<pre>tokenizer = AutoTokenizer.from_pretrained("mistralai/Mistral-7B-v0.1")
+tokenizer.chat_template = CHAT_TEMPLATE_JINJA  # explicit; do not trust default
+
+# Packing concatenates many short seqs into max_seq_length chunks
+SFTConfig(
+    packing=True,
+    max_seq_length=2048,
+    train_on_response_only=True,  # user tokens -> label = -100
+)</pre>
+<p class="legend">TRL calls <code>tokenizer.apply_chat_template(...)</code> and
+produces a single string per example. Response-only masking is the single most
+important SFT knob — without it you train the model to reproduce the user's
+turn.</p>`,
+    pain: `<p><span class="painpoint">Silent chat-template mismatch</span> — the
+#1 bug from the Alignment Handbook. If the training template differs from the
+inference template by one space, scores collapse and no error fires.</p>
+<p class="legend">Mitigation: always decode one packed batch and diff it against
+a real inference string. TRL does not enforce this; it just passes through whatever
+<code>tokenizer</code> ships. Packing also hides EOS tokens between sequences, so
+getting attention masks right requires <code>attn_implementation="flash_attention_2"</code>
+with packed-seq support.</p>`,
+  },
+  trainer: {
+    api: `<pre>from trl import SFTTrainer, DPOTrainer, GRPOTrainer
+
+# Three classes, one skeleton (transformers.Trainer subclass).
+SFTTrainer(model=m, args=SFTConfig(...), train_dataset=ds,
+           processing_class=tok).train()
+
+DPOTrainer(model=m, ref_model=None,          # None => PEFT adapter-off trick
+           args=DPOConfig(beta=0.1, loss_type="sigmoid"),
+           train_dataset=pref_ds,
+           processing_class=tok).train()
+
+GRPOTrainer(model=m, reward_funcs=[verifier],
+            args=GRPOConfig(num_generations=8,
+                            loss_type="dr_grpo",
+                            use_vllm=True,
+                            vllm_mode="colocate"),
+            train_dataset=prompt_ds,
+            processing_class=tok).train()</pre>
+<p class="legend">Every loss variant in the DPO / GRPO zoo is a <code>loss_type</code>
+string. No subclassing needed for standard algorithms.</p>`,
+    pain: `<p><span class="painpoint">GRPOTrainer._compute_loss is a 200-line
+switch</span> in a 2700-line file. Extending with a new advantage estimator means
+editing that switch.</p>
+<p class="legend">Experimental trainers (PPO with value head, online-DPO, Nash-MD,
+XPO) live in <code>trl/experimental/</code> with no semver promise. The classic
+actor-critic PPO was demoted there in 2024 when HF pivoted to critic-free methods.
+verl's registry (<code>compute_advantage</code> / <code>compute_policy_loss</code>
+hooks) is cheaper to extend if you are adding algorithms, not tweaking them.</p>`,
+  },
+  accel: {
+    api: `<pre># accelerate config => YAML, then:
+accelerate launch --config_file fsdp.yaml train_grpo.py
+
+# Inside Python: nothing. transformers.Trainer handles it.
+# FSDP / DeepSpeed / DDP is picked by the YAML.
+
+# vLLM integration for fast rollouts:
+GRPOConfig(use_vllm=True, vllm_mode="colocate")  # same GPU as training
+GRPOConfig(use_vllm=True, vllm_mode="server",    # separate process
+           vllm_server_host="...", vllm_server_port=8000)</pre>
+<p class="legend">One Python process per GPU. No Ray, no scheduler.
+<code>accelerate launch</code> is the only orchestration layer.</p>`,
+    pain: `<p><span class="painpoint">Where TRL falls off a cliff past one node.</span>
+No native rollout-worker pool, no straggler rescheduling, no async actor/rollout
+decoupling. A slow rank blocks the whole collective.</p>
+<p class="legend">Multi-node = "write a SLURM script with <code>--machine_rank</code>
+per node." One node dies, whole run dies. vLLM weight sync is O(model size) per
+step in server mode. Colocate mode shares weight memory but pays vLLM's paged-attention
+overhead during backward. verl and OpenRLHF bet on Ray to solve this; TRL refused
+to, and that refusal is the whole story of its scaling limits.</p>`,
+  },
+  torch: {
+    api: `<pre># Nothing TRL-specific here.
+# bf16 training: args.bf16 = True
+# Gradient checkpointing: args.gradient_checkpointing = True
+# Flash Attention 2: AutoModelForCausalLM.from_pretrained(
+#                       ..., attn_implementation="flash_attention_2")
+# Mixed precision, optimizer, scheduler: all transformers.Trainer defaults.</pre>
+<p class="legend">Pure torch + CUDA + NCCL. Identical compute kernels
+to any other HF <code>Trainer</code> run.</p>`,
+    pain: `<p><span class="ok">Not TRL's problem.</span> If a torch kernel is
+slow, every framework suffers equally. NCCL hangs under allreduce on 64+ GPUs
+are a universal issue.</p>
+<p class="legend">The one TRL-adjacent concern: GRPOTrainer's reference forward
+pass is NOT fused with the policy forward pass, so you pay two full forward passes
+per step (three if vLLM is colocated). Memory/compute cost that is structural,
+not a kernel bug.</p>`,
+  },
+};
+
+const layers = document.querySelectorAll('.layer');
+const apiBox = document.getElementById('api-box');
+const painBox = document.getElementById('pain-box');
+const selName = document.getElementById('sel-name');
+
+function select(key) {
+  layers.forEach(l => l.classList.toggle('selected', l.dataset.key === key));
+  apiBox.innerHTML = layerData[key].api;
+  painBox.innerHTML = layerData[key].pain;
+  selName.textContent = layers[Array.from(layers).findIndex(l => l.dataset.key === key)]
+                          .querySelector('.title').textContent;
+}
+
+layers.forEach(l => l.addEventListener('click', () => select(l.dataset.key)));
+select('datasets');
+</script>
+
+</body>
+</html>

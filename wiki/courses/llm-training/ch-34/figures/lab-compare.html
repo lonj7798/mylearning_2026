@@ -1,0 +1,253 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<title>Ch-34 — Lab Comparison Radar: Qwen 2.5 / Qwen 3 / OLMo 2 / OLMo 3 / Phi 3 / Phi 4</title>
+<style>
+  :root {
+    --bg: #0f1115; --panel: #171a21; --text: #e6e8eb; --muted: #8a95a4;
+    --accent: #5ec8ff; --grid: #2a2f3a;
+    --c-qwen25: #ffb86b;
+    --c-qwen3:  #ff6b9d;
+    --c-olmo2:  #7dd87d;
+    --c-olmo3:  #5ec8ff;
+    --c-phi3:   #c29bff;
+    --c-phi4:   #ffe066;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 20px; background: var(--bg); color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    font-size: 13px;
+  }
+  h1 { font-size: 17px; margin: 0 0 4px 0; }
+  p.sub { color: var(--muted); margin: 0 0 16px 0; font-size: 12px; max-width: 900px; line-height: 1.5; }
+  .wrap { display: grid; grid-template-columns: 1fr 340px; gap: 20px; }
+  .panel {
+    background: var(--panel); padding: 16px; border-radius: 6px;
+  }
+  canvas { display: block; background: #0b0d11; border-radius: 4px; width: 100%; height: 560px; }
+  .legend { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+  .lab-pill {
+    display: inline-flex; align-items: center; gap: 6px;
+    padding: 5px 10px; border-radius: 14px; font-size: 11px;
+    background: #232833; cursor: pointer; user-select: none;
+    border: 1px solid #2a2f3a;
+  }
+  .lab-pill.off { opacity: 0.35; }
+  .lab-pill .sw { width: 10px; height: 10px; border-radius: 50%; display: inline-block; }
+  .info { font-size: 12px; line-height: 1.55; }
+  .info h2 { font-size: 13px; color: var(--accent); margin: 0 0 8px 0; }
+  .info table { width: 100%; border-collapse: collapse; margin-top: 8px; font-size: 11px; }
+  .info th, .info td { text-align: left; padding: 4px 6px; border-bottom: 1px solid var(--grid); }
+  .info th { color: var(--muted); font-weight: 500; }
+  .info code { font-size: 11px; color: var(--accent); }
+  .caption { font-size: 11px; color: var(--muted); margin-top: 10px; line-height: 1.55; }
+</style>
+</head>
+<body>
+
+<h1>Chapter 34 — Lab Comparison Radar</h1>
+<p class="sub">
+Six axes, six labs. Click a pill to toggle. Hover near an axis label to read the per-lab attested numbers. The radar shape is the <em>design stance</em>: Phi skews toward synthetic-%, Qwen 3 toward hybrid-thinking, OLMo 3 toward multi-round + long-context, OLMo 2 is the Tülu baseline shape.
+</p>
+
+<div class="wrap">
+  <div class="panel">
+    <canvas id="radar" width="900" height="560"></canvas>
+    <div class="legend" id="legend"></div>
+    <p class="caption">
+      Axes (0-1 normalized; higher = more of that property): <strong>SFT-scale</strong> log-tokens;
+      <strong>synthetic-%</strong> teacher-generated fraction of SFT+pretrain-shaping data;
+      <strong>LR tier</strong> (Qwen DPO 7e-7 = high; OLMo RLVR 3e-7 = mid; others inferred);
+      <strong>multi-round</strong> number of distinct SFT + DPO passes (Qwen 3 four-stage = 4; OLMo 3 branches = 4);
+      <strong>long-context</strong> max SFT sequence length (Qwen 2.5 = 262K; OLMo 3 Longmino = long);
+      <strong>hybrid-thinking</strong> whether one checkpoint carries /think + /no_think.
+    </p>
+  </div>
+
+  <div class="panel info" id="info">
+    <h2>Select a lab to inspect</h2>
+    <p>Click a pill to toggle; hover the pill to see that lab's attested per-axis numbers below.</p>
+  </div>
+</div>
+
+<script>
+const AXES = ["SFT-scale","synthetic-%","LR tier","multi-round","long-context","hybrid-thinking"];
+// values normalized to [0,1]; "nd" = not-disclosed, estimated as 0.3 placeholder
+const LABS = [
+  { key:"qwen25", name:"Qwen 2.5", color:getCSS("--c-qwen25"), v:[0.85, 0.50, 0.90, 0.55, 0.95, 0.00],
+    notes:{
+      "SFT-scale":"1M examples across SFT+DPO+GRPO stages",
+      "synthetic-%":"mixed; SFT-resample preference construction is on-policy synthetic",
+      "LR tier":"DPO LR 7e-7 (attested); SFT LR nd",
+      "multi-round":"SFT two-phase + DPO + GRPO = 3 (phases) / 2 (rounds)",
+      "long-context":"SFT Phase 2 up to 262,144 tokens",
+      "hybrid-thinking":"no — single-mode model"
+    }},
+  { key:"qwen3",  name:"Qwen 3",  color:getCSS("--c-qwen3"),  v:[0.75, 0.70, 0.55, 0.95, 0.70, 1.00],
+    notes:{
+      "SFT-scale":"cold-start + fusion SFT; sizes nd",
+      "synthetic-%":"heavy; long-CoT traces and synthetic math/code",
+      "LR tier":"nd (AdamW defaults inferred)",
+      "multi-round":"four stages: cold-start SFT → reasoning RL → fusion SFT → general RL",
+      "long-context":"pretrain long-context stage at 32K; SFT bound nd",
+      "hybrid-thinking":"YES — /think and /no_think on one checkpoint"
+    }},
+  { key:"olmo2",  name:"OLMo 2",  color:getCSS("--c-olmo2"),  v:[0.80, 0.40, 0.50, 0.55, 0.30, 0.00],
+    notes:{
+      "SFT-scale":"~939K prompts (OLMo-variant of Tülu 3 mix)",
+      "synthetic-%":"Tülu 3 synthetic fraction; lower than Phi line",
+      "LR tier":"RLVR LR 3e-7; SFT LR Tülu defaults re-tuned",
+      "multi-round":"SFT + DPO + RLVR = 3",
+      "long-context":"SFT bounded by Tülu 3 chat lengths; pretrain 4K→32K",
+      "hybrid-thinking":"no"
+    }},
+  { key:"olmo3",  name:"OLMo 3",  color:getCSS("--c-olmo3"),  v:[0.80, 0.40, 0.50, 1.00, 0.85, 0.30],
+    notes:{
+      "SFT-scale":"Dolci suite; per-branch sizes nd",
+      "synthetic-%":"Dolci synthetic fraction per branch; not itemized",
+      "LR tier":"inherits Tülu 3 / OLMo 2 defaults",
+      "multi-round":"four branches (Base / Think / Instruct / RL-Zero) × SFT+DPO+RLVR each",
+      "long-context":"Longmino stage at long-context (639B-token long-doc pool, 50B sampled)",
+      "hybrid-thinking":"partial — Think branch is a separate checkpoint, not a toggle"
+    }},
+  { key:"phi3",   name:"Phi 3",   color:getCSS("--c-phi3"),   v:[0.45, 0.85, 0.40, 0.40, 0.20, 0.00],
+    notes:{
+      "SFT-scale":"size not itemized publicly",
+      "synthetic-%":"Phase-2 pretraining is primarily synthetic; SFT also curated synthetic + human",
+      "LR tier":"nd",
+      "multi-round":"Phase1 pretrain + Phase2 pretrain + SFT + DPO(+safety slice) = 4 stages but 2 post-train rounds",
+      "long-context":"mini 4K native (128K LongRope variant)",
+      "hybrid-thinking":"no"
+    }},
+  { key:"phi4",   name:"Phi 4",   color:getCSS("--c-phi4"),   v:[0.95, 0.95, 0.50, 0.65, 0.60, 0.45],
+    notes:{
+      "SFT-scale":"Phi-4-reasoning: 1.4M prompts, ~16B SFT tokens (~8.3B unique)",
+      "synthetic-%":"~400B unweighted synthetic tokens; SFT traces o3-mini-generated",
+      "LR tier":"nd",
+      "multi-round":"Phi-4-base pretrain/post + Phi-4-reasoning SFT + 90 GRPO steps",
+      "long-context":"SFT traces at 32K context (o3-mini high-thinking)",
+      "hybrid-thinking":"partial — reasoning-only model; /think emitted by default"
+    }}
+];
+const ACTIVE = new Set(LABS.map(l=>l.key));
+let HOVER_LAB = null;
+
+function getCSS(v){ return getComputedStyle(document.documentElement).getPropertyValue(v).trim(); }
+
+const canvas = document.getElementById("radar");
+const ctx = canvas.getContext("2d");
+function resizeCanvas(){
+  const dpr = window.devicePixelRatio || 1;
+  const rect = canvas.getBoundingClientRect();
+  canvas.width = rect.width * dpr;
+  canvas.height = rect.height * dpr;
+  ctx.setTransform(dpr,0,0,dpr,0,0);
+}
+
+function draw(){
+  resizeCanvas();
+  const W = canvas.getBoundingClientRect().width;
+  const H = canvas.getBoundingClientRect().height;
+  const cx = W/2, cy = H/2;
+  const R = Math.min(W,H)/2 - 70;
+  const N = AXES.length;
+
+  ctx.clearRect(0,0,W,H);
+
+  // grid rings
+  ctx.strokeStyle = getCSS("--grid");
+  ctx.lineWidth = 1;
+  for (let k=1;k<=5;k++){
+    ctx.beginPath();
+    for (let i=0;i<N;i++){
+      const a = -Math.PI/2 + i*2*Math.PI/N;
+      const r = R*k/5;
+      const x = cx+r*Math.cos(a), y = cy+r*Math.sin(a);
+      if (i===0) ctx.moveTo(x,y); else ctx.lineTo(x,y);
+    }
+    ctx.closePath(); ctx.stroke();
+  }
+
+  // axes + labels
+  ctx.fillStyle = getCSS("--muted");
+  ctx.font = "12px -apple-system, sans-serif";
+  ctx.textAlign = "center";
+  for (let i=0;i<N;i++){
+    const a = -Math.PI/2 + i*2*Math.PI/N;
+    const xE = cx+R*Math.cos(a), yE = cy+R*Math.sin(a);
+    ctx.strokeStyle = getCSS("--grid");
+    ctx.beginPath(); ctx.moveTo(cx,cy); ctx.lineTo(xE,yE); ctx.stroke();
+    const lx = cx+(R+28)*Math.cos(a), ly = cy+(R+28)*Math.sin(a);
+    ctx.fillText(AXES[i], lx, ly+4);
+  }
+
+  // lab polygons
+  for (const lab of LABS){
+    if (!ACTIVE.has(lab.key)) continue;
+    const isHover = HOVER_LAB === lab.key;
+    ctx.beginPath();
+    for (let i=0;i<N;i++){
+      const a = -Math.PI/2 + i*2*Math.PI/N;
+      const r = R*lab.v[i];
+      const x = cx+r*Math.cos(a), y = cy+r*Math.sin(a);
+      if (i===0) ctx.moveTo(x,y); else ctx.lineTo(x,y);
+    }
+    ctx.closePath();
+    ctx.fillStyle = hexToRgba(lab.color, isHover ? 0.35 : 0.15);
+    ctx.fill();
+    ctx.strokeStyle = lab.color;
+    ctx.lineWidth = isHover ? 2.5 : 1.5;
+    ctx.stroke();
+
+    // vertex dots
+    for (let i=0;i<N;i++){
+      const a = -Math.PI/2 + i*2*Math.PI/N;
+      const r = R*lab.v[i];
+      const x = cx+r*Math.cos(a), y = cy+r*Math.sin(a);
+      ctx.fillStyle = lab.color;
+      ctx.beginPath(); ctx.arc(x,y, isHover ? 3.5 : 2.5, 0, 2*Math.PI); ctx.fill();
+    }
+  }
+}
+
+function hexToRgba(hex, a){
+  hex = hex.replace("#",""); if (hex.length===3){ hex = hex.split("").map(c=>c+c).join(""); }
+  const r=parseInt(hex.slice(0,2),16), g=parseInt(hex.slice(2,4),16), b=parseInt(hex.slice(4,6),16);
+  return `rgba(${r},${g},${b},${a})`;
+}
+
+// legend
+const legendDiv = document.getElementById("legend");
+for (const lab of LABS){
+  const pill = document.createElement("span");
+  pill.className = "lab-pill";
+  pill.innerHTML = `<span class="sw" style="background:${lab.color}"></span>${lab.name}`;
+  pill.addEventListener("click", ()=>{
+    if (ACTIVE.has(lab.key)) { ACTIVE.delete(lab.key); pill.classList.add("off"); }
+    else { ACTIVE.add(lab.key); pill.classList.remove("off"); }
+    draw();
+  });
+  pill.addEventListener("mouseenter", ()=>{ HOVER_LAB = lab.key; renderInfo(lab); draw(); });
+  pill.addEventListener("mouseleave", ()=>{ HOVER_LAB = null; draw(); });
+  legendDiv.appendChild(pill);
+}
+
+function renderInfo(lab){
+  const info = document.getElementById("info");
+  let html = `<h2>${lab.name}</h2><table><thead><tr><th>Axis</th><th>Value</th><th>Attested</th></tr></thead><tbody>`;
+  for (let i=0;i<AXES.length;i++){
+    html += `<tr><td>${AXES[i]}</td><td><code>${lab.v[i].toFixed(2)}</code></td><td>${lab.notes[AXES[i]]}</td></tr>`;
+  }
+  html += `</tbody></table><p class="caption" style="margin-top:10px">Values are normalized 0–1 for radar plotting; the Attested column carries the raw-data source content.</p>`;
+  info.innerHTML = html;
+}
+
+window.addEventListener("resize", draw);
+draw();
+renderInfo(LABS[0]);
+</script>
+
+</body>
+</html>

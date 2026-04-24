@@ -1,0 +1,238 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>The Synthetic-Data Loop — Six Stages, Six Failure Modes</title>
+<style>
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+         max-width: 960px; margin: 2em auto; padding: 0 1em; color: #222; }
+  h1 { font-size: 1.4em; margin-bottom: 0.2em; }
+  .subtitle { color: #666; margin-top: 0; margin-bottom: 1.2em; }
+  .panel { border: 1px solid #ddd; border-radius: 6px; padding: 1em; margin: 1em 0;
+           background: #fafafa; }
+  svg { display: block; margin: 1em auto; background: white; border: 1px solid #ccc; }
+  .node-circle { fill: #e3f0fc; stroke: #1976d2; stroke-width: 2; cursor: pointer; transition: fill 0.15s; }
+  .node-circle.active { fill: #1976d2; }
+  .node-circle:hover { fill: #c5dff6; }
+  .node-circle.active:hover { fill: #1560ab; }
+  .node-label { font-size: 13px; font-weight: 600; fill: #0d47a1; pointer-events: none; text-anchor: middle; }
+  .node-label.active { fill: white; }
+  .node-sub { font-size: 11px; fill: #555; pointer-events: none; text-anchor: middle; }
+  .node-sub.active { fill: #e0e0e0; }
+  .arrow { stroke: #888; stroke-width: 1.5; fill: none; marker-end: url(#arrowhead); }
+  .iter-arrow { stroke: #b77; stroke-width: 1.25; fill: none; stroke-dasharray: 5 4; marker-end: url(#arrowhead-iter); }
+  .iter-label { font-size: 10px; fill: #b77; font-style: italic; }
+  .detail { min-height: 220px; }
+  .detail h3 { margin: 0 0 0.4em 0; font-size: 1.05em; color: #0d47a1; }
+  .detail .question { font-style: italic; color: #555; margin-bottom: 0.8em; }
+  .detail .block { margin-bottom: 0.7em; }
+  .detail .block-label { font-size: 0.78em; text-transform: uppercase; letter-spacing: 0.05em; color: #777; margin-bottom: 0.15em; }
+  .detail .failure { color: #8a2a2a; }
+  .detail code { background: #eef; padding: 1px 4px; border-radius: 3px; font-size: 0.88em; }
+  .detail .examples { display: grid; grid-template-columns: 1fr 1fr; gap: 0.5em; margin-top: 0.3em; }
+  .detail .ex { background: white; border: 1px solid #e0e0e0; border-radius: 4px; padding: 0.5em 0.7em; font-size: 0.88em; }
+  .detail .ex-pipe { font-weight: 600; color: #0d47a1; font-size: 0.78em; text-transform: uppercase; letter-spacing: 0.04em; }
+  .hint { font-size: 0.85em; color: #666; text-align: center; margin-top: -0.4em; }
+</style>
+</head>
+<body>
+
+<h1>The Synthetic-Data Loop — Six Stages, Six Failure Modes</h1>
+<p class="subtitle">
+  Every production synthetic-data pipeline is an instance of this six-stage loop.
+  <strong>Click a stage</strong> to see its characteristic failure mode and concrete examples from
+  Self-Instruct, Nemotron-4, APIGen, and OpenMathInstruct-2.
+</p>
+
+<svg id="loop" width="920" height="260" viewBox="0 0 920 260">
+  <defs>
+    <marker id="arrowhead" viewBox="0 0 10 10" refX="9" refY="5"
+            markerWidth="7" markerHeight="7" orient="auto">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#888"/>
+    </marker>
+    <marker id="arrowhead-iter" viewBox="0 0 10 10" refX="9" refY="5"
+            markerWidth="6" markerHeight="6" orient="auto">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#b77"/>
+    </marker>
+  </defs>
+  <!-- arrows populated by JS -->
+  <g id="arrows"></g>
+  <g id="nodes"></g>
+</svg>
+<p class="hint">Click a stage above. Press 1..6 to cycle.</p>
+
+<div class="panel detail" id="detail"></div>
+
+<script>
+const stages = [
+  { id: 1, label: 'Generate',
+    question: 'What does the teacher produce?',
+    failure: 'Collapse to templates — few-shot seeds narrow the teacher to a handful of phrasings, and the student overfits to the template rather than the task.',
+    fix: 'Inject structural diversity upstream: rotating seeds, category-conditioning, personas, topic tags. Monitor root-verb and task-family entropy over generation batches.',
+    examples: [
+      { pipe: 'Self-Instruct', text: 'GPT-3 prompted with 8 in-context examples (6 seed + 2 generated). Starting pool: 175 human seed tasks. Output: ~252K raw candidates.' },
+      { pipe: 'Nemotron-4', text: 'Task-family-seeded prompts across code / QA / topic-following / function-calling / refusal. Genetic Instruct for code (self-instruct + WizardCoder mutations + LLM fitness).' },
+      { pipe: 'APIGen', text: 'Sample k=1..3 functions from 3,673 executable APIs; prompt DeepSeek-Coder-V2 or GPT-4 for (query, gold call) pairs.' },
+      { pipe: 'OpenMathInstruct-2', text: 'Llama-3.1-405B-Instruct samples K=32 CoT solutions per problem at T=1.0, top-p=0.95. 600K problems after question-augmentation from MATH + GSM8K (15K seed).' },
+    ]
+  },
+  { id: 2, label: 'Filter',
+    question: 'What do we drop for structural or surface reasons?',
+    failure: 'Over-prune or under-prune — too strict kills long-tail signal (Self-Instruct banning "graph" wiped math-diagram tasks); too permissive lets schema-broken outputs into SFT and the model learns to emit broken outputs.',
+    fix: 'Compare pre- vs post-filter distributions per task family. Check that acceptance rates are stable across families. Separate structural filters (cheap, always applied) from content filters (tuneable).',
+    examples: [
+      { pipe: 'Self-Instruct', text: 'Drop ill-formatted generations; drop where input == output; drop mentions of "image/graph/file" (GPT-3 cannot handle them); length bounds on outputs.' },
+      { pipe: 'Nemotron-4', text: 'Staged: code filter separate from general filter. Topic-following track intentionally keeps distractor turns. Format validity on code compilation.' },
+      { pipe: 'APIGen', text: 'Layer 1 of 3: JSON must parse; schema fields present; types match (int/str/bool/enum/list). Structural only — correctness is deferred to the next layer.' },
+      { pipe: 'OpenMathInstruct-2', text: 'Regex-extract boxed final answer; reject when no boxed answer exists. Anything without an extractable answer cannot be verified downstream.' },
+    ]
+  },
+  { id: 3, label: 'Dedup',
+    question: 'What do we drop for being redundant?',
+    failure: 'Surface-level dedup admits 10,000 prompts that differ only in entity names but share the same underlying task structure. The model overfits the structure; benchmarks plateau despite dataset growth.',
+    fix: 'Pair surface dedup (ROUGE, MinHash) with embedding- or topic-space dedup (InsTag). Monitor task-family entropy across the accepted corpus, not just pairwise novelty.',
+    examples: [
+      { pipe: 'Self-Instruct', text: 'ROUGE-L > 0.7 against all prior instructions. Drops ~50% of raw candidates. The single most-copied idea from the paper.' },
+      { pipe: 'Nemotron-4', text: 'Light cross-prompt dedup; relies on task-family partitioning rather than aggressive near-dup removal.' },
+      { pipe: 'APIGen', text: 'MinHash on (query, call) pairs across the corpus. Cheap at 60K scale.' },
+      { pipe: 'OpenMathInstruct-2', text: 'Near-duplicate suppression WITHIN a problem\u2019s accepted solutions. Different problems intentionally produce overlapping solutions \u2014 diversity is at the problem level.' },
+    ]
+  },
+  { id: 4, label: 'Verify',
+    question: 'What do we drop for being wrong?',
+    failure: 'No verifier means no signal. A pipeline without a verifier produces data of whatever quality the teacher happened to emit \u2014 no floor, no ceiling. Lambert: "verification is the bottleneck."',
+    fix: 'Pick a verifier appropriate to the modality BEFORE generating. Gold-answer match for math; executor for code; RM for alignment; calibrated judge for open-ended tasks (and audit the judge, ch-26).',
+    examples: [
+      { pipe: 'Self-Instruct', text: 'Minimal \u2014 no gold-answer checker, no executor. Just format + ROUGE. This is the paper\u2019s acknowledged weakness.' },
+      { pipe: 'Nemotron-4', text: 'Nemotron-4-340B-Reward scores responses. Also judges "chosen" vs "rejected" in preference pairs. ~20K human anchors calibrate the RM.' },
+      { pipe: 'APIGen', text: 'Layers 2 and 3 of 3: execute call in 5-sec Python sandbox (reject on exception); GPT-4 judge answers yes/no on (query, call, result). Combined rejection ~40%. Ablation: -semantic -6 BFCL, -execution -11, -format -18.' },
+      { pipe: 'OpenMathInstruct-2', text: 'SymPy symbolic equivalence (MATH) + exact numeric match (GSM8K). Residual false-positive rate ~7% (right answer, wrong reasoning).' },
+    ]
+  },
+  { id: 5, label: 'Select',
+    question: 'Which survivors do we keep, and in what quantity?',
+    failure: 'Biased mix \u2014 if you keep everything that passes verification, you inherit the teacher\u2019s bias toward easy, short, common-style answers. Looks great on simple benchmarks; plateaus on hard ones.',
+    fix: 'Explicit selection on difficulty (IFD, LESS, Superfiltering), reward-model score (Nemotron), or coverage (task-family quotas). Never default to "kept = passed-verification" silently.',
+    examples: [
+      { pipe: 'Self-Instruct', text: 'Implicit: everything that passes (2)+(3) goes in. No difficulty scoring, no coverage targeting. A gap successors fix.' },
+      { pipe: 'Nemotron-4', text: 'RM-score-driven: highest-scoring response = chosen, lowest = rejected for DPO/RPO pairs. Selection IS the preference-pair construction step. 160K DPO + 300K RPO.' },
+      { pipe: 'APIGen', text: 'Keep all survivors across four call-shape buckets (simple / multiple / parallel / parallel-multiple); balance by bucket at the end.' },
+      { pipe: 'OpenMathInstruct-2', text: 'Keep all verified solutions. Selection is at the PROBLEM level (question augmentation upstream), not the solution level.' },
+    ]
+  },
+  { id: 6, label: 'Mix',
+    question: 'How does this dataset compose with others during training?',
+    failure: 'Wrong ratio or wrong order. Too much pure-generated synthetic at pretraining scale reproduces model-collapse patterns. Homogenising code SFT into general SFT degrades code performance.',
+    fix: 'Treat mix ratio and curriculum order as hyperparameters. For pretraining with rephrased synthetic: ~30% is the empirical optimum (5-10x speedup at fixed val-loss). For SFT: stage specialised data before generalist.',
+    examples: [
+      { pipe: 'Self-Instruct', text: 'Single-stage SFT on GPT-3. No mix \u2014 it IS the dataset.' },
+      { pipe: 'Nemotron-4', text: 'Staged: 800K code SFT first, then 200K general SFT; then 160K DPO, then 300K RPO. Also adds alignment QA in continued pretraining. Total >98% synthetic.' },
+      { pipe: 'APIGen', text: 'Single-stage SFT on Mistral-7B / Mixtral (xLAM). xLAM-7B ranks #1 on BFCL among <13B models.' },
+      { pipe: 'OpenMathInstruct-2', text: 'Single-stage SFT on Llama-3.1-{1.5B, 8B, 70B}. 67.8 MATH / 91.7 GSM8K at 8B \u2014 SOTA among open 8B math models at release.' },
+    ]
+  },
+];
+
+const svg = document.getElementById('loop');
+const nodesG = document.getElementById('nodes');
+const arrowsG = document.getElementById('arrows');
+
+const centerY = 115;
+const startX = 70;
+const stepX = 135;
+
+const positions = stages.map((_, i) => ({ x: startX + i * stepX, y: centerY }));
+
+// arrows between successive stages
+for (let i = 0; i < stages.length - 1; i++) {
+  const p1 = positions[i], p2 = positions[i+1];
+  const line = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+  line.setAttribute('d', `M ${p1.x + 42} ${p1.y} L ${p2.x - 42} ${p2.y}`);
+  line.setAttribute('class', 'arrow');
+  arrowsG.appendChild(line);
+}
+
+// iteration arrow: from stage 6 back up and over to stage 1
+const p6 = positions[5], p1 = positions[0];
+const iter = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+iter.setAttribute('d', `M ${p6.x} ${p6.y - 44} Q ${p6.x} 30, ${(p6.x + p1.x)/2} 30 Q ${p1.x} 30, ${p1.x} ${p1.y - 44}`);
+iter.setAttribute('class', 'iter-arrow');
+arrowsG.appendChild(iter);
+
+const iterLabel = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+iterLabel.setAttribute('x', (p6.x + p1.x) / 2);
+iterLabel.setAttribute('y', 22);
+iterLabel.setAttribute('text-anchor', 'middle');
+iterLabel.setAttribute('class', 'iter-label');
+iterLabel.textContent = 'iterate: new seeds, teacher rotation, judge upgrade';
+arrowsG.appendChild(iterLabel);
+
+// render nodes
+stages.forEach((s, i) => {
+  const p = positions[i];
+  const g = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+  g.setAttribute('data-id', s.id);
+  g.style.cursor = 'pointer';
+
+  const c = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+  c.setAttribute('cx', p.x);
+  c.setAttribute('cy', p.y);
+  c.setAttribute('r', 42);
+  c.setAttribute('class', 'node-circle');
+  g.appendChild(c);
+
+  const num = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+  num.setAttribute('x', p.x);
+  num.setAttribute('y', p.y - 6);
+  num.setAttribute('class', 'node-sub');
+  num.textContent = '(' + s.id + ')';
+  g.appendChild(num);
+
+  const lbl = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+  lbl.setAttribute('x', p.x);
+  lbl.setAttribute('y', p.y + 12);
+  lbl.setAttribute('class', 'node-label');
+  lbl.textContent = s.label;
+  g.appendChild(lbl);
+
+  g.addEventListener('click', () => select(s.id));
+  nodesG.appendChild(g);
+});
+
+let current = 0;
+
+function select(id) {
+  current = id;
+  // toggle class on nodes
+  nodesG.querySelectorAll('g').forEach(g => {
+    const active = +g.getAttribute('data-id') === id;
+    const circle = g.querySelector('circle');
+    const num = g.querySelectorAll('text')[0];
+    const lbl = g.querySelectorAll('text')[1];
+    circle.classList.toggle('active', active);
+    num.classList.toggle('active', active);
+    lbl.classList.toggle('active', active);
+  });
+  const s = stages[id - 1];
+  const det = document.getElementById('detail');
+  const exHtml = s.examples.map(ex =>
+    `<div class="ex"><div class="ex-pipe">${ex.pipe}</div>${ex.text}</div>`
+  ).join('');
+  det.innerHTML =
+    `<h3>(${s.id}) ${s.label}</h3>` +
+    `<div class="question">${s.question}</div>` +
+    `<div class="block"><div class="block-label">Failure mode</div><div class="failure">${s.failure}</div></div>` +
+    `<div class="block"><div class="block-label">Fix</div><div>${s.fix}</div></div>` +
+    `<div class="block"><div class="block-label">Concrete examples</div><div class="examples">${exHtml}</div></div>`;
+}
+
+document.addEventListener('keydown', e => {
+  const n = parseInt(e.key, 10);
+  if (n >= 1 && n <= 6) select(n);
+});
+
+select(1);
+</script>
+
+</body>
+</html>

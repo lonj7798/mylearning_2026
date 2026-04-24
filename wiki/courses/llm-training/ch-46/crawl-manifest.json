@@ -1,0 +1,116 @@
+{
+  "chapter_id": "ch-46",
+  "chapter_title": "Lab: Small DPO or RLVR Experiment with Failure Analysis",
+  "track": "rl",
+  "kind": "lab",
+  "generated_at": "2026-04-23T00:00:00Z",
+  "course_outline_concepts": [
+    "Run option A (DPO): ~3B model + 10K-pair preference set; sweep beta in {0.05, 0.1, 0.3}",
+    "Run option B (RLVR): ~3B model + verifiable-math prompt set; sweep KL in {0.01, 0.05, 0.1}",
+    "Instrument: KL, entropy, reward mean/std, pass-rate per prompt-bucket",
+    "Find one failure mode (reward hacking, entropy collapse, length bias) and write its post-mortem",
+    "Deliverable: rl-experiment-memo.md with sweep table + training-curve plots + one failure post-mortem",
+    "Resource-constrained path: ~1B model; single beta or single KL value instead of the full sweep; keep the instrumentation + failure post-mortem -- the analysis, not the scale, is the deliverable."
+  ],
+  "capstone_for": "rl-track (ch-37..ch-46)",
+  "sources": [
+    {
+      "path": "wiki/raw-data/llm-training/papers/dpo.md",
+      "relevance": 1.0,
+      "role": "primary",
+      "what_to_extract": "DPO loss Eq. 7 with beta ratio form; implicit reward r_hat = beta log(pi/pi_ref); gradient form showing automatic sigma(.) weighting; hparams (beta 0.05-0.5, LR 5e-7 to 1e-6, batch 32-128, 1-3 epochs, pi_ref frozen); known length-hacking failure mode."
+    },
+    {
+      "path": "wiki/raw-data/llm-training/papers/grpo.md",
+      "relevance": 1.0,
+      "role": "primary",
+      "what_to_extract": "GRPO Eq. 3 with group-mean baseline; k3 KL estimator inside loss; advantage A_i = (r_i - mean)/std; hparams (G=64, clip 0.2, beta 0.04, LR 1e-6, batch 1024, T=1.0); outcome-supervision variant used for RLVR-math."
+    },
+    {
+      "path": "wiki/raw-data/llm-training/papers/dr-grpo.md",
+      "relevance": 1.0,
+      "role": "primary",
+      "what_to_extract": "Length-bias mechanism: 1/|o_i| normalization + negative advantages makes long wrong answers cheap; Dr.GRPO drops std and uses fixed L_max instead of |o_i|; Figure 1 length curve; ~30% shorter completions at equal accuracy."
+    },
+    {
+      "path": "wiki/raw-data/llm-training/papers/rlvr-tulu3.md",
+      "relevance": 1.0,
+      "role": "primary",
+      "what_to_extract": "Verifier-as-reward setup; three verifier domains (math SymPy, IFEval regex, code unit-test); PPO hparams for RLVR (batch 128, n=4 rollouts, LR 1e-6, beta_KL 0.04, clip 0.2, GAE lambda 0.95); hacking mode: string-match graders accepting 42 inside prose."
+    },
+    {
+      "path": "wiki/raw-data/llm-training/frameworks/trl-grpo.md",
+      "relevance": 1.0,
+      "role": "primary",
+      "what_to_extract": "_compute_loss body with loss_type branches (grpo vs dr_grpo vs bnpo vs dapo vs cispo); coef_1/coef_2 asymmetric clip; per_token_kl k3 estimator; aggregation differences; entropy always logged via _metrics[mode][entropy]."
+    },
+    {
+      "path": "wiki/raw-data/llm-training/frameworks/openrlhf-ppo.md",
+      "relevance": 0.9,
+      "role": "primary",
+      "what_to_extract": "PolicyLoss forward returning (loss, clip_ratio, ppo_kl, vllm_kl); AdaptiveKLController target-KL recipe at line 172 of ppo_trainer.py; vllm IS correction (tis, icepop, seq-mask-tis); token-level KL reward factorization."
+    },
+    {
+      "path": "wiki/raw-data/llm-training/frameworks/verl-grpo.md",
+      "relevance": 0.9,
+      "role": "primary",
+      "what_to_extract": "compute_grpo_outcome_advantage code; norm_adv_by_std_in_grpo toggle (GRPO vs Dr.GRPO); singleton-group zero advantage; (advantages, returns) same tensor, no critic; registry-pluggable adv estimator + reused compute_policy_loss_vanilla."
+    },
+    {
+      "path": "wiki/raw-data/llm-training/papers/entropy-mechanism-llm-rl.md",
+      "relevance": 1.0,
+      "role": "primary",
+      "what_to_extract": "R = -a*exp(H) + b empirical law; covariance theorem (dH/dt proportional to -Cov(log pi, A)); collapse signal H<0.1 nats; Clip-Cov detaches top 2% covariance tokens; KL-Cov applies per-token KL to outliers only; vanilla entropy bonus under/over-corrects."
+    },
+    {
+      "path": "wiki/raw-data/llm-training/papers/reward-hacking-taxonomy.md",
+      "relevance": 0.9,
+      "role": "primary",
+      "what_to_extract": "Formal unhackability impossibility theorem; hacking modes (sycophancy, length bias, sentiment bias, formatting bias, RM blind spots); structural fixes (bounded optimization, KL budget, verifier grounding) beat cleverer proxies; motivation for early stopping + KL control."
+    },
+    {
+      "path": "wiki/raw-data/llm-training/blogs/openrlhf-entropy-debugging.md",
+      "relevance": 1.0,
+      "role": "primary",
+      "what_to_extract": "Standard logged metrics (entropy, KL(pi||pi_ref), PPO ratio, reward mean/std, clipped-frac, length histogram); triage order (1)confirm KL term (2)bump T 0.1-0.2 (3)raise c_H order of magnitude (4)check adv norm (5)then suspect reward; common failure patterns from issues."
+    },
+    {
+      "path": "wiki/raw-data/llm-training/blogs/karpathy-training-neural-net-recipe.md",
+      "relevance": 1.0,
+      "role": "grounding",
+      "what_to_extract": "Neural net training fails silently; overfit-one-batch sanity; predict-outcome-before-run; monitor-and-clip gradients; Adam 3e-4 default; do not be a hero; apply to RL where silent failures include reward hacking, KL-reward mismatch, broken tokenization in rollout vs train."
+    }
+  ],
+  "previous_chapters": [
+    "ch-37",
+    "ch-38",
+    "ch-39",
+    "ch-40",
+    "ch-41",
+    "ch-42",
+    "ch-43",
+    "ch-44",
+    "ch-45"
+  ],
+  "next_chapters": ["ch-47"],
+  "style_reference": "wiki/courses/llm-training/ch-36/read.md",
+  "deliverables": [
+    "read.md (220-280 lines, lab format)",
+    "figures/rl-sweep.html (interactive 3-axis sweep cube, self-contained, ~200-280 lines)",
+    "excerpts/dpo.md",
+    "excerpts/grpo.md",
+    "excerpts/dr-grpo.md",
+    "excerpts/rlvr-tulu3.md",
+    "excerpts/entropy-mechanism-llm-rl.md",
+    "excerpts/reward-hacking-taxonomy.md",
+    "excerpts/openrlhf-entropy-debugging.md"
+  ],
+  "hard_rules": [
+    "No edits outside wiki/courses/llm-training/ch-46/",
+    "No emojis in any deliverable",
+    "No external CDN references in HTML (inline CSS/JS only)",
+    "Code sketches must be real framework calls (TRL DPOTrainer / GRPOTrainer, OpenRLHF PPOTrainer, verl grpo config), not pseudocode; cite real import paths and hparam names",
+    "Quote attested parameter values from raw-data sources; label inferred defaults when not attested",
+    "Capstone rule: chapter closes the RL track -- integrates DPO (ch-37/38), PPO-family (ch-39), GRPO (ch-40), on/off-policy (ch-41), reward-hacking (ch-42), entropy/KL (ch-43), RLVR (ch-44), self-improvement (ch-45); produces the reference-policy checkpoint and instrumentation template that Eval and Infra tracks consume downstream"
+  ]
+}

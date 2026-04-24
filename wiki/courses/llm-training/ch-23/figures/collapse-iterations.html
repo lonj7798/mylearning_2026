@@ -1,0 +1,399 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Model Collapse — Gaussian-mixture density across generations</title>
+<style>
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+         max-width: 1120px; margin: 2em auto; padding: 0 1em; color: #222;
+         background: #fafafa; }
+  h1 { font-size: 1.35em; margin-bottom: 0.2em; }
+  .subtitle { color: #666; margin-top: 0; font-size: 0.95em; }
+  .layout { display: grid; grid-template-columns: 1.3fr 1fr; gap: 1.2em;
+            margin-top: 1.2em; }
+  .panel { border: 1px solid #dcdcdc; border-radius: 6px; background: #fff;
+           padding: 0.9em 1.1em; }
+  h2 { font-size: 1.05em; margin: 0 0 0.6em 0; color: #333;
+       border-bottom: 1px solid #eee; padding-bottom: 0.3em; }
+  .slider-row { display: grid; grid-template-columns: 170px 1fr 58px; gap: 0.7em;
+                align-items: center; padding: 0.35em 0; }
+  .slider-label { font-size: 0.87em; font-weight: 600; color: #333; }
+  .slider-val { font-family: 'SF Mono', Menlo, monospace; font-size: 0.82em;
+                color: #345; text-align: right; }
+  input[type="range"] { width: 100%; }
+  canvas { display: block; width: 100%; height: 320px; background: #fff;
+           border: 1px solid #e0e0e0; border-radius: 4px; }
+  .metric-row { display: flex; justify-content: space-between;
+                padding: 0.35em 0.1em; border-bottom: 1px dashed #eee;
+                font-size: 0.88em; }
+  .metric-row:last-child { border-bottom: none; }
+  .metric-name { color: #333; }
+  .metric-val  { font-family: 'SF Mono', Menlo, monospace; color: #0a4; font-weight: 600; }
+  .metric-val.warn { color: #a60; }
+  .metric-val.bad  { color: #a20; }
+  .legend { font-size: 0.78em; color: #555; margin-top: 0.4em; }
+  .note { font-size: 0.82em; color: #666; margin-top: 1em; line-height: 1.5; }
+  code { background: #eef; padding: 1px 4px; border-radius: 3px;
+         font-family: 'SF Mono', Menlo, monospace; font-size: 0.85em; }
+  .preset { font-size: 0.82em; padding: 4px 10px; margin-right: 0.4em;
+            border: 1px solid #bbb; background: #f4f4f4; border-radius: 4px;
+            cursor: pointer; }
+  .preset:hover { background: #e8e8e8; }
+</style>
+</head>
+<body>
+
+<h1>Model Collapse — Gaussian-mixture density across generations</h1>
+<p class="subtitle">
+  Iterated sample-and-refit on a 5-component Gaussian mixture. Move the sliders
+  to change anchor persistence and verifier pass-rate; watch tails survive or die
+  across generations 0→10. Source: <code>[[model-collapse]]</code>,
+  <code>[[faithful-synth-eval]]</code>.
+</p>
+
+<div class="layout">
+
+  <div class="panel">
+    <h2>Density p<sub>n</sub>(x) — generations 0 (dark) → 10 (light)</h2>
+    <canvas id="densityCanvas" width="720" height="320"></canvas>
+    <div class="legend">
+      True distribution: bold black. Each generation refits from `N` samples of the
+      previous generation's model. <strong>Pure recursion</strong> (anchor=0,
+      verifier=0) reproduces Shumailov's tail-collapse curve.
+    </div>
+  </div>
+
+  <div>
+    <div class="panel">
+      <h2>Controls</h2>
+      <div class="slider-row">
+        <span class="slider-label">Fresh-human anchor</span>
+        <input type="range" id="anchor" min="0" max="100" step="1" value="0">
+        <span class="slider-val" id="anchorVal">0%</span>
+      </div>
+      <div class="slider-row">
+        <span class="slider-label">Verifier pass-rate</span>
+        <input type="range" id="verifier" min="0" max="100" step="1" value="0">
+        <span class="slider-val" id="verifierVal">0%</span>
+      </div>
+      <div class="slider-row">
+        <span class="slider-label">Samples per gen (N)</span>
+        <input type="range" id="nsample" min="50" max="2000" step="50" value="300">
+        <span class="slider-val" id="nsampleVal">300</span>
+      </div>
+      <div style="margin-top: 0.6em;">
+        <button class="preset" data-a="0"   data-v="0"   data-n="300">Shumailov pure</button>
+        <button class="preset" data-a="10"  data-v="0"   data-n="300">10% accumulate</button>
+        <button class="preset" data-a="0"   data-v="60"  data-n="300">Verifier-only</button>
+        <button class="preset" data-a="30"  data-v="60"  data-n="500">Production gate</button>
+      </div>
+    </div>
+
+    <div class="panel" style="margin-top: 1em;">
+      <h2>Tail metrics at gen 10</h2>
+      <div class="metric-row">
+        <span class="metric-name">Rare-mode recall</span>
+        <span class="metric-val" id="recallVal">—</span>
+      </div>
+      <div class="metric-row">
+        <span class="metric-name">KL(p<sub>10</sub> ‖ p<sub>0</sub>)</span>
+        <span class="metric-val" id="klVal">—</span>
+      </div>
+      <div class="metric-row">
+        <span class="metric-name">Surviving components</span>
+        <span class="metric-val" id="survVal">—</span>
+      </div>
+      <div class="metric-row">
+        <span class="metric-name">Effective variance σ<sub>n</sub>²</span>
+        <span class="metric-val" id="varVal">—</span>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<div class="note">
+  <strong>Mechanism.</strong> At each generation, draw <code>N</code> samples from
+  <code>p<sub>n</sub></code>; if verifier pass-rate <code>v</code> &gt; 0, reject a
+  sample with probability <code>v · d(x, true_support)</code> (samples far from true
+  support more likely rejected); mix surviving samples with an <code>a</code>-fraction
+  re-sampled from the true distribution; refit mixture weights and means on the mixed
+  batch. The recursion <code>Var[ŵ<sub>k</sub>] ≈ n·w<sub>k</sub>(1-w<sub>k</sub>)/N</code>
+  drives the low-weight components to zero first; once a component hits zero, it is
+  irretrievable.
+</div>
+
+<script>
+// --- True distribution: 5-component Gaussian mixture with heavy-tailed low-weight modes ---
+const TRUE_WEIGHTS = [0.45, 0.30, 0.15, 0.07, 0.03];
+const TRUE_MEANS   = [-3.0, -0.8,  1.4,  3.6,  5.8];
+const SIGMA        = 0.55;
+const N_COMPS      = TRUE_WEIGHTS.length;
+const N_GENS       = 11;            // generations 0..10
+const X_MIN        = -7, X_MAX = 8;
+const X_RES        = 360;           // density grid resolution
+
+function gaussianPdf(x, mu, sigma) {
+  const z = (x - mu) / sigma;
+  return Math.exp(-0.5 * z * z) / (sigma * Math.sqrt(2 * Math.PI));
+}
+
+function mixturePdf(x, weights, means, sigma) {
+  let s = 0;
+  for (let k = 0; k < weights.length; k++) {
+    s += weights[k] * gaussianPdf(x, means[k], sigma);
+  }
+  return s;
+}
+
+// --- Refit: given mixed samples, re-estimate component weights (means fixed for clarity) ---
+// Each sample is assigned (soft) to the nearest component; rare components lose mass fast.
+function refitWeights(samples, means, sigma) {
+  const w = new Array(means.length).fill(0);
+  for (const x of samples) {
+    // Soft assignment via responsibilities under current means, uniform prior.
+    const r = means.map(mu => gaussianPdf(x, mu, sigma));
+    const Z = r.reduce((a,b)=>a+b, 1e-12);
+    for (let k = 0; k < means.length; k++) w[k] += r[k] / Z;
+  }
+  const total = w.reduce((a,b)=>a+b, 1e-12);
+  for (let k = 0; k < w.length; k++) w[k] /= total;
+  // Strict kill: once a weight drops below 1/(4N), it's gone (tail-loss irrecoverability)
+  const threshold = 1 / (4 * Math.max(samples.length, 1));
+  for (let k = 0; k < w.length; k++) if (w[k] < threshold) w[k] = 0;
+  const total2 = w.reduce((a,b)=>a+b, 1e-12);
+  for (let k = 0; k < w.length; k++) w[k] /= total2;
+  return w;
+}
+
+// --- Sample from mixture ---
+function sampleMixture(weights, means, sigma, n, seedState) {
+  const samples = [];
+  const cum = [];
+  let s = 0;
+  for (const w of weights) { s += w; cum.push(s); }
+  for (let i = 0; i < n; i++) {
+    const u = seededRand(seedState);
+    let k = 0; while (k < cum.length && u > cum[k]) k++;
+    if (k >= means.length) k = means.length - 1;
+    const g = seededGauss(seedState);
+    samples.push(means[k] + sigma * g);
+  }
+  return samples;
+}
+
+// --- Deterministic PRNG for reproducibility across slider moves ---
+function seededRand(state) {
+  state.s = (state.s * 1664525 + 1013904223) >>> 0;
+  return state.s / 4294967296;
+}
+function seededGauss(state) {
+  // Box–Muller
+  let u1 = seededRand(state); if (u1 < 1e-9) u1 = 1e-9;
+  const u2 = seededRand(state);
+  return Math.sqrt(-2 * Math.log(u1)) * Math.cos(2 * Math.PI * u2);
+}
+
+// --- Verifier: rejects samples far from true support ---
+function verifierFilter(samples, trueWeights, trueMeans, sigma, passRate, seedState) {
+  if (passRate <= 0) return samples;
+  const out = [];
+  for (const x of samples) {
+    const pTrue = mixturePdf(x, trueWeights, trueMeans, sigma);
+    // Reject with probability proportional to (1 - normalized pTrue) × passRate
+    const pMax = 0.72;  // approx max of true mixture
+    const novelty = Math.max(0, 1 - pTrue / pMax);  // 0 on-support, →1 off-support
+    const rejectProb = passRate * novelty;
+    if (seededRand(seedState) >= rejectProb) out.push(x);
+  }
+  return out.length > 0 ? out : samples;    // never empty
+}
+
+// --- Run the full simulation ---
+function runSimulation(anchorPct, verifierPct, N) {
+  const anchor = anchorPct / 100;
+  const verifier = verifierPct / 100;
+  const seedState = { s: 20240502 };
+
+  const allWeights = [TRUE_WEIGHTS.slice()];
+  let curWeights = TRUE_WEIGHTS.slice();
+
+  for (let gen = 1; gen < N_GENS; gen++) {
+    // Step A: sample N from current model
+    let syn = sampleMixture(curWeights, TRUE_MEANS, SIGMA, N, seedState);
+    // Step B: verifier filter
+    syn = verifierFilter(syn, TRUE_WEIGHTS, TRUE_MEANS, SIGMA, verifier, seedState);
+    // Step C: mix with anchor from true distribution
+    const nAnchor = Math.round(N * anchor);
+    if (nAnchor > 0) {
+      const anchorSamples = sampleMixture(TRUE_WEIGHTS, TRUE_MEANS, SIGMA,
+                                          nAnchor, seedState);
+      syn = syn.concat(anchorSamples);
+    }
+    // Step D: refit weights
+    curWeights = refitWeights(syn, TRUE_MEANS, SIGMA);
+    allWeights.push(curWeights.slice());
+  }
+  return allWeights;
+}
+
+// --- Metrics ---
+function rareModeRecall(weights) {
+  // Fraction of initially-low-weight components (w<0.10) with >0 weight at gen 10
+  let rareTotal = 0, rareAlive = 0;
+  for (let k = 0; k < TRUE_WEIGHTS.length; k++) {
+    if (TRUE_WEIGHTS[k] < 0.10) {
+      rareTotal++;
+      if (weights[k] > 1e-3) rareAlive++;
+    }
+  }
+  return rareTotal > 0 ? rareAlive / rareTotal : 1;
+}
+
+function klDivergence(p, q) {
+  // KL via grid quadrature
+  let kl = 0;
+  const dx = (X_MAX - X_MIN) / 500;
+  for (let i = 0; i < 500; i++) {
+    const x = X_MIN + (i + 0.5) * dx;
+    const pv = mixturePdf(x, p, TRUE_MEANS, SIGMA);
+    const qv = mixturePdf(x, q, TRUE_MEANS, SIGMA);
+    if (pv > 1e-9 && qv > 1e-9) kl += pv * Math.log(pv / qv) * dx;
+  }
+  return Math.max(kl, 0);
+}
+
+function survivingComponents(weights) {
+  return weights.filter(w => w > 1e-3).length;
+}
+
+function effectiveVariance(weights) {
+  // Weighted variance of means (proxy for spread) + σ²
+  const mean = weights.reduce((s, w, k) => s + w * TRUE_MEANS[k], 0);
+  const varMeans = weights.reduce((s, w, k) => s + w * (TRUE_MEANS[k]-mean)**2, 0);
+  return varMeans + SIGMA * SIGMA;
+}
+
+// --- Rendering ---
+const canvas = document.getElementById("densityCanvas");
+const ctx = canvas.getContext("2d");
+
+function drawDensities(allWeights) {
+  const W = canvas.width, H = canvas.height;
+  ctx.clearRect(0, 0, W, H);
+
+  // Axes
+  ctx.strokeStyle = "#ccc"; ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.moveTo(40, H-28); ctx.lineTo(W-10, H-28); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(40, 10);    ctx.lineTo(40, H-28);  ctx.stroke();
+  ctx.fillStyle = "#666"; ctx.font = "11px sans-serif";
+  for (let v = X_MIN; v <= X_MAX; v += 2) {
+    const px = 40 + (W-50) * (v-X_MIN)/(X_MAX-X_MIN);
+    ctx.fillText(v.toFixed(0), px-4, H-12);
+  }
+  ctx.fillText("x", W-18, H-12);
+  ctx.fillText("p(x)", 8, 16);
+
+  // y-range: max across all generations + true
+  let yMax = 0;
+  const gridX = [];
+  for (let i = 0; i < X_RES; i++) {
+    gridX.push(X_MIN + i * (X_MAX - X_MIN) / (X_RES - 1));
+  }
+  const trueVals = gridX.map(x => mixturePdf(x, TRUE_WEIGHTS, TRUE_MEANS, SIGMA));
+  yMax = Math.max(yMax, ...trueVals);
+  const genVals = allWeights.map(w => gridX.map(x => mixturePdf(x, w, TRUE_MEANS, SIGMA)));
+  for (const g of genVals) for (const v of g) if (v > yMax) yMax = v;
+
+  function screenX(x) { return 40 + (W-50) * (x - X_MIN) / (X_MAX - X_MIN); }
+  function screenY(y) { return (H-28) - (H-40) * y / (yMax * 1.05); }
+
+  // Generation curves — dark (gen 0) to light (gen 10)
+  for (let g = 0; g < allWeights.length; g++) {
+    const t = g / (allWeights.length - 1);
+    const r = Math.round(40 + 180 * t);
+    const gcol = Math.round(80 + 120 * t);
+    const b = Math.round(180 - 80 * t);
+    ctx.strokeStyle = `rgba(${r},${gcol},${b},0.75)`;
+    ctx.lineWidth = g === 0 ? 2.2 : 1.3;
+    ctx.beginPath();
+    for (let i = 0; i < X_RES; i++) {
+      const sx = screenX(gridX[i]);
+      const sy = screenY(genVals[g][i]);
+      if (i === 0) ctx.moveTo(sx, sy); else ctx.lineTo(sx, sy);
+    }
+    ctx.stroke();
+  }
+
+  // True distribution — bold black dashed
+  ctx.setLineDash([4, 3]);
+  ctx.strokeStyle = "#000"; ctx.lineWidth = 1.8;
+  ctx.beginPath();
+  for (let i = 0; i < X_RES; i++) {
+    const sx = screenX(gridX[i]);
+    const sy = screenY(trueVals[i]);
+    if (i === 0) ctx.moveTo(sx, sy); else ctx.lineTo(sx, sy);
+  }
+  ctx.stroke();
+  ctx.setLineDash([]);
+}
+
+// --- Wire up ---
+const anchorEl   = document.getElementById("anchor");
+const verifierEl = document.getElementById("verifier");
+const nsampleEl  = document.getElementById("nsample");
+const anchorVal   = document.getElementById("anchorVal");
+const verifierVal = document.getElementById("verifierVal");
+const nsampleVal  = document.getElementById("nsampleVal");
+const recallVal   = document.getElementById("recallVal");
+const klVal       = document.getElementById("klVal");
+const survVal     = document.getElementById("survVal");
+const varVal      = document.getElementById("varVal");
+
+function classify(el, val, okBelow, warnBelow) {
+  el.classList.remove("warn", "bad");
+  if (val > warnBelow) el.classList.add("bad");
+  else if (val > okBelow) el.classList.add("warn");
+}
+
+function recompute() {
+  const a = +anchorEl.value, v = +verifierEl.value, n = +nsampleEl.value;
+  anchorVal.textContent   = a + "%";
+  verifierVal.textContent = v + "%";
+  nsampleVal.textContent  = n;
+  const allW = runSimulation(a, v, n);
+  drawDensities(allW);
+
+  const last = allW[allW.length - 1];
+  const rr   = rareModeRecall(last);
+  const kl   = klDivergence(TRUE_WEIGHTS, last);
+  const sc   = survivingComponents(last);
+  const ev   = effectiveVariance(last);
+
+  recallVal.textContent = (rr * 100).toFixed(0) + "%";
+  classify(recallVal, 1 - rr, 0.25, 0.50);   // bad if >50% lost
+  klVal.textContent     = kl.toFixed(3);
+  classify(klVal, kl, 0.10, 0.30);
+  survVal.textContent   = `${sc} / ${N_COMPS}`;
+  classify(survVal, N_COMPS - sc, 0.5, 1.5);
+  varVal.textContent    = ev.toFixed(3);
+}
+
+anchorEl.addEventListener("input", recompute);
+verifierEl.addEventListener("input", recompute);
+nsampleEl.addEventListener("input", recompute);
+
+document.querySelectorAll(".preset").forEach(btn => {
+  btn.addEventListener("click", () => {
+    anchorEl.value   = btn.dataset.a;
+    verifierEl.value = btn.dataset.v;
+    nsampleEl.value  = btn.dataset.n;
+    recompute();
+  });
+});
+
+recompute();
+</script>
+
+</body>
+</html>
