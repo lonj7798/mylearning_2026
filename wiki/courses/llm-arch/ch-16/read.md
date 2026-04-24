@@ -255,7 +255,7 @@ These approaches trade exact attention for scalable approximation. They work wel
 
 ## 5. RAG vs. Long Context
 
-Retrieval-Augmented Generation (RAG) represents a fundamentally different paradigm: instead of processing a long document within the model's context window, retrieve the relevant chunks and inject only those into a short context.
+Retrieval-Augmented Generation (RAG), introduced by Lewis et al. ([[rag|paper]]), represents a fundamentally different paradigm: instead of processing a long document within the model's context window, retrieve the relevant chunks and inject only those into a short context. The original RAG formulation pairs a dense retriever with a seq2seq generator (BART) and jointly fine-tunes the query encoder and generator so that retrieval and generation co-adapt; the paper also introduced the RAG-Sequence vs. RAG-Token distinction (conditioning on a single passage for the whole output vs. marginalizing per token). Modern RAG pipelines typically use a dense dual-encoder retriever in the style of DPR ([[dpr|paper]]), which trains a BERT-based question encoder and passage encoder with contrastive in-batch negatives and retrieves top-k via approximate maximum inner product search over a pre-indexed corpus.
 
 ### When RAG Wins
 
@@ -367,6 +367,8 @@ ALiBi extrapolates to 2x training length with zero fine-tuning — a feat that R
 - [[gemma-3|Google DeepMind, "Gemma 3 Technical Report" (2025) (report)]] — 5:1 local/global hybrid, dual RoPE frequencies
 - [[eleutherai-rope|EleutherAI, "Rotary Embeddings: A Relative Revolution" (blog)]] — RoPE derivation and frequency analysis
 - Liu et al., "Lost in the Middle: How Language Models Use Long Contexts" (2023) — U-shaped attention bias
+- [[dpr|Karpukhin et al., "Dense Passage Retrieval for Open-Domain Question Answering" (2020) (paper)]] — DPR dual-encoder retriever, foundational for modern RAG
+- [[rag|Lewis et al., "Retrieval-Augmented Generation for Knowledge-Intensive NLP Tasks" (2020) (paper)]] — RAG architecture, RAG-Sequence vs. RAG-Token, hot-swappable non-parametric memory
 - Chen et al., "Extending Context Window of Large Language Models via Position Interpolation" (2023) — Position Interpolation
 - bloc97, "NTK-Aware Scaled RoPE" (2023) — NTK-aware interpolation
 - Wu et al., "Memorizing Transformers" (2022) — kNN-augmented attention for long context

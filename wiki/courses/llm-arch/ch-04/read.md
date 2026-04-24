@@ -26,6 +26,8 @@ This chapter traces the GPT lineage from GPT-1 ([[gpt-1|paper]]) (117M parameter
 
 Understanding this lineage is prerequisite for every architecture case study in Phase 5 ([[ch-18]] through [[ch-24]]), because every modern model is a variation on the decoder-only theme established here.
 
+A conceptual precursor worth flagging: Pointer Networks ([[pointer-networks|paper]], Vinyals et al. 2015) repurposed attention from an internal alignment tool into the *output distribution itself* — attention weights directly became the probability of selecting each input position. This reframing of attention as computation (not just alignment) foreshadowed the way decoder-only self-attention uses attention weights to route information between positions for every prediction.
+
 ---
 
 ## 1. Causal Masking: The Mechanism That Makes It Work
@@ -457,3 +459,4 @@ GPT-2 reuses the input embedding matrix (transposed) as the output projection th
 - Raffel et al. "Exploring the Limits of Transfer Learning with a Unified Text-to-Text Transformer" (T5, 2020)
 - Kaplan et al. "Scaling Laws for Neural Language Models" (2020) — see [[ch-10]]
 - Vaswani et al. "Attention Is All You Need" (2017) — see [[ch-03]]
+- [[pointer-networks|Vinyals, O., Fortunato, M., & Jaitly, N. "Pointer Networks." NeurIPS 2015. arXiv:1506.03134. — paper]]

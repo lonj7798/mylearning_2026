@@ -97,7 +97,7 @@ This context vector $c_t$ changes at every decoding step — the decoder dynamic
 
 The key insight was framing attention as **soft alignment** rather than hard selection. The model doesn't pick one source position — it takes a weighted combination of all positions. This is differentiable (no need for REINFORCE or other discrete optimization tricks), stable to train, and naturally handles one-to-many and many-to-one alignments that are common in translation.
 
-Critically, the attention weights $\alpha_{tj}$ learned to match known linguistic alignment patterns without any alignment supervision. The model discovered word correspondences purely from the translation objective. This was the first strong evidence that attention functions as a general-purpose information routing mechanism, not just a translation trick.
+Critically, the attention weights $\alpha_{tj}$ learned to match known linguistic alignment patterns without any alignment supervision. The model discovered word correspondences purely from the translation objective. This was the first strong evidence that attention functions as a general-purpose information routing mechanism, not just a translation trick. Vinyals et al. (2015) ([[pointer-networks|paper]]) took this further by using attention weights directly as the output distribution -- "pointing" to input positions rather than blending into a context vector -- solving problems where the output vocabulary varies with the input length.
 
 ---
 
@@ -131,7 +131,7 @@ This analogy is useful for initial intuition but breaks down in important ways:
 
 3. **The output is a weighted blend, not a retrieval.** Dictionary lookup returns a discrete entry. Attention returns a convex combination of all values — it can synthesize information from multiple positions simultaneously.
 
-A more precise analogy: attention is **content-based addressing into a soft memory**, where the address is computed by comparing a query against stored keys, and the output is an interpolation of all stored values weighted by address similarity.
+A more precise analogy: attention is **content-based addressing into a soft memory**, where the address is computed by comparing a query against stored keys, and the output is an interpolation of all stored values weighted by address similarity. This framing was made explicit by Graves et al. (2014) ([[neural-turing-machines|paper]]), whose Neural Turing Machines used attention as a differentiable read/write mechanism for external memory -- a direct conceptual precursor to the KV cache in modern Transformers.
 
 ### Why Scale by $\sqrt{d_k}$?
 
@@ -448,4 +448,6 @@ Bahdanau's attention weights cleanly corresponded to linguistic alignment. This 
 - Alammar, Jay. "The Illustrated Transformer" (2018). [[alammar-illustrated-transformer|blog]]
 - Clark et al. "What Does BERT Look At? An Analysis of BERT's Attention" (2019).
 - Voita et al. "Analyzing Multi-Head Self-Attention: Specialized Heads Do the Heavy Lifting" (2019).
+- Vinyals, Fortunato, Jaitly. "Pointer Networks" (2015). [[pointer-networks|paper]]
+- Graves, Wayne, Danihelka. "Neural Turing Machines" (2014). [[neural-turing-machines|paper]]
 - Cho et al. "Learning Phrase Representations using RNN Encoder-Decoder for Statistical Machine Translation" (2014).

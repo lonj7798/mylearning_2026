@@ -13,6 +13,8 @@ This chapter crosses from model architecture into systems design. The KV cache i
 
 The progression follows the serving stack bottom-up: first the KV cache itself (what it stores, how it grows), then PagedAttention (how to manage that memory efficiently), then continuous batching (how to schedule requests), then prefix caching (how to share computation), and finally the budget arithmetic that connects architecture to serving capacity.
 
+The KV cache has a conceptual ancestor worth naming: Neural Turing Machines ([[neural-turing-machines|paper]], Graves et al. 2014) introduced *differentiable external memory* accessed via attention — a controller reading and writing an explicit memory matrix through content-based addressing. A modern Transformer's KV cache is exactly this pattern specialized to sequence history: each decode step queries an external memory via scaled dot-product attention, and the cache is the memory matrix written to during prefill. PagedAttention's block tables then add an OS-style virtual memory layer on top of that same substrate.
+
 ---
 
 ## 1. The KV Cache: What It Stores and Why
@@ -418,3 +420,4 @@ PagedAttention's block-based memory enables natural prefix sharing: multiple req
 - [[deepseek-v2|DeepSeek AI, "DeepSeek-V2: A Strong, Economical, and Efficient MoE Language Model" (2024) (report)]] — MLA and serving throughput
 - [[mistral-7b|Jiang et al., "Mistral 7B" (2023) (report)]] — Sliding window attention and rolling buffer cache
 - Yu et al., "Orca: A Distributed Serving System for Transformer-Based Generative Models" (2022) — Continuous batching / iteration-level scheduling
+- [[neural-turing-machines|Graves, A., Wayne, G., & Danihelka, I. "Neural Turing Machines." arXiv:1410.5401, 2014. — paper]] — Differentiable external memory via attention; conceptual ancestor of KV cache as content-addressed memory

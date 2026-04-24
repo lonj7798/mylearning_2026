@@ -200,6 +200,8 @@ But DPO has a limitation: it is **off-policy**. The preference pairs in the trai
 
 This is why several production systems use iterative DPO (also called online DPO): periodically regenerate preference data using the current policy, then run another round of DPO. This approximates the on-policy exploration of RLHF while retaining DPO's simplicity.
 
+A complementary direction is **distilling alignment from larger teacher models**. Zephyr ([[zephyr|paper]]) showed that the entire DPO pipeline can run on AI-generated data: fine-tune on teacher completions (dSFT), then run DPO on GPT-4-ranked preference pairs (dDPO). The resulting 7B Zephyr-β beat Llama-2-Chat-70B on MT-Bench with no human annotation and under a day of training — a demonstration that DPO plus AI feedback removes the human-labeling bottleneck from the alignment pipeline entirely.
+
 See [DPO Derivation and Variants](excerpts/dpo-derivation.md) for the complete mathematical derivation and a survey of DPO variants (IPO, KTO, ORPO).
 
 ---
@@ -423,6 +425,7 @@ R1-Zero proved that chain-of-thought reasoning, self-verification, and dynamic c
 
 - [[instructgpt-rlhf|Ouyang et al., "Training Language Models to Follow Instructions with Human Feedback" (2022) (paper)]] -- RLHF, InstructGPT
 - [[dpo|Rafailov et al., "Direct Preference Optimization: Your Language Model is Secretly a Reward Model" (2023) (paper)]] -- DPO
+- [[zephyr|Tunstall et al., "Zephyr: Direct Distillation of LM Alignment" (2023) (paper)]] -- dSFT + dDPO, AI-feedback alignment distillation
 - [[constitutional-ai|Bai et al., "Constitutional AI: Harmlessness from AI Feedback" (2022) (paper)]] -- Constitutional AI, RLAIF
 - [[deepseek-r1|DeepSeek AI, "DeepSeek-R1: Incentivizing Reasoning Capability in LLMs via Reinforcement Learning" (2025) (report)]] -- GRPO, emergent reasoning
 - [[qwen-3|Qwen Team, "Qwen3 Technical Report" (2025) (report)]] -- dual-mode thinking, unified post-training

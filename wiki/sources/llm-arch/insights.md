@@ -28,6 +28,8 @@ Browse by category or search for a specific topic.
 | [[pitfalls-next-token]] | Teacher forcing can fail even in-distribution on planning tasks | Consider multi-token prediction for planning/reasoning tasks |
 | [[emergent-abilities]] | Some capabilities appear suddenly at scale | Evaluate at multiple scales; don't assume linear capability growth |
 | [[emergent-mirage]] | "Emergence" may be a measurement artifact of non-linear metrics | Use continuous metrics when evaluating across scales |
+| [[pointer-networks]] | Attention as output pointer solves variable-size output dictionaries | Use pointer/copy mechanisms when output must select from input |
+| [[neural-turing-machines]] | Differentiable external memory via attention enables learning of algorithmic tasks | Consider explicit memory when tasks require working memory beyond hidden states |
 
 ## Papers — Components & Techniques
 
@@ -47,6 +49,10 @@ Browse by category or search for a specific topic.
 | [[mamba-2]] | SSMs and linear attention are mathematically dual | Use SSD framework to pick faster path per hardware/length |
 | [[paged-attention]] | Virtual memory for KV cache eliminates fragmentation | Use vLLM or PagedAttention-based serving as default |
 | [[speculative-decoding]] | Draft-then-verify gives mathematically equivalent sampling 2-3× faster | Use draft model for inference speedup on autoregressive generation |
+| [[identity-mappings-resnet]] | Pure identity shortcuts + pre-activation enable 1000+ layer networks | Keep residual shortcut as pure identity; place norm before sub-layers (pre-norm) |
+| [[multi-token-prediction]] | Predicting multiple future tokens improves representations and enables self-speculative decoding | Add multi-token prediction heads during pre-training; use for self-speculative inference |
+| [[dpr]] | Dense dual-encoder beats sparse BM25 for passage retrieval | Use dense retrievers with contrastive training for open-domain QA |
+| [[rag]] | Retrieval + generation beats parametric-only for knowledge tasks | Use retrieval augmentation for factual/knowledge-heavy tasks |
 
 ## Papers — Scaling & Training
 
@@ -57,7 +63,9 @@ Browse by category or search for a specific topic.
 | [[scaling-data-constrained]] | Repeating data has diminishing returns beyond ~4 epochs | Prioritize collecting unique data over repeating existing data |
 | [[instructgpt-rlhf]] | RLHF makes small models outperform larger ones on human preference | Align via SFT then RLHF; small aligned > large unaligned |
 | [[dpo]] | Skip the reward model; policy itself defines preferences | Use DPO over full RLHF when simplicity matters |
+| [[zephyr]] | Distilled SFT + distilled DPO from AI feedback aligns 7B models to rival 70B+ | Use AI-feedback synthetic preferences + DPO when human annotation is bottleneck |
 | [[constitutional-ai]] | AI self-critique guided by principles scales alignment supervision | Define constitutional principles; use model to critique its own outputs |
+| [[gpipe]] | Micro-batch pipeline parallelism nearly eliminates pipeline bubbles for cross-device training | Use pipeline parallelism alongside tensor parallelism; tune micro-batch count to minimize bubble overhead |
 | [[megatron-lm]] | Tensor parallelism splits matrix ops across GPUs within a layer | Split attention heads and FFN columns for intra-layer parallelism |
 | [[zero]] | Shard optimizer/gradients/parameters; each GPU stores 1/N | Progressively shard (ZeRO-1→2→3) as model size grows |
 | [[ultra-scale-playbook]] | 5D parallelism (DP, TP, PP, SP, EP) must be optimized jointly | Benchmark thousands of configs; sweet spot depends on hardware |
@@ -112,4 +120,4 @@ Browse by category or search for a specific topic.
 
 ---
 
-**Total: 78 sources indexed** — 38 papers, 18 model reports, 22 blog posts/explainers.
+**Total: 84 sources indexed** — 44 papers, 18 model reports, 22 blog posts/explainers.

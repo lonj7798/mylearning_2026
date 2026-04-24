@@ -378,4 +378,5 @@ Jamba discovered that Mamba layers exhibit training loss spikes when scaled to l
 - [[flash-attention|Dao et al., "FlashAttention" (2022) (paper)]] — IO-aware exact attention, parallel with Mamba's SRAM-residency approach
 - Gu et al., "Efficiently Modeling Long Sequences with Structured State Spaces" (2021) — S4, HiPPO initialization
 - Gu et al., "HiPPO: Recurrent Memory with Optimal Polynomial Projections" (2020) — HiPPO theory
+- [[neural-turing-machines|Graves, Wayne, Danihelka, "Neural Turing Machines" (2014) (paper)]] — differentiable external memory via attention, conceptual precursor to memory-augmented architectures
 - Choromanski et al., "Rethinking Attention with Performers" (2020) — random feature linear attention

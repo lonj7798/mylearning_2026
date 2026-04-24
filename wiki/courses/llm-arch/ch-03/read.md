@@ -160,7 +160,7 @@ The Transformer's skip connections are not just a training trick — they define
 
 ### From ResNet to Transformers
 
-He et al. (2015) ([[resnet|paper]]) showed that residual connections solve the degradation problem: plain deep networks get *worse* with more layers because gradients vanish or explode. The fix: instead of learning $H(x)$, each layer learns the residual $F(x) = H(x) - x$, and the skip connection adds back the identity:
+He et al. (2015) ([[resnet|paper]]) showed that residual connections solve the degradation problem: plain deep networks get *worse* with more layers because gradients vanish or explode. The follow-up work ([[identity-mappings-resnet|paper]], He et al. 2016) proved that keeping the shortcut as a *pure* identity mapping — with normalization moved *before* the weight layers (pre-activation) — enables training of 1000+ layer networks and is the direct theoretical ancestor of pre-norm Transformers. The fix: instead of learning $H(x)$, each layer learns the residual $F(x) = H(x) - x$, and the skip connection adds back the identity:
 
 $$y = x + F(x)$$
 
@@ -514,6 +514,7 @@ The attention mechanism gets most of the research attention, but the FFN sub-lay
 
 - [[attention-is-all-you-need|Vaswani, A., Shazeer, N., Parmar, N., Uszkoreit, J., Jones, L., Gomez, A.N., Kaiser, L., & Polosukhin, I. "Attention Is All You Need." NeurIPS 2017. arXiv:1706.03762. — paper]]
 - [[resnet|He, K., Zhang, X., Ren, S., & Sun, J. "Deep Residual Learning for Image Recognition." CVPR 2016. arXiv:1512.03385. — paper]]
+- [[identity-mappings-resnet|He, K., Zhang, X., Ren, S., & Sun, J. "Identity Mappings in Deep Residual Networks." ECCV 2016. arXiv:1603.05027. — paper]]
 - [[layer-norm|Ba, J.L., Kiros, J.R., & Hinton, G.E. "Layer Normalization." arXiv:1607.06450, 2016. — paper]]
 - [[pre-norm-vs-post-norm|Xiong, R., Yang, Y., He, D., et al. "On Layer Normalization in the Transformer Architecture." ICML 2020. arXiv:2002.04745. — paper]]
 - [[alammar-illustrated-transformer|Alammar, J. "The Illustrated Transformer." jalammar.github.io/illustrated-transformer/, 2018. — blog]]

@@ -477,6 +477,7 @@ The draft-target agreement depends primarily on how predictable the tokens are, 
 ## References
 
 - [[speculative-decoding|Leviathan, Kalman, Matias, "Fast Inference from Transformers via Speculative Decoding" (2022) (paper)]] — original algorithm and mathematical proof
+- [[multi-token-prediction|Gloeckle et al., "Better & Faster LLMs via Multi-token Prediction" (2024) (paper)]] — foundational MTP paper: n=4 heads, self-speculative decoding, 3x speedup
 - [[deepseek-v3|DeepSeek AI, "DeepSeek-V3 Technical Report" (2024) (report)]] — multi-token prediction and MTP-based speculative decoding
 - [[raschka-reasoning-llms|Raschka, "Understanding Reasoning LLMs" (2025) (blog)]] — reasoning model training approaches
 - [[weng-why-we-think|Weng, "Why We Think" (2025) (blog)]] — test-time compute and chain-of-thought

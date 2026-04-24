@@ -281,7 +281,7 @@ The final representation is the embedding $x_0$ plus the sum of all layer contri
 
 $$\frac{\partial \mathcal{L}}{\partial x_l} = \frac{\partial \mathcal{L}}{\partial x_L} \cdot \prod_{k=l+1}^{L}\left(I + \frac{\partial f_k}{\partial x_{k-1}}\right)$$
 
-The identity matrix $I$ in each factor ensures a direct gradient path through the residual connections — even if $\frac{\partial f_k}{\partial x_{k-1}}$ is poorly conditioned, the $I$ term preserves signal. This is He et al.'s ([[resnet|paper]]) core ResNet insight.
+The identity matrix $I$ in each factor ensures a direct gradient path through the residual connections — even if $\frac{\partial f_k}{\partial x_{k-1}}$ is poorly conditioned, the $I$ term preserves signal. This is He et al.'s ([[resnet|paper]]) core ResNet insight, refined in their follow-up ([[identity-mappings-resnet|paper]]) which proved that any modification to the shortcut path (scaling, gating, 1x1 convolution) degrades performance at extreme depth — the shortcut must be pure identity, and normalization must be placed *before* the weight layers (pre-activation).
 
 **Superposition.** The $d$-dimensional stream must encode information from all layers simultaneously. Each layer's additive write means features can interfere, leading to the **superposition hypothesis** — models encode more features than dimensions allow by using nearly-orthogonal directions.
 
@@ -358,6 +358,7 @@ Both OLMo 2 and Gemma 3 independently converged on QK-norm as a solution to atte
 - Zhang & Sennrich, "Root Mean Square Layer Normalization" (2019) — [[rmsnorm|paper]]
 - Xiong et al., "On Layer Normalization in the Transformer Architecture" (2020) — [[pre-norm-vs-post-norm|paper]]
 - He et al., "Deep Residual Learning for Image Recognition" (2015) — [[resnet|paper]]
+- He et al., "Identity Mappings in Deep Residual Networks" (2016) — [[identity-mappings-resnet|paper]]
 - OLMo 2 Technical Report, AI2 (2025) — [[olmo-2|report]]
 - Gemma 3 Technical Report, Google DeepMind (2025) — [[gemma-3|report]]
 - Raschka, "The Big LLM Architecture Comparison" (2025) — [[raschka-llm-architecture-comparison|blog]]

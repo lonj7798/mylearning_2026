@@ -182,7 +182,7 @@ The MTP modules share the main model's embedding and output head — they do not
 
 ### 5.3 Why MTP Helps Training
 
-MTP provides **denser training signal** per forward pass. Standard next-token prediction wastes the rich intermediate representations: every hidden state is used to predict only one token, but contains information relevant to predicting many future tokens. MTP extracts this additional signal without proportionally increasing compute — the MTP modules are lightweight relative to the main Transformer.
+MTP provides **denser training signal** per forward pass. Standard next-token prediction wastes the rich intermediate representations: every hidden state is used to predict only one token, but contains information relevant to predicting many future tokens. MTP extracts this additional signal without proportionally increasing compute — the MTP modules are lightweight relative to the main Transformer. The foundational argument for multi-token prediction was developed by Gloeckle et al. (2024) ([[multi-token-prediction|paper]]), who showed that training with 4 prediction heads improves sample efficiency and enables self-speculative decoding (3x speedup) without a separate draft model.
 
 The DeepSeek-V3 report frames MTP as improving "pre-training performance," and the ablations confirm quality gains on downstream benchmarks. The mechanism likely works because predicting multiple tokens forces the model to build representations that are less myopic — capturing not just what comes next, but the broader trajectory of the text.
 
@@ -437,3 +437,4 @@ MLA's 93.3% KV cache compression *improves* quality over standard MHA. The low-r
 - [[deepseek-r1|DeepSeek AI, "DeepSeek-R1: Incentivizing Reasoning Capability in LLMs via RL" (2025) (report)]] — R1 distillation into V3 post-training
 - [[ch-07|Chapter 7: Attention Variants]] — MHA, MQA, GQA, MLA foundations
 - [[ch-14|Chapter 14: Mixture of Experts]] — MoE fundamentals, routing, load balancing
+- [[multi-token-prediction|Gloeckle et al., "Better & Faster LLMs via Multi-token Prediction" (2024) (paper)]] — foundational MTP work adopted by DeepSeek-V3

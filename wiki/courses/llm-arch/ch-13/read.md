@@ -414,6 +414,6 @@ Expert parallelism's all-to-all communication pattern is qualitatively different
 - [[ultra-scale-playbook|Tazi et al., "The Ultra-Scale Playbook: Training LLMs on GPU Clusters" (2025) (paper)]] — comprehensive 5D parallelism benchmarks
 - [[hf-nanotron|Nanotron Research, Hugging Face distributed training framework (blog)]] — reference implementation for playbook experiments
 - DeepSeek V3 Technical Report (2024) — DualPipe zero-bubble pipeline parallelism, node-constrained expert routing
-- Huang et al., "GPipe: Efficient Training of Giant Neural Networks using Pipeline Parallelism" (2019) — original pipeline parallelism with micro-batching
+- [[gpipe|Huang et al., "GPipe: Easy Scaling with Micro-Batch Pipeline Parallelism" (2019) (paper)]] — original pipeline parallelism with micro-batching
 - Qi et al., "Zero Bubble Pipeline Parallelism" (2024) — B/W decomposition for zero-bubble schedules
 - PyTorch FSDP documentation — production ZeRO-3 implementation
