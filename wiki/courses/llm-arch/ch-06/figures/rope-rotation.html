@@ -1,0 +1,306 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>RoPE Rotation — Interactive Visualizer</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{background:#1a1a2e;color:#e0e0e0;font-family:'Segoe UI',system-ui,-apple-system,sans-serif;min-height:100vh;padding:32px 20px;display:flex;flex-direction:column;align-items:center}
+h1{font-size:24px;color:#e94560;margin-bottom:6px;text-align:center}
+.subtitle{font-size:13px;color:#888;margin-bottom:28px;text-align:center;max-width:720px;line-height:1.6}
+.grid{display:grid;grid-template-columns:1fr 1fr;gap:24px;width:100%;max-width:1060px}
+@media(max-width:800px){.grid{grid-template-columns:1fr}}
+.panel{background:#16213e;border-radius:12px;padding:20px;display:flex;flex-direction:column;align-items:center}
+.panel h2{font-size:15px;color:#4ecdc4;margin-bottom:12px;text-align:center}
+canvas{border-radius:10px;background:#0f1a30}
+.controls{width:100%;max-width:1060px;margin-top:20px;background:#16213e;border-radius:12px;padding:20px 24px}
+.controls h2{font-size:14px;color:#ffd93d;margin-bottom:14px}
+.slider-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:16px}
+.slider-row{display:flex;align-items:center;gap:8px}
+.slider-row label{font-size:12px;color:#aaa;min-width:110px}
+.slider-row input[type=range]{-webkit-appearance:none;flex:1;height:5px;background:#0a1628;border-radius:3px;outline:none}
+.slider-row input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:14px;height:14px;border-radius:50%;background:#e94560;cursor:pointer}
+.slider-row .val{font-size:12px;color:#e94560;font-weight:700;min-width:56px;text-align:right;font-family:monospace}
+.readout{width:100%;max-width:1060px;margin-top:16px;display:grid;grid-template-columns:1fr 1fr 1fr;gap:16px}
+@media(max-width:800px){.readout{grid-template-columns:1fr}}
+.readout-card{background:#16213e;border-radius:10px;padding:16px 20px;text-align:center}
+.readout-card h3{font-size:12px;color:#4ecdc4;margin-bottom:6px}
+.readout-card .big{font-size:28px;font-weight:800;margin:4px 0}
+.readout-card .note{font-size:11px;color:#666;margin-top:4px}
+.proof-box{width:100%;max-width:1060px;margin-top:16px;background:#16213e;border-radius:12px;padding:20px 24px}
+.proof-box h2{font-size:14px;color:#e94560;margin-bottom:10px}
+.proof-box .formula{font-family:monospace;font-size:13px;color:#4ecdc4;background:#0a1628;padding:10px 14px;border-radius:8px;margin:8px 0;line-height:1.8;overflow-x:auto}
+.proof-box p{font-size:12px;color:#aaa;line-height:1.7}
+.legend{display:flex;gap:20px;flex-wrap:wrap;margin-top:8px;justify-content:center}
+.legend-item{font-size:11px;display:flex;align-items:center;gap:5px}
+.legend-dot{width:10px;height:10px;border-radius:50%}
+</style>
+</head>
+<body>
+
+<h1>RoPE Rotation Visualizer</h1>
+<p class="subtitle">
+  RoPE encodes position by rotating query and key vectors in independent 2D planes (one per dimension pair).
+  The dot product between any rotated q and rotated k depends <strong>only on relative position</strong> (m - n), never on absolute positions.
+  Adjust sliders to see this invariance in action.
+</p>
+
+<div class="grid">
+  <div class="panel">
+    <h2>Query Vector Rotation</h2>
+    <canvas id="cvQ" width="400" height="400"></canvas>
+    <div class="legend" style="margin-top:10px">
+      <div class="legend-item"><div class="legend-dot" style="background:#e9456066"></div> Original q</div>
+      <div class="legend-item"><div class="legend-dot" style="background:#e94560"></div> R(m) q</div>
+      <div class="legend-item"><div class="legend-dot" style="background:#ffd93d"></div> Rotation arc</div>
+    </div>
+  </div>
+  <div class="panel">
+    <h2>Key Vector Rotation</h2>
+    <canvas id="cvK" width="400" height="400"></canvas>
+    <div class="legend" style="margin-top:10px">
+      <div class="legend-item"><div class="legend-dot" style="background:#4ecdc466"></div> Original k</div>
+      <div class="legend-item"><div class="legend-dot" style="background:#4ecdc4"></div> R(n) k</div>
+      <div class="legend-item"><div class="legend-dot" style="background:#ffd93d"></div> Rotation arc</div>
+    </div>
+  </div>
+</div>
+
+<div class="controls">
+  <h2>Parameters</h2>
+  <div class="slider-grid">
+    <div class="slider-row">
+      <label>Query pos (m):</label>
+      <input type="range" id="sM" min="0" max="128" value="5">
+      <span class="val" id="vM">5</span>
+    </div>
+    <div class="slider-row">
+      <label>Key pos (n):</label>
+      <input type="range" id="sN" min="0" max="128" value="2">
+      <span class="val" id="vN">2</span>
+    </div>
+    <div class="slider-row">
+      <label>Dim pair (j):</label>
+      <input type="range" id="sJ" min="0" max="63" value="4">
+      <span class="val" id="vJ">4</span>
+    </div>
+    <div class="slider-row">
+      <label>d_model:</label>
+      <input type="range" id="sD" min="64" max="512" step="64" value="128">
+      <span class="val" id="vD">128</span>
+    </div>
+    <div class="slider-row">
+      <label>Base theta:</label>
+      <input type="range" id="sB" min="100" max="100000" step="100" value="10000">
+      <span class="val" id="vB">10000</span>
+    </div>
+  </div>
+</div>
+
+<div class="readout">
+  <div class="readout-card">
+    <h3>Rotation Frequency</h3>
+    <div class="big" style="color:#ffd93d" id="rFreq">--</div>
+    <div class="note" id="rFreqNote">theta_j = base^(-2j/d)</div>
+  </div>
+  <div class="readout-card">
+    <h3>Dot Product</h3>
+    <div class="big" style="color:#e94560" id="rDot">--</div>
+    <div class="note" id="rDotNote">cos((m-n) * theta_j)</div>
+  </div>
+  <div class="readout-card">
+    <h3>Relative Position</h3>
+    <div class="big" style="color:#4ecdc4" id="rRel">--</div>
+    <div class="note" id="rRelNote">m - n</div>
+  </div>
+</div>
+
+<!-- Relative-position proof demo -->
+<div class="proof-box">
+  <h2>Relative Position Invariance — Live Proof</h2>
+  <p>
+    The table below shows the dot product for different absolute positions (m, n) that share the <strong>same relative distance</strong>.
+    All values are identical, confirming that <code>dot(R(m)q, R(n)k) = dot(q, R(m-n)k)</code>.
+  </p>
+  <div id="proofTable" style="margin-top:12px;overflow-x:auto"></div>
+  <div class="formula" id="proofFormula">--</div>
+</div>
+
+<script>
+const $ = id => document.getElementById(id);
+const sliders = ['sM','sN','sJ','sD','sB'];
+const vals    = ['vM','vN','vJ','vD','vB'];
+
+// Fixed base vectors (unit)
+const qBase = 0.4;   // ~23 deg
+const kBase = 1.15;  // ~66 deg
+
+sliders.forEach(s => $(s).addEventListener('input', update));
+
+function theta(j, d, base) {
+  return 1.0 / Math.pow(base, 2.0 * j / d);
+}
+
+function update() {
+  const m = +$('sM').value, n = +$('sN').value, j = +$('sJ').value,
+        d = +$('sD').value, base = +$('sB').value;
+  vals.forEach((v,i) => $(v).textContent = $(sliders[i]).value);
+
+  const th = theta(j, d, base);
+  const rel = m - n;
+  const dot = Math.cos(rel * th);
+  const period = 2 * Math.PI / th;
+
+  $('rFreq').textContent = th.toFixed(6);
+  $('rFreqNote').textContent = `theta_${j} = ${base}^(-${2*j}/${d})  |  period = ${period.toFixed(0)} positions`;
+  $('rDot').textContent = dot.toFixed(6);
+  $('rDotNote').textContent = `cos((${m}-${n}) * ${th.toFixed(4)}) = cos(${rel} * ${th.toFixed(4)})`;
+  $('rRel').textContent = rel;
+  $('rRelNote').textContent = `m - n = ${m} - ${n}`;
+
+  drawCanvas($('cvQ'), qBase, m * th, '#e94560', '#e9456044', m, 'q');
+  drawCanvas($('cvK'), kBase, n * th, '#4ecdc4', '#4ecdc444', n, 'k');
+  buildProofTable(rel, th, j, d, base);
+}
+
+function drawCanvas(cv, baseAngle, rotAngle, color, dimColor, pos, label) {
+  const ctx = cv.getContext('2d');
+  const W = cv.width, H = cv.height;
+  const cx = W/2, cy = H/2, R = 160;
+  ctx.clearRect(0, 0, W, H);
+
+  // Grid
+  ctx.strokeStyle = '#1a2340';
+  ctx.lineWidth = 1;
+  for (let r = 40; r <= R; r += 40) {
+    ctx.beginPath(); ctx.arc(cx, cy, r, 0, Math.PI*2); ctx.stroke();
+  }
+
+  // Axes
+  ctx.strokeStyle = '#2a3450';
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(cx - R - 15, cy); ctx.lineTo(cx + R + 15, cy);
+  ctx.moveTo(cx, cy - R - 15); ctx.lineTo(cx, cy + R + 15);
+  ctx.stroke();
+
+  ctx.fillStyle = '#444';
+  ctx.font = '10px monospace';
+  ctx.fillText('dim 2j', cx + R + 4, cy - 4);
+  ctx.fillText('dim 2j+1', cx + 4, cy - R - 6);
+
+  // Unit circle
+  ctx.beginPath(); ctx.arc(cx, cy, R, 0, Math.PI*2);
+  ctx.strokeStyle = '#333'; ctx.lineWidth = 1.5; ctx.stroke();
+
+  // Original vector (dim)
+  drawVec(ctx, cx, cy, baseAngle, R * 0.88, dimColor, 2);
+  // Label original
+  const ox = cx + Math.cos(baseAngle) * (R * 0.88 + 18);
+  const oy = cy - Math.sin(baseAngle) * (R * 0.88 + 18);
+  ctx.fillStyle = dimColor; ctx.font = '11px sans-serif';
+  ctx.fillText(label, ox - 4, oy + 4);
+
+  // Rotation arc
+  if (Math.abs(rotAngle) > 0.005) {
+    const arcR = 50;
+    ctx.beginPath();
+    const sa = -baseAngle, ea = -(baseAngle + rotAngle);
+    ctx.arc(cx, cy, arcR, sa, ea, rotAngle > 0);
+    ctx.strokeStyle = '#ffd93d'; ctx.lineWidth = 2; ctx.stroke();
+
+    // Arc label
+    const midA = baseAngle + rotAngle / 2;
+    const lx = cx + Math.cos(midA) * (arcR + 14);
+    const ly = cy - Math.sin(midA) * (arcR + 14);
+    ctx.fillStyle = '#ffd93d'; ctx.font = '10px monospace';
+    const degStr = ((rotAngle * 180 / Math.PI) % 360).toFixed(1);
+    ctx.fillText(degStr + '\u00B0', lx - 14, ly + 4);
+  }
+
+  // Rotated vector
+  const rAngle = baseAngle + rotAngle;
+  drawVec(ctx, cx, cy, rAngle, R * 0.88, color, 3);
+  // Label rotated
+  const rx = cx + Math.cos(rAngle) * (R * 0.88 + 18);
+  const ry = cy - Math.sin(rAngle) * (R * 0.88 + 18);
+  ctx.fillStyle = color; ctx.font = 'bold 11px sans-serif';
+  ctx.fillText(`R(${pos})${label}`, rx - 16, ry + 4);
+
+  // Position trail: show ghost vectors at nearby positions
+  const trailAlpha = [0.12, 0.08, 0.05];
+  for (let t = 1; t <= 3; t++) {
+    const trailAngle = baseAngle + (rotAngle > 0 ? rotAngle - t * (rotAngle / (pos || 1)) : 0);
+    if (pos - t >= 0 && pos > 0) {
+      const tAngle = baseAngle + (pos - t) * (rotAngle / pos);
+      ctx.globalAlpha = trailAlpha[t-1];
+      drawVec(ctx, cx, cy, tAngle, R * 0.7, color, 1.5);
+      ctx.globalAlpha = 1;
+    }
+  }
+}
+
+function drawVec(ctx, ox, oy, angle, len, color, width) {
+  const ex = ox + Math.cos(angle) * len;
+  const ey = oy - Math.sin(angle) * len;
+  ctx.beginPath(); ctx.moveTo(ox, oy); ctx.lineTo(ex, ey);
+  ctx.strokeStyle = color; ctx.lineWidth = width; ctx.stroke();
+  // Arrowhead
+  const hl = 9, ha = 0.35;
+  ctx.beginPath();
+  ctx.moveTo(ex, ey);
+  ctx.lineTo(ex - hl * Math.cos(angle - ha), ey + hl * Math.sin(angle - ha));
+  ctx.moveTo(ex, ey);
+  ctx.lineTo(ex - hl * Math.cos(angle + ha), ey + hl * Math.sin(angle + ha));
+  ctx.strokeStyle = color; ctx.lineWidth = width; ctx.stroke();
+}
+
+function buildProofTable(rel, th, j, d, base) {
+  // Show 5 different (m,n) pairs with same relative distance
+  const pairs = [];
+  for (let i = 0; i < 6; i++) {
+    const pn = Math.max(0, i * 3);
+    const pm = pn + rel;
+    if (pm >= 0) pairs.push([pm, pn]);
+  }
+  // Remove duplicates
+  const unique = [];
+  const seen = new Set();
+  for (const [pm, pn] of pairs) {
+    const key = pm + ',' + pn;
+    if (!seen.has(key)) { seen.add(key); unique.push([pm, pn]); }
+  }
+
+  let html = '<table style="width:100%;border-collapse:collapse;font-size:12px;color:#ccc">';
+  html += '<tr style="border-bottom:2px solid #e94560">';
+  html += '<th style="padding:6px 10px;text-align:center;color:#e94560">m</th>';
+  html += '<th style="padding:6px 10px;text-align:center;color:#4ecdc4">n</th>';
+  html += '<th style="padding:6px 10px;text-align:center;color:#ffd93d">m - n</th>';
+  html += '<th style="padding:6px 10px;text-align:center;color:#aaa">Rotation angle (m*theta)</th>';
+  html += '<th style="padding:6px 10px;text-align:center;color:#aaa">Rotation angle (n*theta)</th>';
+  html += '<th style="padding:6px 10px;text-align:center;color:#e94560">dot(R(m)q, R(n)k)</th>';
+  html += '</tr>';
+
+  unique.slice(0, 5).forEach(([pm, pn]) => {
+    const dp = Math.cos((pm - pn) * th);
+    html += '<tr style="border-bottom:1px solid #222">';
+    html += `<td style="padding:6px 10px;text-align:center">${pm}</td>`;
+    html += `<td style="padding:6px 10px;text-align:center">${pn}</td>`;
+    html += `<td style="padding:6px 10px;text-align:center;color:#ffd93d">${pm - pn}</td>`;
+    html += `<td style="padding:6px 10px;text-align:center;font-family:monospace">${(pm * th).toFixed(4)}</td>`;
+    html += `<td style="padding:6px 10px;text-align:center;font-family:monospace">${(pn * th).toFixed(4)}</td>`;
+    html += `<td style="padding:6px 10px;text-align:center;font-weight:700;color:#e94560">${dp.toFixed(6)}</td>`;
+    html += '</tr>';
+  });
+  html += '</table>';
+  $('proofTable').innerHTML = html;
+
+  $('proofFormula').textContent =
+    `R(m)^T R(n) = R(n-m)  =>  dot product = cos((m-n) * theta_${j}) = cos(${rel} * ${th.toFixed(6)}) = ${Math.cos(rel * th).toFixed(6)}   [constant for all rows above]`;
+}
+
+update();
+</script>
+</body>
+</html>

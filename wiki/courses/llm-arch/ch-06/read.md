@@ -5,6 +5,19 @@
      see-also: [[ch-07]], [[ch-16]]
 -->
 
+## Companion Materials
+
+**Interactive Figures:**
+- [RoPE Rotation Visualizer](figures/rope-rotation-visualizer.html) -- manipulate query/key positions and frequency dimensions to see how RoPE rotates vectors in 2D planes; watch the dot product change with relative distance
+- [Positional Encoding Comparison](figures/positional-encoding-comparison.html) -- side-by-side comparison of all five methods (sinusoidal, learned, ALiBi, RoPE, iRoPE) with property scoring matrix
+
+**Deep-Dive Excerpts:**
+- [RoPE Complex Rotation Derivation](excerpts/rope-complex-rotation-derivation.md) -- full first-principles derivation in complex space, uniqueness proof, connection to sinusoidal encoding
+- [YaRN/NTK Interpolation Math](excerpts/yarn-ntk-interpolation-math.md) -- frequency-dependent scaling mathematics, attention temperature correction, comparison of extension methods
+- [iRoPE Layer Pattern](excerpts/irope-layer-pattern.md) -- Llama 4's interleaved design, why less PE helps, the 40x extrapolation achievement
+
+---
+
 ## Overview
 
 Self-attention is a set operation. Given a bag of token embeddings, the attention mechanism computes pairwise dot products and weighted sums — and the result is identical regardless of the order the tokens arrived in. Formally, attention is **permutation-equivariant**: permuting the input permutes the output in the same way, but the actual values are unchanged. Without positional encoding, "The dog bit the man" and "The man bit the dog" produce identical representations for every shared token.
@@ -202,6 +215,8 @@ Because $R^T(m) R(n) = R(n - m)$ for rotation matrices. The dot product depends 
 </div>
 </div>
 
+**[Interactive: RoPE Rotation Visualizer](figures/rope-rotation.html)** — Manipulate position indices, dimension pairs, and base theta to see how query and key vectors rotate in the complex plane. Includes a live proof table showing that the dot product is invariant to absolute position.
+
 ### 4.4 Efficient Implementation
 
 The matrix form looks expensive, but the block-diagonal structure admits an element-wise trick:
@@ -395,6 +410,8 @@ The 256K-to-10M extrapolation ratio (~40x) is far beyond what any prior method a
 ---
 
 ## 8. The Full Evolution
+
+**[Interactive: Encoding Method Comparison](figures/encoding-comparison.html)** — Side-by-side heatmaps of sinusoidal, learned, RoPE, ALiBi, and iRoPE. Drag the sequence length slider beyond training length to see which methods degrade (learned crashes, RoPE high-freq dims go OOD) and which extrapolate cleanly (ALiBi, iRoPE).
 
 <div style="background:#1a1a2e; border-radius:12px; padding:28px; margin:20px 0;">
 <div style="color:#e0e0e0; font-size:14px; margin-bottom:20px; font-family:sans-serif; font-weight:bold;">Positional Encoding Evolution Timeline</div>

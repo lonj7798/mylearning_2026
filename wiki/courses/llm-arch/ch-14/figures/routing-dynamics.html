@@ -1,0 +1,264 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>MoE Routing Dynamics: Collapse vs Balanced</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { background: #0f0f1a; color: #e0e0e0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; padding: 24px; }
+h1 { font-size: 20px; margin-bottom: 4px; color: #fff; }
+.subtitle { color: #888; font-size: 13px; margin-bottom: 24px; }
+.container { display: flex; gap: 32px; flex-wrap: wrap; justify-content: center; }
+.panel { background: #1a1a2e; border-radius: 12px; padding: 24px; flex: 1; min-width: 380px; max-width: 520px; }
+.panel-title { font-size: 15px; font-weight: bold; margin-bottom: 16px; }
+.panel-title.collapse { color: #e94560; }
+.panel-title.balanced { color: #4ecdc4; }
+.panel-title.bias { color: #ffd93d; }
+canvas { width: 100%; border-radius: 8px; background: #16213e; }
+.controls { margin-top: 16px; display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+.btn { background: #0f3460; border: 1px solid #4ecdc4; color: #4ecdc4; padding: 6px 16px; border-radius: 6px; cursor: pointer; font-size: 12px; }
+.btn:hover { background: #4ecdc4; color: #1a1a2e; }
+.btn.active { background: #4ecdc4; color: #1a1a2e; }
+.slider-group { display: flex; flex-direction: column; gap: 2px; }
+.slider-group label { font-size: 11px; color: #888; }
+.slider-group input[type=range] { width: 120px; accent-color: #4ecdc4; }
+.step-counter { font-size: 12px; color: #888; margin-left: auto; }
+.legend { margin-top: 20px; display: flex; gap: 16px; flex-wrap: wrap; justify-content: center; }
+.legend-item { display: flex; align-items: center; gap: 6px; font-size: 12px; color: #aaa; }
+.legend-color { width: 14px; height: 14px; border-radius: 3px; }
+.explanation { margin-top: 24px; background: #1a1a2e; border-radius: 12px; padding: 20px; max-width: 1072px; margin-left: auto; margin-right: auto; }
+.explanation h3 { font-size: 14px; color: #ffd93d; margin-bottom: 8px; }
+.explanation p { font-size: 13px; color: #bbb; line-height: 1.6; margin-bottom: 8px; }
+.explanation code { background: #0f3460; padding: 2px 6px; border-radius: 3px; font-size: 12px; color: #4ecdc4; }
+</style>
+</head>
+<body>
+
+<h1>MoE Routing Dynamics</h1>
+<p class="subtitle">Visualizing expert load over training steps: routing collapse vs auxiliary loss vs bias-term balancing</p>
+
+<div class="container">
+  <div class="panel">
+    <div class="panel-title collapse">No Load Balancing (Routing Collapse)</div>
+    <canvas id="canvas-collapse" width="460" height="260"></canvas>
+    <div class="step-counter">Step: <span id="step-collapse">0</span> / 200</div>
+  </div>
+  <div class="panel">
+    <div class="panel-title balanced">Auxiliary Loss (alpha = 0.01)</div>
+    <canvas id="canvas-aux" width="460" height="260"></canvas>
+    <div class="step-counter">Step: <span id="step-aux">0</span> / 200</div>
+  </div>
+  <div class="panel">
+    <div class="panel-title bias">Bias-Term Balancing (DeepSeek-V3)</div>
+    <canvas id="canvas-bias" width="460" height="260"></canvas>
+    <div class="step-counter">Step: <span id="step-bias">0</span> / 200</div>
+  </div>
+</div>
+
+<div class="controls" style="justify-content:center; margin-top:16px;">
+  <button class="btn" id="btn-play">Play</button>
+  <button class="btn" id="btn-reset">Reset</button>
+  <div class="slider-group">
+    <label>Speed</label>
+    <input type="range" id="speed-slider" min="1" max="10" value="5">
+  </div>
+  <div class="slider-group">
+    <label>Experts: <span id="expert-count-label">8</span></label>
+    <input type="range" id="expert-slider" min="4" max="16" value="8">
+  </div>
+</div>
+
+<div class="legend">
+  <div class="legend-item"><div class="legend-color" style="background:#e94560;"></div>Expert 1</div>
+  <div class="legend-item"><div class="legend-color" style="background:#4ecdc4;"></div>Expert 2</div>
+  <div class="legend-item"><div class="legend-color" style="background:#ffd93d;"></div>Expert 3</div>
+  <div class="legend-item"><div class="legend-color" style="background:#a29bfe;"></div>Expert 4</div>
+  <div class="legend-item"><div class="legend-color" style="background:#55efc4;"></div>Expert 5</div>
+  <div class="legend-item"><div class="legend-color" style="background:#fd79a8;"></div>Expert 6</div>
+  <div class="legend-item"><div class="legend-color" style="background:#74b9ff;"></div>Expert 7</div>
+  <div class="legend-item"><div class="legend-color" style="background:#dfe6e9;"></div>Expert 8</div>
+</div>
+
+<div class="explanation">
+  <h3>What you are seeing</h3>
+  <p>Each bar chart shows the fraction of tokens routed to each expert at the current training step. The ideal distribution is <code>1/N</code> per expert (uniform).</p>
+  <p><strong>Left (No Balancing):</strong> Without intervention, 1-2 experts dominate quickly. By step 100, most experts receive near-zero tokens. This is routing collapse.</p>
+  <p><strong>Center (Auxiliary Loss):</strong> The balancing loss (<code>alpha * N * sum(f_i * P_i)</code>) pulls the distribution toward uniform. Load is balanced but oscillates — the loss term competes with the main objective, causing the router to "fight" between specialization and uniformity.</p>
+  <p><strong>Right (Bias Terms):</strong> DeepSeek-V3's approach adjusts bias terms outside of gradient descent. Load converges smoothly to near-uniform without oscillation, because the bias terms do not interfere with the training loss gradient.</p>
+</div>
+
+<script>
+const COLORS = ['#e94560','#4ecdc4','#ffd93d','#a29bfe','#55efc4','#fd79a8','#74b9ff','#dfe6e9',
+                '#fab1a0','#81ecec','#ff7675','#636e72','#00cec9','#e17055','#0984e3','#6c5ce7'];
+
+let numExperts = 8;
+let step = 0;
+let maxSteps = 200;
+let playing = false;
+let speed = 5;
+let animId = null;
+
+// State for each simulation
+let collapseLoads, auxLoads, biasLoads;
+let biasTerms;
+
+function initState() {
+  step = 0;
+  const uniform = 1 / numExperts;
+  collapseLoads = Array(numExperts).fill(uniform);
+  auxLoads = Array(numExperts).fill(uniform);
+  biasLoads = Array(numExperts).fill(uniform);
+  biasTerms = Array(numExperts).fill(0);
+  // Add initial asymmetry: expert 0 gets a slight advantage
+  collapseLoads[0] += 0.05; collapseLoads[1] -= 0.03; collapseLoads[2] -= 0.02;
+  auxLoads[0] += 0.05; auxLoads[1] -= 0.03; auxLoads[2] -= 0.02;
+  biasLoads[0] += 0.05; biasLoads[1] -= 0.03; biasLoads[2] -= 0.02;
+}
+
+function normalize(arr) {
+  const sum = arr.reduce((a,b) => a+b, 0);
+  return arr.map(v => Math.max(0, v / sum));
+}
+
+function simulateStep() {
+  const N = numExperts;
+  const uniform = 1 / N;
+
+  // --- Collapse: rich-get-richer ---
+  for (let i = 0; i < N; i++) {
+    const advantage = (collapseLoads[i] - uniform) * 0.08;
+    collapseLoads[i] += advantage + (Math.random() - 0.5) * 0.005;
+    collapseLoads[i] = Math.max(0.001, collapseLoads[i]);
+  }
+  collapseLoads = normalize(collapseLoads);
+
+  // --- Auxiliary loss: pull toward uniform with oscillation ---
+  const alpha = 0.01;
+  for (let i = 0; i < N; i++) {
+    const advantage = (auxLoads[i] - uniform) * 0.04;
+    const auxPull = -alpha * N * (auxLoads[i] - uniform) * 2.5;
+    auxLoads[i] += advantage + auxPull + (Math.random() - 0.5) * 0.008;
+    auxLoads[i] = Math.max(0.001, auxLoads[i]);
+  }
+  auxLoads = normalize(auxLoads);
+
+  // --- Bias terms: smooth convergence ---
+  const gamma = 0.15;
+  for (let i = 0; i < N; i++) {
+    // Bias adjustment (non-gradient)
+    biasTerms[i] += gamma * (uniform - biasLoads[i]);
+    // Apply bias to routing (smooth)
+    const adjusted = biasLoads[i] + biasTerms[i] * 0.1;
+    biasLoads[i] = adjusted + (Math.random() - 0.5) * 0.003;
+    biasLoads[i] = Math.max(0.001, biasLoads[i]);
+  }
+  biasLoads = normalize(biasLoads);
+}
+
+function drawBars(canvasId, loads) {
+  const canvas = document.getElementById(canvasId);
+  const ctx = canvas.getContext('2d');
+  const W = canvas.width;
+  const H = canvas.height;
+  const N = loads.length;
+
+  ctx.clearRect(0, 0, W, H);
+
+  // Draw uniform line
+  const uniformY = H - (1/N) * H * 0.85 * N - 20;
+  ctx.strokeStyle = '#ffffff33';
+  ctx.lineWidth = 1;
+  ctx.setLineDash([4, 4]);
+  ctx.beginPath();
+  ctx.moveTo(30, uniformY);
+  ctx.lineTo(W - 10, uniformY);
+  ctx.stroke();
+  ctx.setLineDash([]);
+
+  // Label
+  ctx.fillStyle = '#666';
+  ctx.font = '10px sans-serif';
+  ctx.fillText('1/N', 4, uniformY + 3);
+
+  // Draw bars
+  const barWidth = Math.min(40, (W - 60) / N - 4);
+  const gap = 4;
+  const totalWidth = N * (barWidth + gap) - gap;
+  const startX = (W - totalWidth) / 2;
+
+  for (let i = 0; i < N; i++) {
+    const x = startX + i * (barWidth + gap);
+    const barH = loads[i] * H * 0.85 * N;
+    const y = H - barH - 20;
+
+    ctx.fillStyle = COLORS[i % COLORS.length];
+    ctx.beginPath();
+    ctx.roundRect(x, y, barWidth, barH, [3, 3, 0, 0]);
+    ctx.fill();
+
+    // Expert label
+    ctx.fillStyle = '#888';
+    ctx.font = '10px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText('E' + (i+1), x + barWidth/2, H - 6);
+
+    // Percentage
+    ctx.fillStyle = '#ccc';
+    ctx.font = '9px sans-serif';
+    ctx.fillText((loads[i]*100).toFixed(1) + '%', x + barWidth/2, y - 4);
+  }
+  ctx.textAlign = 'start';
+}
+
+function render() {
+  drawBars('canvas-collapse', collapseLoads);
+  drawBars('canvas-aux', auxLoads);
+  drawBars('canvas-bias', biasLoads);
+  document.getElementById('step-collapse').textContent = step;
+  document.getElementById('step-aux').textContent = step;
+  document.getElementById('step-bias').textContent = step;
+}
+
+function tick() {
+  if (!playing || step >= maxSteps) { playing = false; return; }
+  for (let s = 0; s < speed; s++) {
+    if (step < maxSteps) { simulateStep(); step++; }
+  }
+  render();
+  animId = requestAnimationFrame(tick);
+}
+
+document.getElementById('btn-play').addEventListener('click', function() {
+  if (step >= maxSteps) { initState(); render(); }
+  playing = !playing;
+  this.textContent = playing ? 'Pause' : 'Play';
+  if (playing) tick();
+});
+
+document.getElementById('btn-reset').addEventListener('click', function() {
+  playing = false;
+  document.getElementById('btn-play').textContent = 'Play';
+  initState();
+  render();
+});
+
+document.getElementById('speed-slider').addEventListener('input', function() {
+  speed = parseInt(this.value);
+});
+
+document.getElementById('expert-slider').addEventListener('input', function() {
+  numExperts = parseInt(this.value);
+  document.getElementById('expert-count-label').textContent = numExperts;
+  playing = false;
+  document.getElementById('btn-play').textContent = 'Play';
+  initState();
+  render();
+});
+
+// Init
+initState();
+render();
+</script>
+</body>
+</html>

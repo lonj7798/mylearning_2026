@@ -1,0 +1,366 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Numeric Precision Formats — FP32 / BF16 / FP16 / FP8 / INT8 / INT4</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body {
+  background: #0d1117;
+  color: #e0e0e0;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  padding: 32px;
+  max-width: 960px;
+  margin: 0 auto;
+}
+h1 { font-size: 22px; margin-bottom: 8px; color: #fff; }
+.subtitle { font-size: 13px; color: #888; margin-bottom: 32px; }
+
+.format-card {
+  background: #161b22;
+  border: 1px solid #30363d;
+  border-radius: 12px;
+  padding: 20px 24px;
+  margin-bottom: 16px;
+  transition: border-color 0.2s;
+}
+.format-card:hover { border-color: #58a6ff; }
+.format-card.active { border-color: #58a6ff; }
+
+.format-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 14px;
+  cursor: pointer;
+}
+.format-name {
+  font-size: 17px;
+  font-weight: 700;
+}
+.format-bits {
+  font-size: 14px;
+  color: #8b949e;
+  font-weight: 600;
+}
+
+.bit-layout {
+  display: flex;
+  gap: 2px;
+  margin-bottom: 12px;
+  height: 36px;
+}
+.bit-group {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 4px;
+  font-size: 10px;
+  font-weight: 700;
+  color: #fff;
+  min-width: 0;
+  flex-shrink: 0;
+  position: relative;
+}
+.bit-sign { background: #e94560; }
+.bit-exp { background: #0f3460; }
+.bit-mantissa { background: #1a7a4c; }
+.bit-int { background: #7c3aed; }
+
+.bit-label {
+  position: absolute;
+  bottom: -18px;
+  font-size: 9px;
+  color: #8b949e;
+  white-space: nowrap;
+}
+
+.format-stats {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 10px;
+  margin-top: 20px;
+}
+.stat {
+  background: #0d1117;
+  border-radius: 8px;
+  padding: 10px 14px;
+}
+.stat-label { font-size: 10px; color: #8b949e; text-transform: uppercase; letter-spacing: 0.5px; }
+.stat-value { font-size: 15px; font-weight: 700; margin-top: 2px; }
+
+.legend {
+  display: flex;
+  gap: 20px;
+  margin-bottom: 24px;
+  flex-wrap: wrap;
+}
+.legend-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: #8b949e;
+}
+.legend-swatch {
+  width: 14px;
+  height: 14px;
+  border-radius: 3px;
+}
+
+.comparison-section {
+  background: #161b22;
+  border: 1px solid #30363d;
+  border-radius: 12px;
+  padding: 20px 24px;
+  margin-top: 32px;
+}
+.comparison-section h2 {
+  font-size: 16px;
+  margin-bottom: 16px;
+}
+
+.memory-bar-container {
+  margin-bottom: 12px;
+}
+.memory-bar-label {
+  display: flex;
+  justify-content: space-between;
+  font-size: 12px;
+  margin-bottom: 4px;
+}
+.memory-bar-label span:first-child { color: #e0e0e0; font-weight: 600; }
+.memory-bar-label span:last-child { color: #8b949e; }
+.memory-bar-track {
+  background: #0d1117;
+  border-radius: 4px;
+  height: 20px;
+  overflow: hidden;
+}
+.memory-bar-fill {
+  height: 100%;
+  border-radius: 4px;
+  transition: width 0.6s ease;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  padding-right: 8px;
+  font-size: 10px;
+  font-weight: 700;
+  color: #fff;
+}
+
+.slider-section {
+  margin-top: 24px;
+}
+.slider-section label {
+  font-size: 13px;
+  color: #8b949e;
+  display: block;
+  margin-bottom: 8px;
+}
+.slider-section input[type="range"] {
+  width: 100%;
+  accent-color: #58a6ff;
+}
+.slider-value {
+  font-size: 14px;
+  font-weight: 700;
+  color: #58a6ff;
+  margin-top: 4px;
+}
+</style>
+</head>
+<body>
+
+<h1>Numeric Precision Formats for LLM Inference</h1>
+<p class="subtitle">Bit layout, dynamic range, and memory footprint for each format used in modern LLM quantization.</p>
+
+<div class="legend">
+  <div class="legend-item"><div class="legend-swatch" style="background:#e94560;"></div>Sign (1 bit)</div>
+  <div class="legend-item"><div class="legend-swatch" style="background:#0f3460;"></div>Exponent (range)</div>
+  <div class="legend-item"><div class="legend-swatch" style="background:#1a7a4c;"></div>Mantissa (precision)</div>
+  <div class="legend-item"><div class="legend-swatch" style="background:#7c3aed;"></div>Integer bits</div>
+</div>
+
+<div id="cards"></div>
+
+<div class="comparison-section">
+  <h2>Memory Footprint: 70B Parameter Model</h2>
+  <div class="slider-section">
+    <label>Model size: <span id="paramLabel" class="slider-value">70B</span> parameters</label>
+    <input type="range" id="paramSlider" min="1" max="405" value="70" step="1">
+  </div>
+  <div id="memoryBars" style="margin-top:16px;"></div>
+</div>
+
+<script>
+const formats = [
+  {
+    name: 'FP32',
+    bits: 32,
+    sign: 1, exp: 8, mant: 23,
+    type: 'float',
+    range: '~1.2e-38 to 3.4e+38',
+    precision: '~7 decimal digits',
+    use: 'Master weights (training)',
+    color: '#e94560'
+  },
+  {
+    name: 'BF16',
+    bits: 16,
+    sign: 1, exp: 8, mant: 7,
+    type: 'float',
+    range: '~1.2e-38 to 3.4e+38',
+    precision: '~2.4 decimal digits',
+    use: 'Training forward/backward',
+    color: '#f97316'
+  },
+  {
+    name: 'FP16',
+    bits: 16,
+    sign: 1, exp: 5, mant: 10,
+    type: 'float',
+    range: '~6.0e-5 to 65,504',
+    precision: '~3.3 decimal digits',
+    use: 'Inference default',
+    color: '#fbbf24'
+  },
+  {
+    name: 'FP8 (E4M3)',
+    bits: 8,
+    sign: 1, exp: 4, mant: 3,
+    type: 'float',
+    range: '~1.5e-5 to 448',
+    precision: '~1 decimal digit',
+    use: 'Training GEMM (DeepSeek-V3)',
+    color: '#4ecdc4'
+  },
+  {
+    name: 'FP8 (E5M2)',
+    bits: 8,
+    sign: 1, exp: 5, mant: 2,
+    type: 'float',
+    range: '~6.0e-8 to 57,344',
+    precision: '~0.6 decimal digits',
+    use: 'Training gradients',
+    color: '#06b6d4'
+  },
+  {
+    name: 'INT8',
+    bits: 8,
+    sign: 1, exp: 0, mant: 0, intBits: 7,
+    type: 'int',
+    range: '-128 to 127 (256 levels)',
+    precision: 'Uniform spacing',
+    use: 'Post-training quantization',
+    color: '#a78bfa'
+  },
+  {
+    name: 'INT4',
+    bits: 4,
+    sign: 1, exp: 0, mant: 0, intBits: 3,
+    type: 'int',
+    range: '-8 to 7 (16 levels)',
+    precision: 'Uniform spacing',
+    use: 'Aggressive PTQ (GPTQ/AWQ)',
+    color: '#c084fc'
+  }
+];
+
+const cardsContainer = document.getElementById('cards');
+
+formats.forEach((f, idx) => {
+  const card = document.createElement('div');
+  card.className = 'format-card';
+  card.id = `card-${idx}`;
+
+  // Build bit layout
+  let bitHTML = '';
+  const totalWidth = 100;
+  const signW = (f.sign / f.bits) * totalWidth;
+
+  bitHTML += `<div class="bit-group bit-sign" style="width:${signW}%;">S<span class="bit-label">${f.sign}b</span></div>`;
+
+  if (f.type === 'float') {
+    const expW = (f.exp / f.bits) * totalWidth;
+    const mantW = (f.mant / f.bits) * totalWidth;
+    bitHTML += `<div class="bit-group bit-exp" style="width:${expW}%;">EXP<span class="bit-label">${f.exp}b</span></div>`;
+    bitHTML += `<div class="bit-group bit-mantissa" style="width:${mantW}%;">MANTISSA<span class="bit-label">${f.mant}b</span></div>`;
+  } else {
+    const intW = (f.intBits / f.bits) * totalWidth;
+    bitHTML += `<div class="bit-group bit-int" style="width:${intW}%;">INTEGER<span class="bit-label">${f.intBits}b</span></div>`;
+  }
+
+  card.innerHTML = `
+    <div class="format-header">
+      <span class="format-name" style="color:${f.color};">${f.name}</span>
+      <span class="format-bits">${f.bits} bits</span>
+    </div>
+    <div class="bit-layout" style="padding-bottom:18px;">
+      ${bitHTML}
+    </div>
+    <div class="format-stats">
+      <div class="stat">
+        <div class="stat-label">Dynamic Range</div>
+        <div class="stat-value" style="font-size:12px;">${f.range}</div>
+      </div>
+      <div class="stat">
+        <div class="stat-label">Precision</div>
+        <div class="stat-value" style="font-size:12px;">${f.precision}</div>
+      </div>
+      <div class="stat">
+        <div class="stat-label">Primary Use</div>
+        <div class="stat-value" style="font-size:12px;">${f.use}</div>
+      </div>
+      <div class="stat">
+        <div class="stat-label">Relative Size</div>
+        <div class="stat-value">${(f.bits / 32 * 100).toFixed(0)}% of FP32</div>
+      </div>
+    </div>
+  `;
+  cardsContainer.appendChild(card);
+});
+
+// Memory bars
+const memFormats = [
+  { name: 'FP32', bits: 32, color: '#e94560' },
+  { name: 'BF16', bits: 16, color: '#f97316' },
+  { name: 'FP16', bits: 16, color: '#fbbf24' },
+  { name: 'INT8', bits: 8, color: '#a78bfa' },
+  { name: 'INT4', bits: 4, color: '#c084fc' },
+];
+
+function updateMemoryBars() {
+  const params = parseFloat(document.getElementById('paramSlider').value);
+  document.getElementById('paramLabel').textContent = params + 'B';
+
+  const container = document.getElementById('memoryBars');
+  container.innerHTML = '';
+
+  const maxGB = params * 32 / 8;
+
+  memFormats.forEach(f => {
+    const gb = (params * f.bits / 8).toFixed(1);
+    const pct = Math.max(3, (gb / maxGB) * 100);
+
+    container.innerHTML += `
+      <div class="memory-bar-container">
+        <div class="memory-bar-label">
+          <span>${f.name}</span>
+          <span>${gb} GB</span>
+        </div>
+        <div class="memory-bar-track">
+          <div class="memory-bar-fill" style="width:${pct}%; background:${f.color};">${gb} GB</div>
+        </div>
+      </div>
+    `;
+  });
+}
+
+document.getElementById('paramSlider').addEventListener('input', updateMemoryBars);
+updateMemoryBars();
+</script>
+</body>
+</html>

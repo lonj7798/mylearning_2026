@@ -1,0 +1,298 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Cross-Entropy Loss Landscape</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { background: #1a1a2e; color: #e0e0e0; font-family: 'Segoe UI', system-ui, sans-serif; padding: 20px; min-height: 100vh; }
+h1 { color: #e94560; font-size: 22px; text-align: center; margin-bottom: 6px; }
+.subtitle { color: #888; font-size: 13px; text-align: center; margin-bottom: 20px; }
+.container { max-width: 900px; margin: 0 auto; }
+.panel { background: #16213e; border-radius: 12px; padding: 20px; margin-bottom: 16px; }
+.panel-title { color: #e94560; font-weight: bold; font-size: 15px; margin-bottom: 12px; }
+canvas { width: 100%; border-radius: 8px; background: #0a0a1a; display: block; }
+.controls { display: flex; gap: 16px; flex-wrap: wrap; align-items: center; margin-bottom: 12px; }
+.controls label { font-size: 12px; color: #aaa; display: flex; align-items: center; gap: 6px; }
+.controls select, .controls input[type="range"] { accent-color: #e94560; }
+.controls select { background: #0f3460; color: #e0e0e0; border: 1px solid #333; border-radius: 4px; padding: 4px 8px; }
+.legend { display: flex; gap: 16px; justify-content: center; margin-top: 10px; flex-wrap: wrap; }
+.legend-item { display: flex; align-items: center; gap: 6px; font-size: 11px; color: #aaa; }
+.legend-dot { width: 10px; height: 10px; border-radius: 50%; }
+.info { background: #0f3460; border-radius: 8px; padding: 12px; font-size: 12px; color: #aaa; line-height: 1.6; }
+.info strong { color: #e94560; }
+.metric-row { display: flex; gap: 16px; flex-wrap: wrap; margin-bottom: 12px; }
+.mini-metric { background: #0f3460; border-radius: 8px; padding: 10px 14px; text-align: center; flex: 1; min-width: 120px; }
+.mini-metric .val { font-size: 20px; font-weight: bold; color: #4ecdc4; }
+.mini-metric .lbl { font-size: 10px; color: #888; margin-top: 2px; }
+.btn { background: #e94560; color: #fff; border: none; padding: 6px 16px; border-radius: 6px; cursor: pointer; font-size: 12px; }
+.btn:hover { background: #ff6b81; }
+.btn.secondary { background: #0f3460; border: 1px solid #e94560; color: #e94560; }
+</style>
+</head>
+<body>
+<div class="container">
+<h1>Cross-Entropy Loss Landscape</h1>
+<p class="subtitle">Watch gradient descent optimize a 3-token vocabulary model in real time</p>
+
+<div class="panel">
+<div class="panel-title">Scenario</div>
+<p style="font-size:12px; color:#aaa; margin-bottom:10px;">The model predicts a distribution over 3 tokens. The correct token is token A. We visualize the loss surface as a function of two logit dimensions (the third is fixed at 0 for identifiability). The red ball follows gradient descent toward the minimum.</p>
+<div class="controls">
+<label>Learning rate: <input type="range" id="lr" min="0.01" max="2.0" step="0.01" value="0.5"> <span id="lrVal">0.50</span></label>
+<label>Label smoothing: <select id="smoothing"><option value="0">None (hard target)</option><option value="0.1">0.1 (standard)</option><option value="0.3">0.3 (heavy)</option></select></label>
+<button class="btn" id="startBtn">Start</button>
+<button class="btn secondary" id="resetBtn">Reset</button>
+</div>
+<div class="metric-row" id="metricRow"></div>
+<canvas id="landscape" height="420"></canvas>
+<div class="legend">
+<div class="legend-item"><div class="legend-dot" style="background:#e94560;"></div> Current position</div>
+<div class="legend-item"><div class="legend-dot" style="background:#4ecdc4;"></div> Trajectory</div>
+<div class="legend-item"><div class="legend-dot" style="background:#ffd93d;"></div> Global minimum</div>
+</div>
+</div>
+
+<div class="info">
+<strong>What you are seeing:</strong> The heatmap shows cross-entropy loss as a function of logits for tokens B and C (token A logit fixed at 0).
+The minimum is at (B=-inf, C=-inf), i.e., all probability on token A. With label smoothing, the minimum shifts: the model targets P(A)=1-eps, distributing eps across B and C.
+<br><strong>Key insight:</strong> Without label smoothing, the gradient pulls logits toward -infinity (infinite confidence). Label smoothing creates a finite minimum, acting as implicit regularization.
+</div>
+</div>
+
+<script>
+const canvas = document.getElementById('landscape');
+const ctx = canvas.getContext('2d');
+let dpr, W, H;
+
+const lrSlider = document.getElementById('lr');
+const lrValEl = document.getElementById('lrVal');
+const smoothSel = document.getElementById('smoothing');
+const startBtn = document.getElementById('startBtn');
+const resetBtn = document.getElementById('resetBtn');
+
+// state
+let logitB = 2.0, logitC = 1.5; // starting position
+const logitA = 0;
+let trajectory = [];
+let running = false;
+let animId = null;
+let step = 0;
+
+// logit range for visualization
+const RANGE = 6; // -RANGE to +RANGE
+const GRID = 80;
+
+function softmax3(a, b, c) {
+  const mx = Math.max(a, b, c);
+  const ea = Math.exp(a - mx), eb = Math.exp(b - mx), ec = Math.exp(c - mx);
+  const s = ea + eb + ec;
+  return [ea / s, eb / s, ec / s];
+}
+
+function crossEntropy(b, c) {
+  const eps = parseFloat(smoothSel.value);
+  const probs = softmax3(logitA, b, c);
+  let target;
+  if (eps === 0) {
+    target = [1, 0, 0];
+  } else {
+    target = [1 - eps + eps / 3, eps / 3, eps / 3];
+  }
+  return -(target[0] * Math.log(probs[0] + 1e-12) + target[1] * Math.log(probs[1] + 1e-12) + target[2] * Math.log(probs[2] + 1e-12));
+}
+
+function gradient(b, c) {
+  const eps = parseFloat(smoothSel.value);
+  const probs = softmax3(logitA, b, c);
+  let target;
+  if (eps === 0) target = [1, 0, 0];
+  else target = [1 - eps + eps / 3, eps / 3, eps / 3];
+  // dL/d_logit_b = probs[1] - target[1], dL/d_logit_c = probs[2] - target[2]
+  return [probs[1] - target[1], probs[2] - target[2]];
+}
+
+function resize() {
+  dpr = window.devicePixelRatio || 1;
+  const rect = canvas.getBoundingClientRect();
+  W = rect.width; H = rect.height;
+  canvas.width = W * dpr; canvas.height = H * dpr;
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+}
+
+function toScreen(logitVal) {
+  return ((logitVal + RANGE) / (2 * RANGE));
+}
+
+function draw() {
+  resize();
+  const pad = { top: 30, right: 20, bottom: 40, left: 50 };
+  const plotW = W - pad.left - pad.right;
+  const plotH = H - pad.top - pad.bottom;
+
+  ctx.clearRect(0, 0, W, H);
+
+  // compute loss grid
+  let minLoss = Infinity, maxLoss = -Infinity;
+  const grid = [];
+  for (let gy = 0; gy < GRID; gy++) {
+    grid[gy] = [];
+    for (let gx = 0; gx < GRID; gx++) {
+      const b = -RANGE + (gx / (GRID - 1)) * 2 * RANGE;
+      const c = -RANGE + (gy / (GRID - 1)) * 2 * RANGE;
+      const loss = crossEntropy(b, c);
+      grid[gy][gx] = loss;
+      if (loss < minLoss) minLoss = loss;
+      if (loss > maxLoss) maxLoss = loss;
+    }
+  }
+  maxLoss = Math.min(maxLoss, 8); // clamp for vis
+
+  // draw heatmap
+  const cellW = plotW / GRID, cellH = plotH / GRID;
+  for (let gy = 0; gy < GRID; gy++) {
+    for (let gx = 0; gx < GRID; gx++) {
+      const loss = grid[gy][gx];
+      const t = Math.min((loss - minLoss) / (maxLoss - minLoss), 1);
+      // color: low loss = dark blue, high = red
+      const r = Math.floor(10 + t * 220);
+      const g = Math.floor(20 + (1 - t) * 60);
+      const b = Math.floor(80 - t * 50);
+      ctx.fillStyle = `rgb(${r},${g},${b})`;
+      ctx.fillRect(pad.left + gx * cellW, pad.top + (GRID - 1 - gy) * cellH, cellW + 1, cellH + 1);
+    }
+  }
+
+  // contour lines
+  ctx.strokeStyle = 'rgba(255,255,255,0.12)';
+  ctx.lineWidth = 0.5;
+  const contourLevels = [0.5, 1.0, 1.5, 2.0, 3.0, 4.0, 5.0];
+  for (const level of contourLevels) {
+    for (let gy = 0; gy < GRID - 1; gy++) {
+      for (let gx = 0; gx < GRID - 1; gx++) {
+        const v00 = grid[gy][gx], v10 = grid[gy][gx + 1];
+        const v01 = grid[gy + 1][gx], v11 = grid[gy + 1][gx + 1];
+        const below = [v00 < level, v10 < level, v01 < level, v11 < level];
+        const cnt = below.filter(b => b).length;
+        if (cnt > 0 && cnt < 4) {
+          const cx = pad.left + (gx + 0.5) * cellW;
+          const cy = pad.top + (GRID - 1 - gy - 0.5) * cellH;
+          ctx.beginPath(); ctx.arc(cx, cy, 1, 0, Math.PI * 2); ctx.stroke();
+        }
+      }
+    }
+  }
+
+  // axes
+  ctx.strokeStyle = '#555'; ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.moveTo(pad.left, pad.top); ctx.lineTo(pad.left, pad.top + plotH); ctx.lineTo(pad.left + plotW, pad.top + plotH); ctx.stroke();
+
+  ctx.fillStyle = '#888'; ctx.font = '10px monospace';
+  for (let v = -RANGE; v <= RANGE; v += 2) {
+    const sx = pad.left + toScreen(v) * plotW;
+    const sy = pad.top + plotH - toScreen(v) * plotH;
+    ctx.textAlign = 'center'; ctx.fillText(v.toString(), sx, pad.top + plotH + 14);
+    ctx.textAlign = 'right'; ctx.fillText(v.toString(), pad.left - 6, sy + 4);
+  }
+  ctx.fillStyle = '#888'; ctx.font = '11px sans-serif'; ctx.textAlign = 'center';
+  ctx.fillText('Logit B (token B)', pad.left + plotW / 2, H - 4);
+  ctx.save(); ctx.translate(12, pad.top + plotH / 2); ctx.rotate(-Math.PI / 2);
+  ctx.fillText('Logit C (token C)', 0, 0); ctx.restore();
+
+  // trajectory
+  if (trajectory.length > 1) {
+    ctx.strokeStyle = '#4ecdc4'; ctx.lineWidth = 2; ctx.globalAlpha = 0.7;
+    ctx.beginPath();
+    for (let i = 0; i < trajectory.length; i++) {
+      const sx = pad.left + toScreen(trajectory[i][0]) * plotW;
+      const sy = pad.top + plotH - toScreen(trajectory[i][1]) * plotH;
+      if (i === 0) ctx.moveTo(sx, sy); else ctx.lineTo(sx, sy);
+    }
+    ctx.stroke();
+    ctx.globalAlpha = 1;
+
+    // dots along trajectory
+    for (let i = 0; i < trajectory.length; i += Math.max(1, Math.floor(trajectory.length / 20))) {
+      const sx = pad.left + toScreen(trajectory[i][0]) * plotW;
+      const sy = pad.top + plotH - toScreen(trajectory[i][1]) * plotH;
+      ctx.fillStyle = 'rgba(78,205,196,0.5)'; ctx.beginPath(); ctx.arc(sx, sy, 2, 0, Math.PI * 2); ctx.fill();
+    }
+  }
+
+  // current position
+  const curSx = pad.left + toScreen(logitB) * plotW;
+  const curSy = pad.top + plotH - toScreen(logitC) * plotH;
+  ctx.fillStyle = '#e94560'; ctx.beginPath(); ctx.arc(curSx, curSy, 7, 0, Math.PI * 2); ctx.fill();
+  ctx.strokeStyle = '#fff'; ctx.lineWidth = 2; ctx.beginPath(); ctx.arc(curSx, curSy, 7, 0, Math.PI * 2); ctx.stroke();
+
+  // global minimum indicator
+  const eps = parseFloat(smoothSel.value);
+  let optB, optC;
+  if (eps === 0) {
+    optB = -RANGE + 0.5; optC = -RANGE + 0.5; // toward -inf
+  } else {
+    // finite minimum: solve for logits where softmax matches target
+    const targetA = 1 - eps + eps / 3;
+    const targetB = eps / 3;
+    // logitB_opt = log(targetB/targetA) (since logitA=0)
+    optB = Math.log(targetB / targetA);
+    optC = optB;
+  }
+  const optSx = pad.left + toScreen(Math.max(-RANGE, optB)) * plotW;
+  const optSy = pad.top + plotH - toScreen(Math.max(-RANGE, optC)) * plotH;
+  ctx.fillStyle = '#ffd93d'; ctx.beginPath(); ctx.arc(optSx, optSy, 5, 0, Math.PI * 2); ctx.fill();
+
+  // update metrics
+  const probs = softmax3(logitA, logitB, logitC);
+  const loss = crossEntropy(logitB, logitC);
+  const ppl = Math.exp(loss);
+  document.getElementById('metricRow').innerHTML = `
+    <div class="mini-metric"><div class="val">${step}</div><div class="lbl">Step</div></div>
+    <div class="mini-metric"><div class="val">${loss.toFixed(3)}</div><div class="lbl">Loss (nats)</div></div>
+    <div class="mini-metric"><div class="val">${ppl.toFixed(2)}</div><div class="lbl">Perplexity</div></div>
+    <div class="mini-metric"><div class="val">${probs[0].toFixed(3)}</div><div class="lbl">P(correct)</div></div>
+    <div class="mini-metric"><div class="val">${logitB.toFixed(2)}, ${logitC.toFixed(2)}</div><div class="lbl">Logit B, C</div></div>
+  `;
+}
+
+function doStep() {
+  const lr = parseFloat(lrSlider.value);
+  const [gB, gC] = gradient(logitB, logitC);
+  logitB -= lr * gB;
+  logitC -= lr * gC;
+  logitB = Math.max(-RANGE, Math.min(RANGE, logitB));
+  logitC = Math.max(-RANGE, Math.min(RANGE, logitC));
+  trajectory.push([logitB, logitC]);
+  step++;
+}
+
+function animate() {
+  if (!running) return;
+  doStep();
+  draw();
+  if (step < 500) animId = requestAnimationFrame(animate);
+  else running = false;
+}
+
+startBtn.addEventListener('click', () => {
+  if (running) { running = false; startBtn.textContent = 'Start'; return; }
+  running = true; startBtn.textContent = 'Pause';
+  animate();
+});
+
+resetBtn.addEventListener('click', () => {
+  running = false; startBtn.textContent = 'Start';
+  logitB = 2.0; logitC = 1.5; trajectory = [[logitB, logitC]]; step = 0;
+  draw();
+});
+
+lrSlider.addEventListener('input', () => { lrValEl.textContent = parseFloat(lrSlider.value).toFixed(2); });
+smoothSel.addEventListener('change', () => { if (!running) draw(); });
+
+trajectory = [[logitB, logitC]];
+draw();
+window.addEventListener('resize', draw);
+</script>
+</body>
+</html>

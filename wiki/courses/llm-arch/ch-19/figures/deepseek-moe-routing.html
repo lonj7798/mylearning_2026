@@ -1,0 +1,339 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>DeepSeekMoE: Fine-Grained Expert Routing</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    background: #0d1117; color: #e0e0e0; font-family: 'Segoe UI', system-ui, sans-serif;
+    display: flex; flex-direction: column; align-items: center; padding: 32px 16px; min-height: 100vh;
+  }
+  h1 { font-size: 22px; margin-bottom: 8px; color: #f0f0f0; text-align: center; }
+  .subtitle { font-size: 13px; color: #888; margin-bottom: 28px; text-align: center; max-width: 680px; line-height: 1.5; }
+
+  .controls {
+    display: flex; gap: 16px; margin-bottom: 24px; flex-wrap: wrap; justify-content: center;
+  }
+  .btn {
+    padding: 10px 20px; border-radius: 8px; border: 2px solid #30363d; background: #161b22;
+    color: #e0e0e0; font-size: 13px; font-weight: 600; cursor: pointer; transition: all 0.2s;
+  }
+  .btn:hover { border-color: #5b5bd6; color: #a0a0ff; }
+  .btn.active { border-color: #e94560; background: #1a1a3e; color: #e94560; }
+
+  .viz-container {
+    width: 100%; max-width: 860px; display: flex; flex-direction: column; gap: 24px;
+  }
+
+  /* Token row */
+  .token-row {
+    display: flex; align-items: center; gap: 12px; padding: 12px 0;
+    border-bottom: 1px solid #21262d;
+  }
+  .token-label {
+    width: 120px; font-size: 14px; font-weight: 600; flex-shrink: 0; text-align: right;
+    padding-right: 12px;
+  }
+
+  /* Expert grid */
+  .expert-grid {
+    display: flex; align-items: center; gap: 4px; flex-wrap: wrap; flex: 1;
+  }
+  .expert-cell {
+    width: 20px; height: 20px; border-radius: 3px; transition: all 0.3s;
+    cursor: default; position: relative;
+  }
+  .expert-cell.inactive { background: #161b22; border: 1px solid #21262d; }
+  .expert-cell.routed {
+    border: 1px solid rgba(233,69,96,0.6);
+    box-shadow: 0 0 6px rgba(233,69,96,0.3);
+  }
+  .expert-cell.shared {
+    background: #f0a500 !important; border: 2px solid #ffd93d !important;
+    box-shadow: 0 0 10px rgba(240,165,0,0.4);
+  }
+  .expert-cell:hover::after {
+    content: attr(data-tip); position: absolute; bottom: 100%; left: 50%;
+    transform: translateX(-50%); padding: 4px 8px; background: #30363d;
+    color: #fff; font-size: 10px; border-radius: 4px; white-space: nowrap; z-index: 10;
+    pointer-events: none;
+  }
+
+  /* Shared expert marker */
+  .shared-label {
+    font-size: 11px; color: #f0a500; font-weight: 700; width: 60px; text-align: center; flex-shrink: 0;
+  }
+
+  /* Legend */
+  .legend {
+    display: flex; gap: 24px; justify-content: center; flex-wrap: wrap;
+    margin: 16px 0; font-size: 12px;
+  }
+  .legend-item { display: flex; align-items: center; gap: 6px; }
+  .legend-swatch { width: 16px; height: 16px; border-radius: 3px; }
+
+  /* Stats */
+  .stats {
+    background: #161b22; border-radius: 12px; padding: 20px; border: 1px solid #30363d;
+    display: flex; justify-content: space-around; flex-wrap: wrap; gap: 16px;
+  }
+  .stat-item { text-align: center; min-width: 140px; }
+  .stat-item .label { font-size: 11px; color: #888; margin-bottom: 4px; text-transform: uppercase; letter-spacing: 0.5px; }
+  .stat-item .value { font-size: 24px; font-weight: 700; }
+  .stat-item .value.red { color: #e94560; }
+  .stat-item .value.gold { color: #f0a500; }
+  .stat-item .value.teal { color: #4ecdc4; }
+  .stat-item .value.purple { color: #5b5bd6; }
+
+  /* Comparison section */
+  .comparison {
+    background: #161b22; border-radius: 12px; padding: 24px; border: 1px solid #30363d;
+    margin-top: 8px;
+  }
+  .comparison h2 { font-size: 16px; margin-bottom: 16px; color: #f0f0f0; }
+  .comp-row {
+    display: flex; align-items: center; gap: 16px; margin: 10px 0; font-size: 13px;
+  }
+  .comp-name { width: 140px; font-weight: 600; flex-shrink: 0; }
+  .comp-bar-track { flex: 1; height: 24px; background: #21262d; border-radius: 6px; overflow: hidden; position: relative; }
+  .comp-bar-fill {
+    height: 100%; border-radius: 6px; display: flex; align-items: center; padding-left: 8px;
+    font-size: 11px; font-weight: 700; color: #fff; transition: width 0.5s;
+  }
+  .comp-value { width: 80px; text-align: right; color: #888; font-size: 12px; flex-shrink: 0; }
+
+  .note {
+    margin-top: 16px; padding: 16px; background: #1a1a2e; border-radius: 8px;
+    border-left: 3px solid #f0a500; font-size: 12px; color: #aaa; line-height: 1.6;
+  }
+</style>
+</head>
+<body>
+<h1>DeepSeekMoE: Fine-Grained Expert Routing</h1>
+<p class="subtitle">
+  256 routed experts + 1 shared expert per layer. Each token activates its top-8 routed experts
+  plus the always-on shared expert. Click tokens to see different routing patterns.
+</p>
+
+<div class="controls">
+  <button class="btn active" onclick="routeToken(0)">Token: "gradient"</button>
+  <button class="btn" onclick="routeToken(1)">Token: "def"</button>
+  <button class="btn" onclick="routeToken(2)">Token: "Beijing"</button>
+  <button class="btn" onclick="routeToken(3)">Token: "theorem"</button>
+</div>
+
+<div class="legend">
+  <div class="legend-item">
+    <div class="legend-swatch" style="background:#161b22; border:1px solid #21262d;"></div>
+    <span style="color:#888;">Inactive expert</span>
+  </div>
+  <div class="legend-item">
+    <div class="legend-swatch" style="background:#e94560; border:1px solid rgba(233,69,96,0.6);"></div>
+    <span style="color:#e94560;">Routed (top-8)</span>
+  </div>
+  <div class="legend-item">
+    <div class="legend-swatch" style="background:#f0a500; border:2px solid #ffd93d;"></div>
+    <span style="color:#f0a500;">Shared (always active)</span>
+  </div>
+</div>
+
+<div class="viz-container">
+  <div id="grid-area"></div>
+
+  <div class="stats">
+    <div class="stat-item">
+      <div class="label">Routed Experts</div>
+      <div class="value red">256</div>
+    </div>
+    <div class="stat-item">
+      <div class="label">Shared Experts</div>
+      <div class="value gold">1</div>
+    </div>
+    <div class="stat-item">
+      <div class="label">Active per Token</div>
+      <div class="value teal">8 + 1</div>
+    </div>
+    <div class="stat-item">
+      <div class="label">Possible Combinations</div>
+      <div class="value purple" id="combo-count">4.4 &times; 10<sup>13</sup></div>
+    </div>
+  </div>
+
+  <div class="comparison">
+    <h2>Expert Routing Combinations: Fine-Grained vs Coarse</h2>
+    <div class="comp-row">
+      <div class="comp-name" style="color:#e94560;">DeepSeek-V3</div>
+      <div class="comp-bar-track">
+        <div class="comp-bar-fill" style="width:100%; background:linear-gradient(90deg,#e94560,#c23152);">
+          C(256,8)
+        </div>
+      </div>
+      <div class="comp-value">4.4 &times; 10<sup>13</sup></div>
+    </div>
+    <div class="comp-row">
+      <div class="comp-name" style="color:#5b5bd6;">DeepSeek-V2</div>
+      <div class="comp-bar-track">
+        <div class="comp-bar-fill" style="width:0.4%; min-width:80px; background:linear-gradient(90deg,#5b5bd6,#4747b3);">
+          C(160,6)
+        </div>
+      </div>
+      <div class="comp-value">2.1 &times; 10<sup>10</sup></div>
+    </div>
+    <div class="comp-row">
+      <div class="comp-name" style="color:#4ecdc4;">DBRX</div>
+      <div class="comp-bar-track">
+        <div class="comp-bar-fill" style="width:0.001%; min-width:60px; background:linear-gradient(90deg,#4ecdc4,#36b5ad);">
+          C(16,4)
+        </div>
+      </div>
+      <div class="comp-value">1,820</div>
+    </div>
+    <div class="comp-row">
+      <div class="comp-name" style="color:#ffd93d;">Mixtral</div>
+      <div class="comp-bar-track">
+        <div class="comp-bar-fill" style="width:0.001%; min-width:40px; background:linear-gradient(90deg,#ffd93d,#e6c435); color:#1a1a2e;">
+          C(8,2)
+        </div>
+      </div>
+      <div class="comp-value">28</div>
+    </div>
+  </div>
+
+  <div class="note">
+    <strong>Shared expert:</strong> The gold cell always stays active regardless of routing.
+    It captures high-frequency patterns (syntax, common transitions) so that routed experts can fully specialize.
+    DeepSeek-V2 used 2 shared experts; V3 reduced to 1, likely reallocating parameters to more routed experts.
+  </div>
+</div>
+
+<script>
+const TOTAL_EXPERTS = 256;
+const TOP_K = 8;
+
+// Simulated routing patterns for different tokens
+const routingPatterns = [
+  { name: "gradient", color: "#e94560",
+    experts: [3,17,42,89,134,178,201,240] },
+  { name: "def", color: "#5b5bd6",
+    experts: [7,23,56,71,112,145,189,223] },
+  { name: "Beijing", color: "#4ecdc4",
+    experts: [12,38,67,99,151,188,211,249] },
+  { name: "theorem", color: "#f0a500",
+    experts: [5,21,42,78,134,167,203,245] }
+];
+
+function buildGrid() {
+  const area = document.getElementById('grid-area');
+  area.innerHTML = '';
+
+  const row = document.createElement('div');
+  row.className = 'token-row';
+  row.style.flexDirection = 'column';
+  row.style.alignItems = 'flex-start';
+
+  const labelRow = document.createElement('div');
+  labelRow.style.display = 'flex';
+  labelRow.style.alignItems = 'center';
+  labelRow.style.gap = '12px';
+  labelRow.style.width = '100%';
+  labelRow.style.marginBottom = '8px';
+
+  const tokenLabel = document.createElement('div');
+  tokenLabel.className = 'token-label';
+  tokenLabel.id = 'current-token';
+  tokenLabel.textContent = '"gradient"';
+  tokenLabel.style.width = 'auto';
+  tokenLabel.style.textAlign = 'left';
+  labelRow.appendChild(tokenLabel);
+
+  const sharedLabel = document.createElement('div');
+  sharedLabel.className = 'shared-label';
+  sharedLabel.textContent = '+ SHARED';
+  labelRow.appendChild(sharedLabel);
+
+  row.appendChild(labelRow);
+
+  const grid = document.createElement('div');
+  grid.className = 'expert-grid';
+  grid.id = 'expert-grid';
+
+  // Shared expert (index -1, displayed first)
+  const shared = document.createElement('div');
+  shared.className = 'expert-cell shared';
+  shared.setAttribute('data-tip', 'Shared Expert (always active)');
+  shared.style.width = '22px';
+  shared.style.height = '22px';
+  grid.appendChild(shared);
+
+  // Spacer
+  const spacer = document.createElement('div');
+  spacer.style.width = '8px';
+  grid.appendChild(spacer);
+
+  // 256 routed experts
+  for (let i = 0; i < TOTAL_EXPERTS; i++) {
+    const cell = document.createElement('div');
+    cell.className = 'expert-cell inactive';
+    cell.id = 'expert-' + i;
+    cell.setAttribute('data-tip', 'Expert ' + i);
+    grid.appendChild(cell);
+  }
+
+  row.appendChild(grid);
+  area.appendChild(row);
+}
+
+function routeToken(idx) {
+  const pattern = routingPatterns[idx];
+
+  // Update button states
+  document.querySelectorAll('.btn').forEach((b, i) => {
+    b.classList.toggle('active', i === idx);
+  });
+
+  // Update label
+  document.getElementById('current-token').textContent = '"' + pattern.name + '"';
+  document.getElementById('current-token').style.color = pattern.color;
+
+  // Reset all cells
+  for (let i = 0; i < TOTAL_EXPERTS; i++) {
+    const cell = document.getElementById('expert-' + i);
+    cell.className = 'expert-cell inactive';
+    cell.style.background = '';
+  }
+
+  // Highlight routed experts with staggered animation
+  pattern.experts.forEach((expertIdx, rank) => {
+    setTimeout(() => {
+      const cell = document.getElementById('expert-' + expertIdx);
+      cell.className = 'expert-cell routed';
+      const opacity = 1.0 - (rank * 0.07);
+      cell.style.background = pattern.color;
+      cell.style.opacity = opacity;
+      cell.setAttribute('data-tip', 'Expert ' + expertIdx + ' (rank ' + (rank+1) + ')');
+    }, rank * 60);
+  });
+
+  // Show overlap with other tokens
+  routingPatterns.forEach((other, oi) => {
+    if (oi === idx) return;
+    const overlap = pattern.experts.filter(e => other.experts.includes(e));
+    if (overlap.length > 0) {
+      overlap.forEach(expertIdx => {
+        setTimeout(() => {
+          const cell = document.getElementById('expert-' + expertIdx);
+          cell.style.boxShadow = '0 0 8px ' + other.color + ', 0 0 8px ' + pattern.color;
+          cell.setAttribute('data-tip', 'Expert ' + expertIdx + ' (shared with "' + other.name + '")');
+        }, TOP_K * 60 + 100);
+      });
+    }
+  });
+}
+
+buildGrid();
+routeToken(0);
+</script>
+</body>
+</html>

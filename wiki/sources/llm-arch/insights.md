@@ -87,6 +87,9 @@ Browse by category or search for a specific topic.
 | [[olmo-2]] | Two-stage training + model souping > either alone | Save high-quality data for the final training stage |
 | [[phi-4]] | 40% synthetic data makes 14B competitive with 70B+ | Data quality substitutes for parameter count |
 | [[dbrx]] | Fine-grained MoE (16 experts, top-4) = 65× more combinations | More smaller experts with higher top-k = more expressive routing |
+| [[deepseek-v4]] | Hybrid sparse attention (CSA+HCA) + Engram memory enables 1M context at 10% KV cost | Decouple factual recall from attention via conditional memory |
+| [[qwen-3-5]] | Hybrid DeltaNet (75% linear) + Gated Attention (25%) backbone replaces full attention | Linear attention hybrids are production-viable at scale |
+| [[qwen-3-6]] | Multi-token prediction + thinking preservation make dense 27B beat sparse 397B on agentic tasks | Training innovations can outweigh architecture scale |
 
 ## Blog Posts & Explainers
 
@@ -109,4 +112,4 @@ Browse by category or search for a specific topic.
 
 ---
 
-**Total: 75 sources indexed** — 38 papers, 15 model reports, 22 blog posts/explainers.
+**Total: 78 sources indexed** — 38 papers, 18 model reports, 22 blog posts/explainers.

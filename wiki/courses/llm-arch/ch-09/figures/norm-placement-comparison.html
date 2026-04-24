@@ -1,0 +1,284 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Norm Placement Comparison Animation</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { background: #1a1a2e; color: #e0e0e0; font-family: 'Segoe UI', system-ui, sans-serif; padding: 24px; min-height: 100vh; }
+.container { max-width: 960px; margin: 0 auto; }
+h1 { color: #e94560; font-size: 22px; margin-bottom: 4px; }
+.subtitle { color: #888; font-size: 13px; margin-bottom: 20px; }
+.comparison { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin-bottom: 20px; }
+.panel { background: #16213e; border-radius: 12px; padding: 20px; }
+.panel h2 { font-size: 15px; margin-bottom: 4px; }
+.panel .desc { font-size: 11px; color: #888; margin-bottom: 14px; }
+canvas { display: block; margin: 0 auto; }
+.controls { display: flex; gap: 12px; align-items: center; margin-bottom: 16px; justify-content: center; }
+.btn { background: #0f3460; color: #4ecdc4; border: 1px solid #4ecdc4; border-radius: 6px; padding: 7px 16px; font-size: 12px; cursor: pointer; transition: all 0.2s; }
+.btn:hover { background: #4ecdc4; color: #1a1a2e; }
+.btn.active { background: #e94560; border-color: #e94560; color: #fff; }
+.metrics { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-top: 16px; }
+.metric-card { background: #0f3460; border-radius: 8px; padding: 12px; text-align: center; }
+.metric-card .label { font-size: 10px; color: #888; text-transform: uppercase; letter-spacing: 0.5px; }
+.metric-card .value { font-size: 20px; font-weight: bold; font-family: monospace; margin-top: 4px; }
+.step-info { background: #16213e; border-radius: 10px; padding: 14px; text-align: center; }
+.step-info .step-num { color: #e94560; font-size: 14px; font-weight: bold; }
+.step-info p { font-size: 12px; color: #aaa; margin-top: 4px; }
+.ctrl-row { display: flex; align-items: center; gap: 8px; justify-content: center; margin-bottom: 12px; }
+.ctrl-row label { font-size: 12px; color: #888; }
+.ctrl-row .val { color: #ffd93d; font-family: monospace; font-weight: bold; }
+input[type="range"] { accent-color: #e94560; width: 200px; }
+</style>
+</head>
+<body>
+<div class="container">
+<h1>Norm Placement Comparison</h1>
+<div class="subtitle">Watch how activation scale and gradient magnitude evolve through layers under pre-norm vs post-norm</div>
+
+<div class="controls">
+    <button class="btn" id="playBtn" onclick="togglePlay()">Play</button>
+    <button class="btn" onclick="step()">Step</button>
+    <button class="btn" onclick="reset()">Reset</button>
+    <span style="color:#888; font-size:12px;">Speed:</span>
+    <input type="range" id="speed" min="1" max="10" value="5" style="width:100px;">
+</div>
+
+<div class="ctrl-row">
+    <label>Depth (L): <span class="val" id="v-depth">12</span></label>
+    <input type="range" id="depth" min="4" max="32" step="4" value="12" oninput="document.getElementById('v-depth').textContent=this.value; reset();">
+    <label style="margin-left:16px;">Sublayer variance: <span class="val" id="v-var">0.5</span></label>
+    <input type="range" id="subvar" min="0.1" max="2.0" step="0.1" value="0.5" oninput="document.getElementById('v-var').textContent=this.value; reset();">
+</div>
+
+<div class="comparison">
+    <div class="panel">
+        <h2 style="color:#4ecdc4">Pre-Norm</h2>
+        <div class="desc">x_{l+1} = x_l + Sublayer(Norm(x_l)) -- identity path unobstructed</div>
+        <canvas id="preNormCanvas" width="420" height="220"></canvas>
+        <div class="metrics">
+            <div class="metric-card">
+                <div class="label">Activation Scale</div>
+                <div class="value" id="pre-act-scale" style="color:#4ecdc4">1.00</div>
+            </div>
+            <div class="metric-card">
+                <div class="label">Grad Magnitude</div>
+                <div class="value" id="pre-grad" style="color:#4ecdc4">1.00</div>
+            </div>
+        </div>
+    </div>
+    <div class="panel">
+        <h2 style="color:#e94560">Post-Norm</h2>
+        <div class="desc">x_{l+1} = Norm(x_l + Sublayer(x_l)) -- norm sits on residual path</div>
+        <canvas id="postNormCanvas" width="420" height="220"></canvas>
+        <div class="metrics">
+            <div class="metric-card">
+                <div class="label">Activation Scale</div>
+                <div class="value" id="post-act-scale" style="color:#e94560">1.00</div>
+            </div>
+            <div class="metric-card">
+                <div class="label">Grad Magnitude</div>
+                <div class="value" id="post-grad" style="color:#e94560">1.00</div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="step-info" id="stepInfo">
+    <div class="step-num">Ready</div>
+    <p>Press Play or Step. Watch how activation scale grows in post-norm but stays bounded in pre-norm, and how gradient magnitudes diverge across layers.</p>
+</div>
+</div>
+
+<script>
+let preActScales = [];
+let postActScales = [];
+let preGradScales = [];
+let postGradScales = [];
+let currentLayer = 0;
+let playing = false;
+let timerID;
+
+function getDepth() { return parseInt(document.getElementById('depth').value); }
+function getVar() { return parseFloat(document.getElementById('subvar').value); }
+
+function reset() {
+    playing = false;
+    document.getElementById('playBtn').textContent = 'Play';
+    document.getElementById('playBtn').classList.remove('active');
+    clearTimeout(timerID);
+    currentLayer = 0;
+    preActScales = [1.0];
+    postActScales = [1.0];
+    preGradScales = [];
+    postGradScales = [];
+    document.getElementById('pre-act-scale').textContent = '1.00';
+    document.getElementById('post-act-scale').textContent = '1.00';
+    document.getElementById('pre-grad').textContent = '--';
+    document.getElementById('post-grad').textContent = '--';
+    document.getElementById('stepInfo').innerHTML = '<div class="step-num">Ready</div><p>Press Play or Step.</p>';
+    drawChart('preNormCanvas', preActScales, preGradScales, '#4ecdc4');
+    drawChart('postNormCanvas', postActScales, postGradScales, '#e94560');
+}
+
+function step() {
+    const L = getDepth();
+    const sv = getVar();
+    if (currentLayer >= L) return;
+    currentLayer++;
+
+    // Pre-norm: activation scale grows as sqrt(1 + variance) per layer (additive)
+    // But norm controls sublayer input, so effective growth is sqrt(l) roughly
+    const preScale = Math.sqrt(1 + currentLayer * sv * 0.1);
+    preActScales.push(preScale);
+
+    // Post-norm: norm on residual path resets scale to ~1 each layer
+    // But gradient accumulates multiplicative factors
+    const postScale = 1.0 + (Math.random() - 0.5) * 0.1; // ~1 due to norm
+    postActScales.push(postScale);
+
+    // Gradient magnitudes
+    // Pre-norm: O(1) for all layers due to identity path
+    const preGrad = 1.0 + (Math.random() - 0.5) * 0.2;
+    preGradScales.push(preGrad);
+
+    // Post-norm: gradient grows toward output, ~O(d * l) simplified to multiplicative
+    const postGrad = 1.0 + sv * currentLayer * 0.3;
+    postGradScales.push(postGrad);
+
+    document.getElementById('pre-act-scale').textContent = preScale.toFixed(2);
+    document.getElementById('post-act-scale').textContent = postScale.toFixed(2);
+    document.getElementById('pre-grad').textContent = preGrad.toFixed(2);
+    document.getElementById('post-grad').textContent = postGrad.toFixed(2);
+
+    const info = document.getElementById('stepInfo');
+    if (currentLayer >= L) {
+        const maxPostGrad = Math.max(...postGradScales);
+        const maxPreGrad = Math.max(...preGradScales);
+        info.innerHTML = `<div class="step-num">Complete (${L} layers)</div>
+        <p>Pre-norm gradient range: ${Math.min(...preGradScales).toFixed(2)} - ${maxPreGrad.toFixed(2)} (uniform).
+        Post-norm gradient range: ${Math.min(...postGradScales).toFixed(2)} - ${maxPostGrad.toFixed(2)} (${(maxPostGrad / Math.min(...postGradScales)).toFixed(1)}x imbalance).
+        This imbalance is why post-norm needs learning rate warmup.</p>`;
+        if (playing) togglePlay();
+    } else {
+        info.innerHTML = `<div class="step-num">Layer ${currentLayer} / ${L}</div>
+        <p>Pre-norm: sublayer receives normalized input, adds delta to stream. Scale grows gently.
+        Post-norm: norm on residual path bounds activations but gradient accumulates.</p>`;
+    }
+
+    drawChart('preNormCanvas', preActScales, preGradScales, '#4ecdc4');
+    drawChart('postNormCanvas', postActScales, postGradScales, '#e94560');
+}
+
+function drawChart(canvasId, actScales, gradScales, color) {
+    const canvas = document.getElementById(canvasId);
+    const ctx = canvas.getContext('2d');
+    const W = canvas.width, H = canvas.height;
+    ctx.clearRect(0, 0, W, H);
+
+    const L = getDepth();
+    const padL = 40, padR = 20, padT = 20, padB = 30;
+    const pw = W - padL - padR;
+    const ph = H - padT - padB;
+
+    // Determine y range
+    const allVals = [...actScales, ...gradScales];
+    let yMax = Math.max(3, ...allVals) * 1.1;
+    const yMin = 0;
+
+    // Grid
+    ctx.strokeStyle = '#1a1a2e';
+    ctx.lineWidth = 1;
+    for (let y = 0; y <= yMax; y += 0.5) {
+        const py = padT + (1 - (y - yMin) / (yMax - yMin)) * ph;
+        if (py < padT || py > H - padB) continue;
+        ctx.beginPath(); ctx.moveTo(padL, py); ctx.lineTo(W - padR, py); ctx.stroke();
+        if (y === Math.round(y)) {
+            ctx.fillStyle = '#555'; ctx.font = '10px monospace'; ctx.textAlign = 'right';
+            ctx.fillText(y.toFixed(0), padL - 4, py + 4);
+        }
+    }
+
+    // X axis labels
+    ctx.fillStyle = '#555'; ctx.font = '10px monospace'; ctx.textAlign = 'center';
+    for (let i = 0; i <= L; i += Math.max(1, Math.floor(L/8))) {
+        const px = padL + (i / L) * pw;
+        ctx.fillText(i, px, H - padB + 16);
+    }
+
+    // Draw activation scale line
+    if (actScales.length > 1) {
+        ctx.strokeStyle = color;
+        ctx.lineWidth = 2.5;
+        ctx.beginPath();
+        for (let i = 0; i < actScales.length; i++) {
+            const px = padL + (i / L) * pw;
+            const py = padT + (1 - (actScales[i] - yMin) / (yMax - yMin)) * ph;
+            if (i === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
+        }
+        ctx.stroke();
+
+        // Dots
+        for (let i = 0; i < actScales.length; i++) {
+            const px = padL + (i / L) * pw;
+            const py = padT + (1 - (actScales[i] - yMin) / (yMax - yMin)) * ph;
+            ctx.fillStyle = color;
+            ctx.beginPath(); ctx.arc(px, py, 3, 0, Math.PI * 2); ctx.fill();
+        }
+    }
+
+    // Draw gradient magnitude line
+    if (gradScales.length > 0) {
+        ctx.strokeStyle = '#ffd93d';
+        ctx.lineWidth = 2;
+        ctx.setLineDash([4, 3]);
+        ctx.beginPath();
+        for (let i = 0; i < gradScales.length; i++) {
+            const px = padL + ((i + 1) / L) * pw;
+            const py = padT + (1 - (gradScales[i] - yMin) / (yMax - yMin)) * ph;
+            if (i === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
+        }
+        ctx.stroke();
+        ctx.setLineDash([]);
+
+        for (let i = 0; i < gradScales.length; i++) {
+            const px = padL + ((i + 1) / L) * pw;
+            const py = padT + (1 - (gradScales[i] - yMin) / (yMax - yMin)) * ph;
+            ctx.fillStyle = '#ffd93d';
+            ctx.beginPath(); ctx.arc(px, py, 3, 0, Math.PI * 2); ctx.fill();
+        }
+    }
+
+    // Legend
+    ctx.fillStyle = color; ctx.fillRect(padL + 4, padT + 4, 10, 10);
+    ctx.fillStyle = '#aaa'; ctx.font = '10px sans-serif'; ctx.textAlign = 'left';
+    ctx.fillText('Act. scale', padL + 18, padT + 13);
+    ctx.fillStyle = '#ffd93d'; ctx.fillRect(padL + 4, padT + 20, 10, 10);
+    ctx.fillStyle = '#aaa'; ctx.fillText('Grad. mag.', padL + 18, padT + 29);
+
+    ctx.fillStyle = '#555'; ctx.font = '10px sans-serif'; ctx.textAlign = 'center';
+    ctx.fillText('Layer', W/2, H - 4);
+}
+
+function togglePlay() {
+    playing = !playing;
+    document.getElementById('playBtn').textContent = playing ? 'Pause' : 'Play';
+    document.getElementById('playBtn').classList.toggle('active', playing);
+    if (playing) runLoop();
+    else clearTimeout(timerID);
+}
+
+function runLoop() {
+    if (!playing) return;
+    step();
+    if (playing) {
+        const sp = parseInt(document.getElementById('speed').value);
+        timerID = setTimeout(runLoop, 1100 - sp * 100);
+    }
+}
+
+reset();
+</script>
+</body>
+</html>

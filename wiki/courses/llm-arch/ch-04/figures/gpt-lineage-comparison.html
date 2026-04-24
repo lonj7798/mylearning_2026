@@ -1,0 +1,448 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>GPT Lineage Architecture Comparison — Ch-04</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body {
+  background: #1a1a2e;
+  color: #e0e0e0;
+  font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+  min-height: 100vh;
+  padding: 40px 20px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+h1 { font-size: 22px; color: #e94560; margin-bottom: 8px; }
+.subtitle { font-size: 13px; color: #888; margin-bottom: 32px; text-align: center; max-width: 650px; }
+
+.tabs {
+  display: flex;
+  gap: 4px;
+  background: #16213e;
+  border-radius: 8px;
+  padding: 4px;
+  margin-bottom: 32px;
+}
+.tab {
+  padding: 10px 24px;
+  border: none;
+  background: transparent;
+  color: #888;
+  font-size: 13px;
+  font-weight: 600;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+.tab.active { background: #e94560; color: #fff; }
+.tab:hover:not(.active) { color: #e0e0e0; }
+
+.view { display: none; width: 100%; max-width: 1000px; }
+.view.active { display: block; }
+
+/* === SCALE VIEW === */
+.scale-chart {
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  gap: 40px;
+  height: 400px;
+  padding: 20px 0;
+  margin-bottom: 16px;
+}
+.scale-bar-group {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+}
+.scale-bar {
+  width: 80px;
+  border-radius: 8px 8px 0 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: flex-end;
+  padding-bottom: 12px;
+  transition: height 0.6s ease;
+  position: relative;
+  cursor: pointer;
+}
+.scale-bar:hover { filter: brightness(1.2); }
+.scale-label {
+  font-size: 14px;
+  font-weight: 700;
+  color: #e94560;
+}
+.scale-value {
+  font-size: 12px;
+  color: rgba(255,255,255,0.7);
+  font-weight: 600;
+}
+.scale-sublabel {
+  font-size: 11px;
+  color: #666;
+  text-align: center;
+  max-width: 100px;
+}
+
+/* === ARCHITECTURE VIEW === */
+.arch-compare {
+  display: flex;
+  gap: 20px;
+  justify-content: center;
+  flex-wrap: wrap;
+}
+.arch-card {
+  background: #16213e;
+  border-radius: 12px;
+  padding: 24px;
+  width: 300px;
+  border-top: 3px solid #e94560;
+  cursor: pointer;
+  transition: transform 0.2s;
+}
+.arch-card:hover { transform: translateY(-4px); }
+.arch-card h3 { color: #e94560; font-size: 16px; margin-bottom: 4px; }
+.arch-card .year { color: #666; font-size: 12px; margin-bottom: 16px; }
+.arch-block {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 16px;
+}
+.arch-layer {
+  padding: 8px 12px;
+  border-radius: 6px;
+  font-size: 12px;
+  font-weight: 600;
+  text-align: center;
+}
+.layer-attn { background: #0f3460; color: #4ecdc4; }
+.layer-ffn { background: #0a2744; color: #888; }
+.layer-ln { background: #1a0a2e; color: #a29bfe; font-size: 11px; }
+.layer-sparse { background: #2a1a0a; color: #ffd93d; }
+.arch-specs {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
+  font-size: 11px;
+}
+.spec-label { color: #666; }
+.spec-value { color: #e0e0e0; font-weight: 600; text-align: right; }
+
+/* === PARADIGM VIEW === */
+.paradigm-timeline {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  position: relative;
+  padding-left: 40px;
+}
+.paradigm-timeline::before {
+  content: '';
+  position: absolute;
+  left: 18px;
+  top: 0;
+  bottom: 0;
+  width: 3px;
+  background: linear-gradient(180deg, #e94560, #4ecdc4, #ffd93d);
+}
+.paradigm-entry {
+  position: relative;
+  padding: 20px 24px;
+  background: #16213e;
+  border-radius: 12px;
+  margin-bottom: 16px;
+  margin-left: 20px;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+.paradigm-entry:hover { background: #1a2a4e; }
+.paradigm-entry::before {
+  content: '';
+  position: absolute;
+  left: -32px;
+  top: 28px;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  border: 3px solid #1a1a2e;
+}
+.paradigm-entry:nth-child(1)::before { background: #e94560; }
+.paradigm-entry:nth-child(2)::before { background: #4ecdc4; }
+.paradigm-entry:nth-child(3)::before { background: #ffd93d; }
+.paradigm-entry h3 { font-size: 15px; margin-bottom: 4px; }
+.paradigm-entry:nth-child(1) h3 { color: #e94560; }
+.paradigm-entry:nth-child(2) h3 { color: #4ecdc4; }
+.paradigm-entry:nth-child(3) h3 { color: #ffd93d; }
+.paradigm-entry .desc { color: #aaa; font-size: 12px; line-height: 1.6; margin-top: 8px; }
+.paradigm-entry .example {
+  background: #0f3460;
+  border-radius: 6px;
+  padding: 10px 14px;
+  margin-top: 10px;
+  font-family: monospace;
+  font-size: 12px;
+  color: #4ecdc4;
+  white-space: pre-wrap;
+}
+
+/* === DIFF VIEW === */
+.diff-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+.diff-table th {
+  padding: 12px;
+  text-align: left;
+  color: #e94560;
+  border-bottom: 2px solid #e94560;
+  font-size: 12px;
+}
+.diff-table td {
+  padding: 10px 12px;
+  border-bottom: 1px solid #222;
+  vertical-align: top;
+}
+.diff-table tr:hover td { background: rgba(233,69,96,0.05); }
+.diff-changed {
+  color: #ffd93d;
+  font-weight: 600;
+}
+.diff-same { color: #555; }
+.diff-label { color: #aaa; font-weight: 600; }
+</style>
+</head>
+<body>
+
+<h1>GPT Lineage: Architecture Comparison</h1>
+<p class="subtitle">
+  Three generations of GPT — the architecture barely changed but the paradigm shifted completely.
+  Select a view to explore different aspects of the evolution.
+</p>
+
+<div class="tabs">
+  <button class="tab active" onclick="showView('scale')">Scale</button>
+  <button class="tab" onclick="showView('arch')">Architecture</button>
+  <button class="tab" onclick="showView('paradigm')">Paradigm Shift</button>
+  <button class="tab" onclick="showView('diff')">Full Diff</button>
+</div>
+
+<!-- SCALE VIEW -->
+<div class="view active" id="view-scale">
+  <div class="scale-chart" id="scaleChart"></div>
+  <div style="text-align:center; color:#666; font-size:12px;">
+    Parameter count (log scale). Each generation is ~10-100x the previous. Height is proportional to log(params).
+  </div>
+</div>
+
+<!-- ARCHITECTURE VIEW -->
+<div class="view" id="view-arch">
+  <div class="arch-compare">
+    <div class="arch-card">
+      <h3>GPT-1</h3>
+      <div class="year">2018 -- 117M params</div>
+      <div class="arch-block">
+        <div class="arch-layer layer-ln">Post-LayerNorm</div>
+        <div class="arch-layer layer-attn">Dense Causal Self-Attention</div>
+        <div class="arch-layer layer-ln">Post-LayerNorm</div>
+        <div class="arch-layer layer-ffn">FFN (GELU, 4x)</div>
+        <div style="color:#555; font-size:11px; text-align:center;">x 12 layers</div>
+      </div>
+      <div class="arch-specs">
+        <span class="spec-label">d_model</span><span class="spec-value">768</span>
+        <span class="spec-label">heads</span><span class="spec-value">12</span>
+        <span class="spec-label">d_head</span><span class="spec-value">64</span>
+        <span class="spec-label">context</span><span class="spec-value">512</span>
+        <span class="spec-label">vocab</span><span class="spec-value">~40K</span>
+        <span class="spec-label">position</span><span class="spec-value">learned</span>
+      </div>
+    </div>
+
+    <div class="arch-card">
+      <h3>GPT-2</h3>
+      <div class="year">2019 -- 1.5B params</div>
+      <div class="arch-block">
+        <div class="arch-layer layer-ln" style="border: 1px solid #ffd93d;">Pre-LayerNorm (CHANGED)</div>
+        <div class="arch-layer layer-attn">Dense Causal Self-Attention</div>
+        <div class="arch-layer layer-ln" style="border: 1px solid #ffd93d;">Pre-LayerNorm (CHANGED)</div>
+        <div class="arch-layer layer-ffn">FFN (GELU, 4x)</div>
+        <div style="color:#555; font-size:11px; text-align:center;">x 48 layers</div>
+      </div>
+      <div class="arch-specs">
+        <span class="spec-label">d_model</span><span class="spec-value" style="color:#ffd93d;">1600</span>
+        <span class="spec-label">heads</span><span class="spec-value" style="color:#ffd93d;">25</span>
+        <span class="spec-label">d_head</span><span class="spec-value">64</span>
+        <span class="spec-label">context</span><span class="spec-value" style="color:#ffd93d;">1024</span>
+        <span class="spec-label">vocab</span><span class="spec-value" style="color:#ffd93d;">50,257</span>
+        <span class="spec-label">position</span><span class="spec-value">learned</span>
+      </div>
+    </div>
+
+    <div class="arch-card">
+      <h3>GPT-3</h3>
+      <div class="year">2020 -- 175B params</div>
+      <div class="arch-block">
+        <div class="arch-layer layer-ln">Pre-LayerNorm</div>
+        <div class="arch-layer layer-sparse" style="border: 1px solid #ffd93d;">Alternating Dense + Sparse Attention</div>
+        <div class="arch-layer layer-ln">Pre-LayerNorm</div>
+        <div class="arch-layer layer-ffn">FFN (GELU, 4x)</div>
+        <div style="color:#555; font-size:11px; text-align:center;">x 96 layers</div>
+      </div>
+      <div class="arch-specs">
+        <span class="spec-label">d_model</span><span class="spec-value" style="color:#ffd93d;">12288</span>
+        <span class="spec-label">heads</span><span class="spec-value" style="color:#ffd93d;">96</span>
+        <span class="spec-label">d_head</span><span class="spec-value" style="color:#ffd93d;">128</span>
+        <span class="spec-label">context</span><span class="spec-value" style="color:#ffd93d;">2048</span>
+        <span class="spec-label">vocab</span><span class="spec-value">50,257</span>
+        <span class="spec-label">position</span><span class="spec-value">learned</span>
+      </div>
+    </div>
+  </div>
+  <div style="text-align:center; color:#666; font-size:12px; margin-top:16px;">
+    Yellow values indicate changes from the previous generation. Note: the core block structure is nearly identical across all three.
+  </div>
+</div>
+
+<!-- PARADIGM VIEW -->
+<div class="view" id="view-paradigm">
+  <div class="paradigm-timeline">
+    <div class="paradigm-entry">
+      <h3>GPT-1: Pre-Train + Fine-Tune (2018)</h3>
+      <div class="desc">
+        Pre-train on BooksCorpus with language modeling, then fine-tune on each downstream task
+        with labeled data and a task-specific linear head. Every task requires gradient updates,
+        task-specific data collection, and hyperparameter tuning.
+      </div>
+      <div class="example">[START] premise [DELIM] hypothesis [EXTRACT]
+--> Linear head --> {entailment, contradiction, neutral}
+--> Fine-tune entire model on NLI data</div>
+    </div>
+
+    <div class="paradigm-entry">
+      <h3>GPT-2: Zero-Shot Transfer (2019)</h3>
+      <div class="desc">
+        The model performs tasks described in natural language without any gradient updates.
+        Task format is specified through text prompts: "TL;DR:" for summarization, "Q: ... A:" for QA.
+        Performance is inconsistent but proves the concept.
+      </div>
+      <div class="example">Input: "The dog chased the cat. TL;DR:"
+Output: "A dog chased a cat."
+--> No fine-tuning, no gradient updates</div>
+    </div>
+
+    <div class="paradigm-entry">
+      <h3>GPT-3: In-Context Learning (2020)</h3>
+      <div class="desc">
+        Provide a few examples of the desired input-output mapping directly in the prompt.
+        The model infers the pattern and generalizes. No gradient updates, no task-specific architecture.
+        The few-shot advantage widens with model scale -- an emergent property.
+      </div>
+      <div class="example">Input: "Translate English to French:
+sea otter => loutre de mer
+peppermint => menthe poivree
+cheese =>"
+Output: "fromage"
+--> Pattern learned from examples in the prompt</div>
+    </div>
+  </div>
+</div>
+
+<!-- DIFF VIEW -->
+<div class="view" id="view-diff">
+  <table class="diff-table">
+    <thead>
+      <tr>
+        <th>Component</th>
+        <th>GPT-1 (2018)</th>
+        <th>GPT-2 (2019)</th>
+        <th>GPT-3 (2020)</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr><td class="diff-label">Parameters</td><td>117M</td><td class="diff-changed">1.5B (13x)</td><td class="diff-changed">175B (117x)</td></tr>
+      <tr><td class="diff-label">Layers</td><td>12</td><td class="diff-changed">48</td><td class="diff-changed">96</td></tr>
+      <tr><td class="diff-label">d_model</td><td>768</td><td class="diff-changed">1600</td><td class="diff-changed">12288</td></tr>
+      <tr><td class="diff-label">Heads</td><td>12</td><td class="diff-changed">25</td><td class="diff-changed">96</td></tr>
+      <tr><td class="diff-label">d_head</td><td>64</td><td class="diff-same">64</td><td class="diff-changed">128</td></tr>
+      <tr><td class="diff-label">Context</td><td>512</td><td class="diff-changed">1024</td><td class="diff-changed">2048</td></tr>
+      <tr><td class="diff-label">Vocab</td><td>~40K (BPE)</td><td class="diff-changed">50,257 (byte-BPE)</td><td class="diff-same">50,257</td></tr>
+      <tr><td class="diff-label">LayerNorm</td><td>Post-norm</td><td class="diff-changed">Pre-norm</td><td class="diff-same">Pre-norm</td></tr>
+      <tr><td class="diff-label">Residual init</td><td>Standard</td><td class="diff-changed">1/sqrt(N)</td><td class="diff-same">1/sqrt(N)</td></tr>
+      <tr><td class="diff-label">Attention</td><td>Dense</td><td class="diff-same">Dense</td><td class="diff-changed">Dense + sparse</td></tr>
+      <tr><td class="diff-label">Batch size</td><td>64 (fixed)</td><td class="diff-changed">512 (fixed)</td><td class="diff-changed">32K-3.2M (ramped)</td></tr>
+      <tr><td class="diff-label">Embedding tie</td><td>No</td><td class="diff-changed">Yes</td><td class="diff-same">Yes</td></tr>
+      <tr><td class="diff-label">Paradigm</td><td>Pre-train + fine-tune</td><td class="diff-changed">Zero-shot</td><td class="diff-changed">Few-shot ICL</td></tr>
+      <tr><td class="diff-label">Data</td><td>BooksCorpus (800M words)</td><td class="diff-changed">WebText (40GB)</td><td class="diff-changed">300B tokens (blend)</td></tr>
+    </tbody>
+  </table>
+  <div style="margin-top:12px; text-align:center;">
+    <span style="color:#ffd93d; font-size:12px; font-weight:600;">Yellow</span>
+    <span style="color:#666; font-size:12px;"> = changed from previous generation |</span>
+    <span style="color:#555; font-size:12px; font-weight:600;"> Gray</span>
+    <span style="color:#666; font-size:12px;"> = unchanged</span>
+  </div>
+</div>
+
+<script>
+function showView(name) {
+  document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
+  document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+  document.getElementById('view-' + name).classList.add('active');
+  event.target.classList.add('active');
+  if (name === 'scale') renderScale();
+}
+
+function renderScale() {
+  const chart = document.getElementById('scaleChart');
+  chart.innerHTML = '';
+  const models = [
+    { name: 'GPT-1', year: '2018', params: 117e6, color: '#e94560' },
+    { name: 'GPT-2', year: '2019', params: 1.5e9, color: '#4ecdc4' },
+    { name: 'GPT-3', year: '2020', params: 175e9, color: '#ffd93d' },
+  ];
+  const maxLog = Math.log10(175e9);
+  const minLog = Math.log10(100e6);
+
+  models.forEach(m => {
+    const logP = Math.log10(m.params);
+    const heightPct = ((logP - minLog) / (maxLog - minLog)) * 85 + 10;
+    const group = document.createElement('div');
+    group.className = 'scale-bar-group';
+
+    const bar = document.createElement('div');
+    bar.className = 'scale-bar';
+    bar.style.height = heightPct + '%';
+    bar.style.background = `linear-gradient(180deg, ${m.color}, ${m.color}44)`;
+
+    const val = document.createElement('div');
+    val.className = 'scale-value';
+    val.textContent = m.params >= 1e9 ? (m.params/1e9).toFixed(0) + 'B' : (m.params/1e6).toFixed(0) + 'M';
+    bar.appendChild(val);
+
+    const label = document.createElement('div');
+    label.className = 'scale-label';
+    label.textContent = m.name;
+
+    const sub = document.createElement('div');
+    sub.className = 'scale-sublabel';
+    sub.textContent = m.year;
+
+    group.appendChild(bar);
+    group.appendChild(label);
+    group.appendChild(sub);
+    chart.appendChild(group);
+  });
+}
+
+renderScale();
+</script>
+
+</body>
+</html>

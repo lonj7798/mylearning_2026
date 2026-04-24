@@ -1,0 +1,207 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>FFN Hidden Dimension Ratio Explorer</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { background: #1a1a2e; color: #e0e0e0; font-family: 'Segoe UI', system-ui, sans-serif; padding: 24px; min-height: 100vh; }
+.container { max-width: 900px; margin: 0 auto; }
+h1 { color: #e94560; font-size: 22px; margin-bottom: 4px; }
+.subtitle { color: #888; font-size: 13px; margin-bottom: 20px; }
+.top-controls { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; margin-bottom: 20px; }
+.ctrl { background: #16213e; border-radius: 10px; padding: 14px; }
+.ctrl label { display: block; color: #4ecdc4; font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 6px; }
+.ctrl .val { color: #ffd93d; font-size: 18px; font-weight: bold; font-family: monospace; margin-bottom: 6px; }
+input[type="range"] { width: 100%; accent-color: #e94560; }
+select { width: 100%; background: #0f3460; color: #e0e0e0; border: 1px solid #333; border-radius: 6px; padding: 8px; font-size: 13px; }
+.results-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin-bottom: 20px; }
+.result-box { background: #16213e; border-radius: 10px; padding: 16px; }
+.result-box h3 { color: #e94560; font-size: 12px; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 10px; }
+.metric { display: flex; justify-content: space-between; margin-bottom: 6px; font-size: 13px; }
+.metric .label { color: #aaa; }
+.metric .value { color: #ffd93d; font-family: monospace; font-weight: bold; }
+.comparison-table { background: #16213e; border-radius: 10px; padding: 16px; margin-bottom: 20px; }
+.comparison-table h3 { color: #4ecdc4; font-size: 12px; text-transform: uppercase; margin-bottom: 12px; }
+table { width: 100%; border-collapse: collapse; font-size: 12px; }
+th { text-align: left; color: #e94560; padding: 8px; border-bottom: 2px solid #e94560; }
+td { padding: 8px; border-bottom: 1px solid #2a2a4a; }
+tr.highlight { background: #e9456015; }
+.bar-section { background: #16213e; border-radius: 10px; padding: 16px; }
+.bar-section h3 { color: #4ecdc4; font-size: 12px; text-transform: uppercase; margin-bottom: 12px; }
+.bar-row { display: flex; align-items: center; margin-bottom: 8px; }
+.bar-label { width: 100px; font-size: 11px; flex-shrink: 0; }
+.bar-track { flex: 1; height: 22px; background: #0f3460; border-radius: 4px; overflow: hidden; }
+.bar-fill { height: 100%; border-radius: 4px; transition: width 0.4s; }
+.bar-val { width: 90px; text-align: right; font-size: 11px; font-family: monospace; margin-left: 8px; }
+.note { color: #666; font-size: 11px; margin-top: 12px; text-align: center; }
+</style>
+</head>
+<body>
+<div class="container">
+<h1>FFN Hidden Dimension Ratio Explorer</h1>
+<div class="subtitle">Explore how the FFN hidden dimension ratio affects parameter count, FLOPs, and memory across activation types</div>
+
+<div class="top-controls">
+    <div class="ctrl">
+        <label>d_model</label>
+        <div class="val" id="v-dm">4096</div>
+        <input type="range" id="dm" min="512" max="16384" step="512" value="4096" oninput="update()">
+    </div>
+    <div class="ctrl">
+        <label>FFN Ratio (d_ff / d_model)</label>
+        <div class="val" id="v-ratio">3.50x</div>
+        <input type="range" id="ratio" min="2.0" max="6.0" step="0.25" value="3.5" oninput="update()">
+    </div>
+    <div class="ctrl">
+        <label>Activation Type</label>
+        <select id="acttype" onchange="update()">
+            <option value="gated" selected>SwiGLU / GEGLU (3 matrices)</option>
+            <option value="standard">ReLU / GELU (2 matrices)</option>
+        </select>
+    </div>
+</div>
+
+<div class="results-grid">
+    <div class="result-box">
+        <h3>FFN Parameters (per layer)</h3>
+        <div class="metric"><span class="label">d_ff (hidden dim):</span><span class="value" id="r-dff">--</span></div>
+        <div class="metric"><span class="label">d_ff (rounded to 256):</span><span class="value" id="r-dff-round">--</span></div>
+        <div class="metric"><span class="label">Matrices:</span><span class="value" id="r-matrices">--</span></div>
+        <div class="metric"><span class="label">Total FFN params:</span><span class="value" id="r-params">--</span></div>
+        <div class="metric"><span class="label">vs iso-param (8d^2):</span><span class="value" id="r-vs-iso">--</span></div>
+    </div>
+    <div class="result-box">
+        <h3>Compute (per token, per layer)</h3>
+        <div class="metric"><span class="label">FFN FLOPs:</span><span class="value" id="r-flops">--</span></div>
+        <div class="metric"><span class="label">Attn FLOPs (approx):</span><span class="value" id="r-attn-flops">--</span></div>
+        <div class="metric"><span class="label">FFN share of block:</span><span class="value" id="r-share">--</span></div>
+        <div class="metric"><span class="label">Activation memory:</span><span class="value" id="r-actmem">--</span></div>
+    </div>
+</div>
+
+<div class="comparison-table">
+    <h3>Real Model Comparison</h3>
+    <table id="model-table">
+        <thead>
+            <tr><th>Model</th><th>d_model</th><th>d_ff</th><th>Ratio</th><th>Type</th><th>FFN Params/Layer</th></tr>
+        </thead>
+        <tbody></tbody>
+    </table>
+</div>
+
+<div class="bar-section">
+    <h3>Parameter Distribution (one Transformer block)</h3>
+    <div id="param-bars"></div>
+</div>
+
+<div class="note">
+Iso-parameter baseline: 2 matrices at 4x ratio = 8d^2 params. SwiGLU iso-param: 3 matrices at 8/3 ratio = 8d^2 params.
+Parameter rounding to multiples of 256 for tensor-core efficiency.
+</div>
+</div>
+
+<script>
+const models = [
+    { name: 'Transformer (orig)', dm: 512, dff: 2048, type: 'standard' },
+    { name: 'Llama 3 8B', dm: 4096, dff: 14336, type: 'gated' },
+    { name: 'Llama 3 70B', dm: 8192, dff: 28672, type: 'gated' },
+    { name: 'Llama 3 405B', dm: 16384, dff: 53248, type: 'gated' },
+    { name: 'Mistral 7B', dm: 4096, dff: 14336, type: 'gated' },
+];
+
+function fmt(n) {
+    if (n >= 1e9) return (n/1e9).toFixed(2) + 'B';
+    if (n >= 1e6) return (n/1e6).toFixed(1) + 'M';
+    if (n >= 1e3) return (n/1e3).toFixed(1) + 'K';
+    return n.toString();
+}
+
+function update() {
+    const dm = parseInt(document.getElementById('dm').value);
+    const ratio = parseFloat(document.getElementById('ratio').value);
+    const isGated = document.getElementById('acttype').value === 'gated';
+
+    document.getElementById('v-dm').textContent = dm.toLocaleString();
+    document.getElementById('v-ratio').textContent = ratio.toFixed(2) + 'x';
+
+    const dff_raw = Math.round(dm * ratio);
+    const dff = Math.ceil(dff_raw / 256) * 256;
+    const nMatrices = isGated ? 3 : 2;
+    const ffnParams = nMatrices * dm * dff;
+    const isoPar = 8 * dm * dm;
+    const vsIso = (ffnParams / isoPar * 100).toFixed(0);
+
+    document.getElementById('r-dff').textContent = dff_raw.toLocaleString();
+    document.getElementById('r-dff-round').textContent = dff.toLocaleString();
+    document.getElementById('r-matrices').textContent = nMatrices + (isGated ? ' (W1, V, W2)' : ' (W1, W2)');
+    document.getElementById('r-params').textContent = fmt(ffnParams);
+    document.getElementById('r-vs-iso').textContent = vsIso + '% of 8d^2';
+
+    const ffnFlops = nMatrices * 2 * dm * dff;
+    const attnFlops = 4 * 2 * dm * dm; // approximate: 4 projections
+    const totalFlops = ffnFlops + attnFlops;
+    const ffnShare = (ffnFlops / totalFlops * 100).toFixed(0);
+    const actMem = isGated ? 2 * dff * 2 : dff * 2; // 2 branches for gated, FP16
+
+    document.getElementById('r-flops').textContent = fmt(ffnFlops) + ' FLOPs';
+    document.getElementById('r-attn-flops').textContent = fmt(attnFlops) + ' FLOPs';
+    document.getElementById('r-share').textContent = ffnShare + '%';
+    document.getElementById('r-actmem').textContent = fmt(actMem) + ' bytes/token';
+
+    // Model table
+    const tbody = document.getElementById('model-table').querySelector('tbody');
+    let rows = '';
+    models.forEach(m => {
+        const mNmat = m.type === 'gated' ? 3 : 2;
+        const mParams = mNmat * m.dm * m.dff;
+        const mRatio = (m.dff / m.dm).toFixed(2);
+        const hl = m.dm === dm ? ' class="highlight"' : '';
+        rows += `<tr${hl}>
+            <td style="color:#4ecdc4">${m.name}</td>
+            <td style="font-family:monospace">${m.dm.toLocaleString()}</td>
+            <td style="font-family:monospace">${m.dff.toLocaleString()}</td>
+            <td style="color:#ffd93d">${mRatio}x</td>
+            <td>${m.type === 'gated' ? 'SwiGLU' : 'ReLU'}</td>
+            <td style="font-family:monospace">${fmt(mParams)}</td>
+        </tr>`;
+    });
+    // Add current config
+    rows += `<tr class="highlight">
+        <td style="color:#e94560; font-weight:bold">Your Config</td>
+        <td style="font-family:monospace">${dm.toLocaleString()}</td>
+        <td style="font-family:monospace">${dff.toLocaleString()}</td>
+        <td style="color:#ffd93d">${ratio.toFixed(2)}x</td>
+        <td>${isGated ? 'SwiGLU' : 'Standard'}</td>
+        <td style="font-family:monospace; color:#e94560; font-weight:bold">${fmt(ffnParams)}</td>
+    </tr>`;
+    tbody.innerHTML = rows;
+
+    // Parameter bars
+    const attnParams = 4 * dm * dm; // approximate
+    const normParams = 4 * dm; // 2 norms x 2 params
+    const total = ffnParams + attnParams + normParams;
+    const bars = [
+        { name: 'FFN', val: ffnParams, color: '#e94560' },
+        { name: 'Attention', val: attnParams, color: '#4ecdc4' },
+        { name: 'Norms', val: normParams, color: '#ffd93d' },
+    ];
+    let barHtml = '';
+    bars.forEach(b => {
+        const pct = (b.val / total * 100);
+        barHtml += `<div class="bar-row">
+            <div class="bar-label" style="color:${b.color}">${b.name}</div>
+            <div class="bar-track">
+                <div class="bar-fill" style="width:${pct}%; background:${b.color}"></div>
+            </div>
+            <div class="bar-val">${fmt(b.val)} (${pct.toFixed(0)}%)</div>
+        </div>`;
+    });
+    document.getElementById('param-bars').innerHTML = barHtml;
+}
+
+update();
+</script>
+</body>
+</html>

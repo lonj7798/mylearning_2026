@@ -1,0 +1,84 @@
+# Excerpt: Two-Stage Pre-Training and Model Souping
+
+<!-- source: [[olmo-2|report]], [[ch-11]] -->
+
+## The Curriculum Learning Hypothesis
+
+Standard pre-training treats training data as a uniform stream: shuffle everything together and train for one or more epochs. Two-stage pre-training rejects this assumption. It proposes that the *order* of data exposure matters — specifically, that presenting high-quality data during the final training phase (when the learning rate is being annealed) produces better models than mixing it uniformly throughout.
+
+OLMo 2 is the strongest public evidence for this hypothesis.
+
+## Stage 1: Building Foundations
+
+Stage 1 trains on OLMo-Mix-1124, a large web-crawl dataset:
+
+| Scale | Stage 1 Tokens | Epochs |
+|-------|---------------|--------|
+| 7B    | ~3.9T         | ~1.0   |
+| 13B   | ~4.7T         | ~1.2   |
+| 32B   | ~5.7T         | ~1.5   |
+
+The data is filtered Common Crawl — deduplicated, quality-classified, but fundamentally noisy web text. This stage builds the model's general language competence: syntax, factual knowledge, basic reasoning patterns, and world model.
+
+## Stage 2: Curated Annealing
+
+Stage 2 introduces Dolmino-Mix-1124 (843B tokens) during the learning rate annealing phase. The data mix is deliberately different from Stage 1:
+
+- **50%** high-quality filtered web documents
+- **~12%** academic papers — technical reasoning, formal writing
+- **~10%** math content — mathematical reasoning and problem-solving
+- **~10%** educational material — structured knowledge, clear explanations
+- **~10%** Q&A and instruction data — dialogue patterns, instruction following
+- **~8%** synthetic data — generated examples for coverage gaps
+
+The key insight: this curated data is *scarce* (843B tokens vs 3.9T+ of web data). If mixed uniformly into Stage 1, each high-quality example would be seen once early in training when the model's capacity to absorb fine distinctions is low. By saving it for Stage 2, the model encounters curated data when it already has strong foundations — and the low learning rate ensures small, precise updates rather than large noisy ones.
+
+## Why It Works: Three Hypotheses
+
+**1. Recency bias in optimization.** The final training steps have disproportionate influence on the model's behavior because they occur near convergence. Training on high-quality data last means the model's final representation is shaped by that data.
+
+**2. Capacity utilization.** Early in training, the model is still learning basic language patterns. Presenting nuanced academic content at this stage wastes it — the model cannot distinguish the quality signal from the noise. Later in training, the model has spare capacity for fine-grained improvements.
+
+**3. Learning rate interaction.** The annealing learning rate (small, decreasing) naturally limits the magnitude of parameter updates. Combined with high-quality data, this means Stage 2 makes targeted refinements without disrupting the general competence acquired in Stage 1.
+
+## Model Souping: Extracting Maximum Value
+
+After training multiple Stage 2 variants (with different data mixes at 50B and 300B token scales), OLMo 2 merges the best-performing checkpoints via weight averaging:
+
+$$\theta_{\text{soup}} = \frac{1}{N} \sum_{i=1}^{N} \theta_i$$
+
+This works because all variants were fine-tuned from the same Stage 1 checkpoint — they share a loss basin (linear mode connectivity). Weight averaging moves toward the basin center, which tends to generalize better than any single point.
+
+**The selection criterion matters.** Not all variants are included. Each is evaluated on the OLMES benchmark suite, and only those that improve the average's score are added. This selective souping prevents weak variants from diluting the result.
+
+**Cost analysis:**
+- Training 3-5 annealing variants costs 3-5x the Stage 2 compute — but Stage 2 is a small fraction of total training
+- The souped model has identical inference cost to any individual variant
+- The quality gain is consistent across benchmarks
+
+## The Result
+
+OLMo 2 7B outperforms Llama-3.1-8B despite using fewer total training FLOPs. The report attributes a significant portion of this advantage to the two-stage curriculum and model souping — not to architectural differences, since both models use similar Transformer components.
+
+This is the clearest public evidence that **training recipe is at least as important as architecture** for model quality. Most architecture papers focus on structural innovations (new attention mechanisms, novel normalization). OLMo 2 demonstrates that equivalent or greater gains can come from how you organize the training process.
+
+## Relationship to Other Training Strategies
+
+Two-stage pre-training is not the only curriculum approach. Understanding the alternatives puts OLMo 2's choice in context:
+
+- **Phi's synthetic data approach**: Microsoft's Phi models use synthetic "textbook-quality" data generated by larger models. This is an orthogonal idea — you can combine synthetic data generation with two-stage training (and OLMo 2's Dolmino mix includes ~8% synthetic data in Stage 2).
+
+- **Llama 3's multi-stage approach**: Meta uses multiple training stages with progressively refined data, but the details are limited in the public report. OLMo 2's contribution is making the curriculum design fully transparent and reproducible.
+
+- **Continuous pre-training / replay buffers**: Some approaches mix old and new data throughout training using replay buffers to prevent catastrophic forgetting. Two-stage training avoids this complexity — Stage 1 data is simply dropped at the Stage 2 boundary, and the low learning rate during Stage 2 prevents catastrophic forgetting naturally.
+
+The simplicity of two-stage training is part of its appeal. It requires only two decisions: when to transition (at the annealing phase) and what data to use for Stage 2. There is no complex scheduling, no replay buffer management, no dynamic data mixing.
+
+## Practical Takeaway
+
+For any pre-training run:
+1. Reserve 10-20% of total compute for a curated annealing stage
+2. Curate the annealing data to emphasize the capabilities you care about (reasoning, math, instruction following)
+3. Train 3-5 annealing variants with different mixes
+4. Evaluate and weight-average the best performers
+5. The combined cost of steps 2-4 is small relative to Stage 1 and the quality improvement is consistent

@@ -1,0 +1,438 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Interactive BPE Merge Animation — Ch-05</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body {
+  background: #1a1a2e;
+  color: #e0e0e0;
+  font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 40px 20px;
+}
+h1 { font-size: 22px; color: #e94560; margin-bottom: 8px; }
+.subtitle { font-size: 13px; color: #888; margin-bottom: 32px; text-align: center; max-width: 600px; }
+
+.controls {
+  display: flex;
+  gap: 12px;
+  margin-bottom: 28px;
+  flex-wrap: wrap;
+  justify-content: center;
+  align-items: center;
+}
+button {
+  background: #e94560;
+  color: #fff;
+  border: none;
+  padding: 10px 20px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 600;
+  transition: background 0.2s;
+}
+button:hover { background: #c73650; }
+button:disabled { background: #444; cursor: not-allowed; }
+button.secondary {
+  background: #16213e;
+  border: 1px solid #333;
+  color: #aaa;
+}
+button.secondary:hover { background: #1a2a4e; color: #e0e0e0; }
+
+.step-indicator {
+  background: #16213e;
+  padding: 6px 16px;
+  border-radius: 6px;
+  font-size: 13px;
+  color: #4ecdc4;
+  font-weight: 600;
+}
+
+.main-area {
+  display: flex;
+  gap: 32px;
+  flex-wrap: wrap;
+  justify-content: center;
+  width: 100%;
+  max-width: 1000px;
+}
+
+.words-panel {
+  flex: 1;
+  min-width: 340px;
+  background: #16213e;
+  border-radius: 12px;
+  padding: 24px;
+}
+.words-panel h2 {
+  font-size: 14px;
+  color: #4ecdc4;
+  margin-bottom: 16px;
+}
+.word-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 10px;
+  flex-wrap: wrap;
+}
+.word-freq {
+  color: #666;
+  font-size: 11px;
+  min-width: 28px;
+  text-align: right;
+  margin-right: 4px;
+}
+.token {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 6px 10px;
+  border-radius: 5px;
+  font-size: 13px;
+  font-weight: 600;
+  font-family: monospace;
+  transition: all 0.4s ease;
+}
+.token-base { background: #0f3460; color: #e0e0e0; }
+.token-merged { background: #e94560; color: #fff; }
+.token-highlight { background: #ffd93d; color: #1a1a2e; transform: scale(1.1); }
+.token-eow { background: #0a2744; color: #555; font-size: 11px; }
+
+.pairs-panel {
+  width: 280px;
+  background: #16213e;
+  border-radius: 12px;
+  padding: 24px;
+}
+.pairs-panel h2 {
+  font-size: 14px;
+  color: #ffd93d;
+  margin-bottom: 16px;
+}
+.pair-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 6px 0;
+  border-bottom: 1px solid #222;
+  font-size: 13px;
+}
+.pair-row.winner {
+  background: rgba(233,69,96,0.15);
+  margin: 0 -8px;
+  padding: 6px 8px;
+  border-radius: 4px;
+  border-bottom: none;
+}
+.pair-name { font-family: monospace; color: #e0e0e0; }
+.pair-count { color: #888; font-weight: 600; }
+.pair-row.winner .pair-name { color: #e94560; font-weight: 700; }
+.pair-row.winner .pair-count { color: #e94560; }
+
+.vocab-panel {
+  width: 100%;
+  max-width: 1000px;
+  margin-top: 24px;
+  background: #16213e;
+  border-radius: 12px;
+  padding: 20px 24px;
+}
+.vocab-panel h2 {
+  font-size: 14px;
+  color: #a29bfe;
+  margin-bottom: 12px;
+}
+.vocab-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.vocab-item {
+  padding: 4px 10px;
+  border-radius: 4px;
+  font-size: 12px;
+  font-family: monospace;
+  font-weight: 600;
+}
+.vocab-original { background: #0f3460; color: #888; }
+.vocab-new { background: #e94560; color: #fff; }
+
+.merge-info {
+  width: 100%;
+  max-width: 1000px;
+  margin-top: 16px;
+  padding: 16px 24px;
+  background: #16213e;
+  border-radius: 10px;
+  border-left: 3px solid #e94560;
+}
+.merge-info .title { color: #e94560; font-weight: 700; font-size: 13px; }
+.merge-info .desc { color: #aaa; font-size: 12px; margin-top: 6px; line-height: 1.6; }
+</style>
+</head>
+<body>
+
+<h1>BPE Merge Algorithm: Step-by-Step</h1>
+<p class="subtitle">
+  Watch how Byte Pair Encoding builds a vocabulary by iteratively merging the most frequent adjacent symbol pairs.
+  Click "Next Merge" to advance one step, or "Auto Play" to watch the algorithm run.
+</p>
+
+<div class="controls">
+  <button class="secondary" onclick="reset()">Reset</button>
+  <button id="btnPrev" onclick="prevStep()" disabled>Previous</button>
+  <button id="btnNext" onclick="nextStep()">Next Merge</button>
+  <button id="btnAuto" onclick="autoPlay()">Auto Play</button>
+  <div class="step-indicator" id="stepLabel">Step 0 / ?</div>
+</div>
+
+<div class="main-area">
+  <div class="words-panel">
+    <h2>Corpus Words</h2>
+    <div id="wordsContainer"></div>
+  </div>
+  <div class="pairs-panel">
+    <h2>Adjacent Pairs</h2>
+    <div id="pairsContainer"></div>
+  </div>
+</div>
+
+<div class="vocab-panel">
+  <h2 id="vocabTitle">Vocabulary (8 symbols)</h2>
+  <div id="vocabContainer" class="vocab-list"></div>
+</div>
+
+<div class="merge-info">
+  <div class="title" id="mergeTitle">Ready</div>
+  <div class="desc" id="mergeDesc">
+    The corpus contains 5 words. Each word is split into individual characters plus an end-of-word marker.
+    The algorithm will find the most frequent adjacent pair and merge it into a new token.
+  </div>
+</div>
+
+<script>
+const initialCorpus = [
+  { word: 'hug', freq: 10 },
+  { word: 'pug', freq: 5 },
+  { word: 'pun', freq: 12 },
+  { word: 'bun', freq: 4 },
+  { word: 'hugs', freq: 5 },
+];
+
+let history = [];
+let currentStep = 0;
+let autoTimer = null;
+
+function initState() {
+  return initialCorpus.map(w => ({
+    tokens: [...w.word.split(''), '</w>'],
+    freq: w.freq
+  }));
+}
+
+function countPairs(state) {
+  const counts = {};
+  state.forEach(({ tokens, freq }) => {
+    for (let i = 0; i < tokens.length - 1; i++) {
+      const pair = tokens[i] + '|' + tokens[i+1];
+      counts[pair] = (counts[pair] || 0) + freq;
+    }
+  });
+  return Object.entries(counts)
+    .map(([pair, count]) => ({ pair, a: pair.split('|')[0], b: pair.split('|')[1], count }))
+    .sort((a, b) => b.count - a.count);
+}
+
+function applyMerge(state, a, b) {
+  const merged = a + b;
+  return state.map(({ tokens, freq }) => {
+    const newTokens = [];
+    let i = 0;
+    while (i < tokens.length) {
+      if (i < tokens.length - 1 && tokens[i] === a && tokens[i+1] === b) {
+        newTokens.push(merged);
+        i += 2;
+      } else {
+        newTokens.push(tokens[i]);
+        i++;
+      }
+    }
+    return { tokens: newTokens, freq };
+  });
+}
+
+function getVocab(state) {
+  const vocab = new Set();
+  state.forEach(({ tokens }) => tokens.forEach(t => vocab.add(t)));
+  return [...vocab].sort((a, b) => a.length - b.length || a.localeCompare(b));
+}
+
+function getBaseVocab() {
+  const base = new Set();
+  initialCorpus.forEach(w => {
+    w.word.split('').forEach(c => base.add(c));
+  });
+  base.add('</w>');
+  return base;
+}
+
+function computeAllSteps() {
+  history = [];
+  let state = initState();
+  history.push({ state: JSON.parse(JSON.stringify(state)), merge: null, pairs: countPairs(state) });
+
+  for (let step = 0; step < 8; step++) {
+    const pairs = countPairs(state);
+    if (pairs.length === 0) break;
+    const best = pairs[0];
+    state = applyMerge(state, best.a, best.b);
+    history.push({
+      state: JSON.parse(JSON.stringify(state)),
+      merge: { a: best.a, b: best.b, merged: best.a + best.b, count: best.count },
+      pairs: countPairs(state)
+    });
+  }
+}
+
+function render() {
+  const entry = history[currentStep];
+  const state = entry.state;
+  const pairs = entry.pairs;
+  const merge = entry.merge;
+  const baseVocab = getBaseVocab();
+
+  // Step label
+  document.getElementById('stepLabel').textContent = `Step ${currentStep} / ${history.length - 1}`;
+  document.getElementById('btnPrev').disabled = currentStep === 0;
+  document.getElementById('btnNext').disabled = currentStep >= history.length - 1;
+
+  // Words
+  const wc = document.getElementById('wordsContainer');
+  wc.innerHTML = '';
+  state.forEach(({ tokens, freq }) => {
+    const row = document.createElement('div');
+    row.className = 'word-row';
+    const f = document.createElement('span');
+    f.className = 'word-freq';
+    f.textContent = 'x' + freq;
+    row.appendChild(f);
+    tokens.forEach(t => {
+      const tok = document.createElement('span');
+      tok.className = 'token';
+      if (t === '</w>') {
+        tok.classList.add('token-eow');
+      } else if (!baseVocab.has(t)) {
+        tok.classList.add('token-merged');
+      } else {
+        tok.classList.add('token-base');
+      }
+      if (merge && t === merge.merged) {
+        tok.classList.add('token-highlight');
+      }
+      tok.textContent = t;
+      row.appendChild(tok);
+    });
+    wc.appendChild(row);
+  });
+
+  // Pairs
+  const pc = document.getElementById('pairsContainer');
+  pc.innerHTML = '';
+  const topPairs = pairs.slice(0, 10);
+  topPairs.forEach((p, i) => {
+    const row = document.createElement('div');
+    row.className = 'pair-row' + (i === 0 ? ' winner' : '');
+    const name = document.createElement('span');
+    name.className = 'pair-name';
+    name.textContent = `(${p.a}, ${p.b})`;
+    const count = document.createElement('span');
+    count.className = 'pair-count';
+    count.textContent = p.count;
+    row.appendChild(name);
+    row.appendChild(count);
+    pc.appendChild(row);
+  });
+  if (pairs.length === 0) {
+    pc.innerHTML = '<div style="color:#555; font-size:12px;">No more pairs to merge</div>';
+  }
+
+  // Vocab
+  const vocab = getVocab(state);
+  document.getElementById('vocabTitle').textContent = `Vocabulary (${vocab.length} symbols)`;
+  const vc = document.getElementById('vocabContainer');
+  vc.innerHTML = '';
+  vocab.forEach(v => {
+    const item = document.createElement('span');
+    item.className = 'vocab-item ' + (baseVocab.has(v) ? 'vocab-original' : 'vocab-new');
+    item.textContent = v;
+    vc.appendChild(item);
+  });
+
+  // Merge info
+  const mt = document.getElementById('mergeTitle');
+  const md = document.getElementById('mergeDesc');
+  if (merge) {
+    mt.textContent = `Merge ${currentStep}: (${merge.a}, ${merge.b}) -> ${merge.merged}  [frequency: ${merge.count}]`;
+    md.textContent = `The pair (${merge.a}, ${merge.b}) appeared ${merge.count} times across all words. Every occurrence has been replaced with the new token "${merge.merged}". The vocabulary grows by 1 entry. Remaining pairs are recounted from the updated corpus.`;
+  } else {
+    mt.textContent = 'Step 0: Initial State';
+    md.textContent = 'Each word is split into individual characters plus an end-of-word marker </w>. The base vocabulary contains all unique characters. Click "Next Merge" to find and apply the most frequent pair.';
+  }
+}
+
+function nextStep() {
+  if (currentStep < history.length - 1) {
+    currentStep++;
+    render();
+  }
+}
+
+function prevStep() {
+  if (currentStep > 0) {
+    currentStep--;
+    render();
+  }
+}
+
+function reset() {
+  if (autoTimer) { clearInterval(autoTimer); autoTimer = null; }
+  document.getElementById('btnAuto').textContent = 'Auto Play';
+  currentStep = 0;
+  render();
+}
+
+function autoPlay() {
+  const btn = document.getElementById('btnAuto');
+  if (autoTimer) {
+    clearInterval(autoTimer);
+    autoTimer = null;
+    btn.textContent = 'Auto Play';
+    return;
+  }
+  btn.textContent = 'Pause';
+  autoTimer = setInterval(() => {
+    if (currentStep >= history.length - 1) {
+      clearInterval(autoTimer);
+      autoTimer = null;
+      btn.textContent = 'Auto Play';
+      return;
+    }
+    nextStep();
+  }, 1200);
+}
+
+computeAllSteps();
+render();
+</script>
+
+</body>
+</html>

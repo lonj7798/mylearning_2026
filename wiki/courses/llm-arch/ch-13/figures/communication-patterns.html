@@ -1,0 +1,273 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Collective Communication Patterns — Ch 13</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { background: #1a1a2e; color: #e0e0e0; font-family: 'Segoe UI', system-ui, sans-serif; padding: 24px; min-height: 100vh; }
+h1 { font-size: 20px; color: #e94560; margin-bottom: 4px; }
+.subtitle { color: #888; font-size: 13px; margin-bottom: 24px; }
+.controls { display: flex; gap: 10px; margin-bottom: 24px; flex-wrap: wrap; }
+.btn { padding: 8px 14px; border: 2px solid #333; background: #16213e; color: #e0e0e0; border-radius: 8px; cursor: pointer; font-size: 12px; transition: all 0.2s; }
+.btn:hover { border-color: #e94560; }
+.btn.active { border-color: #e94560; background: #e94560; color: #fff; }
+.viz-container { display: flex; gap: 24px; flex-wrap: wrap; justify-content: center; }
+.viz-panel { background: #16213e; border-radius: 12px; padding: 24px; flex: 1; min-width: 320px; max-width: 600px; }
+.viz-panel h2 { font-size: 15px; color: #4ecdc4; margin-bottom: 4px; }
+.viz-panel .desc { font-size: 12px; color: #888; margin-bottom: 16px; line-height: 1.5; }
+canvas { display: block; margin: 0 auto; border-radius: 8px; }
+.info-box { background: #1a1a2e; border-radius: 8px; padding: 12px; margin-top: 16px; }
+.info-box h3 { font-size: 13px; color: #ffd93d; margin-bottom: 6px; }
+.info-box p { font-size: 12px; color: #bbb; line-height: 1.5; }
+.info-box .highlight { color: #e94560; font-weight: bold; }
+.usage-tag { display: inline-block; background: #0f3460; color: #4ecdc4; font-size: 10px; padding: 2px 8px; border-radius: 10px; margin-top: 6px; margin-right: 4px; }
+.step-controls { display: flex; align-items: center; gap: 12px; margin-top: 12px; justify-content: center; }
+.step-btn { padding: 6px 16px; border: 1px solid #e94560; background: transparent; color: #e94560; border-radius: 6px; cursor: pointer; font-size: 12px; }
+.step-btn:hover { background: #e94560; color: #fff; }
+.step-label { font-size: 12px; color: #888; }
+</style>
+</head>
+<body>
+<h1>Collective Communication Primitives</h1>
+<p class="subtitle">The building blocks of distributed training. Each parallelism strategy uses a specific combination of these primitives.</p>
+
+<div class="controls">
+<button class="btn active" onclick="selectOp('allreduce')">All-Reduce</button>
+<button class="btn" onclick="selectOp('allgather')">All-Gather</button>
+<button class="btn" onclick="selectOp('reducescatter')">Reduce-Scatter</button>
+<button class="btn" onclick="selectOp('alltoall')">All-to-All</button>
+<button class="btn" onclick="selectOp('p2p')">Point-to-Point</button>
+<button class="btn" onclick="selectOp('broadcast')">Broadcast</button>
+</div>
+
+<div class="viz-container">
+<div class="viz-panel">
+<h2 id="opTitle">All-Reduce</h2>
+<div class="desc" id="opDesc">Sum (or average) tensors across all GPUs. Every GPU ends with the same result.</div>
+<canvas id="canvas" width="480" height="320"></canvas>
+<div class="step-controls">
+<button class="step-btn" onclick="prevStep()">Prev</button>
+<span class="step-label" id="stepLabel">Step 1 / 3</span>
+<button class="step-btn" onclick="nextStep()">Next</button>
+<button class="step-btn" onclick="toggleAuto()">Auto</button>
+</div>
+</div>
+<div class="viz-panel">
+<div class="info-box">
+<h3 id="infoTitle">All-Reduce in Distributed Training</h3>
+<div id="infoContent">
+<p>All-Reduce is the workhorse of <span class="highlight">Data Parallelism</span>. After each GPU computes gradients on its micro-batch, all-reduce sums them so every replica has identical averaged gradients for the optimizer step.</p>
+<p style="margin-top:8px;">Communication volume: <span class="highlight">2N</span> per GPU (N for reduce-scatter phase + N for all-gather phase in ring implementation).</p>
+<p style="margin-top:8px;">Also used by <span class="highlight">Tensor Parallelism</span> to combine partial results from column/row-parallel operations — but here it sits on the critical path and cannot be overlapped.</p>
+<div style="margin-top:10px;">
+<span class="usage-tag">Data Parallelism (gradients)</span>
+<span class="usage-tag">Tensor Parallelism (activations)</span>
+<span class="usage-tag">Sequence Parallelism (LayerNorm grads)</span>
+</div>
+</div>
+</div>
+</div>
+</div>
+
+<script>
+const canvas = document.getElementById('canvas');
+const ctx = canvas.getContext('2d');
+const N = 4;
+let currentOp = 'allreduce';
+let currentStep = 0;
+let autoPlay = false;
+let autoInterval = null;
+
+const ops = {
+  allreduce: {
+    title: 'All-Reduce',
+    desc: 'Sum (or average) tensors across all GPUs. Every GPU ends with the same result.',
+    infoTitle: 'All-Reduce in Distributed Training',
+    info: '<p>All-Reduce is the workhorse of <span class="highlight">Data Parallelism</span>. After each GPU computes gradients on its micro-batch, all-reduce sums them so every replica has identical averaged gradients for the optimizer step.</p><p style="margin-top:8px;">Communication volume: <span class="highlight">2N</span> per GPU (N for reduce-scatter phase + N for all-gather phase in ring implementation).</p><p style="margin-top:8px;">Also used by <span class="highlight">Tensor Parallelism</span> to combine partial results from column/row-parallel operations — but here it sits on the critical path and cannot be overlapped.</p><div style="margin-top:10px;"><span class="usage-tag">Data Parallelism (gradients)</span><span class="usage-tag">Tensor Parallelism (activations)</span></div>',
+    steps: 3,
+    draw: drawAllReduce
+  },
+  allgather: {
+    title: 'All-Gather',
+    desc: 'Each GPU contributes a shard; every GPU gets the full concatenated result.',
+    infoTitle: 'All-Gather in Distributed Training',
+    info: '<p>All-Gather reconstructs full tensors from shards. Critical for <span class="highlight">ZeRO-3/FSDP</span>: each GPU stores 1/N of parameters and all-gathers the full layer before each forward/backward pass.</p><p style="margin-top:8px;">Communication volume: <span class="highlight">N</span> per GPU (each GPU sends its shard to all others).</p><p style="margin-top:8px;">In ZeRO-3, prefetching the next layer\'s all-gather during current layer\'s compute is the key optimization for hiding latency.</p><div style="margin-top:10px;"><span class="usage-tag">ZeRO-3 / FSDP (parameter gathering)</span><span class="usage-tag">Sequence Parallelism (SP to TP transition)</span></div>',
+    steps: 3,
+    draw: drawAllGather
+  },
+  reducescatter: {
+    title: 'Reduce-Scatter',
+    desc: 'Reduce (sum) and scatter: each GPU ends with 1/N of the reduced result.',
+    infoTitle: 'Reduce-Scatter in Distributed Training',
+    info: '<p>Reduce-Scatter is the inverse of All-Gather. It sums tensors across GPUs (like all-reduce) but only stores 1/N of the result on each GPU.</p><p style="margin-top:8px;">Used by <span class="highlight">ZeRO-1/2</span> for gradient synchronization: instead of all-reduce (where every GPU keeps the full gradient), reduce-scatter gives each GPU only the gradient shard it needs for its optimizer states.</p><p style="margin-top:8px;">Communication volume: <span class="highlight">N</span> per GPU — same as all-gather. Together, reduce-scatter + all-gather = all-reduce.</p><div style="margin-top:10px;"><span class="usage-tag">ZeRO-1/2 (gradient sharding)</span><span class="usage-tag">Sequence Parallelism (TP to SP transition)</span></div>',
+    steps: 3,
+    draw: drawReduceScatter
+  },
+  alltoall: {
+    title: 'All-to-All',
+    desc: 'Every GPU sends a unique chunk to every other GPU. Full permutation.',
+    infoTitle: 'All-to-All in Expert Parallelism',
+    info: '<p>All-to-All is the most demanding collective: each GPU sends a different piece of data to every other GPU. Used by <span class="highlight">Expert Parallelism</span> to route tokens to their assigned experts.</p><p style="margin-top:8px;">Communication volume: <span class="highlight">N</span> per GPU, but the traffic pattern saturates bisection bandwidth because every pair of GPUs exchanges data simultaneously.</p><p style="margin-top:8px;">DeepSeek V3 constrains routing to at most 4 nodes to limit all-to-all scope — a model architecture decision driven by communication cost.</p><div style="margin-top:10px;"><span class="usage-tag">Expert Parallelism (token routing)</span><span class="usage-tag">MoE training only</span></div>',
+    steps: 3,
+    draw: drawAllToAll
+  },
+  p2p: {
+    title: 'Point-to-Point (Send/Recv)',
+    desc: 'Direct transfer between two specific GPUs. Minimal bandwidth requirement.',
+    infoTitle: 'P2P in Pipeline Parallelism',
+    info: '<p>Point-to-Point is the simplest communication: one GPU sends, one GPU receives. Used by <span class="highlight">Pipeline Parallelism</span> to pass activations from one stage to the next.</p><p style="margin-top:8px;">Communication volume: <span class="highlight">activation size only</span> between adjacent stages — far less than TP\'s all-reduce which communicates within every layer.</p><p style="margin-top:8px;">This is why PP scales well across nodes with slow interconnects: it only needs bandwidth between adjacent stages, not all-to-all connectivity.</p><div style="margin-top:10px;"><span class="usage-tag">Pipeline Parallelism (activations)</span></div>',
+    steps: 3,
+    draw: drawP2P
+  },
+  broadcast: {
+    title: 'Broadcast',
+    desc: 'One GPU sends the same tensor to all other GPUs.',
+    infoTitle: 'Broadcast in Training',
+    info: '<p>Broadcast sends identical data from one source GPU to all others. Used during <span class="highlight">initialization</span> to distribute model weights from rank 0 to all replicas.</p><p style="margin-top:8px;">Also used in column-parallel tensor parallelism to distribute input activations (though in practice, inputs are often already synchronized from the previous operation).</p><p style="margin-top:8px;">Communication volume: <span class="highlight">N</span> total from the source GPU.</p><div style="margin-top:10px;"><span class="usage-tag">Initialization (weight distribution)</span><span class="usage-tag">TP column-parallel (input copy)</span></div>',
+    steps: 3,
+    draw: drawBroadcast
+  }
+};
+
+function selectOp(op) {
+  currentOp = op;
+  currentStep = 0;
+  stopAuto();
+  document.querySelectorAll('.btn').forEach(b => b.classList.remove('active'));
+  event.target.classList.add('active');
+  const o = ops[op];
+  document.getElementById('opTitle').textContent = o.title;
+  document.getElementById('opDesc').textContent = o.desc;
+  document.getElementById('infoTitle').textContent = o.infoTitle;
+  document.getElementById('infoContent').innerHTML = o.info;
+  draw();
+}
+
+function prevStep() { currentStep = Math.max(0, currentStep - 1); draw(); }
+function nextStep() { currentStep = Math.min(ops[currentOp].steps - 1, currentStep + 1); draw(); }
+function toggleAuto() {
+  if (autoPlay) { stopAuto(); } else { autoPlay = true; autoInterval = setInterval(() => { currentStep = (currentStep + 1) % ops[currentOp].steps; draw(); }, 1200); }
+}
+function stopAuto() { autoPlay = false; if (autoInterval) clearInterval(autoInterval); }
+
+function draw() {
+  document.getElementById('stepLabel').textContent = `Step ${currentStep + 1} / ${ops[currentOp].steps}`;
+  ops[currentOp].draw(currentStep);
+}
+
+const gpuColors = ['#e94560', '#4ecdc4', '#ffd93d', '#c084fc'];
+const gpuX = [80, 240, 400, 240];
+const gpuY = [60, 60, 60, 220];
+
+function drawGPUs(labels, highlights) {
+  ctx.clearRect(0, 0, 480, 320);
+  for (let i = 0; i < N; i++) {
+    ctx.fillStyle = highlights && highlights[i] ? gpuColors[i] : '#16213e';
+    ctx.strokeStyle = gpuColors[i];
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.roundRect(gpuX[i] - 40, gpuY[i] - 20, 80, 40, 8);
+    ctx.fill(); ctx.stroke();
+    ctx.fillStyle = '#e0e0e0';
+    ctx.font = 'bold 11px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText(`GPU ${i}`, gpuX[i], gpuY[i] - 4);
+    ctx.font = '10px sans-serif';
+    ctx.fillStyle = highlights && highlights[i] ? '#fff' : '#888';
+    ctx.fillText(labels[i] || '', gpuX[i], gpuY[i] + 12);
+  }
+}
+
+function drawArrow(x1, y1, x2, y2, color) {
+  ctx.strokeStyle = color;
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.moveTo(x1, y1);
+  ctx.lineTo(x2, y2);
+  ctx.stroke();
+  const angle = Math.atan2(y2 - y1, x2 - x1);
+  ctx.beginPath();
+  ctx.moveTo(x2, y2);
+  ctx.lineTo(x2 - 8 * Math.cos(angle - 0.4), y2 - 8 * Math.sin(angle - 0.4));
+  ctx.lineTo(x2 - 8 * Math.cos(angle + 0.4), y2 - 8 * Math.sin(angle + 0.4));
+  ctx.closePath();
+  ctx.fillStyle = color;
+  ctx.fill();
+}
+
+function drawAllReduce(step) {
+  const labels = step === 0 ? ['g0','g1','g2','g3'] : step === 1 ? ['summing...','summing...','summing...','summing...'] : ['g_avg','g_avg','g_avg','g_avg'];
+  const hl = step === 2 ? [true,true,true,true] : [false,false,false,false];
+  drawGPUs(labels, hl);
+  if (step === 1) {
+    for (let i = 0; i < N; i++) for (let j = 0; j < N; j++) {
+      if (i !== j) drawArrow(gpuX[i], gpuY[i] + 20, gpuX[j], gpuY[j] + 20, gpuColors[i] + '60');
+    }
+  }
+  ctx.fillStyle = '#888'; ctx.font = '11px sans-serif'; ctx.textAlign = 'center';
+  ctx.fillText(step === 0 ? 'Each GPU has local gradients' : step === 1 ? 'Ring all-reduce: reduce-scatter + all-gather' : 'Every GPU has identical averaged gradients', 240, 300);
+}
+
+function drawAllGather(step) {
+  const labels = step === 0 ? ['shard 0','shard 1','shard 2','shard 3'] : step === 1 ? ['gathering...','gathering...','gathering...','gathering...'] : ['[0,1,2,3]','[0,1,2,3]','[0,1,2,3]','[0,1,2,3]'];
+  const hl = step === 2 ? [true,true,true,true] : step === 0 ? [true,true,true,true] : [false,false,false,false];
+  drawGPUs(labels, step === 0 ? [true,true,true,true] : step === 2 ? [true,true,true,true] : [false,false,false,false]);
+  if (step === 1) {
+    for (let i = 0; i < N; i++) for (let j = 0; j < N; j++) {
+      if (i !== j) drawArrow(gpuX[i], gpuY[i] + 20, gpuX[j], gpuY[j] + 20, gpuColors[i] + '60');
+    }
+  }
+  ctx.fillStyle = '#888'; ctx.font = '11px sans-serif'; ctx.textAlign = 'center';
+  ctx.fillText(step === 0 ? 'Each GPU holds 1/N of the parameter' : step === 1 ? 'Each GPU sends its shard to all others' : 'Every GPU has the full concatenated tensor', 240, 300);
+}
+
+function drawReduceScatter(step) {
+  const labels = step === 0 ? ['g0','g1','g2','g3'] : step === 1 ? ['reducing...','reducing...','reducing...','reducing...'] : ['sum[0]','sum[1]','sum[2]','sum[3]'];
+  drawGPUs(labels, step === 2 ? [true,true,true,true] : [false,false,false,false]);
+  if (step === 1) {
+    for (let i = 0; i < N; i++) for (let j = 0; j < N; j++) {
+      if (i !== j) drawArrow(gpuX[i], gpuY[i] + 20, gpuX[j], gpuY[j] + 20, gpuColors[i] + '60');
+    }
+  }
+  ctx.fillStyle = '#888'; ctx.font = '11px sans-serif'; ctx.textAlign = 'center';
+  ctx.fillText(step === 0 ? 'Each GPU has full gradient tensor' : step === 1 ? 'Reduce (sum) and scatter to different GPUs' : 'Each GPU has 1/N of the summed gradient', 240, 300);
+}
+
+function drawAllToAll(step) {
+  const labels = step === 0 ? ['t0,t1,t2,t3','t4,t5,t6,t7','t8,t9,tA,tB','tC,tD,tE,tF'] : step === 1 ? ['routing...','routing...','routing...','routing...'] : ['t0,t4,t8,tC','t1,t5,t9,tD','t2,t6,tA,tE','t3,t7,tB,tF'];
+  drawGPUs(labels, step === 2 ? [true,true,true,true] : [false,false,false,false]);
+  if (step === 1) {
+    for (let i = 0; i < N; i++) for (let j = 0; j < N; j++) {
+      if (i !== j) drawArrow(gpuX[i], gpuY[i] + 20, gpuX[j], gpuY[j] + 20, gpuColors[i] + '80');
+    }
+  }
+  ctx.fillStyle = '#888'; ctx.font = '11px sans-serif'; ctx.textAlign = 'center';
+  ctx.fillText(step === 0 ? 'Tokens assigned to experts on each GPU' : step === 1 ? 'Every GPU sends unique data to every other GPU' : 'Each GPU (expert) has its routed tokens', 240, 300);
+}
+
+function drawP2P(step) {
+  const labels = ['Layer 1-10','Layer 11-20','Layer 21-30','Layer 31-40'];
+  drawGPUs(labels, [step===0, step===1, step===2, false]);
+  if (step >= 0) drawArrow(gpuX[0] + 40, gpuY[0], gpuX[1] - 40, gpuY[1], step >= 1 ? '#4ecdc4' : '#333');
+  if (step >= 1) drawArrow(gpuX[1] + 40, gpuY[1], gpuX[2] - 40, gpuY[2], step >= 2 ? '#ffd93d' : '#333');
+  if (step >= 2) drawArrow(gpuX[2], gpuY[2] + 20, gpuX[3], gpuY[3] - 20, '#c084fc');
+  ctx.fillStyle = '#888'; ctx.font = '11px sans-serif'; ctx.textAlign = 'center';
+  ctx.fillText(step === 0 ? 'Stage 0 computes, sends activations to Stage 1' : step === 1 ? 'Activations flow stage-to-stage sequentially' : 'Minimal bandwidth: only activation tensors between adjacent stages', 240, 300);
+}
+
+function drawBroadcast(step) {
+  const labels = step === 0 ? ['weights','empty','empty','empty'] : step === 1 ? ['weights','copying...','copying...','copying...'] : ['weights','weights','weights','weights'];
+  drawGPUs(labels, step === 0 ? [true,false,false,false] : step === 2 ? [true,true,true,true] : [false,false,false,false]);
+  if (step === 1) {
+    for (let j = 1; j < N; j++) drawArrow(gpuX[0], gpuY[0] + 20, gpuX[j], gpuY[j] - 20, gpuColors[0] + '80');
+  }
+  ctx.fillStyle = '#888'; ctx.font = '11px sans-serif'; ctx.textAlign = 'center';
+  ctx.fillText(step === 0 ? 'Rank 0 has the tensor to distribute' : step === 1 ? 'Rank 0 sends to all other ranks' : 'All ranks have identical copies', 240, 300);
+}
+
+draw();
+</script>
+</body>
+</html>

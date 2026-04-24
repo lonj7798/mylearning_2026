@@ -115,6 +115,8 @@ The two dominant paradigms make fundamentally different architectural bets:
 
 ## 4. Cross-Entropy Loss
 
+[Deep Dive: Cross-Entropy and KL Divergence — The Full Derivation](excerpts/cross-entropy-kl-divergence.md)
+
 The standard training objective for autoregressive LLMs. Given a training sequence $x_1, \ldots, x_T$:
 
 $$\mathcal{L}(\theta) = -\frac{1}{T}\sum_{t=1}^{T} \log P_\theta(x_t \mid x_{<t})$$
@@ -168,6 +170,8 @@ Cross-entropy is **not a metric** in the mathematical sense. It violates all thr
 
 ## 5. Perplexity
 
+[Interactive: Perplexity & Cross-Entropy Explorer](figures/perplexity-explorer.html) | [Interactive: Cross-Entropy Loss Landscape](figures/loss-landscape.html)
+
 Perplexity is the standard evaluation metric for language models. It's the exponentiated cross-entropy:
 
 $$\text{PPL}(X) = \exp\left\{-\frac{1}{T}\sum_{t=1}^{T} \log P_\theta(x_t \mid x_{<t})\right\} = \exp(\mathcal{L})$$
@@ -190,6 +194,8 @@ $$\text{PPL}(X) = \exp\left\{-\frac{1}{T}\sum_{t=1}^{T} \log P_\theta(x_t \mid x
 ---
 
 ## 6. Teacher Forcing
+
+[Deep Dive: Teacher Forcing vs. Autoregressive Sampling](excerpts/teacher-forcing-vs-autoregressive.md)
 
 During training, autoregressive models use **teacher forcing**: at each position, the model receives the ground-truth previous tokens as input (not its own predictions). This enables massive parallelism — all positions can be computed simultaneously via causal masking.
 

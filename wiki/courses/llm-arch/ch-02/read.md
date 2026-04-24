@@ -103,6 +103,8 @@ Critically, the attention weights $\alpha_{tj}$ learned to match known linguisti
 
 ## 3. Scaled Dot-Product Attention
 
+[Deep Dive: Attention as Soft Dictionary Lookup — A Derivation](excerpts/attention-soft-dictionary-lookup.md) | [Interactive: QKV Computation Animation](figures/qkv-computation.html)
+
 Vaswani et al. (2017) ([[attention-is-all-you-need|paper]]) generalized Bahdanau's additive attention into the form used by every modern Transformer. The formulation introduces three explicit roles — **Query**, **Key**, and **Value** — and replaces the learned alignment network with a simple dot product.
 
 Given input representations $X \in \mathbb{R}^{n \times d_{model}}$, we project them into three spaces:
@@ -148,6 +150,8 @@ Vaswani et al. tested this directly: additive attention (Bahdanau's formulation)
 ---
 
 ## 4. Attention as Weighted Value Retrieval: A Computational View
+
+[Interactive: Attention Weight Visualizer](figures/attention-weight-visualizer.html)
 
 Let's trace through the computation for a concrete example to build geometric intuition.
 
@@ -367,6 +371,8 @@ Subsequent analysis of trained Transformers (Clark et al. 2019, Voita et al. 201
 - **Separator/delimiter heads** attend to punctuation and structural markers
 
 ### Head Redundancy
+
+[Deep Dive: Multi-Head Redundancy Analysis](excerpts/multi-head-redundancy.md)
 
 A critical finding: **many heads are redundant.** Voita et al. (2019) showed that in a 6-layer, 8-head Transformer, only a small subset of heads are truly important. Pruning 60-80% of heads at inference time (by setting their outputs to zero) causes minimal performance degradation on many tasks.
 

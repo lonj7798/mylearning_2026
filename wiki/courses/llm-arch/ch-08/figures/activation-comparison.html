@@ -1,0 +1,244 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Activation Function Comparison</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { background: #1a1a2e; color: #e0e0e0; font-family: 'Segoe UI', system-ui, sans-serif; padding: 24px; min-height: 100vh; }
+.container { max-width: 900px; margin: 0 auto; }
+h1 { color: #e94560; font-size: 22px; margin-bottom: 4px; }
+.subtitle { color: #888; font-size: 13px; margin-bottom: 20px; }
+.layout { display: grid; grid-template-columns: 1fr 260px; gap: 20px; }
+.chart-area { background: #16213e; border-radius: 12px; padding: 20px; }
+canvas { display: block; }
+.controls { display: flex; flex-direction: column; gap: 12px; }
+.toggle-group { background: #16213e; border-radius: 10px; padding: 14px; }
+.toggle-group h3 { color: #4ecdc4; font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 10px; }
+.toggle-row { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; cursor: pointer; font-size: 13px; }
+.toggle-row input { accent-color: #e94560; cursor: pointer; }
+.swatch { width: 14px; height: 14px; border-radius: 3px; flex-shrink: 0; }
+.param-group { background: #16213e; border-radius: 10px; padding: 14px; }
+.param-group h3 { color: #4ecdc4; font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 10px; }
+.param-row { margin-bottom: 10px; }
+.param-row label { display: block; font-size: 12px; color: #888; margin-bottom: 4px; }
+.param-row .val { color: #ffd93d; font-family: monospace; font-weight: bold; }
+input[type="range"] { width: 100%; accent-color: #e94560; }
+.formula-box { background: #16213e; border-radius: 10px; padding: 14px; }
+.formula-box h3 { color: #e94560; font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 8px; }
+.formula { font-family: monospace; font-size: 12px; color: #aaa; line-height: 1.6; }
+.view-toggle { display: flex; gap: 8px; margin-bottom: 12px; }
+.view-btn { background: #0f3460; color: #4ecdc4; border: 1px solid #4ecdc4; border-radius: 6px; padding: 6px 14px; font-size: 12px; cursor: pointer; }
+.view-btn.active { background: #4ecdc4; color: #1a1a2e; }
+</style>
+</head>
+<body>
+<div class="container">
+<h1>Activation Function Comparison</h1>
+<div class="subtitle">Compare ReLU, GELU, Swish/SiLU, and their gated variants (GLU, SwiGLU) interactively</div>
+
+<div class="view-toggle">
+    <button class="view-btn active" onclick="setView('activation')" id="btn-activation">Activation f(x)</button>
+    <button class="view-btn" onclick="setView('derivative')" id="btn-derivative">Derivative f'(x)</button>
+    <button class="view-btn" onclick="setView('gated')" id="btn-gated">Gated Output</button>
+</div>
+
+<div class="layout">
+<div class="chart-area">
+    <canvas id="chart" width="580" height="420"></canvas>
+</div>
+<div class="controls">
+    <div class="toggle-group">
+        <h3>Activations</h3>
+        <label class="toggle-row"><input type="checkbox" checked onchange="draw()" id="chk-relu"><div class="swatch" style="background:#e94560"></div> ReLU</label>
+        <label class="toggle-row"><input type="checkbox" checked onchange="draw()" id="chk-gelu"><div class="swatch" style="background:#4ecdc4"></div> GELU</label>
+        <label class="toggle-row"><input type="checkbox" checked onchange="draw()" id="chk-swish"><div class="swatch" style="background:#ffd93d"></div> Swish/SiLU</label>
+        <label class="toggle-row"><input type="checkbox" onchange="draw()" id="chk-sigmoid"><div class="swatch" style="background:#a855f7"></div> Sigmoid</label>
+        <label class="toggle-row"><input type="checkbox" onchange="draw()" id="chk-tanh"><div class="swatch" style="background:#22d3ee"></div> Tanh</label>
+    </div>
+    <div class="param-group">
+        <h3>Parameters</h3>
+        <div class="param-row">
+            <label>Swish beta: <span class="val" id="val-beta">1.0</span></label>
+            <input type="range" id="beta" min="0.1" max="5" step="0.1" value="1" oninput="document.getElementById('val-beta').textContent=this.value; draw()">
+        </div>
+        <div class="param-row">
+            <label>X range: [<span class="val" id="val-range">-5, 5</span>]</label>
+            <input type="range" id="xrange" min="2" max="10" step="1" value="5" oninput="document.getElementById('val-range').textContent='-'+this.value+', '+this.value; draw()">
+        </div>
+        <div class="param-row">
+            <label>Gate weight (gated view): <span class="val" id="val-gate">0.0</span></label>
+            <input type="range" id="gatew" min="-3" max="3" step="0.1" value="0" oninput="document.getElementById('val-gate').textContent=this.value; draw()">
+        </div>
+    </div>
+    <div class="formula-box" id="formulaBox">
+        <h3>Formulas</h3>
+        <div class="formula">
+            ReLU(x) = max(0, x)<br>
+            GELU(x) = x * phi(x)<br>
+            Swish(x) = x * sig(bx)<br>
+        </div>
+    </div>
+</div>
+</div>
+</div>
+
+<script>
+const canvas = document.getElementById('chart');
+const ctx = canvas.getContext('2d');
+let currentView = 'activation';
+
+const colors = {
+    relu: '#e94560', gelu: '#4ecdc4', swish: '#ffd93d',
+    sigmoid: '#a855f7', tanh: '#22d3ee'
+};
+
+function sigmoid(x) { return 1 / (1 + Math.exp(-x)); }
+function relu(x) { return Math.max(0, x); }
+function gelu(x) { return x * sigmoid(1.702 * x); }
+function swish(x, beta) { return x * sigmoid(beta * x); }
+function sigmoidFn(x) { return sigmoid(x); }
+function tanhFn(x) { return Math.tanh(x); }
+
+// Derivatives
+function dRelu(x) { return x > 0 ? 1 : 0; }
+function dGelu(x) {
+    const s = sigmoid(1.702 * x);
+    return s + x * 1.702 * s * (1 - s);
+}
+function dSwish(x, beta) {
+    const s = sigmoid(beta * x);
+    return s + x * beta * s * (1 - s);
+}
+function dSigmoid(x) { const s = sigmoid(x); return s * (1 - s); }
+function dTanh(x) { const t = Math.tanh(x); return 1 - t * t; }
+
+// Gated: gate(x) * linear_value, where gate uses activation, value = x + gate_weight
+function gated(activFn, x, beta, gw) {
+    const gate = activFn === swish ? activFn(x, beta) : activFn(x);
+    const value = x + parseFloat(gw);
+    return gate * value;
+}
+
+function setView(v) {
+    currentView = v;
+    document.querySelectorAll('.view-btn').forEach(b => b.classList.remove('active'));
+    document.getElementById('btn-' + v).classList.add('active');
+
+    const fb = document.getElementById('formulaBox');
+    if (v === 'activation') fb.querySelector('.formula').innerHTML = "ReLU(x) = max(0, x)<br>GELU(x) = x &middot; &Phi;(x)<br>Swish(x) = x &middot; &sigma;(&beta;x)";
+    else if (v === 'derivative') fb.querySelector('.formula').innerHTML = "ReLU'(x) = {0 if x&lt;0, 1 if x&gt;0}<br>GELU'(x) = &Phi;(x) + x&middot;&phi;(x)<br>Swish'(x) = &sigma;(&beta;x) + x&beta;&sigma;(&beta;x)(1-&sigma;(&beta;x))";
+    else fb.querySelector('.formula').innerHTML = "SwiGLU: Swish(W1&middot;x) &odot; (Vx)<br>ReGLU: ReLU(W1&middot;x) &odot; (Vx)<br>Gate weight simulates V projection offset";
+    draw();
+}
+
+function draw() {
+    const W = canvas.width, H = canvas.height;
+    const beta = parseFloat(document.getElementById('beta').value);
+    const xr = parseFloat(document.getElementById('xrange').value);
+    const gw = document.getElementById('gatew').value;
+
+    ctx.clearRect(0, 0, W, H);
+
+    // Grid
+    const pad = { l: 50, r: 20, t: 20, b: 40 };
+    const pw = W - pad.l - pad.r;
+    const ph = H - pad.t - pad.b;
+
+    function toPixel(xv, yv, yMin, yMax) {
+        const px = pad.l + ((xv + xr) / (2 * xr)) * pw;
+        const py = pad.t + (1 - (yv - yMin) / (yMax - yMin)) * ph;
+        return [px, py];
+    }
+
+    // Determine y range
+    let yMin = -2, yMax = 5;
+    if (currentView === 'derivative') { yMin = -0.5; yMax = 2; }
+    if (currentView === 'gated') { yMin = -3; yMax = 8; }
+
+    // Grid lines
+    ctx.strokeStyle = '#1a1a2e';
+    ctx.lineWidth = 1;
+    for (let y = Math.ceil(yMin); y <= yMax; y++) {
+        const [, py] = toPixel(0, y, yMin, yMax);
+        ctx.beginPath(); ctx.moveTo(pad.l, py); ctx.lineTo(W - pad.r, py); ctx.stroke();
+        ctx.fillStyle = '#555'; ctx.font = '11px monospace'; ctx.textAlign = 'right';
+        ctx.fillText(y, pad.l - 6, py + 4);
+    }
+    for (let x = -xr; x <= xr; x++) {
+        const [px] = toPixel(x, 0, yMin, yMax);
+        ctx.beginPath(); ctx.moveTo(px, pad.t); ctx.lineTo(px, H - pad.b); ctx.stroke();
+        ctx.fillStyle = '#555'; ctx.textAlign = 'center';
+        ctx.fillText(x, px, H - pad.b + 16);
+    }
+
+    // Axes
+    const [ax0, ay0] = toPixel(0, 0, yMin, yMax);
+    ctx.strokeStyle = '#444'; ctx.lineWidth = 1.5;
+    ctx.beginPath(); ctx.moveTo(pad.l, ay0); ctx.lineTo(W - pad.r, ay0); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(ax0, pad.t); ctx.lineTo(ax0, H - pad.b); ctx.stroke();
+
+    // Plot functions
+    const fns = [];
+    const checks = {
+        relu: document.getElementById('chk-relu').checked,
+        gelu: document.getElementById('chk-gelu').checked,
+        swish: document.getElementById('chk-swish').checked,
+        sigmoid: document.getElementById('chk-sigmoid').checked,
+        tanh: document.getElementById('chk-tanh').checked
+    };
+
+    if (currentView === 'activation') {
+        if (checks.relu) fns.push({ fn: x => relu(x), color: colors.relu, name: 'ReLU' });
+        if (checks.gelu) fns.push({ fn: x => gelu(x), color: colors.gelu, name: 'GELU' });
+        if (checks.swish) fns.push({ fn: x => swish(x, beta), color: colors.swish, name: 'Swish' });
+        if (checks.sigmoid) fns.push({ fn: x => sigmoidFn(x), color: colors.sigmoid, name: 'Sigmoid' });
+        if (checks.tanh) fns.push({ fn: x => tanhFn(x), color: colors.tanh, name: 'Tanh' });
+    } else if (currentView === 'derivative') {
+        if (checks.relu) fns.push({ fn: x => dRelu(x), color: colors.relu, name: "ReLU'" });
+        if (checks.gelu) fns.push({ fn: x => dGelu(x), color: colors.gelu, name: "GELU'" });
+        if (checks.swish) fns.push({ fn: x => dSwish(x, beta), color: colors.swish, name: "Swish'" });
+        if (checks.sigmoid) fns.push({ fn: x => dSigmoid(x), color: colors.sigmoid, name: "Sigmoid'" });
+        if (checks.tanh) fns.push({ fn: x => dTanh(x), color: colors.tanh, name: "Tanh'" });
+    } else {
+        if (checks.relu) fns.push({ fn: x => gated(relu, x, beta, gw), color: colors.relu, name: 'ReGLU' });
+        if (checks.gelu) fns.push({ fn: x => gated(gelu, x, beta, gw), color: colors.gelu, name: 'GEGLU' });
+        if (checks.swish) fns.push({ fn: x => gated((x2) => swish(x2, beta), x, beta, gw), color: colors.swish, name: 'SwiGLU' });
+    }
+
+    const steps = pw;
+    fns.forEach(({ fn, color }) => {
+        ctx.strokeStyle = color;
+        ctx.lineWidth = 2.5;
+        ctx.beginPath();
+        let started = false;
+        for (let s = 0; s <= steps; s++) {
+            const xv = -xr + (s / steps) * 2 * xr;
+            let yv = fn(xv);
+            if (yv < yMin - 2 || yv > yMax + 2) { started = false; continue; }
+            yv = Math.max(yMin - 0.5, Math.min(yMax + 0.5, yv));
+            const [px, py] = toPixel(xv, yv, yMin, yMax);
+            if (!started) { ctx.moveTo(px, py); started = true; }
+            else ctx.lineTo(px, py);
+        }
+        ctx.stroke();
+    });
+
+    // Legend
+    let ly = pad.t + 10;
+    fns.forEach(({ color, name }) => {
+        ctx.fillStyle = color;
+        ctx.fillRect(W - pad.r - 90, ly, 12, 12);
+        ctx.fillStyle = '#ccc';
+        ctx.font = '12px sans-serif';
+        ctx.textAlign = 'left';
+        ctx.fillText(name, W - pad.r - 74, ly + 10);
+        ly += 18;
+    });
+}
+
+draw();
+</script>
+</body>
+</html>

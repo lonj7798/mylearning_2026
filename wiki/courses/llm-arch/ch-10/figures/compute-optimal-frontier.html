@@ -1,0 +1,339 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Compute-Optimal Frontier Explorer</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { background: #1a1a2e; color: #e0e0e0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; padding: 24px; }
+h1 { font-size: 20px; margin-bottom: 8px; color: #e94560; }
+.subtitle { font-size: 13px; color: #888; margin-bottom: 24px; }
+.container { display: flex; gap: 24px; flex-wrap: wrap; }
+.controls { min-width: 280px; flex: 0 0 280px; }
+.chart-area { flex: 1; min-width: 400px; }
+canvas { background: #16213e; border-radius: 12px; width: 100%; }
+.slider-group { margin-bottom: 20px; }
+.slider-label { display: flex; justify-content: space-between; font-size: 13px; margin-bottom: 6px; }
+.slider-label span:first-child { color: #4ecdc4; font-weight: bold; }
+.slider-label span:last-child { color: #ffd93d; font-family: monospace; }
+input[type="range"] {
+  width: 100%; height: 6px; -webkit-appearance: none; appearance: none;
+  background: #0f3460; border-radius: 3px; outline: none;
+}
+input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none; appearance: none; width: 16px; height: 16px;
+  background: #e94560; border-radius: 50%; cursor: pointer;
+}
+.info-box { background: #16213e; border-radius: 8px; padding: 16px; margin-top: 16px; font-size: 12px; line-height: 1.7; }
+.info-box .label { color: #888; }
+.info-box .value { color: #ffd93d; font-weight: bold; font-family: monospace; }
+.info-box .value.accent { color: #e94560; }
+.info-box .value.secondary { color: #4ecdc4; }
+.legend { display: flex; gap: 16px; margin-top: 12px; font-size: 12px; flex-wrap: wrap; }
+.legend-item { display: flex; align-items: center; gap: 6px; }
+.legend-dot { width: 10px; height: 10px; border-radius: 50%; }
+.models-list { margin-top: 16px; }
+.model-row { display: flex; justify-content: space-between; padding: 4px 0; border-bottom: 1px solid #333; font-size: 11px; }
+.model-name { font-weight: bold; }
+</style>
+</head>
+<body>
+<h1>Compute-Optimal Frontier Explorer</h1>
+<p class="subtitle">Chinchilla scaling: N_opt ~ C^0.5, D_opt ~ C^0.5. Drag the compute slider to see optimal allocation.</p>
+
+<div class="container">
+  <div class="controls">
+    <div class="slider-group">
+      <div class="slider-label">
+        <span>Compute Budget (FLOPs)</span>
+        <span id="compute-val">1e21</span>
+      </div>
+      <input type="range" id="compute-slider" min="18" max="25" step="0.1" value="21">
+    </div>
+
+    <div class="slider-group">
+      <div class="slider-label">
+        <span>Overtrain Factor</span>
+        <span id="overtrain-val">1.0x</span>
+      </div>
+      <input type="range" id="overtrain-slider" min="1" max="10" step="0.5" value="1">
+    </div>
+
+    <div class="info-box">
+      <div><span class="label">Compute: </span><span class="value accent" id="info-compute">1.00e21 FLOPs</span></div>
+      <div><span class="label">Chinchilla-optimal N: </span><span class="value secondary" id="info-n-opt">--</span></div>
+      <div><span class="label">Chinchilla-optimal D: </span><span class="value" id="info-d-opt">--</span></div>
+      <div style="border-top:1px solid #333; margin:8px 0; padding-top:8px;">
+        <div><span class="label">Your N (with overtrain): </span><span class="value secondary" id="info-n-actual">--</span></div>
+        <div><span class="label">Your D (with overtrain): </span><span class="value" id="info-d-actual">--</span></div>
+      </div>
+      <div><span class="label">Predicted loss: </span><span class="value accent" id="info-loss">--</span></div>
+    </div>
+
+    <div class="legend">
+      <div class="legend-item"><div class="legend-dot" style="background:#4ecdc4;"></div> Chinchilla frontier</div>
+      <div class="legend-item"><div class="legend-dot" style="background:#e94560;"></div> Your allocation</div>
+      <div class="legend-item"><div class="legend-dot" style="background:#ffd93d;"></div> Historical models</div>
+    </div>
+
+    <div class="info-box models-list">
+      <div style="color:#ffd93d; font-weight:bold; margin-bottom:8px;">Historical Models</div>
+      <div class="model-row"><span class="model-name" style="color:#ffd93d;">GPT-3</span><span>175B, 300B tok</span></div>
+      <div class="model-row"><span class="model-name" style="color:#ffd93d;">Gopher</span><span>280B, 300B tok</span></div>
+      <div class="model-row"><span class="model-name" style="color:#4ecdc4;">Chinchilla</span><span>70B, 1.4T tok</span></div>
+      <div class="model-row"><span class="model-name" style="color:#e94560;">LLaMA-7B</span><span>7B, 1T tok</span></div>
+      <div class="model-row"><span class="model-name" style="color:#e94560;">LLaMA-13B</span><span>13B, 1T tok</span></div>
+      <div class="model-row"><span class="model-name" style="color:#e94560;">LLaMA-65B</span><span>65B, 1.4T tok</span></div>
+    </div>
+  </div>
+
+  <div class="chart-area">
+    <canvas id="chart" width="700" height="500"></canvas>
+  </div>
+</div>
+
+<script>
+const canvas = document.getElementById('chart');
+const ctx = canvas.getContext('2d');
+
+const computeSlider = document.getElementById('compute-slider');
+const overtrainSlider = document.getElementById('overtrain-slider');
+
+// Historical models: [name, params (B), tokens (B), color]
+const models = [
+  ['GPT-3', 175, 300, '#ffd93d'],
+  ['Gopher', 280, 300, '#ffd93d'],
+  ['Chinchilla', 70, 1400, '#4ecdc4'],
+  ['LLaMA-7B', 7, 1000, '#e94560'],
+  ['LLaMA-13B', 13, 1000, '#e94560'],
+  ['LLaMA-65B', 65, 1400, '#e94560'],
+];
+
+// Chinchilla scaling: C = 6*N*D, N_opt ~ C^0.5, D_opt ~ C^0.5
+// Using approximate calibration: N_opt(FLOPs) ~ 0.0061 * C^0.5, D_opt ~ C / (6 * N_opt)
+function chinchillaOptimal(C) {
+  // Calibrated to: C=3.4e23 -> N=70B, D=1.4T (approximately)
+  const N = 0.00364 * Math.pow(C, 0.5); // in billions
+  const D = C / (6e9 * N * 1e9) / 1e9; // convert to billions of tokens
+  return { N: N, D: D };
+}
+
+// Loss function: L(N, D) = E + A/N^alpha + B/D^beta
+// Approximate: E=1.69, A=406.4, B=410.7, alpha=0.34, beta=0.28 (Chinchilla Approach 3)
+function loss(N_b, D_b) {
+  const N = N_b * 1e9;
+  const D = D_b * 1e9;
+  return 1.69 + 406.4 / Math.pow(N, 0.34) + 410.7 / Math.pow(D, 0.28);
+}
+
+// Chart coordinate system
+const CHART_PADDING = { top: 40, right: 40, bottom: 50, left: 60 };
+const logNRange = [Math.log10(1), Math.log10(500)]; // 1B to 500B params
+const logDRange = [Math.log10(50), Math.log10(5000)]; // 50B to 5T tokens
+
+function toCanvasX(logN) {
+  const frac = (logN - logNRange[0]) / (logNRange[1] - logNRange[0]);
+  return CHART_PADDING.left + frac * (canvas.width - CHART_PADDING.left - CHART_PADDING.right);
+}
+function toCanvasY(logD) {
+  const frac = (logD - logDRange[0]) / (logDRange[1] - logDRange[0]);
+  return canvas.height - CHART_PADDING.bottom - frac * (canvas.height - CHART_PADDING.top - CHART_PADDING.bottom);
+}
+
+function draw() {
+  const dpr = window.devicePixelRatio || 1;
+  canvas.width = canvas.clientWidth * dpr;
+  canvas.height = canvas.clientHeight * dpr;
+  ctx.scale(dpr, dpr);
+  const W = canvas.clientWidth;
+  const H = canvas.clientHeight;
+
+  // Redefine mapping for actual pixel size
+  function mapX(logN) {
+    const frac = (logN - logNRange[0]) / (logNRange[1] - logNRange[0]);
+    return CHART_PADDING.left + frac * (W - CHART_PADDING.left - CHART_PADDING.right);
+  }
+  function mapY(logD) {
+    const frac = (logD - logDRange[0]) / (logDRange[1] - logDRange[0]);
+    return H - CHART_PADDING.bottom - frac * (H - CHART_PADDING.top - CHART_PADDING.bottom);
+  }
+
+  ctx.clearRect(0, 0, W, H);
+
+  // Grid lines
+  ctx.strokeStyle = '#2a2a4a';
+  ctx.lineWidth = 0.5;
+  for (let logN = 0; logN <= 3; logN += 0.5) {
+    const x = mapX(logN);
+    ctx.beginPath(); ctx.moveTo(x, CHART_PADDING.top); ctx.lineTo(x, H - CHART_PADDING.bottom); ctx.stroke();
+  }
+  for (let logD = 1.5; logD <= 4; logD += 0.5) {
+    const y = mapY(logD);
+    ctx.beginPath(); ctx.moveTo(CHART_PADDING.left, y); ctx.lineTo(W - CHART_PADDING.right, y); ctx.stroke();
+  }
+
+  // Axis labels
+  ctx.fillStyle = '#888';
+  ctx.font = '11px -apple-system, sans-serif';
+  ctx.textAlign = 'center';
+  for (let logN = 0; logN <= 2.5; logN += 0.5) {
+    const x = mapX(logN);
+    const val = Math.pow(10, logN);
+    ctx.fillText(val >= 100 ? val.toFixed(0) + 'B' : val.toFixed(1) + 'B', x, H - CHART_PADDING.bottom + 18);
+  }
+  ctx.fillText('Parameters', W / 2, H - 8);
+
+  ctx.save();
+  ctx.translate(14, H / 2);
+  ctx.rotate(-Math.PI / 2);
+  ctx.textAlign = 'center';
+  ctx.fillText('Training Tokens', 0, 0);
+  ctx.restore();
+
+  ctx.textAlign = 'right';
+  for (let logD = 2; logD <= 3.5; logD += 0.5) {
+    const y = mapY(logD);
+    const val = Math.pow(10, logD);
+    let label;
+    if (val >= 1000) label = (val / 1000).toFixed(1) + 'T';
+    else label = val.toFixed(0) + 'B';
+    ctx.fillText(label, CHART_PADDING.left - 8, y + 4);
+  }
+
+  // Draw Chinchilla frontier curve
+  ctx.strokeStyle = '#4ecdc4';
+  ctx.lineWidth = 2;
+  ctx.setLineDash([6, 3]);
+  ctx.beginPath();
+  for (let logC = 19; logC <= 25; logC += 0.1) {
+    const C = Math.pow(10, logC);
+    const opt = chinchillaOptimal(C);
+    const x = mapX(Math.log10(opt.N));
+    const y = mapY(Math.log10(opt.D));
+    if (x >= CHART_PADDING.left && x <= W - CHART_PADDING.right && y >= CHART_PADDING.top && y <= H - CHART_PADDING.bottom) {
+      if (logC === 19) ctx.moveTo(x, y);
+      else ctx.lineTo(x, y);
+    }
+  }
+  ctx.stroke();
+  ctx.setLineDash([]);
+
+  // Label the frontier
+  const labelC = Math.pow(10, 23.5);
+  const labelOpt = chinchillaOptimal(labelC);
+  ctx.fillStyle = '#4ecdc4';
+  ctx.font = 'bold 11px -apple-system, sans-serif';
+  ctx.textAlign = 'left';
+  ctx.fillText('Chinchilla frontier', mapX(Math.log10(labelOpt.N)) + 8, mapY(Math.log10(labelOpt.D)) - 8);
+
+  // Draw IsoFLOP contours (faint)
+  ctx.strokeStyle = 'rgba(233, 69, 96, 0.15)';
+  ctx.lineWidth = 1;
+  for (let logC = 20; logC <= 24; logC += 1) {
+    const C = Math.pow(10, logC);
+    ctx.beginPath();
+    let started = false;
+    for (let logN = 0; logN <= 3; logN += 0.02) {
+      const N = Math.pow(10, logN);
+      const D = C / (6 * N * 1e9 * 1e9); // in billions
+      if (D < 50 || D > 5000) continue;
+      const x = mapX(logN);
+      const y = mapY(Math.log10(D));
+      if (!started) { ctx.moveTo(x, y); started = true; }
+      else ctx.lineTo(x, y);
+    }
+    ctx.stroke();
+  }
+
+  // Draw historical models
+  models.forEach(([name, N, D, color]) => {
+    const x = mapX(Math.log10(N));
+    const y = mapY(Math.log10(D));
+    if (x < CHART_PADDING.left || x > W - CHART_PADDING.right) return;
+    if (y < CHART_PADDING.top || y > H - CHART_PADDING.bottom) return;
+
+    ctx.fillStyle = color;
+    ctx.beginPath();
+    ctx.arc(x, y, 6, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.fillStyle = color;
+    ctx.font = 'bold 11px -apple-system, sans-serif';
+    ctx.textAlign = name === 'Gopher' ? 'right' : 'left';
+    const offsetX = name === 'Gopher' ? -10 : 10;
+    const offsetY = name === 'LLaMA-13B' ? 16 : -10;
+    ctx.fillText(name, x + offsetX, y + offsetY);
+  });
+
+  // Draw current selection
+  const logC = parseFloat(computeSlider.value);
+  const C = Math.pow(10, logC);
+  const overtrain = parseFloat(overtrainSlider.value);
+
+  const opt = chinchillaOptimal(C);
+  // With overtraining: use smaller model, more data
+  // C = 6 * N * D, keep C fixed, but shrink N by overtrain factor, grow D by overtrain factor
+  const actualN = opt.N / overtrain;
+  const actualD = opt.D * overtrain;
+
+  const xSel = mapX(Math.log10(actualN));
+  const ySel = mapY(Math.log10(actualD));
+
+  if (xSel >= CHART_PADDING.left && xSel <= W - CHART_PADDING.right && ySel >= CHART_PADDING.top && ySel <= H - CHART_PADDING.bottom) {
+    // Crosshair
+    ctx.strokeStyle = 'rgba(233, 69, 96, 0.4)';
+    ctx.lineWidth = 1;
+    ctx.setLineDash([4, 4]);
+    ctx.beginPath(); ctx.moveTo(xSel, CHART_PADDING.top); ctx.lineTo(xSel, H - CHART_PADDING.bottom); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(CHART_PADDING.left, ySel); ctx.lineTo(W - CHART_PADDING.right, ySel); ctx.stroke();
+    ctx.setLineDash([]);
+
+    // Point
+    ctx.fillStyle = '#e94560';
+    ctx.beginPath();
+    ctx.arc(xSel, ySel, 8, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.strokeStyle = '#fff';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.arc(xSel, ySel, 8, 0, Math.PI * 2);
+    ctx.stroke();
+
+    ctx.fillStyle = '#fff';
+    ctx.font = 'bold 12px -apple-system, sans-serif';
+    ctx.textAlign = 'left';
+    ctx.fillText('Your model', xSel + 12, ySel - 4);
+  }
+
+  // Update info
+  document.getElementById('compute-val').textContent = '1e' + logC.toFixed(1);
+  document.getElementById('overtrain-val').textContent = overtrain.toFixed(1) + 'x';
+  document.getElementById('info-compute').textContent = C.toExponential(2) + ' FLOPs';
+
+  function formatParam(b) {
+    if (b >= 1000) return (b / 1000).toFixed(1) + 'T';
+    if (b >= 1) return b.toFixed(1) + 'B';
+    return (b * 1000).toFixed(0) + 'M';
+  }
+  function formatTok(b) {
+    if (b >= 1000) return (b / 1000).toFixed(1) + 'T';
+    return b.toFixed(0) + 'B';
+  }
+
+  document.getElementById('info-n-opt').textContent = formatParam(opt.N);
+  document.getElementById('info-d-opt').textContent = formatTok(opt.D);
+  document.getElementById('info-n-actual').textContent = formatParam(actualN);
+  document.getElementById('info-d-actual').textContent = formatTok(actualD);
+
+  const L = loss(actualN, actualD);
+  document.getElementById('info-loss').textContent = L.toFixed(3) + ' nats';
+}
+
+computeSlider.addEventListener('input', draw);
+overtrainSlider.addEventListener('input', draw);
+window.addEventListener('resize', draw);
+draw();
+</script>
+</body>
+</html>

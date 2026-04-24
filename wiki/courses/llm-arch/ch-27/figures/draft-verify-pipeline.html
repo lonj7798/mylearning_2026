@@ -1,0 +1,588 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Speculative Decoding: Draft-Verify Pipeline</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    background: #0d1117;
+    color: #e0e0e0;
+    font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+    padding: 24px;
+    min-height: 100vh;
+  }
+  h1 {
+    font-size: 20px;
+    color: #e0e0e0;
+    margin-bottom: 8px;
+  }
+  .subtitle {
+    color: #888;
+    font-size: 13px;
+    margin-bottom: 24px;
+  }
+  .controls {
+    display: flex;
+    gap: 16px;
+    align-items: center;
+    margin-bottom: 24px;
+    flex-wrap: wrap;
+  }
+  button {
+    background: #e94560;
+    color: #fff;
+    border: none;
+    padding: 8px 20px;
+    border-radius: 6px;
+    font-size: 13px;
+    cursor: pointer;
+    font-weight: 600;
+    transition: background 0.2s;
+  }
+  button:hover { background: #ff6b81; }
+  button:disabled { background: #333; cursor: not-allowed; }
+  button.secondary { background: #0f3460; }
+  button.secondary:hover { background: #16213e; }
+  .speed-control {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    color: #888;
+    font-size: 12px;
+  }
+  .speed-control input {
+    width: 80px;
+    accent-color: #e94560;
+  }
+  .pipeline {
+    display: flex;
+    flex-direction: column;
+    gap: 20px;
+    margin-bottom: 24px;
+  }
+  .phase {
+    background: #161b22;
+    border: 1px solid #30363d;
+    border-radius: 10px;
+    padding: 16px 20px;
+    transition: border-color 0.3s, box-shadow 0.3s;
+  }
+  .phase.active {
+    border-color: #e94560;
+    box-shadow: 0 0 16px rgba(233, 69, 96, 0.2);
+  }
+  .phase-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 12px;
+  }
+  .phase-title {
+    font-weight: 700;
+    font-size: 14px;
+  }
+  .phase-label {
+    font-size: 11px;
+    padding: 3px 10px;
+    border-radius: 12px;
+    font-weight: 600;
+  }
+  .draft-label { background: #0f3460; color: #4ecdc4; }
+  .verify-label { background: #2d1b3d; color: #e94560; }
+  .accept-label { background: #1b2d1b; color: #4ecdc4; }
+  .token-row {
+    display: flex;
+    gap: 6px;
+    flex-wrap: wrap;
+    min-height: 40px;
+    align-items: center;
+  }
+  .token {
+    padding: 6px 12px;
+    border-radius: 6px;
+    font-size: 13px;
+    font-weight: 600;
+    font-family: 'SF Mono', 'Fira Code', monospace;
+    transition: all 0.3s;
+    opacity: 0;
+    transform: scale(0.8);
+    position: relative;
+  }
+  .token.visible {
+    opacity: 1;
+    transform: scale(1);
+  }
+  .token.draft {
+    background: #0f3460;
+    color: #4ecdc4;
+    border: 1px solid #4ecdc4;
+  }
+  .token.accepted {
+    background: #1b3d1b;
+    color: #4ecdc4;
+    border: 1px solid #4ecdc4;
+  }
+  .token.rejected {
+    background: #3d1b1b;
+    color: #e94560;
+    border: 1px solid #e94560;
+    text-decoration: line-through;
+  }
+  .token.corrected {
+    background: #3d2d1b;
+    color: #ffd93d;
+    border: 1px solid #ffd93d;
+  }
+  .token.bonus {
+    background: #2d1b3d;
+    color: #e94560;
+    border: 1px solid #e94560;
+  }
+  .token.context {
+    background: #1a1a2e;
+    color: #888;
+    border: 1px solid #333;
+    opacity: 1;
+    transform: scale(1);
+  }
+  .prob-badge {
+    position: absolute;
+    top: -8px;
+    right: -4px;
+    font-size: 9px;
+    padding: 1px 5px;
+    border-radius: 8px;
+    font-weight: 700;
+  }
+  .prob-high { background: #4ecdc4; color: #0d1117; }
+  .prob-med { background: #ffd93d; color: #0d1117; }
+  .prob-low { background: #e94560; color: #fff; }
+  .stats {
+    display: flex;
+    gap: 24px;
+    flex-wrap: wrap;
+    margin-top: 16px;
+  }
+  .stat {
+    background: #161b22;
+    border: 1px solid #30363d;
+    border-radius: 8px;
+    padding: 12px 20px;
+    text-align: center;
+    min-width: 120px;
+  }
+  .stat-value {
+    font-size: 24px;
+    font-weight: 700;
+    color: #4ecdc4;
+  }
+  .stat-label {
+    font-size: 11px;
+    color: #888;
+    margin-top: 4px;
+  }
+  .iteration-log {
+    margin-top: 20px;
+    background: #161b22;
+    border: 1px solid #30363d;
+    border-radius: 10px;
+    padding: 16px 20px;
+    max-height: 200px;
+    overflow-y: auto;
+  }
+  .iteration-log h3 {
+    font-size: 13px;
+    color: #888;
+    margin-bottom: 8px;
+  }
+  .log-entry {
+    font-size: 12px;
+    font-family: 'SF Mono', 'Fira Code', monospace;
+    padding: 4px 0;
+    border-bottom: 1px solid #1a1a2e;
+    color: #e0e0e0;
+  }
+  .log-entry .accepted-count { color: #4ecdc4; font-weight: 700; }
+  .log-entry .rejected-count { color: #e94560; font-weight: 700; }
+  .comparison {
+    margin-top: 20px;
+    background: #161b22;
+    border: 1px solid #30363d;
+    border-radius: 10px;
+    padding: 16px 20px;
+  }
+  .comparison h3 {
+    font-size: 13px;
+    color: #888;
+    margin-bottom: 12px;
+  }
+  .bar-container {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin-bottom: 8px;
+  }
+  .bar-label {
+    font-size: 12px;
+    width: 120px;
+    text-align: right;
+    color: #e0e0e0;
+  }
+  .bar-track {
+    flex: 1;
+    height: 24px;
+    background: #1a1a2e;
+    border-radius: 4px;
+    overflow: hidden;
+    position: relative;
+  }
+  .bar-fill {
+    height: 100%;
+    border-radius: 4px;
+    transition: width 0.5s ease;
+    display: flex;
+    align-items: center;
+    padding-left: 8px;
+    font-size: 11px;
+    font-weight: 600;
+    color: #fff;
+  }
+  .bar-fill.standard { background: #e94560; }
+  .bar-fill.speculative { background: #4ecdc4; color: #0d1117; }
+</style>
+</head>
+<body>
+<h1>Speculative Decoding: Draft-Verify Pipeline</h1>
+<p class="subtitle">Watch a small draft model propose tokens, then the large target model verify them in parallel.</p>
+
+<div class="controls">
+  <button id="btn-run" onclick="runIteration()">Run Iteration</button>
+  <button id="btn-auto" class="secondary" onclick="toggleAuto()">Auto-Run</button>
+  <button class="secondary" onclick="resetAll()">Reset</button>
+  <div class="speed-control">
+    <label>Speed:</label>
+    <input type="range" id="speed" min="1" max="5" value="3">
+    <span id="speed-label">3x</span>
+  </div>
+</div>
+
+<div class="pipeline">
+  <!-- Context -->
+  <div class="phase" id="phase-context">
+    <div class="phase-header">
+      <span class="phase-title">Context (previously generated)</span>
+    </div>
+    <div class="token-row" id="context-tokens">
+      <span class="token context">The</span>
+      <span class="token context">transformer</span>
+      <span class="token context">architecture</span>
+    </div>
+  </div>
+
+  <!-- Draft Phase -->
+  <div class="phase" id="phase-draft">
+    <div class="phase-header">
+      <span class="phase-title">Step 1: Draft (small model, K=5)</span>
+      <span class="phase-label draft-label">M_q (7B)</span>
+    </div>
+    <div class="token-row" id="draft-tokens"></div>
+  </div>
+
+  <!-- Verify Phase -->
+  <div class="phase" id="phase-verify">
+    <div class="phase-header">
+      <span class="phase-title">Step 2: Verify (large model, single forward pass)</span>
+      <span class="phase-label verify-label">M_p (70B)</span>
+    </div>
+    <div class="token-row" id="verify-tokens"></div>
+  </div>
+
+  <!-- Accept/Reject -->
+  <div class="phase" id="phase-accept">
+    <div class="phase-header">
+      <span class="phase-title">Step 3: Accept / Reject / Correct</span>
+      <span class="phase-label accept-label">Result</span>
+    </div>
+    <div class="token-row" id="result-tokens"></div>
+  </div>
+</div>
+
+<div class="stats">
+  <div class="stat">
+    <div class="stat-value" id="stat-iterations">0</div>
+    <div class="stat-label">Iterations</div>
+  </div>
+  <div class="stat">
+    <div class="stat-value" id="stat-tokens">0</div>
+    <div class="stat-label">Tokens Generated</div>
+  </div>
+  <div class="stat">
+    <div class="stat-value" id="stat-target-passes">0</div>
+    <div class="stat-label">Target Passes</div>
+  </div>
+  <div class="stat">
+    <div class="stat-value" id="stat-speedup">-</div>
+    <div class="stat-label">Speedup vs Standard</div>
+  </div>
+  <div class="stat">
+    <div class="stat-value" id="stat-alpha">-</div>
+    <div class="stat-label">Avg Accept Rate</div>
+  </div>
+</div>
+
+<div class="comparison">
+  <h3>Wall-Clock Comparison (target model forward passes)</h3>
+  <div class="bar-container">
+    <span class="bar-label">Standard Decode</span>
+    <div class="bar-track">
+      <div class="bar-fill standard" id="bar-standard" style="width:0%">0 passes</div>
+    </div>
+  </div>
+  <div class="bar-container">
+    <span class="bar-label">Speculative</span>
+    <div class="bar-track">
+      <div class="bar-fill speculative" id="bar-speculative" style="width:0%">0 passes</div>
+    </div>
+  </div>
+</div>
+
+<div class="iteration-log">
+  <h3>Iteration Log</h3>
+  <div id="log-entries"></div>
+</div>
+
+<script>
+const SENTENCES = [
+  ["uses", "self", "-", "attention", "to", "process", "sequences", "in", "parallel"],
+  ["enables", "efficient", "long", "-", "range", "dependency", "modeling", "across", "tokens"],
+  ["has", "revolutionized", "natural", "language", "processing", "since", "its", "introduction", "in"],
+  ["processes", "input", "tokens", "through", "multiple", "layers", "of", "attention", "and"],
+  ["relies", "on", "positional", "encodings", "to", "maintain", "sequence", "order", "information"],
+  ["computes", "attention", "weights", "using", "scaled", "dot", "-", "product", "operations"],
+];
+
+// Probability of draft being correct per token (simulates varying entropy)
+const ACCEPT_PROBS = [0.92, 0.85, 0.78, 0.70, 0.60];
+
+let state = {
+  iterations: 0,
+  totalTokens: 0,
+  targetPasses: 0,
+  totalAccepted: 0,
+  totalDrafted: 0,
+  running: false,
+  autoMode: false,
+  sentenceIdx: 0,
+};
+
+function getDelay() {
+  const speed = document.getElementById('speed').value;
+  document.getElementById('speed-label').textContent = speed + 'x';
+  return 600 / speed;
+}
+
+function sleep(ms) {
+  return new Promise(r => setTimeout(r, ms));
+}
+
+function addToken(containerId, text, cls, probLabel, probClass) {
+  const container = document.getElementById(containerId);
+  const span = document.createElement('span');
+  span.className = 'token ' + cls;
+  span.textContent = text;
+  if (probLabel) {
+    const badge = document.createElement('span');
+    badge.className = 'prob-badge ' + probClass;
+    badge.textContent = probLabel;
+    span.appendChild(badge);
+    span.style.position = 'relative';
+  }
+  container.appendChild(span);
+  requestAnimationFrame(() => span.classList.add('visible'));
+  return span;
+}
+
+function clearPhaseTokens() {
+  ['draft-tokens', 'verify-tokens', 'result-tokens'].forEach(id => {
+    document.getElementById(id).innerHTML = '';
+  });
+}
+
+function setPhaseActive(id) {
+  document.querySelectorAll('.phase').forEach(p => p.classList.remove('active'));
+  if (id) document.getElementById(id).classList.add('active');
+}
+
+function updateStats() {
+  document.getElementById('stat-iterations').textContent = state.iterations;
+  document.getElementById('stat-tokens').textContent = state.totalTokens;
+  document.getElementById('stat-target-passes').textContent = state.targetPasses;
+
+  if (state.targetPasses > 0 && state.totalTokens > 0) {
+    const speedup = state.totalTokens / state.targetPasses;
+    document.getElementById('stat-speedup').textContent = speedup.toFixed(2) + 'x';
+  }
+  if (state.totalDrafted > 0) {
+    const alpha = state.totalAccepted / state.totalDrafted;
+    document.getElementById('stat-alpha').textContent = (alpha * 100).toFixed(0) + '%';
+  }
+
+  // Update bars
+  const maxPasses = Math.max(state.totalTokens, state.targetPasses, 1);
+  const stdPct = (state.totalTokens / maxPasses) * 100;
+  const specPct = (state.targetPasses / maxPasses) * 100;
+  const barStd = document.getElementById('bar-standard');
+  const barSpec = document.getElementById('bar-speculative');
+  barStd.style.width = stdPct + '%';
+  barStd.textContent = state.totalTokens + ' passes';
+  barSpec.style.width = specPct + '%';
+  barSpec.textContent = state.targetPasses + ' passes';
+}
+
+function addLogEntry(text) {
+  const log = document.getElementById('log-entries');
+  const entry = document.createElement('div');
+  entry.className = 'log-entry';
+  entry.innerHTML = text;
+  log.insertBefore(entry, log.firstChild);
+}
+
+async function runIteration() {
+  if (state.running) return;
+  state.running = true;
+  document.getElementById('btn-run').disabled = true;
+
+  clearPhaseTokens();
+  const delay = getDelay();
+  const K = 5;
+  const sentence = SENTENCES[state.sentenceIdx % SENTENCES.length];
+  state.sentenceIdx++;
+
+  // Step 1: Draft
+  setPhaseActive('phase-draft');
+  const draftTokens = sentence.slice(0, K);
+  for (let i = 0; i < K; i++) {
+    const prob = ACCEPT_PROBS[i];
+    const probLabel = (prob * 100).toFixed(0) + '%';
+    const probClass = prob >= 0.8 ? 'prob-high' : prob >= 0.65 ? 'prob-med' : 'prob-low';
+    addToken('draft-tokens', draftTokens[i], 'draft', probLabel, probClass);
+    await sleep(delay * 0.5);
+  }
+  await sleep(delay);
+
+  // Step 2: Verify (all at once — single forward pass)
+  setPhaseActive('phase-verify');
+  for (let i = 0; i < K; i++) {
+    addToken('verify-tokens', draftTokens[i], 'draft');
+  }
+  await sleep(delay * 1.5);
+
+  // Step 3: Accept/Reject
+  setPhaseActive('phase-accept');
+  let accepted = 0;
+  let rejected = false;
+  let logAccepted = [];
+  let logRejected = null;
+
+  for (let i = 0; i < K; i++) {
+    await sleep(delay * 0.7);
+    const prob = ACCEPT_PROBS[i];
+    const roll = Math.random();
+    state.totalDrafted++;
+
+    if (!rejected && roll < prob) {
+      addToken('result-tokens', draftTokens[i], 'accepted');
+      addToken('context-tokens', draftTokens[i], 'context');
+      accepted++;
+      state.totalAccepted++;
+      logAccepted.push(draftTokens[i]);
+
+      // Mark verify token as accepted
+      const verifyTokens = document.getElementById('verify-tokens').children;
+      verifyTokens[i].classList.remove('draft');
+      verifyTokens[i].classList.add('accepted');
+    } else if (!rejected) {
+      rejected = true;
+      addToken('result-tokens', draftTokens[i], 'rejected');
+      logRejected = draftTokens[i];
+
+      const verifyTokens = document.getElementById('verify-tokens').children;
+      verifyTokens[i].classList.remove('draft');
+      verifyTokens[i].classList.add('rejected');
+
+      // Correction token
+      await sleep(delay * 0.5);
+      const correction = sentence[i] === draftTokens[i] ? '...' : sentence[i];
+      addToken('result-tokens', '[corrected]', 'corrected');
+      addToken('context-tokens', '[corrected]', 'context');
+      accepted++;
+
+      // Mark remaining as discarded
+      for (let j = i + 1; j < K; j++) {
+        verifyTokens[j].style.opacity = '0.3';
+        state.totalDrafted++;
+      }
+      break;
+    }
+  }
+
+  // Bonus token if all accepted
+  if (!rejected) {
+    await sleep(delay * 0.5);
+    const bonusToken = sentence[K] || 'EOS';
+    addToken('result-tokens', bonusToken, 'bonus');
+    addToken('context-tokens', bonusToken, 'context');
+    accepted++;
+  }
+
+  state.iterations++;
+  state.totalTokens += accepted;
+  state.targetPasses++;
+
+  const logText = `Iter ${state.iterations}: <span class="accepted-count">${logAccepted.length} accepted</span>` +
+    (logRejected ? ` <span class="rejected-count">1 rejected</span> + correction` : ' + bonus') +
+    ` = ${accepted} tokens`;
+  addLogEntry(logText);
+
+  updateStats();
+  setPhaseActive(null);
+
+  state.running = false;
+  document.getElementById('btn-run').disabled = false;
+
+  if (state.autoMode) {
+    setTimeout(() => runIteration(), delay * 2);
+  }
+}
+
+function toggleAuto() {
+  state.autoMode = !state.autoMode;
+  const btn = document.getElementById('btn-auto');
+  btn.textContent = state.autoMode ? 'Stop Auto' : 'Auto-Run';
+  btn.style.background = state.autoMode ? '#e94560' : '#0f3460';
+  if (state.autoMode && !state.running) runIteration();
+}
+
+function resetAll() {
+  state = { iterations: 0, totalTokens: 0, targetPasses: 0, totalAccepted: 0, totalDrafted: 0, running: false, autoMode: false, sentenceIdx: 0 };
+  clearPhaseTokens();
+  document.getElementById('context-tokens').innerHTML =
+    '<span class="token context">The</span><span class="token context">transformer</span><span class="token context">architecture</span>';
+  document.getElementById('btn-auto').textContent = 'Auto-Run';
+  document.getElementById('btn-auto').style.background = '#0f3460';
+  document.getElementById('btn-run').disabled = false;
+  document.getElementById('log-entries').innerHTML = '';
+  document.getElementById('bar-standard').style.width = '0%';
+  document.getElementById('bar-speculative').style.width = '0%';
+  updateStats();
+  setPhaseActive(null);
+}
+
+document.getElementById('speed').addEventListener('input', () => {
+  document.getElementById('speed-label').textContent = document.getElementById('speed').value + 'x';
+});
+</script>
+</body>
+</html>

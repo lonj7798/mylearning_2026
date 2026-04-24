@@ -73,6 +73,8 @@ Geva et al. (2021) proposed a provocative interpretation: the FFN sublayer funct
 
 This interpretation explains several empirical observations:
 
+[Deep Dive: The FFN-as-Memory Hypothesis](excerpts/ffn-as-memory.md) — evidence for and against, from Geva et al.'s key-value memory interpretation through ROME editing to the superposition complication.
+
 **Factual knowledge localization.** Meng et al. (2022) demonstrated that specific factual associations (e.g., "The Eiffel Tower is in [Paris]") can be traced to individual FFN layers and even specific neurons. Their ROME (Rank-One Model Editing) technique edits knowledge by modifying a single rank-one update to a specific $W_2$ matrix — and the edit sticks, changing the model's factual output without retraining.
 
 **Sparse activation patterns.** In practice, ReLU-based FFNs activate only a small fraction of neurons for any given input (often <10%). This sparsity is consistent with the memory interpretation: most "keys" don't match, so most "values" aren't retrieved. It also motivates Mixture-of-Experts architectures ([[ch-14]]), which make this sparsity structural rather than emergent.
@@ -147,6 +149,8 @@ where $\sigma$ is the sigmoid function and $\beta$ is typically 1. Closely relat
 The field has converged on SwiGLU. Raschka's 2025 comparison ([[raschka-llm-architecture-comparison|blog]]) confirms every major model uses it.
 </div>
 </div>
+
+[Interactive: Activation Function Comparison](figures/activation-comparison.html) — plot ReLU, GELU, Swish, and their gated variants with adjustable parameters; toggle between activation, derivative, and gated output views.
 
 Both GELU and Swish have a **non-monotonic region** near zero — small negative inputs get slightly negative outputs before being suppressed, allowing the network to propagate weak signals rather than killing them. Whether this property explains the empirical gains is debatable, but the gains are consistent enough that the field has moved on.
 
@@ -248,6 +252,10 @@ The key empirical finding: **the gating mechanism matters more than the specific
 
 ## 5. The 8/3 Ratio: Matching Parameter Budgets
 
+[Deep Dive: SwiGLU Parameter Cost Derivation](excerpts/swiglu-parameter-cost.md) — full derivation of the iso-parameter ratio, FLOP analysis, and why real models exceed 8/3.
+
+[Interactive: FFN Hidden Dimension Ratio Explorer](figures/ffn-dimension-explorer.html) — adjust d_model, ratio, and activation type to see parameter counts, FLOP breakdowns, and comparisons with real model configurations.
+
 The gated FFN introduces a third weight matrix ($V$), which increases parameters. To compare fairly, you must adjust $d_{ff}$ to match the parameter budget of the standard FFN.
 
 **Standard FFN (2 matrices):**
@@ -336,6 +344,8 @@ Real models don't use exactly $\frac{8}{3}$. Llama 3 and Mistral both use 3.5x, 
 ---
 
 ## 6. Width vs. Depth Tradeoffs
+
+[Deep Dive: Width vs Depth Experimental Evidence](excerpts/width-vs-depth.md) — collected evidence across scales, from the depth floor for reasoning through Llama 3's 126-layer design to MoE's decoupling of the tradeoff.
 
 Given a fixed parameter budget, should you make each FFN wider (larger $d_{ff}$) or add more Transformer layers?
 

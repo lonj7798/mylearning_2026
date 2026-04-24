@@ -1,0 +1,452 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>O(n) vs O(n^2) Scaling Comparison</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body {
+  background: #0a0a1a;
+  color: #e0e0e0;
+  font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+  padding: 32px;
+  min-height: 100vh;
+}
+h1 {
+  font-size: 22px;
+  color: #fff;
+  margin-bottom: 8px;
+}
+.subtitle {
+  color: #888;
+  font-size: 13px;
+  margin-bottom: 32px;
+}
+.container {
+  max-width: 900px;
+  margin: 0 auto;
+}
+.chart-wrapper {
+  background: #12122a;
+  border-radius: 12px;
+  padding: 24px;
+  margin-bottom: 32px;
+}
+.chart-title {
+  font-size: 14px;
+  font-weight: bold;
+  color: #fff;
+  margin-bottom: 16px;
+}
+.controls {
+  display: flex;
+  gap: 24px;
+  margin-bottom: 20px;
+  flex-wrap: wrap;
+}
+.control-group {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.control-group label {
+  font-size: 12px;
+  color: #888;
+}
+.control-group select, .control-group input[type="range"] {
+  accent-color: #e94560;
+  background: #1a1a3e;
+  color: #e0e0e0;
+  border: 1px solid #333;
+  border-radius: 4px;
+  padding: 4px 8px;
+  font-size: 12px;
+}
+.control-group .val {
+  font-size: 13px;
+  font-weight: bold;
+  color: #ffd93d;
+  min-width: 50px;
+}
+canvas {
+  border-radius: 8px;
+  display: block;
+  margin: 0 auto;
+}
+.legend {
+  display: flex;
+  gap: 24px;
+  justify-content: center;
+  margin-top: 16px;
+  flex-wrap: wrap;
+}
+.legend-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+}
+.legend-dot {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+}
+
+/* Comparison table */
+.table-wrapper {
+  background: #12122a;
+  border-radius: 12px;
+  padding: 24px;
+  margin-bottom: 32px;
+}
+.table-title {
+  font-size: 14px;
+  font-weight: bold;
+  color: #fff;
+  margin-bottom: 16px;
+}
+table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+thead tr {
+  border-bottom: 2px solid #e94560;
+}
+th {
+  text-align: left;
+  padding: 8px;
+  color: #888;
+  font-weight: bold;
+  font-size: 11px;
+  text-transform: uppercase;
+}
+td {
+  padding: 8px;
+  border-bottom: 1px solid #222;
+}
+.val-ssm { color: #4ecdc4; font-weight: bold; }
+.val-attn { color: #e94560; font-weight: bold; }
+.val-flash { color: #ffd93d; font-weight: bold; }
+.val-ratio { color: #c084fc; font-weight: bold; }
+
+/* Breakeven analysis */
+.breakeven-wrapper {
+  background: #12122a;
+  border-radius: 12px;
+  padding: 24px;
+}
+.breakeven-title {
+  font-size: 14px;
+  font-weight: bold;
+  color: #fff;
+  margin-bottom: 16px;
+}
+.breakeven-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 16px;
+}
+.breakeven-card {
+  background: #1a1a3e;
+  border-radius: 8px;
+  padding: 16px;
+  text-align: center;
+}
+.breakeven-scenario {
+  font-size: 12px;
+  color: #888;
+  margin-bottom: 8px;
+}
+.breakeven-value {
+  font-size: 28px;
+  font-weight: bold;
+  margin-bottom: 4px;
+}
+.breakeven-unit {
+  font-size: 11px;
+  color: #888;
+}
+.breakeven-winner {
+  font-size: 11px;
+  font-weight: bold;
+  margin-top: 8px;
+  padding: 4px 8px;
+  border-radius: 4px;
+  display: inline-block;
+}
+.winner-ssm {
+  color: #4ecdc4;
+  background: #1a3a3e;
+}
+.winner-attn {
+  color: #e94560;
+  background: #3a1a2e;
+}
+</style>
+</head>
+<body>
+<div class="container">
+  <h1>O(n) vs O(n&sup2;) Scaling: SSM vs Transformer</h1>
+  <p class="subtitle">How computation and memory costs diverge as sequence length grows. Drag the slider to explore.</p>
+
+  <!-- Main scaling chart -->
+  <div class="chart-wrapper">
+    <div class="chart-title">Computation Cost vs Sequence Length</div>
+    <div class="controls">
+      <div class="control-group">
+        <label>Max sequence length:</label>
+        <input type="range" id="slider-maxT" min="10" max="18" value="14" step="1" oninput="drawChart()">
+        <span class="val" id="val-maxT">16K</span>
+      </div>
+      <div class="control-group">
+        <label>Scale:</label>
+        <select id="select-scale" onchange="drawChart()">
+          <option value="linear">Linear</option>
+          <option value="log" selected>Log</option>
+        </select>
+      </div>
+    </div>
+    <canvas id="chart" width="800" height="400"></canvas>
+    <div class="legend">
+      <div class="legend-item"><div class="legend-dot" style="background:#e94560;"></div>Softmax Attention O(T&sup2;d)</div>
+      <div class="legend-item"><div class="legend-dot" style="background:#ffd93d;"></div>Flash Attention O(T&sup2;d&sup2;/M) HBM ops</div>
+      <div class="legend-item"><div class="legend-dot" style="background:#4ecdc4;"></div>Mamba-2 SSM O(TN)</div>
+      <div class="legend-item"><div class="legend-dot" style="background:#c084fc;"></div>Mamba-2 Chunk O(TCN)</div>
+    </div>
+  </div>
+
+  <!-- Concrete numbers table -->
+  <div class="table-wrapper">
+    <div class="table-title">Concrete Cost Comparison (d=128, N=64, M=20MB SRAM, C=256)</div>
+    <table>
+      <thead>
+        <tr>
+          <th>Seq Length</th>
+          <th>Softmax Attn</th>
+          <th>Flash Attn HBM</th>
+          <th>SSM Recurrence</th>
+          <th>SSM Chunk</th>
+          <th>SSM / Attn Ratio</th>
+        </tr>
+      </thead>
+      <tbody id="cost-table-body"></tbody>
+    </table>
+  </div>
+
+  <!-- Breakeven analysis -->
+  <div class="breakeven-wrapper">
+    <div class="breakeven-title">Where Each Method Wins</div>
+    <div class="breakeven-grid">
+      <div class="breakeven-card">
+        <div class="breakeven-scenario">Short Prompt (512 tokens)</div>
+        <div class="breakeven-value val-attn">Attn</div>
+        <div class="breakeven-unit">Matmul overhead small, tensor cores dominate</div>
+        <div class="breakeven-winner winner-attn">Transformer wins</div>
+      </div>
+      <div class="breakeven-card">
+        <div class="breakeven-scenario">Medium Prompt (4K tokens)</div>
+        <div class="breakeven-value" style="color:#ffd93d;">~Equal</div>
+        <div class="breakeven-unit">Flash Attention competitive, SSM gains start</div>
+        <div class="breakeven-winner" style="color:#ffd93d; background:#3a3a1e;">Depends on task</div>
+      </div>
+      <div class="breakeven-card">
+        <div class="breakeven-scenario">Long Prompt (32K tokens)</div>
+        <div class="breakeven-value val-ssm">SSM</div>
+        <div class="breakeven-unit">Quadratic cost dominates, linear scaling wins</div>
+        <div class="breakeven-winner winner-ssm">Mamba-2 wins</div>
+      </div>
+      <div class="breakeven-card">
+        <div class="breakeven-scenario">Generation (per step)</div>
+        <div class="breakeven-value val-ssm">SSM</div>
+        <div class="breakeven-unit">O(1) vs O(T) per token — no KV cache load</div>
+        <div class="breakeven-winner winner-ssm">Mamba-2 wins (always)</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+const d = 128;     // head dimension
+const N = 64;      // SSM state dimension
+const M_sram = 20e6 / 2; // SRAM in elements (20MB / 2 bytes)
+const C = 256;     // chunk size
+
+function formatNum(n) {
+  if (n >= 1e15) return (n / 1e15).toFixed(1) + 'P';
+  if (n >= 1e12) return (n / 1e12).toFixed(1) + 'T';
+  if (n >= 1e9) return (n / 1e9).toFixed(1) + 'G';
+  if (n >= 1e6) return (n / 1e6).toFixed(1) + 'M';
+  if (n >= 1e3) return (n / 1e3).toFixed(1) + 'K';
+  return n.toFixed(0);
+}
+
+function formatSeqLen(T) {
+  if (T >= 1024 * 1024) return (T / (1024 * 1024)).toFixed(0) + 'M';
+  if (T >= 1024) return (T / 1024).toFixed(0) + 'K';
+  return T.toString();
+}
+
+function costs(T) {
+  return {
+    softmax: T * T * d,
+    flash: T * T * d * d / M_sram,
+    ssm_recur: T * N,
+    ssm_chunk: T * C * N
+  };
+}
+
+function drawChart() {
+  const maxTExp = parseInt(document.getElementById('slider-maxT').value);
+  const maxT = Math.pow(2, maxTExp);
+  const scale = document.getElementById('select-scale').value;
+
+  document.getElementById('val-maxT').textContent = formatSeqLen(maxT);
+
+  const canvas = document.getElementById('chart');
+  const ctx = canvas.getContext('2d');
+  const W = canvas.width;
+  const H = canvas.height;
+  const pad = { top: 20, right: 30, bottom: 50, left: 80 };
+  const plotW = W - pad.left - pad.right;
+  const plotH = H - pad.top - pad.bottom;
+
+  ctx.clearRect(0, 0, W, H);
+  ctx.fillStyle = '#0a0a1a';
+  ctx.fillRect(0, 0, W, H);
+
+  // Generate data points
+  const numPoints = 100;
+  const points = [];
+  for (let i = 0; i < numPoints; i++) {
+    let T;
+    if (scale === 'log') {
+      T = Math.pow(maxT, (i + 1) / numPoints);
+    } else {
+      T = (maxT / numPoints) * (i + 1);
+    }
+    points.push({ T, ...costs(T) });
+  }
+
+  // Find ranges
+  const allCosts = points.flatMap(p => [p.softmax, p.flash, p.ssm_recur, p.ssm_chunk]);
+  let minCost = Math.min(...allCosts);
+  let maxCost = Math.max(...allCosts);
+
+  function xPos(T) {
+    if (scale === 'log') {
+      return pad.left + (Math.log(T) / Math.log(maxT)) * plotW;
+    }
+    return pad.left + (T / maxT) * plotW;
+  }
+
+  function yPos(cost) {
+    if (scale === 'log') {
+      const logMin = Math.log10(minCost);
+      const logMax = Math.log10(maxCost);
+      return pad.top + plotH - ((Math.log10(cost) - logMin) / (logMax - logMin)) * plotH;
+    }
+    return pad.top + plotH - ((cost - minCost) / (maxCost - minCost)) * plotH;
+  }
+
+  // Grid lines
+  ctx.strokeStyle = '#1a1a3e';
+  ctx.lineWidth = 0.5;
+  for (let i = 0; i <= 5; i++) {
+    const y = pad.top + (plotH / 5) * i;
+    ctx.beginPath();
+    ctx.moveTo(pad.left, y);
+    ctx.lineTo(W - pad.right, y);
+    ctx.stroke();
+  }
+
+  // X axis labels
+  ctx.fillStyle = '#888';
+  ctx.font = '11px sans-serif';
+  ctx.textAlign = 'center';
+  const xTicks = scale === 'log' ?
+    [64, 256, 1024, 4096, 16384, 65536, 262144].filter(t => t <= maxT) :
+    Array.from({length: 5}, (_, i) => Math.round(maxT / 5 * (i + 1)));
+
+  for (const t of xTicks) {
+    const x = xPos(t);
+    if (x >= pad.left && x <= W - pad.right) {
+      ctx.fillText(formatSeqLen(t), x, H - pad.bottom + 20);
+      ctx.strokeStyle = '#1a1a3e';
+      ctx.beginPath();
+      ctx.moveTo(x, pad.top);
+      ctx.lineTo(x, pad.top + plotH);
+      ctx.stroke();
+    }
+  }
+  ctx.fillText('Sequence Length', W / 2, H - 5);
+
+  // Y axis label
+  ctx.save();
+  ctx.translate(15, H / 2);
+  ctx.rotate(-Math.PI / 2);
+  ctx.fillStyle = '#888';
+  ctx.fillText('Relative Cost (ops)', 0, 0);
+  ctx.restore();
+
+  // Draw lines
+  function drawLine(key, color, lineWidth) {
+    ctx.strokeStyle = color;
+    ctx.lineWidth = lineWidth;
+    ctx.beginPath();
+    let started = false;
+    for (const p of points) {
+      const x = xPos(p.T);
+      const y = yPos(p[key]);
+      if (y >= pad.top && y <= pad.top + plotH) {
+        if (!started) { ctx.moveTo(x, y); started = true; }
+        else ctx.lineTo(x, y);
+      }
+    }
+    ctx.stroke();
+  }
+
+  drawLine('softmax', '#e94560', 2.5);
+  drawLine('flash', '#ffd93d', 2);
+  drawLine('ssm_chunk', '#c084fc', 2);
+  drawLine('ssm_recur', '#4ecdc4', 2.5);
+
+  // Axes
+  ctx.strokeStyle = '#333';
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(pad.left, pad.top);
+  ctx.lineTo(pad.left, pad.top + plotH);
+  ctx.lineTo(W - pad.right, pad.top + plotH);
+  ctx.stroke();
+
+  // Update table
+  updateTable();
+}
+
+function updateTable() {
+  const lengths = [512, 2048, 8192, 32768, 131072, 262144];
+  const tbody = document.getElementById('cost-table-body');
+  tbody.innerHTML = '';
+
+  for (const T of lengths) {
+    const c = costs(T);
+    const ratio = (c.ssm_chunk / c.softmax * 100).toFixed(1);
+    const tr = document.createElement('tr');
+    tr.innerHTML = `
+      <td>${formatSeqLen(T)}</td>
+      <td class="val-attn">${formatNum(c.softmax)}</td>
+      <td class="val-flash">${formatNum(c.flash)}</td>
+      <td class="val-ssm">${formatNum(c.ssm_recur)}</td>
+      <td style="color:#c084fc; font-weight:bold;">${formatNum(c.ssm_chunk)}</td>
+      <td class="val-ratio">${ratio}%</td>
+    `;
+    tbody.appendChild(tr);
+  }
+}
+
+drawChart();
+</script>
+</body>
+</html>

@@ -1,0 +1,420 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>OLMo 2: Two-Stage Pre-Training Pipeline</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    background: #0f0f1a;
+    color: #e0e0e0;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    padding: 32px;
+    min-height: 100vh;
+  }
+  h1 {
+    font-size: 22px;
+    color: #fff;
+    margin-bottom: 8px;
+  }
+  .subtitle {
+    font-size: 13px;
+    color: #888;
+    margin-bottom: 32px;
+  }
+
+  /* Timeline container */
+  .timeline {
+    position: relative;
+    max-width: 900px;
+    margin: 0 auto 40px;
+  }
+  .timeline-track {
+    position: absolute;
+    top: 50%;
+    left: 0;
+    right: 0;
+    height: 4px;
+    background: #1e1e3a;
+    transform: translateY(-50%);
+    z-index: 0;
+  }
+  .timeline-fill-s1 {
+    position: absolute;
+    top: 50%;
+    left: 0;
+    width: 65%;
+    height: 4px;
+    background: linear-gradient(90deg, #e94560, #e94560);
+    transform: translateY(-50%);
+    z-index: 1;
+    border-radius: 2px 0 0 2px;
+  }
+  .timeline-fill-s2 {
+    position: absolute;
+    top: 50%;
+    left: 65%;
+    width: 25%;
+    height: 4px;
+    background: linear-gradient(90deg, #4ecdc4, #4ecdc4);
+    transform: translateY(-50%);
+    z-index: 1;
+  }
+  .timeline-fill-soup {
+    position: absolute;
+    top: 50%;
+    left: 90%;
+    width: 10%;
+    height: 4px;
+    background: linear-gradient(90deg, #ffd93d, #ffd93d);
+    transform: translateY(-50%);
+    z-index: 1;
+    border-radius: 0 2px 2px 0;
+  }
+
+  /* Stage markers */
+  .stage-markers {
+    display: flex;
+    justify-content: space-between;
+    max-width: 900px;
+    margin: 0 auto;
+    position: relative;
+    height: 220px;
+  }
+  .stage {
+    text-align: center;
+    position: absolute;
+    transform: translateX(-50%);
+  }
+  .stage-dot {
+    width: 16px;
+    height: 16px;
+    border-radius: 50%;
+    margin: 0 auto 12px;
+    border: 3px solid;
+    background: #0f0f1a;
+    position: relative;
+    z-index: 2;
+  }
+  .stage-label {
+    font-size: 13px;
+    font-weight: 700;
+    margin-bottom: 4px;
+  }
+  .stage-detail {
+    font-size: 11px;
+    color: #888;
+    max-width: 180px;
+    line-height: 1.5;
+  }
+
+  .s1 { left: 0%; top: 80px; }
+  .s1 .stage-dot { border-color: #e94560; }
+  .s1 .stage-label { color: #e94560; }
+
+  .s1-end { left: 65%; top: 80px; }
+  .s1-end .stage-dot { border-color: #e94560; background: #e94560; }
+  .s1-end .stage-label { color: #e94560; }
+
+  .s2 { left: 65%; top: 0px; }
+  .s2 .stage-dot { border-color: #4ecdc4; }
+  .s2 .stage-label { color: #4ecdc4; }
+
+  .s2-end { left: 90%; top: 0px; }
+  .s2-end .stage-dot { border-color: #4ecdc4; background: #4ecdc4; }
+  .s2-end .stage-label { color: #4ecdc4; }
+
+  .soup { left: 100%; top: 80px; }
+  .soup .stage-dot { border-color: #ffd93d; background: #ffd93d; }
+  .soup .stage-label { color: #ffd93d; }
+
+  /* Connector lines from off-axis stages */
+  .connector {
+    position: absolute;
+    z-index: 1;
+  }
+  .conn-s2-start {
+    left: 65%;
+    top: 65px;
+    width: 2px;
+    height: 22px;
+    background: #4ecdc4;
+  }
+  .conn-s2-end {
+    left: 90%;
+    top: 65px;
+    width: 2px;
+    height: 22px;
+    background: #4ecdc4;
+  }
+
+  /* Data mix cards */
+  .cards {
+    display: flex;
+    gap: 24px;
+    max-width: 900px;
+    margin: 40px auto 0;
+    flex-wrap: wrap;
+  }
+  .card {
+    flex: 1;
+    min-width: 260px;
+    background: #16213e;
+    border-radius: 12px;
+    padding: 20px;
+    border-left: 4px solid;
+  }
+  .card-s1 { border-color: #e94560; }
+  .card-s2 { border-color: #4ecdc4; }
+  .card-soup { border-color: #ffd93d; }
+  .card h3 {
+    font-size: 14px;
+    margin-bottom: 12px;
+  }
+  .card-s1 h3 { color: #e94560; }
+  .card-s2 h3 { color: #4ecdc4; }
+  .card-soup h3 { color: #ffd93d; }
+  .card ul {
+    list-style: none;
+    font-size: 12px;
+    line-height: 1.8;
+  }
+  .card ul li::before {
+    content: "  ";
+    display: inline-block;
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    margin-right: 8px;
+    vertical-align: middle;
+  }
+  .card-s1 ul li::before { background: #e94560; }
+  .card-s2 ul li::before { background: #4ecdc4; }
+  .card-soup ul li::before { background: #ffd93d; }
+  .card .stat {
+    margin-top: 12px;
+    padding-top: 12px;
+    border-top: 1px solid #2a2a4a;
+    font-size: 11px;
+    color: #888;
+  }
+
+  /* LR curve */
+  .lr-section {
+    max-width: 900px;
+    margin: 40px auto 0;
+  }
+  .lr-section h2 {
+    font-size: 16px;
+    color: #fff;
+    margin-bottom: 16px;
+  }
+  .lr-canvas-wrap {
+    background: #16213e;
+    border-radius: 12px;
+    padding: 20px;
+  }
+  canvas {
+    width: 100%;
+    height: 200px;
+    display: block;
+  }
+
+  /* Scale selector */
+  .scale-select {
+    max-width: 900px;
+    margin: 32px auto 0;
+    display: flex;
+    gap: 12px;
+    align-items: center;
+  }
+  .scale-select label {
+    font-size: 13px;
+    color: #888;
+  }
+  .scale-btn {
+    background: #1e1e3a;
+    border: 1px solid #333;
+    color: #e0e0e0;
+    padding: 6px 16px;
+    border-radius: 6px;
+    cursor: pointer;
+    font-size: 13px;
+    transition: all 0.2s;
+  }
+  .scale-btn:hover { border-color: #4ecdc4; }
+  .scale-btn.active {
+    background: #4ecdc4;
+    color: #0f0f1a;
+    border-color: #4ecdc4;
+    font-weight: 700;
+  }
+
+  /* Token counts */
+  .token-info {
+    max-width: 900px;
+    margin: 24px auto 0;
+    background: #16213e;
+    border-radius: 12px;
+    padding: 16px 20px;
+    display: flex;
+    justify-content: space-around;
+    flex-wrap: wrap;
+    gap: 12px;
+  }
+  .token-item {
+    text-align: center;
+  }
+  .token-val {
+    font-size: 24px;
+    font-weight: 700;
+  }
+  .token-label {
+    font-size: 11px;
+    color: #888;
+    margin-top: 4px;
+  }
+</style>
+</head>
+<body>
+<h1>OLMo 2: Two-Stage Pre-Training Pipeline</h1>
+<p class="subtitle">Stage 1 builds broad knowledge from web data. Stage 2 refines with curated data during annealing. Model souping merges the best variants.</p>
+
+<div class="scale-select">
+  <label>Model scale:</label>
+  <button class="scale-btn active" onclick="setScale('7b')">7B</button>
+  <button class="scale-btn" onclick="setScale('13b')">13B</button>
+  <button class="scale-btn" onclick="setScale('32b')">32B</button>
+</div>
+
+<div class="token-info" id="tokenInfo">
+  <div class="token-item">
+    <div class="token-val" style="color:#e94560;" id="s1Tokens">3.9T</div>
+    <div class="token-label">Stage 1 Tokens</div>
+  </div>
+  <div class="token-item">
+    <div class="token-val" style="color:#4ecdc4;">843B</div>
+    <div class="token-label">Dolmino Mix (Stage 2 pool)</div>
+  </div>
+  <div class="token-item">
+    <div class="token-val" style="color:#ffd93d;" id="annealVariants">50B + 300B</div>
+    <div class="token-label">Annealing Variants</div>
+  </div>
+  <div class="token-item">
+    <div class="token-val" style="color:#a29bfe;" id="totalTokens">~4T</div>
+    <div class="token-label">Total Training Tokens</div>
+  </div>
+</div>
+
+<div style="max-width:900px; margin:32px auto 0; position:relative; height:240px;">
+  <!-- Timeline track -->
+  <div style="position:absolute; top:110px; left:0; right:0; height:4px; background:#1e1e3a; border-radius:2px;"></div>
+  <div style="position:absolute; top:110px; left:0; width:65%; height:4px; background:#e94560; border-radius:2px 0 0 2px;"></div>
+  <div style="position:absolute; top:110px; left:65%; width:25%; height:4px; background:#4ecdc4;"></div>
+  <div style="position:absolute; top:110px; left:90%; width:10%; height:4px; background:#ffd93d; border-radius:0 2px 2px 0;"></div>
+
+  <!-- Stage 1 start -->
+  <div style="position:absolute; left:0; top:102px; transform:translateX(-50%);">
+    <div style="width:16px; height:16px; border-radius:50%; border:3px solid #e94560; background:#0f0f1a; margin:0 auto;"></div>
+  </div>
+  <div style="position:absolute; left:0; top:130px; text-align:center; transform:translateX(-20px); width:160px;">
+    <div style="font-size:13px; font-weight:700; color:#e94560;">Stage 1 Start</div>
+    <div style="font-size:11px; color:#888;">OLMo-Mix-1124<br>Broad web data</div>
+  </div>
+
+  <!-- Stage 1 end / Stage 2 start -->
+  <div style="position:absolute; left:65%; top:102px; transform:translateX(-50%);">
+    <div style="width:16px; height:16px; border-radius:50%; background:#4ecdc4; border:3px solid #4ecdc4; margin:0 auto;"></div>
+  </div>
+  <div style="position:absolute; left:65%; top:40px; text-align:center; transform:translateX(-50%); width:180px;">
+    <div style="font-size:13px; font-weight:700; color:#4ecdc4;">Stage 2: Annealing</div>
+    <div style="font-size:11px; color:#888;">Dolmino-Mix-1124<br>Curated: academic, math,<br>educational, instruction</div>
+  </div>
+  <div style="position:absolute; left:65%; top:88px; width:2px; height:16px; background:#4ecdc4; transform:translateX(-50%);"></div>
+
+  <!-- Stage 2 end -->
+  <div style="position:absolute; left:90%; top:102px; transform:translateX(-50%);">
+    <div style="width:16px; height:16px; border-radius:50%; background:#4ecdc4; border:3px solid #4ecdc4; margin:0 auto;"></div>
+  </div>
+
+  <!-- Soup -->
+  <div style="position:absolute; right:0; top:102px; transform:translateX(50%);">
+    <div style="width:16px; height:16px; border-radius:50%; background:#ffd93d; border:3px solid #ffd93d; margin:0 auto;"></div>
+  </div>
+  <div style="position:absolute; right:0; top:130px; text-align:center; transform:translateX(20px); width:160px;">
+    <div style="font-size:13px; font-weight:700; color:#ffd93d;">Model Soup</div>
+    <div style="font-size:11px; color:#888;">Weight-average best<br>annealing variants</div>
+  </div>
+
+  <!-- LR curve overlay -->
+  <div style="position:absolute; left:0; top:10px; right:0; height:90px; opacity:0.25; pointer-events:none;">
+    <svg width="100%" height="100%" viewBox="0 0 900 90" preserveAspectRatio="none">
+      <!-- Warmup -->
+      <polyline points="0,85 30,10" fill="none" stroke="#e94560" stroke-width="2"/>
+      <!-- Constant -->
+      <line x1="30" y1="10" x2="585" y2="10" stroke="#e94560" stroke-width="2"/>
+      <!-- Annealing -->
+      <polyline points="585,10 810,80" fill="none" stroke="#4ecdc4" stroke-width="2"/>
+      <!-- Flat at end -->
+      <line x1="810" y1="80" x2="900" y2="80" stroke="#ffd93d" stroke-width="2"/>
+    </svg>
+    <div style="position:absolute; top:0; right:10px; font-size:10px; color:#888;">Learning Rate</div>
+  </div>
+</div>
+
+<div class="cards">
+  <div class="card card-s1">
+    <h3>Stage 1: OLMo-Mix-1124</h3>
+    <ul>
+      <li>Filtered Common Crawl web data</li>
+      <li>Deduplicated, quality-classified</li>
+      <li>Standard web-scale distribution</li>
+      <li>Builds broad language competence</li>
+      <li>~1 epoch (7B), ~1.5 epochs (32B)</li>
+    </ul>
+    <div class="stat">Goal: general knowledge, language modeling foundations</div>
+  </div>
+  <div class="card card-s2">
+    <h3>Stage 2: Dolmino-Mix-1124</h3>
+    <ul>
+      <li>50% high-quality filtered web</li>
+      <li>~12% academic papers</li>
+      <li>~10% math content</li>
+      <li>~10% educational material</li>
+      <li>~10% Q&A / instruction data</li>
+      <li>~8% synthetic data</li>
+    </ul>
+    <div class="stat">Goal: refine reasoning, academic knowledge, instruction following</div>
+  </div>
+  <div class="card card-soup">
+    <h3>Model Souping</h3>
+    <ul>
+      <li>Train multiple Stage 2 variants</li>
+      <li>50B and 300B token mixes</li>
+      <li>Evaluate each on benchmark suite</li>
+      <li>Weight-average the best performers</li>
+      <li>Zero inference cost overhead</li>
+    </ul>
+    <div class="stat">Goal: exploit linear mode connectivity for free quality gains</div>
+  </div>
+</div>
+
+<script>
+const scaleData = {
+  '7b':  { s1: '3.9T', total: '~4T', variants: '50B + 300B' },
+  '13b': { s1: '~4.7T', total: '~5T', variants: '50B + 300B' },
+  '32b': { s1: '~5.7T', total: '~6T', variants: '50B + 300B' }
+};
+
+function setScale(scale) {
+  document.querySelectorAll('.scale-btn').forEach(b => b.classList.remove('active'));
+  event.target.classList.add('active');
+  const d = scaleData[scale];
+  document.getElementById('s1Tokens').textContent = d.s1;
+  document.getElementById('totalTokens').textContent = d.total;
+  document.getElementById('annealVariants').textContent = d.variants;
+}
+</script>
+</body>
+</html>

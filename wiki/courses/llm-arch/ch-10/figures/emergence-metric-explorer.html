@@ -1,0 +1,210 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Emergence vs. Metric Choice</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { background: #1a1a2e; color: #e0e0e0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; padding: 24px; }
+h1 { font-size: 20px; margin-bottom: 8px; color: #e94560; }
+.subtitle { font-size: 13px; color: #888; margin-bottom: 24px; line-height: 1.5; }
+.charts { display: flex; gap: 24px; flex-wrap: wrap; }
+.chart-box { flex: 1; min-width: 320px; background: #16213e; border-radius: 12px; padding: 20px; }
+.chart-title { font-size: 14px; font-weight: bold; margin-bottom: 12px; }
+canvas { width: 100%; height: 300px; }
+.controls { margin-top: 20px; display: flex; gap: 24px; flex-wrap: wrap; align-items: flex-start; }
+.slider-group { flex: 1; min-width: 200px; }
+.slider-label { display: flex; justify-content: space-between; font-size: 13px; margin-bottom: 6px; }
+.slider-label span:first-child { color: #4ecdc4; font-weight: bold; }
+.slider-label span:last-child { color: #ffd93d; font-family: monospace; }
+input[type="range"] {
+  width: 100%; height: 6px; -webkit-appearance: none; appearance: none;
+  background: #0f3460; border-radius: 3px; outline: none;
+}
+input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none; appearance: none; width: 16px; height: 16px;
+  background: #e94560; border-radius: 50%; cursor: pointer;
+}
+.explanation { background: #16213e; border-radius: 8px; padding: 16px; margin-top: 20px; font-size: 12px; line-height: 1.7; }
+.explanation .key { color: #ffd93d; font-weight: bold; }
+.math { font-family: monospace; color: #4ecdc4; }
+</style>
+</head>
+<body>
+<h1>Emergence vs. Metric Choice</h1>
+<p class="subtitle">
+  Schaeffer et al. (2023) showed that "emergent abilities" can be created or destroyed by changing the evaluation metric.
+  Left: exact-match accuracy shows a sharp jump. Right: per-token accuracy reveals smooth improvement.
+</p>
+
+<div class="controls">
+  <div class="slider-group">
+    <div class="slider-label">
+      <span>Answer Length (tokens)</span>
+      <span id="len-val">8</span>
+    </div>
+    <input type="range" id="len-slider" min="1" max="20" step="1" value="8">
+  </div>
+  <div class="slider-group">
+    <div class="slider-label">
+      <span>Scaling Steepness</span>
+      <span id="steep-val">3.0</span>
+    </div>
+    <input type="range" id="steep-slider" min="1" max="8" step="0.5" value="3">
+  </div>
+</div>
+
+<div class="charts">
+  <div class="chart-box">
+    <div class="chart-title" style="color:#e94560;">Exact-Match Accuracy (Nonlinear Metric)</div>
+    <canvas id="chart-exact"></canvas>
+  </div>
+  <div class="chart-box">
+    <div class="chart-title" style="color:#4ecdc4;">Per-Token Accuracy (Linear Metric)</div>
+    <canvas id="chart-token"></canvas>
+  </div>
+</div>
+
+<div class="explanation">
+  <p><span class="key">The mechanism:</span> Per-token accuracy <span class="math">p(scale)</span> improves smoothly via a sigmoid.
+  Exact-match accuracy for an <span class="math">L</span>-token answer is <span class="math">p^L</span> (all tokens must be correct).
+  When <span class="math">L = 8</span> and <span class="math">p</span> goes from 0.7 to 0.95, exact-match jumps from
+  <span class="math">0.7^8 = 0.058</span> to <span class="math">0.95^8 = 0.663</span> -- an 11x increase that looks like sudden "emergence."</p>
+  <p style="margin-top:8px;"><span class="key">Try it:</span> Set answer length to 1 -- both charts look the same (no emergence).
+  Increase to 15+ -- the "phase transition" becomes even sharper. The emergence is in the metric, not the model.</p>
+</div>
+
+<script>
+const canvasExact = document.getElementById('chart-exact');
+const canvasToken = document.getElementById('chart-token');
+const ctxExact = canvasExact.getContext('2d');
+const ctxToken = canvasToken.getContext('2d');
+
+const lenSlider = document.getElementById('len-slider');
+const steepSlider = document.getElementById('steep-slider');
+
+// Per-token accuracy as sigmoid of log(scale)
+function tokenAccuracy(logScale, steepness) {
+  // Sigmoid centered at logScale=1.5 (about 30B params)
+  const x = steepness * (logScale - 1.5);
+  return 0.1 + 0.85 / (1 + Math.exp(-x));
+}
+
+function drawChart(canvas, ctx, mode) {
+  const dpr = window.devicePixelRatio || 1;
+  const W = canvas.clientWidth;
+  const H = canvas.clientHeight;
+  canvas.width = W * dpr;
+  canvas.height = H * dpr;
+  ctx.scale(dpr, dpr);
+  ctx.clearRect(0, 0, W, H);
+
+  const PAD = { top: 20, right: 20, bottom: 40, left: 50 };
+  const plotW = W - PAD.left - PAD.right;
+  const plotH = H - PAD.top - PAD.bottom;
+
+  const answerLen = parseInt(lenSlider.value);
+  const steepness = parseFloat(steepSlider.value);
+
+  // X axis: log10(model size in B), from 0.01B to 1000B
+  const xMin = -1, xMax = 3;
+  // Y axis: 0 to 1
+  const yMin = 0, yMax = 1;
+
+  function mapX(logS) { return PAD.left + (logS - xMin) / (xMax - xMin) * plotW; }
+  function mapY(val) { return PAD.top + plotH - (val - yMin) / (yMax - yMin) * plotH; }
+
+  // Grid
+  ctx.strokeStyle = '#2a2a4a';
+  ctx.lineWidth = 0.5;
+  for (let x = 0; x <= 3; x++) {
+    ctx.beginPath(); ctx.moveTo(mapX(x), PAD.top); ctx.lineTo(mapX(x), PAD.top + plotH); ctx.stroke();
+  }
+  for (let y = 0; y <= 1; y += 0.25) {
+    ctx.beginPath(); ctx.moveTo(PAD.left, mapY(y)); ctx.lineTo(PAD.left + plotW, mapY(y)); ctx.stroke();
+  }
+
+  // Axes labels
+  ctx.fillStyle = '#888';
+  ctx.font = '11px -apple-system, sans-serif';
+  ctx.textAlign = 'center';
+  const scaleLabels = [['0.1B', -1], ['1B', 0], ['10B', 1], ['100B', 2], ['1T', 3]];
+  scaleLabels.forEach(([label, logS]) => {
+    ctx.fillText(label, mapX(logS), PAD.top + plotH + 18);
+  });
+  ctx.fillText('Model Size', W / 2, H - 4);
+
+  ctx.textAlign = 'right';
+  for (let y = 0; y <= 1; y += 0.25) {
+    ctx.fillText((y * 100).toFixed(0) + '%', PAD.left - 6, mapY(y) + 4);
+  }
+
+  // Draw curve
+  const color = mode === 'exact' ? '#e94560' : '#4ecdc4';
+  ctx.strokeStyle = color;
+  ctx.lineWidth = 2.5;
+  ctx.beginPath();
+  for (let i = 0; i <= 200; i++) {
+    const logS = xMin + (xMax - xMin) * i / 200;
+    const p = tokenAccuracy(logS, steepness);
+    const val = mode === 'exact' ? Math.pow(p, answerLen) : p;
+    const x = mapX(logS);
+    const y = mapY(val);
+    if (i === 0) ctx.moveTo(x, y);
+    else ctx.lineTo(x, y);
+  }
+  ctx.stroke();
+
+  // Draw individual data points with noise
+  ctx.fillStyle = color;
+  const seed = mode === 'exact' ? 42 : 137;
+  let rng = seed;
+  function pseudoRandom() { rng = (rng * 1103515245 + 12345) & 0x7fffffff; return rng / 0x7fffffff; }
+
+  const sampleScales = [-0.5, 0, 0.3, 0.7, 1.0, 1.3, 1.5, 1.7, 2.0, 2.3, 2.5];
+  sampleScales.forEach(logS => {
+    const p = tokenAccuracy(logS, steepness);
+    const baseVal = mode === 'exact' ? Math.pow(p, answerLen) : p;
+    // Add noise
+    for (let j = 0; j < 3; j++) {
+      const noise = (pseudoRandom() - 0.5) * 0.08;
+      const val = Math.max(0, Math.min(1, baseVal + noise));
+      ctx.globalAlpha = 0.6;
+      ctx.beginPath();
+      ctx.arc(mapX(logS + (pseudoRandom() - 0.5) * 0.1), mapY(val), 3, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  });
+  ctx.globalAlpha = 1;
+
+  // Annotation for exact-match chart
+  if (mode === 'exact' && answerLen > 3) {
+    ctx.fillStyle = 'rgba(233, 69, 96, 0.2)';
+    ctx.fillRect(mapX(-1), mapY(0.15), mapX(1.2) - mapX(-1), mapY(0) - mapY(0.15));
+    ctx.fillStyle = '#e94560';
+    ctx.font = 'bold 11px -apple-system, sans-serif';
+    ctx.textAlign = 'left';
+    ctx.fillText('"Absent"', mapX(-0.8), mapY(0.07));
+
+    ctx.fillStyle = 'rgba(233, 69, 96, 0.1)';
+    ctx.fillRect(mapX(1.8), mapY(1), mapX(3) - mapX(1.8), mapY(0.5) - mapY(1));
+    ctx.fillStyle = '#e94560';
+    ctx.fillText('"Emerged"', mapX(1.9), mapY(0.9));
+  }
+}
+
+function draw() {
+  document.getElementById('len-val').textContent = lenSlider.value;
+  document.getElementById('steep-val').textContent = parseFloat(steepSlider.value).toFixed(1);
+  drawChart(canvasExact, ctxExact, 'exact');
+  drawChart(canvasToken, ctxToken, 'token');
+}
+
+lenSlider.addEventListener('input', draw);
+steepSlider.addEventListener('input', draw);
+window.addEventListener('resize', draw);
+draw();
+</script>
+</body>
+</html>

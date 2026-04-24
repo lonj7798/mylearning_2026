@@ -1,0 +1,346 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Interactive Attention Weight Visualizer</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { background: #1a1a2e; color: #e0e0e0; font-family: 'Segoe UI', system-ui, sans-serif; padding: 20px; min-height: 100vh; }
+h1 { color: #e94560; font-size: 22px; text-align: center; margin-bottom: 6px; }
+.subtitle { color: #888; font-size: 13px; text-align: center; margin-bottom: 20px; }
+.container { max-width: 960px; margin: 0 auto; }
+.panel { background: #16213e; border-radius: 12px; padding: 20px; margin-bottom: 16px; }
+.panel-title { color: #e94560; font-weight: bold; font-size: 15px; margin-bottom: 12px; }
+.controls { display: flex; gap: 16px; flex-wrap: wrap; align-items: center; margin-bottom: 16px; }
+.controls label { font-size: 12px; color: #aaa; display: flex; align-items: center; gap: 6px; }
+.controls select { background: #0f3460; color: #e0e0e0; border: 1px solid #333; border-radius: 4px; padding: 4px 8px; font-size: 12px; }
+input[type="range"] { accent-color: #e94560; }
+.token-row { display: flex; gap: 4px; justify-content: center; flex-wrap: wrap; margin-bottom: 16px; }
+.token { padding: 8px 14px; border-radius: 6px; font-size: 13px; font-family: monospace; cursor: pointer; transition: all 0.2s; user-select: none; }
+.token.query { background: #e94560; color: #fff; font-weight: bold; }
+.token.key { background: #0f3460; color: #4ecdc4; border: 1px solid #4ecdc4; }
+.token:hover { transform: translateY(-2px); }
+.token.selected { box-shadow: 0 0 0 2px #ffd93d; }
+canvas { width: 100%; border-radius: 8px; background: #0a0a1a; display: block; }
+.matrix-container { overflow-x: auto; }
+table.attn-matrix { border-collapse: collapse; margin: 0 auto; }
+table.attn-matrix td, table.attn-matrix th { padding: 6px 10px; text-align: center; font-size: 11px; font-family: monospace; min-width: 56px; }
+table.attn-matrix th { color: #888; font-weight: normal; }
+table.attn-matrix th.row-header { color: #e94560; font-weight: bold; text-align: right; }
+table.attn-matrix th.col-header { color: #4ecdc4; font-weight: bold; }
+table.attn-matrix td { border-radius: 4px; transition: all 0.2s; }
+.flow-container { position: relative; min-height: 200px; }
+.info { background: #0f3460; border-radius: 8px; padding: 12px; font-size: 12px; color: #aaa; line-height: 1.6; margin-top: 12px; }
+.info strong { color: #e94560; }
+.two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+@media (max-width: 700px) { .two-col { grid-template-columns: 1fr; } }
+.metric-row { display: flex; gap: 12px; flex-wrap: wrap; margin-bottom: 12px; }
+.mini-metric { background: #0f3460; border-radius: 8px; padding: 8px 12px; text-align: center; flex: 1; min-width: 80px; }
+.mini-metric .val { font-size: 16px; font-weight: bold; color: #4ecdc4; }
+.mini-metric .lbl { font-size: 10px; color: #888; margin-top: 2px; }
+</style>
+</head>
+<body>
+<div class="container">
+<h1>Interactive Attention Weight Visualizer</h1>
+<p class="subtitle">Click a query token to see its attention distribution. Adjust temperature and dimension to observe scaling effects.</p>
+
+<div class="panel">
+<div class="panel-title">Configuration</div>
+<div class="controls">
+<label>d_k: <select id="dk"><option value="16">16</option><option value="32">32</option><option value="64" selected>64</option><option value="128">128</option><option value="256">256</option><option value="512">512</option></select></label>
+<label>Scale by 1/sqrt(d_k): <select id="scaling"><option value="yes" selected>Yes (standard)</option><option value="no">No (unscaled)</option></select></label>
+<label>Temperature: <input type="range" id="temp" min="0.1" max="5.0" step="0.1" value="1.0"> <span id="tempVal">1.0</span></label>
+<label>Causal mask: <select id="causal"><option value="no">No (bidirectional)</option><option value="yes" selected>Yes (autoregressive)</option></select></label>
+</div>
+</div>
+
+<div class="panel">
+<div class="panel-title">Input Sequence (click a token to query)</div>
+<div class="token-row" id="tokenRow"></div>
+<div class="metric-row" id="queryMetrics"></div>
+</div>
+
+<div class="two-col">
+<div class="panel">
+<div class="panel-title">Attention Weights (selected query row)</div>
+<canvas id="barChart" height="220"></canvas>
+</div>
+<div class="panel">
+<div class="panel-title">Full Attention Matrix</div>
+<div class="matrix-container" id="matrixContainer"></div>
+</div>
+</div>
+
+<div class="panel">
+<div class="panel-title">Attention Flow</div>
+<canvas id="flowCanvas" height="180"></canvas>
+</div>
+
+<div class="info">
+<strong>Experiment suggestions:</strong>
+(1) Toggle scaling off with d_k=512 -- watch attention collapse to near-one-hot (softmax saturation).
+(2) Increase temperature to 5.0 -- attention becomes nearly uniform (model loses selectivity).
+(3) Compare d_k=16 vs d_k=256 with scaling on -- the scaling factor keeps the distribution shape stable.
+</div>
+</div>
+
+<script>
+const sentence = ['The', 'cat', 'sat', 'on', 'the', 'mat', '.'];
+const n = sentence.length;
+let selectedQuery = 3; // "on"
+
+// generate pseudo-random but deterministic Q, K vectors
+function seededRandom(seed) {
+  let s = seed;
+  return function() { s = (s * 1103515245 + 12345) & 0x7fffffff; return s / 0x7fffffff; };
+}
+
+function generateVectors(dk) {
+  const rng = seededRandom(42);
+  const Q = [], K = [];
+  for (let i = 0; i < n; i++) {
+    Q[i] = []; K[i] = [];
+    for (let j = 0; j < dk; j++) {
+      Q[i][j] = (rng() - 0.5) * 2; // ~N(0,1) approximation
+      K[i][j] = (rng() - 0.5) * 2;
+    }
+    // add some structure: nearby tokens have slightly correlated keys
+    if (i > 0) {
+      for (let j = 0; j < dk; j++) {
+        K[i][j] = 0.3 * K[i-1][j] + 0.7 * K[i][j];
+      }
+    }
+    // make "the" tokens (0 and 4) have similar keys
+    if (i === 4) {
+      for (let j = 0; j < dk; j++) {
+        K[i][j] = 0.8 * K[0][j] + 0.2 * K[i][j];
+      }
+    }
+  }
+  return { Q, K };
+}
+
+function dotProduct(a, b) {
+  let s = 0;
+  for (let i = 0; i < a.length; i++) s += a[i] * b[i];
+  return s;
+}
+
+function computeAttention() {
+  const dk = parseInt(document.getElementById('dk').value);
+  const useScale = document.getElementById('scaling').value === 'yes';
+  const temp = parseFloat(document.getElementById('temp').value);
+  const useCausal = document.getElementById('causal').value === 'yes';
+
+  const { Q, K } = generateVectors(dk);
+  const scale = useScale ? Math.sqrt(dk) : 1;
+
+  // compute scores
+  const scores = [];
+  for (let i = 0; i < n; i++) {
+    scores[i] = [];
+    for (let j = 0; j < n; j++) {
+      if (useCausal && j > i) {
+        scores[i][j] = -Infinity;
+      } else {
+        scores[i][j] = dotProduct(Q[i], K[j]) / scale / temp;
+      }
+    }
+  }
+
+  // softmax per row
+  const weights = [];
+  for (let i = 0; i < n; i++) {
+    const row = scores[i];
+    const mx = Math.max(...row.filter(v => v > -Infinity));
+    const exps = row.map(v => v === -Infinity ? 0 : Math.exp(v - mx));
+    const sum = exps.reduce((a, b) => a + b, 0);
+    weights[i] = exps.map(e => e / sum);
+  }
+
+  return { scores, weights, dk, scale };
+}
+
+function buildTokenRow() {
+  const row = document.getElementById('tokenRow');
+  row.innerHTML = '';
+  sentence.forEach((tok, i) => {
+    const el = document.createElement('div');
+    el.className = 'token' + (i === selectedQuery ? ' selected query' : ' key');
+    el.textContent = tok;
+    el.addEventListener('click', () => { selectedQuery = i; render(); });
+    row.appendChild(el);
+  });
+}
+
+function renderMatrix(weights) {
+  const container = document.getElementById('matrixContainer');
+  let html = '<table class="attn-matrix"><tr><th></th>';
+  sentence.forEach((t, j) => { html += `<th class="col-header">${t}</th>`; });
+  html += '</tr>';
+  for (let i = 0; i < n; i++) {
+    html += `<tr><th class="row-header">${sentence[i]}</th>`;
+    for (let j = 0; j < n; j++) {
+      const w = weights[i][j];
+      const intensity = Math.floor(w * 255);
+      const bg = `rgba(233, 69, 96, ${w})`;
+      const textColor = w > 0.5 ? '#fff' : '#aaa';
+      const highlight = i === selectedQuery ? 'border:2px solid #ffd93d;' : '';
+      html += `<td style="background:${bg}; color:${textColor}; ${highlight}">${w.toFixed(2)}</td>`;
+    }
+    html += '</tr>';
+  }
+  html += '</table>';
+  container.innerHTML = html;
+}
+
+function renderBarChart(weights) {
+  const canvas = document.getElementById('barChart');
+  const ctx = canvas.getContext('2d');
+  const dpr = window.devicePixelRatio || 1;
+  const rect = canvas.getBoundingClientRect();
+  canvas.width = rect.width * dpr; canvas.height = rect.height * dpr;
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  const W = rect.width, H = rect.height;
+  const pad = { top: 20, right: 20, bottom: 40, left: 40 };
+  const plotW = W - pad.left - pad.right;
+  const plotH = H - pad.top - pad.bottom;
+
+  ctx.clearRect(0, 0, W, H);
+
+  const row = weights[selectedQuery];
+  const barW = plotW / n - 8;
+
+  for (let j = 0; j < n; j++) {
+    const x = pad.left + j * (plotW / n) + 4;
+    const barH = row[j] * plotH;
+
+    // bar
+    const gradient = ctx.createLinearGradient(x, pad.top + plotH - barH, x, pad.top + plotH);
+    gradient.addColorStop(0, '#e94560');
+    gradient.addColorStop(1, '#0f3460');
+    ctx.fillStyle = gradient;
+    ctx.fillRect(x, pad.top + plotH - barH, barW, barH);
+
+    // value label
+    ctx.fillStyle = '#e0e0e0'; ctx.font = '11px monospace'; ctx.textAlign = 'center';
+    ctx.fillText(row[j].toFixed(3), x + barW / 2, pad.top + plotH - barH - 4);
+
+    // token label
+    ctx.fillStyle = '#4ecdc4'; ctx.font = '12px monospace';
+    ctx.fillText(sentence[j], x + barW / 2, pad.top + plotH + 16);
+  }
+
+  // y-axis
+  ctx.strokeStyle = '#333'; ctx.lineWidth = 0.5;
+  for (let v = 0; v <= 1; v += 0.25) {
+    const y = pad.top + plotH - v * plotH;
+    ctx.beginPath(); ctx.moveTo(pad.left - 4, y); ctx.lineTo(pad.left + plotW, y); ctx.stroke();
+    ctx.fillStyle = '#666'; ctx.font = '10px monospace'; ctx.textAlign = 'right';
+    ctx.fillText(v.toFixed(2), pad.left - 6, y + 4);
+  }
+
+  // title
+  ctx.fillStyle = '#888'; ctx.font = '11px sans-serif'; ctx.textAlign = 'center';
+  ctx.fillText(`Query: "${sentence[selectedQuery]}" (position ${selectedQuery})`, W / 2, 14);
+}
+
+function renderFlow(weights) {
+  const canvas = document.getElementById('flowCanvas');
+  const ctx = canvas.getContext('2d');
+  const dpr = window.devicePixelRatio || 1;
+  const rect = canvas.getBoundingClientRect();
+  canvas.width = rect.width * dpr; canvas.height = rect.height * dpr;
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  const W = rect.width, H = rect.height;
+
+  ctx.clearRect(0, 0, W, H);
+
+  const topY = 30, botY = H - 30;
+  const row = weights[selectedQuery];
+
+  // draw tokens at top (keys) and bottom (query)
+  const spacing = W / (n + 1);
+
+  // flow lines from query to keys
+  const queryX = spacing * (selectedQuery + 1);
+  for (let j = 0; j < n; j++) {
+    const keyX = spacing * (j + 1);
+    const w = row[j];
+    if (w < 0.005) continue;
+
+    ctx.strokeStyle = `rgba(233, 69, 96, ${Math.min(w * 2, 0.9)})`;
+    ctx.lineWidth = Math.max(1, w * 12);
+    ctx.beginPath();
+    ctx.moveTo(queryX, botY - 10);
+    ctx.quadraticCurveTo((queryX + keyX) / 2, (topY + botY) / 2 - 20, keyX, topY + 10);
+    ctx.stroke();
+  }
+
+  // key tokens at top
+  for (let j = 0; j < n; j++) {
+    const x = spacing * (j + 1);
+    ctx.fillStyle = row[j] > 0.1 ? '#4ecdc4' : '#555';
+    ctx.font = '13px monospace'; ctx.textAlign = 'center';
+    ctx.fillText(sentence[j], x, topY);
+
+    // weight label
+    if (row[j] > 0.005) {
+      ctx.fillStyle = '#888'; ctx.font = '10px monospace';
+      ctx.fillText(row[j].toFixed(2), x, topY + 16);
+    }
+  }
+
+  // query token at bottom
+  ctx.fillStyle = '#e94560'; ctx.font = 'bold 14px monospace'; ctx.textAlign = 'center';
+  ctx.fillText(sentence[selectedQuery], queryX, botY + 4);
+  ctx.fillStyle = '#888'; ctx.font = '10px sans-serif';
+  ctx.fillText('(query)', queryX, botY + 18);
+
+  // labels
+  ctx.fillStyle = '#555'; ctx.font = '10px sans-serif';
+  ctx.textAlign = 'left'; ctx.fillText('Keys', 8, topY);
+  ctx.fillText('Query', 8, botY + 4);
+}
+
+function updateMetrics(weights, data) {
+  const row = weights[selectedQuery];
+  // entropy of attention
+  const entropy = -row.reduce((s, w) => s + (w > 1e-12 ? w * Math.log2(w) : 0), 0);
+  const maxWeight = Math.max(...row);
+  const argmax = row.indexOf(maxWeight);
+  const effectiveN = Math.pow(2, entropy);
+
+  document.getElementById('queryMetrics').innerHTML = `
+    <div class="mini-metric"><div class="val">${sentence[selectedQuery]}</div><div class="lbl">Query token</div></div>
+    <div class="mini-metric"><div class="val">${entropy.toFixed(2)} bits</div><div class="lbl">Attention entropy</div></div>
+    <div class="mini-metric"><div class="val">${effectiveN.toFixed(1)}</div><div class="lbl">Effective # attended</div></div>
+    <div class="mini-metric"><div class="val">${sentence[argmax]} (${maxWeight.toFixed(2)})</div><div class="lbl">Top-attended key</div></div>
+    <div class="mini-metric"><div class="val">${data.dk}</div><div class="lbl">d_k (1/sqrt = ${(1/data.scale).toFixed(3)})</div></div>
+  `;
+}
+
+function render() {
+  buildTokenRow();
+  const data = computeAttention();
+  renderMatrix(data.weights);
+  renderBarChart(data.weights);
+  renderFlow(data.weights);
+  updateMetrics(data.weights, data);
+}
+
+document.getElementById('dk').addEventListener('change', render);
+document.getElementById('scaling').addEventListener('change', render);
+document.getElementById('temp').addEventListener('input', () => {
+  document.getElementById('tempVal').textContent = parseFloat(document.getElementById('temp').value).toFixed(1);
+  render();
+});
+document.getElementById('causal').addEventListener('change', render);
+
+render();
+window.addEventListener('resize', render);
+</script>
+</body>
+</html>

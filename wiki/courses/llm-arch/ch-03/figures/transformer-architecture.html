@@ -1,0 +1,551 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>The Original Transformer — Interactive Architecture</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    background: #1a1a2e;
+    color: #e0e0e0;
+    font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 32px 16px;
+  }
+  h1 {
+    color: #e94560;
+    font-size: 22px;
+    margin-bottom: 6px;
+    text-align: center;
+  }
+  .subtitle {
+    color: #888;
+    font-size: 13px;
+    margin-bottom: 28px;
+    text-align: center;
+  }
+  .arch-container {
+    display: flex;
+    gap: 24px;
+    justify-content: center;
+    flex-wrap: wrap;
+    max-width: 1100px;
+    width: 100%;
+    position: relative;
+  }
+  .cross-arrow-zone {
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    align-items: center;
+    min-width: 60px;
+  }
+  .cross-arrow-zone .arrow-line {
+    width: 48px;
+    height: 3px;
+    background: #4ecdc4;
+    position: relative;
+  }
+  .cross-arrow-zone .arrow-line::after {
+    content: '';
+    position: absolute;
+    right: -2px;
+    top: -5px;
+    border: 6px solid transparent;
+    border-left: 8px solid #4ecdc4;
+  }
+  .cross-arrow-zone .arrow-label {
+    color: #4ecdc4;
+    font-size: 10px;
+    margin-top: 4px;
+    white-space: nowrap;
+  }
+  .column {
+    background: #16213e;
+    border-radius: 14px;
+    padding: 20px;
+    min-width: 300px;
+    max-width: 420px;
+    flex: 1;
+    border: 2px solid #0f3460;
+    display: flex;
+    flex-direction: column;
+    gap: 0;
+  }
+  .column-title {
+    text-align: center;
+    font-weight: bold;
+    font-size: 16px;
+    margin-bottom: 14px;
+    letter-spacing: 1px;
+  }
+  .encoder-title { color: #e94560; }
+  .decoder-title { color: #ffd93d; }
+  .stack {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+  .layer-block {
+    border-radius: 10px;
+    padding: 12px 14px;
+    cursor: pointer;
+    transition: all 0.25s ease;
+    position: relative;
+    border: 1px solid transparent;
+  }
+  .layer-block:hover {
+    transform: scale(1.02);
+    filter: brightness(1.15);
+  }
+  .layer-block.expanded {
+    border-color: #e94560;
+  }
+  .layer-block .block-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+  }
+  .layer-block .block-name {
+    font-size: 13px;
+    font-weight: 600;
+  }
+  .layer-block .block-meta {
+    font-size: 10px;
+    color: #888;
+  }
+  .layer-block .expand-icon {
+    font-size: 14px;
+    color: #888;
+    transition: transform 0.2s;
+  }
+  .layer-block.expanded .expand-icon {
+    transform: rotate(90deg);
+    color: #e94560;
+  }
+  .layer-block .details {
+    max-height: 0;
+    overflow: hidden;
+    transition: max-height 0.35s ease, padding 0.35s ease;
+    font-size: 12px;
+    color: #bbb;
+    line-height: 1.55;
+  }
+  .layer-block.expanded .details {
+    max-height: 600px;
+    padding-top: 10px;
+  }
+  .details code {
+    background: #0f3460;
+    padding: 1px 5px;
+    border-radius: 4px;
+    font-family: 'Fira Code', 'Consolas', monospace;
+    font-size: 11px;
+    color: #4ecdc4;
+  }
+  .details .formula {
+    background: #0a1628;
+    border-radius: 6px;
+    padding: 8px 12px;
+    margin: 6px 0;
+    font-family: 'Fira Code', monospace;
+    font-size: 11px;
+    color: #ffd93d;
+    overflow-x: auto;
+  }
+  .details ul {
+    margin: 6px 0 6px 18px;
+  }
+  .details li {
+    margin-bottom: 3px;
+  }
+  .blk-embed     { background: #0a2040; }
+  .blk-attn      { background: #1a1a3e; border-color: #e94560 !important; border-style: dashed; border-width: 1px; }
+  .blk-attn .block-name { color: #e94560; }
+  .blk-cross     { background: #1a1a3e; border-color: #4ecdc4 !important; border-style: dashed; border-width: 1px; }
+  .blk-cross .block-name { color: #4ecdc4; }
+  .blk-ffn       { background: #1a1a3e; border-color: #ffd93d !important; border-style: dashed; border-width: 1px; }
+  .blk-ffn .block-name  { color: #ffd93d; }
+  .blk-norm      { background: #0f3460; }
+  .blk-norm .block-name { color: #e94560; font-size: 12px; }
+  .blk-output    { background: #0a2040; }
+  .blk-linear    { background: #1a1a3e; border-color: #888 !important; border-style: dashed; border-width: 1px; }
+  .flow-arrow {
+    text-align: center;
+    color: #555;
+    font-size: 16px;
+    line-height: 1;
+    padding: 2px 0;
+    user-select: none;
+  }
+  .repeat-badge {
+    text-align: center;
+    margin: 4px 0;
+  }
+  .repeat-badge span {
+    background: #0f3460;
+    color: #e94560;
+    font-size: 11px;
+    padding: 3px 12px;
+    border-radius: 10px;
+    font-weight: bold;
+    letter-spacing: 0.5px;
+  }
+  .legend {
+    margin-top: 28px;
+    display: flex;
+    gap: 20px;
+    flex-wrap: wrap;
+    justify-content: center;
+  }
+  .legend-item {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 12px;
+    color: #aaa;
+  }
+  .legend-swatch {
+    width: 14px;
+    height: 14px;
+    border-radius: 4px;
+  }
+  .info-bar {
+    margin-top: 24px;
+    background: #16213e;
+    border-radius: 10px;
+    padding: 16px 20px;
+    max-width: 700px;
+    width: 100%;
+    text-align: center;
+    color: #888;
+    font-size: 12px;
+    line-height: 1.6;
+  }
+  .info-bar strong { color: #e94560; }
+  @keyframes flowPulse {
+    0%, 100% { opacity: 0.4; }
+    50% { opacity: 1; }
+  }
+  .flow-arrow.animated {
+    animation: flowPulse 1.5s ease-in-out infinite;
+    color: #e94560;
+  }
+</style>
+</head>
+<body>
+
+<h1>The Original Transformer Architecture</h1>
+<p class="subtitle">Click any layer to expand details. Vaswani et al. (2017) encoder-decoder design.</p>
+
+<div class="arch-container">
+
+  <!-- ========== ENCODER COLUMN ========== -->
+  <div class="column">
+    <div class="column-title encoder-title">ENCODER</div>
+    <div class="stack" id="encoder-stack">
+
+      <!-- Encoder output -->
+      <div class="layer-block blk-output" data-info="enc-output">
+        <div class="block-header">
+          <span class="block-name" style="color:#aaa;">Encoder Output</span>
+          <span class="expand-icon">&#9654;</span>
+        </div>
+        <div class="details">
+          The final encoder output is a sequence of contextualized vectors, one per source token. Shape: <code>(T_src, 512)</code>. This tensor is computed <strong>once</strong> and reused by every decoder layer's cross-attention, at every decoding step. This "compute once, attend many" property is a key efficiency advantage of the encoder-decoder design.
+        </div>
+      </div>
+
+      <div class="flow-arrow animated">&#8593;</div>
+      <div class="repeat-badge"><span>x 6 layers</span></div>
+
+      <!-- Add & Norm (post-FFN) -->
+      <div class="layer-block blk-norm" data-info="enc-addnorm2">
+        <div class="block-header">
+          <span class="block-name">Add & Norm</span>
+          <span class="expand-icon">&#9654;</span>
+        </div>
+        <div class="details">
+          <div class="formula">output = LayerNorm(x + FFN(x))</div>
+          Residual connection adds the FFN output back to the stream, then layer normalization rescales. This is the <strong>Post-LN</strong> placement from the original paper. Each sub-layer's output is added (not concatenated) to the residual stream — information accumulates additively.
+        </div>
+      </div>
+
+      <div class="flow-arrow">&#8593;</div>
+
+      <!-- FFN -->
+      <div class="layer-block blk-ffn" data-info="enc-ffn">
+        <div class="block-header">
+          <span class="block-name">Feed-Forward Network</span>
+          <span class="block-meta">d_ff=2048</span>
+          <span class="expand-icon">&#9654;</span>
+        </div>
+        <div class="details">
+          <div class="formula">FFN(x) = ReLU(xW1 + b1)W2 + b2</div>
+          <ul>
+            <li><code>W1</code>: 512 x 2048 (expand)</li>
+            <li><code>W2</code>: 2048 x 512 (project back)</li>
+            <li>Applied identically to each position (position-wise)</li>
+            <li>Contains <strong>2/3 of layer parameters</strong> (~2.1M vs ~1.05M for attention)</li>
+            <li>Acts as a key-value memory: rows of W1 are pattern detectors, columns of W2 are value writers</li>
+          </ul>
+        </div>
+      </div>
+
+      <div class="flow-arrow">&#8593;</div>
+
+      <!-- Add & Norm (post-attention) -->
+      <div class="layer-block blk-norm" data-info="enc-addnorm1">
+        <div class="block-header">
+          <span class="block-name">Add & Norm</span>
+          <span class="expand-icon">&#9654;</span>
+        </div>
+        <div class="details">
+          <div class="formula">output = LayerNorm(x + MultiHeadAttn(x))</div>
+          The residual connection ensures gradient flow directly from output to input (the "gradient superhighway"). LayerNorm normalizes across the d_model=512 feature dimension per position, keeping activations well-scaled.
+        </div>
+      </div>
+
+      <div class="flow-arrow">&#8593;</div>
+
+      <!-- Multi-Head Self-Attention -->
+      <div class="layer-block blk-attn" data-info="enc-selfattn">
+        <div class="block-header">
+          <span class="block-name">Multi-Head Self-Attention</span>
+          <span class="block-meta">h=8, d_k=64</span>
+          <span class="expand-icon">&#9654;</span>
+        </div>
+        <div class="details">
+          <div class="formula">Attention(Q,K,V) = softmax(QK^T / sqrt(d_k)) V</div>
+          <strong>Bidirectional</strong> — no mask. Every source position attends to every other.
+          <ul>
+            <li>8 heads, each with d_k = d_v = 64</li>
+            <li>Total: 8 x 64 = 512 = d_model (same cost as single-head)</li>
+            <li>Q, K, V projections: 3 x (512 x 512) = 786K params</li>
+            <li>Output projection W_O: 512 x 512 = 262K params</li>
+            <li>Scaling by 1/sqrt(64) = 1/8 prevents softmax saturation</li>
+          </ul>
+          Each head learns a different "view": syntactic dependencies, coreference, positional patterns, etc.
+        </div>
+      </div>
+
+      <div class="flow-arrow animated">&#8593;</div>
+
+      <!-- Input Embedding + PE -->
+      <div class="layer-block blk-embed" data-info="enc-embed">
+        <div class="block-header">
+          <span class="block-name" style="color:#aaa;">Input Embedding + Positional Encoding</span>
+          <span class="expand-icon">&#9654;</span>
+        </div>
+        <div class="details">
+          Token embeddings are looked up from a <code>(|V| x 512)</code> matrix and scaled by <code>sqrt(d_model) = sqrt(512)</code>. Sinusoidal positional encodings are then <strong>added</strong> (not concatenated) to inject position information.
+          <div class="formula">PE(pos,2i)   = sin(pos / 10000^(2i/512))
+PE(pos,2i+1) = cos(pos / 10000^(2i/512))</div>
+          The addition means position and content share the same 512 dimensions — downstream layers must learn to disentangle them. This is a known limitation that RoPE later addressed.
+        </div>
+      </div>
+
+      <div class="flow-arrow animated">&#8593;</div>
+      <div style="text-align:center; color:#666; font-size:12px;">Source tokens (e.g., German)</div>
+
+    </div>
+  </div>
+
+  <!-- ========== CROSS-ATTENTION ARROWS ========== -->
+  <div class="cross-arrow-zone">
+    <div style="flex:1;"></div>
+    <div style="display:flex; flex-direction:column; align-items:center; gap:4px;">
+      <div class="arrow-label">K, V</div>
+      <div class="arrow-line"></div>
+      <div class="arrow-label" style="color:#888; font-size:9px;">encoder output</div>
+    </div>
+    <div style="flex:1.5;"></div>
+  </div>
+
+  <!-- ========== DECODER COLUMN ========== -->
+  <div class="column">
+    <div class="column-title decoder-title">DECODER</div>
+    <div class="stack" id="decoder-stack">
+
+      <!-- Linear + Softmax -->
+      <div class="layer-block blk-linear" data-info="dec-linear">
+        <div class="block-header">
+          <span class="block-name" style="color:#aaa;">Linear + Softmax</span>
+          <span class="expand-icon">&#9654;</span>
+        </div>
+        <div class="details">
+          <div class="formula">P(next token) = softmax(h_T * W_vocab + bias)</div>
+          Projects the decoder's final hidden state to vocabulary size <code>(512 -&gt; |V|)</code>, then softmax produces a probability distribution over all tokens. The weight matrix is often <strong>tied</strong> with the embedding matrix (weight tying), halving vocabulary-related parameters.
+        </div>
+      </div>
+
+      <div class="flow-arrow animated">&#8593;</div>
+      <div class="repeat-badge"><span>x 6 layers</span></div>
+
+      <!-- Add & Norm (post-FFN) -->
+      <div class="layer-block blk-norm" data-info="dec-addnorm3">
+        <div class="block-header">
+          <span class="block-name">Add & Norm</span>
+          <span class="expand-icon">&#9654;</span>
+        </div>
+        <div class="details">
+          <div class="formula">output = LayerNorm(x + FFN(x))</div>
+          Same structure as encoder. Residual + layer norm after the FFN sub-layer.
+        </div>
+      </div>
+
+      <div class="flow-arrow">&#8593;</div>
+
+      <!-- FFN -->
+      <div class="layer-block blk-ffn" data-info="dec-ffn">
+        <div class="block-header">
+          <span class="block-name">Feed-Forward Network</span>
+          <span class="block-meta">d_ff=2048</span>
+          <span class="expand-icon">&#9654;</span>
+        </div>
+        <div class="details">
+          <div class="formula">FFN(x) = ReLU(xW1 + b1)W2 + b2</div>
+          Identical structure to encoder FFN. Position-wise: each token position processed independently. The expand-then-compress pattern (512 -&gt; 2048 -&gt; 512) lets the network compute in a higher-dimensional space before projecting back.
+        </div>
+      </div>
+
+      <div class="flow-arrow">&#8593;</div>
+
+      <!-- Add & Norm (post-cross-attention) -->
+      <div class="layer-block blk-norm" data-info="dec-addnorm2">
+        <div class="block-header">
+          <span class="block-name">Add & Norm</span>
+          <span class="expand-icon">&#9654;</span>
+        </div>
+        <div class="details">
+          <div class="formula">output = LayerNorm(x + CrossAttn(x, enc_output))</div>
+          Residual connection preserves decoder state; cross-attention output is added on top.
+        </div>
+      </div>
+
+      <div class="flow-arrow">&#8593;</div>
+
+      <!-- Cross-Attention -->
+      <div class="layer-block blk-cross" data-info="dec-crossattn">
+        <div class="block-header">
+          <span class="block-name">Multi-Head Cross-Attention</span>
+          <span class="block-meta">Q: decoder, K/V: encoder</span>
+          <span class="expand-icon">&#9654;</span>
+        </div>
+        <div class="details">
+          <div class="formula">CrossAttn = softmax(Q_dec * K_enc^T / sqrt(d_k)) * V_enc</div>
+          This is how the decoder "reads" the source sequence:
+          <ul>
+            <li><strong>Queries</strong> come from the decoder's previous sub-layer</li>
+            <li><strong>Keys and Values</strong> come from the encoder's final output</li>
+            <li>No masking — decoder can attend to all source positions</li>
+            <li>Encoder output is computed <strong>once</strong> and reused at every decoder layer and every decoding step</li>
+            <li>Same h=8 heads, d_k=64 structure as self-attention</li>
+          </ul>
+          This is the mechanism that was entirely eliminated in decoder-only models (GPT), where the "source" is simply prepended to the same sequence.
+        </div>
+      </div>
+
+      <div class="flow-arrow">&#8593;</div>
+
+      <!-- Add & Norm (post-masked-self-attention) -->
+      <div class="layer-block blk-norm" data-info="dec-addnorm1">
+        <div class="block-header">
+          <span class="block-name">Add & Norm</span>
+          <span class="expand-icon">&#9654;</span>
+        </div>
+        <div class="details">
+          <div class="formula">output = LayerNorm(x + MaskedSelfAttn(x))</div>
+          Residual + layer norm after masked self-attention.
+        </div>
+      </div>
+
+      <div class="flow-arrow">&#8593;</div>
+
+      <!-- Masked Self-Attention -->
+      <div class="layer-block blk-attn" data-info="dec-maskedattn">
+        <div class="block-header">
+          <span class="block-name">Masked Multi-Head Self-Attention</span>
+          <span class="block-meta">causal mask</span>
+          <span class="expand-icon">&#9654;</span>
+        </div>
+        <div class="details">
+          <div class="formula">Mask[i,j] = 0 if j &lt;= i, else -inf
+Attn = softmax((QK^T + Mask) / sqrt(d_k)) V</div>
+          <strong>Causal (autoregressive)</strong> — each position can only attend to itself and earlier positions. The mask sets future positions to <code>-inf</code> before softmax, zeroing their attention weights.
+          <ul>
+            <li>Prevents information leakage from future tokens during training</li>
+            <li>At inference time, decoding is sequential: generate one token at a time</li>
+            <li>This is the same mechanism used in decoder-only LLMs (GPT, LLaMA, Claude)</li>
+          </ul>
+        </div>
+      </div>
+
+      <div class="flow-arrow animated">&#8593;</div>
+
+      <!-- Output Embedding + PE -->
+      <div class="layer-block blk-embed" data-info="dec-embed">
+        <div class="block-header">
+          <span class="block-name" style="color:#aaa;">Output Embedding + Positional Encoding</span>
+          <span class="expand-icon">&#9654;</span>
+        </div>
+        <div class="details">
+          Target tokens (shifted right by one position) are embedded and summed with sinusoidal positional encodings, identical to the encoder. During training, the full target sequence is processed in parallel with the causal mask enforcing autoregression. During inference, tokens are generated one at a time.
+        </div>
+      </div>
+
+      <div class="flow-arrow animated">&#8593;</div>
+      <div style="text-align:center; color:#666; font-size:12px;">Target tokens (e.g., English, shifted right)</div>
+
+    </div>
+  </div>
+
+</div>
+
+<!-- Legend -->
+<div class="legend">
+  <div class="legend-item">
+    <div class="legend-swatch" style="background:#1a1a3e; border:1px dashed #e94560;"></div>
+    <span>Self-Attention</span>
+  </div>
+  <div class="legend-item">
+    <div class="legend-swatch" style="background:#1a1a3e; border:1px dashed #4ecdc4;"></div>
+    <span>Cross-Attention</span>
+  </div>
+  <div class="legend-item">
+    <div class="legend-swatch" style="background:#1a1a3e; border:1px dashed #ffd93d;"></div>
+    <span>Feed-Forward Network</span>
+  </div>
+  <div class="legend-item">
+    <div class="legend-swatch" style="background:#0f3460;"></div>
+    <span>Add & Norm</span>
+  </div>
+  <div class="legend-item">
+    <div class="legend-swatch" style="background:#0a2040;"></div>
+    <span>Embedding / Output</span>
+  </div>
+</div>
+
+<div class="info-bar">
+  <strong>Base model parameters:</strong> d_model=512, h=8 heads, d_k=d_v=64, d_ff=2048, 6 encoder + 6 decoder layers = ~65M params total.<br>
+  The encoder computes a bidirectional representation of the source; the decoder autoregressively generates the target,
+  attending to both its own past tokens (masked self-attention) and the full source (cross-attention).
+</div>
+
+<script>
+document.querySelectorAll('.layer-block').forEach(block => {
+  block.addEventListener('click', function(e) {
+    document.querySelectorAll('.layer-block.expanded').forEach(other => {
+      if (other !== this) other.classList.remove('expanded');
+    });
+    this.classList.toggle('expanded');
+  });
+});
+</script>
+
+</body>
+</html>

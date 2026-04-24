@@ -1,0 +1,174 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>iRoPE: Interleaved Position-Aware and Position-Free Layers</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { background: #0f0f1a; color: #e0e0e0; font-family: 'Segoe UI', system-ui, sans-serif; padding: 24px; }
+h1 { font-size: 20px; margin-bottom: 8px; color: #fff; }
+.subtitle { font-size: 13px; color: #888; margin-bottom: 24px; }
+.main-layout { display: flex; gap: 24px; flex-wrap: wrap; }
+.model-column { flex: 1; min-width: 280px; background: #1a1a2e; border-radius: 12px; padding: 20px; }
+.model-column h2 { font-size: 15px; margin-bottom: 4px; }
+.model-column .model-desc { font-size: 11px; color: #888; margin-bottom: 16px; }
+.layer-stack { display: flex; flex-direction: column; gap: 4px; }
+.layer {
+  display: flex; align-items: center; gap: 10px;
+  padding: 8px 12px; border-radius: 6px; font-size: 12px;
+  transition: all 0.3s ease; cursor: pointer;
+}
+.layer:hover { transform: translateX(4px); }
+.layer .layer-num { width: 28px; text-align: right; color: #666; font-size: 10px; font-variant-numeric: tabular-nums; }
+.layer .layer-type { flex: 1; font-weight: bold; }
+.layer .layer-info { font-size: 10px; color: #999; }
+.layer.rope { background: #1e2a4a; border-left: 3px solid #4ecdc4; }
+.layer.rope .layer-type { color: #4ecdc4; }
+.layer.nope { background: #2a1e2e; border-left: 3px solid #e94560; }
+.layer.nope .layer-type { color: #e94560; }
+.layer.local { background: #1e2a3a; border-left: 3px solid #ffd93d; }
+.layer.local .layer-type { color: #ffd93d; }
+.layer.global { background: #1e3a2a; border-left: 3px solid #4ecdc4; }
+.layer.global .layer-type { color: #4ecdc4; }
+.layer.standard { background: #1e2a4a; border-left: 3px solid #888; }
+.layer.standard .layer-type { color: #ccc; }
+.info-panel { background: #1a1a2e; border-radius: 12px; padding: 20px; margin-top: 20px; }
+.info-panel h2 { font-size: 15px; color: #e94560; margin-bottom: 12px; }
+.info-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 16px; }
+.info-card { background: #16213e; border-radius: 8px; padding: 16px; }
+.info-card h3 { font-size: 13px; margin-bottom: 8px; }
+.info-card p { font-size: 12px; color: #999; line-height: 1.6; }
+.info-card.pos-aware h3 { color: #4ecdc4; }
+.info-card.pos-free h3 { color: #e94560; }
+.info-card.local-card h3 { color: #ffd93d; }
+.info-card.global-card h3 { color: #4ecdc4; }
+.stats-row { display: flex; gap: 16px; margin-top: 12px; flex-wrap: wrap; }
+.stat { background: #16213e; border-radius: 8px; padding: 12px 16px; text-align: center; }
+.stat .stat-value { font-size: 22px; font-weight: bold; }
+.stat .stat-label { font-size: 10px; color: #888; text-transform: uppercase; letter-spacing: 0.5px; margin-top: 4px; }
+.stat.green .stat-value { color: #4ecdc4; }
+.stat.red .stat-value { color: #e94560; }
+.stat.yellow .stat-value { color: #ffd93d; }
+.token-path { background: #1a1a2e; border-radius: 12px; padding: 20px; margin-top: 20px; }
+.token-path h2 { font-size: 15px; color: #ffd93d; margin-bottom: 12px; }
+.path-vis { display: flex; align-items: center; gap: 8px; overflow-x: auto; padding: 10px 0; flex-wrap: wrap; }
+.path-node { padding: 8px 14px; border-radius: 6px; font-size: 11px; font-weight: bold; white-space: nowrap; }
+.path-arrow { color: #666; font-size: 16px; }
+.path-node.rope-node { background: #1e2a4a; color: #4ecdc4; border: 1px solid #4ecdc4; }
+.path-node.nope-node { background: #2a1e2e; color: #e94560; border: 1px solid #e94560; }
+</style>
+</head>
+<body>
+
+<h1>iRoPE vs Hybrid SWA: Layer Specialization Strategies</h1>
+<p class="subtitle">How Llama 4 (iRoPE) and Gemma 3 (local/global hybrid) specialize attention layers for long context</p>
+
+<div class="main-layout">
+  <!-- Standard Transformer -->
+  <div class="model-column">
+    <h2 style="color:#888;">Standard Transformer</h2>
+    <p class="model-desc">Every layer uses RoPE. All layers are position-dependent.</p>
+    <div class="stats-row">
+      <div class="stat"><div class="stat-value" style="color:#888;">100%</div><div class="stat-label">Position-dependent</div></div>
+      <div class="stat"><div class="stat-value" style="color:#888;">~4x</div><div class="stat-label">Max extension</div></div>
+    </div>
+    <div class="layer-stack" style="margin-top: 12px;">
+      <div class="layer standard"><span class="layer-num">L8</span><span class="layer-type">RoPE Attention</span><span class="layer-info">full context</span></div>
+      <div class="layer standard"><span class="layer-num">L7</span><span class="layer-type">RoPE Attention</span><span class="layer-info">full context</span></div>
+      <div class="layer standard"><span class="layer-num">L6</span><span class="layer-type">RoPE Attention</span><span class="layer-info">full context</span></div>
+      <div class="layer standard"><span class="layer-num">L5</span><span class="layer-type">RoPE Attention</span><span class="layer-info">full context</span></div>
+      <div class="layer standard"><span class="layer-num">L4</span><span class="layer-type">RoPE Attention</span><span class="layer-info">full context</span></div>
+      <div class="layer standard"><span class="layer-num">L3</span><span class="layer-type">RoPE Attention</span><span class="layer-info">full context</span></div>
+      <div class="layer standard"><span class="layer-num">L2</span><span class="layer-type">RoPE Attention</span><span class="layer-info">full context</span></div>
+      <div class="layer standard"><span class="layer-num">L1</span><span class="layer-type">RoPE Attention</span><span class="layer-info">full context</span></div>
+    </div>
+  </div>
+
+  <!-- iRoPE (Llama 4) -->
+  <div class="model-column">
+    <h2 style="color:#4ecdc4;">iRoPE (Llama 4 Scout)</h2>
+    <p class="model-desc">Interleaves RoPE layers with position-free (NoPE) layers. Enables 256K to 10M extension.</p>
+    <div class="stats-row">
+      <div class="stat green"><div class="stat-value">~50%</div><div class="stat-label">Position-free</div></div>
+      <div class="stat red"><div class="stat-value">39x</div><div class="stat-label">Extension ratio</div></div>
+    </div>
+    <div class="layer-stack" style="margin-top: 12px;">
+      <div class="layer rope"><span class="layer-num">L8</span><span class="layer-type">RoPE Layer</span><span class="layer-info">position-aware + temp scaling</span></div>
+      <div class="layer nope"><span class="layer-num">L7</span><span class="layer-type">NoPE Layer</span><span class="layer-info">content-only, length-invariant</span></div>
+      <div class="layer rope"><span class="layer-num">L6</span><span class="layer-type">RoPE Layer</span><span class="layer-info">position-aware + temp scaling</span></div>
+      <div class="layer nope"><span class="layer-num">L5</span><span class="layer-type">NoPE Layer</span><span class="layer-info">content-only, length-invariant</span></div>
+      <div class="layer rope"><span class="layer-num">L4</span><span class="layer-type">RoPE Layer</span><span class="layer-info">position-aware + temp scaling</span></div>
+      <div class="layer nope"><span class="layer-num">L3</span><span class="layer-type">NoPE Layer</span><span class="layer-info">content-only, length-invariant</span></div>
+      <div class="layer rope"><span class="layer-num">L2</span><span class="layer-type">RoPE Layer</span><span class="layer-info">position-aware + temp scaling</span></div>
+      <div class="layer nope"><span class="layer-num">L1</span><span class="layer-type">NoPE Layer</span><span class="layer-info">content-only, length-invariant</span></div>
+    </div>
+  </div>
+
+  <!-- Gemma 3 Hybrid -->
+  <div class="model-column">
+    <h2 style="color:#ffd93d;">Hybrid SWA (Gemma 3)</h2>
+    <p class="model-desc">5:1 local (SWA, W=1024) to global layers. Dual RoPE frequencies.</p>
+    <div class="stats-row">
+      <div class="stat yellow"><div class="stat-value">83%</div><div class="stat-label">Local (SWA)</div></div>
+      <div class="stat green"><div class="stat-value">&lt;15%</div><div class="stat-label">KV cache overhead</div></div>
+    </div>
+    <div class="layer-stack" style="margin-top: 12px;">
+      <div class="layer local"><span class="layer-num">L12</span><span class="layer-type">Local SWA</span><span class="layer-info">W=1024, base=10K</span></div>
+      <div class="layer local"><span class="layer-num">L11</span><span class="layer-type">Local SWA</span><span class="layer-info">W=1024, base=10K</span></div>
+      <div class="layer local"><span class="layer-num">L10</span><span class="layer-type">Local SWA</span><span class="layer-info">W=1024, base=10K</span></div>
+      <div class="layer local"><span class="layer-num">L9</span><span class="layer-type">Local SWA</span><span class="layer-info">W=1024, base=10K</span></div>
+      <div class="layer local"><span class="layer-num">L8</span><span class="layer-type">Local SWA</span><span class="layer-info">W=1024, base=10K</span></div>
+      <div class="layer global"><span class="layer-num">L7</span><span class="layer-type">Global Attention</span><span class="layer-info">full context, base=1M</span></div>
+      <div class="layer local"><span class="layer-num">L6</span><span class="layer-type">Local SWA</span><span class="layer-info">W=1024, base=10K</span></div>
+      <div class="layer local"><span class="layer-num">L5</span><span class="layer-type">Local SWA</span><span class="layer-info">W=1024, base=10K</span></div>
+      <div class="layer local"><span class="layer-num">L4</span><span class="layer-type">Local SWA</span><span class="layer-info">W=1024, base=10K</span></div>
+      <div class="layer local"><span class="layer-num">L3</span><span class="layer-type">Local SWA</span><span class="layer-info">W=1024, base=10K</span></div>
+      <div class="layer local"><span class="layer-num">L2</span><span class="layer-type">Local SWA</span><span class="layer-info">W=1024, base=10K</span></div>
+      <div class="layer global"><span class="layer-num">L1</span><span class="layer-type">Global Attention</span><span class="layer-info">full context, base=1M</span></div>
+    </div>
+  </div>
+</div>
+
+<div class="token-path">
+  <h2>Information Path: Token at Position 9,000,000 Attending to Token at Position 1,000,000 (iRoPE)</h2>
+  <div class="path-vis">
+    <div class="path-node nope-node">L1: NoPE<br>Content match (length-invariant)</div>
+    <div class="path-arrow">&rarr;</div>
+    <div class="path-node rope-node">L2: RoPE<br>Local structure (temp-scaled)</div>
+    <div class="path-arrow">&rarr;</div>
+    <div class="path-node nope-node">L3: NoPE<br>Semantic routing (length-invariant)</div>
+    <div class="path-arrow">&rarr;</div>
+    <div class="path-node rope-node">L4: RoPE<br>Position refinement</div>
+    <div class="path-arrow">&rarr;</div>
+    <div class="path-node nope-node">...</div>
+    <div class="path-arrow">&rarr;</div>
+    <div class="path-node rope-node">L8: RoPE<br>Final position-aware output</div>
+  </div>
+  <p style="font-size: 12px; color: #888; margin-top: 10px;">NoPE layers handle the 8M-position gap via pure content matching (no positional encoding to extrapolate). RoPE layers add positional structure with inference-time temperature scaling. The residual stream carries information between both layer types.</p>
+</div>
+
+<div class="info-panel">
+  <h2>Key Design Principles</h2>
+  <div class="info-grid">
+    <div class="info-card pos-aware">
+      <h3>RoPE Layers (Position-Aware)</h3>
+      <p>Handle tasks requiring positional knowledge: syntactic parsing, local coherence, counting, ordering. These layers know WHERE tokens are. In iRoPE, they use inference-time temperature scaling for extension. In Gemma 3, global layers use base=1M for long-range, local layers use base=10K.</p>
+    </div>
+    <div class="info-card pos-free">
+      <h3>NoPE Layers (Position-Free)</h3>
+      <p>Handle tasks requiring semantic matching: fact retrieval, reasoning, entity linking. These layers know WHAT tokens say but not where they are. They are inherently length-invariant &mdash; no positional encoding means no out-of-distribution positions at any length.</p>
+    </div>
+    <div class="info-card local-card">
+      <h3>Local SWA Layers</h3>
+      <p>Attend only within a fixed window (e.g., W=1024). KV cache is bounded regardless of sequence length. These handle the majority of processing &mdash; most language understanding is local. Use a different RoPE base optimized for the window size.</p>
+    </div>
+    <div class="info-card global-card">
+      <h3>Global Attention Layers</h3>
+      <p>Attend to the full context. These are expensive (full KV cache) but essential for cross-document reasoning and long-range retrieval. Used sparingly &mdash; 1 in 6 layers in Gemma 3. Use a high RoPE base (1M) to encode long-range relative positions.</p>
+    </div>
+  </div>
+</div>
+
+</body>
+</html>

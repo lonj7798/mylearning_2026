@@ -1,0 +1,254 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Gemma 3: Local/Global Attention Interleaving</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    background: #0f0f1a;
+    color: #e0e0e0;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    padding: 32px;
+    min-height: 100vh;
+  }
+  h1 { font-size: 22px; margin-bottom: 8px; color: #fff; }
+  .subtitle { color: #888; font-size: 14px; margin-bottom: 32px; }
+
+  .controls {
+    display: flex; gap: 16px; align-items: center;
+    margin-bottom: 24px; flex-wrap: wrap;
+  }
+  .controls label { font-size: 13px; color: #aaa; }
+  .controls select, .controls input[type=range] {
+    background: #1a1a2e; color: #e0e0e0; border: 1px solid #333;
+    border-radius: 6px; padding: 6px 10px; font-size: 13px;
+  }
+  .controls input[type=range] { width: 160px; }
+
+  .layer-stack {
+    display: flex; flex-direction: column; gap: 4px;
+    max-width: 900px; margin: 0 auto;
+  }
+  .layer-row {
+    display: flex; align-items: center; gap: 8px;
+    height: 32px; transition: all 0.3s ease;
+  }
+  .layer-label {
+    width: 70px; font-size: 12px; font-weight: 600;
+    text-align: right; flex-shrink: 0;
+  }
+  .layer-bar-container {
+    flex: 1; height: 28px; background: #16213e;
+    border-radius: 6px; overflow: hidden; position: relative;
+  }
+  .layer-bar {
+    height: 100%; border-radius: 6px;
+    transition: width 0.5s ease;
+    display: flex; align-items: center; justify-content: flex-end;
+    padding-right: 8px; font-size: 11px; font-weight: 600;
+    min-width: 60px;
+  }
+  .layer-bar.local {
+    background: linear-gradient(90deg, #0f3460 0%, #1a5276 100%);
+    color: #4ecdc4;
+  }
+  .layer-bar.global {
+    background: linear-gradient(90deg, #5b2c6f 0%, #e94560 100%);
+    color: #fff;
+  }
+  .layer-type {
+    width: 60px; font-size: 11px; font-weight: 700;
+    flex-shrink: 0;
+  }
+  .layer-type.local { color: #4ecdc4; }
+  .layer-type.global { color: #e94560; }
+
+  .stats-panel {
+    display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+    gap: 16px; margin-top: 32px; max-width: 900px; margin-left: auto; margin-right: auto;
+  }
+  .stat-card {
+    background: #1a1a2e; border-radius: 10px; padding: 16px;
+    text-align: center;
+  }
+  .stat-value { font-size: 28px; font-weight: 800; margin-bottom: 4px; }
+  .stat-label { font-size: 12px; color: #888; }
+
+  .legend {
+    display: flex; gap: 24px; justify-content: center;
+    margin-top: 24px; font-size: 13px;
+  }
+  .legend-item { display: flex; align-items: center; gap: 6px; }
+  .legend-dot {
+    width: 14px; height: 14px; border-radius: 4px;
+  }
+  .legend-dot.local-dot { background: #1a5276; }
+  .legend-dot.global-dot { background: #e94560; }
+
+  .info-box {
+    max-width: 900px; margin: 32px auto 0;
+    background: #1a1a2e; border-radius: 10px; padding: 20px;
+    border-left: 4px solid #4ecdc4; font-size: 13px; line-height: 1.7;
+    color: #bbb;
+  }
+  .info-box strong { color: #4ecdc4; }
+
+  .rope-section {
+    max-width: 900px; margin: 24px auto 0;
+    display: grid; grid-template-columns: 1fr 1fr; gap: 16px;
+  }
+  .rope-card {
+    background: #1a1a2e; border-radius: 10px; padding: 16px;
+    text-align: center;
+  }
+  .rope-card h3 { font-size: 14px; margin-bottom: 8px; }
+  .rope-freq { font-size: 32px; font-weight: 800; }
+  .rope-card.local-rope h3 { color: #4ecdc4; }
+  .rope-card.local-rope .rope-freq { color: #4ecdc4; }
+  .rope-card.global-rope h3 { color: #e94560; }
+  .rope-card.global-rope .rope-freq { color: #e94560; }
+  .rope-detail { font-size: 11px; color: #888; margin-top: 6px; }
+</style>
+</head>
+<body>
+
+<h1>Gemma 3: Local/Global Attention Interleaving</h1>
+<p class="subtitle">5 local sliding-window layers for every 1 global full-attention layer</p>
+
+<div class="controls">
+  <label>Layers:
+    <select id="layerCount">
+      <option value="18">18 (1B-scale)</option>
+      <option value="26">26 (4B-scale)</option>
+      <option value="36">36 (12B-scale)</option>
+      <option value="46" selected>46 (27B-scale)</option>
+    </select>
+  </label>
+  <label>Sequence length:
+    <input type="range" id="seqLen" min="1024" max="131072" step="1024" value="131072">
+    <span id="seqLenLabel">128K</span>
+  </label>
+  <label>Window size:
+    <select id="winSize">
+      <option value="512">512</option>
+      <option value="1024" selected>1,024 (Gemma 3)</option>
+      <option value="4096">4,096 (Mistral 7B)</option>
+    </select>
+  </label>
+</div>
+
+<div class="legend">
+  <div class="legend-item"><div class="legend-dot local-dot"></div> Local (sliding window)</div>
+  <div class="legend-item"><div class="legend-dot global-dot"></div> Global (full attention)</div>
+</div>
+
+<div class="layer-stack" id="layerStack"></div>
+
+<div class="stats-panel" id="statsPanel">
+  <div class="stat-card">
+    <div class="stat-value" id="statGlobal" style="color:#e94560;">--</div>
+    <div class="stat-label">Global layers</div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-value" id="statLocal" style="color:#4ecdc4;">--</div>
+    <div class="stat-label">Local layers</div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-value" id="statCache" style="color:#ffd93d;">--</div>
+    <div class="stat-label">KV cache vs all-global</div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-value" id="statRatio" style="color:#fff;">--</div>
+    <div class="stat-label">Local:Global ratio</div>
+  </div>
+</div>
+
+<div class="rope-section">
+  <div class="rope-card local-rope">
+    <h3>Local Layers RoPE Base</h3>
+    <div class="rope-freq">10K</div>
+    <div class="rope-detail">Optimized for 1,024-token window<br>High angular resolution for nearby tokens</div>
+  </div>
+  <div class="rope-card global-rope">
+    <h3>Global Layers RoPE Base</h3>
+    <div class="rope-freq">1M</div>
+    <div class="rope-detail">Covers full 128K context<br>Fine positional discrimination at long range</div>
+  </div>
+</div>
+
+<div class="info-box">
+  <strong>How information flows:</strong> Global layers (red) read the full context and write long-range information into the residual stream. The subsequent 5 local layers (blue) access that information not by attending to distant tokens directly, but by reading what the previous global layer deposited. Each global layer acts as a "refresh point" for long-range dependencies.
+</div>
+
+<script>
+function render() {
+  const L = parseInt(document.getElementById('layerCount').value);
+  const S = parseInt(document.getElementById('seqLen').value);
+  const W = parseInt(document.getElementById('winSize').value);
+
+  const stack = document.getElementById('layerStack');
+  stack.innerHTML = '';
+
+  let globalCount = 0;
+  let localCount = 0;
+
+  for (let i = 0; i < L; i++) {
+    const isGlobal = (i % 6 === 5);
+    if (isGlobal) globalCount++; else localCount++;
+
+    const row = document.createElement('div');
+    row.className = 'layer-row';
+
+    const label = document.createElement('div');
+    label.className = 'layer-label';
+    label.textContent = 'Layer ' + i;
+
+    const barContainer = document.createElement('div');
+    barContainer.className = 'layer-bar-container';
+
+    const bar = document.createElement('div');
+    bar.className = 'layer-bar ' + (isGlobal ? 'global' : 'local');
+    const widthPct = isGlobal ? 100 : Math.max(5, (W / S) * 100);
+    bar.style.width = widthPct + '%';
+    bar.textContent = isGlobal ? S.toLocaleString() + ' tokens' : W.toLocaleString() + ' tokens';
+    barContainer.appendChild(bar);
+
+    const typeLabel = document.createElement('div');
+    typeLabel.className = 'layer-type ' + (isGlobal ? 'global' : 'local');
+    typeLabel.textContent = isGlobal ? 'GLOBAL' : 'LOCAL';
+
+    row.appendChild(label);
+    row.appendChild(barContainer);
+    row.appendChild(typeLabel);
+    stack.appendChild(row);
+  }
+
+  // Stats
+  document.getElementById('statGlobal').textContent = globalCount;
+  document.getElementById('statLocal').textContent = localCount;
+
+  const allGlobalCache = L * S;
+  const hybridCache = globalCount * S + localCount * W;
+  const pct = ((hybridCache / allGlobalCache) * 100).toFixed(1);
+  document.getElementById('statCache').textContent = pct + '%';
+
+  const ratio = globalCount > 0 ? (localCount / globalCount).toFixed(1) : '--';
+  document.getElementById('statRatio').textContent = ratio + ':1';
+}
+
+function updateSeqLabel() {
+  const v = parseInt(document.getElementById('seqLen').value);
+  document.getElementById('seqLenLabel').textContent =
+    v >= 1024 ? (v / 1024).toFixed(0) + 'K' : v;
+}
+
+document.getElementById('layerCount').addEventListener('change', render);
+document.getElementById('seqLen').addEventListener('input', () => { updateSeqLabel(); render(); });
+document.getElementById('winSize').addEventListener('change', render);
+
+render();
+</script>
+</body>
+</html>

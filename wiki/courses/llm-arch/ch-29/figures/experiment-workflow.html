@@ -1,0 +1,428 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Architecture Experiment Design Workflow</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body {
+  background: #0d1117;
+  color: #e0e0e0;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  min-height: 100vh;
+  padding: 40px 20px;
+}
+h1 {
+  text-align: center;
+  font-size: 22px;
+  color: #f0f0f0;
+  margin-bottom: 8px;
+}
+.subtitle {
+  text-align: center;
+  font-size: 13px;
+  color: #888;
+  margin-bottom: 40px;
+}
+.workflow {
+  max-width: 800px;
+  margin: 0 auto;
+  position: relative;
+}
+.phase {
+  position: relative;
+  margin-bottom: 12px;
+  cursor: pointer;
+  transition: transform 0.15s;
+}
+.phase:hover { transform: translateX(4px); }
+.phase-box {
+  display: flex;
+  align-items: stretch;
+  border-radius: 10px;
+  overflow: hidden;
+  border: 1px solid #21262d;
+  transition: border-color 0.2s, box-shadow 0.2s;
+}
+.phase:hover .phase-box {
+  border-color: #58a6ff;
+  box-shadow: 0 0 12px rgba(88, 166, 255, 0.15);
+}
+.phase.active .phase-box {
+  border-color: #58a6ff;
+  box-shadow: 0 0 20px rgba(88, 166, 255, 0.25);
+}
+.phase-num {
+  width: 56px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 20px;
+  font-weight: 700;
+  color: #fff;
+  flex-shrink: 0;
+}
+.phase-content {
+  flex: 1;
+  padding: 16px 20px;
+  background: #161b22;
+}
+.phase-title {
+  font-size: 15px;
+  font-weight: 600;
+  color: #f0f0f0;
+  margin-bottom: 4px;
+}
+.phase-summary {
+  font-size: 12px;
+  color: #8b949e;
+  line-height: 1.5;
+}
+.phase-detail {
+  display: none;
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid #21262d;
+  font-size: 12px;
+  color: #c9d1d9;
+  line-height: 1.7;
+}
+.phase.active .phase-detail { display: block; }
+.phase-detail strong { color: #58a6ff; }
+.phase-detail .example {
+  background: #0d1117;
+  border: 1px solid #21262d;
+  border-radius: 6px;
+  padding: 10px 14px;
+  margin-top: 8px;
+  font-size: 11px;
+  color: #8b949e;
+}
+.phase-detail .example em { color: #f0883e; font-style: normal; }
+
+/* Arrow connectors */
+.arrow {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 28px;
+  position: relative;
+}
+.arrow::before {
+  content: '';
+  width: 2px;
+  height: 100%;
+  background: #21262d;
+  position: absolute;
+  left: 27px;
+}
+.arrow-head {
+  width: 0; height: 0;
+  border-left: 6px solid transparent;
+  border-right: 6px solid transparent;
+  border-top: 8px solid #30363d;
+  position: absolute;
+  left: 22px;
+  bottom: 0;
+}
+
+/* Decision diamond */
+.decision {
+  position: relative;
+  margin-bottom: 12px;
+}
+.decision-box {
+  max-width: 600px;
+  margin: 0 auto;
+  background: #1c1e26;
+  border: 2px solid #f0883e;
+  border-radius: 10px;
+  padding: 14px 20px;
+  text-align: center;
+}
+.decision-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: #f0883e;
+  margin-bottom: 6px;
+}
+.decision-options {
+  display: flex;
+  justify-content: center;
+  gap: 24px;
+  margin-top: 8px;
+}
+.option {
+  font-size: 11px;
+  padding: 4px 12px;
+  border-radius: 12px;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+.option.negative {
+  background: rgba(248, 81, 73, 0.15);
+  color: #f85149;
+  border: 1px solid #f8514933;
+}
+.option.negative:hover {
+  background: rgba(248, 81, 73, 0.3);
+}
+.option.ambiguous {
+  background: rgba(240, 136, 62, 0.15);
+  color: #f0883e;
+  border: 1px solid #f0883e33;
+}
+.option.ambiguous:hover {
+  background: rgba(240, 136, 62, 0.3);
+}
+.option.positive {
+  background: rgba(63, 185, 80, 0.15);
+  color: #3fb950;
+  border: 1px solid #3fb95033;
+}
+.option.positive:hover {
+  background: rgba(63, 185, 80, 0.3);
+}
+
+/* Colors per phase */
+.p1 .phase-num { background: #8b5cf6; }
+.p2 .phase-num { background: #6366f1; }
+.p3 .phase-num { background: #3b82f6; }
+.p4 .phase-num { background: #0ea5e9; }
+.p5 .phase-num { background: #14b8a6; }
+.p6 .phase-num { background: #22c55e; }
+.p7 .phase-num { background: #eab308; }
+
+.legend {
+  max-width: 800px;
+  margin: 40px auto 0;
+  padding: 16px 20px;
+  background: #161b22;
+  border: 1px solid #21262d;
+  border-radius: 10px;
+  font-size: 12px;
+  color: #8b949e;
+  line-height: 1.7;
+}
+.legend strong { color: #c9d1d9; }
+</style>
+</head>
+<body>
+<h1>Architecture Experiment Design Workflow</h1>
+<p class="subtitle">Click each phase to expand details and examples. References: OLMo 2, Flash Attention, Chinchilla, DeepSeek-V3.</p>
+
+<div class="workflow">
+
+<!-- Phase 1 -->
+<div class="phase p1" onclick="toggle(this)">
+  <div class="phase-box">
+    <div class="phase-num">1</div>
+    <div class="phase-content">
+      <div class="phase-title">Observe Bottleneck</div>
+      <div class="phase-summary">Profile the system. Identify a specific, measurable gap between current and achievable performance.</div>
+      <div class="phase-detail">
+        <strong>Key questions:</strong> Where is compute wasted? Where is memory the constraint? What is the gap between actual and theoretical throughput?<br><br>
+        <strong>Tools:</strong> GPU profilers (NSight, PyTorch Profiler), memory breakdowns, roofline analysis, arithmetic intensity calculations.<br>
+        <div class="example">
+          <em>Flash Attention:</em> "Standard attention achieves 25-40% of peak FLOPs/s on A100. The N x N attention matrix is materialized in HBM (2 TB/s) when SRAM offers 19 TB/s."<br><br>
+          <em>Chinchilla:</em> "Kaplan's scaling laws predict allocating most compute to model size, but our fresh fits suggest data should scale equally."<br><br>
+          <em>DeepSeek-V2:</em> "MHA stores 32,768 dims per token in KV cache. Cross-head redundancy analysis shows information content fits in ~576 dims."
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="arrow"><div class="arrow-head"></div></div>
+
+<!-- Phase 2 -->
+<div class="phase p2" onclick="toggle(this)">
+  <div class="phase-box">
+    <div class="phase-num">2</div>
+    <div class="phase-content">
+      <div class="phase-title">Form Hypothesis</div>
+      <div class="phase-summary">Bottleneck + proposed modification + falsifiable prediction = hypothesis.</div>
+      <div class="phase-detail">
+        <strong>Template:</strong><br>
+        (1) "The current approach to [X] wastes [resource] because [mechanism]."<br>
+        (2) "Replacing [X] with [Y] should reduce [resource] because [reasoning]."<br>
+        (3) "At [scale], this should improve [metric] by ~[amount] with [tradeoff] as cost."<br>
+        <div class="example">
+          <em>MLA hypothesis:</em> "MHA stores redundant KV heads. Compressing to low-rank latent (d_c=512) should reduce cache 93% while preserving quality, because the bottleneck regularizes representations."
+        </div>
+        <strong>Sanity check:</strong> Does this violate any known theoretical constraint? Is the predicted effect size plausible? Would a domain expert find the reasoning convincing?
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="arrow"><div class="arrow-head"></div></div>
+
+<!-- Phase 3 -->
+<div class="phase p3" onclick="toggle(this)">
+  <div class="phase-box">
+    <div class="phase-num">3</div>
+    <div class="phase-content">
+      <div class="phase-title">Small-Scale Ablation</div>
+      <div class="phase-summary">1B parameters, 10-50B tokens, 3 seeds. One variable changed vs baseline. Explicit matching criterion.</div>
+      <div class="phase-detail">
+        <strong>Matching criteria (choose one, report it):</strong><br>
+        - FLOPs-matched: same total training FLOPs<br>
+        - Parameter-matched: same parameter count<br>
+        - Wall-clock-matched: same training time on same hardware<br><br>
+        <strong>OLMo 2 example:</strong> Each architectural choice (RMSNorm, RoPE, QK-norm, Z-loss) tested independently against OLMo 1 baseline with same training tokens and model size. Cumulative ablations reveal interaction effects.
+        <div class="example">
+          <em>Minimum viable ablation table:</em><br>
+          | Config | Change | Loss | vs Baseline |<br>
+          | A (baseline) | None | 2.847 | -- |<br>
+          | B | +RMSNorm | 2.831 | -0.016 |<br>
+          | C | +RoPE | 2.819 | -0.028 |<br>
+          | D | +QK-norm | 2.845 | -0.002 |<br>
+          (Each row differs from A in exactly one way)
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="arrow"><div class="arrow-head"></div></div>
+
+<!-- Decision point -->
+<div class="decision">
+  <div class="decision-box">
+    <div class="decision-title">Evaluate Small-Scale Results</div>
+    <div class="decision-options">
+      <div class="option negative">Negative: revise or abandon</div>
+      <div class="option ambiguous">Ambiguous: more seeds / larger scale</div>
+      <div class="option positive">Positive: proceed to scaling</div>
+    </div>
+  </div>
+</div>
+
+<div class="arrow"><div class="arrow-head"></div></div>
+
+<!-- Phase 4 -->
+<div class="phase p4" onclick="toggle(this)">
+  <div class="phase-box">
+    <div class="phase-num">4</div>
+    <div class="phase-content">
+      <div class="phase-title">Scaling Plot</div>
+      <div class="phase-summary">3-5 model sizes on log-log axes. Fit power laws. Check if curves diverge, converge, or cross.</div>
+      <div class="phase-detail">
+        <strong>Procedure:</strong><br>
+        1. Train baseline and variant at 125M, 350M, 760M, 1.3B, 2.7B<br>
+        2. Plot validation loss (log) vs FLOPs or parameters (log)<br>
+        3. Fit L(C) = alpha * C^(-beta) + L_inf to each curve<br>
+        4. Extrapolate to target scale (e.g., 70B)<br><br>
+        <strong>Interpretation:</strong><br>
+        - <em>Persistent gap:</em> Strong evidence for large scale (Chinchilla pattern)<br>
+        - <em>Converging:</em> Modification may not matter at target size<br>
+        - <em>Crossing:</em> Informative but dangerous - verify the crossing point is real<br>
+        - <em>Diverging:</em> Modification becomes MORE valuable at scale (MLA pattern)
+        <div class="example">
+          <em>Chinchilla:</em> Three independent methodologies (IsoFLOP profiles, IsoLoss contours, parametric loss fitting) all predicted the same optimal ratio. This cross-validation is the gold standard.
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="arrow"><div class="arrow-head"></div></div>
+
+<!-- Phase 5 -->
+<div class="phase p5" onclick="toggle(this)">
+  <div class="phase-box">
+    <div class="phase-num">5</div>
+    <div class="phase-content">
+      <div class="phase-title">Full-Scale Validation</div>
+      <div class="phase-summary">Run at target scale. Evaluate on diverse benchmark suite. Compare to named baselines.</div>
+      <div class="phase-detail">
+        <strong>Requirements:</strong><br>
+        - Diverse evaluation: knowledge, reasoning, code, math, instruction-following<br>
+        - Named baselines: compare to specific published models, not "prior work"<br>
+        - Multiple axes: quality, speed, memory, implementation complexity<br>
+        - Error bars where feasible (multiple seeds at this scale are expensive)<br><br>
+        <strong>Watch for:</strong><br>
+        - Benchmark overfitting (helps MMLU, hurts generation)<br>
+        - Proxy-task failures (4K training says nothing about 128K behavior)<br>
+        - Implementation confounds (speedup from kernels, not architecture)
+        <div class="example">
+          <em>OLMo 2:</em> OLMES framework with 20 benchmarks across knowledge recall, commonsense, general reasoning, and math. All artifacts released for independent verification.
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="arrow"><div class="arrow-head"></div></div>
+
+<!-- Phase 6 -->
+<div class="phase p6" onclick="toggle(this)">
+  <div class="phase-box">
+    <div class="phase-num">6</div>
+    <div class="phase-content">
+      <div class="phase-title">Analysis & Interpretation</div>
+      <div class="phase-summary">Explain WHY it works, not just THAT it works. Identify limitations and failure modes.</div>
+      <div class="phase-detail">
+        <strong>Go beyond numbers:</strong><br>
+        - Flash Attention: IO complexity analysis proving O(N^2 d^2/M) HBM accesses<br>
+        - Chinchilla: explaining why Kaplan's exponents were wrong (suboptimal LRs per scale)<br>
+        - DeepSeek-V2: low-rank bottleneck as regularizer hypothesis<br><br>
+        <strong>Mandatory limitations section:</strong><br>
+        (1) Where does the modification NOT help?<br>
+        (2) What does it cost (complexity, kernels, training overhead)?<br>
+        (3) What assumptions must hold for the claims to be valid?
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="arrow"><div class="arrow-head"></div></div>
+
+<!-- Phase 7 -->
+<div class="phase p7" onclick="toggle(this)">
+  <div class="phase-box">
+    <div class="phase-num">7</div>
+    <div class="phase-content">
+      <div class="phase-title">Write Up & Release</div>
+      <div class="phase-summary">Motivation with numbers. Method reproducible from text alone. Explicit baselines. Limitations. Code release.</div>
+      <div class="phase-detail">
+        <strong>Paper structure:</strong><br>
+        1. Motivation (quantified bottleneck, 1-2 paragraphs)<br>
+        2. Method (equations, pseudocode, figures - implementable from paper alone)<br>
+        3. Experimental setup (everything needed to reproduce)<br>
+        4. Results (ablation tables, scaling plots, diverse benchmarks)<br>
+        5. Analysis (why it works, not just that it works)<br>
+        6. Limitations (where it fails, what it costs, what assumptions hold)<br><br>
+        <strong>Honesty signals:</strong> negative results reported, multiple evaluation axes, current baselines (not strawmen), error bars, code release.
+        <div class="example">
+          <em>DeepSeek-V3:</em> Reports $5.6M total training cost prominently. Each component (MLA, aux-loss-free balancing, MTP) gets independent ablation. Compares to specific named models. Acknowledges custom kernel requirement.
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+</div>
+
+<div class="legend">
+  <strong>How to use this diagram:</strong> This represents the idealized linear flow. In practice, the workflow is iterative:
+  negative results at Phase 3 loop back to Phase 2 (revise hypothesis); ambiguous results may require more data or seeds;
+  full-scale validation may reveal issues that require new small-scale ablations. The key discipline is spending more time on
+  Phases 1-2 (observation and hypothesis) than on Phases 3-5 (running experiments). GPU time is expensive; thinking time is free.
+</div>
+
+<script>
+function toggle(el) {
+  const wasActive = el.classList.contains('active');
+  document.querySelectorAll('.phase').forEach(p => p.classList.remove('active'));
+  if (!wasActive) el.classList.add('active');
+}
+// Auto-expand first phase on load
+document.addEventListener('DOMContentLoaded', () => {
+  document.querySelector('.phase').classList.add('active');
+});
+</script>
+</body>
+</html>

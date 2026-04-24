@@ -1,0 +1,455 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>OLMo 2: Ablation Results — What Actually Matters</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    background: #0f0f1a;
+    color: #e0e0e0;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    padding: 32px;
+    min-height: 100vh;
+  }
+  h1 { font-size: 22px; color: #fff; margin-bottom: 4px; }
+  .subtitle { font-size: 13px; color: #888; margin-bottom: 32px; }
+
+  /* Filter controls */
+  .filters {
+    display: flex;
+    gap: 8px;
+    margin-bottom: 24px;
+    flex-wrap: wrap;
+  }
+  .filter-btn {
+    background: #1e1e3a;
+    border: 1px solid #333;
+    color: #e0e0e0;
+    padding: 6px 14px;
+    border-radius: 6px;
+    cursor: pointer;
+    font-size: 12px;
+    transition: all 0.2s;
+  }
+  .filter-btn:hover { border-color: #4ecdc4; }
+  .filter-btn.active {
+    background: #4ecdc4;
+    color: #0f0f1a;
+    border-color: #4ecdc4;
+    font-weight: 700;
+  }
+
+  /* Ablation cards */
+  .ablation-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(380px, 1fr));
+    gap: 16px;
+    max-width: 1000px;
+  }
+  .ablation-card {
+    background: #16213e;
+    border-radius: 12px;
+    padding: 20px;
+    border-left: 4px solid;
+    transition: opacity 0.3s, transform 0.3s;
+  }
+  .ablation-card.hidden {
+    display: none;
+  }
+  .ablation-card.positive { border-color: #4ecdc4; }
+  .ablation-card.nuanced { border-color: #ffd93d; }
+  .ablation-card.neutral { border-color: #888; }
+
+  .card-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    margin-bottom: 12px;
+  }
+  .card-title {
+    font-size: 14px;
+    font-weight: 700;
+    color: #fff;
+  }
+  .card-badge {
+    font-size: 10px;
+    padding: 3px 8px;
+    border-radius: 4px;
+    font-weight: 700;
+    white-space: nowrap;
+  }
+  .badge-positive { background: rgba(78,205,196,0.2); color: #4ecdc4; }
+  .badge-nuanced { background: rgba(255,217,61,0.2); color: #ffd93d; }
+  .badge-neutral { background: rgba(136,136,136,0.2); color: #888; }
+
+  .card-description {
+    font-size: 12px;
+    color: #aaa;
+    line-height: 1.6;
+    margin-bottom: 12px;
+  }
+
+  /* Before/After comparison */
+  .comparison {
+    display: flex;
+    gap: 12px;
+    margin-bottom: 12px;
+  }
+  .comp-box {
+    flex: 1;
+    padding: 10px;
+    border-radius: 8px;
+    font-size: 11px;
+  }
+  .comp-before {
+    background: rgba(233,69,96,0.1);
+    border: 1px solid rgba(233,69,96,0.3);
+  }
+  .comp-before .comp-label { color: #e94560; }
+  .comp-after {
+    background: rgba(78,205,196,0.1);
+    border: 1px solid rgba(78,205,196,0.3);
+  }
+  .comp-after .comp-label { color: #4ecdc4; }
+  .comp-label {
+    font-weight: 700;
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    margin-bottom: 4px;
+  }
+
+  /* Impact bar */
+  .impact-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-top: 8px;
+  }
+  .impact-label {
+    font-size: 10px;
+    color: #888;
+    min-width: 50px;
+  }
+  .impact-bar-bg {
+    flex: 1;
+    height: 6px;
+    background: #1e1e3a;
+    border-radius: 3px;
+    overflow: hidden;
+  }
+  .impact-bar {
+    height: 100%;
+    border-radius: 3px;
+    transition: width 0.5s ease;
+  }
+  .impact-bar.high { background: #4ecdc4; }
+  .impact-bar.medium { background: #ffd93d; }
+  .impact-bar.low { background: #888; }
+
+  /* Evidence tag */
+  .evidence {
+    font-size: 10px;
+    color: #666;
+    margin-top: 10px;
+    padding-top: 10px;
+    border-top: 1px solid #2a2a4a;
+  }
+  .evidence strong { color: #888; }
+
+  /* Legend */
+  .legend {
+    display: flex;
+    gap: 20px;
+    margin-bottom: 24px;
+    font-size: 12px;
+  }
+  .legend-item {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .legend-dot {
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+  }
+</style>
+</head>
+<body>
+<h1>OLMo 2 Ablation Results</h1>
+<p class="subtitle">Published evidence for each architectural decision. Green = clearly helped. Yellow = nuanced / conditional. Gray = no measurable effect.</p>
+
+<div class="legend">
+  <div class="legend-item"><div class="legend-dot" style="background:#4ecdc4;"></div> Clearly helped</div>
+  <div class="legend-item"><div class="legend-dot" style="background:#ffd93d;"></div> Nuanced / conditional</div>
+  <div class="legend-item"><div class="legend-dot" style="background:#888;"></div> No measurable effect</div>
+</div>
+
+<div class="filters">
+  <button class="filter-btn active" onclick="filterCards('all')">All</button>
+  <button class="filter-btn" onclick="filterCards('stability')">Stability</button>
+  <button class="filter-btn" onclick="filterCards('architecture')">Architecture</button>
+  <button class="filter-btn" onclick="filterCards('training')">Training Recipe</button>
+</div>
+
+<div class="ablation-grid" id="grid">
+
+  <!-- QK-Norm -->
+  <div class="ablation-card positive" data-category="stability">
+    <div class="card-header">
+      <div class="card-title">QK-Norm</div>
+      <div class="card-badge badge-positive">Clear Win</div>
+    </div>
+    <div class="card-description">
+      RMSNorm applied to queries and keys before the dot product. Bounds attention logits to prevent softmax saturation during long training runs.
+    </div>
+    <div class="comparison">
+      <div class="comp-box comp-before">
+        <div class="comp-label">OLMo 1 (without)</div>
+        Loss spikes during training, required restarts. Attention logits grew unboundedly.
+      </div>
+      <div class="comp-box comp-after">
+        <div class="comp-label">OLMo 2 (with)</div>
+        Stable training across 4-6T tokens. No loss spikes. Attention logits bounded.
+      </div>
+    </div>
+    <div class="impact-row">
+      <div class="impact-label">Impact</div>
+      <div class="impact-bar-bg"><div class="impact-bar high" style="width:95%;"></div></div>
+    </div>
+    <div class="evidence"><strong>Evidence:</strong> Loss curves with/without QK-norm. Direct comparison at 7B and 13B scales.</div>
+  </div>
+
+  <!-- Z-Loss -->
+  <div class="ablation-card positive" data-category="stability">
+    <div class="card-header">
+      <div class="card-title">Z-Loss Regularization</div>
+      <div class="card-badge badge-positive">Clear Win</div>
+    </div>
+    <div class="card-description">
+      Penalty on log-sum-exp of output logits: L_z = alpha * log^2(sum(exp(z_j))). Prevents logit explosion at the vocabulary projection layer.
+    </div>
+    <div class="comparison">
+      <div class="comp-box comp-before">
+        <div class="comp-label">Without Z-loss</div>
+        Output logit magnitudes grow over training, risk of overflow in long runs.
+      </div>
+      <div class="comp-box comp-after">
+        <div class="comp-label">With Z-loss</div>
+        Output logits stay bounded. Complementary to QK-norm (covers output layer).
+      </div>
+    </div>
+    <div class="impact-row">
+      <div class="impact-label">Impact</div>
+      <div class="impact-bar-bg"><div class="impact-bar high" style="width:85%;"></div></div>
+    </div>
+    <div class="evidence"><strong>Evidence:</strong> Logit magnitude tracking during training. Combined effect with QK-norm.</div>
+  </div>
+
+  <!-- RMSNorm -->
+  <div class="ablation-card positive" data-category="architecture">
+    <div class="card-header">
+      <div class="card-title">RMSNorm (from nonparametric LayerNorm)</div>
+      <div class="card-badge badge-positive">Clear Win</div>
+    </div>
+    <div class="card-description">
+      Replaced OLMo 1's nonparametric LayerNorm (no learnable parameters) with RMSNorm (learnable scale, no mean centering). Simpler, slightly better convergence.
+    </div>
+    <div class="comparison">
+      <div class="comp-box comp-before">
+        <div class="comp-label">Nonparametric LayerNorm</div>
+        No learnable parameters. Fixed normalization with mean subtraction.
+      </div>
+      <div class="comp-box comp-after">
+        <div class="comp-label">RMSNorm</div>
+        Learnable scale. Drops mean centering (dispensable per ablation evidence).
+      </div>
+    </div>
+    <div class="impact-row">
+      <div class="impact-label">Impact</div>
+      <div class="impact-bar-bg"><div class="impact-bar high" style="width:65%;"></div></div>
+    </div>
+    <div class="evidence"><strong>Evidence:</strong> Controlled ablation. Consistent with broader literature (Llama, Mistral use RMSNorm).</div>
+  </div>
+
+  <!-- RoPE -->
+  <div class="ablation-card positive" data-category="architecture">
+    <div class="card-header">
+      <div class="card-title">RoPE (from absolute positional embeddings)</div>
+      <div class="card-badge badge-positive">Clear Win</div>
+    </div>
+    <div class="card-description">
+      Replaced OLMo 1's absolute positional embeddings with Rotary Position Embeddings. Encodes relative position through rotation, enabling better generalization.
+    </div>
+    <div class="comparison">
+      <div class="comp-box comp-before">
+        <div class="comp-label">Absolute Pos Emb</div>
+        Learned per-position vectors. Limited length generalization.
+      </div>
+      <div class="comp-box comp-after">
+        <div class="comp-label">RoPE</div>
+        Rotation-based relative encoding. Standard in all modern LLMs.
+      </div>
+    </div>
+    <div class="impact-row">
+      <div class="impact-label">Impact</div>
+      <div class="impact-bar-bg"><div class="impact-bar high" style="width:75%;"></div></div>
+    </div>
+    <div class="evidence"><strong>Evidence:</strong> Controlled ablation showing downstream task improvement. Aligns with community consensus.</div>
+  </div>
+
+  <!-- Two-stage training -->
+  <div class="ablation-card positive" data-category="training">
+    <div class="card-header">
+      <div class="card-title">Two-Stage Pre-Training</div>
+      <div class="card-badge badge-positive">Clear Win</div>
+    </div>
+    <div class="card-description">
+      Stage 1 on broad web data, Stage 2 on curated Dolmino mix during LR annealing. Curated data during annealing has outsized impact on downstream tasks.
+    </div>
+    <div class="comparison">
+      <div class="comp-box comp-before">
+        <div class="comp-label">Stage 1 Only</div>
+        Broad competence but weaker on reasoning, math, and instruction following.
+      </div>
+      <div class="comp-box comp-after">
+        <div class="comp-label">Stage 1 + Stage 2</div>
+        Significant gains on academic benchmarks. 7B outperforms Llama-3.1-8B.
+      </div>
+    </div>
+    <div class="impact-row">
+      <div class="impact-label">Impact</div>
+      <div class="impact-bar-bg"><div class="impact-bar high" style="width:90%;"></div></div>
+    </div>
+    <div class="evidence"><strong>Evidence:</strong> Stage 1 only vs Stage 1+2 comparison on OLMES suite (20 benchmarks).</div>
+  </div>
+
+  <!-- Model souping -->
+  <div class="ablation-card positive" data-category="training">
+    <div class="card-header">
+      <div class="card-title">Model Souping</div>
+      <div class="card-badge badge-positive">Clear Win</div>
+    </div>
+    <div class="card-description">
+      Weight-averaging multiple Stage 2 variants (different data mixes) to produce the final model. Exploits linear mode connectivity from shared Stage 1 checkpoint.
+    </div>
+    <div class="comparison">
+      <div class="comp-box comp-before">
+        <div class="comp-label">Best Single Variant</div>
+        Performance depends on which annealing mix happened to be best.
+      </div>
+      <div class="comp-box comp-after">
+        <div class="comp-label">Souped Model</div>
+        Consistent improvement. More robust than any single variant. Zero inference cost.
+      </div>
+    </div>
+    <div class="impact-row">
+      <div class="impact-label">Impact</div>
+      <div class="impact-bar-bg"><div class="impact-bar medium" style="width:60%;"></div></div>
+    </div>
+    <div class="evidence"><strong>Evidence:</strong> Multiple variant comparison. Souped model outperforms best individual across benchmarks.</div>
+  </div>
+
+  <!-- Post-norm vs pre-norm -->
+  <div class="ablation-card nuanced" data-category="architecture">
+    <div class="card-header">
+      <div class="card-title">Post-Norm vs Pre-Norm Placement</div>
+      <div class="card-badge badge-nuanced">Conditional</div>
+    </div>
+    <div class="card-description">
+      OLMo 2 uses post-norm (RMSNorm after attention/FFN). This only works stably because of QK-norm + Z-loss + scaled initialization. Pre-norm is safer without these.
+    </div>
+    <div class="comparison">
+      <div class="comp-box comp-before">
+        <div class="comp-label">Pre-norm (standard)</div>
+        Always stable. Default for Llama, Mistral, etc. May sacrifice some representational capacity.
+      </div>
+      <div class="comp-box comp-after">
+        <div class="comp-label">Post-norm + stabilizers</div>
+        Works with QK-norm + Z-loss. Potentially better final quality. Fails without stabilizers.
+      </div>
+    </div>
+    <div class="impact-row">
+      <div class="impact-label">Impact</div>
+      <div class="impact-bar-bg"><div class="impact-bar medium" style="width:40%;"></div></div>
+    </div>
+    <div class="evidence"><strong>Evidence:</strong> Post-norm succeeded only when combined with QK-norm + Z-loss. Not independently validated.</div>
+  </div>
+
+  <!-- GQA vs MHA -->
+  <div class="ablation-card nuanced" data-category="architecture">
+    <div class="card-header">
+      <div class="card-title">GQA vs MHA</div>
+      <div class="card-badge badge-nuanced">Scale-Dependent</div>
+    </div>
+    <div class="card-description">
+      MHA (full heads) used at 7B and 13B. GQA (8 KV heads) adopted only at 32B for KV cache manageability. Not a quality-driven decision.
+    </div>
+    <div class="comparison">
+      <div class="comp-box comp-before">
+        <div class="comp-label">MHA (7B, 13B)</div>
+        Full representational capacity. KV cache manageable at these scales.
+      </div>
+      <div class="comp-box comp-after">
+        <div class="comp-label">GQA (32B)</div>
+        5x KV cache reduction. Adopted for serving pragmatics, not quality improvement.
+      </div>
+    </div>
+    <div class="impact-row">
+      <div class="impact-label">Quality</div>
+      <div class="impact-bar-bg"><div class="impact-bar low" style="width:10%;"></div></div>
+    </div>
+    <div class="impact-row">
+      <div class="impact-label">Efficiency</div>
+      <div class="impact-bar-bg"><div class="impact-bar high" style="width:80%;"></div></div>
+    </div>
+    <div class="evidence"><strong>Evidence:</strong> GQA adopted at 32B for inference efficiency, not benchmarked against MHA at that scale.</div>
+  </div>
+
+  <!-- Bias removal -->
+  <div class="ablation-card neutral" data-category="architecture">
+    <div class="card-header">
+      <div class="card-title">Bias Term Removal</div>
+      <div class="card-badge badge-neutral">No Effect</div>
+    </div>
+    <div class="card-description">
+      All bias terms removed from linear layers (Q, K, V, O, FFN projections, output head). Pure y = Wx. RMSNorm makes per-layer biases redundant.
+    </div>
+    <div class="comparison">
+      <div class="comp-box comp-before">
+        <div class="comp-label">With bias (y = Wx + b)</div>
+        Standard neural network convention. Adds d parameters per projection.
+      </div>
+      <div class="comp-box comp-after">
+        <div class="comp-label">Without bias (y = Wx)</div>
+        No measurable quality change. Simpler implementation, cleaner quantization.
+      </div>
+    </div>
+    <div class="impact-row">
+      <div class="impact-label">Impact</div>
+      <div class="impact-bar-bg"><div class="impact-bar low" style="width:5%;"></div></div>
+    </div>
+    <div class="evidence"><strong>Evidence:</strong> No measurable difference. Removed for simplicity. Consistent with Llama precedent.</div>
+  </div>
+
+</div>
+
+<script>
+function filterCards(category) {
+  document.querySelectorAll('.filter-btn').forEach(b => b.classList.remove('active'));
+  event.target.classList.add('active');
+
+  document.querySelectorAll('.ablation-card').forEach(card => {
+    if (category === 'all' || card.dataset.category === category) {
+      card.classList.remove('hidden');
+    } else {
+      card.classList.add('hidden');
+    }
+  });
+}
+</script>
+</body>
+</html>

@@ -1,0 +1,536 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Pre-Norm vs Post-Norm Placement</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { background: #1a1a2e; color: #e0e0e0; font-family: 'Segoe UI', system-ui, sans-serif; padding: 24px; min-height: 100vh; }
+.container { max-width: 960px; margin: 0 auto; }
+h1 { color: #e94560; font-size: 22px; margin-bottom: 4px; }
+.subtitle { color: #888; font-size: 13px; margin-bottom: 20px; }
+.top-controls { display: flex; gap: 12px; margin-bottom: 16px; align-items: center; flex-wrap: wrap; }
+.view-btn { background: #0f3460; color: #4ecdc4; border: 1px solid #4ecdc4; border-radius: 6px; padding: 6px 14px; font-size: 12px; cursor: pointer; transition: all 0.15s; }
+.view-btn.active { background: #4ecdc4; color: #1a1a2e; }
+.view-btn:hover { opacity: 0.85; }
+.main-layout { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 16px; }
+.panel { background: #16213e; border-radius: 12px; padding: 16px; position: relative; }
+.panel-title { color: #e94560; font-size: 13px; font-weight: bold; text-align: center; margin-bottom: 8px; text-transform: uppercase; letter-spacing: 0.5px; }
+canvas { display: block; margin: 0 auto; }
+.bottom-row { display: grid; grid-template-columns: 1fr 260px; gap: 16px; }
+.loss-panel { background: #16213e; border-radius: 12px; padding: 16px; }
+.loss-panel h3 { color: #4ecdc4; font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 8px; }
+.side-info { display: flex; flex-direction: column; gap: 12px; }
+.info-card { background: #16213e; border-radius: 10px; padding: 14px; }
+.info-card h3 { color: #4ecdc4; font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 8px; }
+.info-card .text { font-size: 12px; color: #aaa; line-height: 1.6; }
+.param-row { margin-bottom: 8px; }
+.param-row label { display: block; font-size: 12px; color: #888; margin-bottom: 4px; }
+.param-row .val { color: #ffd93d; font-family: monospace; font-weight: bold; }
+input[type="range"] { width: 100%; accent-color: #e94560; }
+.equation { font-family: monospace; font-size: 11px; color: #ffd93d; background: #0f3460; padding: 6px 10px; border-radius: 6px; margin-top: 6px; }
+.step-indicator { color: #ffd93d; font-size: 11px; text-align: center; margin-top: 6px; font-family: monospace; }
+</style>
+</head>
+<body>
+<div class="container">
+<h1>Pre-Norm vs Post-Norm: Placement Comparison</h1>
+<div class="subtitle">Animate a forward pass through both configurations. Compare where normalization occurs and its effect on training stability.</div>
+
+<div class="top-controls">
+    <button class="view-btn active" id="btn-animate" onclick="setMode('animate')">Animate Forward Pass</button>
+    <button class="view-btn" id="btn-static" onclick="setMode('static')">Static Diagram</button>
+    <button class="view-btn" id="btn-grad" onclick="setMode('grad')">Gradient Analysis</button>
+    <span style="flex:1"></span>
+    <div class="param-row" style="margin:0; width:180px;">
+        <label style="margin:0">Layers: <span class="val" id="val-layers">4</span></label>
+        <input type="range" id="sl-layers" min="2" max="12" step="1" value="4" oninput="onLayersChange()">
+    </div>
+</div>
+
+<div class="main-layout">
+    <div class="panel">
+        <div class="panel-title">Post-Norm (Original Transformer)</div>
+        <canvas id="cv-post" width="430" height="380"></canvas>
+        <div class="step-indicator" id="step-post"></div>
+    </div>
+    <div class="panel">
+        <div class="panel-title">Pre-Norm (Modern LLMs)</div>
+        <canvas id="cv-pre" width="430" height="380"></canvas>
+        <div class="step-indicator" id="step-pre"></div>
+    </div>
+</div>
+
+<div class="bottom-row">
+    <div class="loss-panel">
+        <h3>Training Loss Curves (Simulated)</h3>
+        <canvas id="cv-loss" width="600" height="200"></canvas>
+    </div>
+    <div class="side-info">
+        <div class="info-card">
+            <h3>Post-Norm</h3>
+            <div class="text">Norm sits ON the residual path. Gradient magnitude: O(d * L). Requires warmup to avoid divergence.</div>
+            <div class="equation">x_l+1 = LN(x_l + f(x_l))</div>
+        </div>
+        <div class="info-card">
+            <h3>Pre-Norm</h3>
+            <div class="text">Norm is INSIDE the branch. Residual path is clean identity. Gradient: O(1). No warmup needed.</div>
+            <div class="equation">x_l+1 = x_l + f(LN(x_l))</div>
+        </div>
+    </div>
+</div>
+</div>
+
+<script>
+const cvPost = document.getElementById('cv-post');
+const cvPre = document.getElementById('cv-pre');
+const cvLoss = document.getElementById('cv-loss');
+const ctxPost = cvPost.getContext('2d');
+const ctxPre = cvPre.getContext('2d');
+const ctxLoss = cvLoss.getContext('2d');
+
+let mode = 'animate';
+let numLayers = 4;
+let animStep = 0;
+let animTimer = null;
+
+const COL = { red: '#e94560', teal: '#4ecdc4', yellow: '#ffd93d', purple: '#a855f7', bg: '#16213e', bgDark: '#0f3460' };
+
+function onLayersChange() {
+    numLayers = parseInt(document.getElementById('sl-layers').value);
+    document.getElementById('val-layers').textContent = numLayers;
+    animStep = 0;
+    drawAll();
+}
+
+function setMode(m) {
+    mode = m;
+    document.querySelectorAll('.view-btn').forEach(b => b.classList.remove('active'));
+    document.getElementById('btn-' + m).classList.add('active');
+    if (animTimer) { clearInterval(animTimer); animTimer = null; }
+    animStep = 0;
+    if (m === 'animate') {
+        animTimer = setInterval(() => {
+            animStep++;
+            const totalSteps = numLayers * 4 + 2;
+            if (animStep > totalSteps + 8) animStep = 0;
+            drawAll();
+        }, 400);
+    }
+    drawAll();
+}
+
+function drawAll() {
+    drawBlock(ctxPost, cvPost, 'post');
+    drawBlock(ctxPre, cvPre, 'pre');
+    drawLossCurves();
+}
+
+function roundRect(ctx, x, y, w, h, r) {
+    ctx.beginPath();
+    ctx.moveTo(x + r, y);
+    ctx.lineTo(x + w - r, y);
+    ctx.quadraticCurveTo(x + w, y, x + w, y + r);
+    ctx.lineTo(x + w, y + h - r);
+    ctx.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
+    ctx.lineTo(x + r, y + h);
+    ctx.quadraticCurveTo(x, y + h, x, y + h - r);
+    ctx.lineTo(x, y + r);
+    ctx.quadraticCurveTo(x, y, x + r, y);
+    ctx.closePath();
+}
+
+function drawBlock(ctx, cv, type) {
+    const W = cv.width, H = cv.height;
+    ctx.clearRect(0, 0, W, H);
+
+    const isPost = type === 'post';
+    const maxShow = Math.min(numLayers, 6);
+    const streamX = 80;
+    const top = 20, bot = H - 20;
+    const blockH = (bot - top) / (maxShow + 0.5);
+
+    // Residual stream line
+    ctx.strokeStyle = COL.red;
+    ctx.lineWidth = 3;
+    ctx.setLineDash([]);
+    ctx.beginPath();
+    ctx.moveTo(streamX, top);
+    ctx.lineTo(streamX, bot);
+    ctx.stroke();
+
+    // Arrow
+    ctx.fillStyle = COL.red;
+    ctx.beginPath();
+    ctx.moveTo(streamX, bot);
+    ctx.lineTo(streamX - 5, bot - 10);
+    ctx.lineTo(streamX + 5, bot - 10);
+    ctx.closePath();
+    ctx.fill();
+
+    // Labels
+    ctx.fillStyle = COL.red;
+    ctx.font = 'bold 11px monospace';
+    ctx.textAlign = 'center';
+    ctx.fillText('x\u2080', streamX, top - 5);
+    ctx.fillText('x_L', streamX, bot + 15);
+
+    const totalAnimSteps = maxShow * 4 + 2;
+    const isAnimating = mode === 'animate';
+
+    for (let i = 0; i < maxShow; i++) {
+        const yTop = top + i * blockH + blockH * 0.3;
+        const yMid = yTop + blockH * 0.2;
+        const yBot = yTop + blockH * 0.4;
+
+        // Determine which step in animation maps to this layer
+        const layerAnimStart = i * 4 + 1;
+        const isActive = isAnimating && animStep >= layerAnimStart && animStep < layerAnimStart + 4;
+        const localStep = isAnimating ? animStep - layerAnimStart : 4;
+
+        // Compute element positions
+        const branchStart = streamX + 8;
+        const normBoxX = streamX + 60;
+        const sublayerX = streamX + 160;
+        const normW = 56, normH = 20;
+        const subW = 70, subH = 20;
+
+        // Highlight for active layer
+        if (isActive) {
+            ctx.fillStyle = 'rgba(233,69,96,0.06)';
+            ctx.fillRect(streamX - 15, yTop - 5, W - streamX, blockH * 0.5);
+        }
+
+        // Opacity for animation
+        const baseAlpha = isAnimating ? (animStep >= layerAnimStart ? 1 : 0.25) : 1;
+
+        if (isPost) {
+            // POST-NORM: Sublayer -> Add -> Norm
+            // Skip connection
+            ctx.strokeStyle = `rgba(255,255,255,${0.12 * baseAlpha})`;
+            ctx.lineWidth = 1;
+            ctx.setLineDash([3, 3]);
+            ctx.beginPath();
+            ctx.moveTo(streamX, yTop);
+            ctx.lineTo(streamX + 260, yTop);
+            ctx.lineTo(streamX + 260, yBot + 10);
+            ctx.lineTo(streamX + 8, yBot + 10);
+            ctx.stroke();
+            ctx.setLineDash([]);
+
+            // Branch read
+            ctx.strokeStyle = `rgba(255,255,255,${0.2 * baseAlpha})`;
+            ctx.lineWidth = 1;
+            ctx.beginPath();
+            ctx.moveTo(branchStart, yTop);
+            ctx.lineTo(sublayerX, yTop);
+            ctx.stroke();
+
+            // Sublayer box
+            const subAlpha = (isActive && localStep >= 1) || !isAnimating ? baseAlpha : 0.2;
+            ctx.globalAlpha = subAlpha;
+            ctx.fillStyle = COL.teal + '22';
+            ctx.strokeStyle = COL.teal;
+            ctx.lineWidth = 1.5;
+            roundRect(ctx, sublayerX, yTop - subH / 2, subW, subH, 4);
+            ctx.fill(); ctx.stroke();
+            ctx.fillStyle = COL.teal;
+            ctx.font = '10px sans-serif';
+            ctx.textAlign = 'center';
+            ctx.fillText('Sublayer', sublayerX + subW / 2, yTop + 4);
+            ctx.globalAlpha = 1;
+
+            // Arrow to add node
+            const addY = yBot;
+            ctx.strokeStyle = `rgba(255,255,255,${0.2 * baseAlpha})`;
+            ctx.lineWidth = 1;
+            ctx.beginPath();
+            ctx.moveTo(sublayerX + subW / 2, yTop + subH / 2);
+            ctx.lineTo(sublayerX + subW / 2, addY);
+            ctx.lineTo(streamX + 8, addY);
+            ctx.stroke();
+
+            // Add node on stream
+            const addAlpha = (isActive && localStep >= 2) || !isAnimating ? baseAlpha : 0.2;
+            ctx.globalAlpha = addAlpha;
+            ctx.fillStyle = COL.red;
+            ctx.beginPath(); ctx.arc(streamX, addY, 6, 0, Math.PI * 2); ctx.fill();
+            ctx.fillStyle = '#1a1a2e'; ctx.font = 'bold 10px sans-serif'; ctx.textAlign = 'center';
+            ctx.fillText('+', streamX, addY + 4);
+            ctx.globalAlpha = 1;
+
+            // Norm ON the stream (below add)
+            const normY = addY + 14;
+            const normAlpha = (isActive && localStep >= 3) || !isAnimating ? baseAlpha : 0.2;
+            ctx.globalAlpha = normAlpha;
+            ctx.fillStyle = COL.purple + '33';
+            ctx.strokeStyle = COL.purple;
+            ctx.lineWidth = 1.5;
+            roundRect(ctx, streamX - normW / 2, normY - normH / 2, normW, normH, 4);
+            ctx.fill(); ctx.stroke();
+            ctx.fillStyle = COL.purple;
+            ctx.font = '9px monospace'; ctx.textAlign = 'center';
+            ctx.fillText('LayerNorm', streamX, normY + 3);
+            ctx.globalAlpha = 1;
+
+            // Highlight that norm is ON the stream
+            if (mode === 'grad') {
+                ctx.strokeStyle = 'rgba(233,69,96,0.5)';
+                ctx.lineWidth = 2;
+                ctx.setLineDash([4, 4]);
+                roundRect(ctx, streamX - normW / 2 - 3, normY - normH / 2 - 3, normW + 6, normH + 6, 6);
+                ctx.stroke();
+                ctx.setLineDash([]);
+            }
+
+        } else {
+            // PRE-NORM: Norm -> Sublayer -> Add
+            // Skip connection (clean identity)
+            ctx.strokeStyle = `rgba(78,205,196,${0.15 * baseAlpha})`;
+            ctx.lineWidth = 1;
+            ctx.setLineDash([3, 3]);
+            ctx.beginPath();
+            ctx.moveTo(streamX, yTop);
+            ctx.lineTo(streamX + 260, yTop);
+            ctx.lineTo(streamX + 260, yBot + 10);
+            ctx.lineTo(streamX + 8, yBot + 10);
+            ctx.stroke();
+            ctx.setLineDash([]);
+
+            // Branch read
+            ctx.strokeStyle = `rgba(255,255,255,${0.2 * baseAlpha})`;
+            ctx.lineWidth = 1;
+            ctx.beginPath();
+            ctx.moveTo(branchStart, yTop);
+            ctx.lineTo(normBoxX, yTop);
+            ctx.stroke();
+
+            // Norm box (inside branch)
+            const normAlpha = (isActive && localStep >= 0) || !isAnimating ? baseAlpha : 0.2;
+            ctx.globalAlpha = normAlpha;
+            ctx.fillStyle = COL.purple + '33';
+            ctx.strokeStyle = COL.purple;
+            ctx.lineWidth = 1.5;
+            roundRect(ctx, normBoxX, yTop - normH / 2, normW, normH, 4);
+            ctx.fill(); ctx.stroke();
+            ctx.fillStyle = COL.purple;
+            ctx.font = '9px monospace'; ctx.textAlign = 'center';
+            ctx.fillText('RMSNorm', normBoxX + normW / 2, yTop + 3);
+            ctx.globalAlpha = 1;
+
+            // Arrow norm -> sublayer
+            ctx.strokeStyle = `rgba(255,255,255,${0.2 * baseAlpha})`;
+            ctx.lineWidth = 1;
+            ctx.beginPath();
+            ctx.moveTo(normBoxX + normW, yTop);
+            ctx.lineTo(sublayerX, yTop);
+            ctx.stroke();
+
+            // Sublayer box
+            const subAlpha = (isActive && localStep >= 1) || !isAnimating ? baseAlpha : 0.2;
+            ctx.globalAlpha = subAlpha;
+            ctx.fillStyle = COL.teal + '22';
+            ctx.strokeStyle = COL.teal;
+            ctx.lineWidth = 1.5;
+            roundRect(ctx, sublayerX, yTop - subH / 2, subW, subH, 4);
+            ctx.fill(); ctx.stroke();
+            ctx.fillStyle = COL.teal;
+            ctx.font = '10px sans-serif'; ctx.textAlign = 'center';
+            ctx.fillText('Sublayer', sublayerX + subW / 2, yTop + 4);
+            ctx.globalAlpha = 1;
+
+            // Arrow from sublayer to add on stream
+            const addY = yBot + 10;
+            ctx.strokeStyle = `rgba(78,205,196,${0.3 * baseAlpha})`;
+            ctx.lineWidth = 1;
+            ctx.beginPath();
+            ctx.moveTo(sublayerX + subW / 2, yTop + subH / 2);
+            ctx.lineTo(sublayerX + subW / 2, addY);
+            ctx.lineTo(streamX + 8, addY);
+            ctx.stroke();
+
+            // Add node on stream
+            const addAlpha = (isActive && localStep >= 2) || !isAnimating ? baseAlpha : 0.2;
+            ctx.globalAlpha = addAlpha;
+            ctx.fillStyle = COL.teal;
+            ctx.beginPath(); ctx.arc(streamX, addY, 6, 0, Math.PI * 2); ctx.fill();
+            ctx.fillStyle = '#1a1a2e'; ctx.font = 'bold 10px sans-serif'; ctx.textAlign = 'center';
+            ctx.fillText('+', streamX, addY + 4);
+            ctx.globalAlpha = 1;
+
+            // In gradient mode, highlight clean identity
+            if (mode === 'grad') {
+                ctx.strokeStyle = 'rgba(78,205,196,0.4)';
+                ctx.lineWidth = 2;
+                ctx.setLineDash([]);
+                ctx.beginPath();
+                ctx.moveTo(streamX - 4, yTop - 10);
+                ctx.lineTo(streamX - 4, addY + 10);
+                ctx.stroke();
+                ctx.fillStyle = 'rgba(78,205,196,0.6)';
+                ctx.font = '9px sans-serif'; ctx.textAlign = 'left';
+                if (i === 0) ctx.fillText('Identity path', streamX - 70, yMid);
+            }
+        }
+
+        // Layer label
+        ctx.fillStyle = '#555';
+        ctx.font = '10px monospace'; ctx.textAlign = 'right';
+        ctx.fillText('L' + (i + 1), streamX - 14, yTop + 3);
+    }
+
+    if (numLayers > maxShow) {
+        ctx.fillStyle = '#888'; ctx.font = '12px sans-serif'; ctx.textAlign = 'center';
+        ctx.fillText('... (' + (numLayers - maxShow) + ' more)', W / 2, bot - 5);
+    }
+
+    // Step indicator
+    const stepEl = document.getElementById('step-' + type);
+    if (isAnimating) {
+        const layerNum = Math.floor((animStep - 1) / 4) + 1;
+        const subStep = ((animStep - 1) % 4);
+        const stepNames = isPost ? ['read', 'sublayer', 'add', 'norm'] : ['norm', 'sublayer', 'add', '--'];
+        if (animStep > 0 && animStep <= maxShow * 4) {
+            stepEl.textContent = 'Layer ' + layerNum + ' / Step: ' + stepNames[subStep];
+        } else {
+            stepEl.textContent = animStep === 0 ? 'Starting...' : 'Complete';
+        }
+    } else {
+        stepEl.textContent = mode === 'grad' ? 'Gradient paths highlighted' : '';
+    }
+}
+
+function drawLossCurves() {
+    const W = cvLoss.width, H = cvLoss.height;
+    ctxLoss.clearRect(0, 0, W, H);
+
+    const pad = { l: 50, r: 20, t: 20, b: 35 };
+    const pw = W - pad.l - pad.r;
+    const ph = H - pad.t - pad.b;
+
+    const steps = 200;
+
+    // Simulated loss curves
+    function postNormLoss(t, withWarmup) {
+        const x = t / steps;
+        if (!withWarmup) {
+            // Diverges: spikes then recovers poorly
+            if (x < 0.05) return 4.5 + Math.random() * 2;
+            if (x < 0.1) return 6 + Math.random() * 3;
+            return 5 + Math.sin(x * 20) * 2 + Math.random();
+        }
+        // With warmup: slow start, then converges
+        const warmup = Math.min(1, x / 0.15);
+        const base = 4.5 * Math.exp(-3 * x) + 1.1;
+        const delay = 0.3 * Math.exp(-8 * (x - 0.15) * (x - 0.15));
+        return base + delay * (1 - warmup);
+    }
+
+    function preNormLoss(t) {
+        const x = t / steps;
+        const base = 4.5 * Math.exp(-4 * x) + 1.05;
+        return base;
+    }
+
+    // Precompute
+    const postNoWarmup = [], postWarmup = [], preNorm = [];
+    // Use seeded pseudo-random for consistency
+    let seed = 42;
+    function srand() { seed = (seed * 16807) % 2147483647; return (seed - 1) / 2147483646; }
+
+    for (let t = 0; t < steps; t++) {
+        const r1 = srand(), r2 = srand(), r3 = srand();
+        const x = t / steps;
+        // Post-norm no warmup: diverges
+        if (x < 0.05) postNoWarmup.push(4.5 + r1 * 1.5);
+        else if (x < 0.12) postNoWarmup.push(5.5 + r1 * 3);
+        else postNoWarmup.push(5 + Math.sin(x * 15) * 1.5 + r1 * 0.5);
+
+        // Post-norm with warmup
+        const warmup = Math.min(1, x / 0.15);
+        postWarmup.push(4.5 * Math.exp(-3 * x * warmup) + 1.15 + r2 * 0.08);
+
+        // Pre-norm: immediate stable descent
+        preNorm.push(4.5 * Math.exp(-4.5 * x) + 1.05 + r3 * 0.05);
+    }
+
+    // Y range
+    const yMin = 0.5, yMax = 9;
+
+    function toPixel(x, y) {
+        return [pad.l + (x / steps) * pw, pad.t + (1 - (y - yMin) / (yMax - yMin)) * ph];
+    }
+
+    // Grid
+    ctxLoss.strokeStyle = '#1e2a4a';
+    ctxLoss.lineWidth = 1;
+    for (let y = 1; y <= 8; y += 1) {
+        const [, py] = toPixel(0, y);
+        ctxLoss.beginPath(); ctxLoss.moveTo(pad.l, py); ctxLoss.lineTo(W - pad.r, py); ctxLoss.stroke();
+        ctxLoss.fillStyle = '#555'; ctxLoss.font = '10px monospace'; ctxLoss.textAlign = 'right';
+        ctxLoss.fillText(y.toFixed(0), pad.l - 6, py + 3);
+    }
+
+    // Axes
+    ctxLoss.strokeStyle = '#444'; ctxLoss.lineWidth = 1;
+    ctxLoss.beginPath(); ctxLoss.moveTo(pad.l, H - pad.b); ctxLoss.lineTo(W - pad.r, H - pad.b); ctxLoss.stroke();
+    ctxLoss.beginPath(); ctxLoss.moveTo(pad.l, pad.t); ctxLoss.lineTo(pad.l, H - pad.b); ctxLoss.stroke();
+
+    ctxLoss.fillStyle = '#888'; ctxLoss.font = '10px sans-serif'; ctxLoss.textAlign = 'center';
+    ctxLoss.fillText('Training steps', W / 2, H - 5);
+    ctxLoss.save();
+    ctxLoss.translate(12, H / 2);
+    ctxLoss.rotate(-Math.PI / 2);
+    ctxLoss.fillText('Loss', 0, 0);
+    ctxLoss.restore();
+
+    // Plot curves
+    function plotLine(data, color, dash) {
+        ctxLoss.strokeStyle = color;
+        ctxLoss.lineWidth = 2;
+        ctxLoss.setLineDash(dash || []);
+        ctxLoss.beginPath();
+        for (let t = 0; t < data.length; t++) {
+            const [px, py] = toPixel(t, Math.max(yMin, Math.min(yMax, data[t])));
+            if (t === 0) ctxLoss.moveTo(px, py);
+            else ctxLoss.lineTo(px, py);
+        }
+        ctxLoss.stroke();
+        ctxLoss.setLineDash([]);
+    }
+
+    plotLine(postNoWarmup, '#e94560', [4, 3]);
+    plotLine(postWarmup, '#ffd93d', []);
+    plotLine(preNorm, '#4ecdc4', []);
+
+    // Warmup region
+    const [wxStart] = toPixel(0, 0);
+    const [wxEnd] = toPixel(steps * 0.15, 0);
+    ctxLoss.fillStyle = 'rgba(255,217,61,0.05)';
+    ctxLoss.fillRect(wxStart, pad.t, wxEnd - wxStart, ph);
+    ctxLoss.fillStyle = 'rgba(255,217,61,0.3)';
+    ctxLoss.font = '9px sans-serif'; ctxLoss.textAlign = 'center';
+    ctxLoss.fillText('warmup', (wxStart + wxEnd) / 2, pad.t + 12);
+
+    // Legend
+    const lx = pad.l + pw * 0.4, ly = pad.t + 10;
+    [
+        { name: 'Post-norm (no warmup)', color: '#e94560', dash: [4, 3] },
+        { name: 'Post-norm (with warmup)', color: '#ffd93d', dash: [] },
+        { name: 'Pre-norm', color: '#4ecdc4', dash: [] }
+    ].forEach(({ name, color, dash }, i) => {
+        const y = ly + i * 16;
+        ctxLoss.strokeStyle = color; ctxLoss.lineWidth = 2; ctxLoss.setLineDash(dash);
+        ctxLoss.beginPath(); ctxLoss.moveTo(lx, y); ctxLoss.lineTo(lx + 20, y); ctxLoss.stroke();
+        ctxLoss.setLineDash([]);
+        ctxLoss.fillStyle = '#ccc'; ctxLoss.font = '10px sans-serif'; ctxLoss.textAlign = 'left';
+        ctxLoss.fillText(name, lx + 25, y + 4);
+    });
+}
+
+// Start animation
+setMode('animate');
+</script>
+</body>
+</html>

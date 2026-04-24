@@ -1,0 +1,203 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>KV Cache Size Calculator</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { background: #1a1a2e; color: #e0e0e0; font-family: 'Segoe UI', system-ui, sans-serif; padding: 24px; min-height: 100vh; }
+h1 { color: #e94560; font-size: 22px; margin-bottom: 4px; }
+.subtitle { color: #888; font-size: 13px; margin-bottom: 24px; }
+.container { max-width: 900px; margin: 0 auto; }
+.controls { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 24px; }
+.control-group { background: #16213e; border-radius: 10px; padding: 16px; }
+.control-group label { display: block; color: #4ecdc4; font-size: 12px; font-weight: bold; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 8px; }
+.control-group .value { color: #ffd93d; font-size: 20px; font-weight: bold; margin-bottom: 8px; font-family: monospace; }
+input[type="range"] { width: 100%; accent-color: #e94560; cursor: pointer; }
+select { width: 100%; background: #0f3460; color: #e0e0e0; border: 1px solid #333; border-radius: 6px; padding: 8px; font-size: 14px; cursor: pointer; }
+.preset-row { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 24px; }
+.preset-btn { background: #0f3460; color: #4ecdc4; border: 1px solid #4ecdc4; border-radius: 6px; padding: 6px 14px; font-size: 12px; cursor: pointer; transition: all 0.2s; }
+.preset-btn:hover { background: #4ecdc4; color: #1a1a2e; }
+.results { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-bottom: 24px; }
+.result-card { background: #16213e; border-radius: 10px; padding: 16px; text-align: center; border: 2px solid transparent; transition: border-color 0.3s; }
+.result-card.highlight { border-color: #e94560; }
+.result-card .attn-type { font-size: 12px; font-weight: bold; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 8px; }
+.result-card .cache-val { font-size: 22px; font-weight: bold; font-family: monospace; margin-bottom: 4px; }
+.result-card .cache-unit { font-size: 11px; color: #888; }
+.result-card .reduction { font-size: 11px; margin-top: 6px; padding: 3px 8px; border-radius: 10px; display: inline-block; }
+.bar-chart { background: #16213e; border-radius: 10px; padding: 20px; }
+.bar-row { display: flex; align-items: center; margin-bottom: 12px; }
+.bar-label { width: 80px; font-size: 12px; font-weight: bold; flex-shrink: 0; }
+.bar-track { flex: 1; height: 28px; background: #0f3460; border-radius: 4px; overflow: hidden; position: relative; }
+.bar-fill { height: 100%; border-radius: 4px; transition: width 0.5s ease; display: flex; align-items: center; justify-content: flex-end; padding-right: 8px; font-size: 11px; font-weight: bold; min-width: 60px; }
+.bar-value { width: 100px; text-align: right; font-size: 12px; font-family: monospace; flex-shrink: 0; margin-left: 12px; }
+.note { color: #666; font-size: 11px; margin-top: 16px; text-align: center; }
+.gpu-indicator { margin-top: 20px; background: #16213e; border-radius: 10px; padding: 16px; }
+.gpu-indicator h3 { color: #4ecdc4; font-size: 13px; margin-bottom: 10px; }
+.gpu-bar-container { display: flex; align-items: center; gap: 12px; margin-bottom: 6px; }
+.gpu-name { width: 70px; font-size: 11px; color: #888; }
+.gpu-bar-track { flex: 1; height: 20px; background: #0f3460; border-radius: 4px; overflow: hidden; position: relative; }
+.gpu-bar-fill { height: 100%; border-radius: 4px; transition: width 0.5s; }
+.gpu-pct { width: 50px; font-size: 11px; font-family: monospace; text-align: right; }
+</style>
+</head>
+<body>
+<div class="container">
+<h1>KV Cache Size Calculator</h1>
+<div class="subtitle">Compare MHA, GQA, MQA, and MLA cache requirements across model configurations</div>
+
+<div class="preset-row">
+<button class="preset-btn" onclick="setPreset(4096,64,128,32,4096,'fp16')">Llama 2 70B</button>
+<button class="preset-btn" onclick="setPreset(4096,32,128,32,4096,'fp16')">Mistral 7B</button>
+<button class="preset-btn" onclick="setPreset(4096,32,128,32,8192,'fp16')">Llama 3 8B</button>
+<button class="preset-btn" onclick="setPreset(8192,64,128,80,8192,'fp16')">Llama 3 70B</button>
+<button class="preset-btn" onclick="setPreset(16384,128,128,126,8192,'fp16')">Llama 3 405B</button>
+<button class="preset-btn" onclick="setPreset(5120,128,128,60,4096,'fp16')">DeepSeek-V2</button>
+</div>
+
+<div class="controls">
+<div class="control-group">
+<label>Model Dimension (d_model)</label>
+<div class="value" id="val-dmodel">8192</div>
+<input type="range" id="dmodel" min="1024" max="16384" step="1024" value="8192" oninput="update()">
+</div>
+<div class="control-group">
+<label>Query Heads (H)</label>
+<div class="value" id="val-heads">64</div>
+<input type="range" id="heads" min="8" max="128" step="8" value="64" oninput="update()">
+</div>
+<div class="control-group">
+<label>Head Dimension (d_k)</label>
+<div class="value" id="val-dk">128</div>
+<input type="range" id="dk" min="64" max="256" step="64" value="128" oninput="update()">
+</div>
+<div class="control-group">
+<label>Layers (L)</label>
+<div class="value" id="val-layers">80</div>
+<input type="range" id="layers" min="12" max="126" step="2" value="80" oninput="update()">
+</div>
+<div class="control-group">
+<label>Sequence Length</label>
+<div class="value" id="val-seqlen">4096</div>
+<input type="range" id="seqlen" min="512" max="131072" step="512" value="4096" oninput="update()">
+</div>
+<div class="control-group">
+<label>Precision</label>
+<select id="precision" onchange="update()">
+<option value="2" selected>FP16 / BF16 (2 bytes)</option>
+<option value="1">INT8 (1 byte)</option>
+<option value="4">FP32 (4 bytes)</option>
+</select>
+</div>
+</div>
+
+<div class="results" id="results"></div>
+
+<div class="bar-chart" id="barchart"></div>
+
+<div class="gpu-indicator" id="gpu-section"></div>
+
+<div class="note">
+Cache = 2 (K+V) &times; KV_heads &times; d_k &times; layers &times; seq_len &times; precision_bytes.
+MLA uses d_c=512 + d_h^R=64 per layer (DeepSeek-V2 config).
+</div>
+</div>
+
+<script>
+function fmt(bytes) {
+    if (bytes >= 1e12) return (bytes/1e12).toFixed(1) + ' TB';
+    if (bytes >= 1e9) return (bytes/1e9).toFixed(2) + ' GB';
+    if (bytes >= 1e6) return (bytes/1e6).toFixed(1) + ' MB';
+    if (bytes >= 1e3) return (bytes/1e3).toFixed(1) + ' KB';
+    return bytes + ' B';
+}
+
+function setPreset(dm, h, dk, l, s, p) {
+    document.getElementById('dmodel').value = dm;
+    document.getElementById('heads').value = h;
+    document.getElementById('dk').value = dk;
+    document.getElementById('layers').value = l;
+    document.getElementById('seqlen').value = s;
+    document.getElementById('precision').value = p === 'fp16' ? 2 : p === 'int8' ? 1 : 4;
+    update();
+}
+
+function update() {
+    const H = parseInt(document.getElementById('heads').value);
+    const dk = parseInt(document.getElementById('dk').value);
+    const L = parseInt(document.getElementById('layers').value);
+    const S = parseInt(document.getElementById('seqlen').value);
+    const P = parseInt(document.getElementById('precision').value);
+
+    document.getElementById('val-dmodel').textContent = document.getElementById('dmodel').value;
+    document.getElementById('val-heads').textContent = H;
+    document.getElementById('val-dk').textContent = dk;
+    document.getElementById('val-layers').textContent = L;
+    document.getElementById('val-seqlen').textContent = S.toLocaleString();
+
+    const G_gqa = Math.max(1, Math.round(H / 8));
+    const dc = 512, dR = 64;
+
+    const mha  = 2 * H * dk * L * S * P;
+    const gqa  = 2 * G_gqa * dk * L * S * P;
+    const mqa  = 2 * 1 * dk * L * S * P;
+    const mla  = (dc + dR) * L * S * P;
+
+    const configs = [
+        { name: 'MHA', val: mha, color: '#e94560', heads: H + ' KV heads' },
+        { name: 'GQA', val: gqa, color: '#4ecdc4', heads: G_gqa + ' KV groups' },
+        { name: 'MQA', val: mqa, color: '#ffd93d', heads: '1 KV head' },
+        { name: 'MLA', val: mla, color: '#a855f7', heads: 'd_c=' + dc }
+    ];
+
+    let html = '';
+    configs.forEach((c, i) => {
+        const red = (mha / c.val).toFixed(1);
+        html += `<div class="result-card ${i === 0 ? '' : 'highlight'}">
+            <div class="attn-type" style="color:${c.color}">${c.name}</div>
+            <div class="cache-val" style="color:${c.color}">${fmt(c.val)}</div>
+            <div class="cache-unit">${c.heads}</div>
+            <div class="reduction" style="background:${c.color}22; color:${c.color}">${i === 0 ? 'baseline' : red + 'x smaller'}</div>
+        </div>`;
+    });
+    document.getElementById('results').innerHTML = html;
+
+    let bars = '';
+    configs.forEach(c => {
+        const pct = Math.max(2, (c.val / mha) * 100);
+        bars += `<div class="bar-row">
+            <div class="bar-label" style="color:${c.color}">${c.name}</div>
+            <div class="bar-track">
+                <div class="bar-fill" style="width:${pct}%; background:${c.color}">${pct < 5 ? '' : ''}</div>
+            </div>
+            <div class="bar-value">${fmt(c.val)}</div>
+        </div>`;
+    });
+    document.getElementById('barchart').innerHTML = bars;
+
+    const gpus = [
+        { name: 'A100 80G', mem: 80e9 },
+        { name: 'H100 80G', mem: 80e9 },
+        { name: 'A10G 24G', mem: 24e9 },
+        { name: 'L4 24G', mem: 24e9 }
+    ];
+    let gpuHtml = '<h3>GPU Memory Usage (KV Cache Only, GQA)</h3>';
+    gpus.forEach(g => {
+        const pct = Math.min(100, (gqa / g.mem) * 100);
+        const col = pct > 90 ? '#e94560' : pct > 60 ? '#ffd93d' : '#4ecdc4';
+        gpuHtml += `<div class="gpu-bar-container">
+            <div class="gpu-name">${g.name}</div>
+            <div class="gpu-bar-track">
+                <div class="gpu-bar-fill" style="width:${pct}%; background:${col}"></div>
+            </div>
+            <div class="gpu-pct" style="color:${col}">${pct.toFixed(1)}%</div>
+        </div>`;
+    });
+    document.getElementById('gpu-section').innerHTML = gpuHtml;
+}
+
+update();
+</script>
+</body>
+</html>

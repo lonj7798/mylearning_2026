@@ -1,0 +1,447 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Speculative Decoding: Acceptance Rate Explorer</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    background: #0d1117;
+    color: #e0e0e0;
+    font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+    padding: 24px;
+    min-height: 100vh;
+  }
+  h1 { font-size: 20px; margin-bottom: 8px; }
+  .subtitle { color: #888; font-size: 13px; margin-bottom: 24px; }
+  .grid {
+    display: grid;
+    grid-template-columns: 320px 1fr;
+    gap: 24px;
+    margin-bottom: 24px;
+  }
+  @media (max-width: 800px) {
+    .grid { grid-template-columns: 1fr; }
+  }
+  .panel {
+    background: #161b22;
+    border: 1px solid #30363d;
+    border-radius: 10px;
+    padding: 20px;
+  }
+  .panel h2 {
+    font-size: 14px;
+    color: #888;
+    margin-bottom: 16px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+  }
+  .slider-group {
+    margin-bottom: 20px;
+  }
+  .slider-label {
+    display: flex;
+    justify-content: space-between;
+    font-size: 13px;
+    margin-bottom: 6px;
+  }
+  .slider-label .value {
+    color: #4ecdc4;
+    font-weight: 700;
+    font-family: 'SF Mono', monospace;
+  }
+  input[type="range"] {
+    width: 100%;
+    accent-color: #e94560;
+    margin-bottom: 4px;
+  }
+  .slider-ticks {
+    display: flex;
+    justify-content: space-between;
+    font-size: 10px;
+    color: #555;
+  }
+  .result-card {
+    background: #1a1a2e;
+    border-radius: 8px;
+    padding: 16px;
+    margin-bottom: 12px;
+    text-align: center;
+  }
+  .result-value {
+    font-size: 32px;
+    font-weight: 700;
+  }
+  .result-label {
+    font-size: 11px;
+    color: #888;
+    margin-top: 4px;
+  }
+  .result-value.good { color: #4ecdc4; }
+  .result-value.medium { color: #ffd93d; }
+  .result-value.bad { color: #e94560; }
+  canvas {
+    width: 100%;
+    height: 400px;
+    display: block;
+  }
+  .domain-presets {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-bottom: 20px;
+  }
+  .preset-btn {
+    background: #1a1a2e;
+    color: #e0e0e0;
+    border: 1px solid #30363d;
+    padding: 6px 14px;
+    border-radius: 16px;
+    font-size: 11px;
+    cursor: pointer;
+    transition: all 0.2s;
+  }
+  .preset-btn:hover { border-color: #e94560; color: #e94560; }
+  .preset-btn.active { background: #e94560; color: #fff; border-color: #e94560; }
+  .formula {
+    background: #1a1a2e;
+    border-radius: 8px;
+    padding: 12px 16px;
+    font-family: 'SF Mono', monospace;
+    font-size: 12px;
+    color: #4ecdc4;
+    margin-bottom: 16px;
+    text-align: center;
+  }
+  .breakdown {
+    margin-top: 16px;
+  }
+  .breakdown-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 8px 0;
+    border-bottom: 1px solid #1a1a2e;
+    font-size: 12px;
+  }
+  .breakdown-row .label { color: #888; }
+  .breakdown-row .val { font-weight: 700; font-family: 'SF Mono', monospace; }
+  .chart-container {
+    position: relative;
+  }
+  .chart-legend {
+    display: flex;
+    gap: 16px;
+    justify-content: center;
+    margin-top: 12px;
+    flex-wrap: wrap;
+  }
+  .legend-item {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 11px;
+    color: #888;
+  }
+  .legend-dot {
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+  }
+</style>
+</head>
+<body>
+<h1>Acceptance Rate Explorer</h1>
+<p class="subtitle">Explore how acceptance rate, speculation length, and draft cost affect speculative decoding speedup.</p>
+
+<div class="domain-presets">
+  <button class="preset-btn" onclick="setPreset(0.88, 6, 0.08, this)">Code Completion</button>
+  <button class="preset-btn" onclick="setPreset(0.80, 5, 0.10, this)">Translation</button>
+  <button class="preset-btn" onclick="setPreset(0.75, 5, 0.10, this)">Summarization</button>
+  <button class="preset-btn" onclick="setPreset(0.60, 4, 0.10, this)">Creative Writing</button>
+  <button class="preset-btn" onclick="setPreset(0.55, 4, 0.12, this)">Math Reasoning</button>
+  <button class="preset-btn" onclick="setPreset(0.65, 5, 0.08, this)">Chain-of-Thought</button>
+</div>
+
+<div class="grid">
+  <div class="panel">
+    <h2>Parameters</h2>
+
+    <div class="slider-group">
+      <div class="slider-label">
+        <span>Acceptance Rate (alpha)</span>
+        <span class="value" id="alpha-val">0.75</span>
+      </div>
+      <input type="range" id="alpha" min="0" max="100" value="75" oninput="update()">
+      <div class="slider-ticks"><span>0%</span><span>25%</span><span>50%</span><span>75%</span><span>100%</span></div>
+    </div>
+
+    <div class="slider-group">
+      <div class="slider-label">
+        <span>Speculation Length (K)</span>
+        <span class="value" id="k-val">5</span>
+      </div>
+      <input type="range" id="k-slider" min="1" max="12" value="5" oninput="update()">
+      <div class="slider-ticks"><span>1</span><span>4</span><span>8</span><span>12</span></div>
+    </div>
+
+    <div class="slider-group">
+      <div class="slider-label">
+        <span>Draft Cost Ratio (c = t_draft / t_target)</span>
+        <span class="value" id="c-val">0.10</span>
+      </div>
+      <input type="range" id="c-slider" min="1" max="30" value="10" oninput="update()">
+      <div class="slider-ticks"><span>0.01</span><span>0.10</span><span>0.20</span><span>0.30</span></div>
+    </div>
+
+    <div class="formula">
+      E[tokens] = (1 - alpha^(K+1)) / (1 - alpha)
+    </div>
+
+    <div class="result-card">
+      <div class="result-value" id="res-speedup">2.05x</div>
+      <div class="result-label">Expected Speedup</div>
+    </div>
+
+    <div class="result-card">
+      <div class="result-value" id="res-tokens" style="font-size:24px;">3.08</div>
+      <div class="result-label">Expected Tokens per Iteration</div>
+    </div>
+
+    <div class="breakdown">
+      <div class="breakdown-row">
+        <span class="label">Target model cost</span>
+        <span class="val" id="bd-target">1 pass</span>
+      </div>
+      <div class="breakdown-row">
+        <span class="label">Draft model cost</span>
+        <span class="val" id="bd-draft">0.50 passes equiv.</span>
+      </div>
+      <div class="breakdown-row">
+        <span class="label">Total cost per iter</span>
+        <span class="val" id="bd-total">1.50 passes</span>
+      </div>
+      <div class="breakdown-row">
+        <span class="label">Tokens at each depth</span>
+        <span class="val" id="bd-depth">-</span>
+      </div>
+    </div>
+  </div>
+
+  <div class="panel">
+    <h2>Speedup Curve</h2>
+    <div class="chart-container">
+      <canvas id="chart"></canvas>
+    </div>
+    <div class="chart-legend">
+      <div class="legend-item"><div class="legend-dot" style="background:#e94560;"></div>Current K</div>
+      <div class="legend-item"><div class="legend-dot" style="background:#4ecdc4;"></div>K=3</div>
+      <div class="legend-item"><div class="legend-dot" style="background:#ffd93d;"></div>K=5</div>
+      <div class="legend-item"><div class="legend-dot" style="background:#888;"></div>K=8</div>
+      <div class="legend-item"><div class="legend-dot" style="background:#ff6b81; border:2px dashed #e94560;width:14px;height:2px;border-radius:0;"></div>Break-even (1x)</div>
+    </div>
+  </div>
+</div>
+
+<script>
+const canvas = document.getElementById('chart');
+const ctx = canvas.getContext('2d');
+
+function resize() {
+  const rect = canvas.parentElement.getBoundingClientRect();
+  canvas.width = rect.width * window.devicePixelRatio;
+  canvas.height = 400 * window.devicePixelRatio;
+  canvas.style.width = rect.width + 'px';
+  canvas.style.height = '400px';
+  ctx.scale(window.devicePixelRatio, window.devicePixelRatio);
+}
+
+function expectedTokens(alpha, K) {
+  if (alpha === 1) return K + 1;
+  if (alpha === 0) return 1;
+  return (1 - Math.pow(alpha, K + 1)) / (1 - alpha);
+}
+
+function speedup(alpha, K, c) {
+  const et = expectedTokens(alpha, K);
+  const cost = 1 + K * c;
+  return et / cost;
+}
+
+function drawChart() {
+  const w = canvas.width / window.devicePixelRatio;
+  const h = canvas.height / window.devicePixelRatio;
+  const pad = { top: 20, right: 20, bottom: 40, left: 50 };
+  const cw = w - pad.left - pad.right;
+  const ch = h - pad.top - pad.bottom;
+
+  ctx.clearRect(0, 0, w, h);
+
+  const alpha = parseInt(document.getElementById('alpha').value) / 100;
+  const K = parseInt(document.getElementById('k-slider').value);
+  const c = parseInt(document.getElementById('c-slider').value) / 100;
+
+  const maxSpeedup = 8;
+  const alphaSteps = 100;
+
+  // Grid
+  ctx.strokeStyle = '#1a1a2e';
+  ctx.lineWidth = 1;
+  for (let i = 0; i <= 8; i++) {
+    const y = pad.top + ch - (i / maxSpeedup) * ch;
+    ctx.beginPath();
+    ctx.moveTo(pad.left, y);
+    ctx.lineTo(pad.left + cw, y);
+    ctx.stroke();
+  }
+  for (let i = 0; i <= 10; i++) {
+    const x = pad.left + (i / 10) * cw;
+    ctx.beginPath();
+    ctx.moveTo(x, pad.top);
+    ctx.lineTo(x, pad.top + ch);
+    ctx.stroke();
+  }
+
+  // Break-even line at speedup=1
+  ctx.strokeStyle = '#e94560';
+  ctx.lineWidth = 1;
+  ctx.setLineDash([6, 4]);
+  const breakY = pad.top + ch - (1 / maxSpeedup) * ch;
+  ctx.beginPath();
+  ctx.moveTo(pad.left, breakY);
+  ctx.lineTo(pad.left + cw, breakY);
+  ctx.stroke();
+  ctx.setLineDash([]);
+
+  // Draw curves for K=3, K=5, K=8
+  const curves = [
+    { k: 3, color: '#4ecdc4', width: 1.5 },
+    { k: 5, color: '#ffd93d', width: 1.5 },
+    { k: 8, color: '#888', width: 1.5 },
+  ];
+
+  for (const curve of curves) {
+    ctx.strokeStyle = curve.color;
+    ctx.lineWidth = curve.width;
+    ctx.globalAlpha = 0.5;
+    ctx.beginPath();
+    for (let i = 0; i <= alphaSteps; i++) {
+      const a = i / alphaSteps;
+      const s = speedup(a, curve.k, c);
+      const x = pad.left + (a * cw);
+      const y = pad.top + ch - (Math.min(s, maxSpeedup) / maxSpeedup) * ch;
+      if (i === 0) ctx.moveTo(x, y);
+      else ctx.lineTo(x, y);
+    }
+    ctx.stroke();
+    ctx.globalAlpha = 1;
+  }
+
+  // Current K curve (highlighted)
+  ctx.strokeStyle = '#e94560';
+  ctx.lineWidth = 3;
+  ctx.beginPath();
+  for (let i = 0; i <= alphaSteps; i++) {
+    const a = i / alphaSteps;
+    const s = speedup(a, K, c);
+    const x = pad.left + (a * cw);
+    const y = pad.top + ch - (Math.min(s, maxSpeedup) / maxSpeedup) * ch;
+    if (i === 0) ctx.moveTo(x, y);
+    else ctx.lineTo(x, y);
+  }
+  ctx.stroke();
+
+  // Current point
+  const curS = speedup(alpha, K, c);
+  const curX = pad.left + alpha * cw;
+  const curY = pad.top + ch - (Math.min(curS, maxSpeedup) / maxSpeedup) * ch;
+  ctx.fillStyle = '#e94560';
+  ctx.beginPath();
+  ctx.arc(curX, curY, 6, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.fillStyle = '#fff';
+  ctx.beginPath();
+  ctx.arc(curX, curY, 3, 0, Math.PI * 2);
+  ctx.fill();
+
+  // Point label
+  ctx.fillStyle = '#e0e0e0';
+  ctx.font = '12px SF Mono, monospace';
+  ctx.textAlign = 'center';
+  const labelY = curY > pad.top + 30 ? curY - 14 : curY + 20;
+  ctx.fillText(curS.toFixed(2) + 'x', curX, labelY);
+
+  // Axes labels
+  ctx.fillStyle = '#888';
+  ctx.font = '11px system-ui';
+  ctx.textAlign = 'center';
+  for (let i = 0; i <= 10; i++) {
+    const x = pad.left + (i / 10) * cw;
+    ctx.fillText((i * 10) + '%', x, pad.top + ch + 20);
+  }
+  ctx.fillText('Acceptance Rate (alpha)', pad.left + cw / 2, pad.top + ch + 36);
+
+  ctx.textAlign = 'right';
+  for (let i = 0; i <= 8; i++) {
+    const y = pad.top + ch - (i / maxSpeedup) * ch;
+    ctx.fillText(i + 'x', pad.left - 8, y + 4);
+  }
+
+  ctx.save();
+  ctx.translate(14, pad.top + ch / 2);
+  ctx.rotate(-Math.PI / 2);
+  ctx.textAlign = 'center';
+  ctx.fillText('Speedup', 0, 0);
+  ctx.restore();
+}
+
+function update() {
+  const alpha = parseInt(document.getElementById('alpha').value) / 100;
+  const K = parseInt(document.getElementById('k-slider').value);
+  const c = parseInt(document.getElementById('c-slider').value) / 100;
+
+  document.getElementById('alpha-val').textContent = alpha.toFixed(2);
+  document.getElementById('k-val').textContent = K;
+  document.getElementById('c-val').textContent = c.toFixed(2);
+
+  const et = expectedTokens(alpha, K);
+  const s = speedup(alpha, K, c);
+  const totalCost = 1 + K * c;
+
+  const resEl = document.getElementById('res-speedup');
+  resEl.textContent = s.toFixed(2) + 'x';
+  resEl.className = 'result-value ' + (s >= 2.0 ? 'good' : s >= 1.2 ? 'medium' : 'bad');
+
+  document.getElementById('res-tokens').textContent = et.toFixed(2);
+  document.getElementById('bd-target').textContent = '1 pass';
+  document.getElementById('bd-draft').textContent = (K * c).toFixed(2) + ' passes equiv.';
+  document.getElementById('bd-total').textContent = totalCost.toFixed(2) + ' passes';
+
+  // Token probability at each depth
+  let depthStr = '';
+  for (let i = 1; i <= Math.min(K, 6); i++) {
+    depthStr += (Math.pow(alpha, i) * 100).toFixed(0) + '%';
+    if (i < Math.min(K, 6)) depthStr += ', ';
+  }
+  if (K > 6) depthStr += '...';
+  document.getElementById('bd-depth').textContent = depthStr;
+
+  drawChart();
+}
+
+function setPreset(alpha, k, c, btn) {
+  document.getElementById('alpha').value = Math.round(alpha * 100);
+  document.getElementById('k-slider').value = k;
+  document.getElementById('c-slider').value = Math.round(c * 100);
+  document.querySelectorAll('.preset-btn').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+  update();
+}
+
+window.addEventListener('resize', () => { resize(); update(); });
+resize();
+update();
+</script>
+</body>
+</html>

@@ -27,6 +27,8 @@ Self-attention connects every position to every other position in a single layer
 
 ## 2. The Encoder-Decoder Architecture
 
+[Interactive: Full Transformer Architecture](figures/transformer-architecture.html)
+
 The original Transformer is an encoder-decoder model for sequence-to-sequence tasks (machine translation). This is **not** the architecture used by modern LLMs — GPT and its descendants use decoder-only ([[ch-04]]) — but understanding the full encoder-decoder design clarifies *why* each component exists.
 
 <div style="background:#1a1a2e; border-radius:12px; padding:28px; margin:20px 0; font-family:sans-serif; color:#e0e0e0;">
@@ -152,6 +154,8 @@ where $W_i^Q \in \mathbb{R}^{512 \times 64}$, $W_i^K \in \mathbb{R}^{512 \times 
 
 ## 4. The Residual Stream View
 
+[Deep Dive: The Residual Stream — A Deep Dive](excerpts/residual-stream-deep-dive.md)
+
 The Transformer's skip connections are not just a training trick — they define the fundamental information flow architecture.
 
 ### From ResNet to Transformers
@@ -262,6 +266,8 @@ The stream carries information from embedding to output; layers are read/write o
 
 ## 5. Positional Encoding: The Sinusoidal Solution
 
+[Deep Dive: Sinusoidal Encoding Frequency Analysis](excerpts/sinusoidal-encoding-frequency-analysis.md) | [Interactive: Positional Encoding Visualizer](figures/positional-encoding-visualizer.html) | [Interactive: Sinusoidal Positional Encoding](figures/sinusoidal-encoding.html)
+
 Attention is permutation-equivariant: $\text{Attention}(\pi(X)) = \pi(\text{Attention}(X))$ for any permutation $\pi$. Without positional encoding, the model treats "the cat sat on the mat" identically to "mat the on sat cat the." Position information must be explicitly injected.
 
 ### The Sinusoidal Encoding
@@ -340,6 +346,8 @@ RoPE (Su et al., 2021, [[ch-09]]) solved these by rotating query and key vectors
 ---
 
 ## 6. Layer Normalization and Its Placement
+
+[Deep Dive: Layer Normalization Placement — Post-LN vs. Pre-LN](excerpts/layer-norm-placement.md)
 
 ### Why Normalize?
 

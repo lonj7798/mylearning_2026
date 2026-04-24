@@ -74,6 +74,8 @@ Calculation: 2 (K+V) x KV_heads x d_k (128) x layers (80) x seq_len x 2 bytes (F
 
 At 32K context with full MHA, a *single request* would consume 80 GB of KV cache — exceeding the memory of an A100. This is why every 70B+ model uses a KV-reduction strategy.
 
+[Interactive: KV Cache Size Calculator](figures/kv-cache-calculator.html) — pick model size, attention type, sequence length, and precision to compute exact cache sizes for MHA, GQA, MQA, and MLA, with GPU memory usage indicators.
+
 ---
 
 ## 2. Multi-Query Attention (MQA, [[mqa|paper]]): One KV Head to Rule Them All
@@ -174,6 +176,8 @@ where $W_K, W_V \in \mathbb{R}^{d_\text{model} \times d_k}$ — reduced from $(d
 **The speedup is nearly proportional to the cache reduction** because decoding is bandwidth-bound. If you reduce the KV cache by $H\times$, you reduce the bytes loaded per step by approximately $H\times$, which translates almost directly to $H\times$ faster decoding.
 
 **The quality cost is real but modest.** Sharing K and V across all query heads reduces the model's ability to form diverse attention patterns — different heads can no longer attend to different representations of the same position. The paper acknowledges "only minor quality degradation," but the degradation is task-dependent and becomes more noticeable at scale. This gap is what motivated GQA.
+
+[Deep Dive: MLA vs GQA Quantitative Comparison](excerpts/mla-vs-gqa-comparison.md) — side-by-side cache sizes, quality benchmarks, compute costs, and a decision framework for choosing between attention variants.
 
 **Training caveat:** MQA provides no speedup during training. Training parallelizes across sequence length (all positions computed simultaneously via teacher forcing), so the KV cache size is irrelevant. MQA is purely an inference optimization. Models must also be trained from scratch with MQA — you cannot trivially convert an existing MHA checkpoint.
 
@@ -337,6 +341,10 @@ The N x N matrices S and P are the problem. They consume $O(N^2)$ memory and req
 
 ### Tiling: The Core Algorithm
 
+[Deep Dive: Flash Attention Tiling Algorithm](excerpts/flash-attention-tiling.md) — complete walkthrough of the forward pass algorithm with block size calculations, IO complexity analysis, and backward pass recomputation strategy.
+
+[Interactive: Flash Attention Tiling Animation](figures/flash-attention-tiling.html) — step through the nested loop, watch tiles processed in SRAM, and track HBM access counts vs. standard attention.
+
 Flash Attention never materializes the full N x N attention matrix. Instead, it divides Q, K, V into blocks that fit in SRAM and computes attention *tile by tile*:
 
 <div style="background:#1a1a2e; border-radius:12px; padding:24px; margin:20px 0;">
@@ -381,6 +389,8 @@ Block size B = ceil(M / (4d)), where M = SRAM capacity, d = head dimension.
 </div>
 
 ### The Online Softmax Trick
+
+[Deep Dive: Online Softmax Derivation](excerpts/online-softmax-derivation.md) — full mathematical derivation from first principles, proving correctness of the incremental softmax computation.
 
 The mathematical challenge: softmax requires a global normalization denominator $\sum_j e^{s_j}$ across the entire key sequence. How can you compute this tile-by-tile without seeing all scores at once?
 

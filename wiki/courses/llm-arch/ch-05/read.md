@@ -5,6 +5,19 @@
      see-also: [[ch-06]], [[ch-07]]
 -->
 
+## Companion Materials
+
+**Interactive Figures:**
+- [BPE Merge Animation](figures/bpe-merge-animation.html) -- step through the BPE algorithm on a live corpus; watch pairs get counted, merged, and added to the vocabulary
+- [Vocab Size vs Sequence Length Tradeoff](figures/vocab-size-tradeoff.html) -- interactive explorer showing how vocabulary size affects fertility, embedding cost, and attention compute across real models (BERT, GPT-2, LLaMA 1/3, Qwen 3)
+
+**Deep-Dive Excerpts:**
+- [BPE Algorithm Step-by-Step Walkthrough](excerpts/bpe-algorithm-walkthrough.md) -- full worked example from corpus to vocabulary, byte-level BPE, merge table as compressed knowledge
+- [SolidGoldMagikarp Deep-Dive](excerpts/solidgoldmagikarp-deep-dive.md) -- root cause analysis of glitch tokens, the tokenizer-model corpus mismatch, mitigation strategies
+- [Multilingual Tokenization Fairness](excerpts/multilingual-tokenization-fairness.md) -- fertility gap quantification, downstream consequences (context, compute, cost), how LLaMA 3 and Qwen 3 addressed it
+
+---
+
 ## Overview
 
 Tokenization is the interface between raw text and the model's numerical world. Every decision made here propagates through the entire architecture: the embedding table size, the effective sequence length, the compute cost of attention, and the model's ability to handle multilingual text, code, and edge cases. It is easy to treat tokenization as a preprocessing detail. That is a mistake — vocabulary design is an architectural decision with first-order consequences for model quality, efficiency, and fairness.

@@ -1,0 +1,327 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Vocab Size vs Sequence Length Tradeoff — Ch-05</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body {
+  background: #1a1a2e;
+  color: #e0e0e0;
+  font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 40px 20px;
+}
+h1 { font-size: 22px; color: #e94560; margin-bottom: 8px; }
+.subtitle { font-size: 13px; color: #888; margin-bottom: 32px; text-align: center; max-width: 620px; }
+
+.chart-container {
+  width: 100%;
+  max-width: 800px;
+  margin-bottom: 32px;
+}
+canvas { width: 100%; }
+
+.slider-row {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  margin-bottom: 24px;
+  flex-wrap: wrap;
+  justify-content: center;
+}
+.slider-label { font-size: 13px; color: #aaa; min-width: 100px; }
+input[type="range"] {
+  -webkit-appearance: none;
+  width: 300px;
+  height: 6px;
+  background: #16213e;
+  border-radius: 3px;
+  outline: none;
+}
+input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: #e94560;
+  cursor: pointer;
+}
+.slider-value {
+  font-size: 14px;
+  font-weight: 700;
+  color: #e94560;
+  min-width: 80px;
+}
+
+.models-grid {
+  display: flex;
+  gap: 16px;
+  flex-wrap: wrap;
+  justify-content: center;
+  margin-bottom: 32px;
+  width: 100%;
+  max-width: 900px;
+}
+.model-card {
+  background: #16213e;
+  border-radius: 10px;
+  padding: 16px 20px;
+  min-width: 160px;
+  flex: 1;
+  cursor: pointer;
+  transition: all 0.2s;
+  border: 2px solid transparent;
+}
+.model-card:hover { border-color: #333; }
+.model-card.active { border-color: #e94560; }
+.model-card .name { font-size: 13px; font-weight: 700; color: #e94560; }
+.model-card .vocab { font-size: 20px; font-weight: 700; color: #e0e0e0; margin: 4px 0; }
+.model-card .detail { font-size: 11px; color: #666; }
+
+.metrics-panel {
+  width: 100%;
+  max-width: 900px;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 16px;
+  margin-bottom: 24px;
+}
+.metric {
+  background: #16213e;
+  border-radius: 10px;
+  padding: 20px;
+  text-align: center;
+}
+.metric .label { font-size: 11px; color: #888; text-transform: uppercase; letter-spacing: 1px; }
+.metric .value { font-size: 28px; font-weight: 700; margin: 8px 0 4px; }
+.metric .unit { font-size: 12px; color: #666; }
+
+.cost-bar-container {
+  width: 100%;
+  max-width: 900px;
+  background: #16213e;
+  border-radius: 12px;
+  padding: 24px;
+}
+.cost-bar-container h2 { font-size: 14px; color: #4ecdc4; margin-bottom: 16px; }
+.bar-group { margin-bottom: 16px; }
+.bar-label {
+  display: flex;
+  justify-content: space-between;
+  margin-bottom: 4px;
+  font-size: 12px;
+}
+.bar-label .name { color: #aaa; }
+.bar-label .val { color: #e0e0e0; font-weight: 600; }
+.bar-track {
+  width: 100%;
+  height: 20px;
+  background: #0a1628;
+  border-radius: 4px;
+  overflow: hidden;
+}
+.bar-fill {
+  height: 100%;
+  border-radius: 4px;
+  transition: width 0.5s ease;
+}
+</style>
+</head>
+<body>
+
+<h1>Vocabulary Size vs Sequence Length Tradeoff</h1>
+<p class="subtitle">
+  A larger vocabulary compresses text into fewer tokens (cheaper attention) but increases embedding table cost.
+  Select a model to see the tradeoffs, or use the slider to explore custom vocabulary sizes.
+</p>
+
+<div class="models-grid" id="modelsGrid"></div>
+
+<div class="slider-row">
+  <span class="slider-label">Vocab size:</span>
+  <input type="range" id="vocabSlider" min="10000" max="200000" step="1000" value="50257" oninput="updateFromSlider()">
+  <span class="slider-value" id="vocabValue">50,257</span>
+</div>
+
+<div class="metrics-panel" id="metricsPanel"></div>
+
+<div class="cost-bar-container">
+  <h2>Cost Breakdown (8B parameter model, d_model=4096)</h2>
+  <div id="costBars"></div>
+</div>
+
+<script>
+const models = [
+  { name: 'BERT', vocab: 30522, d: 768, tied: true, color: '#888' },
+  { name: 'GPT-2 XL', vocab: 50257, d: 1600, tied: true, color: '#e94560' },
+  { name: 'LLaMA 1', vocab: 32000, d: 4096, tied: true, color: '#4ecdc4' },
+  { name: 'LLaMA 3 8B', vocab: 128256, d: 4096, tied: false, color: '#ffd93d' },
+  { name: 'Qwen 3', vocab: 151669, d: 4096, tied: true, color: '#a29bfe' },
+];
+
+let selectedVocab = 50257;
+let selectedModel = 1;
+
+const dModel = 4096;
+const totalParams = 8e9;
+const engWordsPerDoc = 4000;
+
+function formatNum(n) {
+  if (n >= 1e9) return (n/1e9).toFixed(2) + 'B';
+  if (n >= 1e6) return (n/1e6).toFixed(1) + 'M';
+  if (n >= 1e3) return (n/1e3).toFixed(1) + 'K';
+  return n.toFixed(0);
+}
+
+function fertility(vocab) {
+  // Approximate fertility: log relationship, calibrated to known points
+  // 32K -> 1.3, 50K -> 1.2, 128K -> 1.05, 150K -> 1.0
+  const logV = Math.log(vocab);
+  const f = 2.8 - 0.155 * logV;
+  return Math.max(0.95, Math.min(2.0, f));
+}
+
+function embeddingParams(vocab, tied) {
+  return tied ? vocab * dModel : 2 * vocab * dModel;
+}
+
+function embeddingMB(vocab, tied) {
+  return embeddingParams(vocab, tied) * 2 / (1024 * 1024); // FP16
+}
+
+function seqLen(vocab, words) {
+  return Math.ceil(words * fertility(vocab));
+}
+
+function attentionCost(seqLen) {
+  return seqLen * seqLen; // relative O(N^2) cost
+}
+
+function renderModels() {
+  const grid = document.getElementById('modelsGrid');
+  grid.innerHTML = '';
+  models.forEach((m, i) => {
+    const card = document.createElement('div');
+    card.className = 'model-card' + (i === selectedModel ? ' active' : '');
+    card.innerHTML = `
+      <div class="name" style="color:${m.color}">${m.name}</div>
+      <div class="vocab">${(m.vocab/1000).toFixed(m.vocab > 100000 ? 0 : 1)}K</div>
+      <div class="detail">d=${m.d}, ${m.tied ? 'tied' : 'untied'}</div>
+    `;
+    card.onclick = () => {
+      selectedModel = i;
+      selectedVocab = m.vocab;
+      document.getElementById('vocabSlider').value = m.vocab;
+      document.getElementById('vocabValue').textContent = m.vocab.toLocaleString();
+      renderAll();
+    };
+    grid.appendChild(card);
+  });
+}
+
+function renderMetrics() {
+  const panel = document.getElementById('metricsPanel');
+  const v = selectedVocab;
+  const m = models[selectedModel];
+  const tied = m ? m.tied : true;
+  const fert = fertility(v);
+  const tokens = seqLen(v, engWordsPerDoc);
+  const embP = embeddingParams(v, tied);
+  const embMB = embeddingMB(v, tied);
+  const pctOfModel = (embP / totalParams * 100);
+
+  panel.innerHTML = `
+    <div class="metric">
+      <div class="label">Fertility (English)</div>
+      <div class="value" style="color:#4ecdc4;">${fert.toFixed(2)}</div>
+      <div class="unit">tokens / word</div>
+    </div>
+    <div class="metric">
+      <div class="label">4K-word doc length</div>
+      <div class="value" style="color:#ffd93d;">${tokens.toLocaleString()}</div>
+      <div class="unit">tokens</div>
+    </div>
+    <div class="metric">
+      <div class="label">Embedding params</div>
+      <div class="value" style="color:#e94560;">${formatNum(embP)}</div>
+      <div class="unit">${embMB.toFixed(0)} MB (FP16) | ${pctOfModel.toFixed(1)}% of 8B</div>
+    </div>
+    <div class="metric">
+      <div class="label">Softmax width</div>
+      <div class="value" style="color:#a29bfe;">${(v/1000).toFixed(1)}K</div>
+      <div class="unit">logits per decode step</div>
+    </div>
+  `;
+}
+
+function renderCostBars() {
+  const container = document.getElementById('costBars');
+  const v = selectedVocab;
+  const m = models[selectedModel];
+  const tied = m ? m.tied : true;
+
+  const embP = embeddingParams(v, tied);
+  const pct = embP / totalParams * 100;
+  const tokens = seqLen(v, engWordsPerDoc);
+  const baseTokens = seqLen(32000, engWordsPerDoc);
+  const attPct = (attentionCost(tokens) / attentionCost(baseTokens) * 100);
+
+  container.innerHTML = `
+    <div class="bar-group">
+      <div class="bar-label">
+        <span class="name">Embedding % of 8B model</span>
+        <span class="val">${pct.toFixed(1)}%</span>
+      </div>
+      <div class="bar-track">
+        <div class="bar-fill" style="width:${Math.min(pct * 3, 100)}%; background: linear-gradient(90deg, #e94560, #e9456088);"></div>
+      </div>
+    </div>
+    <div class="bar-group">
+      <div class="bar-label">
+        <span class="name">Relative attention cost (vs 32K vocab baseline)</span>
+        <span class="val">${attPct.toFixed(0)}%</span>
+      </div>
+      <div class="bar-track">
+        <div class="bar-fill" style="width:${Math.min(attPct, 100)}%; background: linear-gradient(90deg, #4ecdc4, #4ecdc488);"></div>
+      </div>
+    </div>
+    <div class="bar-group">
+      <div class="bar-label">
+        <span class="name">Sequence compression (vs 32K vocab)</span>
+        <span class="val">${(fertility(32000) / fertility(v) * 100).toFixed(0)}%</span>
+      </div>
+      <div class="bar-track">
+        <div class="bar-fill" style="width:${Math.min(fertility(32000) / fertility(v) * 100, 100)}%; background: linear-gradient(90deg, #ffd93d, #ffd93d88);"></div>
+      </div>
+    </div>
+  `;
+}
+
+function renderAll() {
+  renderModels();
+  renderMetrics();
+  renderCostBars();
+}
+
+function updateFromSlider() {
+  selectedVocab = parseInt(document.getElementById('vocabSlider').value);
+  document.getElementById('vocabValue').textContent = selectedVocab.toLocaleString();
+  // Find closest model
+  let minDist = Infinity;
+  models.forEach((m, i) => {
+    const dist = Math.abs(m.vocab - selectedVocab);
+    if (dist < minDist) { minDist = dist; selectedModel = i; }
+  });
+  renderAll();
+}
+
+renderAll();
+</script>
+
+</body>
+</html>

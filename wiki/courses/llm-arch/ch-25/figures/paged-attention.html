@@ -1,0 +1,306 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>PagedAttention: Virtual Memory for KV Cache</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { background: #0f0f1a; color: #e0e0e0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; padding: 24px; min-height: 100vh; }
+h1 { font-size: 20px; color: #fff; margin-bottom: 4px; }
+.subtitle { color: #888; font-size: 13px; margin-bottom: 24px; }
+.container { max-width: 900px; margin: 0 auto; }
+.controls { display: flex; gap: 12px; margin-bottom: 24px; flex-wrap: wrap; align-items: center; }
+button { background: #1a1a2e; border: 1px solid #333; color: #e0e0e0; padding: 8px 16px; border-radius: 6px; cursor: pointer; font-size: 13px; transition: all 0.2s; }
+button:hover { border-color: #4ecdc4; color: #4ecdc4; }
+button.active { background: #4ecdc4; color: #0f0f1a; border-color: #4ecdc4; font-weight: bold; }
+.step-label { color: #888; font-size: 12px; margin-left: 8px; }
+.scene { display: flex; gap: 32px; flex-wrap: wrap; justify-content: center; }
+.panel { background: #1a1a2e; border-radius: 12px; padding: 20px; flex: 1; min-width: 280px; }
+.panel-title { font-size: 14px; font-weight: bold; margin-bottom: 16px; }
+.panel-title.req-a { color: #4ecdc4; }
+.panel-title.req-b { color: #e94560; }
+.panel-title.gpu { color: #ffd93d; }
+
+/* Block table visualization */
+.block-table { display: flex; flex-direction: column; gap: 4px; margin-bottom: 12px; }
+.bt-row { display: flex; align-items: center; gap: 6px; }
+.bt-logical { width: 60px; height: 30px; border-radius: 4px; display: flex; align-items: center; justify-content: center; font-size: 11px; font-weight: bold; border: 1px solid; }
+.bt-arrow { color: #666; font-size: 14px; }
+.bt-physical { width: 60px; height: 30px; border-radius: 4px; display: flex; align-items: center; justify-content: center; font-size: 11px; font-weight: bold; background: #16213e; }
+
+/* GPU memory grid */
+.gpu-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 4px; }
+.gpu-block { height: 48px; border-radius: 6px; display: flex; flex-direction: column; align-items: center; justify-content: center; font-size: 10px; font-weight: bold; transition: all 0.4s ease; }
+.gpu-block.free { background: #16213e; color: #444; border: 1px dashed #333; }
+.gpu-block.req-a { background: #0d4f4a; color: #4ecdc4; border: 1px solid #4ecdc4; }
+.gpu-block.req-b { background: #4a0d1a; color: #e94560; border: 1px solid #e94560; }
+.gpu-block.shared { background: #3d2e00; color: #ffd93d; border: 1px solid #ffd93d; }
+.gpu-block .block-id { font-size: 9px; color: inherit; opacity: 0.7; }
+
+/* Stats */
+.stats { margin-top: 16px; display: flex; gap: 16px; flex-wrap: wrap; }
+.stat { text-align: center; }
+.stat-value { font-size: 24px; font-weight: bold; color: #4ecdc4; }
+.stat-label { font-size: 11px; color: #888; }
+.stat-value.waste { color: #e94560; }
+.stat-value.good { color: #4ecdc4; }
+
+/* Annotations */
+.annotation { background: #16213e; border-radius: 8px; padding: 12px 16px; margin-top: 16px; font-size: 12px; color: #ccc; line-height: 1.6; border-left: 3px solid #4ecdc4; }
+.annotation.warn { border-left-color: #e94560; }
+.annotation strong { color: #fff; }
+
+/* Comparison panel */
+.comparison { display: flex; gap: 24px; margin-top: 24px; flex-wrap: wrap; }
+.comp-box { flex: 1; min-width: 200px; background: #1a1a2e; border-radius: 12px; padding: 16px; text-align: center; }
+.comp-title { font-size: 12px; color: #888; margin-bottom: 8px; }
+.comp-bar-track { width: 100%; height: 24px; background: #16213e; border-radius: 4px; overflow: hidden; margin-bottom: 4px; }
+.comp-bar { height: 100%; border-radius: 4px; transition: width 0.5s ease; display: flex; align-items: center; justify-content: flex-end; padding-right: 6px; font-size: 10px; font-weight: bold; }
+.comp-bar.used { background: #4ecdc4; color: #0f0f1a; }
+.comp-bar.wasted { background: #e94560; color: #fff; }
+</style>
+</head>
+<body>
+<div class="container">
+<h1>PagedAttention: Virtual Memory for KV Cache</h1>
+<p class="subtitle">Interactive visualization of block-based KV cache memory management</p>
+
+<div class="controls">
+<button id="btn-step0" class="active" onclick="setStep(0)">Initial</button>
+<button id="btn-step1" onclick="setStep(1)">Req A: 3 blocks</button>
+<button id="btn-step2" onclick="setStep(2)">Req B arrives</button>
+<button id="btn-step3" onclick="setStep(3)">Req A grows</button>
+<button id="btn-step4" onclick="setStep(4)">Req B finishes</button>
+<button id="btn-step5" onclick="setStep(5)">Req C reuses</button>
+<button id="btn-step6" onclick="setStep(6)">Prefix sharing</button>
+<span class="step-label" id="step-desc">Empty GPU memory — 16 blocks available</span>
+</div>
+
+<div class="scene">
+<!-- Block Tables -->
+<div class="panel" style="min-width: 340px;">
+<div class="panel-title" style="color: #fff;">Block Tables (Logical → Physical)</div>
+<div id="block-tables"></div>
+</div>
+
+<!-- GPU Memory -->
+<div class="panel" style="min-width: 340px;">
+<div class="panel-title gpu">GPU Memory (Physical Blocks)</div>
+<div class="gpu-grid" id="gpu-grid"></div>
+<div class="stats" id="stats"></div>
+</div>
+</div>
+
+<div id="annotation-box"></div>
+
+<div class="comparison" id="comparison"></div>
+</div>
+
+<script>
+const TOTAL_BLOCKS = 16;
+
+const steps = [
+  {
+    desc: "Empty GPU memory — 16 blocks available",
+    requests: {},
+    gpu: Array(TOTAL_BLOCKS).fill({ state: 'free', label: '' }),
+    annotation: "All 16 physical blocks are free. Each block holds KV cache for a fixed number of tokens (e.g., 16 tokens). Blocks are the same size — no external fragmentation is possible.",
+    annotationType: '',
+    comparison: { traditional: { used: 0, wasted: 0, total: 16 }, paged: { used: 0, wasted: 0, total: 16 } }
+  },
+  {
+    desc: "Request A allocated 3 blocks (48 tokens of KV cache)",
+    requests: {
+      'A': { color: '#4ecdc4', mappings: [[0, 3], [1, 7], [2, 0]] }
+    },
+    gpu: makeGPU([
+      [0, 'req-a', 'A:2'], [3, 'req-a', 'A:0'], [7, 'req-a', 'A:1']
+    ]),
+    annotation: "Request A needs 48 tokens of KV cache → 3 blocks. Blocks are allocated from anywhere in GPU memory — they need not be contiguous. The block table maps logical order (0,1,2) to physical locations (3,7,0).",
+    annotationType: '',
+    comparison: { traditional: { used: 3, wasted: 13, total: 16, note: 'Pre-allocated max (16 blocks)' }, paged: { used: 3, wasted: 0, total: 16 } }
+  },
+  {
+    desc: "Request B arrives, gets 2 blocks (32 tokens)",
+    requests: {
+      'A': { color: '#4ecdc4', mappings: [[0, 3], [1, 7], [2, 0]] },
+      'B': { color: '#e94560', mappings: [[0, 1], [1, 9]] }
+    },
+    gpu: makeGPU([
+      [0, 'req-a', 'A:2'], [1, 'req-b', 'B:0'], [3, 'req-a', 'A:0'],
+      [7, 'req-a', 'A:1'], [9, 'req-b', 'B:1']
+    ]),
+    annotation: "Request B arrives and gets 2 blocks from the free pool. Note: B's blocks (physical 1, 9) are interleaved with A's blocks — <strong>no contiguous allocation needed</strong>. Traditional systems would need to find a contiguous 2-block region.",
+    annotationType: '',
+    comparison: { traditional: { used: 5, wasted: 27, total: 32, note: '2 requests x 16 max blocks each' }, paged: { used: 5, wasted: 0, total: 16 } }
+  },
+  {
+    desc: "Request A grows by 1 block (generates more tokens)",
+    requests: {
+      'A': { color: '#4ecdc4', mappings: [[0, 3], [1, 7], [2, 0], [3, 5]] },
+      'B': { color: '#e94560', mappings: [[0, 1], [1, 9]] }
+    },
+    gpu: makeGPU([
+      [0, 'req-a', 'A:2'], [1, 'req-b', 'B:0'], [3, 'req-a', 'A:0'],
+      [5, 'req-a', 'A:3'], [7, 'req-a', 'A:1'], [9, 'req-b', 'B:1']
+    ]),
+    annotation: "As Request A generates more tokens, a new block is allocated on demand (physical block 5). No reallocation or copying of existing blocks — just append a new entry to the block table. This is the key advantage over contiguous allocation.",
+    annotationType: '',
+    comparison: { traditional: { used: 6, wasted: 26, total: 32 }, paged: { used: 6, wasted: 0, total: 16 } }
+  },
+  {
+    desc: "Request B finishes — blocks immediately freed",
+    requests: {
+      'A': { color: '#4ecdc4', mappings: [[0, 3], [1, 7], [2, 0], [3, 5]] }
+    },
+    gpu: makeGPU([
+      [0, 'req-a', 'A:2'], [3, 'req-a', 'A:0'],
+      [5, 'req-a', 'A:3'], [7, 'req-a', 'A:1']
+    ]),
+    annotation: "Request B completes. Its 2 blocks (physical 1, 9) are instantly returned to the free pool. <strong>No fragmentation</strong> — all blocks are the same size, so freed blocks are immediately usable by new requests.",
+    annotationType: '',
+    comparison: { traditional: { used: 4, wasted: 12, total: 16, note: 'B freed, but A still pre-allocated' }, paged: { used: 4, wasted: 0, total: 16 } }
+  },
+  {
+    desc: "Request C arrives, reuses B's freed blocks",
+    requests: {
+      'A': { color: '#4ecdc4', mappings: [[0, 3], [1, 7], [2, 0], [3, 5]] },
+      'C': { color: '#a29bfe', mappings: [[0, 9], [1, 1], [2, 12]] }
+    },
+    gpu: makeGPU([
+      [0, 'req-a', 'A:2'], [1, 'req-c', 'C:1'], [3, 'req-a', 'A:0'],
+      [5, 'req-a', 'A:3'], [7, 'req-a', 'A:1'], [9, 'req-c', 'C:0'], [12, 'req-c', 'C:2']
+    ]),
+    annotation: "Request C arrives and gets 3 blocks — including physical blocks 1 and 9 that were just freed by Request B. The free-block pool makes recycling immediate. <strong>Zero external fragmentation.</strong>",
+    annotationType: '',
+    comparison: { traditional: { used: 7, wasted: 25, total: 32 }, paged: { used: 7, wasted: 0, total: 16 } }
+  },
+  {
+    desc: "Prefix sharing: Requests D & E share system prompt blocks",
+    requests: {
+      'D': { color: '#4ecdc4', mappings: [['P0', 2, true], ['P1', 6, true], [2, 4]] },
+      'E': { color: '#e94560', mappings: [['P0', 2, true], ['P1', 6, true], [2, 10], [3, 14]] }
+    },
+    gpu: makeGPU([
+      [2, 'shared', 'P:0'], [4, 'req-a', 'D:2'], [6, 'shared', 'P:1'],
+      [10, 'req-b', 'E:2'], [14, 'req-b', 'E:3']
+    ]),
+    annotation: "Requests D and E share the same system prompt. The shared prefix KV cache occupies physical blocks 2 and 6 — <strong>both block tables point to the same physical memory</strong>. The prefix is computed once and reused. Copy-on-write protects against modification. Memory saved: 2 blocks (the duplicate prefix).",
+    annotationType: '',
+    comparison: { traditional: { used: 7, wasted: 25, total: 32, note: 'Each request stores own prefix copy' }, paged: { used: 5, wasted: 0, total: 16, note: 'Shared prefix = 2 blocks saved' } }
+  }
+];
+
+function makeGPU(allocations) {
+  const gpu = [];
+  for (let i = 0; i < TOTAL_BLOCKS; i++) {
+    const alloc = allocations.find(a => a[0] === i);
+    if (alloc) {
+      gpu.push({ state: alloc[1], label: alloc[2] });
+    } else {
+      gpu.push({ state: 'free', label: '' });
+    }
+  }
+  return gpu;
+}
+
+function setStep(n) {
+  const step = steps[n];
+
+  // Update buttons
+  document.querySelectorAll('.controls button').forEach((b, i) => {
+    b.classList.toggle('active', i === n);
+  });
+
+  document.getElementById('step-desc').textContent = step.desc;
+
+  // Render block tables
+  const btDiv = document.getElementById('block-tables');
+  let btHTML = '';
+  for (const [name, req] of Object.entries(step.requests)) {
+    const color = req.color;
+    btHTML += `<div style="margin-bottom:16px;"><div style="color:${color}; font-weight:bold; font-size:13px; margin-bottom:6px;">Request ${name}</div>`;
+    btHTML += '<div class="block-table">';
+    for (const m of req.mappings) {
+      const logical = typeof m[0] === 'string' ? m[0] : `Blk ${m[0]}`;
+      const physical = `Phy ${m[1]}`;
+      const shared = m[2] ? ' (shared)' : '';
+      const borderColor = m[2] ? '#ffd93d' : color;
+      btHTML += `<div class="bt-row">
+        <div class="bt-logical" style="background:#16213e; color:${color}; border-color:${borderColor};">${logical}</div>
+        <span class="bt-arrow">→</span>
+        <div class="bt-physical" style="color:${m[2] ? '#ffd93d' : '#e0e0e0'};">${physical}${shared}</div>
+      </div>`;
+    }
+    btHTML += '</div></div>';
+  }
+  if (Object.keys(step.requests).length === 0) {
+    btHTML = '<div style="color:#666; font-size:13px; padding:20px; text-align:center;">No active requests</div>';
+  }
+  btDiv.innerHTML = btHTML;
+
+  // Render GPU grid
+  const gpuDiv = document.getElementById('gpu-grid');
+  let gpuHTML = '';
+  let usedCount = 0;
+  for (let i = 0; i < TOTAL_BLOCKS; i++) {
+    const block = step.gpu[i];
+    const cls = `gpu-block ${block.state}`;
+    const label = block.state === 'free' ? 'free' : block.label;
+    if (block.state !== 'free') usedCount++;
+    gpuHTML += `<div class="${cls}"><span>${label}</span><span class="block-id">#${i}</span></div>`;
+  }
+  gpuDiv.innerHTML = gpuHTML;
+
+  // Stats
+  const freeCount = TOTAL_BLOCKS - usedCount;
+  const utilization = Math.round((usedCount / TOTAL_BLOCKS) * 100);
+  document.getElementById('stats').innerHTML = `
+    <div class="stat"><div class="stat-value good">${usedCount}</div><div class="stat-label">Used</div></div>
+    <div class="stat"><div class="stat-value" style="color:#666;">${freeCount}</div><div class="stat-label">Free</div></div>
+    <div class="stat"><div class="stat-value good">${utilization}%</div><div class="stat-label">Utilization</div></div>
+    <div class="stat"><div class="stat-value good"><1</div><div class="stat-label">Blocks wasted/req</div></div>
+  `;
+
+  // Annotation
+  const abox = document.getElementById('annotation-box');
+  abox.innerHTML = `<div class="annotation ${step.annotationType}">${step.annotation}</div>`;
+
+  // Comparison bars
+  const comp = step.comparison;
+  const tradTotal = comp.traditional.total;
+  const tradUsedPct = Math.round((comp.traditional.used / tradTotal) * 100);
+  const tradWastedPct = Math.round((comp.traditional.wasted / tradTotal) * 100);
+  const pagedTotal = comp.paged.total;
+  const pagedUsedPct = Math.round((comp.paged.used / pagedTotal) * 100);
+
+  document.getElementById('comparison').innerHTML = `
+    <div class="comp-box">
+      <div class="comp-title">Traditional (Pre-allocated Contiguous)</div>
+      <div class="comp-bar-track">
+        <div class="comp-bar used" style="width:${tradUsedPct}%">${tradUsedPct}%</div>
+      </div>
+      <div class="comp-bar-track">
+        <div class="comp-bar wasted" style="width:${tradWastedPct}%">${tradWastedPct > 5 ? tradWastedPct + '% wasted' : ''}</div>
+      </div>
+      <div style="font-size:11px; color:#888; margin-top:4px;">${comp.traditional.note || `${comp.traditional.used} used / ${tradTotal} allocated`}</div>
+    </div>
+    <div class="comp-box">
+      <div class="comp-title">PagedAttention (Block-based)</div>
+      <div class="comp-bar-track">
+        <div class="comp-bar used" style="width:${pagedUsedPct}%">${pagedUsedPct}%</div>
+      </div>
+      <div class="comp-bar-track">
+        <div class="comp-bar wasted" style="width:0%"></div>
+      </div>
+      <div style="font-size:11px; color:#888; margin-top:4px;">${comp.paged.note || `${comp.paged.used} used / ${pagedTotal} total — near-zero waste`}</div>
+    </div>
+  `;
+}
+
+// Initialize
+setStep(0);
+</script>
+</body>
+</html>

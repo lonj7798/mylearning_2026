@@ -1,0 +1,421 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Sinusoidal Positional Encoding Visualizer</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { background: #1a1a2e; color: #e0e0e0; font-family: 'Segoe UI', system-ui, sans-serif; padding: 20px; min-height: 100vh; }
+h1 { color: #e94560; font-size: 22px; text-align: center; margin-bottom: 6px; }
+.subtitle { color: #888; font-size: 13px; text-align: center; margin-bottom: 20px; }
+.container { max-width: 960px; margin: 0 auto; }
+.panel { background: #16213e; border-radius: 12px; padding: 20px; margin-bottom: 16px; }
+.panel-title { color: #e94560; font-weight: bold; font-size: 15px; margin-bottom: 12px; }
+.controls { display: flex; gap: 16px; flex-wrap: wrap; align-items: center; margin-bottom: 16px; }
+.controls label { font-size: 12px; color: #aaa; display: flex; align-items: center; gap: 6px; }
+.controls select, .controls input { accent-color: #e94560; }
+.controls select { background: #0f3460; color: #e0e0e0; border: 1px solid #333; border-radius: 4px; padding: 4px 8px; }
+canvas { width: 100%; border-radius: 8px; background: #0a0a1a; display: block; }
+.legend { display: flex; gap: 16px; justify-content: center; margin-top: 10px; flex-wrap: wrap; }
+.legend-item { display: flex; align-items: center; gap: 6px; font-size: 11px; color: #aaa; }
+.legend-dot { width: 10px; height: 10px; border-radius: 50%; }
+.info { background: #0f3460; border-radius: 8px; padding: 12px; font-size: 12px; color: #aaa; line-height: 1.6; margin-top: 12px; }
+.info strong { color: #e94560; }
+.two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+@media (max-width: 700px) { .two-col { grid-template-columns: 1fr; } }
+.metric-row { display: flex; gap: 12px; flex-wrap: wrap; justify-content: center; margin-bottom: 12px; }
+.mini-metric { background: #0f3460; border-radius: 8px; padding: 8px 12px; text-align: center; min-width: 100px; }
+.mini-metric .val { font-size: 16px; font-weight: bold; color: #4ecdc4; }
+.mini-metric .lbl { font-size: 10px; color: #888; margin-top: 2px; }
+</style>
+</head>
+<body>
+<div class="container">
+<h1>Sinusoidal Positional Encoding Visualizer</h1>
+<p class="subtitle">Explore how position information is encoded across dimensions and positions</p>
+
+<div class="panel">
+<div class="panel-title">Encoding Heatmap</div>
+<div class="controls">
+<label>d_model: <select id="dmodel"><option value="32">32</option><option value="64">64</option><option value="128" selected>128</option><option value="256">256</option><option value="512">512</option></select></label>
+<label>Max position: <select id="maxpos"><option value="32">32</option><option value="64">64</option><option value="128" selected>128</option><option value="256">256</option></select></label>
+<label>Base: <input type="range" id="base" min="100" max="100000" step="100" value="10000"> <span id="baseVal">10000</span></label>
+</div>
+<canvas id="heatmap" height="300"></canvas>
+<div class="legend">
+<div class="legend-item"><div class="legend-dot" style="background:#e94560;"></div> sin = +1</div>
+<div class="legend-item"><div class="legend-dot" style="background:#1a1a2e;"></div> 0</div>
+<div class="legend-item"><div class="legend-dot" style="background:#4ecdc4;"></div> sin = -1</div>
+</div>
+</div>
+
+<div class="two-col">
+<div class="panel">
+<div class="panel-title">Single Dimension Wave</div>
+<div class="controls">
+<label>Dimension pair: <input type="range" id="dimIdx" min="0" max="63" value="0"> <span id="dimIdxVal">0</span></label>
+</div>
+<canvas id="waveCanvas" height="200"></canvas>
+<div class="metric-row" id="waveMetrics"></div>
+</div>
+<div class="panel">
+<div class="panel-title">Dot Product Similarity</div>
+<div class="controls">
+<label>Reference position: <input type="range" id="refPos" min="0" max="127" value="0"> <span id="refPosVal">0</span></label>
+</div>
+<canvas id="dotCanvas" height="200"></canvas>
+<div class="metric-row" id="dotMetrics"></div>
+</div>
+</div>
+
+<div class="panel">
+<div class="panel-title">Relative Position as Rotation</div>
+<div class="controls">
+<label>Position: <input type="range" id="rotPos" min="0" max="50" value="0"> <span id="rotPosVal">0</span></label>
+<label>Offset k: <input type="range" id="rotK" min="0" max="20" value="3"> <span id="rotKVal">3</span></label>
+<label>Dimension: <input type="range" id="rotDim" min="0" max="63" value="2"> <span id="rotDimVal">2</span></label>
+</div>
+<canvas id="rotCanvas" height="220"></canvas>
+</div>
+
+<div class="info">
+<strong>Key properties:</strong>
+(1) Each dimension pair (2i, 2i+1) oscillates at a unique frequency, creating a unique "fingerprint" per position.
+(2) PE(pos+k) = R_k * PE(pos) where R_k is a rotation matrix -- relative position is a linear transformation.
+(3) The dot product between PE(pos) and PE(pos+k) decays with |k|, providing a built-in distance bias.
+(4) High-frequency dimensions distinguish nearby positions; low-frequency dimensions encode global position.
+</div>
+</div>
+
+<script>
+function PE(pos, i, dmodel, base) {
+  const freq = 1.0 / Math.pow(base, (2 * Math.floor(i / 2)) / dmodel);
+  return i % 2 === 0 ? Math.sin(pos * freq) : Math.cos(pos * freq);
+}
+
+function getConfig() {
+  return {
+    dmodel: parseInt(document.getElementById('dmodel').value),
+    maxpos: parseInt(document.getElementById('maxpos').value),
+    base: parseInt(document.getElementById('base').value)
+  };
+}
+
+function drawHeatmap() {
+  const { dmodel, maxpos, base } = getConfig();
+  const canvas = document.getElementById('heatmap');
+  const ctx = canvas.getContext('2d');
+  const dpr = window.devicePixelRatio || 1;
+  const rect = canvas.getBoundingClientRect();
+  canvas.width = rect.width * dpr; canvas.height = rect.height * dpr;
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  const W = rect.width, H = rect.height;
+  const pad = { top: 30, right: 20, bottom: 40, left: 50 };
+  const plotW = W - pad.left - pad.right;
+  const plotH = H - pad.top - pad.bottom;
+
+  ctx.clearRect(0, 0, W, H);
+
+  const cellW = plotW / dmodel;
+  const cellH = plotH / maxpos;
+
+  for (let pos = 0; pos < maxpos; pos++) {
+    for (let d = 0; d < dmodel; d++) {
+      const val = PE(pos, d, dmodel, base);
+      // val in [-1, 1]
+      let r, g, b;
+      if (val > 0) {
+        r = Math.floor(26 + val * 207); // towards #e94560
+        g = Math.floor(26 + val * 43);
+        b = Math.floor(46 + val * 50);
+      } else {
+        const t = -val;
+        r = Math.floor(26 + t * 52);   // towards #4ecdc4
+        g = Math.floor(26 + t * 179);
+        b = Math.floor(46 + t * 150);
+      }
+      ctx.fillStyle = `rgb(${r},${g},${b})`;
+      ctx.fillRect(pad.left + d * cellW, pad.top + pos * cellH, Math.max(cellW, 1), Math.max(cellH, 1));
+    }
+  }
+
+  // axes
+  ctx.fillStyle = '#888'; ctx.font = '10px monospace';
+  ctx.textAlign = 'center';
+  for (let d = 0; d < dmodel; d += Math.max(1, Math.floor(dmodel / 8))) {
+    ctx.fillText(d.toString(), pad.left + d * cellW + cellW / 2, pad.top + plotH + 14);
+  }
+  ctx.textAlign = 'right';
+  for (let p = 0; p < maxpos; p += Math.max(1, Math.floor(maxpos / 8))) {
+    ctx.fillText(p.toString(), pad.left - 6, pad.top + p * cellH + cellH / 2 + 4);
+  }
+
+  ctx.fillStyle = '#888'; ctx.font = '11px sans-serif'; ctx.textAlign = 'center';
+  ctx.fillText('Embedding dimension', pad.left + plotW / 2, H - 4);
+  ctx.save(); ctx.translate(12, pad.top + plotH / 2); ctx.rotate(-Math.PI / 2);
+  ctx.fillText('Position', 0, 0); ctx.restore();
+}
+
+function drawWave() {
+  const { dmodel, maxpos, base } = getConfig();
+  const dimIdx = parseInt(document.getElementById('dimIdx').value);
+  const canvas = document.getElementById('waveCanvas');
+  const ctx = canvas.getContext('2d');
+  const dpr = window.devicePixelRatio || 1;
+  const rect = canvas.getBoundingClientRect();
+  canvas.width = rect.width * dpr; canvas.height = rect.height * dpr;
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  const W = rect.width, H = rect.height;
+  const pad = { top: 20, right: 20, bottom: 30, left: 40 };
+  const plotW = W - pad.left - pad.right;
+  const plotH = H - pad.top - pad.bottom;
+
+  ctx.clearRect(0, 0, W, H);
+
+  // grid
+  ctx.strokeStyle = '#222'; ctx.lineWidth = 0.5;
+  const midY = pad.top + plotH / 2;
+  ctx.beginPath(); ctx.moveTo(pad.left, midY); ctx.lineTo(pad.left + plotW, midY); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(pad.left, pad.top); ctx.lineTo(pad.left, pad.top + plotH); ctx.stroke();
+
+  // sin wave (dim 2*dimIdx)
+  ctx.strokeStyle = '#e94560'; ctx.lineWidth = 2;
+  ctx.beginPath();
+  for (let px = 0; px <= plotW; px++) {
+    const pos = (px / plotW) * maxpos;
+    const val = PE(pos, dimIdx * 2, dmodel, base);
+    const y = midY - val * (plotH / 2 - 4);
+    if (px === 0) ctx.moveTo(pad.left + px, y); else ctx.lineTo(pad.left + px, y);
+  }
+  ctx.stroke();
+
+  // cos wave (dim 2*dimIdx + 1)
+  ctx.strokeStyle = '#4ecdc4'; ctx.lineWidth = 2; ctx.setLineDash([4, 3]);
+  ctx.beginPath();
+  for (let px = 0; px <= plotW; px++) {
+    const pos = (px / plotW) * maxpos;
+    const val = PE(pos, dimIdx * 2 + 1, dmodel, base);
+    const y = midY - val * (plotH / 2 - 4);
+    if (px === 0) ctx.moveTo(pad.left + px, y); else ctx.lineTo(pad.left + px, y);
+  }
+  ctx.stroke();
+  ctx.setLineDash([]);
+
+  // labels
+  ctx.fillStyle = '#888'; ctx.font = '10px monospace'; ctx.textAlign = 'center';
+  ctx.fillText('Position', pad.left + plotW / 2, H - 4);
+  ctx.textAlign = 'right';
+  ctx.fillText('+1', pad.left - 4, pad.top + 10);
+  ctx.fillText('-1', pad.left - 4, pad.top + plotH);
+  ctx.fillText('0', pad.left - 4, midY + 4);
+
+  // frequency info
+  const freq = 1.0 / Math.pow(base, (2 * dimIdx) / dmodel);
+  const wavelength = 2 * Math.PI / freq;
+  document.getElementById('waveMetrics').innerHTML = `
+    <div class="mini-metric"><div class="val">${dimIdx}</div><div class="lbl">Dim pair index</div></div>
+    <div class="mini-metric"><div class="val">${freq.toExponential(2)}</div><div class="lbl">Frequency</div></div>
+    <div class="mini-metric"><div class="val">${wavelength.toFixed(1)}</div><div class="lbl">Wavelength (positions)</div></div>
+  `;
+}
+
+function drawDotProduct() {
+  const { dmodel, maxpos, base } = getConfig();
+  const refPos = parseInt(document.getElementById('refPos').value);
+  const canvas = document.getElementById('dotCanvas');
+  const ctx = canvas.getContext('2d');
+  const dpr = window.devicePixelRatio || 1;
+  const rect = canvas.getBoundingClientRect();
+  canvas.width = rect.width * dpr; canvas.height = rect.height * dpr;
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  const W = rect.width, H = rect.height;
+  const pad = { top: 20, right: 20, bottom: 30, left: 50 };
+  const plotW = W - pad.left - pad.right;
+  const plotH = H - pad.top - pad.bottom;
+
+  ctx.clearRect(0, 0, W, H);
+
+  // compute PE for reference
+  const peRef = [];
+  for (let d = 0; d < dmodel; d++) peRef.push(PE(refPos, d, dmodel, base));
+
+  // compute dot products
+  const dots = [];
+  let maxDot = -Infinity, minDot = Infinity;
+  for (let pos = 0; pos < maxpos; pos++) {
+    let dot = 0;
+    for (let d = 0; d < dmodel; d++) {
+      dot += peRef[d] * PE(pos, d, dmodel, base);
+    }
+    dots.push(dot);
+    if (dot > maxDot) maxDot = dot;
+    if (dot < minDot) minDot = dot;
+  }
+
+  // draw
+  const range = Math.max(Math.abs(maxDot), Math.abs(minDot));
+  const midY = pad.top + plotH / 2;
+
+  ctx.strokeStyle = '#222'; ctx.lineWidth = 0.5;
+  ctx.beginPath(); ctx.moveTo(pad.left, midY); ctx.lineTo(pad.left + plotW, midY); ctx.stroke();
+
+  ctx.strokeStyle = '#e94560'; ctx.lineWidth = 2;
+  ctx.beginPath();
+  for (let pos = 0; pos < maxpos; pos++) {
+    const x = pad.left + (pos / maxpos) * plotW;
+    const y = midY - (dots[pos] / range) * (plotH / 2 - 4);
+    if (pos === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+  }
+  ctx.stroke();
+
+  // mark reference position
+  const refX = pad.left + (refPos / maxpos) * plotW;
+  ctx.strokeStyle = '#ffd93d'; ctx.lineWidth = 1; ctx.setLineDash([3, 3]);
+  ctx.beginPath(); ctx.moveTo(refX, pad.top); ctx.lineTo(refX, pad.top + plotH); ctx.stroke();
+  ctx.setLineDash([]);
+  ctx.fillStyle = '#ffd93d'; ctx.beginPath(); ctx.arc(refX, pad.top + 4, 4, 0, Math.PI * 2); ctx.fill();
+
+  ctx.fillStyle = '#888'; ctx.font = '10px monospace'; ctx.textAlign = 'center';
+  ctx.fillText('Position', pad.left + plotW / 2, H - 4);
+  ctx.textAlign = 'right';
+  ctx.fillText(maxDot.toFixed(0), pad.left - 4, pad.top + 10);
+  ctx.fillText('0', pad.left - 4, midY + 4);
+
+  document.getElementById('dotMetrics').innerHTML = `
+    <div class="mini-metric"><div class="val">${refPos}</div><div class="lbl">Reference pos</div></div>
+    <div class="mini-metric"><div class="val">${maxDot.toFixed(1)}</div><div class="lbl">Max dot (self)</div></div>
+    <div class="mini-metric"><div class="val">${dots[Math.min(refPos + 1, maxpos - 1)].toFixed(1)}</div><div class="lbl">Dot at pos+1</div></div>
+  `;
+}
+
+function drawRotation() {
+  const { dmodel, base } = getConfig();
+  const pos = parseInt(document.getElementById('rotPos').value);
+  const k = parseInt(document.getElementById('rotK').value);
+  const dimIdx = parseInt(document.getElementById('rotDim').value);
+  const canvas = document.getElementById('rotCanvas');
+  const ctx = canvas.getContext('2d');
+  const dpr = window.devicePixelRatio || 1;
+  const rect = canvas.getBoundingClientRect();
+  canvas.width = rect.width * dpr; canvas.height = rect.height * dpr;
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  const W = rect.width, H = rect.height;
+
+  ctx.clearRect(0, 0, W, H);
+
+  const cx = W / 2, cy = H / 2;
+  const radius = Math.min(W, H) / 2 - 40;
+
+  // unit circle
+  ctx.strokeStyle = '#333'; ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.arc(cx, cy, radius, 0, Math.PI * 2); ctx.stroke();
+
+  // axes
+  ctx.strokeStyle = '#222'; ctx.lineWidth = 0.5;
+  ctx.beginPath(); ctx.moveTo(cx - radius - 10, cy); ctx.lineTo(cx + radius + 10, cy); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(cx, cy - radius - 10); ctx.lineTo(cx, cy + radius + 10); ctx.stroke();
+
+  ctx.fillStyle = '#666'; ctx.font = '10px monospace'; ctx.textAlign = 'center';
+  ctx.fillText('sin', cx, cy - radius - 14);
+  ctx.fillText('cos', cx + radius + 14, cy + 4);
+
+  const freq = 1.0 / Math.pow(base, (2 * dimIdx) / dmodel);
+
+  // PE at pos
+  const sinPos = Math.sin(pos * freq);
+  const cosPos = Math.cos(pos * freq);
+  const x1 = cx + cosPos * radius, y1 = cy - sinPos * radius;
+
+  // PE at pos+k
+  const sinPosK = Math.sin((pos + k) * freq);
+  const cosPosK = Math.cos((pos + k) * freq);
+  const x2 = cx + cosPosK * radius, y2 = cy - sinPosK * radius;
+
+  // rotation arc
+  const angle1 = Math.atan2(sinPos, cosPos);
+  const angle2 = Math.atan2(sinPosK, cosPosK);
+  ctx.strokeStyle = 'rgba(255, 217, 61, 0.4)'; ctx.lineWidth = 2;
+  ctx.beginPath();
+  const arcR = radius * 0.6;
+  // draw arc from angle1 to angle2
+  ctx.arc(cx, cy, arcR, -angle1, -angle2, angle2 > angle1);
+  ctx.stroke();
+
+  // angle label
+  const midAngle = (angle1 + angle2) / 2;
+  const labelR = arcR + 16;
+  ctx.fillStyle = '#ffd93d'; ctx.font = '11px sans-serif'; ctx.textAlign = 'center';
+  ctx.fillText(`k*w = ${(k * freq).toFixed(3)} rad`, cx + Math.cos(midAngle) * labelR, cy - Math.sin(midAngle) * labelR);
+
+  // vectors
+  ctx.strokeStyle = '#e94560'; ctx.lineWidth = 2;
+  ctx.beginPath(); ctx.moveTo(cx, cy); ctx.lineTo(x1, y1); ctx.stroke();
+  ctx.fillStyle = '#e94560'; ctx.beginPath(); ctx.arc(x1, y1, 6, 0, Math.PI * 2); ctx.fill();
+  ctx.fillStyle = '#e94560'; ctx.font = '11px sans-serif';
+  ctx.fillText(`pos=${pos}`, x1 + (cosPos > 0 ? 14 : -14), y1 + (sinPos > 0 ? -10 : 14));
+
+  ctx.strokeStyle = '#4ecdc4'; ctx.lineWidth = 2;
+  ctx.beginPath(); ctx.moveTo(cx, cy); ctx.lineTo(x2, y2); ctx.stroke();
+  ctx.fillStyle = '#4ecdc4'; ctx.beginPath(); ctx.arc(x2, y2, 6, 0, Math.PI * 2); ctx.fill();
+  ctx.fillStyle = '#4ecdc4'; ctx.font = '11px sans-serif';
+  ctx.fillText(`pos+k=${pos + k}`, x2 + (cosPosK > 0 ? 14 : -14), y2 + (sinPosK > 0 ? -10 : 14));
+
+  // rotation matrix text
+  ctx.fillStyle = '#888'; ctx.font = '11px monospace'; ctx.textAlign = 'left';
+  const wk = k * freq;
+  ctx.fillText(`R_k = [cos(${wk.toFixed(3)})  sin(${wk.toFixed(3)})]`, 10, H - 30);
+  ctx.fillText(`      [-sin(${wk.toFixed(3)}) cos(${wk.toFixed(3)})]`, 10, H - 14);
+
+  ctx.fillStyle = '#555'; ctx.font = '10px sans-serif'; ctx.textAlign = 'right';
+  ctx.fillText(`dim pair: ${dimIdx}, freq: ${freq.toExponential(2)}, wavelength: ${(2 * Math.PI / freq).toFixed(1)}`, W - 10, H - 10);
+}
+
+function renderAll() {
+  drawHeatmap();
+  drawWave();
+  drawDotProduct();
+  drawRotation();
+}
+
+// event listeners
+document.getElementById('dmodel').addEventListener('change', () => {
+  const dmodel = parseInt(document.getElementById('dmodel').value);
+  document.getElementById('dimIdx').max = Math.floor(dmodel / 2) - 1;
+  renderAll();
+});
+document.getElementById('maxpos').addEventListener('change', () => {
+  const maxpos = parseInt(document.getElementById('maxpos').value);
+  document.getElementById('refPos').max = maxpos - 1;
+  renderAll();
+});
+document.getElementById('base').addEventListener('input', () => {
+  document.getElementById('baseVal').textContent = document.getElementById('base').value;
+  renderAll();
+});
+document.getElementById('dimIdx').addEventListener('input', () => {
+  document.getElementById('dimIdxVal').textContent = document.getElementById('dimIdx').value;
+  drawWave();
+});
+document.getElementById('refPos').addEventListener('input', () => {
+  document.getElementById('refPosVal').textContent = document.getElementById('refPos').value;
+  drawDotProduct();
+});
+document.getElementById('rotPos').addEventListener('input', () => {
+  document.getElementById('rotPosVal').textContent = document.getElementById('rotPos').value;
+  drawRotation();
+});
+document.getElementById('rotK').addEventListener('input', () => {
+  document.getElementById('rotKVal').textContent = document.getElementById('rotK').value;
+  drawRotation();
+});
+document.getElementById('rotDim').addEventListener('input', () => {
+  document.getElementById('rotDimVal').textContent = document.getElementById('rotDim').value;
+  drawRotation();
+});
+
+renderAll();
+window.addEventListener('resize', renderAll);
+</script>
+</body>
+</html>

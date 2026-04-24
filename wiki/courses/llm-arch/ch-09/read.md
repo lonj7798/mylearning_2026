@@ -100,6 +100,8 @@ This solves all three of BatchNorm's problems: it's independent of batch size, h
 
 ## 3. RMSNorm: The Essential Simplification
 
+[Deep Dive: RMSNorm vs LayerNorm Implementation Comparison](excerpts/rmsnorm-vs-layernorm.md) — side-by-side mathematical definitions, pseudocode, fused CUDA kernel comparison, and performance benchmarks.
+
 Zhang & Sennrich (2019) ([[rmsnorm|paper]]) asked a simple question: does the mean-centering in LayerNorm actually help? The answer is no.
 
 **RMSNorm** drops the mean subtraction entirely and normalizes by the root mean square:
@@ -175,6 +177,10 @@ This seemingly trivial rearrangement has profound consequences for training dyna
 <div style="color:#888; font-size:11px; margin-top:12px; text-align:center;">Pre-norm: residual path is unobstructed identity. Post-norm: norm sits on the residual path, distorting gradient flow.</div>
 </div>
 
+[Deep Dive: Pre-Norm Stability Proof Sketch](excerpts/pre-norm-stability.md) — walk through the mean field theory argument: why post-norm gradients are O(d*L) at initialization while pre-norm gradients are O(1).
+
+[Interactive: Pre-Norm vs Post-Norm Placement Comparison](figures/norm-placement.html) — animated forward pass through both configurations, with side-by-side diagrams and simulated training loss curves showing stability differences.
+
 ### Why Pre-Norm Trains More Stably
 
 Xiong et al. (2020) ([[pre-norm-vs-post-norm|paper]]) proved this rigorously using mean field theory. The core argument:
@@ -204,6 +210,8 @@ Interestingly, OLMo 2 ([[olmo-2|report]]) moved to post-norm placement (RMSNorm 
 ---
 
 ## 5. QK-Norm: Taming Attention Logit Growth
+
+[Deep Dive: QK-Norm Gradient Analysis](excerpts/qk-norm-gradient-analysis.md) — the entropy collapse cascade, how QK-norm bounds logits and self-regulates gradients, and comparison with logit soft-capping.
 
 As Transformers scale to billions of parameters and train on trillions of tokens, a subtle failure mode emerges: **attention logit growth**. The dot products $q_i^T k_j$ that determine attention weights can grow unboundedly during training, causing attention entropy to collapse — the model increasingly attends to a single token, losing the ability to distribute attention across relevant context.
 
@@ -236,6 +244,8 @@ A natural concern: doesn't normalizing Q and K discard magnitude information? Ye
 ---
 
 ## 6. The Residual Stream as Information Highway
+
+[Interactive: Residual Stream Information Flow](figures/residual-stream.html) — interactive diagram showing how attention and FFN layers read from and write to the residual stream, with gradient flow visualization and layer count slider.
 
 The most powerful conceptual framework for understanding Transformers is the **residual stream** view, developed in the mechanistic interpretability literature (Elhage et al., "A Mathematical Framework for Transformer Circuits", 2021).
 

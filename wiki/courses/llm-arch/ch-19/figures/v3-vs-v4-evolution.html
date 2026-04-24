@@ -1,0 +1,372 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>DeepSeek V3 → V4: Architectural Evolution</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    background: #1a1a2e; color: #e0e0e0; font-family: 'Segoe UI', system-ui, sans-serif;
+    display: flex; flex-direction: column; align-items: center; padding: 32px 16px; min-height: 100vh;
+  }
+  h1 { font-size: 22px; margin-bottom: 6px; color: #f0f0f0; text-align: center; }
+  .subtitle { font-size: 13px; color: #888; margin-bottom: 28px; text-align: center; max-width: 750px; line-height: 1.5; }
+
+  /* Evolution grid */
+  .evo-grid { width: 100%; max-width: 900px; display: flex; flex-direction: column; gap: 0; }
+  .evo-row {
+    display: grid; grid-template-columns: 140px 1fr 40px 1fr; align-items: stretch;
+    border-bottom: 1px solid #2a2a4a; min-height: 100px;
+  }
+  .evo-row:last-child { border-bottom: none; }
+  .evo-header {
+    display: grid; grid-template-columns: 140px 1fr 40px 1fr;
+    background: #12121f; border-radius: 10px 10px 0 0; padding: 12px 0;
+    border-bottom: 2px solid #e94560;
+  }
+  .evo-header span {
+    font-size: 13px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.8px;
+    text-align: center; color: #e94560;
+  }
+  .evo-header span:first-child { color: #888; }
+  .evo-header span:nth-child(3) { color: #555; }
+
+  .evo-label {
+    display: flex; align-items: center; justify-content: flex-end; padding: 12px 16px;
+    font-size: 12px; font-weight: 700; color: #888; text-transform: uppercase;
+    letter-spacing: 0.5px; text-align: right; line-height: 1.4;
+    border-right: 2px solid #2a2a4a;
+  }
+  .evo-cell {
+    padding: 14px 18px; display: flex; flex-direction: column; justify-content: center;
+    gap: 6px; transition: background 0.2s;
+  }
+  .evo-cell:hover { background: rgba(233,69,96,0.05); }
+  .evo-arrow {
+    display: flex; align-items: center; justify-content: center;
+    font-size: 18px; color: #e94560; font-weight: 700;
+  }
+  .evo-cell .tag {
+    font-size: 14px; font-weight: 600; color: #e0e0e0; line-height: 1.4;
+  }
+  .evo-cell .detail {
+    font-size: 11px; color: #888; line-height: 1.5;
+  }
+  .evo-cell.v4 .tag { color: #e94560; }
+  .evo-cell.new-badge .tag::after {
+    content: 'NEW'; font-size: 9px; background: #e94560; color: #fff;
+    padding: 2px 6px; border-radius: 3px; margin-left: 8px; vertical-align: middle;
+    font-weight: 700; letter-spacing: 0.5px;
+  }
+
+  /* Stats comparison */
+  .stats-section {
+    margin-top: 36px; width: 100%; max-width: 900px;
+    background: #12121f; border-radius: 12px; padding: 24px; border: 1px solid #2a2a4a;
+  }
+  .stats-section h2 { font-size: 16px; color: #f0f0f0; margin-bottom: 16px; }
+  .stat-row {
+    display: flex; align-items: center; gap: 12px; margin: 14px 0;
+  }
+  .stat-label { width: 170px; font-size: 12px; color: #888; font-weight: 600; flex-shrink: 0; text-align: right; }
+  .stat-bars { flex: 1; display: flex; flex-direction: column; gap: 4px; }
+  .stat-bar-wrap { display: flex; align-items: center; gap: 8px; }
+  .stat-bar-track { flex: 1; height: 22px; background: #1a1a2e; border-radius: 5px; overflow: hidden; }
+  .stat-bar-fill {
+    height: 100%; border-radius: 5px; display: flex; align-items: center;
+    padding-left: 8px; font-size: 10px; font-weight: 700; color: #fff;
+    transition: width 1.2s ease-out;
+  }
+  .stat-bar-fill.v3 { background: linear-gradient(90deg, #4a4a8a, #5b5bd6); }
+  .stat-bar-fill.v4 { background: linear-gradient(90deg, #c23152, #e94560); }
+  .stat-version { font-size: 10px; color: #666; width: 24px; flex-shrink: 0; }
+
+  /* Impact cards */
+  .impact-section {
+    margin-top: 36px; width: 100%; max-width: 900px;
+    display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px;
+  }
+  .impact-card {
+    background: #12121f; border-radius: 10px; padding: 20px; border: 1px solid #2a2a4a;
+    text-align: center; transition: border-color 0.2s, transform 0.2s;
+  }
+  .impact-card:hover { border-color: #e94560; transform: translateY(-2px); }
+  .impact-card .metric { font-size: 32px; font-weight: 800; color: #e94560; margin-bottom: 4px; }
+  .impact-card .metric-label { font-size: 12px; color: #888; line-height: 1.4; }
+  .impact-card .metric-sub { font-size: 10px; color: #555; margin-top: 6px; }
+
+  /* Timeline */
+  .timeline-section {
+    margin-top: 36px; width: 100%; max-width: 900px;
+    background: #12121f; border-radius: 12px; padding: 24px; border: 1px solid #2a2a4a;
+  }
+  .timeline-section h2 { font-size: 16px; color: #f0f0f0; margin-bottom: 20px; }
+  .timeline { display: flex; align-items: flex-start; justify-content: space-between; position: relative; padding: 0 20px; }
+  .timeline::before {
+    content: ''; position: absolute; top: 18px; left: 40px; right: 40px;
+    height: 3px; background: linear-gradient(90deg, #5b5bd6, #e94560); border-radius: 2px;
+  }
+  .tl-node { display: flex; flex-direction: column; align-items: center; gap: 8px; z-index: 1; width: 110px; }
+  .tl-dot {
+    width: 16px; height: 16px; border-radius: 50%; border: 3px solid #e94560;
+    background: #1a1a2e; flex-shrink: 0;
+  }
+  .tl-dot.v3 { border-color: #5b5bd6; }
+  .tl-dot.active { background: #e94560; box-shadow: 0 0 12px rgba(233,69,96,0.5); }
+  .tl-label { font-size: 12px; font-weight: 700; color: #e0e0e0; text-align: center; }
+  .tl-detail { font-size: 10px; color: #666; text-align: center; line-height: 1.4; }
+
+  .note {
+    margin-top: 28px; width: 100%; max-width: 900px; padding: 16px;
+    background: #12121f; border-radius: 8px; border-left: 3px solid #e94560;
+    font-size: 12px; color: #aaa; line-height: 1.6;
+  }
+
+  @media (max-width: 700px) {
+    .evo-row, .evo-header { grid-template-columns: 90px 1fr 30px 1fr; }
+    .impact-section { grid-template-columns: 1fr; }
+    .timeline { flex-direction: column; gap: 16px; align-items: flex-start; }
+    .timeline::before { display: none; }
+  }
+</style>
+</head>
+<body>
+
+<h1>DeepSeek V3 &rarr; V4: Architectural Evolution</h1>
+<p class="subtitle">
+  Five architectural axes evolved between V3 (671B, 2024) and V4-Pro (1.6T, 2026).
+  Each change targets a specific bottleneck that scaling V3 alone could not solve.
+</p>
+
+<!-- Evolution comparison grid -->
+<div class="evo-grid">
+  <div class="evo-header">
+    <span>Component</span>
+    <span>DeepSeek-V3</span>
+    <span></span>
+    <span>DeepSeek-V4</span>
+  </div>
+
+  <div class="evo-row">
+    <div class="evo-label">Attention</div>
+    <div class="evo-cell">
+      <div class="tag">MLA (uniform)</div>
+      <div class="detail">576-dim latent per token per layer. All heads share same resolution. O(L&sup2;) attention.</div>
+    </div>
+    <div class="evo-arrow">&rarr;</div>
+    <div class="evo-cell v4">
+      <div class="tag">Hybrid CSA + HCA</div>
+      <div class="detail">Per-head pathway: CSA (sparse top-k, O(Lk)) for lookup heads, HCA (extreme compression) for summary heads. 10% KV cache of V3.2.</div>
+    </div>
+  </div>
+
+  <div class="evo-row">
+    <div class="evo-label">Residual<br>Connections</div>
+    <div class="evo-cell">
+      <div class="tag">Standard residual</div>
+      <div class="detail">x<sub>l+1</sub> = x<sub>l</sub> + f(x<sub>l</sub>). Simple addition. Risk of explosion / collapse at depth.</div>
+    </div>
+    <div class="evo-arrow">&rarr;</div>
+    <div class="evo-cell v4 new-badge">
+      <div class="tag">mHC (Birkhoff)</div>
+      <div class="detail">Doubly stochastic mixing matrix via Sinkhorn-Knopp. L1-norm preserved. 4x wider stream, +6.7% overhead.</div>
+    </div>
+  </div>
+
+  <div class="evo-row">
+    <div class="evo-label">Memory<br>Module</div>
+    <div class="evo-cell">
+      <div class="tag">None</div>
+      <div class="detail">All knowledge retrieval via attention + MoE computation.</div>
+    </div>
+    <div class="evo-arrow">&rarr;</div>
+    <div class="evo-cell v4 new-badge">
+      <div class="tag">Engram</div>
+      <div class="detail">O(1) hashed N-gram lookup. Context-aware gating. Layers 2 &amp; 15. 20-25% of sparse budget.</div>
+    </div>
+  </div>
+
+  <div class="evo-row">
+    <div class="evo-label">MoE<br>Experts</div>
+    <div class="evo-cell">
+      <div class="tag">256 experts, top-8</div>
+      <div class="detail">FP8 precision. 5.5% activation ratio. 37B active / 671B total.</div>
+    </div>
+    <div class="evo-arrow">&rarr;</div>
+    <div class="evo-cell v4">
+      <div class="tag">384 experts, top-6</div>
+      <div class="detail">FP4 precision. 3% activation ratio. 49B active / 1.6T total. Halved expert memory vs V3.</div>
+    </div>
+  </div>
+
+  <div class="evo-row">
+    <div class="evo-label">Optimizer</div>
+    <div class="evo-cell">
+      <div class="tag">AdamW</div>
+      <div class="detail">&beta;<sub>1</sub>=0.9, &beta;<sub>2</sub>=0.95, wd=0.1. 14.8T tokens. Zero loss spikes.</div>
+    </div>
+    <div class="evo-arrow">&rarr;</div>
+    <div class="evo-cell v4">
+      <div class="tag">Muon</div>
+      <div class="detail">Faster convergence, greater stability. &gt;32T tokens (&gt;2x V3).</div>
+    </div>
+  </div>
+
+  <div class="evo-row">
+    <div class="evo-label">Context<br>Length</div>
+    <div class="evo-cell">
+      <div class="tag">128K tokens</div>
+      <div class="detail">Trained at 4K, extended post-training to 32K then 128K.</div>
+    </div>
+    <div class="evo-arrow">&rarr;</div>
+    <div class="evo-cell v4">
+      <div class="tag">1M tokens</div>
+      <div class="detail">Pre-trained at 32K, extended to 1M. 8x context increase enabled by hybrid sparse attention.</div>
+    </div>
+  </div>
+
+  <div class="evo-row">
+    <div class="evo-label">Post-<br>Training</div>
+    <div class="evo-cell">
+      <div class="tag">SFT + RL (GRPO)</div>
+      <div class="detail">Single-pass pipeline. R1 distillation. ~5K GPU-hours.</div>
+    </div>
+    <div class="evo-arrow">&rarr;</div>
+    <div class="evo-cell v4">
+      <div class="tag">Two-stage pipeline</div>
+      <div class="detail">Stage 1: domain-specific expert SFT/RL. Stage 2: on-policy distillation into unified model.</div>
+    </div>
+  </div>
+</div>
+
+<!-- Quantitative comparison bars -->
+<div class="stats-section">
+  <h2>Scale Comparison</h2>
+
+  <div class="stat-row">
+    <div class="stat-label">Total Parameters</div>
+    <div class="stat-bars">
+      <div class="stat-bar-wrap">
+        <span class="stat-version">V3</span>
+        <div class="stat-bar-track"><div class="stat-bar-fill v3" style="width:42%;">671B</div></div>
+      </div>
+      <div class="stat-bar-wrap">
+        <span class="stat-version">V4</span>
+        <div class="stat-bar-track"><div class="stat-bar-fill v4" style="width:100%;">1,600B</div></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="stat-row">
+    <div class="stat-label">Active Parameters</div>
+    <div class="stat-bars">
+      <div class="stat-bar-wrap">
+        <span class="stat-version">V3</span>
+        <div class="stat-bar-track"><div class="stat-bar-fill v3" style="width:75.5%;">37B (5.5%)</div></div>
+      </div>
+      <div class="stat-bar-wrap">
+        <span class="stat-version">V4</span>
+        <div class="stat-bar-track"><div class="stat-bar-fill v4" style="width:100%;">49B (3.0%)</div></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="stat-row">
+    <div class="stat-label">Training Tokens</div>
+    <div class="stat-bars">
+      <div class="stat-bar-wrap">
+        <span class="stat-version">V3</span>
+        <div class="stat-bar-track"><div class="stat-bar-fill v3" style="width:46%;">14.8T</div></div>
+      </div>
+      <div class="stat-bar-wrap">
+        <span class="stat-version">V4</span>
+        <div class="stat-bar-track"><div class="stat-bar-fill v4" style="width:100%;">&gt;32T</div></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="stat-row">
+    <div class="stat-label">Context Length</div>
+    <div class="stat-bars">
+      <div class="stat-bar-wrap">
+        <span class="stat-version">V3</span>
+        <div class="stat-bar-track"><div class="stat-bar-fill v3" style="width:12.8%;">128K</div></div>
+      </div>
+      <div class="stat-bar-wrap">
+        <span class="stat-version">V4</span>
+        <div class="stat-bar-track"><div class="stat-bar-fill v4" style="width:100%;">1,000K</div></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="stat-row">
+    <div class="stat-label">Routed Experts</div>
+    <div class="stat-bars">
+      <div class="stat-bar-wrap">
+        <span class="stat-version">V3</span>
+        <div class="stat-bar-track"><div class="stat-bar-fill v3" style="width:66.7%;">256 (top-8, FP8)</div></div>
+      </div>
+      <div class="stat-bar-wrap">
+        <span class="stat-version">V4</span>
+        <div class="stat-bar-track"><div class="stat-bar-fill v4" style="width:100%;">384 (top-6, FP4)</div></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Impact cards -->
+<div class="impact-section">
+  <div class="impact-card">
+    <div class="metric">10%</div>
+    <div class="metric-label">KV Cache vs V3.2<br>at 1M tokens</div>
+    <div class="metric-sub">Hybrid CSA+HCA</div>
+  </div>
+  <div class="impact-card">
+    <div class="metric">27%</div>
+    <div class="metric-label">Inference FLOPs vs V3.2<br>per generated token at 1M</div>
+    <div class="metric-sub">CSA sparse selection</div>
+  </div>
+  <div class="impact-card">
+    <div class="metric">O(1)</div>
+    <div class="metric-label">Engram lookup cost<br>vs O(L&sup2;) attention</div>
+    <div class="metric-sub">Hashed N-gram memory</div>
+  </div>
+</div>
+
+<!-- Timeline -->
+<div class="timeline-section">
+  <h2>DeepSeek Architecture Timeline</h2>
+  <div class="timeline">
+    <div class="tl-node">
+      <div class="tl-dot v3"></div>
+      <div class="tl-label">V2</div>
+      <div class="tl-detail">2024<br>MLA + MoE introduced<br>236B total</div>
+    </div>
+    <div class="tl-node">
+      <div class="tl-dot v3"></div>
+      <div class="tl-label">V3</div>
+      <div class="tl-detail">2024<br>Aux-loss-free + MTP + FP8<br>671B total</div>
+    </div>
+    <div class="tl-node">
+      <div class="tl-dot v3"></div>
+      <div class="tl-label">R1</div>
+      <div class="tl-detail">2025<br>RL reasoning on V3 base<br>GRPO</div>
+    </div>
+    <div class="tl-node">
+      <div class="tl-dot active"></div>
+      <div class="tl-label">V4</div>
+      <div class="tl-detail">2026<br>CSA+HCA, Engram, mHC, FP4<br>1.6T total</div>
+    </div>
+  </div>
+</div>
+
+<div class="note">
+  <strong>Key theme:</strong> V3 proved that <em>integrating</em> five innovations (MLA, MoE, aux-loss-free, MTP, FP8) produces compound savings.
+  V4 extends this philosophy: hybrid attention + Engram + mHC + FP4 experts + Muon each enable the others.
+  Engram frees attention from factual recall, letting CSA operate with smaller k budgets. FP4 makes 384 experts affordable.
+  mHC enables the wider residual stream that carries 1.6T parameters. The compound effect — not any single innovation — is the story.
+</div>
+
+</body>
+</html>

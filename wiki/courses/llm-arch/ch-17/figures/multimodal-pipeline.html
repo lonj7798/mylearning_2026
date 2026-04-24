@@ -1,0 +1,249 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Multimodal LLM Pipeline</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { background: #0d1117; color: #e0e0e0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; padding: 32px; min-height: 100vh; }
+h1 { font-size: 20px; color: #e0e0e0; margin-bottom: 8px; }
+.subtitle { color: #888; font-size: 13px; margin-bottom: 32px; }
+
+.pipeline { display: flex; flex-direction: column; align-items: center; gap: 0; max-width: 700px; margin: 0 auto; }
+
+.stage { position: relative; width: 100%; cursor: pointer; transition: transform 0.2s; }
+.stage:hover { transform: scale(1.02); }
+.stage:hover .stage-box { border-color: #e94560; }
+
+.stage-box {
+  background: #161b22; border: 2px solid #30363d; border-radius: 12px;
+  padding: 16px 20px; display: flex; align-items: center; gap: 16px;
+  transition: border-color 0.2s;
+}
+.stage-num {
+  width: 36px; height: 36px; border-radius: 50%;
+  display: flex; align-items: center; justify-content: center;
+  font-weight: bold; font-size: 14px; flex-shrink: 0;
+}
+.stage-content { flex: 1; }
+.stage-title { font-weight: bold; font-size: 14px; margin-bottom: 4px; }
+.stage-desc { font-size: 12px; color: #888; line-height: 1.5; }
+.stage-detail {
+  display: none; margin-top: 10px; padding: 12px; background: #0d1117;
+  border-radius: 8px; font-size: 12px; line-height: 1.6; color: #b0b0b0;
+}
+.stage-detail.open { display: block; }
+.stage-dims { color: #4ecdc4; font-family: monospace; font-size: 11px; }
+
+.arrow { width: 2px; height: 24px; background: #30363d; position: relative; }
+.arrow::after {
+  content: ''; position: absolute; bottom: -4px; left: -4px;
+  width: 0; height: 0; border-left: 5px solid transparent;
+  border-right: 5px solid transparent; border-top: 6px solid #30363d;
+}
+
+.color-preprocess { background: #1a3a2a; border-color: #2ea043 !important; }
+.color-preprocess .stage-num { background: #2ea043; color: #fff; }
+.color-preprocess .stage-title { color: #2ea043; }
+
+.color-vision { background: #1a2a3a; border-color: #4ecdc4 !important; }
+.color-vision .stage-num { background: #4ecdc4; color: #0d1117; }
+.color-vision .stage-title { color: #4ecdc4; }
+
+.color-bridge { background: #2a1a3a; border-color: #a855f7 !important; }
+.color-bridge .stage-num { background: #a855f7; color: #fff; }
+.color-bridge .stage-title { color: #a855f7; }
+
+.color-llm { background: #3a1a1a; border-color: #e94560 !important; }
+.color-llm .stage-num { background: #e94560; color: #fff; }
+.color-llm .stage-title { color: #e94560; }
+
+.color-output { background: #3a2a1a; border-color: #ffd93d !important; }
+.color-output .stage-num { background: #ffd93d; color: #0d1117; }
+.color-output .stage-title { color: #ffd93d; }
+
+.legend {
+  display: flex; gap: 16px; flex-wrap: wrap; justify-content: center;
+  margin-top: 32px; padding: 16px; background: #161b22;
+  border-radius: 8px; border: 1px solid #30363d;
+}
+.legend-item { display: flex; align-items: center; gap: 6px; font-size: 11px; color: #888; }
+.legend-dot { width: 10px; height: 10px; border-radius: 50%; }
+
+.model-select {
+  display: flex; gap: 8px; margin-bottom: 24px; justify-content: center;
+}
+.model-btn {
+  padding: 8px 16px; border-radius: 8px; border: 2px solid #30363d;
+  background: #161b22; color: #888; cursor: pointer; font-size: 12px;
+  font-weight: bold; transition: all 0.2s;
+}
+.model-btn.active { border-color: #e94560; color: #e94560; background: #1a1a2e; }
+.model-btn:hover { border-color: #e94560; }
+
+.token-count {
+  text-align: center; margin-top: 24px; padding: 12px;
+  background: #161b22; border-radius: 8px; border: 1px solid #30363d;
+}
+.token-count .num { font-size: 24px; font-weight: bold; color: #e94560; }
+.token-count .label { font-size: 11px; color: #888; margin-top: 4px; }
+</style>
+</head>
+<body>
+<h1>Multimodal LLM Pipeline</h1>
+<p class="subtitle">Click any stage to expand details. Select a model to see specific configurations.</p>
+
+<div class="model-select">
+  <button class="model-btn active" onclick="selectModel('gemma3')">Gemma 3 (27B)</button>
+  <button class="model-btn" onclick="selectModel('llama4')">Llama 4 Scout</button>
+  <button class="model-btn" onclick="selectModel('llama3')">Llama 3 (405B)</button>
+</div>
+
+<div class="pipeline" id="pipeline"></div>
+
+<div class="token-count">
+  <div class="num" id="totalTokens">256</div>
+  <div class="label">visual tokens per image</div>
+</div>
+
+<div class="legend">
+  <div class="legend-item"><div class="legend-dot" style="background:#2ea043;"></div>Preprocessing</div>
+  <div class="legend-item"><div class="legend-dot" style="background:#4ecdc4;"></div>Vision Encoding</div>
+  <div class="legend-item"><div class="legend-dot" style="background:#a855f7;"></div>Bridging</div>
+  <div class="legend-item"><div class="legend-dot" style="background:#e94560;"></div>LLM Processing</div>
+  <div class="legend-item"><div class="legend-dot" style="background:#ffd93d;"></div>Output</div>
+</div>
+
+<script>
+const models = {
+  gemma3: {
+    name: 'Gemma 3 (27B)',
+    tokens: 256,
+    stages: [
+      { num: 1, color: 'preprocess', title: 'Image Preprocessing',
+        desc: 'Pan-and-Scan: analyze aspect ratio, extract optimal crops at native resolution',
+        detail: 'Input: arbitrary resolution image. Pan-and-Scan decomposes into multiple 896x896 crops based on aspect ratio and content. Each crop is processed independently. No wasted padding tokens.' },
+      { num: 2, color: 'vision', title: 'Patch Embedding (SigLIP)',
+        desc: 'Split each crop into 14x14 patches, project to encoder dimension',
+        detail: 'SigLIP 400M vision encoder. Input resolution: 896x896. Patch size: 14x14. Patches per crop: (896/14)^2 = 4,096. Each patch projected to encoder hidden dim. Contrastively pretrained with sigmoid loss for language alignment.' },
+      { num: 3, color: 'vision', title: 'Vision Encoding',
+        desc: 'Process patch tokens through SigLIP Transformer layers',
+        detail: 'SigLIP 400M: standard ViT architecture. The encoder output is a sequence of visual feature vectors, one per patch position. These features live in a representation space aligned with language via contrastive pretraining.' },
+      { num: 4, color: 'bridge', title: 'Average Pooling + Projection',
+        desc: 'Pool encoder output to 256 tokens, project to LLM dimension',
+        detail: 'Aggressive compression: 4,096 encoder tokens pooled down to 256 visual tokens via average pooling. Then linearly projected from SigLIP dimension to Gemma 3 model dimension. Same 256-token budget regardless of input resolution or number of Pan-and-Scan crops.' },
+      { num: 5, color: 'llm', title: 'Token Interleaving',
+        desc: 'Concatenate 256 visual tokens with text tokens',
+        detail: 'Visual tokens inserted before the text query in the sequence. In Gemma 3\'s 5:1 local/global architecture, visual tokens are only attended to in global attention layers (every 6th layer). Local attention layers (1024-token window) may not see visual tokens if they fall outside the window.' },
+      { num: 6, color: 'llm', title: 'LLM Processing (GQA + SWA)',
+        desc: '5:1 local/global attention, GQA with QK-norm, 128K context',
+        detail: 'Full Gemma 3 architecture: 5 local attention layers (1024-token sliding window, RoPE freq 10K) per 1 global attention layer (full context, RoPE freq 1M). GQA with QK-norm. Visual tokens participate in self-attention alongside text tokens.' },
+      { num: 7, color: 'output', title: 'Text Generation',
+        desc: 'Autoregressive decoding conditioned on visual + textual context',
+        detail: 'Standard next-token prediction. The model generates text tokens one at a time, conditioned on both the visual tokens (image understanding) and any preceding text tokens (prompt/conversation).' }
+    ]
+  },
+  llama4: {
+    name: 'Llama 4 Scout',
+    tokens: 'N/A (early fusion)',
+    stages: [
+      { num: 1, color: 'preprocess', title: 'Image Preprocessing',
+        desc: 'Standard resizing and normalization for MetaCLIP encoder',
+        detail: 'Input images preprocessed to MetaCLIP\'s expected resolution. Unlike Gemma 3, no Pan-and-Scan is described in the Llama 4 report.' },
+      { num: 2, color: 'vision', title: 'Patch Embedding (MetaCLIP)',
+        desc: 'Split image into patches, project to encoder dimension',
+        detail: 'MetaCLIP-based vision encoder. Trained separately with contrastive learning on curated image-text pairs, then adapted for use with the Llama 4 backbone.' },
+      { num: 3, color: 'vision', title: 'Vision Encoding',
+        desc: 'Process patches through MetaCLIP Transformer',
+        detail: 'MetaCLIP encoder produces visual features aligned with language. Trained separately, then frozen while the Llama 4 backbone learns to consume its outputs during joint multimodal pretraining.' },
+      { num: 4, color: 'bridge', title: 'Projection + Early Fusion',
+        desc: 'Project visual features and interleave with text in unified backbone',
+        detail: 'Visual tokens projected into Llama 4\'s model dimension and interleaved with text tokens BEFORE the first Transformer layer. This is early fusion: the unified MoE backbone processes both modalities jointly from layer 1. No separate adapter stage.' },
+      { num: 5, color: 'llm', title: 'Unified MoE Backbone',
+        desc: '109B total / 17B active, 16 experts, iRoPE, 10M context',
+        detail: 'Scout: 109B total params, 17B active per token. Each token routed to 1 shared expert + 1 routed expert (16 total). iRoPE enables generalization from 256K training context to 10M inference context. Vision and text tokens processed identically through the MoE layers.' },
+      { num: 6, color: 'llm', title: 'Cross-Modal Self-Attention',
+        desc: 'Full attention between visual and text tokens in every layer',
+        detail: 'Unlike Gemma 3\'s sparse visual attention (global layers only), Llama 4 gives every layer full access to visual tokens. This enables deeper cross-modal reasoning but increases compute per token.' },
+      { num: 7, color: 'output', title: 'Text Generation',
+        desc: 'Autoregressive decoding with cross-modal conditioning',
+        detail: 'MoE-based next-token prediction. Only 17B parameters active per token despite 109B total. The model has been jointly pretrained on 30T+ tokens of text, image, and video data.' }
+    ]
+  },
+  llama3: {
+    name: 'Llama 3 (405B)',
+    tokens: 'Adapter-dependent',
+    stages: [
+      { num: 1, color: 'preprocess', title: 'Image Preprocessing',
+        desc: 'Standard resize to vision encoder resolution',
+        detail: 'Images resized to the vision encoder\'s expected resolution. No Pan-and-Scan or multi-crop strategy described in the Llama 3 report.' },
+      { num: 2, color: 'vision', title: 'Image Encoder',
+        desc: 'Separate vision encoder produces visual features',
+        detail: 'Vision capabilities added post-hoc. The image encoder is trained independently and produces visual features in its own representation space.' },
+      { num: 3, color: 'vision', title: 'Vision Encoding',
+        desc: 'Extract visual features from image',
+        detail: 'Standard vision encoding. The encoder was not trained jointly with the language model. Its features must be projected into the LLM\'s space by the adapter.' },
+      { num: 4, color: 'bridge', title: 'Adapter Projection',
+        desc: 'MLP adapter maps visual features to LLM embedding space',
+        detail: 'This is the critical bottleneck of late fusion. A small adapter (typically 2-3 layer MLP) projects visual features from the encoder\'s dimension to the LLM\'s dimension (16,384 for 405B). The adapter is the ONLY component trained on multimodal data. All cross-modal understanding must pass through this narrow bottleneck.' },
+      { num: 5, color: 'llm', title: 'Token Concatenation',
+        desc: 'Concatenate projected visual tokens with text tokens',
+        detail: 'Visual tokens prepended to the text sequence. The 405B dense backbone processes them through standard GQA self-attention. The backbone was NOT trained on multimodal data — it treats visual tokens as unfamiliar input.' },
+      { num: 6, color: 'llm', title: 'Frozen LLM Backbone (405B Dense)',
+        desc: 'GQA, RoPE, 128K context — frozen or lightly fine-tuned',
+        detail: '405B dense Transformer with GQA (128 query heads, 8 KV heads). The backbone is frozen or lightly fine-tuned during multimodal adaptation. This preserves the model\'s strong language capabilities but limits what it can learn about vision.' },
+      { num: 7, color: 'output', title: 'Text Generation',
+        desc: 'Autoregressive decoding with limited visual conditioning',
+        detail: 'Standard next-token prediction. The model can reference visual information but its cross-modal reasoning is bounded by the adapter\'s capacity and the backbone\'s lack of multimodal pretraining.' }
+    ]
+  }
+};
+
+let currentModel = 'gemma3';
+
+function selectModel(model) {
+  currentModel = model;
+  document.querySelectorAll('.model-btn').forEach(btn => btn.classList.remove('active'));
+  event.target.classList.add('active');
+  renderPipeline();
+}
+
+function renderPipeline() {
+  const m = models[currentModel];
+  const pipeline = document.getElementById('pipeline');
+  pipeline.innerHTML = '';
+
+  m.stages.forEach((stage, i) => {
+    const div = document.createElement('div');
+    div.className = 'stage';
+    div.innerHTML = `
+      <div class="stage-box color-${stage.color}">
+        <div class="stage-num">${stage.num}</div>
+        <div class="stage-content">
+          <div class="stage-title">${stage.title}</div>
+          <div class="stage-desc">${stage.desc}</div>
+          <div class="stage-detail" id="detail-${i}">${stage.detail}</div>
+        </div>
+      </div>
+    `;
+    div.onclick = () => {
+      const detail = document.getElementById(`detail-${i}`);
+      detail.classList.toggle('open');
+    };
+    pipeline.appendChild(div);
+
+    if (i < m.stages.length - 1) {
+      const arrow = document.createElement('div');
+      arrow.className = 'arrow';
+      pipeline.appendChild(arrow);
+    }
+  });
+
+  document.getElementById('totalTokens').textContent = m.tokens;
+}
+
+renderPipeline();
+</script>
+</body>
+</html>

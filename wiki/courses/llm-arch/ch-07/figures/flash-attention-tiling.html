@@ -1,0 +1,292 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Flash Attention Tiling Animation</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { background: #1a1a2e; color: #e0e0e0; font-family: 'Segoe UI', system-ui, sans-serif; padding: 24px; min-height: 100vh; }
+.container { max-width: 960px; margin: 0 auto; }
+h1 { color: #e94560; font-size: 22px; margin-bottom: 4px; }
+.subtitle { color: #888; font-size: 13px; margin-bottom: 20px; }
+.main-layout { display: grid; grid-template-columns: 1fr 300px; gap: 20px; }
+.matrix-area { background: #16213e; border-radius: 12px; padding: 20px; }
+.matrix-label { color: #4ecdc4; font-size: 13px; font-weight: bold; margin-bottom: 10px; }
+canvas { display: block; border-radius: 6px; }
+.side-panel { display: flex; flex-direction: column; gap: 12px; }
+.stat-box { background: #16213e; border-radius: 10px; padding: 14px; }
+.stat-box h3 { color: #4ecdc4; font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 8px; }
+.stat-row { display: flex; justify-content: space-between; margin-bottom: 4px; font-size: 12px; }
+.stat-val { color: #ffd93d; font-family: monospace; font-weight: bold; }
+.controls-bar { display: flex; gap: 10px; align-items: center; margin-top: 16px; margin-bottom: 12px; }
+.btn { background: #0f3460; color: #4ecdc4; border: 1px solid #4ecdc4; border-radius: 6px; padding: 8px 18px; font-size: 13px; cursor: pointer; transition: all 0.2s; }
+.btn:hover { background: #4ecdc4; color: #1a1a2e; }
+.btn.active { background: #e94560; border-color: #e94560; color: #fff; }
+.speed-label { color: #888; font-size: 12px; }
+input[type="range"] { accent-color: #e94560; width: 120px; }
+.legend { display: flex; gap: 16px; flex-wrap: wrap; margin-top: 12px; }
+.legend-item { display: flex; align-items: center; gap: 6px; font-size: 11px; }
+.legend-swatch { width: 14px; height: 14px; border-radius: 3px; }
+.step-desc { background: #16213e; border-radius: 10px; padding: 14px; margin-top: 12px; min-height: 70px; }
+.step-desc h3 { color: #e94560; font-size: 12px; margin-bottom: 6px; }
+.step-desc p { font-size: 12px; color: #aaa; line-height: 1.5; }
+.sram-box { background: #16213e; border-radius: 10px; padding: 14px; }
+.sram-box h3 { color: #e94560; font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 8px; }
+.sram-contents { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+.sram-slot { background: #0f3460; border-radius: 4px; padding: 6px 8px; text-align: center; font-size: 10px; font-weight: bold; transition: all 0.3s; }
+.sram-slot.loaded { border: 1px solid #4ecdc4; }
+</style>
+</head>
+<body>
+<div class="container">
+<h1>Flash Attention Tiling Animation</h1>
+<div class="subtitle">Visualizing how Flash Attention processes the attention matrix tile-by-tile without materializing it in HBM</div>
+
+<div class="controls-bar">
+    <button class="btn" id="playBtn" onclick="togglePlay()">Play</button>
+    <button class="btn" onclick="stepForward()">Step</button>
+    <button class="btn" onclick="resetAnim()">Reset</button>
+    <span class="speed-label">Speed:</span>
+    <input type="range" id="speed" min="1" max="10" value="4">
+    <span class="speed-label">Grid: </span>
+    <select id="gridSize" onchange="resetAnim()" style="background:#0f3460;color:#e0e0e0;border:1px solid #333;border-radius:4px;padding:4px 8px;font-size:12px;">
+        <option value="4">4x4 (N=4 blocks)</option>
+        <option value="6" selected>6x6 (N=6 blocks)</option>
+        <option value="8">8x8 (N=8 blocks)</option>
+    </select>
+</div>
+
+<div class="main-layout">
+<div>
+    <div class="matrix-area">
+        <div class="matrix-label">Attention Score Matrix (S = QK<sup>T</sup>) -- never fully materialized</div>
+        <canvas id="matrixCanvas" width="520" height="520"></canvas>
+    </div>
+    <div class="legend">
+        <div class="legend-item"><div class="legend-swatch" style="background:#0f3460"></div> Not computed</div>
+        <div class="legend-item"><div class="legend-swatch" style="background:#e94560"></div> Currently in SRAM</div>
+        <div class="legend-item"><div class="legend-swatch" style="background:#4ecdc4"></div> Computed & accumulated</div>
+        <div class="legend-item"><div class="legend-swatch" style="background:#ffd93d33; border:1px solid #ffd93d;"></div> K/V block loaded</div>
+        <div class="legend-item"><div class="legend-swatch" style="background:#e9456033; border:1px solid #e94560;"></div> Q block loaded</div>
+    </div>
+</div>
+
+<div class="side-panel">
+    <div class="stat-box">
+        <h3>Progress</h3>
+        <div class="stat-row"><span>Outer loop (K/V block j):</span> <span class="stat-val" id="outerIdx">0 / 0</span></div>
+        <div class="stat-row"><span>Inner loop (Q block i):</span> <span class="stat-val" id="innerIdx">0 / 0</span></div>
+        <div class="stat-row"><span>Tiles computed:</span> <span class="stat-val" id="tilesComputed">0</span></div>
+        <div class="stat-row"><span>Total tiles:</span> <span class="stat-val" id="totalTiles">0</span></div>
+    </div>
+    <div class="sram-box">
+        <h3>SRAM Contents</h3>
+        <div class="sram-contents">
+            <div class="sram-slot" id="sram-q">Q_i: --</div>
+            <div class="sram-slot" id="sram-k">K_j: --</div>
+            <div class="sram-slot" id="sram-v">V_j: --</div>
+            <div class="sram-slot" id="sram-o">O_i: --</div>
+            <div class="sram-slot" id="sram-m">m_i: -inf</div>
+            <div class="sram-slot" id="sram-l">l_i: 0</div>
+        </div>
+    </div>
+    <div class="stat-box">
+        <h3>HBM Accesses</h3>
+        <div class="stat-row"><span>Standard attention:</span> <span class="stat-val" id="stdHBM">--</span></div>
+        <div class="stat-row"><span>Flash Attention:</span> <span class="stat-val" id="flashHBM">--</span></div>
+        <div class="stat-row"><span>Reduction:</span> <span class="stat-val" id="hbmReduction" style="color:#4ecdc4">--</span></div>
+    </div>
+    <div class="step-desc" id="stepDesc">
+        <h3>Ready</h3>
+        <p>Press Play or Step to begin. The outer loop loads K/V blocks; the inner loop processes each Q block against the loaded K/V. Only one tile of S exists at any time, in SRAM.</p>
+    </div>
+</div>
+</div>
+</div>
+
+<script>
+const canvas = document.getElementById('matrixCanvas');
+const ctx = canvas.getContext('2d');
+let N, cellSize, pad = 40;
+let grid, outerJ, innerI, playing, timerID, computed;
+
+function initGrid() {
+    N = parseInt(document.getElementById('gridSize').value);
+    cellSize = Math.floor((canvas.width - pad * 2) / N);
+    grid = Array.from({length: N}, () => Array(N).fill(0)); // 0=empty, 1=active, 2=done
+    outerJ = 0; innerI = 0; computed = 0;
+    document.getElementById('totalTiles').textContent = N * N;
+    document.getElementById('tilesComputed').textContent = 0;
+    const stdAccess = N * N; // O(N^2) for full matrix
+    document.getElementById('stdHBM').textContent = stdAccess + ' blocks';
+    document.getElementById('flashHBM').textContent = '0 blocks';
+    document.getElementById('hbmReduction').textContent = '--';
+}
+
+function draw() {
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+    // Column header (K/V blocks)
+    ctx.fillStyle = '#888';
+    ctx.font = '11px monospace';
+    ctx.textAlign = 'center';
+    for (let j = 0; j < N; j++) {
+        ctx.fillStyle = j === outerJ && (playing || computed < N*N) ? '#ffd93d' : '#555';
+        ctx.fillText('K' + j, pad + j * cellSize + cellSize/2, pad - 8);
+    }
+    // Row header (Q blocks)
+    ctx.textAlign = 'right';
+    for (let i = 0; i < N; i++) {
+        ctx.fillStyle = i === innerI && (playing || computed < N*N) ? '#e94560' : '#555';
+        ctx.fillText('Q' + i, pad - 8, pad + i * cellSize + cellSize/2 + 4);
+    }
+
+    // Highlight active K/V column
+    if (computed < N * N) {
+        ctx.fillStyle = 'rgba(255,217,61,0.06)';
+        ctx.fillRect(pad + outerJ * cellSize, pad, cellSize, N * cellSize);
+        // Highlight active Q row
+        ctx.fillStyle = 'rgba(233,69,96,0.06)';
+        ctx.fillRect(pad, pad + innerI * cellSize, N * cellSize, cellSize);
+    }
+
+    // Draw cells
+    for (let i = 0; i < N; i++) {
+        for (let j = 0; j < N; j++) {
+            const x = pad + j * cellSize;
+            const y = pad + i * cellSize;
+            if (grid[i][j] === 2) {
+                ctx.fillStyle = '#4ecdc4';
+                ctx.globalAlpha = 0.35;
+                ctx.fillRect(x+1, y+1, cellSize-2, cellSize-2);
+                ctx.globalAlpha = 1;
+                ctx.strokeStyle = '#4ecdc4';
+                ctx.lineWidth = 1;
+                ctx.strokeRect(x+1, y+1, cellSize-2, cellSize-2);
+            } else if (grid[i][j] === 1) {
+                ctx.fillStyle = '#e94560';
+                ctx.globalAlpha = 0.7;
+                ctx.fillRect(x+1, y+1, cellSize-2, cellSize-2);
+                ctx.globalAlpha = 1;
+                ctx.strokeStyle = '#e94560';
+                ctx.lineWidth = 2;
+                ctx.strokeRect(x+1, y+1, cellSize-2, cellSize-2);
+                // Label
+                ctx.fillStyle = '#fff';
+                ctx.font = 'bold 10px monospace';
+                ctx.textAlign = 'center';
+                ctx.fillText('S' + i + ',' + j, x + cellSize/2, y + cellSize/2 + 4);
+            } else {
+                ctx.fillStyle = '#0f3460';
+                ctx.fillRect(x+1, y+1, cellSize-2, cellSize-2);
+                ctx.strokeStyle = '#1a1a2e';
+                ctx.lineWidth = 1;
+                ctx.strokeRect(x+1, y+1, cellSize-2, cellSize-2);
+            }
+        }
+    }
+}
+
+function stepForward() {
+    if (computed >= N * N) return;
+
+    // Clear previous active
+    for (let i = 0; i < N; i++)
+        for (let j = 0; j < N; j++)
+            if (grid[i][j] === 1) grid[i][j] = 2;
+
+    // Set current active
+    grid[innerI][outerJ] = 1;
+    computed++;
+
+    // Update stats
+    document.getElementById('outerIdx').textContent = (outerJ + 1) + ' / ' + N;
+    document.getElementById('innerIdx').textContent = (innerI + 1) + ' / ' + N;
+    document.getElementById('tilesComputed').textContent = computed;
+
+    // SRAM contents
+    document.getElementById('sram-q').textContent = 'Q_' + innerI;
+    document.getElementById('sram-q').classList.add('loaded');
+    document.getElementById('sram-k').textContent = 'K_' + outerJ;
+    document.getElementById('sram-k').classList.add('loaded');
+    document.getElementById('sram-v').textContent = 'V_' + outerJ;
+    document.getElementById('sram-v').classList.add('loaded');
+    document.getElementById('sram-o').textContent = 'O_' + innerI;
+    document.getElementById('sram-o').classList.add('loaded');
+    document.getElementById('sram-m').textContent = 'm_' + innerI + ': upd';
+    document.getElementById('sram-l').textContent = 'l_' + innerI + ': upd';
+
+    // HBM access count (simplified: each step loads Q_i + stores O_i; K_j/V_j loaded once per outer)
+    const flashAccess = computed + outerJ + 1; // rough model
+    document.getElementById('flashHBM').textContent = flashAccess + ' blocks';
+    const stdAccess = N * N;
+    const red = (stdAccess / flashAccess).toFixed(1);
+    document.getElementById('hbmReduction').textContent = red + 'x fewer';
+
+    // Step description
+    const descEl = document.getElementById('stepDesc');
+    if (innerI === 0) {
+        descEl.innerHTML = `<h3>Outer Loop: Load K_${outerJ}, V_${outerJ}</h3>
+        <p>Loading key block ${outerJ} and value block ${outerJ} from HBM to SRAM. These stay in SRAM for all Q blocks in this iteration.</p>`;
+    } else {
+        descEl.innerHTML = `<h3>Tile S[${innerI},${outerJ}]</h3>
+        <p>Computing S = Q_${innerI} &times; K_${outerJ}<sup>T</sup> in SRAM. Running online softmax: update m_${innerI}, l_${innerI}. Accumulate into O_${innerI}. Write O_${innerI} back to HBM.</p>`;
+    }
+
+    // Advance indices
+    innerI++;
+    if (innerI >= N) {
+        innerI = 0;
+        outerJ++;
+    }
+
+    if (computed >= N * N) {
+        descEl.innerHTML = `<h3>Complete!</h3>
+        <p>All ${N*N} tiles processed. Final output O has exact attention values. The full N&times;N matrix was never stored in HBM -- only one tile existed at a time in SRAM.</p>`;
+        if (playing) togglePlay();
+    }
+
+    draw();
+}
+
+function togglePlay() {
+    playing = !playing;
+    document.getElementById('playBtn').textContent = playing ? 'Pause' : 'Play';
+    document.getElementById('playBtn').classList.toggle('active', playing);
+    if (playing) runLoop();
+    else clearTimeout(timerID);
+}
+
+function runLoop() {
+    if (!playing) return;
+    stepForward();
+    if (playing) {
+        const speed = parseInt(document.getElementById('speed').value);
+        timerID = setTimeout(runLoop, 1100 - speed * 100);
+    }
+}
+
+function resetAnim() {
+    playing = false;
+    document.getElementById('playBtn').textContent = 'Play';
+    document.getElementById('playBtn').classList.remove('active');
+    clearTimeout(timerID);
+    initGrid();
+    document.getElementById('outerIdx').textContent = '0 / ' + N;
+    document.getElementById('innerIdx').textContent = '0 / ' + N;
+    document.getElementById('sram-q').textContent = 'Q_i: --';
+    document.getElementById('sram-k').textContent = 'K_j: --';
+    document.getElementById('sram-v').textContent = 'V_j: --';
+    document.getElementById('sram-o').textContent = 'O_i: --';
+    document.getElementById('sram-m').textContent = 'm_i: -inf';
+    document.getElementById('sram-l').textContent = 'l_i: 0';
+    document.getElementById('stepDesc').innerHTML = '<h3>Ready</h3><p>Press Play or Step to begin. The outer loop loads K/V blocks; the inner loop processes each Q block against the loaded K/V. Only one tile of S exists at any time, in SRAM.</p>';
+    draw();
+}
+
+initGrid();
+draw();
+</script>
+</body>
+</html>

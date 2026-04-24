@@ -1,0 +1,346 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>KV Cache Memory Scaling — Jamba vs. Transformer vs. Mamba</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body {
+  background: #0d1117;
+  color: #e0e0e0;
+  font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+  padding: 32px;
+  min-height: 100vh;
+}
+h1 { font-size: 20px; margin-bottom: 4px; color: #f0f0f0; }
+.subtitle { font-size: 13px; color: #888; margin-bottom: 24px; }
+
+.controls {
+  display: flex;
+  gap: 24px;
+  margin-bottom: 24px;
+  flex-wrap: wrap;
+  align-items: center;
+}
+.control-group {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.control-group label {
+  font-size: 11px;
+  color: #888;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+.control-group input[type=range] {
+  width: 200px;
+  accent-color: #58a6ff;
+}
+.control-group .value {
+  font-size: 14px;
+  font-weight: 600;
+  color: #58a6ff;
+}
+
+.chart-area {
+  background: #161b22;
+  border: 1px solid #30363d;
+  border-radius: 12px;
+  padding: 24px;
+  margin-bottom: 24px;
+}
+canvas {
+  width: 100%;
+  max-width: 800px;
+  height: 400px;
+}
+
+.legend-bar {
+  display: flex;
+  gap: 24px;
+  margin-bottom: 16px;
+  flex-wrap: wrap;
+}
+.legend-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+}
+.legend-dot {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+}
+
+.comparison-table {
+  width: 100%;
+  max-width: 800px;
+  border-collapse: collapse;
+  margin-top: 16px;
+}
+.comparison-table th,
+.comparison-table td {
+  padding: 10px 16px;
+  text-align: right;
+  font-size: 13px;
+  border-bottom: 1px solid #21262d;
+}
+.comparison-table th {
+  text-align: left;
+  color: #888;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  border-bottom: 2px solid #30363d;
+}
+.comparison-table td:first-child {
+  text-align: left;
+  font-weight: 600;
+}
+.gpu-line {
+  color: #f97583;
+  font-weight: 600;
+}
+.note {
+  font-size: 12px;
+  color: #888;
+  margin-top: 16px;
+  line-height: 1.5;
+}
+</style>
+</head>
+<body>
+
+<h1>KV Cache Memory Scaling</h1>
+<p class="subtitle">Interactive comparison: how KV cache grows with context length for different architectures</p>
+
+<div class="controls">
+  <div class="control-group">
+    <label>Context Length</label>
+    <input type="range" id="ctxSlider" min="1" max="256" value="256" step="1">
+    <div class="value" id="ctxValue">256K tokens</div>
+  </div>
+  <div class="control-group">
+    <label>Precision</label>
+    <div style="display:flex;gap:8px;">
+      <button id="btnFP16" class="prec-btn active" onclick="setPrecision(2)">FP16</button>
+      <button id="btnFP8" class="prec-btn" onclick="setPrecision(1)">FP8</button>
+    </div>
+  </div>
+</div>
+<style>
+.prec-btn {
+  background: #21262d;
+  border: 1px solid #30363d;
+  color: #888;
+  padding: 6px 14px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 600;
+  transition: all 0.15s;
+}
+.prec-btn.active {
+  background: #1f6feb;
+  border-color: #1f6feb;
+  color: #fff;
+}
+</style>
+
+<div class="legend-bar">
+  <div class="legend-item">
+    <div class="legend-dot" style="background:#f97583;"></div>
+    <span>Llama-2 7B (32L, MHA, 32 KV heads)</span>
+  </div>
+  <div class="legend-item">
+    <div class="legend-dot" style="background:#d29922;"></div>
+    <span>Mistral 7B (32L, GQA-8, SWA 4K)</span>
+  </div>
+  <div class="legend-item">
+    <div class="legend-dot" style="background:#8b5cf6;"></div>
+    <span>Mixtral 8x7B (32L, GQA-8)</span>
+  </div>
+  <div class="legend-item">
+    <div class="legend-dot" style="background:#2ea043;"></div>
+    <span>Jamba (4L attn, GQA-8)</span>
+  </div>
+  <div class="legend-item">
+    <div class="legend-dot" style="background:#56d364;"></div>
+    <span>Pure Mamba (0L attn)</span>
+  </div>
+</div>
+
+<div class="chart-area">
+  <canvas id="chart"></canvas>
+</div>
+
+<table class="comparison-table" id="compTable"></table>
+
+<p class="note">
+  KV cache = 2 (K+V) x KV_heads x d_head (128) x attn_layers x seq_len x precision_bytes.<br>
+  Mistral uses sliding window attention (W=4096), so its effective cache is capped at min(seq_len, 4096) per layer.<br>
+  Pure Mamba has zero KV cache — its state is fixed-size regardless of sequence length.<br>
+  The red dashed line marks a single 80GB GPU's total memory (model weights consume a portion of this).
+</p>
+
+<script>
+let precision = 2; // bytes per element: 2=FP16, 1=FP8
+
+const models = [
+  { name: 'Llama-2 7B',  attnLayers: 32, kvHeads: 32, dHead: 128, swa: null,  color: '#f97583' },
+  { name: 'Mistral 7B',  attnLayers: 32, kvHeads: 8,  dHead: 128, swa: 4096, color: '#d29922' },
+  { name: 'Mixtral 8x7B',attnLayers: 32, kvHeads: 8,  dHead: 128, swa: null,  color: '#8b5cf6' },
+  { name: 'Jamba',        attnLayers: 4,  kvHeads: 8,  dHead: 128, swa: null,  color: '#2ea043' },
+  { name: 'Pure Mamba',   attnLayers: 0,  kvHeads: 0,  dHead: 128, swa: null,  color: '#56d364' },
+];
+
+function kvCacheGB(model, seqLen, prec) {
+  if (model.attnLayers === 0) return 0;
+  const effectiveLen = model.swa ? Math.min(seqLen, model.swa) : seqLen;
+  return (2 * model.kvHeads * model.dHead * model.attnLayers * effectiveLen * prec) / (1024**3);
+}
+
+function drawChart() {
+  const canvas = document.getElementById('chart');
+  const ctx = canvas.getContext('2d');
+  const dpr = window.devicePixelRatio || 1;
+  const rect = canvas.getBoundingClientRect();
+  canvas.width = rect.width * dpr;
+  canvas.height = rect.height * dpr;
+  ctx.scale(dpr, dpr);
+  const W = rect.width, H = rect.height;
+
+  ctx.clearRect(0, 0, W, H);
+
+  const padL = 60, padR = 20, padT = 20, padB = 40;
+  const plotW = W - padL - padR;
+  const plotH = H - padT - padB;
+
+  // Axes
+  const maxCtx = 256 * 1024;
+  const maxGB = 140;
+
+  const xScale = (v) => padL + (v / maxCtx) * plotW;
+  const yScale = (v) => padT + plotH - (v / maxGB) * plotH;
+
+  // Grid
+  ctx.strokeStyle = '#21262d';
+  ctx.lineWidth = 1;
+  for (let g = 0; g <= maxGB; g += 20) {
+    ctx.beginPath();
+    ctx.moveTo(padL, yScale(g));
+    ctx.lineTo(padL + plotW, yScale(g));
+    ctx.stroke();
+    ctx.fillStyle = '#888';
+    ctx.font = '11px sans-serif';
+    ctx.textAlign = 'right';
+    ctx.fillText(g + ' GB', padL - 8, yScale(g) + 4);
+  }
+  for (let k = 0; k <= 256; k += 32) {
+    const x = xScale(k * 1024);
+    ctx.beginPath();
+    ctx.moveTo(x, padT);
+    ctx.lineTo(x, padT + plotH);
+    ctx.stroke();
+    ctx.fillStyle = '#888';
+    ctx.font = '11px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText(k + 'K', x, padT + plotH + 16);
+  }
+
+  // 80GB GPU line
+  ctx.strokeStyle = '#f9758366';
+  ctx.lineWidth = 2;
+  ctx.setLineDash([8, 4]);
+  ctx.beginPath();
+  ctx.moveTo(padL, yScale(80));
+  ctx.lineTo(padL + plotW, yScale(80));
+  ctx.stroke();
+  ctx.setLineDash([]);
+  ctx.fillStyle = '#f97583';
+  ctx.font = 'bold 11px sans-serif';
+  ctx.textAlign = 'left';
+  ctx.fillText('80 GB GPU limit', padL + 4, yScale(80) - 6);
+
+  // Plot lines
+  const steps = 128;
+  models.forEach(model => {
+    ctx.strokeStyle = model.color;
+    ctx.lineWidth = 2.5;
+    ctx.beginPath();
+    for (let i = 0; i <= steps; i++) {
+      const seq = (i / steps) * maxCtx;
+      const gb = kvCacheGB(model, seq, precision);
+      const clampedGB = Math.min(gb, maxGB);
+      const x = xScale(seq);
+      const y = yScale(clampedGB);
+      if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+    }
+    ctx.stroke();
+  });
+
+  // Highlight current context length
+  const ctxK = parseInt(document.getElementById('ctxSlider').value);
+  const ctxTokens = ctxK * 1024;
+  ctx.strokeStyle = '#58a6ff44';
+  ctx.lineWidth = 1;
+  ctx.setLineDash([4, 4]);
+  ctx.beginPath();
+  ctx.moveTo(xScale(ctxTokens), padT);
+  ctx.lineTo(xScale(ctxTokens), padT + plotH);
+  ctx.stroke();
+  ctx.setLineDash([]);
+
+  // Dots at current context
+  models.forEach(model => {
+    const gb = kvCacheGB(model, ctxTokens, precision);
+    const clampedGB = Math.min(gb, maxGB);
+    ctx.fillStyle = model.color;
+    ctx.beginPath();
+    ctx.arc(xScale(ctxTokens), yScale(clampedGB), 5, 0, Math.PI * 2);
+    ctx.fill();
+  });
+}
+
+function updateTable() {
+  const ctxK = parseInt(document.getElementById('ctxSlider').value);
+  const ctxTokens = ctxK * 1024;
+
+  let html = '<tr><th>Model</th><th>Attn Layers</th><th>KV Heads</th><th>KV Cache</th><th>Fits 80GB GPU?</th></tr>';
+  models.forEach(model => {
+    const gb = kvCacheGB(model, ctxTokens, precision);
+    const fits = gb < 60; // leaving room for weights
+    const gbStr = gb === 0 ? '0 GB' : (gb < 0.1 ? gb.toFixed(2) + ' GB' : gb.toFixed(1) + ' GB');
+    const fitsStr = gb === 0 ? '<span style="color:#56d364;">No cache</span>' :
+                    fits ? '<span style="color:#56d364;">Yes</span>' :
+                           '<span style="color:#f97583;">No</span>';
+    html += '<tr><td style="color:' + model.color + ';">' + model.name + '</td><td style="text-align:center;">' + model.attnLayers + '</td><td style="text-align:center;">' + model.kvHeads + '</td><td>' + gbStr + '</td><td>' + fitsStr + '</td></tr>';
+  });
+  document.getElementById('compTable').innerHTML = html;
+}
+
+function setPrecision(p) {
+  precision = p;
+  document.querySelectorAll('.prec-btn').forEach(b => b.classList.remove('active'));
+  if (p === 2) document.getElementById('btnFP16').classList.add('active');
+  else document.getElementById('btnFP8').classList.add('active');
+  update();
+}
+
+function update() {
+  const ctxK = parseInt(document.getElementById('ctxSlider').value);
+  document.getElementById('ctxValue').textContent = ctxK + 'K tokens';
+  drawChart();
+  updateTable();
+}
+
+document.getElementById('ctxSlider').addEventListener('input', update);
+window.addEventListener('resize', update);
+update();
+</script>
+
+</body>
+</html>

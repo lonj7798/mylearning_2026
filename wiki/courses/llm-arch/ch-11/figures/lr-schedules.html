@@ -1,0 +1,335 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Learning Rate Schedule Explorer</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    background: #0f0f1a;
+    color: #e0e0e0;
+    font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+    padding: 24px;
+    min-height: 100vh;
+  }
+  h1 {
+    color: #e94560;
+    font-size: 22px;
+    margin-bottom: 4px;
+  }
+  .subtitle {
+    color: #888;
+    font-size: 13px;
+    margin-bottom: 24px;
+  }
+  .container {
+    max-width: 900px;
+    margin: 0 auto;
+  }
+  .controls {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+    gap: 16px;
+    margin-bottom: 24px;
+    background: #1a1a2e;
+    border-radius: 12px;
+    padding: 20px;
+  }
+  .control-group {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+  .control-group label {
+    font-size: 11px;
+    color: #888;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+  }
+  .control-group .value {
+    font-size: 13px;
+    color: #4ecdc4;
+    font-weight: bold;
+    min-height: 18px;
+  }
+  input[type="range"] {
+    width: 100%;
+    accent-color: #e94560;
+    cursor: pointer;
+  }
+  .chart-container {
+    background: #1a1a2e;
+    border-radius: 12px;
+    padding: 20px;
+    margin-bottom: 16px;
+  }
+  canvas {
+    width: 100%;
+    height: 350px;
+    display: block;
+  }
+  .legend {
+    display: flex;
+    gap: 24px;
+    justify-content: center;
+    margin-top: 12px;
+    flex-wrap: wrap;
+  }
+  .legend-item {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 12px;
+  }
+  .legend-dot {
+    width: 12px;
+    height: 12px;
+    border-radius: 50%;
+  }
+  .schedule-toggle {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+    margin-bottom: 16px;
+  }
+  .schedule-toggle button {
+    background: #16213e;
+    color: #e0e0e0;
+    border: 1px solid #333;
+    padding: 6px 14px;
+    border-radius: 6px;
+    cursor: pointer;
+    font-size: 12px;
+    transition: all 0.2s;
+  }
+  .schedule-toggle button.active {
+    border-color: #e94560;
+    background: #e94560;
+    color: #fff;
+  }
+  .schedule-toggle button:hover:not(.active) {
+    border-color: #4ecdc4;
+  }
+  .annotations {
+    background: #1a1a2e;
+    border-radius: 12px;
+    padding: 20px;
+    font-size: 12px;
+    line-height: 1.7;
+    color: #aaa;
+  }
+  .annotations strong {
+    color: #e0e0e0;
+  }
+  .annotations .highlight {
+    color: #4ecdc4;
+  }
+</style>
+</head>
+<body>
+<div class="container">
+  <h1>Learning Rate Schedule Explorer</h1>
+  <p class="subtitle">Chapter 11: Pre-training &mdash; Interactive comparison of cosine, WSD, and linear decay schedules</p>
+
+  <div class="schedule-toggle" id="toggles">
+    <button class="active" data-schedule="cosine">Cosine</button>
+    <button class="active" data-schedule="wsd">WSD (Warmup-Stable-Decay)</button>
+    <button class="active" data-schedule="linear">Linear Decay</button>
+  </div>
+
+  <div class="controls">
+    <div class="control-group">
+      <label>Peak Learning Rate (eta_max)</label>
+      <div class="value" id="val-lr">3e-4</div>
+      <input type="range" id="lr" min="1" max="10" step="0.5" value="3">
+    </div>
+    <div class="control-group">
+      <label>Minimum Learning Rate (eta_min)</label>
+      <div class="value" id="val-lr-min">1e-5</div>
+      <input type="range" id="lr-min" min="0" max="5" step="0.5" value="1">
+    </div>
+    <div class="control-group">
+      <label>Warmup Steps (fraction of total)</label>
+      <div class="value" id="val-warmup">2%</div>
+      <input type="range" id="warmup" min="0.5" max="10" step="0.5" value="2">
+    </div>
+    <div class="control-group">
+      <label>WSD Stable Fraction</label>
+      <div class="value" id="val-stable">70%</div>
+      <input type="range" id="stable" min="40" max="90" step="5" value="70">
+    </div>
+    <div class="control-group">
+      <label>Total Training Steps</label>
+      <div class="value" id="val-steps">100,000</div>
+      <input type="range" id="steps" min="10000" max="500000" step="10000" value="100000">
+    </div>
+  </div>
+
+  <div class="chart-container">
+    <canvas id="chart"></canvas>
+    <div class="legend">
+      <div class="legend-item"><div class="legend-dot" style="background:#e94560;"></div>Cosine</div>
+      <div class="legend-item"><div class="legend-dot" style="background:#4ecdc4;"></div>WSD</div>
+      <div class="legend-item"><div class="legend-dot" style="background:#ffd93d;"></div>Linear Decay</div>
+    </div>
+  </div>
+
+  <div class="annotations">
+    <strong>Key observations:</strong><br>
+    <span class="highlight">Cosine</span> decays gradually from the start, spending most of training at a moderate LR. Llama 3 (405B) used this with eta_max=8e-5 over 15T tokens.<br>
+    <span class="highlight">WSD</span> maintains peak LR for ~70% of training, then decays sharply. This maximizes the learning signal during the stable phase but requires knowing total steps in advance.<br>
+    <span class="highlight">Linear Decay</span> is the simplest schedule. It is rarely used alone for large runs but serves as a useful baseline for understanding the other two.<br><br>
+    <strong>Practical note:</strong> The warmup phase (first 1-2%) is universal across all schedules. Without it, randomly initialized models receive extreme gradients that cause immediate divergence.
+    OLMo 2's two-stage training transitions from Stage 1 to Stage 2 data during the annealing phase (right side of the chart), which is why the schedule choice interacts with curriculum design.
+  </div>
+</div>
+
+<script>
+const canvas = document.getElementById('chart');
+const ctx = canvas.getContext('2d');
+
+const schedules = { cosine: true, wsd: true, linear: true };
+const colors = { cosine: '#e94560', wsd: '#4ecdc4', linear: '#ffd93d' };
+
+function getParams() {
+  return {
+    lrMax: parseFloat(document.getElementById('lr').value) * 1e-4,
+    lrMin: parseFloat(document.getElementById('lr-min').value) * 1e-5,
+    warmupFrac: parseFloat(document.getElementById('warmup').value) / 100,
+    stableFrac: parseFloat(document.getElementById('stable').value) / 100,
+    totalSteps: parseInt(document.getElementById('steps').value),
+  };
+}
+
+function cosineSchedule(step, p) {
+  const warmupSteps = Math.floor(p.totalSteps * p.warmupFrac);
+  if (step < warmupSteps) return p.lrMax * (step / warmupSteps);
+  const progress = (step - warmupSteps) / (p.totalSteps - warmupSteps);
+  return p.lrMin + 0.5 * (p.lrMax - p.lrMin) * (1 + Math.cos(Math.PI * progress));
+}
+
+function wsdSchedule(step, p) {
+  const warmupSteps = Math.floor(p.totalSteps * p.warmupFrac);
+  const stableEnd = Math.floor(p.totalSteps * (p.warmupFrac + p.stableFrac));
+  if (step < warmupSteps) return p.lrMax * (step / warmupSteps);
+  if (step < stableEnd) return p.lrMax;
+  const decayProgress = (step - stableEnd) / (p.totalSteps - stableEnd);
+  return p.lrMin + (p.lrMax - p.lrMin) * (1 - decayProgress) * (1 - decayProgress);
+}
+
+function linearSchedule(step, p) {
+  const warmupSteps = Math.floor(p.totalSteps * p.warmupFrac);
+  if (step < warmupSteps) return p.lrMax * (step / warmupSteps);
+  const progress = (step - warmupSteps) / (p.totalSteps - warmupSteps);
+  return p.lrMax - (p.lrMax - p.lrMin) * progress;
+}
+
+function draw() {
+  const dpr = window.devicePixelRatio || 1;
+  const rect = canvas.getBoundingClientRect();
+  canvas.width = rect.width * dpr;
+  canvas.height = rect.height * dpr;
+  ctx.scale(dpr, dpr);
+  const W = rect.width;
+  const H = rect.height;
+
+  ctx.clearRect(0, 0, W, H);
+
+  const p = getParams();
+  const pad = { top: 20, right: 20, bottom: 40, left: 60 };
+  const plotW = W - pad.left - pad.right;
+  const plotH = H - pad.top - pad.bottom;
+
+  // Grid
+  ctx.strokeStyle = '#222';
+  ctx.lineWidth = 0.5;
+  for (let i = 0; i <= 5; i++) {
+    const y = pad.top + (plotH * i / 5);
+    ctx.beginPath();
+    ctx.moveTo(pad.left, y);
+    ctx.lineTo(pad.left + plotW, y);
+    ctx.stroke();
+  }
+
+  // Axes labels
+  ctx.fillStyle = '#666';
+  ctx.font = '11px sans-serif';
+  ctx.textAlign = 'right';
+  for (let i = 0; i <= 5; i++) {
+    const val = p.lrMax * (1 - i / 5);
+    const y = pad.top + (plotH * i / 5);
+    ctx.fillText(val.toExponential(1), pad.left - 8, y + 4);
+  }
+  ctx.textAlign = 'center';
+  for (let i = 0; i <= 5; i++) {
+    const step = Math.floor(p.totalSteps * i / 5);
+    const x = pad.left + (plotW * i / 5);
+    ctx.fillText((step / 1000).toFixed(0) + 'K', x, pad.top + plotH + 20);
+  }
+  ctx.fillText('Training Steps', pad.left + plotW / 2, pad.top + plotH + 36);
+  ctx.save();
+  ctx.translate(14, pad.top + plotH / 2);
+  ctx.rotate(-Math.PI / 2);
+  ctx.fillText('Learning Rate', 0, 0);
+  ctx.restore();
+
+  // Draw schedules
+  const numPoints = 500;
+  const scheduleFns = { cosine: cosineSchedule, wsd: wsdSchedule, linear: linearSchedule };
+
+  for (const [name, fn] of Object.entries(scheduleFns)) {
+    if (!schedules[name]) continue;
+    ctx.strokeStyle = colors[name];
+    ctx.lineWidth = 2.5;
+    ctx.beginPath();
+    for (let i = 0; i <= numPoints; i++) {
+      const step = (i / numPoints) * p.totalSteps;
+      const lr = fn(step, p);
+      const x = pad.left + (i / numPoints) * plotW;
+      const y = pad.top + plotH * (1 - lr / (p.lrMax * 1.05));
+      if (i === 0) ctx.moveTo(x, y);
+      else ctx.lineTo(x, y);
+    }
+    ctx.stroke();
+  }
+
+  // Warmup region annotation
+  const warmupX = pad.left + (p.warmupFrac) * plotW;
+  ctx.fillStyle = 'rgba(233, 69, 96, 0.08)';
+  ctx.fillRect(pad.left, pad.top, warmupX - pad.left, plotH);
+  ctx.fillStyle = '#e9456066';
+  ctx.font = '10px sans-serif';
+  ctx.textAlign = 'center';
+  if (p.warmupFrac > 0.03) {
+    ctx.fillText('warmup', (pad.left + warmupX) / 2, pad.top + 14);
+  }
+}
+
+// Event listeners
+document.querySelectorAll('input[type="range"]').forEach(input => {
+  input.addEventListener('input', () => {
+    const p = getParams();
+    document.getElementById('val-lr').textContent = p.lrMax.toExponential(1);
+    document.getElementById('val-lr-min').textContent = p.lrMin.toExponential(1);
+    document.getElementById('val-warmup').textContent = (p.warmupFrac * 100).toFixed(1) + '%';
+    document.getElementById('val-stable').textContent = (p.stableFrac * 100).toFixed(0) + '%';
+    document.getElementById('val-steps').textContent = p.totalSteps.toLocaleString();
+    draw();
+  });
+});
+
+document.querySelectorAll('.schedule-toggle button').forEach(btn => {
+  btn.addEventListener('click', () => {
+    const name = btn.dataset.schedule;
+    schedules[name] = !schedules[name];
+    btn.classList.toggle('active');
+    draw();
+  });
+});
+
+window.addEventListener('resize', draw);
+draw();
+</script>
+</body>
+</html>

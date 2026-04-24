@@ -1,0 +1,435 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Ablation Table Analysis Walkthrough</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    background: #0d1117;
+    color: #e0e0e0;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    padding: 32px;
+    min-height: 100vh;
+  }
+  h1 { font-size: 22px; color: #f0f0f0; margin-bottom: 4px; text-align: center; }
+  .subtitle { font-size: 13px; color: #888; text-align: center; margin-bottom: 32px; }
+  .section { max-width: 800px; margin: 0 auto 40px; }
+  .section-header {
+    display: flex; align-items: center; gap: 12px; margin-bottom: 16px;
+  }
+  .section-num {
+    background: #e94560; color: #fff; width: 28px; height: 28px;
+    border-radius: 50%; display: flex; align-items: center; justify-content: center;
+    font-size: 14px; font-weight: 700; flex-shrink: 0;
+  }
+  .section-title { font-size: 17px; font-weight: 700; color: #f0f0f0; }
+  .section-source { font-size: 12px; color: #888; margin-left: auto; font-style: italic; }
+
+  /* Tables */
+  .ablation-table {
+    width: 100%; border-collapse: collapse; font-size: 13px; margin-bottom: 12px;
+  }
+  .ablation-table thead th {
+    text-align: left; padding: 10px 12px; border-bottom: 2px solid #e94560;
+    color: #e0e0e0; font-weight: 700; font-size: 12px; text-transform: uppercase;
+    letter-spacing: 0.5px;
+  }
+  .ablation-table tbody td {
+    padding: 8px 12px; border-bottom: 1px solid #1e2d3d;
+  }
+  .ablation-table tbody tr { cursor: pointer; transition: background 0.15s; }
+  .ablation-table tbody tr:hover { background: #16213e; }
+  .ablation-table tbody tr.highlight { background: #1a2f1a; }
+  .ablation-table tbody tr.highlight-warn { background: #2f2a1a; }
+  .ablation-table tbody tr.highlight-bad { background: #2f1a1a; }
+  .ablation-table tbody tr.active-row {
+    outline: 2px solid #4ecdc4; outline-offset: -2px; border-radius: 4px;
+  }
+  .cell-good { color: #4ade80; font-weight: 700; }
+  .cell-bad { color: #f87171; font-weight: 700; }
+  .cell-neutral { color: #fbbf24; font-weight: 700; }
+  .cell-baseline { color: #7dd3fc; font-weight: 600; }
+
+  /* Annotation panel */
+  .annotation-panel {
+    background: #16213e; border-radius: 10px; padding: 16px 20px;
+    min-height: 80px; transition: all 0.3s;
+  }
+  .annotation-panel .label {
+    font-size: 11px; text-transform: uppercase; letter-spacing: 1px;
+    color: #4ecdc4; font-weight: 700; margin-bottom: 8px;
+  }
+  .annotation-panel .text {
+    font-size: 13px; line-height: 1.6; color: #ccc;
+  }
+  .annotation-panel .verdict {
+    margin-top: 10px; padding: 8px 12px; border-radius: 6px;
+    font-size: 12px; font-weight: 600;
+  }
+  .verdict-pass { background: #0d2818; color: #4ade80; border: 1px solid #22c55e; }
+  .verdict-warn { background: #2a2215; color: #fbbf24; border: 1px solid #eab308; }
+  .verdict-fail { background: #2a1215; color: #f87171; border: 1px solid #ef4444; }
+
+  /* Checklist */
+  .checklist {
+    display: grid; grid-template-columns: 1fr 1fr; gap: 8px;
+    margin-bottom: 20px;
+  }
+  .check-item {
+    background: #16213e; border-radius: 6px; padding: 10px 12px;
+    font-size: 12px; display: flex; align-items: flex-start; gap: 8px;
+    cursor: pointer; transition: background 0.15s; user-select: none;
+  }
+  .check-item:hover { background: #1e3050; }
+  .check-icon {
+    width: 18px; height: 18px; border-radius: 4px; border: 2px solid #555;
+    display: flex; align-items: center; justify-content: center;
+    flex-shrink: 0; font-size: 12px; transition: all 0.2s;
+  }
+  .check-item.checked .check-icon {
+    background: #4ecdc4; border-color: #4ecdc4; color: #0d1117;
+  }
+  .check-label { color: #ccc; line-height: 1.4; }
+  .check-item.checked .check-label { color: #4ecdc4; }
+
+  .tab-bar {
+    display: flex; gap: 4px; margin-bottom: 20px;
+  }
+  .tab {
+    padding: 8px 16px; border-radius: 6px 6px 0 0; font-size: 13px;
+    font-weight: 600; cursor: pointer; transition: all 0.15s;
+    background: #16213e; color: #888; border: 1px solid #1e2d3d;
+    border-bottom: none;
+  }
+  .tab.active { background: #1e3050; color: #4ecdc4; border-color: #4ecdc4; }
+  .tab:hover:not(.active) { color: #ccc; }
+  .tab-content { display: none; }
+  .tab-content.active { display: block; }
+
+  .instructions {
+    font-size: 12px; color: #666; text-align: center; margin-bottom: 16px;
+    font-style: italic;
+  }
+</style>
+</head>
+<body>
+  <h1>Ablation Table Analysis Walkthrough</h1>
+  <p class="subtitle">Click rows to see critical-reading annotations. Apply the checklist to evaluate each study.</p>
+
+  <div class="section">
+    <div class="tab-bar">
+      <div class="tab active" onclick="switchTab('tab1')">Example 1: DeepSeek-V2 MLA</div>
+      <div class="tab" onclick="switchTab('tab2')">Example 2: Flash Attention</div>
+      <div class="tab" onclick="switchTab('tab3')">Quality Checklist</div>
+    </div>
+
+    <!-- TAB 1: DeepSeek-V2 MLA -->
+    <div id="tab1" class="tab-content active">
+      <div class="section-header">
+        <div class="section-num">1</div>
+        <div class="section-title">MLA vs Attention Variants (DeepSeek-V2)</div>
+        <div class="section-source">Source: DeepSeek-V2 Technical Report, Table 3</div>
+      </div>
+      <p class="instructions">Click any row to see the critical-reading annotation.</p>
+
+      <table class="ablation-table" id="table1">
+        <thead>
+          <tr>
+            <th>Attention Type</th>
+            <th>KV Cache / Token</th>
+            <th>MMLU (5-shot)</th>
+            <th>BBH (3-shot)</th>
+            <th>HumanEval</th>
+            <th style="text-align:right">Throughput</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr onclick="annotate('t1r1')" data-row="t1r1" class="highlight">
+            <td class="cell-baseline">MHA (baseline)</td>
+            <td>32,768 dims</td>
+            <td>71.3%</td>
+            <td>68.7%</td>
+            <td>45.1%</td>
+            <td style="text-align:right">1.0x</td>
+          </tr>
+          <tr onclick="annotate('t1r2')" data-row="t1r2">
+            <td>MQA (1 KV head)</td>
+            <td class="cell-good">256 dims</td>
+            <td class="cell-bad">68.1%</td>
+            <td class="cell-bad">64.2%</td>
+            <td class="cell-bad">40.9%</td>
+            <td style="text-align:right" class="cell-good">8.2x</td>
+          </tr>
+          <tr onclick="annotate('t1r3')" data-row="t1r3">
+            <td>GQA (8 groups)</td>
+            <td class="cell-neutral">4,096 dims</td>
+            <td>70.5%</td>
+            <td>67.8%</td>
+            <td>43.9%</td>
+            <td style="text-align:right" class="cell-neutral">4.1x</td>
+          </tr>
+          <tr onclick="annotate('t1r4')" data-row="t1r4" class="highlight">
+            <td style="color:#c084fc; font-weight:700;">MLA (proposed)</td>
+            <td class="cell-good">576 dims</td>
+            <td class="cell-good">78.5%</td>
+            <td class="cell-good">78.9%</td>
+            <td class="cell-good">48.8%</td>
+            <td style="text-align:right" class="cell-good">5.76x</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <div class="annotation-panel" id="ann-t1">
+        <div class="label">Critical Reading Annotation</div>
+        <div class="text" id="ann-t1-text">
+          Click a row above to see the annotation for that comparison. Each annotation examines what the row tells you and what questions a critical reader should ask.
+        </div>
+      </div>
+    </div>
+
+    <!-- TAB 2: Flash Attention -->
+    <div id="tab2" class="tab-content">
+      <div class="section-header">
+        <div class="section-num">2</div>
+        <div class="section-title">Flash Attention Speed vs Standard Attention</div>
+        <div class="section-source">Source: FlashAttention (Dao et al., 2022), Table 2</div>
+      </div>
+      <p class="instructions">Click any row to see the critical-reading annotation.</p>
+
+      <table class="ablation-table" id="table2">
+        <thead>
+          <tr>
+            <th>Method</th>
+            <th>Seq Length</th>
+            <th>Memory</th>
+            <th>Wall-Clock</th>
+            <th>FLOPs</th>
+            <th style="text-align:right">Exact?</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr onclick="annotate('t2r1')" data-row="t2r1">
+            <td class="cell-baseline">Standard Attention</td>
+            <td>512</td>
+            <td>O(N^2)</td>
+            <td>1.0x</td>
+            <td>O(N^2 d)</td>
+            <td style="text-align:right">Yes</td>
+          </tr>
+          <tr onclick="annotate('t2r2')" data-row="t2r2">
+            <td class="cell-baseline">Standard Attention</td>
+            <td>1024</td>
+            <td>O(N^2)</td>
+            <td>1.0x</td>
+            <td>O(N^2 d)</td>
+            <td style="text-align:right">Yes</td>
+          </tr>
+          <tr onclick="annotate('t2r3')" data-row="t2r3" class="highlight-warn">
+            <td>Linformer</td>
+            <td>1024</td>
+            <td class="cell-good">O(N)</td>
+            <td class="cell-bad">0.7x</td>
+            <td class="cell-good">O(N d)</td>
+            <td style="text-align:right" class="cell-bad">No</td>
+          </tr>
+          <tr onclick="annotate('t2r4')" data-row="t2r4" class="highlight-warn">
+            <td>Performer</td>
+            <td>1024</td>
+            <td class="cell-good">O(N)</td>
+            <td class="cell-bad">0.8x</td>
+            <td class="cell-good">O(N d)</td>
+            <td style="text-align:right" class="cell-bad">No</td>
+          </tr>
+          <tr onclick="annotate('t2r5')" data-row="t2r5" class="highlight">
+            <td style="color:#4ecdc4; font-weight:700;">FlashAttention</td>
+            <td>1024</td>
+            <td class="cell-good">O(N)</td>
+            <td class="cell-good">3.0x</td>
+            <td>O(N^2 d)</td>
+            <td style="text-align:right" class="cell-good">Yes</td>
+          </tr>
+          <tr onclick="annotate('t2r6')" data-row="t2r6" class="highlight">
+            <td style="color:#4ecdc4; font-weight:700;">FlashAttention</td>
+            <td>4096</td>
+            <td class="cell-good">O(N)</td>
+            <td class="cell-good">4.2x</td>
+            <td>O(N^2 d)</td>
+            <td style="text-align:right" class="cell-good">Yes</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <div class="annotation-panel" id="ann-t2">
+        <div class="label">Critical Reading Annotation</div>
+        <div class="text" id="ann-t2-text">
+          Click a row above to see the annotation for that comparison.
+        </div>
+      </div>
+    </div>
+
+    <!-- TAB 3: Checklist -->
+    <div id="tab3" class="tab-content">
+      <div class="section-header">
+        <div class="section-num">3</div>
+        <div class="section-title">Ablation Quality Checklist</div>
+      </div>
+      <p class="instructions">Click each item to check it off as you evaluate an ablation study. A good ablation satisfies all eight.</p>
+
+      <div class="checklist" id="checklist">
+        <div class="check-item" onclick="toggleCheck(this)">
+          <div class="check-icon"></div>
+          <div class="check-label"><strong>Single-variable changes:</strong> Each row changes exactly one component from the baseline.</div>
+        </div>
+        <div class="check-item" onclick="toggleCheck(this)">
+          <div class="check-icon"></div>
+          <div class="check-label"><strong>Meaningful baseline:</strong> Comparison is against the strongest reasonable alternative, not a straw man.</div>
+        </div>
+        <div class="check-item" onclick="toggleCheck(this)">
+          <div class="check-icon"></div>
+          <div class="check-label"><strong>Matched compute:</strong> All rows use the same training budget (steps, data, hardware).</div>
+        </div>
+        <div class="check-item" onclick="toggleCheck(this)">
+          <div class="check-icon"></div>
+          <div class="check-label"><strong>Appropriate metric:</strong> The metric matches the claimed contribution (speed claim = speed metric).</div>
+        </div>
+        <div class="check-item" onclick="toggleCheck(this)">
+          <div class="check-icon"></div>
+          <div class="check-label"><strong>Variance reported:</strong> Error bars or standard deviation across seeds are shown.</div>
+        </div>
+        <div class="check-item" onclick="toggleCheck(this)">
+          <div class="check-icon"></div>
+          <div class="check-label"><strong>Scale appropriate:</strong> The ablation scale matches the target deployment scale, or scaling trends are shown.</div>
+        </div>
+        <div class="check-item" onclick="toggleCheck(this)">
+          <div class="check-icon"></div>
+          <div class="check-label"><strong>Negative results included:</strong> Cases where the method does not help are reported.</div>
+        </div>
+        <div class="check-item" onclick="toggleCheck(this)">
+          <div class="check-icon"></div>
+          <div class="check-label"><strong>Hyperparameters fair:</strong> The proposed method and baselines use equally-tuned hyperparameters.</div>
+        </div>
+      </div>
+
+      <div class="annotation-panel">
+        <div class="label">How to Use This Checklist</div>
+        <div class="text">
+          Apply this checklist to every ablation table you encounter. No paper satisfies all eight criteria perfectly -- but papers that fail on 3+ criteria deserve extra skepticism.
+          <br><br>
+          <strong>Most common failures:</strong> Missing variance (item 5), unmatched compute (item 3), and missing negative results (item 7). These three alone account for most misleading ablations in architecture papers.
+        </div>
+      </div>
+    </div>
+  </div>
+
+<script>
+const annotations = {
+  t1r1: {
+    panel: 'ann-t1',
+    text: '<strong>MHA Baseline.</strong> This is the right baseline: standard multi-head attention with full KV cache. The numbers (71.3% MMLU) establish the quality ceiling that alternatives must approach. <strong>Critical check:</strong> Is this MHA model trained with the same data, optimizer, and compute as the MLA model? The DeepSeek-V2 report confirms it is (same 8.1T tokens, same optimizer). This is a fair baseline.',
+    verdict: 'pass',
+    verdictText: 'Fair baseline with matched training setup.'
+  },
+  t1r2: {
+    panel: 'ann-t1',
+    text: '<strong>MQA (1 KV head).</strong> Maximum cache compression (256 dims) but 3-5% quality degradation across all benchmarks. This confirms the known MQA tradeoff. <strong>Critical question:</strong> Was MQA trained from scratch, or uptrained from the MHA checkpoint? If uptrained, did it get the same 5% compute budget as GQA? The report should specify this. MQA\'s quality gap here is larger than in the GQA paper\'s ablations, possibly due to the larger model scale (236B).',
+    verdict: 'warn',
+    verdictText: 'Quality gap is informative, but training procedure details should be checked.'
+  },
+  t1r3: {
+    panel: 'ann-t1',
+    text: '<strong>GQA (8 groups).</strong> Moderate cache reduction (4,096 dims, 8x reduction) with modest quality loss (~0.8% MMLU). This is the industry standard configuration. <strong>Critical question:</strong> At this scale (236B total params), does GQA\'s quality gap narrow or widen compared to smaller models? The ~0.8% gap here is consistent with smaller-scale results, suggesting the gap is relatively stable across scale.',
+    verdict: 'pass',
+    verdictText: 'Expected result confirming GQA as a viable middle ground.'
+  },
+  t1r4: {
+    panel: 'ann-t1',
+    text: '<strong>MLA (proposed method).</strong> This is the key row. MLA achieves 576 dims of cache (98% less than MHA) while IMPROVING quality by 7+ points on MMLU. <strong>Critical questions:</strong> (1) Is this improvement purely from MLA, or does the full DeepSeek-V2 model include other changes (MoE, training recipe) that contribute? The report\'s ablation isolates MLA specifically. (2) Could the low-rank bottleneck be acting as a regularizer, and would this effect hold at even larger scale? DeepSeek-V3 at 671B confirmed it does. (3) The 5.76x throughput is measured on their specific serving stack -- would this hold in vLLM?',
+    verdict: 'pass',
+    verdictText: 'Strong result. The quality improvement (not just preservation) is remarkable and well-supported.'
+  },
+  t2r1: {
+    panel: 'ann-t2',
+    text: '<strong>Standard Attention at seq 512.</strong> At short sequences, the N x N attention matrix is small (512 x 512 x 2 bytes = 0.5 MB per head). The memory bottleneck is mild, so Flash Attention\'s tiling provides only modest benefit. This is why the BERT-large speedup was only 15%.',
+    verdict: 'pass',
+    verdictText: 'Honest baseline at a length where the contribution is weakest.'
+  },
+  t2r2: {
+    panel: 'ann-t2',
+    text: '<strong>Standard Attention at seq 1024.</strong> At 1K tokens, the attention matrix quadruples (1024 x 1024 x 2 = 2 MB per head). The memory bottleneck becomes significant, and Flash Attention\'s advantage grows to 3x wall-clock. <strong>Key observation:</strong> The paper reports wall-clock time, not FLOPs. This is the correct metric for an IO-optimization paper. FLOPs are actually unchanged (or slightly increased due to recomputation).',
+    verdict: 'pass',
+    verdictText: 'Correct metric (wall-clock) for an IO-optimization contribution.'
+  },
+  t2r3: {
+    panel: 'ann-t2',
+    text: '<strong>Linformer (approximate).</strong> This is the devastating comparison. Linformer reduces FLOPs to O(Nd) but is actually SLOWER than standard attention in wall-clock time (0.7x). <strong>Why?</strong> Linformer\'s approximation introduces extra projections and memory accesses that the FLOP reduction does not compensate for. This row alone validates Flash Attention\'s thesis: the bottleneck is memory IO, not FLOPs. Reducing FLOPs while increasing memory traffic makes things worse.',
+    verdict: 'fail',
+    verdictText: 'Linformer is slower despite lower FLOP count -- proves the IO bottleneck thesis.'
+  },
+  t2r4: {
+    panel: 'ann-t2',
+    text: '<strong>Performer (approximate).</strong> Same pattern as Linformer: lower theoretical complexity but slower wall-clock. Performer uses kernel-based attention approximation that avoids the N x N matrix in theory, but the kernel computations and memory access patterns are not IO-efficient. <strong>Critical insight:</strong> Two separate approximate attention methods both fail to achieve wall-clock speedups. This is not a coincidence -- it is evidence of a systemic misunderstanding about where the bottleneck lies.',
+    verdict: 'fail',
+    verdictText: 'Second approximate method also slower -- the pattern is now a strong signal.'
+  },
+  t2r5: {
+    panel: 'ann-t2',
+    text: '<strong>FlashAttention at seq 1024.</strong> Same O(N^2 d) FLOPs as standard attention, but 3x wall-clock speedup and O(N) memory. <strong>This is the ablation that matters most.</strong> Flash Attention does NOT reduce FLOPs -- it reduces HBM accesses. The FLOPs column showing no change (same O(N^2 d)) is the clearest evidence that this is an IO optimization, not a compute optimization. Combined with the "Exact? = Yes" column, this distinguishes Flash Attention from all approximate methods.',
+    verdict: 'pass',
+    verdictText: 'The core result: same FLOPs, same exactness, 3x faster. Pure IO optimization.'
+  },
+  t2r6: {
+    panel: 'ann-t2',
+    text: '<strong>FlashAttention at seq 4096.</strong> Speedup increases from 3x to 4.2x at longer sequences. <strong>This is the scaling signal.</strong> The benefit grows with sequence length because the N x N matrix (which Flash Attention avoids materializing) grows quadratically. At 16K tokens, Flash Attention enabled the first Transformer to achieve above-chance on Path-X. <strong>Critical question:</strong> Does the speedup continue growing at 32K, 64K, 128K? Flash Attention 2 shows yes, approaching the theoretical IO-optimality bound.',
+    verdict: 'pass',
+    verdictText: 'Speedup grows with sequence length -- strong signal for long-context scaling.'
+  }
+};
+
+function annotate(rowId) {
+  const ann = annotations[rowId];
+  if (!ann) return;
+
+  // Clear active rows in same table
+  const table = document.querySelector(`#${ann.panel}`).previousElementSibling.previousElementSibling;
+  if (table) {
+    table.querySelectorAll('tr').forEach(r => r.classList.remove('active-row'));
+  }
+  // Also try the previous sibling chain more broadly
+  document.querySelectorAll(`tr[data-row]`).forEach(r => {
+    if (r.dataset.row.startsWith(rowId.substring(0, 2))) {
+      r.classList.remove('active-row');
+    }
+  });
+
+  const clickedRow = document.querySelector(`tr[data-row="${rowId}"]`);
+  if (clickedRow) clickedRow.classList.add('active-row');
+
+  const textEl = document.getElementById(ann.panel + '-text');
+  let html = ann.text;
+  const verdictClass = ann.verdict === 'pass' ? 'verdict-pass' : ann.verdict === 'warn' ? 'verdict-warn' : 'verdict-fail';
+  const icon = ann.verdict === 'pass' ? '&#10003;' : ann.verdict === 'warn' ? '&#9888;' : '&#10007;';
+  html += `<div class="verdict ${verdictClass}">${icon} ${ann.verdictText}</div>`;
+  textEl.innerHTML = html;
+}
+
+function switchTab(tabId) {
+  document.querySelectorAll('.tab-content').forEach(t => t.classList.remove('active'));
+  document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+  document.getElementById(tabId).classList.add('active');
+  // Activate matching tab button
+  const tabs = document.querySelectorAll('.tab');
+  const targets = ['tab1', 'tab2', 'tab3'];
+  const idx = targets.indexOf(tabId);
+  if (idx >= 0) tabs[idx].classList.add('active');
+}
+
+function toggleCheck(el) {
+  el.classList.toggle('checked');
+  const icon = el.querySelector('.check-icon');
+  icon.innerHTML = el.classList.contains('checked') ? '&#10003;' : '';
+}
+</script>
+</body>
+</html>

@@ -1,0 +1,345 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Jamba Architecture — Hybrid Layer Interleaving</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body {
+  background: #0d1117;
+  color: #e0e0e0;
+  font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+  padding: 32px;
+  min-height: 100vh;
+}
+h1 {
+  font-size: 22px;
+  margin-bottom: 8px;
+  color: #f0f0f0;
+}
+.subtitle {
+  font-size: 13px;
+  color: #888;
+  margin-bottom: 32px;
+}
+.container {
+  display: flex;
+  gap: 48px;
+  flex-wrap: wrap;
+  align-items: flex-start;
+}
+.block-column {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 16px;
+}
+.block-label {
+  font-size: 14px;
+  font-weight: 700;
+  color: #c9d1d9;
+  background: #161b22;
+  padding: 8px 20px;
+  border-radius: 8px;
+  border: 1px solid #30363d;
+  text-align: center;
+  width: 200px;
+}
+.block-label small {
+  display: block;
+  font-size: 11px;
+  font-weight: 400;
+  color: #888;
+  margin-top: 2px;
+}
+.layer-stack {
+  display: flex;
+  flex-direction: column-reverse;
+  gap: 4px;
+}
+.layer {
+  width: 200px;
+  height: 44px;
+  border-radius: 6px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 12px;
+  font-weight: 600;
+  position: relative;
+  cursor: default;
+  transition: transform 0.15s, box-shadow 0.15s;
+}
+.layer:hover {
+  transform: scale(1.04);
+  box-shadow: 0 0 16px rgba(255,255,255,0.1);
+}
+.layer-mamba {
+  background: linear-gradient(135deg, #1a3a2a 0%, #0f2a1e 100%);
+  border: 1.5px solid #2ea043;
+  color: #56d364;
+}
+.layer-attention {
+  background: linear-gradient(135deg, #2a1a3a 0%, #1e0f2a 100%);
+  border: 1.5px solid #8b5cf6;
+  color: #c4b5fd;
+}
+.moe-badge {
+  position: absolute;
+  right: 6px;
+  top: 50%;
+  transform: translateY(-50%);
+  background: #da3633;
+  color: #fff;
+  font-size: 9px;
+  font-weight: 700;
+  padding: 2px 6px;
+  border-radius: 4px;
+}
+.legend {
+  display: flex;
+  gap: 24px;
+  margin-bottom: 24px;
+  flex-wrap: wrap;
+}
+.legend-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+}
+.legend-swatch {
+  width: 20px;
+  height: 20px;
+  border-radius: 4px;
+}
+.arrow-down {
+  color: #484f58;
+  font-size: 18px;
+  text-align: center;
+  line-height: 1;
+}
+.stats {
+  margin-top: 32px;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 12px;
+  max-width: 900px;
+}
+.stat-card {
+  background: #161b22;
+  border: 1px solid #30363d;
+  border-radius: 8px;
+  padding: 16px;
+  text-align: center;
+}
+.stat-value {
+  font-size: 28px;
+  font-weight: 700;
+  margin-bottom: 4px;
+}
+.stat-label {
+  font-size: 11px;
+  color: #888;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+.flow-section {
+  margin-top: 40px;
+  max-width: 900px;
+}
+.flow-section h2 {
+  font-size: 16px;
+  margin-bottom: 16px;
+  color: #c9d1d9;
+}
+.flow-diagram {
+  background: #161b22;
+  border: 1px solid #30363d;
+  border-radius: 12px;
+  padding: 24px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+}
+.flow-box {
+  padding: 10px 24px;
+  border-radius: 6px;
+  font-size: 12px;
+  font-weight: 600;
+  text-align: center;
+  min-width: 260px;
+}
+.flow-mamba { background: #1a3a2a; border: 1px solid #2ea043; color: #56d364; }
+.flow-attn { background: #2a1a3a; border: 1px solid #8b5cf6; color: #c4b5fd; }
+.flow-moe { background: #3a1a1a; border: 1px solid #da3633; color: #f97583; }
+.flow-norm { background: #1a2a3a; border: 1px solid #388bfd; color: #79c0ff; }
+.flow-io { background: #2d2a1a; border: 1px solid #d29922; color: #e3b341; }
+.flow-arrow { color: #484f58; font-size: 16px; }
+.flow-note {
+  font-size: 11px;
+  color: #888;
+  max-width: 300px;
+  text-align: center;
+  line-height: 1.4;
+}
+.flow-branch {
+  display: flex;
+  gap: 24px;
+  align-items: center;
+}
+.flow-or {
+  font-size: 11px;
+  color: #666;
+  font-weight: 600;
+}
+</style>
+</head>
+<body>
+
+<h1>Jamba Architecture: Hybrid SSM + Attention + MoE</h1>
+<p class="subtitle">4 Jamba Blocks x 8 Layers = 32 Total Layers | 1:7 Attention-to-Mamba Ratio | MoE on every 2nd layer</p>
+
+<div class="legend">
+  <div class="legend-item">
+    <div class="legend-swatch" style="background:#1a3a2a; border:1.5px solid #2ea043;"></div>
+    <span style="color:#56d364;">Mamba SSM Layer (28 total)</span>
+  </div>
+  <div class="legend-item">
+    <div class="legend-swatch" style="background:#2a1a3a; border:1.5px solid #8b5cf6;"></div>
+    <span style="color:#c4b5fd;">Attention Layer (4 total)</span>
+  </div>
+  <div class="legend-item">
+    <div class="legend-swatch" style="background:#da3633; border-radius:4px;"></div>
+    <span style="color:#f97583;">MoE (16 experts, top-2)</span>
+  </div>
+</div>
+
+<div class="container" id="blocks"></div>
+
+<div class="stats">
+  <div class="stat-card">
+    <div class="stat-value" style="color:#56d364;">28</div>
+    <div class="stat-label">Mamba Layers</div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-value" style="color:#c4b5fd;">4</div>
+    <div class="stat-label">Attention Layers</div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-value" style="color:#f97583;">16</div>
+    <div class="stat-label">MoE Layers</div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-value" style="color:#e3b341;">52B</div>
+    <div class="stat-label">Total Params</div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-value" style="color:#79c0ff;">12B</div>
+    <div class="stat-label">Active Params</div>
+  </div>
+</div>
+
+<div class="flow-section">
+  <h2>Data Flow Through One Jamba Block (8 Layers)</h2>
+  <div class="flow-diagram">
+    <div class="flow-box flow-io">Input Hidden State (d_model)</div>
+    <div class="flow-arrow">&darr;</div>
+
+    <div class="flow-box flow-norm">RMSNorm</div>
+    <div class="flow-arrow">&darr;</div>
+
+    <div class="flow-box flow-mamba">Mamba SSM &mdash; selective scan, O(n) time, fixed state</div>
+    <div class="flow-note">+ residual connection</div>
+    <div class="flow-arrow">&darr;</div>
+
+    <div class="flow-box flow-moe">MLP or MoE (16 experts, top-2) &mdash; alternating</div>
+    <div class="flow-note">+ residual connection</div>
+    <div class="flow-arrow">&darr;</div>
+
+    <div style="border:1px dashed #484f58; border-radius:8px; padding:12px; text-align:center;">
+      <div style="font-size:11px; color:#888; margin-bottom:8px;">Repeat 6 more Mamba layers (with alternating MoE/dense MLP)...</div>
+    </div>
+    <div class="flow-arrow">&darr;</div>
+
+    <div class="flow-box flow-norm">RMSNorm</div>
+    <div class="flow-arrow">&darr;</div>
+
+    <div class="flow-box flow-attn">Transformer Attention (GQA) &mdash; full context, O(n&sup2;)</div>
+    <div class="flow-note">Only layer with KV cache in this block</div>
+    <div class="flow-note">+ residual connection</div>
+    <div class="flow-arrow">&darr;</div>
+
+    <div class="flow-box flow-moe">MLP or MoE &mdash; alternating</div>
+    <div class="flow-note">+ residual connection</div>
+    <div class="flow-arrow">&darr;</div>
+
+    <div class="flow-box flow-io">Output Hidden State &rarr; Next Block</div>
+  </div>
+</div>
+
+<script>
+const container = document.getElementById('blocks');
+
+// Jamba: 4 blocks, 8 layers each
+// Within each block: 7 Mamba + 1 Attention (attention at layer 8)
+// MoE on every 2nd layer (layers 2, 4, 6, 8 within each block)
+const blocks = [
+  { name: 'Block 1', layers: ['M','M','M','M','M','M','M','A'] },
+  { name: 'Block 2', layers: ['M','M','M','M','M','M','M','A'] },
+  { name: 'Block 3', layers: ['M','M','M','M','M','M','M','A'] },
+  { name: 'Block 4', layers: ['M','M','M','M','M','M','M','A'] },
+];
+
+blocks.forEach((block, bi) => {
+  const col = document.createElement('div');
+  col.className = 'block-column';
+
+  const label = document.createElement('div');
+  label.className = 'block-label';
+  label.innerHTML = block.name + '<small>Layers ' + (bi*8+1) + '–' + (bi*8+8) + '</small>';
+
+  const stack = document.createElement('div');
+  stack.className = 'layer-stack';
+
+  block.layers.forEach((type, li) => {
+    const globalIdx = bi * 8 + li + 1;
+    const hasMoE = (li + 1) % 2 === 0; // every 2nd layer
+    const layer = document.createElement('div');
+    const isAttn = type === 'A';
+    layer.className = 'layer ' + (isAttn ? 'layer-attention' : 'layer-mamba');
+
+    let text = isAttn
+      ? 'L' + globalIdx + ' · Attention (GQA)'
+      : 'L' + globalIdx + ' · Mamba SSM';
+
+    layer.innerHTML = text;
+
+    if (hasMoE) {
+      const badge = document.createElement('span');
+      badge.className = 'moe-badge';
+      badge.textContent = 'MoE';
+      layer.appendChild(badge);
+    }
+
+    stack.appendChild(layer);
+  });
+
+  col.appendChild(label);
+  col.appendChild(stack);
+
+  if (bi < blocks.length - 1) {
+    const arrow = document.createElement('div');
+    arrow.className = 'arrow-down';
+    arrow.innerHTML = '&rarr;';
+    arrow.style.position = 'absolute';
+  }
+
+  container.appendChild(col);
+});
+</script>
+
+</body>
+</html>

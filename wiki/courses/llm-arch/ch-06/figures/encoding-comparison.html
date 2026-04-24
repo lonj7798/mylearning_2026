@@ -1,0 +1,396 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Positional Encoding Comparison — Ch-06</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{background:#1a1a2e;color:#e0e0e0;font-family:'Segoe UI',system-ui,-apple-system,sans-serif;min-height:100vh;padding:28px 20px;display:flex;flex-direction:column;align-items:center}
+h1{font-size:22px;color:#e94560;margin-bottom:6px;text-align:center}
+.sub{font-size:13px;color:#888;margin-bottom:24px;text-align:center;max-width:760px;line-height:1.6}
+.controls{background:#16213e;border-radius:12px;padding:18px 24px;width:100%;max-width:1120px;margin-bottom:20px;display:flex;flex-wrap:wrap;gap:20px;align-items:center;justify-content:center}
+.ctrl-group{display:flex;align-items:center;gap:8px}
+.ctrl-group label{font-size:12px;color:#aaa;white-space:nowrap}
+.ctrl-group input[type=range]{-webkit-appearance:none;width:180px;height:5px;background:#0a1628;border-radius:3px;outline:none}
+.ctrl-group input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:14px;height:14px;border-radius:50%;background:#e94560;cursor:pointer}
+.ctrl-group .val{font-size:12px;color:#e94560;font-weight:700;min-width:48px;text-align:right;font-family:monospace}
+.train-marker{font-size:11px;color:#ffd93d;background:#ffd93d22;padding:2px 8px;border-radius:4px}
+.canvas-grid{display:grid;grid-template-columns:1fr;gap:0;width:100%;max-width:1120px}
+.method-row{display:flex;gap:0;width:100%;border-bottom:1px solid #0f1a30}
+.method-row:last-child{border-bottom:none}
+.method-label{width:110px;min-width:110px;background:#16213e;display:flex;flex-direction:column;justify-content:center;align-items:center;padding:10px 8px;border-right:1px solid #0f1a30}
+.method-label .name{font-size:13px;font-weight:700;text-align:center}
+.method-label .year{font-size:10px;color:#666;margin-top:2px}
+.method-label .type{font-size:9px;color:#888;margin-top:4px;text-align:center;line-height:1.3}
+.method-canvas{flex:1;position:relative}
+.method-canvas canvas{display:block;width:100%;height:120px}
+.extrap-zone{position:absolute;top:0;height:100%;background:repeating-linear-gradient(90deg,transparent,transparent 4px,#e9456011 4px,#e9456011 8px);pointer-events:none;border-left:2px dashed #e94560aa}
+.extrap-label{position:absolute;top:4px;font-size:9px;color:#e94560;padding:1px 4px;background:#1a1a2ecc}
+
+.summary{width:100%;max-width:1120px;margin-top:20px;background:#16213e;border-radius:12px;padding:20px 24px}
+.summary h2{font-size:14px;color:#4ecdc4;margin-bottom:12px}
+.summary table{width:100%;border-collapse:collapse;font-size:12px}
+.summary th{text-align:left;padding:8px 10px;color:#e94560;border-bottom:2px solid #e94560}
+.summary td{padding:7px 10px;border-bottom:1px solid #222}
+.summary .good{color:#4ecdc4}
+.summary .warn{color:#ffd93d}
+.summary .bad{color:#e94560}
+
+.note-box{width:100%;max-width:1120px;margin-top:16px;background:#16213e;border-radius:12px;padding:16px 24px}
+.note-box h2{font-size:14px;color:#ffd93d;margin-bottom:8px}
+.note-box p{font-size:12px;color:#aaa;line-height:1.7}
+.note-box code{color:#4ecdc4;background:#0a1628;padding:1px 5px;border-radius:3px;font-size:11px}
+</style>
+</head>
+<body>
+
+<h1>Positional Encoding Methods — Side-by-Side Comparison</h1>
+<p class="sub">
+  Each row shows how a different encoding method represents position information across a sequence.
+  The heatmap shows the encoding signal across positions (x-axis) and dimensions (y-axis).
+  Drag the sequence length slider beyond the training length to see extrapolation behavior.
+</p>
+
+<div class="controls">
+  <div class="ctrl-group">
+    <label>Sequence length:</label>
+    <input type="range" id="sLen" min="32" max="8192" step="32" value="512">
+    <span class="val" id="vLen">512</span>
+  </div>
+  <div class="ctrl-group">
+    <label>Training length:</label>
+    <input type="range" id="sTrain" min="32" max="4096" step="32" value="512">
+    <span class="val" id="vTrain">512</span>
+  </div>
+  <div class="ctrl-group">
+    <label>d_model:</label>
+    <input type="range" id="sDim" min="32" max="256" step="32" value="64">
+    <span class="val" id="vDim">64</span>
+  </div>
+  <div class="ctrl-group" id="extrapIndicator" style="display:none">
+    <span class="train-marker">Beyond training length — watch for degradation</span>
+  </div>
+</div>
+
+<div class="canvas-grid" id="canvasGrid"></div>
+
+<div class="summary">
+  <h2>Extrapolation Behavior Summary</h2>
+  <table>
+    <thead>
+      <tr>
+        <th>Method</th>
+        <th>How it encodes position</th>
+        <th>At training length</th>
+        <th>Beyond training length</th>
+        <th>Why</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td style="color:#e94560;font-weight:700">Sinusoidal</td>
+        <td>Fixed sin/cos added to embeddings</td>
+        <td class="good">Smooth, unique</td>
+        <td class="warn">Defined but untested</td>
+        <td>Frequencies continue, but model never trained on them</td>
+      </tr>
+      <tr>
+        <td style="color:#a29bfe;font-weight:700">Learned</td>
+        <td>Lookup table (one vector per position)</td>
+        <td class="good">Flexible, optimized</td>
+        <td class="bad">Undefined (crash)</td>
+        <td>No embedding exists for position > L. Hard wall.</td>
+      </tr>
+      <tr>
+        <td style="color:#4ecdc4;font-weight:700">RoPE</td>
+        <td>Rotation of Q/K by position-dependent angle</td>
+        <td class="good">Relative, clean</td>
+        <td class="warn">Degrades (OOD angles)</td>
+        <td>High-freq dims see out-of-distribution rotation angles</td>
+      </tr>
+      <tr>
+        <td style="color:#ffd93d;font-weight:700">ALiBi</td>
+        <td>Linear distance penalty on attention logits</td>
+        <td class="good">Multi-scale</td>
+        <td class="good">Extrapolates well</td>
+        <td>Linear bias is defined for any distance. No learned params.</td>
+      </tr>
+      <tr>
+        <td style="color:#fd79a8;font-weight:700">iRoPE</td>
+        <td>RoPE on alternating layers only</td>
+        <td class="good">Best of both</td>
+        <td class="good">40x extrapolation</td>
+        <td>No-PE layers use content attention; less OOD exposure</td>
+      </tr>
+    </tbody>
+  </table>
+</div>
+
+<div class="note-box">
+  <h2>Reading the Heatmaps</h2>
+  <p>
+    <strong>X-axis</strong> = sequence position (0 to seq_len). <strong>Y-axis</strong> = encoding dimension.
+    Color intensity shows the encoding value (red = positive, blue = negative, black = zero).
+    The <span style="color:#e94560">dashed red line</span> marks the training length boundary.
+    Beyond it, watch for: <strong>Learned</strong> showing solid gray (undefined), <strong>RoPE</strong> high-frequency
+    bands becoming chaotic, and <strong>ALiBi / iRoPE</strong> continuing smoothly. Sinusoidal continues its pattern
+    but the model has no training signal for those positions.
+  </p>
+</div>
+
+<script>
+const $ = id => document.getElementById(id);
+
+const methods = [
+  { id: 'sinusoidal', name: 'Sinusoidal', year: '2017', type: 'Additive\nAbsolute', color: '#e94560' },
+  { id: 'learned',    name: 'Learned',    year: '2019', type: 'Additive\nAbsolute', color: '#a29bfe' },
+  { id: 'rope',       name: 'RoPE',       year: '2021', type: 'Multiplicative\nRelative', color: '#4ecdc4' },
+  { id: 'alibi',      name: 'ALiBi',      year: '2022', type: 'Bias on logits\nRelative', color: '#ffd93d' },
+  { id: 'irope',      name: 'iRoPE',      year: '2025', type: 'Interleaved\nRoPE + NoPE', color: '#fd79a8' }
+];
+
+// Build DOM
+const grid = $('canvasGrid');
+methods.forEach(m => {
+  const row = document.createElement('div');
+  row.className = 'method-row';
+  row.innerHTML = `
+    <div class="method-label">
+      <div class="name" style="color:${m.color}">${m.name}</div>
+      <div class="year">${m.year}</div>
+      <div class="type">${m.type.replace('\n','<br>')}</div>
+    </div>
+    <div class="method-canvas" id="wrap_${m.id}">
+      <canvas id="cv_${m.id}" height="120"></canvas>
+    </div>
+  `;
+  grid.appendChild(row);
+});
+
+['sLen','sTrain','sDim'].forEach(s => $(s).addEventListener('input', update));
+
+// Pseudo-random for learned embeddings (seeded)
+function seededRand(seed) {
+  let s = seed;
+  return function() {
+    s = (s * 16807 + 0) % 2147483647;
+    return (s / 2147483647) * 2 - 1;
+  };
+}
+
+function computeSinusoidal(pos, dim, d) {
+  const i = Math.floor(dim / 2);
+  const freq = 1.0 / Math.pow(10000, 2.0 * i / d);
+  return dim % 2 === 0 ? Math.sin(pos * freq) : Math.cos(pos * freq);
+}
+
+function computeRoPE(pos, dim, d) {
+  // Show the rotation angle component
+  const j = Math.floor(dim / 2);
+  const theta = 1.0 / Math.pow(10000, 2.0 * j / d);
+  const angle = pos * theta;
+  return dim % 2 === 0 ? Math.cos(angle) : Math.sin(angle);
+}
+
+function computeALiBi(pos, dim, numHeads) {
+  // Show the attention bias for different heads
+  const h = Math.floor(dim * numHeads / 64);  // map dim to head
+  const slope = Math.pow(2, -8.0 * (h + 1) / numHeads);
+  // Bias relative to position 0 (show as distance penalty)
+  const bias = -slope * pos;
+  // Normalize to [-1, 1] range for visualization
+  return Math.max(-1, Math.min(1, bias * 0.1));
+}
+
+function computeIRoPE(pos, dim, d, isRoPELayer) {
+  if (isRoPELayer) {
+    return computeRoPE(pos, dim, d);
+  }
+  // No-PE layer: pure content-based, show as flat zero (no positional signal)
+  return 0;
+}
+
+function update() {
+  const seqLen = +$('sLen').value;
+  const trainLen = +$('sTrain').value;
+  const d = +$('sDim').value;
+
+  $('vLen').textContent = seqLen;
+  $('vTrain').textContent = trainLen;
+  $('vDim').textContent = d;
+
+  const extrapolating = seqLen > trainLen;
+  $('extrapIndicator').style.display = extrapolating ? 'block' : 'none';
+
+  methods.forEach(m => drawMethod(m, seqLen, trainLen, d));
+}
+
+function drawMethod(method, seqLen, trainLen, d) {
+  const cv = $('cv_' + method.id);
+  const wrap = $('wrap_' + method.id);
+
+  // Set canvas to container width
+  const W = wrap.clientWidth || 800;
+  const H = 120;
+  cv.width = W;
+  cv.height = H;
+
+  const ctx = cv.getContext('2d');
+  ctx.clearRect(0, 0, W, H);
+
+  const numDims = Math.min(d, 64); // show up to 64 dims for visual clarity
+  const cellW = W / Math.min(seqLen, 512); // sample up to 512 positions
+  const cellH = H / numDims;
+  const sampleStep = Math.max(1, Math.floor(seqLen / 512));
+
+  const trainX = (trainLen / seqLen) * W;
+  const extrapolating = seqLen > trainLen;
+
+  // Precompute learned embedding "lookup" (pseudo-random, fixed per position)
+  const learnedRand = seededRand(42);
+  const learnedTable = [];
+  for (let p = 0; p < trainLen; p++) {
+    learnedTable[p] = [];
+    for (let dim = 0; dim < numDims; dim++) {
+      learnedTable[p][dim] = learnedRand() * 0.8;
+    }
+  }
+
+  let col = 0;
+  for (let p = 0; p < seqLen; p += sampleStep) {
+    for (let dim = 0; dim < numDims; dim++) {
+      let val = 0;
+      let undefined_pos = false;
+
+      switch (method.id) {
+        case 'sinusoidal':
+          val = computeSinusoidal(p, dim, d);
+          break;
+
+        case 'learned':
+          if (p < trainLen) {
+            val = learnedTable[p] ? learnedTable[p][dim] || 0 : 0;
+          } else {
+            undefined_pos = true;
+          }
+          break;
+
+        case 'rope':
+          val = computeRoPE(p, dim, d);
+          // Add noise for OOD positions on high-freq dims
+          if (p >= trainLen) {
+            const j = Math.floor(dim / 2);
+            const theta = 1.0 / Math.pow(10000, 2.0 * j / d);
+            const oofRatio = (p - trainLen) / trainLen;
+            // High-freq dims (low j) degrade more
+            const freqSensitivity = 1.0 - (j / (d/2));
+            const noise = freqSensitivity * oofRatio * (Math.sin(p * theta * 17.3) * 0.5);
+            val = val * (1 - freqSensitivity * oofRatio * 0.3) + noise;
+          }
+          break;
+
+        case 'alibi':
+          val = computeALiBi(p, dim, 8);
+          break;
+
+        case 'irope': {
+          // Alternate between RoPE and no-PE dims to visualize interleaving
+          // Top half dims = RoPE layer, bottom half = no-PE layer
+          const isRoPEDim = dim < numDims / 2;
+          if (isRoPEDim) {
+            val = computeRoPE(p, dim, d);
+            if (p >= trainLen) {
+              const j = Math.floor(dim / 2);
+              const theta = 1.0 / Math.pow(10000, 2.0 * j / d);
+              const oofRatio = (p - trainLen) / trainLen;
+              const freqSensitivity = 1.0 - (j / (d/2));
+              // iRoPE degrades much less than pure RoPE (40x extrapolation)
+              const dampedNoise = freqSensitivity * oofRatio * 0.05 * Math.sin(p * theta * 17.3);
+              val = val * (1 - freqSensitivity * oofRatio * 0.05) + dampedNoise;
+            }
+          } else {
+            val = 0; // no-PE layer: no positional signal
+          }
+          break;
+        }
+      }
+
+      // Color mapping
+      let r, g, b;
+      if (undefined_pos) {
+        r = 40; g = 40; b = 50; // gray for undefined
+      } else {
+        val = Math.max(-1, Math.min(1, val));
+        if (val >= 0) {
+          // Positive: black -> method color
+          const mc = hexToRgb(method.color);
+          r = Math.floor(mc.r * val);
+          g = Math.floor(mc.g * val);
+          b = Math.floor(mc.b * val);
+        } else {
+          // Negative: black -> complementary blue
+          const av = -val;
+          r = Math.floor(30 * av);
+          g = Math.floor(60 * av);
+          b = Math.floor(180 * av);
+        }
+      }
+
+      ctx.fillStyle = `rgb(${r},${g},${b})`;
+      ctx.fillRect(col * cellW, dim * cellH, cellW + 1, cellH + 1);
+    }
+    col++;
+  }
+
+  // Training boundary line
+  if (extrapolating) {
+    ctx.setLineDash([4, 3]);
+    ctx.strokeStyle = '#e94560aa';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(trainX, 0);
+    ctx.lineTo(trainX, H);
+    ctx.stroke();
+    ctx.setLineDash([]);
+
+    // Label
+    ctx.fillStyle = '#e94560';
+    ctx.font = '9px sans-serif';
+    ctx.fillText('train', trainX + 3, 10);
+
+    // Show method-specific extrapolation note
+    let note = '';
+    switch (method.id) {
+      case 'learned': note = 'UNDEFINED'; break;
+      case 'rope': note = 'OOD (high-freq)'; break;
+      case 'sinusoidal': note = 'untested pattern'; break;
+      case 'alibi': note = 'continues linearly'; break;
+      case 'irope': note = '40x OK'; break;
+    }
+    if (note) {
+      ctx.fillStyle = method.id === 'alibi' || method.id === 'irope' ? '#4ecdc4' : '#e94560';
+      ctx.font = 'bold 10px sans-serif';
+      ctx.fillText(note, trainX + 3, H - 6);
+    }
+  }
+}
+
+function hexToRgb(hex) {
+  const r = parseInt(hex.slice(1,3), 16);
+  const g = parseInt(hex.slice(3,5), 16);
+  const b = parseInt(hex.slice(5,7), 16);
+  return {r, g, b};
+}
+
+// Handle resize
+let resizeTimer;
+window.addEventListener('resize', () => {
+  clearTimeout(resizeTimer);
+  resizeTimer = setTimeout(update, 100);
+});
+
+update();
+</script>
+</body>
+</html>

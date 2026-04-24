@@ -1,0 +1,682 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Sinusoidal Positional Encoding — Interactive Visualization</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    background: #1a1a2e;
+    color: #e0e0e0;
+    font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+    min-height: 100vh;
+    padding: 32px 16px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+  }
+  h1 {
+    color: #e94560;
+    font-size: 22px;
+    margin-bottom: 6px;
+    text-align: center;
+  }
+  .subtitle {
+    color: #888;
+    font-size: 13px;
+    margin-bottom: 28px;
+    text-align: center;
+    max-width: 600px;
+  }
+
+  .panel {
+    background: #16213e;
+    border-radius: 14px;
+    padding: 20px 24px;
+    margin-bottom: 20px;
+    max-width: 900px;
+    width: 100%;
+    border: 1px solid #0f3460;
+  }
+  .panel-title {
+    color: #e94560;
+    font-weight: bold;
+    font-size: 15px;
+    margin-bottom: 14px;
+  }
+
+  /* Canvas */
+  canvas {
+    display: block;
+    width: 100%;
+    border-radius: 8px;
+    background: #0a1628;
+  }
+
+  /* Controls */
+  .controls {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 16px;
+    align-items: center;
+    margin-bottom: 14px;
+  }
+  .control-group {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+  .control-group label {
+    font-size: 11px;
+    color: #888;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+  }
+  .control-group .value-display {
+    font-size: 13px;
+    color: #ffd93d;
+    font-weight: bold;
+    font-family: 'Fira Code', monospace;
+  }
+  input[type="range"] {
+    -webkit-appearance: none;
+    appearance: none;
+    height: 6px;
+    border-radius: 3px;
+    background: #0f3460;
+    outline: none;
+    min-width: 180px;
+  }
+  input[type="range"]::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    width: 16px;
+    height: 16px;
+    border-radius: 50%;
+    background: #e94560;
+    cursor: pointer;
+    border: 2px solid #fff;
+  }
+  input[type="range"]::-moz-range-thumb {
+    width: 16px;
+    height: 16px;
+    border-radius: 50%;
+    background: #e94560;
+    cursor: pointer;
+    border: 2px solid #fff;
+  }
+
+  /* Dim selector buttons */
+  .dim-buttons {
+    display: flex;
+    gap: 6px;
+    flex-wrap: wrap;
+  }
+  .dim-btn {
+    background: #0f3460;
+    border: 1px solid #1a3a6e;
+    color: #aaa;
+    padding: 4px 10px;
+    border-radius: 6px;
+    font-size: 11px;
+    cursor: pointer;
+    transition: all 0.15s;
+    font-family: 'Fira Code', monospace;
+  }
+  .dim-btn:hover { background: #1a3a6e; color: #fff; }
+  .dim-btn.active {
+    background: #e94560;
+    border-color: #e94560;
+    color: #fff;
+  }
+
+  /* Encoding vector display */
+  .vector-display {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 2px;
+    margin-top: 10px;
+  }
+  .vec-cell {
+    width: 8px;
+    height: 24px;
+    border-radius: 2px;
+    transition: background 0.15s;
+  }
+
+  /* Similarity heatmap */
+  .heatmap-container {
+    display: flex;
+    gap: 20px;
+    align-items: flex-start;
+    flex-wrap: wrap;
+  }
+  .heatmap-wrap {
+    flex: 1;
+    min-width: 300px;
+  }
+  .heatmap-legend {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    min-width: 140px;
+    padding-top: 20px;
+  }
+  .heatmap-legend .leg-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 12px;
+    color: #aaa;
+  }
+  .heatmap-legend .leg-swatch {
+    width: 20px;
+    height: 12px;
+    border-radius: 3px;
+  }
+
+  /* Formula display */
+  .formula-box {
+    background: #0a1628;
+    border-radius: 8px;
+    padding: 12px 16px;
+    margin: 10px 0;
+    font-family: 'Fira Code', monospace;
+    font-size: 12px;
+    color: #ffd93d;
+    overflow-x: auto;
+    line-height: 1.6;
+  }
+
+  .info-text {
+    font-size: 12px;
+    color: #888;
+    line-height: 1.55;
+    margin-top: 10px;
+  }
+  .info-text strong { color: #4ecdc4; }
+</style>
+</head>
+<body>
+
+<h1>Sinusoidal Positional Encoding</h1>
+<p class="subtitle">
+  Each dimension oscillates at a different frequency. High-frequency dimensions distinguish nearby positions;
+  low-frequency dimensions encode global position. Together they create a unique fingerprint for every position.
+</p>
+
+<!-- Panel 1: Sinusoidal waves per dimension -->
+<div class="panel">
+  <div class="panel-title">1. Sinusoidal Waves Across Dimensions</div>
+  <div class="controls">
+    <div class="control-group">
+      <label>Dimensions to display</label>
+      <div class="dim-buttons" id="dim-buttons"></div>
+    </div>
+  </div>
+  <canvas id="wave-canvas" height="280"></canvas>
+  <div class="formula-box">
+    PE(pos, 2i)   = sin(pos / 10000^(2i/d_model))<br>
+    PE(pos, 2i+1) = cos(pos / 10000^(2i/d_model))
+  </div>
+  <p class="info-text">
+    Each curve shows the encoding value for one dimension pair (sin component) across sequence positions 0-127.
+    <strong>Dimension 0</strong> has period 2pi ~ 6.3 positions.
+    <strong>Dimension 510</strong> has period 2pi x 10000 ~ 62,832 positions.
+    The multi-scale structure lets the model distinguish both nearby and distant positions.
+  </p>
+</div>
+
+<!-- Panel 2: Encoding vector at a given position -->
+<div class="panel">
+  <div class="panel-title">2. Encoding Vector at Position <span id="pos-label" style="color:#ffd93d;">0</span></div>
+  <div class="controls">
+    <div class="control-group">
+      <label>Sequence Position</label>
+      <input type="range" id="pos-slider" min="0" max="127" value="0">
+      <span class="value-display" id="pos-value">0</span>
+    </div>
+    <div class="control-group">
+      <label>d_model</label>
+      <div class="dim-buttons">
+        <button class="dim-btn dmodel-btn" data-dmodel="64">64</button>
+        <button class="dim-btn dmodel-btn active" data-dmodel="128">128</button>
+        <button class="dim-btn dmodel-btn" data-dmodel="256">256</button>
+        <button class="dim-btn dmodel-btn" data-dmodel="512">512</button>
+      </div>
+    </div>
+  </div>
+  <canvas id="vector-canvas" height="120"></canvas>
+  <p class="info-text" id="vector-info">
+    Each bar shows the PE value for one dimension. <strong>Sin</strong> (even dims) and <strong>cos</strong> (odd dims) alternate.
+    Move the slider to see how the encoding vector changes with position — high-frequency dimensions (left) change rapidly,
+    low-frequency dimensions (right) are nearly constant for nearby positions.
+  </p>
+</div>
+
+<!-- Panel 3: Dot-product similarity between positions -->
+<div class="panel">
+  <div class="panel-title">3. Dot-Product Similarity Between Positions</div>
+  <div class="heatmap-container">
+    <div class="heatmap-wrap">
+      <canvas id="heatmap-canvas" height="360"></canvas>
+    </div>
+    <div class="heatmap-legend">
+      <div style="font-size:12px; color:#aaa; margin-bottom:4px;">PE(p) . PE(q) / d_model</div>
+      <div class="leg-row">
+        <div class="leg-swatch" style="background:#e94560;"></div>
+        <span>High similarity (1.0)</span>
+      </div>
+      <div class="leg-row">
+        <div class="leg-swatch" style="background:#1a1a2e;"></div>
+        <span>Zero similarity</span>
+      </div>
+      <div class="leg-row">
+        <div class="leg-swatch" style="background:#4ecdc4;"></div>
+        <span>Negative similarity</span>
+      </div>
+      <div style="font-size:11px; color:#666; margin-top:12px; line-height:1.5;">
+        The diagonal is always 1.0 (a position's encoding is most similar to itself).
+        Similarity decays with distance, but does not decay monotonically — the multi-frequency structure creates a complex pattern.
+        <br><br>
+        <strong style="color:#ffd93d;">Key property:</strong> For any fixed offset k, PE(pos+k) is a linear transformation of PE(pos). This lets the model learn relative-position attention through linear projections.
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+// ===== Configuration =====
+const D_MODEL_DEFAULT = 128;
+let dModel = D_MODEL_DEFAULT;
+const SEQ_LEN = 128;
+const BASE = 10000;
+
+// ===== Utility: compute PE =====
+function computePE(pos, dim, dModel) {
+  const i = Math.floor(dim / 2);
+  const freq = 1 / Math.pow(BASE, (2 * i) / dModel);
+  return dim % 2 === 0 ? Math.sin(pos * freq) : Math.cos(pos * freq);
+}
+
+function computePEVector(pos, dModel) {
+  const vec = new Float64Array(dModel);
+  for (let d = 0; d < dModel; d++) {
+    vec[d] = computePE(pos, d, dModel);
+  }
+  return vec;
+}
+
+function dotProduct(a, b) {
+  let sum = 0;
+  for (let i = 0; i < a.length; i++) sum += a[i] * b[i];
+  return sum;
+}
+
+// ===== Panel 1: Wave visualization =====
+const waveCanvas = document.getElementById('wave-canvas');
+const waveCtx = waveCanvas.getContext('2d');
+
+const dimPairs = [
+  { dim: 0,   color: '#e94560', label: 'dim 0' },
+  { dim: 16,  color: '#ff6b6b', label: 'dim 16' },
+  { dim: 32,  color: '#ffd93d', label: 'dim 32' },
+  { dim: 64,  color: '#4ecdc4', label: 'dim 64' },
+  { dim: 128, color: '#45b7d1', label: 'dim 128' },
+  { dim: 256, color: '#96ceb4', label: 'dim 256' },
+  { dim: 384, color: '#a29bfe', label: 'dim 384' },
+  { dim: 510, color: '#888888', label: 'dim 510' },
+];
+
+let activeDims = new Set([0, 32, 128, 510]);
+
+function buildDimButtons() {
+  const container = document.getElementById('dim-buttons');
+  container.innerHTML = '';
+  dimPairs.forEach(dp => {
+    const btn = document.createElement('button');
+    btn.className = 'dim-btn' + (activeDims.has(dp.dim) ? ' active' : '');
+    btn.textContent = dp.label;
+    btn.style.borderColor = dp.color;
+    if (activeDims.has(dp.dim)) btn.style.background = dp.color;
+    btn.addEventListener('click', () => {
+      if (activeDims.has(dp.dim)) {
+        activeDims.delete(dp.dim);
+        btn.classList.remove('active');
+        btn.style.background = '#0f3460';
+      } else {
+        activeDims.add(dp.dim);
+        btn.classList.add('active');
+        btn.style.background = dp.color;
+      }
+      drawWaves();
+    });
+    container.appendChild(btn);
+  });
+}
+
+function drawWaves() {
+  const dpr = window.devicePixelRatio || 1;
+  const rect = waveCanvas.getBoundingClientRect();
+  waveCanvas.width = rect.width * dpr;
+  waveCanvas.height = 280 * dpr;
+  waveCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
+
+  const W = rect.width;
+  const H = 280;
+  const pad = { top: 20, bottom: 30, left: 50, right: 20 };
+  const plotW = W - pad.left - pad.right;
+  const plotH = H - pad.top - pad.bottom;
+
+  waveCtx.clearRect(0, 0, W, H);
+
+  // Grid
+  waveCtx.strokeStyle = '#1a2a4e';
+  waveCtx.lineWidth = 0.5;
+  for (let y = 0; y <= 4; y++) {
+    const yy = pad.top + (y / 4) * plotH;
+    waveCtx.beginPath();
+    waveCtx.moveTo(pad.left, yy);
+    waveCtx.lineTo(W - pad.right, yy);
+    waveCtx.stroke();
+  }
+  for (let x = 0; x <= 8; x++) {
+    const xx = pad.left + (x / 8) * plotW;
+    waveCtx.beginPath();
+    waveCtx.moveTo(xx, pad.top);
+    waveCtx.lineTo(xx, H - pad.bottom);
+    waveCtx.stroke();
+  }
+
+  // Y-axis labels
+  waveCtx.fillStyle = '#666';
+  waveCtx.font = '10px monospace';
+  waveCtx.textAlign = 'right';
+  waveCtx.fillText('+1', pad.left - 6, pad.top + 4);
+  waveCtx.fillText(' 0', pad.left - 6, pad.top + plotH / 2 + 4);
+  waveCtx.fillText('-1', pad.left - 6, pad.top + plotH + 4);
+
+  // X-axis labels
+  waveCtx.textAlign = 'center';
+  for (let x = 0; x <= 8; x++) {
+    const pos = Math.round((x / 8) * (SEQ_LEN - 1));
+    waveCtx.fillText(pos, pad.left + (x / 8) * plotW, H - pad.bottom + 16);
+  }
+  waveCtx.fillText('position', pad.left + plotW / 2, H - 4);
+
+  // Zero line
+  waveCtx.strokeStyle = '#333';
+  waveCtx.lineWidth = 1;
+  const zeroY = pad.top + plotH / 2;
+  waveCtx.beginPath();
+  waveCtx.moveTo(pad.left, zeroY);
+  waveCtx.lineTo(W - pad.right, zeroY);
+  waveCtx.stroke();
+
+  // Draw waves
+  dimPairs.forEach(dp => {
+    if (!activeDims.has(dp.dim)) return;
+
+    waveCtx.strokeStyle = dp.color;
+    waveCtx.lineWidth = 2;
+    waveCtx.beginPath();
+
+    for (let pos = 0; pos < SEQ_LEN; pos++) {
+      const val = computePE(pos, dp.dim, 512); // always use 512 for wave display
+      const x = pad.left + (pos / (SEQ_LEN - 1)) * plotW;
+      const y = pad.top + ((1 - val) / 2) * plotH;
+      if (pos === 0) waveCtx.moveTo(x, y);
+      else waveCtx.lineTo(x, y);
+    }
+    waveCtx.stroke();
+
+    // Label at end
+    const lastVal = computePE(SEQ_LEN - 1, dp.dim, 512);
+    const labelY = pad.top + ((1 - lastVal) / 2) * plotH;
+    waveCtx.fillStyle = dp.color;
+    waveCtx.font = '10px sans-serif';
+    waveCtx.textAlign = 'left';
+    // Compute wavelength for label
+    const i = Math.floor(dp.dim / 2);
+    const wavelength = 2 * Math.PI * Math.pow(BASE, (2 * i) / 512);
+    const wlStr = wavelength < 100 ? wavelength.toFixed(1) : Math.round(wavelength).toLocaleString();
+    // skip label if too crowded — just show dim
+  });
+
+  // Legend in top-right
+  let legendY = pad.top + 8;
+  dimPairs.forEach(dp => {
+    if (!activeDims.has(dp.dim)) return;
+    const i = Math.floor(dp.dim / 2);
+    const wavelength = 2 * Math.PI * Math.pow(BASE, (2 * i) / 512);
+    const wlStr = wavelength < 100 ? 'lambda=' + wavelength.toFixed(1) : 'lambda=' + Math.round(wavelength).toLocaleString();
+
+    waveCtx.fillStyle = dp.color;
+    waveCtx.font = 'bold 10px monospace';
+    waveCtx.textAlign = 'right';
+    waveCtx.fillText(dp.label + ' (' + wlStr + ')', W - pad.right - 4, legendY);
+    legendY += 14;
+  });
+}
+
+// ===== Panel 2: Encoding vector bar chart =====
+const vecCanvas = document.getElementById('vector-canvas');
+const vecCtx = vecCanvas.getContext('2d');
+const posSlider = document.getElementById('pos-slider');
+const posValue = document.getElementById('pos-value');
+const posLabel = document.getElementById('pos-label');
+
+function drawVector() {
+  const pos = parseInt(posSlider.value);
+  posValue.textContent = pos;
+  posLabel.textContent = pos;
+
+  const vec = computePEVector(pos, dModel);
+
+  const dpr = window.devicePixelRatio || 1;
+  const rect = vecCanvas.getBoundingClientRect();
+  vecCanvas.width = rect.width * dpr;
+  vecCanvas.height = 120 * dpr;
+  vecCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
+
+  const W = rect.width;
+  const H = 120;
+  const pad = { top: 10, bottom: 20, left: 30, right: 10 };
+  const plotW = W - pad.left - pad.right;
+  const plotH = H - pad.top - pad.bottom;
+
+  vecCtx.clearRect(0, 0, W, H);
+
+  // Zero line
+  const zeroY = pad.top + plotH / 2;
+  vecCtx.strokeStyle = '#333';
+  vecCtx.lineWidth = 0.5;
+  vecCtx.beginPath();
+  vecCtx.moveTo(pad.left, zeroY);
+  vecCtx.lineTo(W - pad.right, zeroY);
+  vecCtx.stroke();
+
+  // Y labels
+  vecCtx.fillStyle = '#666';
+  vecCtx.font = '9px monospace';
+  vecCtx.textAlign = 'right';
+  vecCtx.fillText('+1', pad.left - 4, pad.top + 6);
+  vecCtx.fillText('-1', pad.left - 4, pad.top + plotH + 4);
+
+  // Bars
+  const barW = Math.max(1, plotW / dModel - 0.5);
+  for (let d = 0; d < dModel; d++) {
+    const x = pad.left + (d / dModel) * plotW;
+    const val = vec[d];
+    const barH = (val / 1) * (plotH / 2);
+
+    // Color: positive = #e94560, negative = #4ecdc4, intensity by magnitude
+    const alpha = Math.abs(val) * 0.8 + 0.2;
+    if (val >= 0) {
+      vecCtx.fillStyle = `rgba(233, 69, 96, ${alpha})`;
+    } else {
+      vecCtx.fillStyle = `rgba(78, 205, 196, ${alpha})`;
+    }
+
+    if (val >= 0) {
+      vecCtx.fillRect(x, zeroY - barH, barW, barH);
+    } else {
+      vecCtx.fillRect(x, zeroY, barW, -barH);
+    }
+  }
+
+  // Dim axis labels
+  vecCtx.fillStyle = '#666';
+  vecCtx.font = '9px monospace';
+  vecCtx.textAlign = 'center';
+  const labelSteps = dModel <= 64 ? 8 : dModel <= 128 ? 16 : dModel <= 256 ? 32 : 64;
+  for (let d = 0; d < dModel; d += labelSteps) {
+    vecCtx.fillText(d, pad.left + (d / dModel) * plotW + barW / 2, H - 4);
+  }
+}
+
+posSlider.addEventListener('input', drawVector);
+
+// d_model selector
+document.querySelectorAll('.dmodel-btn').forEach(btn => {
+  btn.addEventListener('click', () => {
+    document.querySelectorAll('.dmodel-btn').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    dModel = parseInt(btn.dataset.dmodel);
+    drawVector();
+    drawHeatmap();
+  });
+});
+
+// ===== Panel 3: Similarity heatmap =====
+const hmCanvas = document.getElementById('heatmap-canvas');
+const hmCtx = hmCanvas.getContext('2d');
+
+function drawHeatmap() {
+  const N = 32; // positions 0..31 for readability
+  const dpr = window.devicePixelRatio || 1;
+  const rect = hmCanvas.getBoundingClientRect();
+  hmCanvas.width = rect.width * dpr;
+  hmCanvas.height = 360 * dpr;
+  hmCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
+
+  const W = rect.width;
+  const H = 360;
+  const pad = { top: 24, bottom: 30, left: 36, right: 16 };
+  const plotSize = Math.min(W - pad.left - pad.right, H - pad.top - pad.bottom);
+  const cellSize = plotSize / N;
+
+  hmCtx.clearRect(0, 0, W, H);
+
+  // Precompute PE vectors
+  const vecs = [];
+  for (let p = 0; p < N; p++) {
+    vecs.push(computePEVector(p, dModel));
+  }
+
+  // Compute similarities
+  const sims = [];
+  let minSim = Infinity, maxSim = -Infinity;
+  for (let p = 0; p < N; p++) {
+    sims[p] = [];
+    for (let q = 0; q < N; q++) {
+      const sim = dotProduct(vecs[p], vecs[q]) / dModel;
+      sims[p][q] = sim;
+      if (sim < minSim) minSim = sim;
+      if (sim > maxSim) maxSim = sim;
+    }
+  }
+
+  // Draw cells
+  for (let p = 0; p < N; p++) {
+    for (let q = 0; q < N; q++) {
+      const sim = sims[p][q];
+      const x = pad.left + q * cellSize;
+      const y = pad.top + p * cellSize;
+
+      if (sim >= 0) {
+        // 0 -> #1a1a2e, 1 -> #e94560
+        const t = sim / maxSim;
+        const r = Math.round(26 + t * (233 - 26));
+        const g = Math.round(26 + t * (69 - 26));
+        const b = Math.round(46 + t * (96 - 46));
+        hmCtx.fillStyle = `rgb(${r},${g},${b})`;
+      } else {
+        // 0 -> #1a1a2e, negative -> #4ecdc4
+        const t = Math.min(1, Math.abs(sim) / Math.abs(minSim));
+        const r = Math.round(26 + t * (78 - 26));
+        const g = Math.round(26 + t * (205 - 26));
+        const b = Math.round(46 + t * (196 - 46));
+        hmCtx.fillStyle = `rgb(${r},${g},${b})`;
+      }
+
+      hmCtx.fillRect(x, y, cellSize - 0.5, cellSize - 0.5);
+    }
+  }
+
+  // Axis labels
+  hmCtx.fillStyle = '#666';
+  hmCtx.font = '9px monospace';
+  hmCtx.textAlign = 'center';
+  for (let i = 0; i < N; i += 4) {
+    hmCtx.fillText(i, pad.left + i * cellSize + cellSize / 2, pad.top + N * cellSize + 14);
+  }
+  hmCtx.fillText('position q', pad.left + (N * cellSize) / 2, pad.top + N * cellSize + 28);
+
+  hmCtx.textAlign = 'right';
+  for (let i = 0; i < N; i += 4) {
+    hmCtx.fillText(i, pad.left - 4, pad.top + i * cellSize + cellSize / 2 + 3);
+  }
+
+  hmCtx.save();
+  hmCtx.translate(10, pad.top + (N * cellSize) / 2);
+  hmCtx.rotate(-Math.PI / 2);
+  hmCtx.textAlign = 'center';
+  hmCtx.fillText('position p', 0, 0);
+  hmCtx.restore();
+
+  // Title
+  hmCtx.fillStyle = '#888';
+  hmCtx.font = '11px sans-serif';
+  hmCtx.textAlign = 'center';
+  hmCtx.fillText('PE(p) . PE(q) / d_model   (positions 0-31, d_model=' + dModel + ')', pad.left + (N * cellSize) / 2, pad.top - 8);
+
+  // Tooltip on hover
+  hmCanvas.onmousemove = function(e) {
+    const brect = hmCanvas.getBoundingClientRect();
+    const mx = (e.clientX - brect.left);
+    const my = (e.clientY - brect.top);
+    const q = Math.floor((mx - pad.left) / cellSize);
+    const p = Math.floor((my - pad.top) / cellSize);
+    if (p >= 0 && p < N && q >= 0 && q < N) {
+      hmCanvas.title = `PE(${p}) . PE(${q}) / ${dModel} = ${sims[p][q].toFixed(4)}`;
+    } else {
+      hmCanvas.title = '';
+    }
+  };
+}
+
+// ===== Initialize =====
+function init() {
+  buildDimButtons();
+  drawWaves();
+  drawVector();
+  drawHeatmap();
+}
+
+// Handle resize
+let resizeTimer;
+window.addEventListener('resize', () => {
+  clearTimeout(resizeTimer);
+  resizeTimer = setTimeout(() => {
+    drawWaves();
+    drawVector();
+    drawHeatmap();
+  }, 100);
+});
+
+init();
+</script>
+
+</body>
+</html>

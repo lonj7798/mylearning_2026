@@ -1,0 +1,372 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Paper Reading Flowchart — Three-Pass Method</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    background: #0d1117;
+    color: #e0e0e0;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    padding: 32px;
+    min-height: 100vh;
+  }
+  h1 {
+    font-size: 22px;
+    color: #f0f0f0;
+    margin-bottom: 8px;
+    text-align: center;
+  }
+  .subtitle {
+    font-size: 13px;
+    color: #888;
+    text-align: center;
+    margin-bottom: 32px;
+  }
+  .flowchart {
+    max-width: 760px;
+    margin: 0 auto;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 0;
+  }
+  .pass-header {
+    width: 100%;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin-bottom: 16px;
+    margin-top: 8px;
+  }
+  .pass-badge {
+    font-size: 11px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 1.5px;
+    padding: 4px 12px;
+    border-radius: 4px;
+    white-space: nowrap;
+  }
+  .pass-1 .pass-badge { background: #1a3a2a; color: #4ecdc4; }
+  .pass-2 .pass-badge { background: #3a2a1a; color: #ffd93d; }
+  .pass-3 .pass-badge { background: #2a1a3a; color: #c084fc; }
+  .pass-line {
+    flex: 1;
+    height: 1px;
+    background: #333;
+  }
+  .pass-time {
+    font-size: 12px;
+    color: #666;
+    white-space: nowrap;
+  }
+  .node {
+    width: 100%;
+    max-width: 520px;
+    border-radius: 10px;
+    padding: 16px 20px;
+    text-align: center;
+    position: relative;
+    cursor: default;
+    transition: transform 0.15s;
+  }
+  .node:hover { transform: scale(1.02); }
+  .node-title {
+    font-size: 15px;
+    font-weight: 700;
+    margin-bottom: 6px;
+  }
+  .node-desc {
+    font-size: 12px;
+    line-height: 1.5;
+    opacity: 0.85;
+  }
+  .action-node {
+    background: #16213e;
+    border: 1.5px solid #1e3a5f;
+  }
+  .action-node .node-title { color: #7dd3fc; }
+  .decision-node {
+    background: #1a1a2e;
+    border: 2px solid #e94560;
+    border-radius: 10px;
+    transform: none;
+  }
+  .decision-node .node-title { color: #e94560; }
+  .outcome-pass {
+    background: #0d2818;
+    border: 1.5px solid #22c55e;
+  }
+  .outcome-pass .node-title { color: #4ade80; }
+  .outcome-fail {
+    background: #2a1215;
+    border: 1.5px solid #ef4444;
+  }
+  .outcome-fail .node-title { color: #f87171; }
+  .outcome-maybe {
+    background: #2a2215;
+    border: 1.5px solid #eab308;
+  }
+  .outcome-maybe .node-title { color: #fbbf24; }
+  .arrow {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 6px 0;
+    color: #555;
+    font-size: 18px;
+    line-height: 1;
+  }
+  .arrow-label {
+    font-size: 11px;
+    color: #888;
+    margin-top: 2px;
+    font-style: italic;
+  }
+  .branch {
+    display: flex;
+    gap: 16px;
+    width: 100%;
+    max-width: 620px;
+    justify-content: center;
+  }
+  .branch .node {
+    max-width: 280px;
+    flex: 1;
+  }
+  .stats-bar {
+    width: 100%;
+    max-width: 620px;
+    margin-top: 32px;
+    background: #16213e;
+    border-radius: 10px;
+    padding: 16px 20px;
+  }
+  .stats-title {
+    font-size: 13px;
+    font-weight: 700;
+    color: #7dd3fc;
+    margin-bottom: 12px;
+  }
+  .stats-row {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin-bottom: 8px;
+  }
+  .stats-label {
+    font-size: 12px;
+    color: #aaa;
+    width: 80px;
+    text-align: right;
+  }
+  .stats-track {
+    flex: 1;
+    height: 20px;
+    background: #0d1117;
+    border-radius: 4px;
+    position: relative;
+    overflow: hidden;
+  }
+  .stats-fill {
+    height: 100%;
+    border-radius: 4px;
+    display: flex;
+    align-items: center;
+    padding-left: 8px;
+    font-size: 11px;
+    font-weight: 700;
+    color: #fff;
+    transition: width 0.8s ease-out;
+  }
+  .fill-1 { background: #4ecdc4; }
+  .fill-2 { background: #ffd93d; color: #1a1a2e !important; }
+  .fill-3 { background: #c084fc; }
+  .stats-count {
+    font-size: 12px;
+    color: #888;
+    width: 60px;
+  }
+  .questions-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr 1fr;
+    gap: 8px;
+    margin-top: 6px;
+  }
+  .q-item {
+    background: #0d1117;
+    border-radius: 6px;
+    padding: 8px 10px;
+    font-size: 11px;
+    line-height: 1.4;
+    color: #ccc;
+    border-left: 3px solid #4ecdc4;
+  }
+  .q-num {
+    font-weight: 700;
+    color: #4ecdc4;
+    margin-right: 4px;
+  }
+</style>
+</head>
+<body>
+  <h1>The Three-Pass Paper Reading Method</h1>
+  <p class="subtitle">An efficient strategy for reading LLM architecture papers. Most papers do not survive past Pass 2.</p>
+
+  <div class="flowchart">
+
+    <!-- PASS 1 -->
+    <div class="pass-header pass-1">
+      <span class="pass-badge">Pass 1: Skeleton</span>
+      <div class="pass-line"></div>
+      <span class="pass-time">~5 minutes</span>
+    </div>
+
+    <div class="node action-node">
+      <div class="node-title">Read Abstract + Figures + Results Tables</div>
+      <div class="node-desc">Skip everything else. Identify the claimed bottleneck, the structural change, and the magnitude of improvement.</div>
+    </div>
+
+    <div class="arrow">&darr;</div>
+
+    <div class="node action-node">
+      <div class="node-title">Answer Three Questions</div>
+      <div class="questions-grid">
+        <div class="q-item"><span class="q-num">1.</span> What bottleneck is claimed?</div>
+        <div class="q-item"><span class="q-num">2.</span> What structural change is proposed?</div>
+        <div class="q-item"><span class="q-num">3.</span> How large is the improvement?</div>
+      </div>
+    </div>
+
+    <div class="arrow">&darr;</div>
+
+    <div class="node decision-node">
+      <div class="node-title">Can you answer all three clearly?</div>
+      <div class="node-desc">If the abstract is vague or figures are unclear, that is itself a negative signal.</div>
+    </div>
+
+    <div class="arrow">&darr;</div>
+
+    <div class="branch">
+      <div class="node outcome-fail">
+        <div class="node-title">No &rarr; STOP</div>
+        <div class="node-desc">~80% of papers. File for reference or discard. Do not invest more time.</div>
+      </div>
+      <div class="node outcome-pass">
+        <div class="node-title">Yes &rarr; Proceed</div>
+        <div class="node-desc">~20% of papers. The contribution is clear enough to warrant deeper reading.</div>
+      </div>
+    </div>
+
+    <div class="arrow">&darr;</div>
+
+    <!-- PASS 2 -->
+    <div class="pass-header pass-2">
+      <span class="pass-badge">Pass 2: Ablations</span>
+      <div class="pass-line"></div>
+      <span class="pass-time">~15-20 minutes</span>
+    </div>
+
+    <div class="node action-node">
+      <div class="node-title">Read Ablation Tables + Experimental Setup</div>
+      <div class="node-desc">Check: single-variable changes, meaningful baselines, appropriate metrics, reported variance. Skip Related Work.</div>
+    </div>
+
+    <div class="arrow">&darr;</div>
+
+    <div class="node action-node">
+      <div class="node-title">Apply Mental Ablation</div>
+      <div class="node-desc">For each proposed component: "What would happen without this?" Identify which components are structurally necessary vs. optional improvements.</div>
+    </div>
+
+    <div class="arrow">&darr;</div>
+
+    <div class="node decision-node">
+      <div class="node-title">Do ablations support the claims?</div>
+      <div class="node-desc">Are the improvements real? Are baselines fair? Are effects larger than noise?</div>
+    </div>
+
+    <div class="arrow">&darr;</div>
+
+    <div class="branch">
+      <div class="node outcome-fail">
+        <div class="node-title">No &rarr; STOP</div>
+        <div class="node-desc">~50% of Pass-1 survivors. Weak ablations, unfair baselines, or noisy results.</div>
+      </div>
+      <div class="node outcome-maybe">
+        <div class="node-title">Partial &rarr; Flag Gaps</div>
+        <div class="node-desc">Promising but incomplete evidence. Note specific gaps for Pass 3 investigation.</div>
+      </div>
+      <div class="node outcome-pass">
+        <div class="node-title">Yes &rarr; Proceed</div>
+        <div class="node-desc">~50% of Pass-1 survivors. Ablations are clean and support the claimed contribution.</div>
+      </div>
+    </div>
+
+    <div class="arrow">&darr;</div>
+
+    <!-- PASS 3 -->
+    <div class="pass-header pass-3">
+      <span class="pass-badge">Pass 3: Full Read</span>
+      <div class="pass-line"></div>
+      <span class="pass-time">~30-60 minutes</span>
+    </div>
+
+    <div class="node action-node">
+      <div class="node-title">Read Complete Paper</div>
+      <div class="node-desc">Methodology, training details, related work, appendices. Assess reproducibility: could you implement this from the paper alone?</div>
+    </div>
+
+    <div class="arrow">&darr;</div>
+
+    <div class="node action-node">
+      <div class="node-title">Classify the Contribution</div>
+      <div class="questions-grid">
+        <div class="q-item" style="border-left-color:#c084fc;"><span class="q-num" style="color:#c084fc;">1.</span> New bottleneck identification</div>
+        <div class="q-item" style="border-left-color:#c084fc;"><span class="q-num" style="color:#c084fc;">2.</span> Novel structural solution</div>
+        <div class="q-item" style="border-left-color:#c084fc;"><span class="q-num" style="color:#c084fc;">3.</span> Engineering optimization</div>
+      </div>
+    </div>
+
+    <div class="arrow">&darr;</div>
+
+    <div class="node outcome-pass" style="border-color: #c084fc; background: #1a152a;">
+      <div class="node-title" style="color: #c084fc;">Record Assessment</div>
+      <div class="node-desc">Contribution type, key ablation findings, reproducibility rating, open questions, relevance to your work.</div>
+    </div>
+
+    <!-- Stats bar -->
+    <div class="stats-bar">
+      <div class="stats-title">Typical Monthly Reading Funnel</div>
+      <div class="stats-row">
+        <div class="stats-label">Pass 1</div>
+        <div class="stats-track">
+          <div class="stats-fill fill-1" style="width: 100%;">50 papers</div>
+        </div>
+        <div class="stats-count">~5 hrs</div>
+      </div>
+      <div class="stats-row">
+        <div class="stats-label">Pass 2</div>
+        <div class="stats-track">
+          <div class="stats-fill fill-2" style="width: 20%;">10 papers</div>
+        </div>
+        <div class="stats-count">~3 hrs</div>
+      </div>
+      <div class="stats-row">
+        <div class="stats-label">Pass 3</div>
+        <div class="stats-track">
+          <div class="stats-fill fill-3" style="width: 6%;">3</div>
+        </div>
+        <div class="stats-count">~3 hrs</div>
+      </div>
+      <div style="font-size: 11px; color: #666; margin-top: 8px; text-align: center;">
+        ~11 hours/month total. Most time is spent on the fewest, highest-value papers.
+      </div>
+    </div>
+
+  </div>
+</body>
+</html>

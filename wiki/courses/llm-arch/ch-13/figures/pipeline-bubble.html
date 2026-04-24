@@ -1,0 +1,342 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Pipeline Parallelism Schedules — Ch 13</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { background: #1a1a2e; color: #e0e0e0; font-family: 'Segoe UI', system-ui, sans-serif; padding: 24px; min-height: 100vh; }
+h1 { font-size: 20px; color: #e94560; margin-bottom: 4px; }
+.subtitle { color: #888; font-size: 13px; margin-bottom: 20px; }
+.controls { display: flex; gap: 12px; margin-bottom: 20px; flex-wrap: wrap; align-items: center; }
+.btn { padding: 8px 16px; border: 2px solid #333; background: #16213e; color: #e0e0e0; border-radius: 8px; cursor: pointer; font-size: 13px; transition: all 0.2s; }
+.btn:hover { border-color: #e94560; }
+.btn.active { border-color: #e94560; background: #e94560; color: #fff; }
+.slider-group { display: flex; align-items: center; gap: 8px; margin-left: 16px; }
+.slider-group label { font-size: 12px; color: #888; }
+.slider-group input[type=range] { width: 100px; accent-color: #e94560; }
+.slider-group .val { font-size: 12px; color: #e94560; font-weight: bold; width: 24px; }
+.schedule-container { background: #16213e; border-radius: 12px; padding: 20px; margin-bottom: 20px; overflow-x: auto; }
+.schedule-title { font-size: 14px; color: #4ecdc4; margin-bottom: 4px; }
+.schedule-desc { font-size: 12px; color: #888; margin-bottom: 16px; }
+.timeline { position: relative; }
+.gpu-lane { display: flex; align-items: center; margin-bottom: 3px; }
+.gpu-lane-label { font-size: 11px; color: #888; width: 48px; flex-shrink: 0; }
+.gpu-lane-bar { display: flex; height: 28px; }
+.cell { display: flex; align-items: center; justify-content: center; font-size: 9px; font-weight: bold; color: #fff; border-right: 1px solid rgba(0,0,0,0.2); min-width: 28px; width: 28px; transition: all 0.3s; }
+.cell-fwd { background: #4ecdc4; color: #1a1a2e; }
+.cell-bwd { background: #e94560; }
+.cell-bwd-b { background: #c03050; }
+.cell-bwd-w { background: #ff8a80; color: #1a1a2e; }
+.cell-bubble { background: #2a2a4e; }
+.cell-idle { background: #222244; }
+.metrics { display: flex; gap: 16px; margin-top: 16px; flex-wrap: wrap; }
+.metric { background: #1a1a2e; border-radius: 8px; padding: 12px 16px; }
+.metric .label { font-size: 11px; color: #888; margin-bottom: 2px; }
+.metric .value { font-size: 18px; font-weight: bold; }
+.metric .value.good { color: #4ecdc4; }
+.metric .value.warn { color: #ffd93d; }
+.metric .value.bad { color: #e94560; }
+.legend { display: flex; gap: 14px; flex-wrap: wrap; margin-top: 12px; }
+.legend-item { display: flex; align-items: center; gap: 5px; font-size: 11px; }
+.legend-swatch { width: 14px; height: 14px; border-radius: 3px; }
+.explanation { background: #16213e; border-radius: 12px; padding: 20px; margin-top: 16px; }
+.explanation h3 { font-size: 14px; color: #ffd93d; margin-bottom: 8px; }
+.explanation p { font-size: 13px; color: #bbb; line-height: 1.6; margin-bottom: 8px; }
+.formula { color: #e94560; font-family: monospace; font-size: 13px; background: #1a1a2e; padding: 4px 8px; border-radius: 4px; display: inline-block; margin: 4px 0; }
+</style>
+</head>
+<body>
+<h1>Pipeline Parallelism: Schedule Comparison</h1>
+<p class="subtitle">Visualize how micro-batches flow through pipeline stages and where bubbles form.</p>
+
+<div class="controls">
+<button class="btn active" onclick="selectSchedule('naive')">Naive</button>
+<button class="btn" onclick="selectSchedule('afab')">AFAB (m=8)</button>
+<button class="btn" onclick="selectSchedule('1f1b')">1F1B</button>
+<button class="btn" onclick="selectSchedule('interleaved')">Interleaved</button>
+<button class="btn" onclick="selectSchedule('zerobubble')">Zero Bubble</button>
+<div class="slider-group">
+<label>Stages (p):</label>
+<input type="range" id="stages" min="2" max="8" value="4" step="1">
+<span class="val" id="stagesVal">4</span>
+</div>
+</div>
+
+<div class="schedule-container">
+<div class="schedule-title" id="schedTitle">Naive Pipeline</div>
+<div class="schedule-desc" id="schedDesc">One micro-batch, all forward then all backward. Massive bubble.</div>
+<div class="timeline" id="timeline"></div>
+<div class="legend">
+<div class="legend-item"><div class="legend-swatch" style="background:#4ecdc4;"></div>Forward (F)</div>
+<div class="legend-item"><div class="legend-swatch" style="background:#e94560;"></div>Backward (B)</div>
+<div class="legend-item"><div class="legend-swatch" style="background:#c03050;"></div>Backward-Input (B)</div>
+<div class="legend-item"><div class="legend-swatch" style="background:#ff8a80;"></div>Backward-Weight (W)</div>
+<div class="legend-item"><div class="legend-swatch" style="background:#2a2a4e;"></div>Bubble (idle)</div>
+</div>
+<div class="metrics" id="metrics"></div>
+</div>
+
+<div class="explanation" id="explanation"></div>
+
+<script>
+let currentSchedule = 'naive';
+const mbColors = ['#4ecdc4','#3dbdad','#2dad9d','#1d9d8d','#0d8d7d','#4ecdc4','#3dbdad','#2dad9d'];
+const bwdColors = ['#e94560','#d93550','#c92540','#b91530','#a90520','#e94560','#d93550','#c92540'];
+
+document.getElementById('stages').addEventListener('input', () => {
+  document.getElementById('stagesVal').textContent = document.getElementById('stages').value;
+  render();
+});
+
+function selectSchedule(s) {
+  currentSchedule = s;
+  document.querySelectorAll('.btn').forEach(b => b.classList.remove('active'));
+  event.target.classList.add('active');
+  render();
+}
+
+function makeCell(type, label) {
+  return { type, label };
+}
+
+function generateSchedule(schedule, p) {
+  const schedules = {
+    naive: () => {
+      const total = 2 * p;
+      const grid = Array.from({length: p}, () => Array(total).fill(null));
+      for (let s = 0; s < p; s++) {
+        grid[s][s] = makeCell('fwd', 'F1');
+        grid[s][p + (p - 1 - s)] = makeCell('bwd', 'B1');
+      }
+      for (let s = 0; s < p; s++) {
+        for (let t = 0; t < total; t++) {
+          if (!grid[s][t]) grid[s][t] = makeCell('bubble', '');
+        }
+      }
+      return { grid, totalSteps: total, m: 1, bubbleFrac: (p-1) };
+    },
+    afab: () => {
+      const m = 8;
+      const total = m + m + (p - 1);
+      const grid = Array.from({length: p}, () => Array(total).fill(null));
+      for (let mb = 0; mb < m; mb++) {
+        for (let s = 0; s < p; s++) {
+          const fwdT = mb + s;
+          if (fwdT < total) grid[s][fwdT] = makeCell('fwd', `F${mb+1}`);
+        }
+      }
+      for (let mb = 0; mb < m; mb++) {
+        for (let s = p - 1; s >= 0; s--) {
+          const bwdT = m + (p - 1) + mb + (p - 1 - s);
+          if (bwdT < total) grid[s][bwdT] = makeCell('bwd', `B${mb+1}`);
+        }
+      }
+      for (let s = 0; s < p; s++) {
+        for (let t = 0; t < total; t++) {
+          if (!grid[s][t]) grid[s][t] = makeCell('bubble', '');
+        }
+      }
+      return { grid, totalSteps: total, m, bubbleFrac: (p-1)/m };
+    },
+    '1f1b': () => {
+      const m = Math.max(p + 2, 8);
+      const total = m + m + (p - 1);
+      const grid = Array.from({length: p}, () => []);
+
+      for (let s = 0; s < p; s++) {
+        let t = 0;
+        let fwdDone = 0;
+        let bwdDone = 0;
+        // Warmup: p - s - 1 idle slots, then forward passes
+        for (let i = 0; i < s; i++) { grid[s].push(makeCell('bubble', '')); t++; }
+        // Warmup forwards
+        const warmup = p - s;
+        for (let i = 0; i < warmup && fwdDone < m; i++) {
+          grid[s].push(makeCell('fwd', `F${fwdDone+1}`)); fwdDone++; t++;
+        }
+        // Steady state: alternating B then F
+        while (fwdDone < m || bwdDone < m) {
+          if (bwdDone < m && fwdDone >= (bwdDone + 1)) {
+            grid[s].push(makeCell('bwd', `B${bwdDone+1}`)); bwdDone++; t++;
+          }
+          if (fwdDone < m) {
+            grid[s].push(makeCell('fwd', `F${fwdDone+1}`)); fwdDone++; t++;
+          } else if (bwdDone < m) {
+            grid[s].push(makeCell('bwd', `B${bwdDone+1}`)); bwdDone++; t++;
+          }
+        }
+        // Cooldown
+        while (grid[s].length < total) grid[s].push(makeCell('bubble', ''));
+      }
+
+      // Normalize lengths
+      const maxLen = Math.max(...grid.map(r => r.length));
+      grid.forEach(r => { while (r.length < maxLen) r.push(makeCell('bubble', '')); });
+
+      return { grid, totalSteps: maxLen, m, bubbleFrac: (p-1)/m };
+    },
+    interleaved: () => {
+      const m = 8;
+      const v = 2;
+      const total = m * v + m * v + (p - 1);
+      const grid = Array.from({length: p}, () => []);
+
+      for (let s = 0; s < p; s++) {
+        for (let i = 0; i < s; i++) grid[s].push(makeCell('bubble', ''));
+        // Simplified: show forward chunks then backward chunks
+        for (let chunk = 0; chunk < v; chunk++) {
+          for (let mb = 0; mb < m; mb++) {
+            grid[s].push(makeCell('fwd', `F${mb+1}.${chunk+1}`));
+          }
+        }
+        for (let chunk = v - 1; chunk >= 0; chunk--) {
+          for (let mb = m - 1; mb >= 0; mb--) {
+            grid[s].push(makeCell('bwd', `B${mb+1}.${chunk+1}`));
+          }
+        }
+        for (let i = 0; i < p - 1 - s; i++) grid[s].push(makeCell('bubble', ''));
+      }
+
+      const maxLen = Math.max(...grid.map(r => r.length));
+      grid.forEach(r => { while (r.length < maxLen) r.push(makeCell('bubble', '')); });
+
+      return { grid, totalSteps: maxLen, m, bubbleFrac: (p-1)/(v*m) };
+    },
+    zerobubble: () => {
+      const m = 8;
+      const total = m * 3 + p;
+      const grid = Array.from({length: p}, () => []);
+
+      for (let s = 0; s < p; s++) {
+        for (let i = 0; i < s; i++) grid[s].push(makeCell('bubble', ''));
+        // Warmup forwards
+        const warmup = p - s;
+        let fwd = 0;
+        for (let i = 0; i < warmup && fwd < m; i++) {
+          grid[s].push(makeCell('fwd', `F${fwd+1}`)); fwd++;
+        }
+        // Steady: F, B, W interleaved
+        let bwd = 0; let w = 0;
+        while (fwd < m || bwd < m || w < m) {
+          if (bwd < m && fwd > bwd) {
+            grid[s].push(makeCell('bwd-b', `B${bwd+1}`)); bwd++;
+          }
+          if (fwd < m) {
+            grid[s].push(makeCell('fwd', `F${fwd+1}`)); fwd++;
+          }
+          if (w < bwd) {
+            grid[s].push(makeCell('bwd-w', `W${w+1}`)); w++;
+          }
+          if (fwd >= m && bwd >= m && w >= m) break;
+          if (grid[s].length > total + 10) break;
+        }
+        while (w < m) {
+          grid[s].push(makeCell('bwd-w', `W${w+1}`)); w++;
+        }
+      }
+
+      const maxLen = Math.max(...grid.map(r => r.length));
+      grid.forEach(r => { while (r.length < maxLen) r.push(makeCell('bubble', '')); });
+
+      return { grid, totalSteps: maxLen, m, bubbleFrac: 0.05 };
+    }
+  };
+
+  return schedules[schedule]();
+}
+
+function render() {
+  const p = parseInt(document.getElementById('stages').value);
+  const result = generateSchedule(currentSchedule, p);
+  const { grid, totalSteps, m, bubbleFrac } = result;
+
+  const descs = {
+    naive: `Single micro-batch. Each stage waits for the previous to complete. Bubble = ${p-1} / 1 = ${((p-1)*100).toFixed(0)}% idle time.`,
+    afab: `All Forward All Backward with m=${m} micro-batches. Bubble = (p-1)/m = ${(bubbleFrac*100).toFixed(1)}%. Simple but stores activations for all ${m} micro-batches.`,
+    '1f1b': `One-Forward-One-Backward with m=${m}. Same bubble as AFAB but activation memory capped at p=${p} micro-batches. Industry standard baseline.`,
+    interleaved: `Interleaved stages (v=2 chunks per GPU). Bubble = (p-1)/(v*m) = ${(bubbleFrac*100).toFixed(1)}%. Halves the bubble but doubles P2P communication.`,
+    zerobubble: `Zero Bubble (B/W decomposition). Backward split into B (input grad) and W (weight grad). W fills bubbles. Near-zero idle time.`
+  };
+
+  const titles = {
+    naive: 'Naive Pipeline (1 micro-batch)',
+    afab: 'All-Forward-All-Backward (AFAB)',
+    '1f1b': 'One-Forward-One-Backward (1F1B)',
+    interleaved: 'Interleaved Stages (v=2)',
+    zerobubble: 'Zero Bubble (B/W Decomposition)'
+  };
+
+  document.getElementById('schedTitle').textContent = titles[currentSchedule];
+  document.getElementById('schedDesc').textContent = descs[currentSchedule];
+
+  const timeline = document.getElementById('timeline');
+  timeline.innerHTML = '';
+
+  const maxCells = 40;
+  grid.forEach((row, i) => {
+    const lane = document.createElement('div');
+    lane.className = 'gpu-lane';
+    const label = document.createElement('div');
+    label.className = 'gpu-lane-label';
+    label.textContent = `Stage ${i}`;
+    lane.appendChild(label);
+    const bar = document.createElement('div');
+    bar.className = 'gpu-lane-bar';
+    const displayRow = row.slice(0, maxCells);
+    displayRow.forEach(cell => {
+      const el = document.createElement('div');
+      el.className = `cell cell-${cell.type}`;
+      if (cell.label.length <= 3) el.textContent = cell.label;
+      el.title = cell.label || 'idle';
+      bar.appendChild(el);
+    });
+    if (row.length > maxCells) {
+      const more = document.createElement('div');
+      more.className = 'cell cell-bubble';
+      more.textContent = '...';
+      more.style.minWidth = '36px';
+      bar.appendChild(more);
+    }
+    lane.appendChild(bar);
+    timeline.appendChild(lane);
+  });
+
+  // Metrics
+  const metricsDiv = document.getElementById('metrics');
+  metricsDiv.innerHTML = '';
+  const bubblePct = bubbleFrac * 100;
+  const efficiency = Math.max(0, 100 - bubblePct);
+
+  const metricsData = [
+    { label: 'Bubble Fraction', value: bubblePct < 1 ? '<1%' : `${bubblePct.toFixed(1)}%`, cls: bubblePct < 10 ? 'good' : bubblePct < 30 ? 'warn' : 'bad' },
+    { label: 'GPU Efficiency', value: `${efficiency.toFixed(1)}%`, cls: efficiency > 90 ? 'good' : efficiency > 70 ? 'warn' : 'bad' },
+    { label: 'Micro-batches (m)', value: `${m}`, cls: 'good' },
+    { label: 'Stages (p)', value: `${p}`, cls: 'warn' },
+    { label: 'Activation Memory', value: currentSchedule === 'afab' ? `${m} micro-batches` : currentSchedule === 'naive' ? '1 micro-batch' : `${p} micro-batches`, cls: currentSchedule === 'afab' ? 'bad' : 'warn' }
+  ];
+
+  metricsData.forEach(m => {
+    const div = document.createElement('div');
+    div.className = 'metric';
+    div.innerHTML = `<div class="label">${m.label}</div><div class="value ${m.cls}">${m.value}</div>`;
+    metricsDiv.appendChild(div);
+  });
+
+  // Explanation
+  const explanations = {
+    naive: `<h3>Why Naive PP Fails</h3><p>With a single micro-batch and ${p} stages, each GPU computes for 1 time unit (forward) + 2 time units (backward) = 3 units. But the total pipeline takes ${3*p} units. Each GPU is idle for ${3*(p-1)} units.</p><p>Bubble fraction: <span class="formula">r = (p-1) = ${p-1}</span>. At p=${p}, the GPU is idle <strong>${((p-1)/p*100).toFixed(0)}%</strong> of the time.</p>`,
+    afab: `<h3>AFAB: Micro-batching Helps</h3><p>By splitting the batch into m=${m} micro-batches, each GPU processes ${m} forward passes then ${m} backward passes. The bubble stays the same absolute size, but the total work increases.</p><p>Bubble fraction: <span class="formula">r = (p-1)/m = ${p-1}/${m} = ${(bubbleFrac).toFixed(2)}</span></p><p><strong>Problem:</strong> AFAB must store activations for all ${m} micro-batches simultaneously, causing memory explosion.</p>`,
+    '1f1b': `<h3>1F1B: Memory-Efficient Scheduling</h3><p>1F1B starts backward passes as soon as possible, alternating F and B in steady state. The bubble size is identical to AFAB, but activation memory is capped at p=${p} micro-batches instead of m=${m}.</p><p>Bubble fraction: <span class="formula">r = (p-1)/m = ${(bubbleFrac).toFixed(2)}</span></p><p>This is the industry baseline used by most training frameworks. Llama 3.1 extends it with interleaving and depth-first/breadth-first priority tuning.</p>`,
+    interleaved: `<h3>Interleaved: Halving the Bubble</h3><p>Each GPU holds v=2 non-contiguous chunks of layers. Micro-batches cycle through each GPU twice, halving the effective bubble.</p><p>Bubble fraction: <span class="formula">r = (p-1)/(v*m) = ${p-1}/${2*m} = ${(bubbleFrac).toFixed(3)}</span></p><p><strong>Tradeoff:</strong> v=2 means 2x more P2P communications. The bandwidth cost may negate the bubble savings on slow interconnects.</p>`,
+    zerobubble: `<h3>Zero Bubble: B/W Decomposition</h3><p>The key insight: backward pass = B (input gradients, needed immediately) + W (weight gradients, only needed before optimizer step). Since W is flexible, it fills pipeline bubbles.</p><p>DualPipe (DeepSeek V3) runs two streams from both ends of the pipeline, achieving near-zero bubble. Scheduling is solved via integer linear programming.</p><p>Bubble fraction: <span class="formula">r &approx; 0</span> (theoretical). Practical overhead from scheduling granularity and memory constraints.</p>`
+  };
+
+  document.getElementById('explanation').innerHTML = explanations[currentSchedule];
+}
+
+render();
+</script>
+</body>
+</html>

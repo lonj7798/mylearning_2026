@@ -1,0 +1,390 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Causal Mask Visualizer — Ch-04</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body {
+  background: #1a1a2e;
+  color: #e0e0e0;
+  font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 40px 20px;
+}
+h1 {
+  font-size: 22px;
+  color: #e94560;
+  margin-bottom: 8px;
+}
+.subtitle {
+  font-size: 13px;
+  color: #888;
+  margin-bottom: 32px;
+  text-align: center;
+  max-width: 600px;
+}
+.controls {
+  display: flex;
+  gap: 16px;
+  align-items: center;
+  margin-bottom: 24px;
+  flex-wrap: wrap;
+  justify-content: center;
+}
+.controls label {
+  font-size: 13px;
+  color: #aaa;
+}
+.controls input[type="text"] {
+  background: #16213e;
+  border: 1px solid #333;
+  color: #e0e0e0;
+  padding: 8px 12px;
+  border-radius: 6px;
+  font-size: 14px;
+  width: 320px;
+  outline: none;
+}
+.controls input[type="text"]:focus {
+  border-color: #e94560;
+}
+.controls button {
+  background: #e94560;
+  color: #fff;
+  border: none;
+  padding: 8px 18px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 600;
+}
+.controls button:hover {
+  background: #c73650;
+}
+.matrix-container {
+  display: flex;
+  gap: 48px;
+  flex-wrap: wrap;
+  justify-content: center;
+  align-items: flex-start;
+}
+.matrix-panel {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+.matrix-title {
+  font-size: 14px;
+  font-weight: 600;
+  margin-bottom: 12px;
+  color: #4ecdc4;
+}
+.matrix {
+  display: grid;
+  gap: 2px;
+}
+.cell {
+  width: 52px;
+  height: 52px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 4px;
+  font-size: 11px;
+  font-weight: 600;
+  transition: all 0.3s ease;
+  cursor: pointer;
+  position: relative;
+}
+.cell.attended {
+  background: #0f3460;
+  color: #e0e0e0;
+}
+.cell.masked {
+  background: #2a0a0a;
+  color: #444;
+}
+.cell.highlight {
+  outline: 2px solid #ffd93d;
+  outline-offset: -2px;
+  z-index: 1;
+}
+.header-cell {
+  width: 52px;
+  height: 28px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 11px;
+  font-weight: 700;
+  color: #e94560;
+}
+.row-header {
+  width: 52px;
+  height: 52px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 11px;
+  font-weight: 700;
+  color: #e94560;
+}
+.info-panel {
+  margin-top: 24px;
+  background: #16213e;
+  border-radius: 10px;
+  padding: 20px 28px;
+  max-width: 600px;
+  min-height: 80px;
+}
+.info-panel .info-title {
+  color: #e94560;
+  font-weight: 700;
+  font-size: 13px;
+  margin-bottom: 8px;
+}
+.info-panel .info-text {
+  color: #aaa;
+  font-size: 12px;
+  line-height: 1.6;
+}
+.legend {
+  display: flex;
+  gap: 24px;
+  margin-top: 16px;
+  font-size: 12px;
+}
+.legend-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.legend-swatch {
+  width: 16px;
+  height: 16px;
+  border-radius: 3px;
+}
+.view-toggle {
+  display: flex;
+  gap: 4px;
+  background: #16213e;
+  border-radius: 6px;
+  padding: 3px;
+}
+.view-toggle button {
+  background: transparent;
+  color: #888;
+  border: none;
+  padding: 6px 14px;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 600;
+}
+.view-toggle button.active {
+  background: #e94560;
+  color: #fff;
+}
+</style>
+</head>
+<body>
+
+<h1>Causal Attention Mask Visualizer</h1>
+<p class="subtitle">
+  Click any cell to see what token i attends to when computing its representation.
+  The causal mask enforces the autoregressive property: token i can only attend to tokens 1..i.
+</p>
+
+<div class="controls">
+  <label>Input sequence:</label>
+  <input type="text" id="inputSeq" value="The cat sat on the mat" />
+  <button onclick="updateSequence()">Update</button>
+  <div class="view-toggle">
+    <button class="active" id="btnMask" onclick="setView('mask')">Mask</button>
+    <button id="btnWeights" onclick="setView('weights')">Weights</button>
+  </div>
+</div>
+
+<div class="matrix-container">
+  <div class="matrix-panel">
+    <div class="matrix-title" id="matrixTitle">Causal Mask (Pre-Softmax)</div>
+    <div id="matrixGrid" class="matrix"></div>
+  </div>
+</div>
+
+<div class="legend">
+  <div class="legend-item">
+    <div class="legend-swatch" style="background:#0f3460;"></div>
+    <span style="color:#aaa;">Attended (j &le; i)</span>
+  </div>
+  <div class="legend-item">
+    <div class="legend-swatch" style="background:#2a0a0a;"></div>
+    <span style="color:#aaa;">Masked (j &gt; i, future)</span>
+  </div>
+  <div class="legend-item">
+    <div class="legend-swatch" style="background:#ffd93d; opacity:0.6;"></div>
+    <span style="color:#aaa;">Selected row/column</span>
+  </div>
+</div>
+
+<div class="info-panel">
+  <div class="info-title" id="infoTitle">Click a cell to explore</div>
+  <div class="info-text" id="infoText">
+    Each row i shows which tokens contribute to the representation of token i.
+    Blue cells are attended; dark cells are masked (set to &minus;&infin; before softmax, yielding zero attention weight).
+  </div>
+</div>
+
+<script>
+let tokens = [];
+let currentView = 'mask';
+
+function updateSequence() {
+  const input = document.getElementById('inputSeq').value.trim();
+  tokens = input.split(/\s+/).slice(0, 10); // max 10 tokens for readability
+  renderMatrix();
+}
+
+function setView(view) {
+  currentView = view;
+  document.getElementById('btnMask').classList.toggle('active', view === 'mask');
+  document.getElementById('btnWeights').classList.toggle('active', view === 'weights');
+  document.getElementById('matrixTitle').textContent =
+    view === 'mask' ? 'Causal Mask (Pre-Softmax)' : 'Attention Weights (Post-Softmax)';
+  renderMatrix();
+}
+
+function generateWeights(n) {
+  // Generate realistic-looking attention weights with recency bias
+  const weights = [];
+  for (let i = 0; i < n; i++) {
+    const row = [];
+    let sum = 0;
+    for (let j = 0; j <= i; j++) {
+      // Recency bias: more weight to recent tokens
+      const recency = Math.exp(-0.3 * (i - j));
+      // First token often gets extra attention (BOS pattern)
+      const bos = j === 0 ? 0.3 : 0;
+      const raw = recency + bos + Math.random() * 0.2;
+      row.push(raw);
+      sum += raw;
+    }
+    // Normalize
+    for (let j = 0; j < row.length; j++) {
+      row[j] = row[j] / sum;
+    }
+    weights.push(row);
+  }
+  return weights;
+}
+
+function renderMatrix() {
+  const grid = document.getElementById('matrixGrid');
+  grid.innerHTML = '';
+  const n = tokens.length;
+  grid.style.gridTemplateColumns = `52px repeat(${n}, 52px)`;
+  grid.style.gridTemplateRows = `28px repeat(${n}, 52px)`;
+
+  const weights = currentView === 'weights' ? generateWeights(n) : null;
+
+  // Header row
+  const corner = document.createElement('div');
+  corner.className = 'header-cell';
+  corner.style.color = '#555';
+  corner.textContent = 'Q\\K';
+  grid.appendChild(corner);
+
+  for (let j = 0; j < n; j++) {
+    const h = document.createElement('div');
+    h.className = 'header-cell';
+    h.textContent = tokens[j];
+    h.title = `Key: position ${j}`;
+    grid.appendChild(h);
+  }
+
+  // Data rows
+  for (let i = 0; i < n; i++) {
+    // Row header
+    const rh = document.createElement('div');
+    rh.className = 'row-header';
+    rh.textContent = tokens[i];
+    rh.title = `Query: position ${i}`;
+    grid.appendChild(rh);
+
+    for (let j = 0; j < n; j++) {
+      const cell = document.createElement('div');
+      cell.className = 'cell';
+      const attended = j <= i;
+      cell.classList.add(attended ? 'attended' : 'masked');
+
+      if (currentView === 'mask') {
+        cell.textContent = attended ? '0' : '-inf';
+      } else {
+        if (attended) {
+          const w = weights[i][j];
+          cell.textContent = w.toFixed(2);
+          // Color intensity based on weight
+          const intensity = Math.floor(w * 255);
+          cell.style.background = `rgba(78, 205, 196, ${w * 0.8 + 0.1})`;
+          cell.style.color = w > 0.3 ? '#1a1a2e' : '#e0e0e0';
+        } else {
+          cell.textContent = '0.00';
+        }
+      }
+
+      cell.dataset.row = i;
+      cell.dataset.col = j;
+      cell.addEventListener('click', () => handleCellClick(i, j));
+      cell.addEventListener('mouseenter', () => highlightRowCol(i, j));
+      cell.addEventListener('mouseleave', clearHighlights);
+      grid.appendChild(cell);
+    }
+  }
+}
+
+function highlightRowCol(row, col) {
+  const cells = document.querySelectorAll('.cell');
+  cells.forEach(c => {
+    const r = parseInt(c.dataset.row);
+    const cl = parseInt(c.dataset.col);
+    if (r === row || cl === col) {
+      c.classList.add('highlight');
+    }
+  });
+}
+
+function clearHighlights() {
+  document.querySelectorAll('.cell.highlight').forEach(c => c.classList.remove('highlight'));
+}
+
+function handleCellClick(i, j) {
+  const title = document.getElementById('infoTitle');
+  const text = document.getElementById('infoText');
+  const qi = tokens[i];
+  const kj = tokens[j];
+
+  if (j <= i) {
+    title.textContent = `"${qi}" (pos ${i}) attends to "${kj}" (pos ${j})`;
+    const dist = i - j;
+    if (dist === 0) {
+      text.textContent = `Self-attention: "${qi}" attends to itself. This is always allowed — the diagonal is included in the causal mask. The model can use the current token's own representation when computing its output.`;
+    } else {
+      text.textContent = `"${qi}" can see "${kj}" because position ${j} <= position ${i}. The relative distance is ${dist} token${dist > 1 ? 's' : ''}. This attention is causal — "${qi}" is looking at a past token, which is allowed under the autoregressive constraint.`;
+    }
+  } else {
+    title.textContent = `"${qi}" (pos ${i}) CANNOT attend to "${kj}" (pos ${j})`;
+    text.textContent = `BLOCKED: Position ${j} > position ${i}, so "${kj}" is a future token relative to "${qi}". The mask value is -inf (GPT-2 uses -1e9), which becomes 0 after softmax. Token "${qi}" receives zero information from "${kj}". This prevents information leakage from future tokens, enforcing the autoregressive factorization P(x_t | x_1, ..., x_{t-1}).`;
+  }
+}
+
+// Initialize
+updateSequence();
+</script>
+
+</body>
+</html>

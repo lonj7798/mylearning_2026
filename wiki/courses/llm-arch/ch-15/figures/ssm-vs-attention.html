@@ -1,0 +1,387 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>SSM vs Attention: Computation and Complexity Comparison</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { background: #0d1117; color: #e0e0e0; font-family: 'Segoe UI', system-ui, sans-serif; padding: 24px; }
+h1 { font-size: 20px; color: #fff; margin-bottom: 6px; }
+.subtitle { color: #888; font-size: 13px; margin-bottom: 24px; }
+.container { max-width: 1000px; margin: 0 auto; }
+
+.section { margin-bottom: 32px; }
+.section h2 { font-size: 16px; color: #4ecdc4; margin-bottom: 16px; border-bottom: 1px solid #222; padding-bottom: 8px; }
+
+/* Dual computation diagram */
+.dual-grid { display: grid; grid-template-columns: 1fr 80px 1fr; gap: 0; margin-bottom: 24px; }
+.path-card { background: #1a1a2e; border-radius: 12px; padding: 20px; }
+.path-card h3 { font-size: 14px; margin-bottom: 12px; }
+.path-card.ssm h3 { color: #4ecdc4; }
+.path-card.attn h3 { color: #e94560; }
+.bridge { display: flex; align-items: center; justify-content: center; flex-direction: column; gap: 4px; }
+.bridge-arrow { color: #ffd93d; font-size: 24px; }
+.bridge-label { color: #ffd93d; font-size: 10px; text-align: center; writing-mode: vertical-rl; letter-spacing: 1px; }
+
+.step-list { list-style: none; }
+.step-list li { padding: 8px 12px; margin-bottom: 6px; border-radius: 6px; font-size: 13px; line-height: 1.5; }
+.path-card.ssm .step-list li { background: #0f3460; border-left: 3px solid #4ecdc4; }
+.path-card.attn .step-list li { background: #2d1b30; border-left: 3px solid #e94560; }
+.complexity-tag { font-family: 'Courier New', monospace; font-size: 12px; font-weight: 600; padding: 2px 6px; border-radius: 4px; margin-left: 4px; }
+.tag-linear { background: #0f3460; color: #4ecdc4; }
+.tag-quad { background: #3d1b30; color: #e94560; }
+.tag-const { background: #2d3a0f; color: #a6e22e; }
+
+/* Complexity chart */
+.chart-container { background: #1a1a2e; border-radius: 12px; padding: 20px; }
+.chart-controls { display: flex; gap: 10px; margin-bottom: 16px; align-items: center; flex-wrap: wrap; }
+.chart-controls label { font-size: 12px; color: #888; }
+.chart-controls input[type=range] { width: 200px; accent-color: #4ecdc4; }
+.chart-controls .val { font-family: 'Courier New', monospace; font-size: 13px; color: #ffd93d; min-width: 50px; }
+canvas { width: 100%; border-radius: 8px; }
+
+/* Comparison table */
+.cmp-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.cmp-table th { text-align: left; padding: 10px 12px; border-bottom: 2px solid #e94560; color: #fff; font-size: 12px; text-transform: uppercase; letter-spacing: 0.5px; }
+.cmp-table td { padding: 10px 12px; border-bottom: 1px solid #222; }
+.cmp-table tr:hover { background: #16213e; }
+.cmp-table .arch-name { font-weight: 600; }
+.arch-ssm { color: #4ecdc4; }
+.arch-attn { color: #e94560; }
+.arch-hybrid { color: #ffd93d; }
+.arch-linear { color: #a78bfa; }
+.check { color: #4ecdc4; }
+.cross { color: #e94560; }
+.partial { color: #ffd93d; }
+
+/* Semiseparable matrix visualization */
+.matrix-viz { display: flex; gap: 32px; justify-content: center; align-items: flex-start; flex-wrap: wrap; margin-top: 16px; }
+.matrix-box { text-align: center; }
+.matrix-box .label { font-size: 13px; font-weight: 600; margin-bottom: 8px; }
+.matrix-grid { display: inline-grid; gap: 1px; background: #0d1117; padding: 1px; border-radius: 4px; }
+.matrix-cell { width: 28px; height: 28px; display: flex; align-items: center; justify-content: center; font-size: 9px; font-weight: 600; border-radius: 2px; }
+.cell-zero { background: #111; color: #333; }
+.cell-low { background: #0f3460; color: #4ecdc4; }
+.cell-med { background: #1a5276; color: #76d7c4; }
+.cell-high { background: #2e86c1; color: #fff; }
+.cell-diag { background: #e94560; color: #fff; }
+.matrix-caption { font-size: 11px; color: #888; margin-top: 8px; max-width: 220px; }
+</style>
+</head>
+<body>
+<div class="container">
+<h1>SSM vs Attention: Two Paths Through the Same Matrix</h1>
+<p class="subtitle">The Structured State Space Duality (SSD) shows SSMs and linear attention compute the same semiseparable matrix via different algorithms</p>
+
+<!-- Section 1: Dual computation paths -->
+<div class="section">
+<h2>Dual Computation Paths</h2>
+<div class="dual-grid">
+    <div class="path-card ssm">
+        <h3>SSM Path (Recurrence)</h3>
+        <ul class="step-list">
+            <li>For each t: compute h_t = A_t h_{t-1} + B_t x_t <span class="complexity-tag tag-const">O(N) per step</span></li>
+            <li>Output: y_t = C_t h_t <span class="complexity-tag tag-const">O(N) per step</span></li>
+            <li>Total: <span class="complexity-tag tag-linear">O(L*N)</span></li>
+            <li style="background:#1a2e1a; border-left-color:#a6e22e;">Best when L >> N (long sequences). Inference: constant memory, O(1) per step.</li>
+        </ul>
+    </div>
+    <div class="bridge">
+        <span class="bridge-arrow">&harr;</span>
+        <span class="bridge-label">DUAL</span>
+        <span class="bridge-arrow">&harr;</span>
+    </div>
+    <div class="path-card attn">
+        <h3>Attention Path (Quadratic)</h3>
+        <ul class="step-list">
+            <li>Compute full matrix M where M[t,s] = C_t (prod A_r) B_s <span class="complexity-tag tag-quad">O(L^2)</span></li>
+            <li>Output: y = M * x (matrix-vector multiply) <span class="complexity-tag tag-quad">O(L^2)</span></li>
+            <li>Total: <span class="complexity-tag tag-quad">O(L^2)</span></li>
+            <li style="background:#2d1b1b; border-left-color:#e94560;">Best when L is small. Leverages tensor core matmul hardware for maximum throughput.</li>
+        </ul>
+    </div>
+</div>
+<p style="text-align:center; font-size:12px; color:#888; margin-top:-12px;">
+    Mamba-2's <strong>chunk-wise hybrid</strong>: quadratic within chunks (tensor cores), recurrence across chunks (linear). Best of both worlds.
+</p>
+</div>
+
+<!-- Section 2: Semiseparable matrix -->
+<div class="section">
+<h2>The Semiseparable Matrix M</h2>
+<p style="font-size:13px; color:#aaa; margin-bottom:16px;">Both paths compute y = Mx where M is lower-triangular and semiseparable (every lower-triangular submatrix has rank at most N, the state dimension).</p>
+<div class="matrix-viz">
+    <div class="matrix-box">
+        <div class="label" style="color:#4ecdc4;">SSM View: M[t,s] = C_t (A_{s+1}...A_t) B_s</div>
+        <div class="matrix-grid" style="grid-template-columns: repeat(6,1fr);">
+            <div class="matrix-cell cell-diag">C B</div>
+            <div class="matrix-cell cell-zero">0</div>
+            <div class="matrix-cell cell-zero">0</div>
+            <div class="matrix-cell cell-zero">0</div>
+            <div class="matrix-cell cell-zero">0</div>
+            <div class="matrix-cell cell-zero">0</div>
+            <div class="matrix-cell cell-high">CAB</div>
+            <div class="matrix-cell cell-diag">CB</div>
+            <div class="matrix-cell cell-zero">0</div>
+            <div class="matrix-cell cell-zero">0</div>
+            <div class="matrix-cell cell-zero">0</div>
+            <div class="matrix-cell cell-zero">0</div>
+            <div class="matrix-cell cell-med">CA2B</div>
+            <div class="matrix-cell cell-high">CAB</div>
+            <div class="matrix-cell cell-diag">CB</div>
+            <div class="matrix-cell cell-zero">0</div>
+            <div class="matrix-cell cell-zero">0</div>
+            <div class="matrix-cell cell-zero">0</div>
+            <div class="matrix-cell cell-low">CA3B</div>
+            <div class="matrix-cell cell-med">CA2B</div>
+            <div class="matrix-cell cell-high">CAB</div>
+            <div class="matrix-cell cell-diag">CB</div>
+            <div class="matrix-cell cell-zero">0</div>
+            <div class="matrix-cell cell-zero">0</div>
+            <div class="matrix-cell cell-low">CA4B</div>
+            <div class="matrix-cell cell-low">CA3B</div>
+            <div class="matrix-cell cell-med">CA2B</div>
+            <div class="matrix-cell cell-high">CAB</div>
+            <div class="matrix-cell cell-diag">CB</div>
+            <div class="matrix-cell cell-zero">0</div>
+            <div class="matrix-cell cell-low">CA5B</div>
+            <div class="matrix-cell cell-low">CA4B</div>
+            <div class="matrix-cell cell-low">CA3B</div>
+            <div class="matrix-cell cell-med">CA2B</div>
+            <div class="matrix-cell cell-high">CAB</div>
+            <div class="matrix-cell cell-diag">CB</div>
+        </div>
+        <div class="matrix-caption">Entries decay with distance (powers of A). Computed via recurrence h_t = A h_{t-1} + B x_t, one column at a time.</div>
+    </div>
+    <div class="matrix-box">
+        <div class="label" style="color:#e94560;">Linear Attention View: M[t,s] = q_t^T k_s</div>
+        <div class="matrix-grid" style="grid-template-columns: repeat(6,1fr);">
+            <div class="matrix-cell cell-diag">q1k1</div>
+            <div class="matrix-cell cell-zero">0</div>
+            <div class="matrix-cell cell-zero">0</div>
+            <div class="matrix-cell cell-zero">0</div>
+            <div class="matrix-cell cell-zero">0</div>
+            <div class="matrix-cell cell-zero">0</div>
+            <div class="matrix-cell cell-med">q2k1</div>
+            <div class="matrix-cell cell-diag">q2k2</div>
+            <div class="matrix-cell cell-zero">0</div>
+            <div class="matrix-cell cell-zero">0</div>
+            <div class="matrix-cell cell-zero">0</div>
+            <div class="matrix-cell cell-zero">0</div>
+            <div class="matrix-cell cell-low">q3k1</div>
+            <div class="matrix-cell cell-high">q3k2</div>
+            <div class="matrix-cell cell-diag">q3k3</div>
+            <div class="matrix-cell cell-zero">0</div>
+            <div class="matrix-cell cell-zero">0</div>
+            <div class="matrix-cell cell-zero">0</div>
+            <div class="matrix-cell cell-high">q4k1</div>
+            <div class="matrix-cell cell-low">q4k2</div>
+            <div class="matrix-cell cell-med">q4k3</div>
+            <div class="matrix-cell cell-diag">q4k4</div>
+            <div class="matrix-cell cell-zero">0</div>
+            <div class="matrix-cell cell-zero">0</div>
+            <div class="matrix-cell cell-med">q5k1</div>
+            <div class="matrix-cell cell-med">q5k2</div>
+            <div class="matrix-cell cell-low">q5k3</div>
+            <div class="matrix-cell cell-high">q5k4</div>
+            <div class="matrix-cell cell-diag">q5k5</div>
+            <div class="matrix-cell cell-zero">0</div>
+            <div class="matrix-cell cell-low">q6k1</div>
+            <div class="matrix-cell cell-high">q6k2</div>
+            <div class="matrix-cell cell-med">q6k3</div>
+            <div class="matrix-cell cell-low">q6k4</div>
+            <div class="matrix-cell cell-med">q6k5</div>
+            <div class="matrix-cell cell-diag">q6k6</div>
+        </div>
+        <div class="matrix-caption">Entries are query-key dot products. No distance decay -- any position can attend equally. Computed via outer product, full matrix at once.</div>
+    </div>
+</div>
+</div>
+
+<!-- Section 3: Complexity scaling chart -->
+<div class="section">
+<h2>Complexity Scaling: FLOPs vs Sequence Length</h2>
+<div class="chart-container">
+    <div class="chart-controls">
+        <label>State dim N:</label>
+        <input type="range" id="sliderN" min="4" max="128" value="16" step="4">
+        <span class="val" id="valN">16</span>
+        <label style="margin-left:16px;">Head dim d:</label>
+        <input type="range" id="sliderD" min="32" max="256" value="128" step="32">
+        <span class="val" id="valD">128</span>
+    </div>
+    <canvas id="chart" height="300"></canvas>
+    <div style="display:flex; gap:24px; margin-top:12px; flex-wrap:wrap;">
+        <div style="display:flex; align-items:center; gap:6px; font-size:12px;"><div style="width:24px; height:3px; background:#e94560;"></div> Softmax Attention O(L^2 d)</div>
+        <div style="display:flex; align-items:center; gap:6px; font-size:12px;"><div style="width:24px; height:3px; background:#a78bfa;"></div> Linear Attention O(L d^2)</div>
+        <div style="display:flex; align-items:center; gap:6px; font-size:12px;"><div style="width:24px; height:3px; background:#4ecdc4;"></div> Mamba SSM O(L N)</div>
+        <div style="display:flex; align-items:center; gap:6px; font-size:12px;"><div style="width:24px; height:3px; background:#ffd93d; border-top:2px dashed #ffd93d;"></div> Crossover: linear attn vs softmax</div>
+    </div>
+</div>
+</div>
+
+<!-- Section 4: Feature comparison -->
+<div class="section">
+<h2>Architecture Comparison</h2>
+<table class="cmp-table">
+<thead>
+<tr>
+    <th>Architecture</th>
+    <th>Training Cost</th>
+    <th>Inference / Step</th>
+    <th>Memory (Inf.)</th>
+    <th>Exact Retrieval</th>
+    <th>Content Routing</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+    <td class="arch-name arch-attn">Softmax Attention</td>
+    <td>O(L^2 d)</td>
+    <td>O(Ld) load KV</td>
+    <td>O(L) KV cache</td>
+    <td class="check">Yes</td>
+    <td class="check">Yes (softmax)</td>
+</tr>
+<tr>
+    <td class="arch-name arch-linear">Linear Attention</td>
+    <td>O(L d^2)</td>
+    <td>O(d^2)</td>
+    <td>O(d^2) fixed</td>
+    <td class="cross">Weak</td>
+    <td class="cross">No (smooth)</td>
+</tr>
+<tr>
+    <td class="arch-name arch-ssm">Classical SSM (S4)</td>
+    <td>O(L log L) FFT</td>
+    <td>O(N)</td>
+    <td>O(N) fixed</td>
+    <td class="cross">No</td>
+    <td class="cross">No (fixed params)</td>
+</tr>
+<tr>
+    <td class="arch-name arch-ssm">Mamba (Selective SSM)</td>
+    <td>O(LN) scan</td>
+    <td>O(N)</td>
+    <td>O(N) fixed</td>
+    <td class="partial">Weak</td>
+    <td class="check">Yes (selection)</td>
+</tr>
+<tr>
+    <td class="arch-name arch-ssm">Mamba-2 (SSD)</td>
+    <td>O(LN) or O(L^2)</td>
+    <td>O(N)</td>
+    <td>O(N) fixed</td>
+    <td class="partial">Weak</td>
+    <td class="check">Yes (selection)</td>
+</tr>
+<tr>
+    <td class="arch-name arch-hybrid">Jamba (1:7 Hybrid)</td>
+    <td>Mixed</td>
+    <td>Mixed</td>
+    <td>~O(L/8) KV</td>
+    <td class="check">Yes (attn layers)</td>
+    <td class="check">Yes</td>
+</tr>
+</tbody>
+</table>
+</div>
+</div>
+
+<script>
+const canvas = document.getElementById('chart');
+const ctx = canvas.getContext('2d');
+
+function drawChart() {
+    const N = parseInt(document.getElementById('sliderN').value);
+    const d = parseInt(document.getElementById('sliderD').value);
+    document.getElementById('valN').textContent = N;
+    document.getElementById('valD').textContent = d;
+
+    const dpr = window.devicePixelRatio || 1;
+    const rect = canvas.getBoundingClientRect();
+    canvas.width = rect.width * dpr;
+    canvas.height = rect.height * dpr;
+    ctx.scale(dpr, dpr);
+    const W = rect.width, H = rect.height;
+
+    ctx.fillStyle = '#0d1117';
+    ctx.fillRect(0, 0, W, H);
+
+    const pad = { l: 60, r: 20, t: 20, b: 40 };
+    const pw = W - pad.l - pad.r, ph = H - pad.t - pad.b;
+
+    // Axes
+    ctx.strokeStyle = '#333';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(pad.l, pad.t); ctx.lineTo(pad.l, pad.t + ph); ctx.lineTo(pad.l + pw, pad.t + ph);
+    ctx.stroke();
+
+    // Log-log scale
+    const Lmin = 64, Lmax = 131072;
+    const logLmin = Math.log10(Lmin), logLmax = Math.log10(Lmax);
+
+    function xPos(L) { return pad.l + (Math.log10(L) - logLmin) / (logLmax - logLmin) * pw; }
+
+    // Compute max FLOP for y-axis
+    const maxFlop = Lmax * Lmax * d;
+    const logFmin = Math.log10(Lmin * Math.min(N, d)), logFmax = Math.log10(maxFlop);
+    function yPos(f) { return pad.t + ph - (Math.log10(f) - logFmin) / (logFmax - logFmin) * ph; }
+
+    // X axis labels
+    ctx.fillStyle = '#888'; ctx.font = '11px monospace'; ctx.textAlign = 'center';
+    for (let exp = 6; exp <= 17; exp++) {
+        const L = Math.pow(2, exp);
+        if (L >= Lmin && L <= Lmax) {
+            const x = xPos(L);
+            ctx.fillText(L >= 1024 ? (L/1024) + 'K' : L, x, pad.t + ph + 16);
+            ctx.strokeStyle = '#1a1a2e'; ctx.beginPath(); ctx.moveTo(x, pad.t); ctx.lineTo(x, pad.t + ph); ctx.stroke();
+        }
+    }
+    ctx.fillText('Sequence Length L', pad.l + pw / 2, pad.t + ph + 34);
+
+    // Y axis label
+    ctx.save(); ctx.translate(14, pad.t + ph / 2); ctx.rotate(-Math.PI / 2);
+    ctx.fillStyle = '#888'; ctx.textAlign = 'center'; ctx.fillText('FLOPs (log scale)', 0, 0);
+    ctx.restore();
+
+    // Draw lines
+    function drawLine(computeFn, color, dashed) {
+        ctx.strokeStyle = color; ctx.lineWidth = 2;
+        if (dashed) ctx.setLineDash([6, 4]); else ctx.setLineDash([]);
+        ctx.beginPath();
+        let started = false;
+        for (let L = Lmin; L <= Lmax; L *= 1.1) {
+            const f = computeFn(L);
+            const x = xPos(L), y = yPos(f);
+            if (y < pad.t || y > pad.t + ph) { started = false; continue; }
+            if (!started) { ctx.moveTo(x, y); started = true; } else { ctx.lineTo(x, y); }
+        }
+        ctx.stroke();
+        ctx.setLineDash([]);
+    }
+
+    drawLine(L => L * L * d, '#e94560', false);         // softmax
+    drawLine(L => L * d * d, '#a78bfa', false);          // linear attn
+    drawLine(L => L * N, '#4ecdc4', false);              // mamba
+
+    // Crossover point
+    const crossL = d * d / d;  // L^2*d = L*d^2 => L = d
+    if (crossL >= Lmin && crossL <= Lmax) {
+        const cx = xPos(d), cy = yPos(d * d * d);
+        ctx.fillStyle = '#ffd93d';
+        ctx.beginPath(); ctx.arc(cx, cy, 5, 0, Math.PI * 2); ctx.fill();
+        ctx.fillStyle = '#ffd93d'; ctx.font = '11px sans-serif'; ctx.textAlign = 'left';
+        ctx.fillText(`L=${d}: crossover`, cx + 8, cy - 4);
+    }
+}
+
+document.getElementById('sliderN').addEventListener('input', drawChart);
+document.getElementById('sliderD').addEventListener('input', drawChart);
+window.addEventListener('resize', drawChart);
+drawChart();
+</script>
+</body>
+</html>

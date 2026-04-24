@@ -1,0 +1,195 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>MoE Expert Layout Comparison</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { background: #0f0f1a; color: #e0e0e0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; padding: 24px; }
+h1 { font-size: 20px; margin-bottom: 4px; color: #fff; }
+.subtitle { color: #888; font-size: 13px; margin-bottom: 28px; }
+.architectures { display: flex; gap: 24px; flex-wrap: wrap; justify-content: center; }
+.arch-card { background: #1a1a2e; border-radius: 12px; padding: 20px; width: 320px; }
+.arch-name { font-size: 16px; font-weight: bold; margin-bottom: 4px; }
+.arch-meta { font-size: 11px; color: #888; margin-bottom: 16px; }
+.arch-meta span { color: #4ecdc4; }
+.token-row { display: flex; align-items: center; gap: 8px; margin-bottom: 12px; }
+.token-label { font-size: 11px; color: #aaa; width: 40px; text-align: right; flex-shrink: 0; }
+.expert-grid { display: flex; gap: 2px; flex-wrap: wrap; flex: 1; }
+.expert-cell { width: 16px; height: 16px; border-radius: 2px; transition: all 0.3s; cursor: pointer; }
+.expert-cell.inactive { background: #16213e; }
+.expert-cell.active { background: #e94560; }
+.expert-cell.shared { background: #ffd93d; }
+.expert-cell:hover { transform: scale(1.3); z-index: 10; }
+.stats { margin-top: 16px; padding-top: 12px; border-top: 1px solid #333; }
+.stat-row { display: flex; justify-content: space-between; font-size: 12px; margin-bottom: 4px; }
+.stat-label { color: #888; }
+.stat-value { color: #4ecdc4; font-weight: bold; }
+.legend { margin-top: 28px; display: flex; gap: 20px; justify-content: center; }
+.legend-item { display: flex; align-items: center; gap: 6px; font-size: 12px; color: #aaa; }
+.legend-swatch { width: 14px; height: 14px; border-radius: 3px; }
+.controls { margin-top: 20px; display: flex; gap: 12px; justify-content: center; }
+.btn { background: #0f3460; border: 1px solid #4ecdc4; color: #4ecdc4; padding: 6px 16px; border-radius: 6px; cursor: pointer; font-size: 12px; }
+.btn:hover { background: #4ecdc4; color: #1a1a2e; }
+.combinations { margin-top: 28px; background: #1a1a2e; border-radius: 12px; padding: 20px; max-width: 1008px; margin-left: auto; margin-right: auto; }
+.combinations h3 { font-size: 14px; color: #ffd93d; margin-bottom: 12px; }
+.combo-bar-container { margin-bottom: 10px; }
+.combo-label { font-size: 12px; color: #aaa; margin-bottom: 4px; display: flex; justify-content: space-between; }
+.combo-bar-bg { background: #16213e; border-radius: 4px; height: 24px; position: relative; overflow: hidden; }
+.combo-bar { height: 100%; border-radius: 4px; display: flex; align-items: center; padding-left: 8px; font-size: 11px; font-weight: bold; color: #1a1a2e; transition: width 0.5s ease; }
+.detail-box { margin-top: 28px; background: #1a1a2e; border-radius: 12px; padding: 20px; max-width: 1008px; margin-left: auto; margin-right: auto; }
+.detail-box h3 { font-size: 14px; color: #4ecdc4; margin-bottom: 8px; }
+.detail-box p { font-size: 13px; color: #bbb; line-height: 1.6; margin-bottom: 6px; }
+.detail-box code { background: #0f3460; padding: 2px 6px; border-radius: 3px; font-size: 12px; color: #ffd93d; }
+</style>
+</head>
+<body>
+
+<h1>MoE Expert Layout Comparison</h1>
+<p class="subtitle">How different architectures distribute experts and route tokens. Click "Re-route" to simulate new token assignments.</p>
+
+<div class="architectures" id="arch-container"></div>
+
+<div class="controls">
+  <button class="btn" id="btn-reroute">Re-route Tokens</button>
+</div>
+
+<div class="legend">
+  <div class="legend-item"><div class="legend-swatch" style="background:#e94560;"></div>Active (routed)</div>
+  <div class="legend-item"><div class="legend-swatch" style="background:#ffd93d;"></div>Shared (always active)</div>
+  <div class="legend-item"><div class="legend-swatch" style="background:#16213e; border:1px solid #333;"></div>Inactive</div>
+</div>
+
+<div class="combinations">
+  <h3>Expert Combinations per Layer</h3>
+  <div id="combo-bars"></div>
+</div>
+
+<div class="detail-box">
+  <h3>Reading the Visualization</h3>
+  <p>Each card shows one MoE architecture. The grid represents all experts in a single layer, and each row shows one token's routing pattern (which experts are activated for that token). Yellow cells are <strong>shared experts</strong> that process every token regardless of routing.</p>
+  <p>The combination bar chart below shows <code>C(N, k)</code> for each architecture -- the number of distinct expert teams the router can assemble. Notice the exponential jump from Mixtral (28 combinations) to DBRX (1,820) to DeepSeek-V3 (trillions). More combinations means finer-grained specialization.</p>
+</div>
+
+<script>
+const architectures = [
+  { name: 'Mixtral 8x7B', color: '#e94560', experts: 8, active: 2, shared: 0, model: 'mixtral' },
+  { name: 'DBRX', color: '#4ecdc4', experts: 16, active: 4, shared: 0, model: 'dbrx' },
+  { name: 'Llama 4 Maverick', color: '#55efc4', experts: 16, active: 1, shared: 1, model: 'llama4', note: '128 experts shown as 16 for visual clarity' },
+  { name: 'DeepSeek-V3', color: '#ff6b81', experts: 16, active: 2, shared: 1, model: 'dsv3', note: '256 experts shown as 16 for visual clarity' },
+];
+
+const realCombinations = [
+  { name: 'Mixtral 8x7B', n: 8, k: 2, combos: 28, color: '#e94560' },
+  { name: 'DBRX', n: 16, k: 4, combos: 1820, color: '#4ecdc4' },
+  { name: 'Llama 4 Scout', n: 16, k: 1, combos: 16, color: '#55efc4' },
+  { name: 'Llama 4 Maverick', n: 128, k: 1, combos: 128, color: '#55efc4' },
+  { name: 'Qwen3-235B', n: 128, k: 8, combos: 2.3e10, color: '#a29bfe' },
+  { name: 'DeepSeek-V2', n: 160, k: 6, combos: 2.1e11, color: '#ffd93d' },
+  { name: 'DeepSeek-V3', n: 256, k: 8, combos: 4.4e13, color: '#ff6b81' },
+];
+
+function pickRandom(n, k, shared) {
+  const routed = [];
+  const available = [];
+  for (let i = shared; i < n; i++) available.push(i);
+  for (let j = 0; j < k && available.length > 0; j++) {
+    const idx = Math.floor(Math.random() * available.length);
+    routed.push(available[idx]);
+    available.splice(idx, 1);
+  }
+  return routed;
+}
+
+function renderArchitectures() {
+  const container = document.getElementById('arch-container');
+  container.innerHTML = '';
+
+  architectures.forEach(arch => {
+    const card = document.createElement('div');
+    card.className = 'arch-card';
+
+    let html = `<div class="arch-name" style="color:${arch.color};">${arch.name}</div>`;
+    html += `<div class="arch-meta">`;
+    html += `<span>${arch.experts}</span> experts shown, top-<span>${arch.active}</span>`;
+    if (arch.shared > 0) html += ` + <span>${arch.shared}</span> shared`;
+    if (arch.note) html += `<br>${arch.note}`;
+    html += `</div>`;
+
+    const numTokens = 5;
+    for (let t = 0; t < numTokens; t++) {
+      const routed = pickRandom(arch.experts, arch.active, arch.shared);
+      html += `<div class="token-row">`;
+      html += `<div class="token-label">tok ${t+1}</div>`;
+      html += `<div class="expert-grid">`;
+      for (let e = 0; e < arch.experts; e++) {
+        let cls = 'expert-cell inactive';
+        if (e < arch.shared) cls = 'expert-cell shared';
+        else if (routed.includes(e)) cls = 'expert-cell active';
+        html += `<div class="${cls}" title="Expert ${e+1}"></div>`;
+      }
+      html += `</div></div>`;
+    }
+
+    // Stats
+    const combos = comb(arch.experts - arch.shared, arch.active);
+    const activePct = ((arch.active + arch.shared) / arch.experts * 100).toFixed(1);
+    html += `<div class="stats">`;
+    html += `<div class="stat-row"><span class="stat-label">Active per token</span><span class="stat-value">${arch.active + arch.shared} / ${arch.experts}</span></div>`;
+    html += `<div class="stat-row"><span class="stat-label">Activation ratio</span><span class="stat-value">${activePct}%</span></div>`;
+    html += `<div class="stat-row"><span class="stat-label">Combinations</span><span class="stat-value">${formatNum(combos)}</span></div>`;
+    html += `</div>`;
+
+    card.innerHTML = html;
+    container.appendChild(card);
+  });
+}
+
+function comb(n, k) {
+  if (k > n) return 0;
+  if (k === 0 || k === n) return 1;
+  let result = 1;
+  for (let i = 0; i < k; i++) {
+    result = result * (n - i) / (i + 1);
+  }
+  return Math.round(result);
+}
+
+function formatNum(n) {
+  if (n >= 1e12) return (n / 1e12).toFixed(1) + 'T';
+  if (n >= 1e9) return (n / 1e9).toFixed(1) + 'B';
+  if (n >= 1e6) return (n / 1e6).toFixed(1) + 'M';
+  if (n >= 1e3) return n.toLocaleString();
+  return n.toString();
+}
+
+function renderComboBars() {
+  const container = document.getElementById('combo-bars');
+  container.innerHTML = '';
+  const maxLog = Math.log10(4.4e13);
+
+  realCombinations.forEach(item => {
+    const logVal = Math.log10(item.combos);
+    const pct = (logVal / maxLog * 100).toFixed(1);
+    const div = document.createElement('div');
+    div.className = 'combo-bar-container';
+    div.innerHTML = `
+      <div class="combo-label">
+        <span>${item.name} (${item.n} experts, top-${item.k})</span>
+        <span style="color:${item.color}; font-weight:bold;">${formatNum(item.combos)}</span>
+      </div>
+      <div class="combo-bar-bg">
+        <div class="combo-bar" style="width:${pct}%; background:${item.color};">${formatNum(item.combos)}</div>
+      </div>`;
+    container.appendChild(div);
+  });
+}
+
+document.getElementById('btn-reroute').addEventListener('click', renderArchitectures);
+
+renderArchitectures();
+renderComboBars();
+</script>
+</body>
+</html>

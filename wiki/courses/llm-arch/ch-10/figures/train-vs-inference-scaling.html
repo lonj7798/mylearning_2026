@@ -1,0 +1,309 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Training vs. Inference Compute Tradeoff</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { background: #1a1a2e; color: #e0e0e0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; padding: 24px; }
+h1 { font-size: 20px; margin-bottom: 8px; color: #e94560; }
+.subtitle { font-size: 13px; color: #888; margin-bottom: 24px; line-height: 1.5; }
+.main { display: flex; gap: 24px; flex-wrap: wrap; }
+.left { flex: 1; min-width: 380px; }
+.right { flex: 0 0 300px; }
+canvas { width: 100%; height: 400px; background: #16213e; border-radius: 12px; }
+.controls { margin-top: 16px; }
+.slider-group { margin-bottom: 16px; }
+.slider-label { display: flex; justify-content: space-between; font-size: 13px; margin-bottom: 6px; }
+.slider-label span:first-child { color: #4ecdc4; font-weight: bold; }
+.slider-label span:last-child { color: #ffd93d; font-family: monospace; }
+input[type="range"] {
+  width: 100%; height: 6px; -webkit-appearance: none; appearance: none;
+  background: #0f3460; border-radius: 3px; outline: none;
+}
+input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none; appearance: none; width: 16px; height: 16px;
+  background: #e94560; border-radius: 50%; cursor: pointer;
+}
+.info-box { background: #16213e; border-radius: 8px; padding: 16px; margin-bottom: 16px; font-size: 12px; line-height: 1.7; }
+.info-box h3 { color: #e94560; font-size: 14px; margin-bottom: 8px; }
+.label { color: #888; }
+.val { color: #ffd93d; font-weight: bold; }
+.val2 { color: #4ecdc4; font-weight: bold; }
+.val3 { color: #e94560; font-weight: bold; }
+.strategy { padding: 8px 12px; border-radius: 6px; margin-bottom: 8px; font-size: 12px; cursor: pointer; border: 2px solid transparent; }
+.strategy.active { border-color: #e94560; }
+.strategy:hover { background: #0f3460; }
+.strategy-name { font-weight: bold; margin-bottom: 4px; }
+</style>
+</head>
+<body>
+<h1>Training vs. Inference Compute Tradeoff</h1>
+<p class="subtitle">
+  Explore how different strategies allocate a fixed total compute budget between training (one-time) and inference (per-query).
+  The optimal split depends on expected query volume and problem difficulty.
+</p>
+
+<div class="main">
+  <div class="left">
+    <canvas id="chart"></canvas>
+    <div class="controls">
+      <div class="slider-group">
+        <div class="slider-label">
+          <span>Total Compute Budget (FLOPs)</span>
+          <span id="budget-val">1e23</span>
+        </div>
+        <input type="range" id="budget-slider" min="20" max="25" step="0.25" value="23">
+      </div>
+      <div class="slider-group">
+        <div class="slider-label">
+          <span>Expected Queries (lifetime)</span>
+          <span id="queries-val">1M</span>
+        </div>
+        <input type="range" id="queries-slider" min="3" max="9" step="0.5" value="6">
+      </div>
+      <div class="slider-group">
+        <div class="slider-label">
+          <span>Problem Difficulty</span>
+          <span id="diff-val">Medium</span>
+        </div>
+        <input type="range" id="diff-slider" min="1" max="3" step="1" value="2">
+      </div>
+    </div>
+  </div>
+
+  <div class="right">
+    <div class="info-box">
+      <h3>Strategies</h3>
+      <div class="strategy active" id="strat-balanced" onclick="selectStrategy('balanced')">
+        <div class="strategy-name" style="color:#4ecdc4;">Balanced (Chinchilla)</div>
+        <div style="color:#888;">50% train / 50% larger model, standard inference</div>
+      </div>
+      <div class="strategy" id="strat-overtrain" onclick="selectStrategy('overtrain')">
+        <div class="strategy-name" style="color:#ffd93d;">Overtrain (LLaMA)</div>
+        <div style="color:#888;">70% train / smaller model, more tokens</div>
+      </div>
+      <div class="strategy" id="strat-inference" onclick="selectStrategy('inference')">
+        <div class="strategy-name" style="color:#e94560;">Inference-Heavy (o1/R1)</div>
+        <div style="color:#888;">40% train / 60% inference-time compute</div>
+      </div>
+    </div>
+
+    <div class="info-box">
+      <h3>Current Allocation</h3>
+      <div><span class="label">Training compute: </span><span class="val3" id="info-train">--</span></div>
+      <div><span class="label">Model size: </span><span class="val2" id="info-size">--</span></div>
+      <div><span class="label">Training tokens: </span><span class="val" id="info-tokens">--</span></div>
+      <div><span class="label">Inference per query: </span><span class="val2" id="info-infer-query">--</span></div>
+      <div><span class="label">Total inference: </span><span class="val3" id="info-infer-total">--</span></div>
+      <div style="border-top:1px solid #333; margin-top:8px; padding-top:8px;">
+        <div><span class="label">Estimated accuracy: </span><span class="val" id="info-acc">--</span></div>
+      </div>
+    </div>
+
+    <div class="info-box">
+      <h3>Key Insight</h3>
+      <p style="color:#888; font-size:11px; line-height:1.6;">
+        For high query volumes, smaller models with inference-time scaling (best-of-N, chain-of-thought)
+        can outperform larger models on easy/medium problems. But for hard problems requiring
+        fundamental capability, no amount of inference compute substitutes for training-time investment.
+      </p>
+    </div>
+  </div>
+</div>
+
+<script>
+const canvas = document.getElementById('chart');
+const ctx = canvas.getContext('2d');
+
+const budgetSlider = document.getElementById('budget-slider');
+const queriesSlider = document.getElementById('queries-slider');
+const diffSlider = document.getElementById('diff-slider');
+
+let currentStrategy = 'balanced';
+
+function selectStrategy(s) {
+  currentStrategy = s;
+  document.querySelectorAll('.strategy').forEach(el => el.classList.remove('active'));
+  document.getElementById('strat-' + s).classList.add('active');
+  draw();
+}
+
+// Strategy definitions: fraction of budget to training, inference multiplier
+const strategies = {
+  balanced: { trainFrac: 0.85, inferMult: 1, label: 'Chinchilla Balanced' },
+  overtrain: { trainFrac: 0.95, inferMult: 0.5, label: 'LLaMA Overtrain' },
+  inference: { trainFrac: 0.60, inferMult: 8, label: 'Inference-Heavy' },
+};
+
+function draw() {
+  const dpr = window.devicePixelRatio || 1;
+  const W = canvas.clientWidth;
+  const H = canvas.clientHeight;
+  canvas.width = W * dpr;
+  canvas.height = H * dpr;
+  ctx.scale(dpr, dpr);
+  ctx.clearRect(0, 0, W, H);
+
+  const PAD = { top: 30, right: 30, bottom: 50, left: 60 };
+  const plotW = W - PAD.left - PAD.right;
+  const plotH = H - PAD.top - PAD.bottom;
+
+  const logBudget = parseFloat(budgetSlider.value);
+  const totalBudget = Math.pow(10, logBudget);
+  const logQueries = parseFloat(queriesSlider.value);
+  const numQueries = Math.pow(10, logQueries);
+  const difficulty = parseInt(diffSlider.value);
+
+  document.getElementById('budget-val').textContent = '1e' + logBudget.toFixed(1);
+  const qStr = numQueries >= 1e9 ? (numQueries / 1e9).toFixed(0) + 'B' :
+               numQueries >= 1e6 ? (numQueries / 1e6).toFixed(0) + 'M' :
+               numQueries >= 1e3 ? (numQueries / 1e3).toFixed(0) + 'K' : numQueries.toFixed(0);
+  document.getElementById('queries-val').textContent = qStr;
+  document.getElementById('diff-val').textContent = ['', 'Easy', 'Medium', 'Hard'][difficulty];
+
+  // Draw bar chart: for each strategy, show train vs inference allocation and resulting accuracy
+  const barWidth = plotW / 5;
+  const stratNames = ['balanced', 'overtrain', 'inference'];
+  const colors = { balanced: '#4ecdc4', overtrain: '#ffd93d', inference: '#e94560' };
+
+  // X axis
+  ctx.strokeStyle = '#333';
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(PAD.left, PAD.top + plotH);
+  ctx.lineTo(PAD.left + plotW, PAD.top + plotH);
+  ctx.stroke();
+
+  // Y axis: percentage allocation 0-100
+  ctx.fillStyle = '#888';
+  ctx.font = '11px -apple-system, sans-serif';
+  ctx.textAlign = 'right';
+  for (let p = 0; p <= 100; p += 25) {
+    const y = PAD.top + plotH - (p / 100) * plotH;
+    ctx.fillText(p + '%', PAD.left - 8, y + 4);
+    ctx.strokeStyle = '#2a2a4a';
+    ctx.lineWidth = 0.5;
+    ctx.beginPath(); ctx.moveTo(PAD.left, y); ctx.lineTo(PAD.left + plotW, y); ctx.stroke();
+  }
+
+  ctx.save();
+  ctx.translate(14, PAD.top + plotH / 2);
+  ctx.rotate(-Math.PI / 2);
+  ctx.textAlign = 'center';
+  ctx.fillStyle = '#888';
+  ctx.fillText('Budget Allocation', 0, 0);
+  ctx.restore();
+
+  stratNames.forEach((name, i) => {
+    const strat = strategies[name];
+    const x = PAD.left + (i + 0.5) * (plotW / 3) - barWidth / 2;
+
+    const trainH = strat.trainFrac * plotH;
+    const inferH = (1 - strat.trainFrac) * plotH;
+
+    // Training bar
+    ctx.fillStyle = colors[name];
+    ctx.globalAlpha = 0.8;
+    ctx.fillRect(x, PAD.top + plotH - trainH - inferH, barWidth * 0.45, trainH);
+
+    // Inference bar
+    ctx.fillStyle = colors[name];
+    ctx.globalAlpha = 0.4;
+    ctx.fillRect(x + barWidth * 0.5, PAD.top + plotH - inferH, barWidth * 0.45, inferH);
+
+    ctx.globalAlpha = 1;
+
+    // Labels
+    ctx.fillStyle = colors[name];
+    ctx.font = 'bold 12px -apple-system, sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText(strat.label.split(' ')[0], x + barWidth / 2, PAD.top + plotH + 18);
+    ctx.fillStyle = '#888';
+    ctx.font = '10px -apple-system, sans-serif';
+    ctx.fillText(strat.label.split(' ').slice(1).join(' '), x + barWidth / 2, PAD.top + plotH + 32);
+
+    // Percentages
+    ctx.fillStyle = '#fff';
+    ctx.font = 'bold 11px -apple-system, sans-serif';
+    ctx.fillText((strat.trainFrac * 100).toFixed(0) + '%', x + barWidth * 0.22, PAD.top + plotH - trainH / 2 - inferH + 4);
+    if (inferH > 15) {
+      ctx.fillText(((1 - strat.trainFrac) * 100).toFixed(0) + '%', x + barWidth * 0.72, PAD.top + plotH - inferH / 2 + 4);
+    }
+
+    // Highlight current
+    if (name === currentStrategy) {
+      ctx.strokeStyle = '#fff';
+      ctx.lineWidth = 2;
+      ctx.strokeRect(x - 4, PAD.top + plotH - trainH - inferH - 4, barWidth + 8, trainH + inferH + 8);
+    }
+  });
+
+  // Legend
+  ctx.font = '11px -apple-system, sans-serif';
+  ctx.textAlign = 'left';
+  ctx.globalAlpha = 0.8;
+  ctx.fillStyle = '#4ecdc4';
+  ctx.fillRect(PAD.left, PAD.top - 20, 12, 12);
+  ctx.fillStyle = '#e0e0e0';
+  ctx.fillText('Training', PAD.left + 16, PAD.top - 10);
+
+  ctx.globalAlpha = 0.4;
+  ctx.fillStyle = '#4ecdc4';
+  ctx.fillRect(PAD.left + 90, PAD.top - 20, 12, 12);
+  ctx.globalAlpha = 1;
+  ctx.fillStyle = '#e0e0e0';
+  ctx.fillText('Inference', PAD.left + 106, PAD.top - 10);
+
+  // Update info panel
+  const strat = strategies[currentStrategy];
+  const trainCompute = totalBudget * strat.trainFrac;
+  const inferTotal = totalBudget * (1 - strat.trainFrac);
+  const inferPerQuery = inferTotal / numQueries;
+
+  // Approximate model size from training compute (Chinchilla: N ~ 0.00364 * C^0.5)
+  const modelN = 0.00364 * Math.pow(trainCompute, 0.5);
+  const trainTokens = trainCompute / (6 * modelN * 1e9 * 1e9);
+
+  function fmt(x) {
+    if (x >= 1e24) return (x / 1e24).toFixed(1) + 'e24';
+    if (x >= 1e21) return (x / 1e21).toFixed(1) + 'e21';
+    if (x >= 1e18) return (x / 1e18).toFixed(1) + 'e18';
+    if (x >= 1e15) return (x / 1e15).toFixed(1) + 'e15';
+    if (x >= 1e12) return (x / 1e12).toFixed(1) + 'e12';
+    return x.toExponential(1);
+  }
+  function fmtP(b) {
+    if (b >= 1000) return (b / 1000).toFixed(1) + 'T';
+    if (b >= 1) return b.toFixed(1) + 'B';
+    return (b * 1000).toFixed(0) + 'M';
+  }
+  function fmtT(n) {
+    if (n >= 1e12) return (n / 1e12).toFixed(1) + 'T';
+    if (n >= 1e9) return (n / 1e9).toFixed(0) + 'B';
+    return (n / 1e6).toFixed(0) + 'M';
+  }
+
+  document.getElementById('info-train').textContent = fmt(trainCompute) + ' FLOPs';
+  document.getElementById('info-size').textContent = fmtP(modelN);
+  document.getElementById('info-tokens').textContent = fmtT(trainTokens);
+  document.getElementById('info-infer-query').textContent = fmt(inferPerQuery) + ' FLOPs';
+  document.getElementById('info-infer-total').textContent = fmt(inferTotal) + ' FLOPs';
+
+  // Rough accuracy estimate
+  const baseAcc = Math.min(0.95, 0.3 + 0.12 * Math.log10(trainCompute / 1e18));
+  const diffPenalty = [0, 0, 0.1, 0.3][difficulty];
+  const inferBonus = Math.min(0.2, 0.05 * Math.log10(Math.max(1, strat.inferMult))) * (difficulty < 3 ? 1 : 0.2);
+  const acc = Math.max(0, Math.min(1, baseAcc - diffPenalty + inferBonus));
+  document.getElementById('info-acc').textContent = (acc * 100).toFixed(1) + '%';
+}
+
+budgetSlider.addEventListener('input', draw);
+queriesSlider.addEventListener('input', draw);
+diffSlider.addEventListener('input', draw);
+window.addEventListener('resize', draw);
+draw();
+</script>
+</body>
+</html>

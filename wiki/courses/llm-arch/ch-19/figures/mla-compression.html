@@ -1,0 +1,340 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>MLA: Multi-head Latent Attention Compression Pipeline</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    background: #0d1117; color: #e0e0e0; font-family: 'Segoe UI', system-ui, sans-serif;
+    display: flex; flex-direction: column; align-items: center; padding: 32px 16px; min-height: 100vh;
+  }
+  h1 { font-size: 22px; margin-bottom: 8px; color: #f0f0f0; text-align: center; }
+  .subtitle { font-size: 13px; color: #888; margin-bottom: 32px; text-align: center; max-width: 700px; line-height: 1.5; }
+  .diagram { display: flex; flex-direction: column; align-items: center; gap: 0; width: 100%; max-width: 800px; }
+  .stage {
+    display: flex; align-items: center; gap: 20px; width: 100%; padding: 16px 0;
+    position: relative;
+  }
+  .stage-label {
+    width: 120px; text-align: right; font-size: 12px; color: #888;
+    font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px; flex-shrink: 0;
+  }
+  .stage-content { flex: 1; display: flex; justify-content: center; align-items: center; gap: 12px; flex-wrap: wrap; }
+  .box {
+    padding: 14px 24px; border-radius: 10px; font-size: 13px; font-weight: 600;
+    text-align: center; transition: all 0.3s ease; cursor: default; position: relative;
+    line-height: 1.4;
+  }
+  .box:hover { transform: translateY(-2px); box-shadow: 0 4px 20px rgba(0,0,0,0.4); }
+  .box-input { background: #161b22; border: 2px solid #30363d; color: #e0e0e0; min-width: 280px; }
+  .box-down { background: #1a1a3e; border: 2px solid #5b5bd6; color: #a0a0ff; min-width: 200px; }
+  .box-latent {
+    background: linear-gradient(135deg, #e94560 0%, #c23152 100%);
+    border: 3px solid #ff6b81; color: #fff; min-width: 260px; font-size: 15px;
+    box-shadow: 0 0 30px rgba(233,69,96,0.3);
+  }
+  .box-rope {
+    background: linear-gradient(135deg, #f0a500 0%, #d4940a 100%);
+    border: 3px solid #ffd93d; color: #1a1a2e; min-width: 180px;
+    box-shadow: 0 0 20px rgba(240,165,0,0.25);
+  }
+  .box-up { background: #1a1a3e; border: 2px solid #5b5bd6; color: #a0a0ff; min-width: 160px; }
+  .box-kv { min-width: 140px; padding: 12px 20px; }
+  .box-k { background: #0f3460; border: 2px solid #4ecdc4; color: #4ecdc4; }
+  .box-v { background: #0f3460; border: 2px solid #ffd93d; color: #ffd93d; }
+  .box-attn {
+    background: linear-gradient(135deg, #1a3a5c 0%, #0f3460 100%);
+    border: 2px solid #4ecdc4; color: #4ecdc4; min-width: 300px;
+  }
+
+  .arrow-down {
+    display: flex; flex-direction: column; align-items: center; gap: 2px;
+    padding: 4px 0;
+  }
+  .arrow-down .shaft { width: 3px; height: 24px; background: #30363d; border-radius: 2px; }
+  .arrow-down .head { width: 0; height: 0; border-left: 8px solid transparent; border-right: 8px solid transparent; border-top: 10px solid #30363d; }
+  .arrow-down.highlight .shaft { background: #e94560; }
+  .arrow-down.highlight .head { border-top-color: #e94560; }
+  .arrow-down.gold .shaft { background: #f0a500; }
+  .arrow-down.gold .head { border-top-color: #f0a500; }
+
+  .branch { display: flex; gap: 40px; align-items: flex-start; justify-content: center; width: 100%; }
+  .branch-arm { display: flex; flex-direction: column; align-items: center; gap: 8px; }
+
+  .cache-badge {
+    display: inline-block; background: #e94560; color: #fff; font-size: 10px;
+    font-weight: 700; padding: 3px 8px; border-radius: 4px; text-transform: uppercase;
+    letter-spacing: 0.5px; margin-top: 4px;
+  }
+  .cache-badge.gold { background: #f0a500; color: #1a1a2e; }
+
+  .dim-tag { font-size: 11px; color: #888; font-weight: 400; display: block; margin-top: 4px; }
+
+  .comparison {
+    margin-top: 40px; width: 100%; max-width: 700px;
+    background: #161b22; border-radius: 12px; padding: 24px; border: 1px solid #30363d;
+  }
+  .comparison h2 { font-size: 16px; color: #f0f0f0; margin-bottom: 16px; }
+  .bar-container { margin: 12px 0; }
+  .bar-label {
+    display: flex; justify-content: space-between; align-items: baseline;
+    font-size: 13px; margin-bottom: 6px;
+  }
+  .bar-label .name { color: #e0e0e0; font-weight: 600; }
+  .bar-label .value { color: #888; font-size: 12px; }
+  .bar-track { height: 28px; background: #21262d; border-radius: 6px; overflow: hidden; position: relative; }
+  .bar-fill {
+    height: 100%; border-radius: 6px; display: flex; align-items: center;
+    padding-left: 10px; font-size: 11px; font-weight: 700; color: #fff;
+    transition: width 1s ease-out;
+  }
+  .bar-fill.mha { background: linear-gradient(90deg, #e94560, #c23152); }
+  .bar-fill.gqa { background: linear-gradient(90deg, #4ecdc4, #36b5ad); }
+  .bar-fill.mqa { background: linear-gradient(90deg, #ffd93d, #e6c435); color: #1a1a2e; }
+  .bar-fill.mla { background: linear-gradient(90deg, #5b5bd6, #4747b3); }
+
+  .note {
+    margin-top: 24px; padding: 16px; background: #1a1a2e; border-radius: 8px;
+    border-left: 3px solid #5b5bd6; font-size: 12px; color: #aaa; line-height: 1.6;
+  }
+
+  .slider-section {
+    margin-top: 32px; width: 100%; max-width: 700px;
+    background: #161b22; border-radius: 12px; padding: 24px; border: 1px solid #30363d;
+  }
+  .slider-section h2 { font-size: 16px; color: #f0f0f0; margin-bottom: 4px; }
+  .slider-section .desc { font-size: 12px; color: #888; margin-bottom: 16px; }
+  .slider-row { display: flex; align-items: center; gap: 16px; margin: 12px 0; }
+  .slider-row label { font-size: 13px; color: #bbb; width: 160px; flex-shrink: 0; }
+  .slider-row input[type="range"] { flex: 1; accent-color: #5b5bd6; }
+  .slider-row .val { font-size: 13px; color: #5b5bd6; font-weight: 700; width: 60px; text-align: right; }
+  .result-box {
+    margin-top: 16px; padding: 16px; background: #1a1a2e; border-radius: 8px;
+    display: flex; justify-content: space-around; text-align: center;
+  }
+  .result-item .label { font-size: 11px; color: #888; margin-bottom: 4px; }
+  .result-item .num { font-size: 22px; font-weight: 700; color: #e94560; }
+  .result-item .unit { font-size: 11px; color: #888; }
+</style>
+</head>
+<body>
+<h1>Multi-head Latent Attention (MLA) Compression Pipeline</h1>
+<p class="subtitle">
+  MLA compresses keys and values into a shared low-rank latent vector, reducing KV cache by 93.3%.
+  The latent plus a small decoupled RoPE component is all that gets cached per token per layer.
+</p>
+
+<div class="diagram">
+  <!-- Input hidden state -->
+  <div class="stage">
+    <div class="stage-label">Input</div>
+    <div class="stage-content">
+      <div class="box box-input">
+        x<sub>t</sub> &mdash; hidden state
+        <span class="dim-tag">d<sub>model</sub> = 7,168</span>
+      </div>
+    </div>
+  </div>
+
+  <div class="arrow-down highlight"></div>
+
+  <!-- Down projection -->
+  <div class="stage">
+    <div class="stage-label">Down-project</div>
+    <div class="stage-content">
+      <div class="box box-down">
+        W<sub>DKV</sub> : (512 &times; 7168)
+        <span class="dim-tag">14:1 compression ratio</span>
+      </div>
+    </div>
+  </div>
+
+  <div class="arrow-down highlight"></div>
+
+  <!-- Cached latent + RoPE -->
+  <div class="stage">
+    <div class="stage-label">Cached</div>
+    <div class="stage-content">
+      <div style="display:flex; flex-direction:column; align-items:center; gap:8px;">
+        <div class="box box-latent">
+          c<sub>t</sub> &mdash; KV latent
+          <span class="dim-tag" style="color:#ffb3c1;">d<sub>c</sub> = 512 dims</span>
+          <div><span class="cache-badge">CACHED</span></div>
+        </div>
+        <div class="box box-rope">
+          k<sub>t</sub><sup>R</sup> &mdash; RoPE key
+          <span class="dim-tag" style="color:#4a3800;">d<sub>h</sub><sup>R</sup> = 64 dims</span>
+          <div><span class="cache-badge gold">CACHED</span></div>
+        </div>
+        <div style="font-size:12px; color:#888; margin-top:4px;">
+          Total cached: <strong style="color:#e0e0e0;">576 dims</strong> per token per layer
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="arrow-down"></div>
+
+  <!-- Up projection branch -->
+  <div class="stage">
+    <div class="stage-label">Up-project</div>
+    <div class="stage-content">
+      <div class="branch">
+        <div class="branch-arm">
+          <div class="box box-up">
+            W<sub>UK</sub><sup>(h)</sup>
+            <span class="dim-tag">(128 &times; 512) per head</span>
+          </div>
+          <div class="arrow-down"></div>
+          <div class="box box-kv box-k">
+            K heads
+            <span class="dim-tag">128 heads &times; 128 dims</span>
+          </div>
+        </div>
+        <div class="branch-arm">
+          <div class="box box-up">
+            W<sub>UV</sub><sup>(h)</sup>
+            <span class="dim-tag">(128 &times; 512) per head</span>
+          </div>
+          <div class="arrow-down"></div>
+          <div class="box box-kv box-v">
+            V heads
+            <span class="dim-tag">128 heads &times; 128 dims</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="arrow-down"></div>
+
+  <!-- Attention -->
+  <div class="stage">
+    <div class="stage-label">Attend</div>
+    <div class="stage-content">
+      <div class="box box-attn">
+        Standard multi-head attention (Q &middot; K<sup>T</sup> / &radic;d<sub>k</sub>, softmax, &middot; V)
+        <span class="dim-tag">RoPE keys = reconstructed K + k<sub>t</sub><sup>R</sup></span>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Comparison bars -->
+<div class="comparison">
+  <h2>KV Cache Size per Token per Layer (dims)</h2>
+  <div class="bar-container">
+    <div class="bar-label"><span class="name">MHA (128 KV heads)</span><span class="value">32,768 dims</span></div>
+    <div class="bar-track"><div class="bar-fill mha" style="width:100%;">32,768</div></div>
+  </div>
+  <div class="bar-container">
+    <div class="bar-label"><span class="name">GQA-8 (8 groups)</span><span class="value">2,048 dims</span></div>
+    <div class="bar-track"><div class="bar-fill gqa" style="width:6.25%;">2,048</div></div>
+  </div>
+  <div class="bar-container">
+    <div class="bar-label"><span class="name">MQA (1 KV head)</span><span class="value">256 dims</span></div>
+    <div class="bar-track"><div class="bar-fill mqa" style="width:0.78%;min-width:50px;">256</div></div>
+  </div>
+  <div class="bar-container">
+    <div class="bar-label"><span class="name">MLA (latent + RoPE)</span><span class="value">576 dims</span></div>
+    <div class="bar-track"><div class="bar-fill mla" style="width:1.76%;min-width:50px;">576</div></div>
+  </div>
+</div>
+
+<!-- Interactive explorer -->
+<div class="slider-section">
+  <h2>KV Cache Explorer</h2>
+  <p class="desc">Adjust parameters to see how MLA cache size compares to MHA at different scales.</p>
+  <div class="slider-row">
+    <label>Attention heads (H)</label>
+    <input type="range" id="heads" min="8" max="256" value="128" step="8">
+    <span class="val" id="heads-val">128</span>
+  </div>
+  <div class="slider-row">
+    <label>Head dim (d<sub>k</sub>)</label>
+    <input type="range" id="dk" min="32" max="256" value="128" step="16">
+    <span class="val" id="dk-val">128</span>
+  </div>
+  <div class="slider-row">
+    <label>KV latent dim (d<sub>c</sub>)</label>
+    <input type="range" id="dc" min="64" max="2048" value="512" step="64">
+    <span class="val" id="dc-val">512</span>
+  </div>
+  <div class="slider-row">
+    <label>Layers</label>
+    <input type="range" id="layers" min="1" max="128" value="61" step="1">
+    <span class="val" id="layers-val">61</span>
+  </div>
+  <div class="slider-row">
+    <label>Seq length</label>
+    <input type="range" id="seq" min="1024" max="131072" value="4096" step="1024">
+    <span class="val" id="seq-val">4,096</span>
+  </div>
+  <div class="result-box">
+    <div class="result-item">
+      <div class="label">MHA Cache</div>
+      <div class="num" id="mha-cache">30.5</div>
+      <div class="unit">GB (FP16)</div>
+    </div>
+    <div class="result-item">
+      <div class="label">MLA Cache</div>
+      <div class="num" id="mla-cache" style="color:#5b5bd6;">0.5</div>
+      <div class="unit">GB (FP16)</div>
+    </div>
+    <div class="result-item">
+      <div class="label">Compression</div>
+      <div class="num" id="compress" style="color:#4ecdc4;">56.9x</div>
+      <div class="unit">reduction</div>
+    </div>
+  </div>
+</div>
+
+<div class="note">
+  <strong>Key insight:</strong> MLA caches a shared latent vector (d<sub>c</sub> = 512) plus a small RoPE key (d<sub>h</sub><sup>R</sup> = 64),
+  totaling 576 dims per token per layer. Standard MHA caches 2 &times; H &times; d<sub>k</sub> = 32,768 dims.
+  The up-projection matrices W<sub>UK</sub> and W<sub>UV</sub> are static model weights &mdash; they are not cached.
+  Each head reconstructs unique K/V from the shared latent, preserving representational diversity unlike MQA.
+</div>
+
+<script>
+  const $ = id => document.getElementById(id);
+  const fmt = n => n >= 1 ? n.toFixed(1) : n.toFixed(2);
+  const fmtInt = n => n.toLocaleString();
+
+  function update() {
+    const H = +$('heads').value;
+    const dk = +$('dk').value;
+    const dc = +$('dc').value;
+    const L = +$('layers').value;
+    const S = +$('seq').value;
+
+    $('heads-val').textContent = H;
+    $('dk-val').textContent = dk;
+    $('dc-val').textContent = dc;
+    $('layers-val').textContent = L;
+    $('seq-val').textContent = fmtInt(S);
+
+    // MHA: 2 (K+V) * H * dk * L * S * 2 bytes (FP16)
+    const mhaBytes = 2 * H * dk * L * S * 2;
+    const mhaGB = mhaBytes / (1024**3);
+
+    // MLA: (dc + 64) * L * S * 2 bytes
+    const mlaBytes = (dc + 64) * L * S * 2;
+    const mlaGB = mlaBytes / (1024**3);
+
+    const ratio = mhaBytes / mlaBytes;
+
+    $('mha-cache').textContent = fmt(mhaGB);
+    $('mla-cache').textContent = fmt(mlaGB);
+    $('compress').textContent = fmt(ratio) + 'x';
+  }
+
+  ['heads','dk','dc','layers','seq'].forEach(id => {
+    $(id).addEventListener('input', update);
+  });
+  update();
+</script>
+</body>
+</html>

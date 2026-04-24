@@ -1,0 +1,389 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>RoPE Scaling Methods: Frequency-Domain Comparison</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { background: #0f0f1a; color: #e0e0e0; font-family: 'Segoe UI', system-ui, sans-serif; padding: 24px; }
+h1 { font-size: 20px; margin-bottom: 8px; color: #fff; }
+.subtitle { font-size: 13px; color: #888; margin-bottom: 24px; }
+.controls { display: flex; gap: 20px; flex-wrap: wrap; margin-bottom: 20px; align-items: center; }
+.control-group { display: flex; flex-direction: column; gap: 4px; }
+.control-group label { font-size: 11px; color: #888; text-transform: uppercase; letter-spacing: 0.5px; }
+.control-group input[type="range"] { width: 180px; accent-color: #e94560; }
+.control-group .value { font-size: 13px; color: #4ecdc4; font-weight: bold; font-variant-numeric: tabular-nums; }
+.canvas-container { position: relative; background: #1a1a2e; border-radius: 12px; padding: 20px; margin-bottom: 16px; }
+canvas { width: 100%; height: 400px; display: block; }
+.legend { display: flex; gap: 24px; justify-content: center; flex-wrap: wrap; margin-top: 12px; }
+.legend-item { display: flex; align-items: center; gap: 6px; font-size: 12px; }
+.legend-color { width: 24px; height: 3px; border-radius: 2px; }
+.explanation { background: #1a1a2e; border-radius: 12px; padding: 20px; margin-top: 16px; }
+.explanation h2 { font-size: 15px; color: #e94560; margin-bottom: 10px; }
+.explanation p { font-size: 13px; line-height: 1.6; color: #bbb; margin-bottom: 8px; }
+.explanation .highlight { color: #4ecdc4; font-weight: bold; }
+.freq-bands { display: flex; gap: 12px; margin-top: 16px; flex-wrap: wrap; }
+.freq-band { flex: 1; min-width: 180px; background: #16213e; border-radius: 8px; padding: 14px; }
+.freq-band h3 { font-size: 13px; margin-bottom: 6px; }
+.freq-band p { font-size: 11px; line-height: 1.5; color: #999; }
+.freq-band.high h3 { color: #4ecdc4; }
+.freq-band.mid h3 { color: #ffd93d; }
+.freq-band.low h3 { color: #e94560; }
+</style>
+</head>
+<body>
+
+<h1>RoPE Scaling Methods: Frequency-Domain Comparison</h1>
+<p class="subtitle">How Position Interpolation, NTK-Aware, and YaRN modify RoPE frequencies to enable context extension</p>
+
+<div class="controls">
+  <div class="control-group">
+    <label>Extension Factor (s = L'/L)</label>
+    <input type="range" id="extensionFactor" min="1" max="16" step="0.5" value="4">
+    <div class="value" id="extensionValue">4x (4K &rarr; 16K)</div>
+  </div>
+  <div class="control-group">
+    <label>Model Dimension (d)</label>
+    <input type="range" id="modelDim" min="32" max="128" step="16" value="64">
+    <div class="value" id="dimValue">d = 64</div>
+  </div>
+  <div class="control-group">
+    <label>RoPE Base</label>
+    <input type="range" id="ropeBase" min="10000" max="1000000" step="10000" value="10000">
+    <div class="value" id="baseValue">base = 10,000</div>
+  </div>
+</div>
+
+<div class="canvas-container">
+  <canvas id="freqCanvas"></canvas>
+  <div class="legend">
+    <div class="legend-item"><div class="legend-color" style="background:#666;"></div>Original RoPE</div>
+    <div class="legend-item"><div class="legend-color" style="background:#e94560;"></div>Position Interpolation</div>
+    <div class="legend-item"><div class="legend-color" style="background:#ffd93d;"></div>NTK-Aware</div>
+    <div class="legend-item"><div class="legend-color" style="background:#4ecdc4;"></div>YaRN</div>
+  </div>
+</div>
+
+<div class="canvas-container">
+  <canvas id="angleCanvas"></canvas>
+  <div class="legend">
+    <div class="legend-item"><div class="legend-color" style="background:#666; border: 1px dashed #aaa;"></div>Training range max angle</div>
+    <div class="legend-item"><div class="legend-color" style="background:#e94560;"></div>PI max angle at L'</div>
+    <div class="legend-item"><div class="legend-color" style="background:#ffd93d;"></div>NTK max angle at L'</div>
+    <div class="legend-item"><div class="legend-color" style="background:#4ecdc4;"></div>YaRN max angle at L'</div>
+  </div>
+</div>
+
+<div class="explanation">
+  <h2>What You Are Seeing</h2>
+  <p><strong>Top chart:</strong> The effective frequency (theta_i) for each RoPE dimension after scaling. Original RoPE frequencies are shown in gray. Each method modifies these frequencies differently to accommodate longer sequences.</p>
+  <p><strong>Bottom chart:</strong> The maximum rotation angle each dimension experiences at the extended context length L'. The dashed gray line shows the maximum angle seen during training. Dimensions whose bars exceed this line are <span class="highlight">out of distribution</span> &mdash; the source of length generalization failure.</p>
+  <p>Drag the <span class="highlight">extension factor slider</span> to see how each method responds to increasing context length. Notice how PI uniformly compresses all frequencies, NTK-Aware preferentially compresses low frequencies, and YaRN applies a smooth ramp that leaves high frequencies untouched.</p>
+
+  <div class="freq-bands">
+    <div class="freq-band high">
+      <h3>High Frequency (short wavelength)</h3>
+      <p>Wavelength &lt; L. These dimensions complete many full rotations during training &mdash; they extrapolate naturally. PI unnecessarily compresses them, degrading local position resolution.</p>
+    </div>
+    <div class="freq-band mid">
+      <h3>Medium Frequency (boundary)</h3>
+      <p>Wavelength ~ L. These are at the boundary of extrapolation. YaRN applies a smooth ramp here, interpolating between "leave alone" and "fully scale."</p>
+    </div>
+    <div class="freq-band low">
+      <h3>Low Frequency (long wavelength)</h3>
+      <p>Wavelength &gt; L. These dimensions have NOT completed a full rotation during training. They encounter novel angles at L' &gt; L and cause the perplexity cliff. All methods must scale these.</p>
+    </div>
+  </div>
+</div>
+
+<script>
+const freqCanvas = document.getElementById('freqCanvas');
+const angleCanvas = document.getElementById('angleCanvas');
+const extSlider = document.getElementById('extensionFactor');
+const dimSlider = document.getElementById('modelDim');
+const baseSlider = document.getElementById('ropeBase');
+const extValue = document.getElementById('extensionValue');
+const dimValue = document.getElementById('dimValue');
+const baseValue = document.getElementById('baseValue');
+
+function setupCanvas(canvas) {
+  const rect = canvas.parentElement.getBoundingClientRect();
+  const dpr = window.devicePixelRatio || 1;
+  canvas.width = (rect.width - 40) * dpr;
+  canvas.height = 400 * dpr;
+  canvas.style.width = (rect.width - 40) + 'px';
+  canvas.style.height = '400px';
+  const ctx = canvas.getContext('2d');
+  ctx.scale(dpr, dpr);
+  return ctx;
+}
+
+function computeFrequencies(d, base) {
+  const freqs = [];
+  for (let i = 0; i < d / 2; i++) {
+    freqs.push(Math.pow(base, -2 * i / d));
+  }
+  return freqs;
+}
+
+function piFrequencies(origFreqs, s) {
+  return origFreqs.map(f => f / s);
+}
+
+function ntkFrequencies(origFreqs, d, base, s) {
+  const newBase = base * Math.pow(s, d / (d - 2));
+  const newFreqs = [];
+  for (let i = 0; i < d / 2; i++) {
+    newFreqs.push(Math.pow(newBase, -2 * i / d));
+  }
+  return newFreqs;
+}
+
+function yarnFrequencies(origFreqs, d, base, s, L) {
+  const ntkBase = base * Math.pow(s, d / (d - 2));
+  const result = [];
+  for (let i = 0; i < d / 2; i++) {
+    const theta = origFreqs[i];
+    const wavelength = 2 * Math.PI / theta;
+    // Ramp function: 0 for high freq (wavelength << L), 1 for low freq (wavelength >> L)
+    const alpha = L;
+    const beta = L * 2;
+    let gamma;
+    if (wavelength < alpha) {
+      gamma = 0; // high freq: leave alone
+    } else if (wavelength > beta) {
+      gamma = 1; // low freq: full interpolation
+    } else {
+      gamma = (wavelength - alpha) / (beta - alpha); // smooth ramp
+    }
+    const scaledTheta = theta * (1 - gamma) + (theta / s) * gamma;
+    result.push(scaledTheta);
+  }
+  return result;
+}
+
+function draw() {
+  const s = parseFloat(extSlider.value);
+  const d = parseInt(dimSlider.value);
+  const base = parseInt(baseSlider.value);
+  const L = 4096;
+  const Lp = L * s;
+
+  extValue.innerHTML = s + 'x (' + (L/1000) + 'K &rarr; ' + (Lp >= 1000000 ? (Lp/1000000).toFixed(1) + 'M' : (Lp/1000) + 'K') + ')';
+  dimValue.textContent = 'd = ' + d;
+  baseValue.textContent = 'base = ' + base.toLocaleString();
+
+  const origFreqs = computeFrequencies(d, base);
+  const piFreqs = piFrequencies(origFreqs, s);
+  const ntkFreqs = ntkFrequencies(origFreqs, d, base, s);
+  const yarnFreqs = yarnFrequencies(origFreqs, d, base, s, L);
+
+  const numDims = d / 2;
+
+  // ---- Frequency chart ----
+  const ctx1 = setupCanvas(freqCanvas);
+  const w1 = freqCanvas.width / (window.devicePixelRatio || 1);
+  const h1 = 400;
+  const margin = { top: 40, right: 30, bottom: 50, left: 70 };
+  const plotW = w1 - margin.left - margin.right;
+  const plotH = h1 - margin.top - margin.bottom;
+
+  ctx1.clearRect(0, 0, w1, h1);
+
+  // Log scale for frequencies
+  const allFreqs = [...origFreqs, ...piFreqs, ...ntkFreqs, ...yarnFreqs].filter(f => f > 0);
+  const minFreq = Math.min(...allFreqs) * 0.5;
+  const maxFreq = Math.max(...allFreqs) * 2;
+  const logMin = Math.log10(minFreq);
+  const logMax = Math.log10(maxFreq);
+
+  function freqToY(f) {
+    const logF = Math.log10(f);
+    return margin.top + plotH * (1 - (logF - logMin) / (logMax - logMin));
+  }
+
+  function dimToX(i) {
+    return margin.left + (i / (numDims - 1)) * plotW;
+  }
+
+  // Grid
+  ctx1.strokeStyle = '#2a2a3e';
+  ctx1.lineWidth = 0.5;
+  for (let exp = Math.ceil(logMin); exp <= Math.floor(logMax); exp++) {
+    const y = freqToY(Math.pow(10, exp));
+    ctx1.beginPath(); ctx1.moveTo(margin.left, y); ctx1.lineTo(w1 - margin.right, y); ctx1.stroke();
+    ctx1.fillStyle = '#666';
+    ctx1.font = '11px monospace';
+    ctx1.textAlign = 'right';
+    ctx1.fillText('1e' + exp, margin.left - 8, y + 4);
+  }
+
+  // Axis labels
+  ctx1.fillStyle = '#888';
+  ctx1.font = '12px sans-serif';
+  ctx1.textAlign = 'center';
+  ctx1.fillText('RoPE Dimension Index (i)', w1 / 2, h1 - 8);
+  ctx1.save();
+  ctx1.translate(14, h1 / 2);
+  ctx1.rotate(-Math.PI / 2);
+  ctx1.fillText('Frequency (theta_i)', 0, 0);
+  ctx1.restore();
+
+  // Title
+  ctx1.fillStyle = '#fff';
+  ctx1.font = 'bold 14px sans-serif';
+  ctx1.textAlign = 'left';
+  ctx1.fillText('Effective RoPE Frequency per Dimension', margin.left, 24);
+
+  // X axis ticks
+  ctx1.fillStyle = '#666';
+  ctx1.font = '10px monospace';
+  ctx1.textAlign = 'center';
+  for (let i = 0; i < numDims; i += Math.max(1, Math.floor(numDims / 8))) {
+    ctx1.fillText(i.toString(), dimToX(i), h1 - margin.bottom + 16);
+  }
+
+  // Draw lines
+  function drawLine(freqs, color, lineWidth, dash) {
+    ctx1.strokeStyle = color;
+    ctx1.lineWidth = lineWidth;
+    ctx1.setLineDash(dash || []);
+    ctx1.beginPath();
+    for (let i = 0; i < numDims; i++) {
+      const x = dimToX(i);
+      const y = freqToY(freqs[i]);
+      if (i === 0) ctx1.moveTo(x, y); else ctx1.lineTo(x, y);
+    }
+    ctx1.stroke();
+    ctx1.setLineDash([]);
+    // Dots
+    for (let i = 0; i < numDims; i++) {
+      const x = dimToX(i);
+      const y = freqToY(freqs[i]);
+      ctx1.beginPath();
+      ctx1.arc(x, y, 2.5, 0, Math.PI * 2);
+      ctx1.fillStyle = color;
+      ctx1.fill();
+    }
+  }
+
+  drawLine(origFreqs, '#666', 2, [4, 4]);
+  drawLine(piFreqs, '#e94560', 2);
+  drawLine(ntkFreqs, '#ffd93d', 2);
+  drawLine(yarnFreqs, '#4ecdc4', 2);
+
+  // ---- Angle chart ----
+  const ctx2 = setupCanvas(angleCanvas);
+  const w2 = angleCanvas.width / (window.devicePixelRatio || 1);
+  const h2 = 400;
+
+  ctx2.clearRect(0, 0, w2, h2);
+
+  // Max angles at extended length
+  const origAngles = origFreqs.map(f => f * L);       // training max
+  const origExtAngles = origFreqs.map(f => f * Lp);   // unscaled at L' (would be OOD)
+  const piAngles = piFreqs.map(f => f * Lp);
+  const ntkAngles = ntkFreqs.map(f => f * Lp);
+  const yarnAngles = yarnFreqs.map(f => f * Lp);
+
+  const allAngles = [...origAngles, ...piAngles, ...ntkAngles, ...yarnAngles];
+  const maxAngle = Math.max(...allAngles) * 1.2;
+  const minAngle = 0;
+
+  // Use log scale for angles too
+  const logMinA = -1;
+  const logMaxA = Math.log10(maxAngle) + 0.3;
+
+  function angleToY(a) {
+    if (a <= 0) return margin.top + plotH;
+    const logA = Math.log10(a);
+    return margin.top + plotH * (1 - (logA - logMinA) / (logMaxA - logMinA));
+  }
+
+  function dimToX2(i) {
+    return margin.left + (i / (numDims - 1)) * (w2 - margin.left - margin.right);
+  }
+
+  // Grid
+  ctx2.strokeStyle = '#2a2a3e';
+  ctx2.lineWidth = 0.5;
+  for (let exp = Math.ceil(logMinA); exp <= Math.floor(logMaxA); exp++) {
+    const y = angleToY(Math.pow(10, exp));
+    ctx2.beginPath(); ctx2.moveTo(margin.left, y); ctx2.lineTo(w2 - margin.right, y); ctx2.stroke();
+    ctx2.fillStyle = '#666';
+    ctx2.font = '11px monospace';
+    ctx2.textAlign = 'right';
+    ctx2.fillText('1e' + exp, margin.left - 8, y + 4);
+  }
+
+  // Title
+  ctx2.fillStyle = '#fff';
+  ctx2.font = 'bold 14px sans-serif';
+  ctx2.textAlign = 'left';
+  ctx2.fillText('Maximum Rotation Angle at Extended Length L\'', margin.left, 24);
+
+  // Axis labels
+  ctx2.fillStyle = '#888';
+  ctx2.font = '12px sans-serif';
+  ctx2.textAlign = 'center';
+  ctx2.fillText('RoPE Dimension Index (i)', w2 / 2, h2 - 8);
+  ctx2.save();
+  ctx2.translate(14, h2 / 2);
+  ctx2.rotate(-Math.PI / 2);
+  ctx2.fillText('Max Angle (radians)', 0, 0);
+  ctx2.restore();
+
+  // X axis ticks
+  ctx2.fillStyle = '#666';
+  ctx2.font = '10px monospace';
+  ctx2.textAlign = 'center';
+  for (let i = 0; i < numDims; i += Math.max(1, Math.floor(numDims / 8))) {
+    ctx2.fillText(i.toString(), dimToX2(i), h2 - margin.bottom + 16);
+  }
+
+  // Training range line (dashed)
+  ctx2.strokeStyle = '#888';
+  ctx2.lineWidth = 2;
+  ctx2.setLineDash([6, 4]);
+  ctx2.beginPath();
+  for (let i = 0; i < numDims; i++) {
+    const x = dimToX2(i);
+    const y = angleToY(origAngles[i]);
+    if (i === 0) ctx2.moveTo(x, y); else ctx2.lineTo(x, y);
+  }
+  ctx2.stroke();
+  ctx2.setLineDash([]);
+
+  // Bar width
+  const barW = Math.max(2, (w2 - margin.left - margin.right) / numDims * 0.2);
+  const offsets = [-1.5, 0, 1.5];
+  const colors = ['#e94560', '#ffd93d', '#4ecdc4'];
+  const angleSets = [piAngles, ntkAngles, yarnAngles];
+
+  for (let i = 0; i < numDims; i++) {
+    const cx = dimToX2(i);
+    for (let m = 0; m < 3; m++) {
+      const angle = angleSets[m][i];
+      const trainAngle = origAngles[i];
+      const y1 = angleToY(angle);
+      const y2 = angleToY(0.1);
+      const barHeight = y2 - y1;
+      if (barHeight > 0) {
+        ctx2.globalAlpha = 0.7;
+        ctx2.fillStyle = colors[m];
+        ctx2.fillRect(cx + offsets[m] * barW - barW / 2, y1, barW, barHeight);
+        ctx2.globalAlpha = 1;
+      }
+    }
+  }
+}
+
+extSlider.addEventListener('input', draw);
+dimSlider.addEventListener('input', draw);
+baseSlider.addEventListener('input', draw);
+window.addEventListener('resize', draw);
+draw();
+</script>
+</body>
+</html>

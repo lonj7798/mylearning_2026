@@ -1,0 +1,333 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Residual Stream Information Flow</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { background: #1a1a2e; color: #e0e0e0; font-family: 'Segoe UI', system-ui, sans-serif; padding: 24px; min-height: 100vh; }
+.container { max-width: 960px; margin: 0 auto; }
+h1 { color: #e94560; font-size: 22px; margin-bottom: 4px; }
+.subtitle { color: #888; font-size: 13px; margin-bottom: 20px; }
+.layout { display: grid; grid-template-columns: 1fr 280px; gap: 20px; }
+.diagram-area { background: #16213e; border-radius: 12px; padding: 20px; overflow-x: auto; }
+canvas { display: block; }
+.side-panel { display: flex; flex-direction: column; gap: 12px; }
+.info-box { background: #16213e; border-radius: 10px; padding: 14px; }
+.info-box h3 { color: #4ecdc4; font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 8px; }
+.info-box p { font-size: 12px; color: #aaa; line-height: 1.6; }
+.controls { background: #16213e; border-radius: 10px; padding: 14px; }
+.controls h3 { color: #e94560; font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 10px; }
+.ctrl-row { margin-bottom: 10px; }
+.ctrl-row label { display: block; font-size: 12px; color: #888; margin-bottom: 4px; }
+.ctrl-row .val { color: #ffd93d; font-family: monospace; font-weight: bold; }
+input[type="range"] { width: 100%; accent-color: #e94560; }
+.legend { display: flex; flex-direction: column; gap: 6px; }
+.legend-item { display: flex; align-items: center; gap: 8px; font-size: 11px; }
+.legend-swatch { width: 14px; height: 14px; border-radius: 3px; flex-shrink: 0; }
+.gradient-box { background: #16213e; border-radius: 10px; padding: 14px; }
+.gradient-box h3 { color: #ffd93d; font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 8px; }
+.grad-meter { height: 16px; border-radius: 4px; margin-bottom: 6px; display: flex; align-items: center; padding: 0 8px; font-size: 10px; font-weight: bold; }
+.grad-label { font-size: 11px; color: #888; margin-bottom: 4px; }
+.toggle-row { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; font-size: 12px; cursor: pointer; }
+.toggle-row input { accent-color: #e94560; }
+</style>
+</head>
+<body>
+<div class="container">
+<h1>Residual Stream Information Flow</h1>
+<div class="subtitle">Visualizing how layers read from and write to the shared residual stream, with gradient magnitude comparison</div>
+
+<div class="layout">
+<div class="diagram-area">
+    <canvas id="diagram" width="620" height="600"></canvas>
+</div>
+<div class="side-panel">
+    <div class="controls">
+        <h3>Configuration</h3>
+        <div class="ctrl-row">
+            <label>Layers: <span class="val" id="v-layers">4</span></label>
+            <input type="range" id="numLayers" min="2" max="8" value="4" oninput="draw()">
+        </div>
+        <div class="ctrl-row">
+            <label>Active layer (hover highlight): <span class="val" id="v-active">--</span></label>
+            <input type="range" id="activeLayer" min="0" max="4" value="0" oninput="draw()">
+        </div>
+        <label class="toggle-row"><input type="checkbox" checked id="showGrad" onchange="draw()"> Show gradient flow</label>
+        <label class="toggle-row"><input type="checkbox" id="showPostNorm" onchange="draw()"> Post-norm mode</label>
+    </div>
+    <div class="info-box">
+        <h3>Residual Stream</h3>
+        <p>The residual stream is a d-dimensional vector flowing left to right. Each sublayer (Attn, FFN) <strong>reads</strong> from the stream, computes a delta, and <strong>writes</strong> (adds) it back. The final output is x<sub>0</sub> + sum of all deltas.</p>
+    </div>
+    <div class="info-box">
+        <h3>Legend</h3>
+        <div class="legend">
+            <div class="legend-item"><div class="legend-swatch" style="background:#e94560"></div> Residual stream (identity path)</div>
+            <div class="legend-item"><div class="legend-swatch" style="background:#4ecdc4"></div> Attention sublayer</div>
+            <div class="legend-item"><div class="legend-swatch" style="background:#ffd93d"></div> FFN sublayer</div>
+            <div class="legend-item"><div class="legend-swatch" style="background:#a855f7"></div> Normalization (RMSNorm)</div>
+            <div class="legend-item"><div class="legend-swatch" style="background:rgba(78,205,196,0.2); border:1px solid #4ecdc4"></div> Read from stream</div>
+            <div class="legend-item"><div class="legend-swatch" style="background:rgba(233,69,96,0.2); border:1px solid #e94560"></div> Write to stream (add)</div>
+        </div>
+    </div>
+    <div class="gradient-box">
+        <h3>Gradient Magnitude by Layer</h3>
+        <div id="grad-bars"></div>
+        <p style="font-size:11px; color:#666; margin-top:8px;">Pre-norm: O(1) at all layers. Post-norm: grows toward output.</p>
+    </div>
+</div>
+</div>
+</div>
+
+<script>
+const canvas = document.getElementById('diagram');
+const ctx = canvas.getContext('2d');
+
+function draw() {
+    const L = parseInt(document.getElementById('numLayers').value);
+    const activeL = parseInt(document.getElementById('activeLayer').value);
+    const showGrad = document.getElementById('showGrad').checked;
+    const isPostNorm = document.getElementById('showPostNorm').checked;
+
+    document.getElementById('v-layers').textContent = L;
+    document.getElementById('v-active').textContent = activeL > 0 ? 'Layer ' + activeL : '--';
+    document.getElementById('activeLayer').max = L;
+
+    const W = canvas.width, H = canvas.height;
+    ctx.clearRect(0, 0, W, H);
+
+    const padL = 60, padR = 60, padT = 40, padB = 50;
+    const streamY = H / 2;
+    const layerW = (W - padL - padR) / (L + 0.5);
+    const branchH = 100;
+    const blockW = layerW * 0.35;
+    const blockH = 30;
+
+    // Draw main residual stream
+    ctx.strokeStyle = '#e94560';
+    ctx.lineWidth = 4;
+    ctx.beginPath();
+    ctx.moveTo(padL, streamY);
+    ctx.lineTo(W - padR, streamY);
+    ctx.stroke();
+
+    // Arrow at end
+    ctx.fillStyle = '#e94560';
+    ctx.beginPath();
+    ctx.moveTo(W - padR, streamY);
+    ctx.lineTo(W - padR - 10, streamY - 6);
+    ctx.lineTo(W - padR - 10, streamY + 6);
+    ctx.closePath();
+    ctx.fill();
+
+    // Labels
+    ctx.fillStyle = '#e94560';
+    ctx.font = 'bold 13px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText('x\u2080', padL - 10, streamY + 5);
+    ctx.fillText('x_L', W - padR + 15, streamY + 5);
+
+    // Draw each layer
+    for (let l = 1; l <= L; l++) {
+        const cx = padL + (l - 0.25) * layerW;
+        const isActive = l === activeL;
+        const alpha = isActive ? 1.0 : 0.7;
+
+        // Highlight active layer
+        if (isActive) {
+            ctx.fillStyle = 'rgba(233, 69, 96, 0.05)';
+            ctx.fillRect(cx - layerW * 0.4, padT, layerW * 0.8, H - padT - padB);
+        }
+
+        // Attention branch (above)
+        const attnX = cx - blockW * 0.7;
+        const attnTopY = streamY - branchH;
+
+        // Read arrow (from stream up to attn)
+        ctx.strokeStyle = `rgba(78, 205, 196, ${alpha * 0.6})`;
+        ctx.lineWidth = 2;
+        ctx.setLineDash([4, 3]);
+        ctx.beginPath();
+        ctx.moveTo(attnX, streamY);
+        ctx.lineTo(attnX, attnTopY + blockH + 5);
+        ctx.stroke();
+        ctx.setLineDash([]);
+
+        // Norm before attn (pre-norm) or after (post-norm)
+        if (!isPostNorm) {
+            // Pre-norm: norm on the branch before sublayer
+            ctx.fillStyle = `rgba(168, 85, 247, ${alpha * 0.8})`;
+            const normY = streamY - branchH * 0.4;
+            ctx.fillRect(attnX - 12, normY - 8, 24, 16);
+            ctx.fillStyle = '#fff';
+            ctx.font = '8px sans-serif';
+            ctx.textAlign = 'center';
+            ctx.fillText('Norm', attnX, normY + 3);
+        }
+
+        // Attn block
+        ctx.fillStyle = `rgba(78, 205, 196, ${alpha * 0.8})`;
+        ctx.strokeStyle = isActive ? '#4ecdc4' : 'transparent';
+        ctx.lineWidth = isActive ? 2 : 0;
+        roundRect(ctx, attnX - blockW/2, attnTopY, blockW, blockH, 6);
+        ctx.fill();
+        if (isActive) ctx.stroke();
+        ctx.fillStyle = '#fff';
+        ctx.font = 'bold 11px sans-serif';
+        ctx.textAlign = 'center';
+        ctx.fillText('Attn ' + l, attnX, attnTopY + blockH/2 + 4);
+
+        // Write arrow (from attn down to stream) + addition symbol
+        ctx.strokeStyle = `rgba(233, 69, 96, ${alpha * 0.6})`;
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.moveTo(attnX, attnTopY + blockH);
+        const addX1 = attnX + blockW * 0.5;
+        ctx.lineTo(addX1, attnTopY + blockH);
+        ctx.lineTo(addX1, streamY);
+        ctx.stroke();
+
+        // + symbol on stream
+        ctx.fillStyle = '#e94560';
+        ctx.font = 'bold 16px sans-serif';
+        ctx.fillText('+', addX1, streamY - 8);
+
+        // Post-norm on stream
+        if (isPostNorm) {
+            ctx.fillStyle = `rgba(168, 85, 247, ${alpha * 0.8})`;
+            ctx.fillRect(addX1 + 8, streamY - 8, 24, 16);
+            ctx.fillStyle = '#fff';
+            ctx.font = '8px sans-serif';
+            ctx.fillText('Norm', addX1 + 20, streamY + 3);
+        }
+
+        // FFN branch (below)
+        const ffnX = cx + blockW * 0.3;
+        const ffnBotY = streamY + branchH - blockH;
+
+        // Read arrow
+        ctx.strokeStyle = `rgba(255, 217, 61, ${alpha * 0.6})`;
+        ctx.lineWidth = 2;
+        ctx.setLineDash([4, 3]);
+        ctx.beginPath();
+        ctx.moveTo(ffnX, streamY);
+        ctx.lineTo(ffnX, ffnBotY - 5);
+        ctx.stroke();
+        ctx.setLineDash([]);
+
+        // Norm before FFN (pre-norm)
+        if (!isPostNorm) {
+            ctx.fillStyle = `rgba(168, 85, 247, ${alpha * 0.8})`;
+            const normY2 = streamY + branchH * 0.3;
+            ctx.fillRect(ffnX - 12, normY2 - 8, 24, 16);
+            ctx.fillStyle = '#fff';
+            ctx.font = '8px sans-serif';
+            ctx.fillText('Norm', ffnX, normY2 + 3);
+        }
+
+        // FFN block
+        ctx.fillStyle = `rgba(255, 217, 61, ${alpha * 0.8})`;
+        ctx.strokeStyle = isActive ? '#ffd93d' : 'transparent';
+        ctx.lineWidth = isActive ? 2 : 0;
+        roundRect(ctx, ffnX - blockW/2, ffnBotY, blockW, blockH, 6);
+        ctx.fill();
+        if (isActive) ctx.stroke();
+        ctx.fillStyle = '#1a1a2e';
+        ctx.font = 'bold 11px sans-serif';
+        ctx.fillText('FFN ' + l, ffnX, ffnBotY + blockH/2 + 4);
+
+        // Write arrow
+        ctx.strokeStyle = `rgba(233, 69, 96, ${alpha * 0.6})`;
+        ctx.lineWidth = 2;
+        const addX2 = ffnX + blockW * 0.5;
+        ctx.beginPath();
+        ctx.moveTo(ffnX, ffnBotY + blockH);
+        ctx.lineTo(addX2, ffnBotY + blockH);
+        ctx.lineTo(addX2, streamY);
+        ctx.stroke();
+
+        ctx.fillStyle = '#e94560';
+        ctx.font = 'bold 16px sans-serif';
+        ctx.fillText('+', addX2, streamY + 20);
+
+        if (isPostNorm) {
+            ctx.fillStyle = `rgba(168, 85, 247, ${alpha * 0.8})`;
+            ctx.fillRect(addX2 + 8, streamY - 8, 24, 16);
+            ctx.fillStyle = '#fff';
+            ctx.font = '8px sans-serif';
+            ctx.fillText('Norm', addX2 + 20, streamY + 3);
+        }
+
+        // Gradient arrows (backward)
+        if (showGrad) {
+            const gradAlpha = isPostNorm ? Math.min(1, 0.3 + 0.7 * l / L) : 0.6;
+            const gradW = isPostNorm ? 1 + 2 * l / L : 2;
+            ctx.strokeStyle = `rgba(78, 205, 196, ${gradAlpha})`;
+            ctx.lineWidth = gradW;
+            ctx.setLineDash([2, 3]);
+            const gx = padL + (l - 0.5) * layerW;
+            ctx.beginPath();
+            ctx.moveTo(gx + 12, streamY + branchH + 25);
+            ctx.lineTo(gx - 12, streamY + branchH + 25);
+            ctx.stroke();
+            // arrowhead
+            ctx.fillStyle = `rgba(78, 205, 196, ${gradAlpha})`;
+            ctx.beginPath();
+            ctx.moveTo(gx - 12, streamY + branchH + 25);
+            ctx.lineTo(gx - 6, streamY + branchH + 22);
+            ctx.lineTo(gx - 6, streamY + branchH + 28);
+            ctx.closePath();
+            ctx.fill();
+            ctx.setLineDash([]);
+
+            ctx.fillStyle = `rgba(78, 205, 196, ${gradAlpha})`;
+            ctx.font = '9px monospace';
+            ctx.textAlign = 'center';
+            const gradText = isPostNorm ? 'O(d*' + l + ')' : 'O(1)';
+            ctx.fillText(gradText, gx, streamY + branchH + 40);
+        }
+    }
+
+    // Formula at bottom
+    ctx.fillStyle = '#888';
+    ctx.font = '12px monospace';
+    ctx.textAlign = 'center';
+    const formula = isPostNorm
+        ? 'Post-norm: x_{l+1} = Norm(x_l + Sublayer(x_l))'
+        : 'Pre-norm: x_{l+1} = x_l + Sublayer(Norm(x_l))';
+    ctx.fillText(formula, W/2, H - 15);
+
+    // Gradient bars in side panel
+    let gbHtml = '';
+    for (let l = 1; l <= L; l++) {
+        const gradMag = isPostNorm ? 0.2 + 0.8 * (l / L) : 0.5;
+        const pct = gradMag * 100;
+        const col = isPostNorm ? (l === L ? '#e94560' : '#4ecdc4') : '#4ecdc4';
+        gbHtml += `<div class="grad-label">Layer ${l}</div>
+        <div class="grad-meter" style="background:${col}22; width:${pct}%; color:${col}; border:1px solid ${col}33;">
+            ${isPostNorm ? 'O(d*' + l + ')' : 'O(1)'}
+        </div>`;
+    }
+    document.getElementById('grad-bars').innerHTML = gbHtml;
+}
+
+function roundRect(ctx, x, y, w, h, r) {
+    ctx.beginPath();
+    ctx.moveTo(x + r, y);
+    ctx.lineTo(x + w - r, y);
+    ctx.quadraticCurveTo(x + w, y, x + w, y + r);
+    ctx.lineTo(x + w, y + h - r);
+    ctx.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
+    ctx.lineTo(x + r, y + h);
+    ctx.quadraticCurveTo(x, y + h, x, y + h - r);
+    ctx.lineTo(x, y + r);
+    ctx.quadraticCurveTo(x, y, x + r, y);
+    ctx.closePath();
+}
+
+draw();
+</script>
+</body>
+</html>

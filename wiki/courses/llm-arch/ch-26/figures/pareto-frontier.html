@@ -1,0 +1,338 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Pareto Frontier — Accuracy vs Inference Speed across Quantization Levels</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body {
+  background: #0d1117;
+  color: #e0e0e0;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  padding: 32px;
+  max-width: 1000px;
+  margin: 0 auto;
+}
+h1 { font-size: 22px; margin-bottom: 6px; color: #fff; }
+.subtitle { font-size: 13px; color: #888; margin-bottom: 24px; }
+
+.chart-container {
+  background: #161b22;
+  border: 1px solid #30363d;
+  border-radius: 12px;
+  padding: 24px;
+  position: relative;
+}
+
+canvas {
+  width: 100%;
+  height: auto;
+  display: block;
+}
+
+.controls {
+  display: flex;
+  gap: 12px;
+  margin-bottom: 20px;
+  flex-wrap: wrap;
+}
+.control-btn {
+  background: #21262d;
+  border: 1px solid #30363d;
+  color: #e0e0e0;
+  padding: 8px 16px;
+  border-radius: 8px;
+  font-size: 12px;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+.control-btn:hover { border-color: #58a6ff; }
+.control-btn.active { border-color: #58a6ff; background: #0d1117; color: #58a6ff; }
+
+.tooltip {
+  position: absolute;
+  background: #21262d;
+  border: 1px solid #58a6ff;
+  border-radius: 8px;
+  padding: 12px 16px;
+  font-size: 12px;
+  pointer-events: none;
+  display: none;
+  z-index: 10;
+  max-width: 260px;
+}
+.tooltip .tt-name { font-weight: 700; color: #58a6ff; margin-bottom: 4px; }
+.tooltip .tt-line { color: #8b949e; margin-bottom: 2px; }
+
+.legend-box {
+  background: #161b22;
+  border: 1px solid #30363d;
+  border-radius: 12px;
+  padding: 16px 24px;
+  margin-top: 16px;
+}
+.legend-box h3 { font-size: 14px; margin-bottom: 10px; }
+.legend-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 8px;
+}
+.legend-entry {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+}
+.legend-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.insight-box {
+  background: #161b22;
+  border: 1px solid #30363d;
+  border-radius: 12px;
+  padding: 16px 24px;
+  margin-top: 16px;
+}
+.insight-box h3 { font-size: 14px; margin-bottom: 10px; color: #fbbf24; }
+.insight-box p { font-size: 13px; color: #8b949e; line-height: 1.6; margin-bottom: 8px; }
+.insight-box strong { color: #e0e0e0; }
+</style>
+</head>
+<body>
+
+<h1>The Quantization Pareto Frontier</h1>
+<p class="subtitle">Accuracy (MMLU) vs relative inference throughput for different model sizes and quantization levels. Points on the frontier represent optimal tradeoffs.</p>
+
+<div class="controls">
+  <button class="control-btn active" data-filter="all">All Models</button>
+  <button class="control-btn" data-filter="70b">70B Family</button>
+  <button class="control-btn" data-filter="13b">13-14B Family</button>
+  <button class="control-btn" data-filter="7b">7B Family</button>
+  <button class="control-btn" data-filter="frontier">Pareto Frontier Only</button>
+</div>
+
+<div class="chart-container">
+  <canvas id="chart" width="900" height="520"></canvas>
+  <div class="tooltip" id="tooltip"></div>
+</div>
+
+<div class="legend-box">
+  <h3>Legend</h3>
+  <div class="legend-grid">
+    <div class="legend-entry"><div class="legend-dot" style="background:#e94560;"></div>70B models</div>
+    <div class="legend-entry"><div class="legend-dot" style="background:#fbbf24;"></div>13-14B models</div>
+    <div class="legend-entry"><div class="legend-dot" style="background:#4ecdc4;"></div>7B models</div>
+    <div class="legend-entry"><div class="legend-dot" style="background:#a78bfa;"></div>3B and smaller</div>
+    <div class="legend-entry"><div class="legend-dot" style="background:#fff; border:2px solid #58a6ff;width:8px;height:8px;"></div>Pareto-optimal point</div>
+    <div class="legend-entry" style="color:#8b949e;">Circle size = memory footprint</div>
+  </div>
+</div>
+
+<div class="insight-box">
+  <h3>Key Observations</h3>
+  <p><strong>1. A quantized large model beats a smaller model at full precision.</strong> 70B-INT4 outperforms 13B-FP16 on MMLU despite similar memory footprints, because quantization loses less information than removing 80% of parameters.</p>
+  <p><strong>2. INT4 is the practical sweet spot.</strong> The jump from FP16 to INT4 doubles throughput with only 1-2 points MMLU drop. Going below INT4 (INT3) causes disproportionate quality loss.</p>
+  <p><strong>3. Distillation shifts the frontier.</strong> Phi-4 (14B, distilled) sits on the Pareto frontier alongside much larger models, demonstrating that high-quality training data can substitute for parameter count.</p>
+</div>
+
+<script>
+// Model data: [name, family, precision, mmlu, relThroughput, memoryGB, isPareto]
+const data = [
+  // 70B family
+  ['Llama-2-70B FP16', '70b', 'FP16', 82.5, 1.0, 140, false],
+  ['Llama-2-70B INT8', '70b', 'INT8', 82.2, 1.8, 70, true],
+  ['Llama-2-70B INT4 (GPTQ)', '70b', 'INT4', 81.0, 3.2, 35, true],
+  ['Llama-2-70B INT4 (AWQ)', '70b', 'INT4', 81.3, 3.3, 35, true],
+  ['Llama-2-70B INT3', '70b', 'INT3', 75.5, 4.0, 26, false],
+
+  // 13-14B family
+  ['Llama-2-13B FP16', '13b', 'FP16', 68.0, 3.5, 26, false],
+  ['Llama-2-13B INT8', '13b', 'INT8', 67.7, 5.5, 13, false],
+  ['Llama-2-13B INT4', '13b', 'INT4', 66.5, 8.0, 6.5, false],
+  ['Phi-4 (14B) FP16', '13b', 'FP16', 84.8, 3.0, 28, true],
+  ['Phi-4 (14B) INT4', '13b', 'INT4', 83.5, 7.5, 7, true],
+
+  // 7B family
+  ['Llama-2-7B FP16', '7b', 'FP16', 58.0, 6.0, 14, false],
+  ['Llama-2-7B INT8', '7b', 'INT8', 57.5, 9.0, 7, false],
+  ['Llama-2-7B INT4', '7b', 'INT4', 55.5, 14.0, 3.5, false],
+  ['Mistral-7B FP16', '7b', 'FP16', 64.0, 6.5, 14, false],
+  ['Mistral-7B INT4', '7b', 'INT4', 62.0, 15.0, 3.5, true],
+
+  // Small
+  ['Phi-3 mini (3.8B) FP16', 'small', 'FP16', 68.8, 12.0, 7.6, false],
+  ['Phi-3 mini (3.8B) INT4', 'small', 'INT4', 67.0, 22.0, 1.9, true],
+];
+
+const canvas = document.getElementById('chart');
+const ctx = canvas.getContext('2d');
+const tooltip = document.getElementById('tooltip');
+
+// Chart dimensions
+const margin = { top: 30, right: 40, bottom: 50, left: 60 };
+const W = canvas.width - margin.left - margin.right;
+const H = canvas.height - margin.top - margin.bottom;
+
+const colors = {
+  '70b': '#e94560',
+  '13b': '#fbbf24',
+  '7b': '#4ecdc4',
+  'small': '#a78bfa'
+};
+
+let activeFilter = 'all';
+
+function getFilteredData() {
+  if (activeFilter === 'all') return data;
+  if (activeFilter === 'frontier') return data.filter(d => d[6]);
+  return data.filter(d => d[1] === activeFilter);
+}
+
+function xScale(v) {
+  const min = 0, max = 25;
+  return margin.left + ((v - min) / (max - min)) * W;
+}
+function yScale(v) {
+  const min = 50, max = 90;
+  return margin.top + H - ((v - min) / (max - min)) * H;
+}
+function radiusScale(mem) {
+  return 4 + Math.sqrt(mem) * 1.2;
+}
+
+function draw() {
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+  // Grid
+  ctx.strokeStyle = '#21262d';
+  ctx.lineWidth = 1;
+  for (let y = 50; y <= 90; y += 5) {
+    ctx.beginPath();
+    ctx.moveTo(margin.left, yScale(y));
+    ctx.lineTo(margin.left + W, yScale(y));
+    ctx.stroke();
+    ctx.fillStyle = '#8b949e';
+    ctx.font = '11px sans-serif';
+    ctx.textAlign = 'right';
+    ctx.fillText(y + '%', margin.left - 8, yScale(y) + 4);
+  }
+  for (let x = 0; x <= 25; x += 5) {
+    ctx.beginPath();
+    ctx.moveTo(xScale(x), margin.top);
+    ctx.lineTo(xScale(x), margin.top + H);
+    ctx.stroke();
+    ctx.fillStyle = '#8b949e';
+    ctx.font = '11px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText(x + 'x', xScale(x), margin.top + H + 20);
+  }
+
+  // Axis labels
+  ctx.fillStyle = '#8b949e';
+  ctx.font = '12px sans-serif';
+  ctx.textAlign = 'center';
+  ctx.fillText('Relative Inference Throughput (tokens/s, higher = faster)', margin.left + W/2, canvas.height - 8);
+  ctx.save();
+  ctx.translate(14, margin.top + H/2);
+  ctx.rotate(-Math.PI/2);
+  ctx.fillText('MMLU Accuracy (%)', 0, 0);
+  ctx.restore();
+
+  // Draw Pareto frontier line
+  const paretoPoints = data.filter(d => d[6]).map(d => [xScale(d[4]), yScale(d[3])]);
+  paretoPoints.sort((a, b) => a[0] - b[0]);
+  if (paretoPoints.length > 1) {
+    ctx.beginPath();
+    ctx.strokeStyle = 'rgba(88, 166, 255, 0.3)';
+    ctx.lineWidth = 2;
+    ctx.setLineDash([6, 4]);
+    ctx.moveTo(paretoPoints[0][0], paretoPoints[0][1]);
+    for (let i = 1; i < paretoPoints.length; i++) {
+      ctx.lineTo(paretoPoints[i][0], paretoPoints[i][1]);
+    }
+    ctx.stroke();
+    ctx.setLineDash([]);
+  }
+
+  // Draw points
+  const filtered = getFilteredData();
+  filtered.forEach(d => {
+    const x = xScale(d[4]);
+    const y = yScale(d[3]);
+    const r = radiusScale(d[5]);
+    const color = colors[d[1]] || '#888';
+
+    ctx.beginPath();
+    ctx.arc(x, y, r, 0, Math.PI * 2);
+    ctx.fillStyle = color + '99';
+    ctx.fill();
+    ctx.strokeStyle = d[6] ? '#58a6ff' : color;
+    ctx.lineWidth = d[6] ? 2.5 : 1;
+    ctx.stroke();
+
+    // Label for Pareto points
+    if (d[6]) {
+      ctx.fillStyle = '#e0e0e0';
+      ctx.font = '10px sans-serif';
+      ctx.textAlign = 'left';
+      const labelX = x + r + 4;
+      const labelY = y - r - 2;
+      ctx.fillText(d[0], labelX, labelY);
+    }
+  });
+}
+
+// Tooltip
+canvas.addEventListener('mousemove', (e) => {
+  const rect = canvas.getBoundingClientRect();
+  const mx = (e.clientX - rect.left) * (canvas.width / rect.width);
+  const my = (e.clientY - rect.top) * (canvas.height / rect.height);
+
+  let hit = null;
+  const filtered = getFilteredData();
+  for (const d of filtered) {
+    const x = xScale(d[4]);
+    const y = yScale(d[3]);
+    const r = radiusScale(d[5]);
+    const dist = Math.sqrt((mx - x) ** 2 + (my - y) ** 2);
+    if (dist < r + 4) { hit = d; break; }
+  }
+
+  if (hit) {
+    tooltip.style.display = 'block';
+    tooltip.style.left = (e.clientX - canvas.parentElement.getBoundingClientRect().left + 16) + 'px';
+    tooltip.style.top = (e.clientY - canvas.parentElement.getBoundingClientRect().top - 20) + 'px';
+    tooltip.innerHTML = `
+      <div class="tt-name">${hit[0]}</div>
+      <div class="tt-line">MMLU: ${hit[3]}%</div>
+      <div class="tt-line">Throughput: ${hit[4]}x</div>
+      <div class="tt-line">Memory: ${hit[5]} GB</div>
+      <div class="tt-line">Precision: ${hit[2]}</div>
+      ${hit[6] ? '<div class="tt-line" style="color:#58a6ff;">Pareto-optimal</div>' : ''}
+    `;
+  } else {
+    tooltip.style.display = 'none';
+  }
+});
+
+canvas.addEventListener('mouseleave', () => { tooltip.style.display = 'none'; });
+
+// Filter buttons
+document.querySelectorAll('.control-btn').forEach(btn => {
+  btn.addEventListener('click', () => {
+    document.querySelectorAll('.control-btn').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    activeFilter = btn.dataset.filter;
+    draw();
+  });
+});
+
+draw();
+</script>
+</body>
+</html>

@@ -1,0 +1,373 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>RoPE Rotation Visualizer — Ch-06</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body {
+  background: #1a1a2e;
+  color: #e0e0e0;
+  font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 40px 20px;
+}
+h1 { font-size: 22px; color: #e94560; margin-bottom: 8px; }
+.subtitle { font-size: 13px; color: #888; margin-bottom: 32px; text-align: center; max-width: 650px; }
+
+.main-layout {
+  display: flex;
+  gap: 32px;
+  flex-wrap: wrap;
+  justify-content: center;
+  width: 100%;
+  max-width: 1000px;
+}
+
+.canvas-panel {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+canvas {
+  background: #16213e;
+  border-radius: 12px;
+}
+.canvas-label {
+  font-size: 12px;
+  color: #888;
+  margin-top: 8px;
+  text-align: center;
+}
+
+.controls-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  min-width: 280px;
+}
+.control-group {
+  background: #16213e;
+  border-radius: 10px;
+  padding: 16px 20px;
+}
+.control-group h3 {
+  font-size: 13px;
+  color: #4ecdc4;
+  margin-bottom: 12px;
+}
+.slider-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+.slider-row label {
+  font-size: 12px;
+  color: #aaa;
+  min-width: 80px;
+}
+.slider-row input[type="range"] {
+  -webkit-appearance: none;
+  flex: 1;
+  height: 5px;
+  background: #0a1628;
+  border-radius: 3px;
+  outline: none;
+}
+.slider-row input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: #e94560;
+  cursor: pointer;
+}
+.slider-row .val {
+  font-size: 12px;
+  color: #e94560;
+  font-weight: 700;
+  min-width: 40px;
+  text-align: right;
+}
+
+.info-box {
+  background: #16213e;
+  border-radius: 10px;
+  padding: 16px 20px;
+  width: 100%;
+  max-width: 1000px;
+  margin-top: 24px;
+}
+.info-box h3 { font-size: 13px; color: #ffd93d; margin-bottom: 8px; }
+.info-box p { font-size: 12px; color: #aaa; line-height: 1.6; }
+.info-box .formula {
+  font-family: monospace;
+  color: #4ecdc4;
+  background: #0a1628;
+  padding: 8px 12px;
+  border-radius: 6px;
+  margin: 8px 0;
+  font-size: 13px;
+}
+
+.dot-product-display {
+  background: #16213e;
+  border-radius: 10px;
+  padding: 16px 20px;
+}
+.dot-product-display h3 { font-size: 13px; color: #e94560; margin-bottom: 8px; }
+.dp-value {
+  font-size: 24px;
+  font-weight: 700;
+  color: #e94560;
+  text-align: center;
+  margin: 8px 0;
+}
+.dp-note { font-size: 11px; color: #666; text-align: center; }
+</style>
+</head>
+<body>
+
+<h1>RoPE Rotation Visualizer</h1>
+<p class="subtitle">
+  RoPE encodes position by rotating query/key vectors in 2D planes. This visualizer shows how a single dimension pair
+  is rotated at different positions, and how the dot product between rotated vectors depends only on relative position.
+</p>
+
+<div class="main-layout">
+  <div class="canvas-panel">
+    <canvas id="ropeCanvas" width="400" height="400"></canvas>
+    <div class="canvas-label">2D rotation plane for dimension pair j</div>
+  </div>
+
+  <div class="controls-panel">
+    <div class="control-group">
+      <h3>Positions</h3>
+      <div class="slider-row">
+        <label>Query pos (m):</label>
+        <input type="range" id="posM" min="0" max="50" value="3" oninput="update()">
+        <span class="val" id="posMVal">3</span>
+      </div>
+      <div class="slider-row">
+        <label>Key pos (n):</label>
+        <input type="range" id="posN" min="0" max="50" value="1" oninput="update()">
+        <span class="val" id="posNVal">1</span>
+      </div>
+    </div>
+
+    <div class="control-group">
+      <h3>Frequency</h3>
+      <div class="slider-row">
+        <label>Dim pair (j):</label>
+        <input type="range" id="dimJ" min="0" max="31" value="2" oninput="update()">
+        <span class="val" id="dimJVal">2</span>
+      </div>
+      <div class="slider-row">
+        <label>d_model:</label>
+        <input type="range" id="dModel" min="32" max="256" step="32" value="64" oninput="update()">
+        <span class="val" id="dModelVal">64</span>
+      </div>
+    </div>
+
+    <div class="dot-product-display">
+      <h3>Dot Product (Relative Position)</h3>
+      <div class="dp-value" id="dpValue">--</div>
+      <div class="dp-note" id="dpNote">Relative distance: m - n = 2</div>
+      <div style="margin-top:8px; font-size:11px; color:#888; text-align:center;" id="dpFormula">
+        cos((m-n) * theta_j) = cos(2 * theta_2)
+      </div>
+    </div>
+
+    <div class="control-group">
+      <h3>Legend</h3>
+      <div style="display:flex; flex-direction:column; gap:6px; font-size:12px;">
+        <div><span style="color:#e94560; font-weight:700;">---</span> Original q vector</div>
+        <div><span style="color:#ff6b81; font-weight:700;">---</span> Rotated q at position m</div>
+        <div><span style="color:#4ecdc4; font-weight:700;">---</span> Original k vector</div>
+        <div><span style="color:#7fefef; font-weight:700;">---</span> Rotated k at position n</div>
+        <div><span style="color:#ffd93d; font-weight:700;">arc</span> Rotation angle = m * theta_j</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="info-box">
+  <h3>How RoPE Works</h3>
+  <div class="formula" id="formulaDisplay">
+    theta_j = 10000^(-2j/d) | Rotation angle for q at pos m: m * theta_j
+  </div>
+  <p>
+    Each pair of dimensions (2j, 2j+1) forms a 2D rotation plane. At position m, the query vector is rotated by
+    angle m * theta_j in this plane. The key vector at position n is rotated by n * theta_j. Their dot product
+    equals |q||k| * cos((m-n) * theta_j), which depends only on the <strong>relative position</strong> (m - n).
+    Low j = high frequency (fast rotation, local position). High j = low frequency (slow rotation, global position).
+  </p>
+</div>
+
+<script>
+const canvas = document.getElementById('ropeCanvas');
+const ctx = canvas.getContext('2d');
+const cx = canvas.width / 2;
+const cy = canvas.height / 2;
+const radius = 160;
+
+// Fixed query and key vectors (unit vectors at fixed angles)
+const qAngle = 0.4; // ~23 degrees
+const kAngle = 1.2; // ~69 degrees
+
+function getTheta(j, d) {
+  return 1.0 / Math.pow(10000, 2.0 * j / d);
+}
+
+function update() {
+  const m = parseInt(document.getElementById('posM').value);
+  const n = parseInt(document.getElementById('posN').value);
+  const j = parseInt(document.getElementById('dimJ').value);
+  const d = parseInt(document.getElementById('dModel').value);
+
+  document.getElementById('posMVal').textContent = m;
+  document.getElementById('posNVal').textContent = n;
+  document.getElementById('dimJVal').textContent = j;
+  document.getElementById('dModelVal').textContent = d;
+
+  const theta = getTheta(j, d);
+  const qRot = m * theta;
+  const kRot = n * theta;
+  const relAngle = (m - n) * theta;
+  const dotProduct = Math.cos(relAngle);
+
+  document.getElementById('dpValue').textContent = dotProduct.toFixed(4);
+  document.getElementById('dpNote').textContent = `Relative distance: m - n = ${m - n}`;
+  document.getElementById('dpFormula').textContent =
+    `cos((${m}-${n}) * theta_${j}) = cos(${(m-n)} * ${theta.toFixed(4)}) = ${dotProduct.toFixed(4)}`;
+  document.getElementById('formulaDisplay').textContent =
+    `theta_${j} = 10000^(-${2*j}/${d}) = ${theta.toFixed(6)} | Period = ${(2*Math.PI/theta).toFixed(0)} positions`;
+
+  draw(m, n, j, d, theta, qRot, kRot, dotProduct);
+}
+
+function draw(m, n, j, d, theta, qRot, kRot, dotProduct) {
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+  // Background circle
+  ctx.beginPath();
+  ctx.arc(cx, cy, radius, 0, Math.PI * 2);
+  ctx.strokeStyle = '#333';
+  ctx.lineWidth = 1;
+  ctx.stroke();
+
+  // Axes
+  ctx.strokeStyle = '#222';
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(cx - radius - 10, cy);
+  ctx.lineTo(cx + radius + 10, cy);
+  ctx.moveTo(cx, cy - radius - 10);
+  ctx.lineTo(cx, cy + radius + 10);
+  ctx.stroke();
+
+  // Axis labels
+  ctx.fillStyle = '#555';
+  ctx.font = '11px monospace';
+  ctx.fillText('dim 2j', cx + radius + 14, cy + 4);
+  ctx.fillText('dim 2j+1', cx - 24, cy - radius - 14);
+
+  // Draw original q vector (dimmer)
+  drawVector(cx, cy, qAngle, radius * 0.85, '#e9456066', 2, 'q');
+
+  // Draw original k vector (dimmer)
+  drawVector(cx, cy, kAngle, radius * 0.85, '#4ecdc466', 2, 'k');
+
+  // Draw rotated q vector
+  const qRotAngle = qAngle + qRot;
+  drawVector(cx, cy, qRotAngle, radius * 0.85, '#e94560', 3, `R(${m})q`);
+
+  // Draw rotated k vector
+  const kRotAngle = kAngle + kRot;
+  drawVector(cx, cy, kRotAngle, radius * 0.85, '#4ecdc4', 3, `R(${n})k`);
+
+  // Draw rotation arc for q
+  if (Math.abs(qRot) > 0.01) {
+    drawArc(cx, cy, 60, qAngle, qAngle + qRot, '#ffd93d', `m*theta=${(qRot).toFixed(2)}`);
+  }
+
+  // Draw rotation arc for k
+  if (Math.abs(kRot) > 0.01) {
+    drawArc(cx, cy, 45, kAngle, kAngle + kRot, '#ffd93d88', `n*theta=${(kRot).toFixed(2)}`);
+  }
+
+  // Draw relative angle arc
+  drawArc(cx, cy, radius * 0.85 + 12, kRotAngle, qRotAngle, '#a29bfe', '');
+
+  // Dot product indicator
+  const dpColor = dotProduct > 0.5 ? '#4ecdc4' : dotProduct > 0 ? '#ffd93d' : '#e94560';
+  ctx.fillStyle = dpColor;
+  ctx.font = 'bold 12px sans-serif';
+  ctx.fillText(`dot = ${dotProduct.toFixed(3)}`, 10, 20);
+}
+
+function drawVector(ox, oy, angle, len, color, width, label) {
+  const ex = ox + Math.cos(angle) * len;
+  const ey = oy - Math.sin(angle) * len;
+
+  ctx.beginPath();
+  ctx.moveTo(ox, oy);
+  ctx.lineTo(ex, ey);
+  ctx.strokeStyle = color;
+  ctx.lineWidth = width;
+  ctx.stroke();
+
+  // Arrowhead
+  const headLen = 10;
+  const headAngle = 0.4;
+  ctx.beginPath();
+  ctx.moveTo(ex, ey);
+  ctx.lineTo(
+    ex - headLen * Math.cos(angle - headAngle),
+    ey + headLen * Math.sin(angle - headAngle)
+  );
+  ctx.moveTo(ex, ey);
+  ctx.lineTo(
+    ex - headLen * Math.cos(angle + headAngle),
+    ey + headLen * Math.sin(angle + headAngle)
+  );
+  ctx.stroke();
+
+  // Label
+  if (label) {
+    ctx.fillStyle = color;
+    ctx.font = 'bold 11px sans-serif';
+    const lx = ox + Math.cos(angle) * (len + 16);
+    const ly = oy - Math.sin(angle) * (len + 16);
+    ctx.fillText(label, lx - 10, ly + 4);
+  }
+}
+
+function drawArc(ox, oy, r, startAngle, endAngle, color, label) {
+  ctx.beginPath();
+  // Canvas angles are clockwise, math angles counter-clockwise
+  ctx.arc(ox, oy, r, -startAngle, -endAngle, endAngle > startAngle);
+  ctx.strokeStyle = color;
+  ctx.lineWidth = 2;
+  ctx.stroke();
+
+  if (label) {
+    const midAngle = (startAngle + endAngle) / 2;
+    const lx = ox + Math.cos(midAngle) * (r + 14);
+    const ly = oy - Math.sin(midAngle) * (r + 14);
+    ctx.fillStyle = color;
+    ctx.font = '10px monospace';
+    ctx.fillText(label, lx - 20, ly);
+  }
+}
+
+update();
+</script>
+
+</body>
+</html>

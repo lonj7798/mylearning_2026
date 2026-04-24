@@ -1,0 +1,459 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Residual Stream Information Flow</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { background: #1a1a2e; color: #e0e0e0; font-family: 'Segoe UI', system-ui, sans-serif; padding: 24px; min-height: 100vh; }
+.container { max-width: 960px; margin: 0 auto; }
+h1 { color: #e94560; font-size: 22px; margin-bottom: 4px; }
+.subtitle { color: #888; font-size: 13px; margin-bottom: 20px; }
+.layout { display: grid; grid-template-columns: 1fr 240px; gap: 20px; }
+.chart-area { background: #16213e; border-radius: 12px; padding: 20px; position: relative; overflow: hidden; }
+canvas { display: block; }
+.controls { display: flex; flex-direction: column; gap: 12px; }
+.param-group { background: #16213e; border-radius: 10px; padding: 14px; }
+.param-group h3 { color: #4ecdc4; font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 10px; }
+.param-row { margin-bottom: 10px; }
+.param-row label { display: block; font-size: 12px; color: #888; margin-bottom: 4px; }
+.param-row .val { color: #ffd93d; font-family: monospace; font-weight: bold; }
+input[type="range"] { width: 100%; accent-color: #e94560; }
+.legend-box { background: #16213e; border-radius: 10px; padding: 14px; }
+.legend-box h3 { color: #4ecdc4; font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 10px; }
+.legend-item { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; font-size: 12px; }
+.legend-swatch { width: 20px; height: 4px; border-radius: 2px; flex-shrink: 0; }
+.view-toggle { display: flex; gap: 8px; margin-bottom: 12px; }
+.view-btn { background: #0f3460; color: #4ecdc4; border: 1px solid #4ecdc4; border-radius: 6px; padding: 6px 14px; font-size: 12px; cursor: pointer; transition: all 0.15s; }
+.view-btn.active { background: #4ecdc4; color: #1a1a2e; }
+.view-btn:hover { opacity: 0.85; }
+.info-box { background: #16213e; border-radius: 10px; padding: 14px; }
+.info-box h3 { color: #e94560; font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 8px; }
+.info-text { font-size: 12px; color: #aaa; line-height: 1.6; }
+.equation { font-family: monospace; font-size: 11px; color: #ffd93d; background: #0f3460; padding: 8px 10px; border-radius: 6px; margin-top: 8px; line-height: 1.5; }
+</style>
+</head>
+<body>
+<div class="container">
+<h1>Residual Stream: Information Flow in Transformers</h1>
+<div class="subtitle">Visualize how attention and FFN layers read from and write to the residual stream. Adjust layer count and observe gradient flow.</div>
+
+<div class="view-toggle">
+    <button class="view-btn active" id="btn-forward" onclick="setView('forward')">Forward Pass</button>
+    <button class="view-btn" id="btn-gradient" onclick="setView('gradient')">Gradient Flow</button>
+    <button class="view-btn" id="btn-magnitude" onclick="setView('magnitude')">Magnitude Plot</button>
+</div>
+
+<div class="layout">
+<div class="chart-area">
+    <canvas id="canvas" width="660" height="520"></canvas>
+</div>
+<div class="controls">
+    <div class="param-group">
+        <h3>Architecture</h3>
+        <div class="param-row">
+            <label>Number of layers: <span class="val" id="val-layers">6</span></label>
+            <input type="range" id="sl-layers" min="2" max="24" step="1" value="6" oninput="updateParam()">
+        </div>
+        <div class="param-row">
+            <label>Init scale (1/sqrt(2L)): <span class="val" id="val-scale">0.29</span></label>
+            <input type="range" id="sl-scale" min="0.05" max="1.0" step="0.01" value="0.29" oninput="updateParam()">
+        </div>
+        <div class="param-row">
+            <label>Sublayer variance: <span class="val" id="val-var">0.15</span></label>
+            <input type="range" id="sl-var" min="0.01" max="0.5" step="0.01" value="0.15" oninput="updateParam()">
+        </div>
+    </div>
+    <div class="legend-box">
+        <h3>Legend</h3>
+        <div class="legend-item"><div class="legend-swatch" style="background:#e94560"></div> Residual stream</div>
+        <div class="legend-item"><div class="legend-swatch" style="background:#4ecdc4"></div> Attention sublayer</div>
+        <div class="legend-item"><div class="legend-swatch" style="background:#ffd93d"></div> FFN sublayer</div>
+        <div class="legend-item"><div class="legend-swatch" style="background:#a855f7"></div> RMSNorm</div>
+        <div class="legend-item"><div class="legend-swatch" style="background:rgba(255,255,255,0.15)"></div> Read (from stream)</div>
+        <div class="legend-item"><div class="legend-swatch" style="background:rgba(233,69,96,0.4)"></div> Write (to stream)</div>
+    </div>
+    <div class="info-box">
+        <h3>Key Insight</h3>
+        <div class="info-text" id="info-content">
+            Each layer reads the current stream state via RMSNorm, computes a delta, and adds it back. The final output is the embedding plus all deltas.
+        </div>
+        <div class="equation" id="eq-content">x_L = x_0 + sum(f_l(x_l-1))</div>
+    </div>
+</div>
+</div>
+</div>
+
+<script>
+const canvas = document.getElementById('canvas');
+const ctx = canvas.getContext('2d');
+let currentView = 'forward';
+let animFrame = 0;
+let animTimer = null;
+
+function updateParam() {
+    const L = parseInt(document.getElementById('sl-layers').value);
+    const sc = (1 / Math.sqrt(2 * L)).toFixed(2);
+    document.getElementById('val-layers').textContent = L;
+    document.getElementById('val-scale').textContent = document.getElementById('sl-scale').value;
+    document.getElementById('val-var').textContent = document.getElementById('sl-var').value;
+    draw();
+}
+
+function setView(v) {
+    currentView = v;
+    document.querySelectorAll('.view-btn').forEach(b => b.classList.remove('active'));
+    document.getElementById('btn-' + v).classList.add('active');
+    const info = document.getElementById('info-content');
+    const eq = document.getElementById('eq-content');
+    if (v === 'forward') {
+        info.textContent = 'Each layer reads the current stream state via RMSNorm, computes a delta, and adds it back. The final output is the embedding plus all deltas.';
+        eq.textContent = 'x_L = x_0 + sum(f_l(x_l-1))';
+    } else if (v === 'gradient') {
+        info.textContent = 'Gradients flow through the identity path (skip connections) at O(1) magnitude. The branch Jacobians add corrections but never block the highway.';
+        eq.textContent = 'dL/dx_l = dL/dx_L * prod(I + J_k)';
+    } else {
+        info.textContent = 'Activation magnitude grows with depth as each layer adds its contribution. Initialization scale controls growth rate. Well-scaled init keeps magnitude bounded.';
+        eq.textContent = 'Var(x_l) ~ 1 + l * sigma_f^2 / (2L)';
+    }
+    draw();
+}
+
+function draw() {
+    const W = canvas.width, H = canvas.height;
+    const L = parseInt(document.getElementById('sl-layers').value);
+    const initScale = parseFloat(document.getElementById('sl-scale').value);
+    const subVar = parseFloat(document.getElementById('sl-var').value);
+    ctx.clearRect(0, 0, W, H);
+
+    if (currentView === 'magnitude') {
+        drawMagnitudePlot(W, H, L, initScale, subVar);
+        return;
+    }
+
+    const isGrad = currentView === 'gradient';
+
+    // Layout
+    const streamX = 120;
+    const streamTop = 40;
+    const streamBot = H - 40;
+    const maxVisible = Math.min(L, 12);
+    const blockH = (streamBot - streamTop) / (maxVisible + 0.5);
+    const branchW = 180;
+
+    // Draw title
+    ctx.fillStyle = '#888';
+    ctx.font = '11px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText(isGrad ? 'GRADIENT FLOW (backward)' : 'FORWARD PASS', W / 2, 20);
+
+    // Draw residual stream backbone
+    ctx.strokeStyle = '#e94560';
+    ctx.lineWidth = 3;
+    ctx.setLineDash([]);
+    ctx.beginPath();
+    ctx.moveTo(streamX, streamTop);
+    ctx.lineTo(streamX, streamBot);
+    ctx.stroke();
+
+    // Arrow at bottom (forward) or top (gradient)
+    const arrowY = isGrad ? streamTop : streamBot;
+    const arrowDir = isGrad ? 1 : -1;
+    ctx.fillStyle = '#e94560';
+    ctx.beginPath();
+    ctx.moveTo(streamX, arrowY);
+    ctx.lineTo(streamX - 6, arrowY + arrowDir * 12);
+    ctx.lineTo(streamX + 6, arrowY + arrowDir * 12);
+    ctx.closePath();
+    ctx.fill();
+
+    // Label endpoints
+    ctx.fillStyle = '#e94560';
+    ctx.font = 'bold 12px monospace';
+    ctx.textAlign = 'center';
+    ctx.fillText('x\u2080 (embed)', streamX, streamTop - 8);
+    ctx.fillText('x_L (output)', streamX, streamBot + 20);
+
+    // Draw each block
+    for (let i = 0; i < maxVisible; i++) {
+        const layerIdx = i;
+        const yCenter = streamTop + (i + 0.5) * blockH + blockH * 0.25;
+        const isAttn = true;
+        const isFFN = true;
+
+        // Attention branch
+        const attnY = yCenter - blockH * 0.15;
+        drawBranch(ctx, streamX, attnY, branchW, blockH * 0.22, layerIdx, 'Attn', '#4ecdc4', isGrad);
+
+        // FFN branch
+        const ffnY = yCenter + blockH * 0.15;
+        drawBranch(ctx, streamX, ffnY, branchW, blockH * 0.22, layerIdx, 'FFN', '#ffd93d', isGrad);
+
+        // Layer label
+        ctx.fillStyle = '#555';
+        ctx.font = '10px monospace';
+        ctx.textAlign = 'right';
+        ctx.fillText('L' + (layerIdx + 1), streamX - 16, yCenter + 3);
+
+        // Addition nodes on stream
+        [attnY, ffnY].forEach(y => {
+            ctx.fillStyle = '#e94560';
+            ctx.beginPath();
+            ctx.arc(streamX, y + blockH * 0.11, 5, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.fillStyle = '#1a1a2e';
+            ctx.font = 'bold 9px sans-serif';
+            ctx.textAlign = 'center';
+            ctx.fillText('+', streamX, y + blockH * 0.11 + 3);
+        });
+    }
+
+    if (L > maxVisible) {
+        ctx.fillStyle = '#888';
+        ctx.font = '13px sans-serif';
+        ctx.textAlign = 'center';
+        ctx.fillText('... (' + (L - maxVisible) + ' more layers)', W / 2, streamBot - 10);
+    }
+
+    // Gradient glow effect
+    if (isGrad) {
+        const grad = ctx.createLinearGradient(streamX - 8, streamBot, streamX - 8, streamTop);
+        grad.addColorStop(0, 'rgba(233, 69, 96, 0.0)');
+        grad.addColorStop(0.5, 'rgba(233, 69, 96, 0.12)');
+        grad.addColorStop(1, 'rgba(233, 69, 96, 0.25)');
+        ctx.fillStyle = grad;
+        ctx.fillRect(streamX - 8, streamTop, 16, streamBot - streamTop);
+
+        // Identity path annotation
+        ctx.fillStyle = '#e94560';
+        ctx.font = 'italic 11px sans-serif';
+        ctx.textAlign = 'left';
+        ctx.fillText('Identity path: O(1) gradient', streamX + branchW + 60, H / 2 - 10);
+        ctx.fillStyle = '#888';
+        ctx.fillText('(independent of depth L)', streamX + branchW + 60, H / 2 + 8);
+
+        // Draw gradient arrow along identity
+        ctx.strokeStyle = 'rgba(233, 69, 96, 0.5)';
+        ctx.lineWidth = 2;
+        ctx.setLineDash([6, 4]);
+        ctx.beginPath();
+        ctx.moveTo(streamX + branchW + 50, H / 2 + 20);
+        ctx.lineTo(streamX + 10, H / 2 + 20);
+        ctx.stroke();
+        ctx.setLineDash([]);
+    }
+}
+
+function drawBranch(ctx, streamX, y, branchW, h, layerIdx, label, color, isGrad) {
+    const readY = y;
+    const writeY = y + h;
+    const midY = y + h / 2;
+    const branchRight = streamX + branchW;
+    const normX = streamX + 40;
+    const sublayerX = streamX + branchW * 0.55;
+
+    // Read line (from stream to norm)
+    ctx.strokeStyle = isGrad ? 'rgba(255,255,255,0.08)' : 'rgba(255,255,255,0.15)';
+    ctx.lineWidth = 1;
+    ctx.setLineDash([3, 3]);
+    ctx.beginPath();
+    ctx.moveTo(streamX + 5, readY);
+    ctx.lineTo(normX, readY);
+    ctx.stroke();
+    ctx.setLineDash([]);
+
+    // Norm box
+    const normW = 48, normH = h * 0.7;
+    ctx.fillStyle = 'rgba(168, 85, 247, 0.15)';
+    ctx.strokeStyle = '#a855f7';
+    ctx.lineWidth = 1;
+    roundRect(ctx, normX - 2, midY - normH / 2, normW, normH, 4);
+    ctx.fill();
+    ctx.stroke();
+    ctx.fillStyle = '#a855f7';
+    ctx.font = '9px monospace';
+    ctx.textAlign = 'center';
+    ctx.fillText('RMSNorm', normX + normW / 2 - 2, midY + 3);
+
+    // Arrow norm -> sublayer
+    ctx.strokeStyle = 'rgba(255,255,255,0.2)';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(normX + normW, midY);
+    ctx.lineTo(sublayerX - 2, midY);
+    ctx.stroke();
+
+    // Sublayer box
+    const subW = 60, subH = normH;
+    ctx.fillStyle = color + '22';
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 1.5;
+    roundRect(ctx, sublayerX, midY - subH / 2, subW, subH, 4);
+    ctx.fill();
+    ctx.stroke();
+    ctx.fillStyle = color;
+    ctx.font = 'bold 10px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText(label + ' ' + (layerIdx + 1), sublayerX + subW / 2, midY + 3);
+
+    // Write arrow (from sublayer back to stream)
+    ctx.strokeStyle = isGrad ? 'rgba(233,69,96,0.2)' : 'rgba(233,69,96,0.4)';
+    ctx.lineWidth = 1.5;
+    ctx.setLineDash([]);
+    ctx.beginPath();
+    ctx.moveTo(sublayerX + subW, midY);
+    ctx.lineTo(sublayerX + subW + 15, midY);
+    ctx.lineTo(sublayerX + subW + 15, writeY);
+    ctx.lineTo(streamX + 8, writeY);
+    ctx.stroke();
+
+    // Write arrow head
+    ctx.fillStyle = isGrad ? 'rgba(233,69,96,0.2)' : 'rgba(233,69,96,0.5)';
+    ctx.beginPath();
+    ctx.moveTo(streamX + 8, writeY);
+    ctx.lineTo(streamX + 14, writeY - 3);
+    ctx.lineTo(streamX + 14, writeY + 3);
+    ctx.closePath();
+    ctx.fill();
+
+    // Delta label
+    ctx.fillStyle = '#888';
+    ctx.font = '9px monospace';
+    ctx.textAlign = 'left';
+    ctx.fillText('+\u0394' + label.toLowerCase()[0] + (layerIdx + 1), sublayerX + subW + 18, midY + 3);
+}
+
+function drawMagnitudePlot(W, H, L, initScale, subVar) {
+    const pad = { l: 60, r: 30, t: 40, b: 50 };
+    const pw = W - pad.l - pad.r;
+    const ph = H - pad.t - pad.b;
+
+    // Title
+    ctx.fillStyle = '#888';
+    ctx.font = '11px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText('ACTIVATION MAGNITUDE vs LAYER DEPTH', W / 2, 20);
+
+    // Compute magnitudes for three scenarios
+    const scenarios = [
+        { name: 'Pre-norm (scaled init)', color: '#4ecdc4', compute: l => 1 + l * subVar * initScale * initScale },
+        { name: 'Pre-norm (unscaled)', color: '#ffd93d', compute: l => 1 + l * subVar },
+        { name: 'Post-norm (unscaled)', color: '#e94560', compute: l => { let v = 1; for (let k = 0; k < l; k++) v = (v + subVar) * 1.02; return v; } }
+    ];
+
+    // Find y range
+    let yMax = 0;
+    scenarios.forEach(s => { for (let l = 0; l <= L; l++) yMax = Math.max(yMax, s.compute(l)); });
+    yMax = Math.ceil(yMax * 1.2);
+    const yMin = 0;
+
+    function toPixel(x, y) {
+        return [pad.l + (x / L) * pw, pad.t + (1 - (y - yMin) / (yMax - yMin)) * ph];
+    }
+
+    // Grid
+    ctx.strokeStyle = '#1e2a4a';
+    ctx.lineWidth = 1;
+    const ySteps = 5;
+    for (let i = 0; i <= ySteps; i++) {
+        const yv = yMin + (yMax - yMin) * i / ySteps;
+        const [, py] = toPixel(0, yv);
+        ctx.beginPath(); ctx.moveTo(pad.l, py); ctx.lineTo(W - pad.r, py); ctx.stroke();
+        ctx.fillStyle = '#555'; ctx.font = '11px monospace'; ctx.textAlign = 'right';
+        ctx.fillText(yv.toFixed(1), pad.l - 8, py + 4);
+    }
+    for (let x = 0; x <= L; x += Math.max(1, Math.floor(L / 8))) {
+        const [px] = toPixel(x, 0);
+        ctx.beginPath(); ctx.moveTo(px, pad.t); ctx.lineTo(px, H - pad.b); ctx.stroke();
+        ctx.fillStyle = '#555'; ctx.textAlign = 'center';
+        ctx.fillText(x, px, H - pad.b + 16);
+    }
+
+    // Axes
+    ctx.strokeStyle = '#444'; ctx.lineWidth = 1.5;
+    ctx.beginPath(); ctx.moveTo(pad.l, H - pad.b); ctx.lineTo(W - pad.r, H - pad.b); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(pad.l, pad.t); ctx.lineTo(pad.l, H - pad.b); ctx.stroke();
+
+    // Axis labels
+    ctx.fillStyle = '#888'; ctx.font = '12px sans-serif'; ctx.textAlign = 'center';
+    ctx.fillText('Layer depth', W / 2, H - 8);
+    ctx.save();
+    ctx.translate(16, H / 2);
+    ctx.rotate(-Math.PI / 2);
+    ctx.fillText('Activation magnitude (relative)', 0, 0);
+    ctx.restore();
+
+    // Plot lines
+    scenarios.forEach(({ compute, color }) => {
+        ctx.strokeStyle = color;
+        ctx.lineWidth = 2.5;
+        ctx.beginPath();
+        for (let l = 0; l <= L; l++) {
+            const [px, py] = toPixel(l, compute(l));
+            if (l === 0) ctx.moveTo(px, py);
+            else ctx.lineTo(px, py);
+        }
+        ctx.stroke();
+
+        // Dots at each layer
+        for (let l = 0; l <= L; l++) {
+            const [px, py] = toPixel(l, compute(l));
+            ctx.fillStyle = color;
+            ctx.beginPath();
+            ctx.arc(px, py, 3, 0, Math.PI * 2);
+            ctx.fill();
+        }
+    });
+
+    // Ideal line at y=1
+    ctx.strokeStyle = 'rgba(255,255,255,0.2)';
+    ctx.lineWidth = 1;
+    ctx.setLineDash([6, 4]);
+    const [, idealY] = toPixel(0, 1);
+    ctx.beginPath(); ctx.moveTo(pad.l, idealY); ctx.lineTo(W - pad.r, idealY); ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.fillStyle = 'rgba(255,255,255,0.3)';
+    ctx.font = '10px sans-serif';
+    ctx.textAlign = 'left';
+    ctx.fillText('ideal = 1.0', pad.l + 4, idealY - 6);
+
+    // Legend
+    let ly = pad.t + 10;
+    scenarios.forEach(({ name, color }) => {
+        ctx.fillStyle = color;
+        ctx.fillRect(W - pad.r - 170, ly, 14, 3);
+        ctx.fillStyle = '#ccc';
+        ctx.font = '11px sans-serif';
+        ctx.textAlign = 'left';
+        ctx.fillText(name, W - pad.r - 150, ly + 5);
+        ly += 18;
+    });
+}
+
+function roundRect(ctx, x, y, w, h, r) {
+    ctx.beginPath();
+    ctx.moveTo(x + r, y);
+    ctx.lineTo(x + w - r, y);
+    ctx.quadraticCurveTo(x + w, y, x + w, y + r);
+    ctx.lineTo(x + w, y + h - r);
+    ctx.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
+    ctx.lineTo(x + r, y + h);
+    ctx.quadraticCurveTo(x, y + h, x, y + h - r);
+    ctx.lineTo(x, y + r);
+    ctx.quadraticCurveTo(x, y, x + r, y);
+    ctx.closePath();
+}
+
+// Auto-set init scale to 1/sqrt(2L) when layers change
+document.getElementById('sl-layers').addEventListener('input', function() {
+    const L = parseInt(this.value);
+    const sc = (1 / Math.sqrt(2 * L)).toFixed(2);
+    document.getElementById('sl-scale').value = sc;
+    document.getElementById('val-scale').textContent = sc;
+});
+
+draw();
+</script>
+</body>
+</html>

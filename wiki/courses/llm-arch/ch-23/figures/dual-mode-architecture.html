@@ -1,0 +1,429 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Qwen 3 Dual-Mode Architecture</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body {
+  background: #0d1117;
+  color: #e0e0e0;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+  padding: 32px;
+  min-height: 100vh;
+}
+h1 {
+  font-size: 22px;
+  color: #e0e0e0;
+  margin-bottom: 8px;
+  font-weight: 600;
+}
+.subtitle {
+  color: #888;
+  font-size: 13px;
+  margin-bottom: 32px;
+}
+.mode-toggle {
+  display: flex;
+  gap: 0;
+  margin-bottom: 32px;
+  border-radius: 8px;
+  overflow: hidden;
+  width: fit-content;
+}
+.mode-btn {
+  padding: 12px 28px;
+  font-size: 14px;
+  font-weight: 600;
+  border: none;
+  cursor: pointer;
+  transition: all 0.3s;
+  font-family: inherit;
+}
+.mode-btn.thinking {
+  background: #1a1a2e;
+  color: #888;
+}
+.mode-btn.thinking.active {
+  background: #e94560;
+  color: #fff;
+}
+.mode-btn.non-thinking {
+  background: #1a1a2e;
+  color: #888;
+}
+.mode-btn.non-thinking.active {
+  background: #4ecdc4;
+  color: #1a1a2e;
+}
+.pipeline-container {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  max-width: 900px;
+}
+.stage {
+  display: flex;
+  align-items: stretch;
+  gap: 0;
+  border-radius: 10px;
+  overflow: hidden;
+  transition: all 0.4s;
+  opacity: 1;
+}
+.stage.dimmed {
+  opacity: 0.25;
+}
+.stage-label {
+  width: 160px;
+  min-width: 160px;
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  font-weight: 600;
+  font-size: 13px;
+}
+.stage-content {
+  flex: 1;
+  padding: 16px 20px;
+  background: #161b22;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+}
+.stage-content h3 {
+  font-size: 14px;
+  margin-bottom: 6px;
+  font-weight: 600;
+}
+.stage-content p {
+  font-size: 12px;
+  color: #999;
+  line-height: 1.5;
+}
+.arrow-row {
+  display: flex;
+  align-items: center;
+  padding-left: 70px;
+  height: 24px;
+}
+.arrow-row svg {
+  width: 20px;
+  height: 24px;
+}
+/* Input section */
+.input-section {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  margin-bottom: 24px;
+  padding: 16px 20px;
+  background: #161b22;
+  border-radius: 10px;
+  border: 1px solid #30363d;
+  max-width: 900px;
+}
+.input-section .prompt-box {
+  flex: 1;
+  font-size: 13px;
+  color: #e0e0e0;
+  font-family: 'SF Mono', 'Fira Code', monospace;
+  line-height: 1.6;
+}
+.input-section .flag {
+  padding: 4px 10px;
+  border-radius: 4px;
+  font-size: 11px;
+  font-weight: 700;
+  font-family: 'SF Mono', 'Fira Code', monospace;
+  white-space: nowrap;
+}
+.flag.think-flag {
+  background: #e94560;
+  color: #fff;
+}
+.flag.nothink-flag {
+  background: #4ecdc4;
+  color: #1a1a2e;
+}
+/* Output section */
+.output-section {
+  margin-top: 24px;
+  max-width: 900px;
+}
+.output-box {
+  background: #161b22;
+  border-radius: 10px;
+  padding: 20px;
+  border: 1px solid #30363d;
+  font-family: 'SF Mono', 'Fira Code', monospace;
+  font-size: 12px;
+  line-height: 1.7;
+  white-space: pre-wrap;
+  transition: all 0.4s;
+}
+.output-box .think-trace {
+  color: #e94560;
+  opacity: 0.8;
+}
+.output-box .answer {
+  color: #4ecdc4;
+}
+.output-label {
+  font-size: 12px;
+  font-weight: 600;
+  margin-bottom: 8px;
+  color: #888;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+}
+/* Shared weights callout */
+.shared-weights {
+  margin-top: 24px;
+  padding: 16px 20px;
+  background: #1c1c3a;
+  border-radius: 10px;
+  border-left: 3px solid #ffd93d;
+  max-width: 900px;
+  font-size: 13px;
+  color: #ccc;
+  line-height: 1.6;
+}
+.shared-weights strong {
+  color: #ffd93d;
+}
+/* Training pipeline colors */
+.s1-label { background: #1e3a5f; }
+.s2-label { background: #3d1f1f; }
+.s3-label { background: #2d1f4e; }
+.s4-label { background: #1f3d2e; }
+.s1-label h3, .s1-label .snum { color: #5ba3f5; }
+.s2-label h3, .s2-label .snum { color: #e94560; }
+.s3-label h3, .s3-label .snum { color: #b47aff; }
+.s4-label h3, .s4-label .snum { color: #4ecdc4; }
+.snum {
+  font-size: 22px;
+  font-weight: 700;
+  margin-bottom: 4px;
+}
+/* Budget slider */
+.budget-section {
+  margin-top: 24px;
+  max-width: 900px;
+  padding: 20px;
+  background: #161b22;
+  border-radius: 10px;
+  border: 1px solid #30363d;
+  display: none;
+}
+.budget-section.visible { display: block; }
+.budget-label {
+  font-size: 13px;
+  font-weight: 600;
+  color: #e0e0e0;
+  margin-bottom: 12px;
+}
+.budget-slider {
+  width: 100%;
+  -webkit-appearance: none;
+  height: 6px;
+  border-radius: 3px;
+  background: linear-gradient(to right, #4ecdc4 0%, #e94560 100%);
+  outline: none;
+}
+.budget-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: #fff;
+  cursor: pointer;
+  box-shadow: 0 0 6px rgba(0,0,0,0.4);
+}
+.budget-info {
+  display: flex;
+  justify-content: space-between;
+  margin-top: 8px;
+  font-size: 11px;
+  color: #888;
+}
+.budget-value {
+  font-size: 14px;
+  font-weight: 600;
+  color: #ffd93d;
+  margin-top: 8px;
+  text-align: center;
+}
+.section-title {
+  font-size: 15px;
+  font-weight: 600;
+  color: #e0e0e0;
+  margin: 32px 0 16px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid #30363d;
+  max-width: 900px;
+}
+</style>
+</head>
+<body>
+
+<h1>Qwen 3: Dual-Mode Architecture</h1>
+<p class="subtitle">Same weights, different behavior. A runtime flag controls thinking vs. non-thinking mode.</p>
+
+<div class="mode-toggle">
+  <button class="mode-btn thinking active" onclick="setMode('thinking')">Thinking Mode</button>
+  <button class="mode-btn non-thinking" onclick="setMode('non-thinking')">Non-Thinking Mode</button>
+</div>
+
+<!-- Input -->
+<div class="input-section">
+  <div class="prompt-box" id="promptBox">User: "What is the sum of the first 50 prime numbers?"</div>
+  <div class="flag think-flag" id="modeFlag">&lt;think&gt; enabled</div>
+</div>
+
+<!-- Shared weights callout -->
+<div class="shared-weights">
+  <strong>Key insight:</strong> The Transformer weights are identical in both modes. Mode switching is controlled entirely by special tokens (<code>&lt;think&gt;</code> / <code>&lt;/think&gt;</code>) in the prompt prefix. No weight changes, no adapter swaps, no routing — just a token-level signal that triggers different generation behavior.
+</div>
+
+<!-- Training Pipeline -->
+<div class="section-title">Post-Training Pipeline (builds dual-mode capability)</div>
+
+<div class="pipeline-container" id="pipeline">
+  <div class="stage" id="stage1">
+    <div class="stage-label s1-label">
+      <div class="snum">S1</div>
+      <h3>Cold Start</h3>
+    </div>
+    <div class="stage-content">
+      <h3>Long-CoT SFT</h3>
+      <p>Supervised fine-tuning on curated chain-of-thought examples. Teaches the <em>format</em> of multi-step reasoning — how to decompose, check work, arrive at conclusions. Foundation for thinking mode.</p>
+    </div>
+  </div>
+
+  <div class="arrow-row"><svg viewBox="0 0 20 24"><path d="M10 0 L10 18 M4 12 L10 18 L16 12" stroke="#555" stroke-width="2" fill="none"/></svg></div>
+
+  <div class="stage" id="stage2">
+    <div class="stage-label s2-label">
+      <div class="snum">S2</div>
+      <h3>Reasoning RL</h3>
+    </div>
+    <div class="stage-content">
+      <h3>GRPO on 3,995 Query-Verifier Pairs</h3>
+      <p>Reinforcement learning with deterministic verification (compilers, math checkers). Remarkably data-efficient — reshapes how 36T tokens of pre-trained knowledge are deployed. RL optimizes <em>strategy</em>, not knowledge.</p>
+    </div>
+  </div>
+
+  <div class="arrow-row"><svg viewBox="0 0 20 24"><path d="M10 0 L10 18 M4 12 L10 18 L16 12" stroke="#555" stroke-width="2" fill="none"/></svg></div>
+
+  <div class="stage" id="stage3">
+    <div class="stage-label s3-label">
+      <div class="snum">S3</div>
+      <h3>Mode Fusion</h3>
+    </div>
+    <div class="stage-content">
+      <h3>Thinking + Non-Thinking Integration</h3>
+      <p>The critical stage. Model learns to switch behavior based on &lt;think&gt; token presence. Training data includes both modes. Must solve <em>mode confusion</em>: no reasoning traces in non-thinking mode, no skipped reasoning in thinking mode.</p>
+    </div>
+  </div>
+
+  <div class="arrow-row"><svg viewBox="0 0 20 24"><path d="M10 0 L10 18 M4 12 L10 18 L16 12" stroke="#555" stroke-width="2" fill="none"/></svg></div>
+
+  <div class="stage" id="stage4">
+    <div class="stage-label s4-label">
+      <div class="snum">S4</div>
+      <h3>General RL</h3>
+    </div>
+    <div class="stage-content">
+      <h3>Broad Task Performance Recovery</h3>
+      <p>Final RL pass ensures reasoning-focused stages 1-3 did not degrade performance on non-reasoning tasks: summarization, translation, creative writing, factual Q&A.</p>
+    </div>
+  </div>
+</div>
+
+<!-- Budget control -->
+<div class="budget-section" id="budgetSection">
+  <div class="budget-label">Thinking Token Budget</div>
+  <input type="range" class="budget-slider" id="budgetSlider" min="0" max="4096" value="2048" oninput="updateBudget()">
+  <div class="budget-info">
+    <span>0 (no thinking)</span>
+    <span>4096 (maximum)</span>
+  </div>
+  <div class="budget-value" id="budgetValue">Budget: 2048 tokens</div>
+</div>
+
+<!-- Output -->
+<div class="output-section">
+  <div class="output-label" id="outputLabel">Model Output (Thinking Mode)</div>
+  <div class="output-box" id="outputBox"><span class="think-trace">&lt;think&gt;
+I need to find the sum of the first 50 prime numbers.
+Let me list them: 2, 3, 5, 7, 11, 13, 17, 19, 23, 29,
+31, 37, 41, 43, 47, 53, 59, 61, 67, 71,
+73, 79, 83, 89, 97, 101, 103, 107, 109, 113,
+127, 131, 137, 139, 149, 151, 157, 163, 167, 173,
+179, 181, 191, 193, 197, 199, 211, 223, 227, 229
+
+Let me sum these in groups of 10:
+  2+3+5+7+11+13+17+19+23+29 = 129
+  31+37+41+43+47+53+59+61+67+71 = 510
+  73+79+83+89+97+101+103+107+109+113 = 954
+  127+131+137+139+149+151+157+163+167+173 = 1494
+  179+181+191+193+197+199+211+223+227+229 = 2030
+
+Total = 129 + 510 + 954 + 1494 + 2030 = 5117
+&lt;/think&gt;
+</span>
+<span class="answer">The sum of the first 50 prime numbers is **5,117**.</span></div>
+</div>
+
+<script>
+function setMode(mode) {
+  const thinkBtn = document.querySelector('.mode-btn.thinking');
+  const nonThinkBtn = document.querySelector('.mode-btn.non-thinking');
+  const modeFlag = document.getElementById('modeFlag');
+  const outputLabel = document.getElementById('outputLabel');
+  const outputBox = document.getElementById('outputBox');
+  const budgetSection = document.getElementById('budgetSection');
+  const stages = document.querySelectorAll('.stage');
+
+  if (mode === 'thinking') {
+    thinkBtn.classList.add('active');
+    nonThinkBtn.classList.remove('active');
+    modeFlag.className = 'flag think-flag';
+    modeFlag.textContent = '<think> enabled';
+    outputLabel.textContent = 'Model Output (Thinking Mode)';
+    budgetSection.classList.add('visible');
+
+    outputBox.innerHTML = '<span class="think-trace">&lt;think&gt;\nI need to find the sum of the first 50 prime numbers.\nLet me list them: 2, 3, 5, 7, 11, 13, 17, 19, 23, 29,\n31, 37, 41, 43, 47, 53, 59, 61, 67, 71,\n73, 79, 83, 89, 97, 101, 103, 107, 109, 113,\n127, 131, 137, 139, 149, 151, 157, 163, 167, 173,\n179, 181, 191, 193, 197, 199, 211, 223, 227, 229\n\nLet me sum these in groups of 10:\n  2+3+5+7+11+13+17+19+23+29 = 129\n  31+37+41+43+47+53+59+61+67+71 = 510\n  73+79+83+89+97+101+103+107+109+113 = 954\n  127+131+137+139+149+151+157+163+167+173 = 1494\n  179+181+191+193+197+199+211+223+227+229 = 2030\n\nTotal = 129 + 510 + 954 + 1494 + 2030 = 5117\n&lt;/think&gt;\n</span>\n<span class="answer">The sum of the first 50 prime numbers is **5,117**.</span>';
+
+    // Highlight stages 1,2,3 as relevant to thinking
+    stages.forEach(s => s.classList.remove('dimmed'));
+
+  } else {
+    nonThinkBtn.classList.add('active');
+    thinkBtn.classList.remove('active');
+    modeFlag.className = 'flag nothink-flag';
+    modeFlag.textContent = '<think> disabled';
+    outputLabel.textContent = 'Model Output (Non-Thinking Mode)';
+    budgetSection.classList.remove('visible');
+
+    outputBox.innerHTML = '<span class="answer">The sum of the first 50 prime numbers is **5,117**.</span>';
+
+    // Dim stages 1,2 — they built thinking capability but aren't "used" in non-thinking
+    document.getElementById('stage1').classList.add('dimmed');
+    document.getElementById('stage2').classList.add('dimmed');
+    document.getElementById('stage3').classList.remove('dimmed');
+    document.getElementById('stage4').classList.remove('dimmed');
+  }
+}
+
+function updateBudget() {
+  const val = document.getElementById('budgetSlider').value;
+  document.getElementById('budgetValue').textContent = 'Budget: ' + val + ' tokens';
+}
+</script>
+
+</body>
+</html>

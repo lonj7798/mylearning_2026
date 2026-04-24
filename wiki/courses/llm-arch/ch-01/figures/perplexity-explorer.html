@@ -1,0 +1,269 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Perplexity &amp; Cross-Entropy Explorer</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { background: #1a1a2e; color: #e0e0e0; font-family: 'Segoe UI', system-ui, sans-serif; padding: 20px; min-height: 100vh; }
+h1 { color: #e94560; font-size: 22px; text-align: center; margin-bottom: 8px; }
+.subtitle { color: #888; font-size: 13px; text-align: center; margin-bottom: 24px; }
+.container { max-width: 900px; margin: 0 auto; }
+.panel { background: #16213e; border-radius: 12px; padding: 20px; margin-bottom: 20px; }
+.panel-title { color: #e94560; font-weight: bold; font-size: 15px; margin-bottom: 16px; }
+.slider-row { display: flex; align-items: center; gap: 16px; margin-bottom: 14px; flex-wrap: wrap; }
+.slider-label { min-width: 200px; font-size: 13px; color: #aaa; }
+.slider-label span { color: #4ecdc4; font-weight: bold; font-size: 15px; }
+input[type="range"] { flex: 1; min-width: 150px; accent-color: #e94560; height: 6px; }
+.metrics { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; margin-bottom: 20px; }
+.metric-card { background: #0f3460; border-radius: 8px; padding: 14px; text-align: center; }
+.metric-value { font-size: 28px; font-weight: bold; color: #e94560; }
+.metric-label { font-size: 11px; color: #888; margin-top: 4px; }
+.metric-card.highlight .metric-value { color: #4ecdc4; }
+.metric-card.warn .metric-value { color: #ffd93d; }
+canvas { width: 100%; border-radius: 8px; background: #0a0a1a; }
+.chart-container { position: relative; margin-top: 12px; }
+.legend { display: flex; gap: 20px; justify-content: center; margin-top: 10px; flex-wrap: wrap; }
+.legend-item { display: flex; align-items: center; gap: 6px; font-size: 12px; color: #aaa; }
+.legend-dot { width: 10px; height: 10px; border-radius: 50%; }
+.info { background: #0f3460; border-radius: 8px; padding: 14px; font-size: 12px; color: #aaa; line-height: 1.6; margin-top: 12px; }
+.info strong { color: #e94560; }
+.two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+@media (max-width: 700px) { .two-col { grid-template-columns: 1fr; } }
+.bar-container { display: flex; flex-direction: column; gap: 6px; margin-top: 8px; }
+.bar-row { display: flex; align-items: center; gap: 8px; }
+.bar-token { min-width: 60px; text-align: right; font-size: 12px; color: #aaa; font-family: monospace; }
+.bar-wrapper { flex: 1; height: 22px; background: #0a0a1a; border-radius: 4px; overflow: hidden; position: relative; }
+.bar-fill { height: 100%; border-radius: 4px; transition: width 0.3s; display: flex; align-items: center; padding-left: 6px; font-size: 10px; color: #fff; font-weight: bold; }
+.bar-nll { min-width: 50px; text-align: left; font-size: 11px; color: #888; font-family: monospace; }
+</style>
+</head>
+<body>
+<div class="container">
+<h1>Perplexity &amp; Cross-Entropy Explorer</h1>
+<p class="subtitle">Adjust token probabilities to see how cross-entropy loss and perplexity respond</p>
+
+<div class="panel">
+<div class="panel-title">Token Probability Distribution (Model Output)</div>
+<p style="font-size:12px; color:#888; margin-bottom:14px;">Imagine the model is predicting the next token. The correct token is highlighted. Drag sliders to change the model's predicted probabilities.</p>
+<div id="sliders"></div>
+<div style="font-size:11px; color:#666; margin-top:4px;">Probabilities are auto-normalized to sum to 1.0 via softmax.</div>
+</div>
+
+<div class="metrics" id="metrics"></div>
+
+<div class="two-col">
+<div class="panel">
+<div class="panel-title">Per-Token Contribution to Loss</div>
+<div class="bar-container" id="bars"></div>
+</div>
+<div class="panel">
+<div class="panel-title">Perplexity Interpretation</div>
+<div id="pplInterp" style="font-size:13px; line-height:1.7;"></div>
+</div>
+</div>
+
+<div class="panel">
+<div class="panel-title">Cross-Entropy vs. Model Confidence</div>
+<div class="chart-container">
+<canvas id="chart" height="280"></canvas>
+</div>
+<div class="legend">
+<div class="legend-item"><div class="legend-dot" style="background:#e94560;"></div> Cross-Entropy (nats)</div>
+<div class="legend-item"><div class="legend-dot" style="background:#4ecdc4;"></div> Perplexity</div>
+<div class="legend-item"><div class="legend-dot" style="background:#ffd93d;"></div> Current setting</div>
+</div>
+</div>
+
+<div class="info">
+<strong>Key relationships:</strong> PPL = exp(CE). Cross-entropy H(P,Q) = -log Q(correct token) when the true distribution is one-hot.
+KL divergence = H(P,Q) - H(P). Since H(P) = 0 for a one-hot target, CE = KL divergence in this case.
+<br><strong>Intuition:</strong> Perplexity of <em>k</em> means the model is as uncertain as choosing uniformly among <em>k</em> tokens.
+</div>
+</div>
+
+<script>
+const tokens = [
+  { name: 'mat', correct: true, initLogit: 3.0 },
+  { name: 'floor', correct: false, initLogit: 1.5 },
+  { name: 'ground', correct: false, initLogit: 1.0 },
+  { name: 'table', correct: false, initLogit: 0.2 },
+  { name: 'roof', correct: false, initLogit: -0.5 },
+  { name: 'other', correct: false, initLogit: -1.0 },
+];
+
+let logits = tokens.map(t => t.initLogit);
+
+function softmax(logits) {
+  const maxL = Math.max(...logits);
+  const exps = logits.map(l => Math.exp(l - maxL));
+  const sum = exps.reduce((a, b) => a + b, 0);
+  return exps.map(e => e / sum);
+}
+
+function buildSliders() {
+  const container = document.getElementById('sliders');
+  tokens.forEach((t, i) => {
+    const row = document.createElement('div');
+    row.className = 'slider-row';
+    const label = document.createElement('div');
+    label.className = 'slider-label';
+    label.innerHTML = `${t.correct ? '&#9733; ' : ''}<code>${t.name}</code>: <span id="prob-${i}">--</span>${t.correct ? ' <span style="color:#ffd93d;font-size:10px;">(correct)</span>' : ''}`;
+    const slider = document.createElement('input');
+    slider.type = 'range'; slider.min = '-5'; slider.max = '8'; slider.step = '0.1';
+    slider.value = t.initLogit;
+    slider.id = `slider-${i}`;
+    slider.addEventListener('input', () => { logits[i] = parseFloat(slider.value); update(); });
+    row.appendChild(label); row.appendChild(slider);
+    container.appendChild(row);
+  });
+}
+
+function update() {
+  const probs = softmax(logits);
+  const correctIdx = tokens.findIndex(t => t.correct);
+  const pCorrect = probs[correctIdx];
+
+  // update slider labels
+  probs.forEach((p, i) => {
+    document.getElementById(`prob-${i}`).textContent = p.toFixed(4);
+  });
+
+  // cross-entropy (single token, one-hot target)
+  const ce = -Math.log(pCorrect);
+  const ppl = Math.exp(ce);
+  const klDiv = ce; // H(P)=0 for one-hot
+  const entropy = -probs.reduce((s, p) => s + (p > 1e-12 ? p * Math.log(p) : 0), 0);
+
+  // metrics
+  const metricsEl = document.getElementById('metrics');
+  metricsEl.innerHTML = `
+    <div class="metric-card"><div class="metric-value">${pCorrect.toFixed(4)}</div><div class="metric-label">P(correct token)</div></div>
+    <div class="metric-card highlight"><div class="metric-value">${ce.toFixed(3)}</div><div class="metric-label">Cross-Entropy (nats)</div></div>
+    <div class="metric-card warn"><div class="metric-value">${ppl.toFixed(2)}</div><div class="metric-label">Perplexity</div></div>
+    <div class="metric-card"><div class="metric-value">${entropy.toFixed(3)}</div><div class="metric-label">Model Entropy H(Q)</div></div>
+  `;
+
+  // bars
+  const barsEl = document.getElementById('bars');
+  barsEl.innerHTML = '';
+  const maxNLL = Math.max(...probs.map(p => -Math.log(Math.max(p, 1e-12))));
+  probs.forEach((p, i) => {
+    const nll = -Math.log(Math.max(p, 1e-12));
+    const row = document.createElement('div'); row.className = 'bar-row';
+    const tok = document.createElement('div'); tok.className = 'bar-token';
+    tok.textContent = tokens[i].name;
+    const wrapper = document.createElement('div'); wrapper.className = 'bar-wrapper';
+    const fill = document.createElement('div'); fill.className = 'bar-fill';
+    fill.style.width = `${(p / Math.max(...probs)) * 100}%`;
+    fill.style.background = tokens[i].correct ? '#e94560' : '#0f3460';
+    fill.textContent = (p * 100).toFixed(1) + '%';
+    wrapper.appendChild(fill);
+    const nllLabel = document.createElement('div'); nllLabel.className = 'bar-nll';
+    nllLabel.textContent = `NLL: ${nll.toFixed(2)}`;
+    row.appendChild(tok); row.appendChild(wrapper); row.appendChild(nllLabel);
+    barsEl.appendChild(row);
+  });
+
+  // perplexity interpretation
+  const interpEl = document.getElementById('pplInterp');
+  let interpText = '';
+  if (ppl < 1.5) interpText = `<span style="color:#4ecdc4;">Excellent.</span> The model is highly confident in the correct token. Perplexity ${ppl.toFixed(1)} means the model is choosing among ~${ppl.toFixed(1)} equally likely tokens.`;
+  else if (ppl < 5) interpText = `<span style="color:#4ecdc4;">Good.</span> Perplexity ${ppl.toFixed(1)} means the model's uncertainty is equivalent to choosing uniformly from ~${Math.round(ppl)} tokens. Some ambiguity, but the correct token is favored.`;
+  else if (ppl < 20) interpText = `<span style="color:#ffd93d;">Moderate.</span> Perplexity ${ppl.toFixed(1)}: the model is as uncertain as picking from ~${Math.round(ppl)} tokens. This is typical for well-trained LLMs on average (GPT-2 WikiText PPL ~19).`;
+  else if (ppl < 100) interpText = `<span style="color:#ffd93d;">High.</span> Perplexity ${ppl.toFixed(1)}: the model is struggling. It sees ~${Math.round(ppl)} plausible candidates. This token is hard to predict.`;
+  else interpText = `<span style="color:#e94560;">Very high.</span> Perplexity ${ppl.toFixed(0)}: the model is nearly guessing. Cross-entropy loss is ${ce.toFixed(2)} nats. The model assigns very little probability to the correct token.`;
+  interpEl.innerHTML = interpText + `<div style="margin-top:12px; font-size:11px; color:#666;">Uniform over ${tokens.length} tokens would give PPL = ${tokens.length}.0<br>Perfect prediction gives PPL = 1.0</div>`;
+
+  drawChart(pCorrect);
+}
+
+function drawChart(currentP) {
+  const canvas = document.getElementById('chart');
+  const ctx = canvas.getContext('2d');
+  const dpr = window.devicePixelRatio || 1;
+  const rect = canvas.getBoundingClientRect();
+  canvas.width = rect.width * dpr; canvas.height = rect.height * dpr;
+  ctx.scale(dpr, dpr);
+  const W = rect.width, H = rect.height;
+  const pad = { top: 20, right: 60, bottom: 40, left: 60 };
+  const plotW = W - pad.left - pad.right, plotH = H - pad.top - pad.bottom;
+
+  ctx.clearRect(0, 0, W, H);
+
+  // axes
+  ctx.strokeStyle = '#333'; ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.moveTo(pad.left, pad.top); ctx.lineTo(pad.left, pad.top + plotH); ctx.lineTo(pad.left + plotW, pad.top + plotH); ctx.stroke();
+
+  // x-axis: P(correct) from 0.01 to 1
+  // y-axis left: CE, y-axis right: PPL
+  const xMin = 0.01, xMax = 1.0;
+  const ceMax = 5; // nats
+  const pplMax = Math.exp(ceMax);
+
+  function xToScreen(p) { return pad.left + ((p - xMin) / (xMax - xMin)) * plotW; }
+  function ceToScreen(ce) { return pad.top + plotH - (ce / ceMax) * plotH; }
+
+  // grid lines
+  ctx.strokeStyle = '#1a1a3e'; ctx.lineWidth = 0.5;
+  for (let ce = 1; ce <= ceMax; ce++) {
+    const y = ceToScreen(ce);
+    ctx.beginPath(); ctx.moveTo(pad.left, y); ctx.lineTo(pad.left + plotW, y); ctx.stroke();
+    ctx.fillStyle = '#666'; ctx.font = '10px monospace'; ctx.textAlign = 'right';
+    ctx.fillText(ce.toFixed(0), pad.left - 6, y + 4);
+  }
+  for (let p = 0.2; p <= 1.0; p += 0.2) {
+    const x = xToScreen(p);
+    ctx.beginPath(); ctx.moveTo(x, pad.top); ctx.lineTo(x, pad.top + plotH); ctx.stroke();
+    ctx.fillStyle = '#666'; ctx.font = '10px monospace'; ctx.textAlign = 'center';
+    ctx.fillText(p.toFixed(1), x, pad.top + plotH + 16);
+  }
+
+  // CE curve
+  ctx.strokeStyle = '#e94560'; ctx.lineWidth = 2;
+  ctx.beginPath();
+  for (let px = 0; px <= plotW; px++) {
+    const p = xMin + (px / plotW) * (xMax - xMin);
+    const ce = -Math.log(p);
+    const y = ceToScreen(Math.min(ce, ceMax));
+    if (px === 0) ctx.moveTo(pad.left + px, y); else ctx.lineTo(pad.left + px, y);
+  }
+  ctx.stroke();
+
+  // PPL curve (scaled to same axis: log scale mapped to CE)
+  ctx.strokeStyle = '#4ecdc4'; ctx.lineWidth = 2; ctx.setLineDash([5, 3]);
+  ctx.beginPath();
+  for (let px = 0; px <= plotW; px++) {
+    const p = xMin + (px / plotW) * (xMax - xMin);
+    const ppl = 1 / p; // PPL = exp(-log(p)) = 1/p for one-hot
+    const ceEquiv = Math.log(ppl); // map PPL to CE scale
+    const y = ceToScreen(Math.min(ceEquiv, ceMax));
+    if (px === 0) ctx.moveTo(pad.left + px, y); else ctx.lineTo(pad.left + px, y);
+  }
+  ctx.stroke();
+  ctx.setLineDash([]);
+
+  // current position marker
+  const curX = xToScreen(currentP);
+  const curCE = -Math.log(currentP);
+  const curY = ceToScreen(Math.min(curCE, ceMax));
+  ctx.strokeStyle = '#ffd93d'; ctx.lineWidth = 1; ctx.setLineDash([3, 3]);
+  ctx.beginPath(); ctx.moveTo(curX, pad.top); ctx.lineTo(curX, pad.top + plotH); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(pad.left, curY); ctx.lineTo(pad.left + plotW, curY); ctx.stroke();
+  ctx.setLineDash([]);
+  ctx.fillStyle = '#ffd93d'; ctx.beginPath(); ctx.arc(curX, curY, 6, 0, Math.PI * 2); ctx.fill();
+
+  // axis labels
+  ctx.fillStyle = '#888'; ctx.font = '11px sans-serif'; ctx.textAlign = 'center';
+  ctx.fillText('P(correct token)', pad.left + plotW / 2, H - 4);
+  ctx.save(); ctx.translate(14, pad.top + plotH / 2); ctx.rotate(-Math.PI / 2);
+  ctx.fillText('Cross-Entropy / ln(PPL) (nats)', 0, 0); ctx.restore();
+}
+
+buildSliders();
+update();
+window.addEventListener('resize', update);
+</script>
+</body>
+</html>

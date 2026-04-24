@@ -1,0 +1,310 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Parallelism Strategy Comparison — Ch 13</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { background: #1a1a2e; color: #e0e0e0; font-family: 'Segoe UI', system-ui, sans-serif; padding: 24px; min-height: 100vh; }
+h1 { font-size: 20px; color: #e94560; margin-bottom: 8px; }
+.subtitle { color: #888; font-size: 13px; margin-bottom: 24px; }
+.controls { display: flex; gap: 12px; margin-bottom: 24px; flex-wrap: wrap; }
+.btn { padding: 8px 16px; border: 2px solid #333; background: #16213e; color: #e0e0e0; border-radius: 8px; cursor: pointer; font-size: 13px; transition: all 0.2s; }
+.btn:hover { border-color: #e94560; }
+.btn.active { border-color: #e94560; background: #e94560; color: #fff; }
+.diagram-container { display: flex; gap: 24px; flex-wrap: wrap; justify-content: center; margin-bottom: 24px; }
+.diagram { background: #16213e; border-radius: 12px; padding: 20px; min-width: 280px; flex: 1; max-width: 500px; }
+.diagram h2 { font-size: 14px; color: #4ecdc4; margin-bottom: 12px; text-align: center; }
+.gpu-cluster { display: flex; flex-direction: column; gap: 6px; }
+.gpu-row { display: flex; gap: 6px; align-items: center; }
+.gpu-label { font-size: 11px; color: #888; width: 48px; flex-shrink: 0; }
+.gpu-bar { display: flex; flex: 1; height: 32px; border-radius: 4px; overflow: hidden; }
+.seg { display: flex; align-items: center; justify-content: center; font-size: 9px; font-weight: bold; color: #fff; transition: all 0.4s ease; min-width: 0; }
+.seg-params { background: #e94560; }
+.seg-grads { background: #4ecdc4; }
+.seg-optim { background: #ffd93d; color: #1a1a2e; }
+.seg-act { background: #c084fc; }
+.seg-empty { background: #333; }
+.seg-bubble { background: repeating-linear-gradient(45deg, #333, #333 4px, #444 4px, #444 8px); }
+.comm-arrow { display: flex; align-items: center; justify-content: center; margin: 8px 0; }
+.comm-arrow .arrow { color: #e94560; font-size: 13px; }
+.comm-label { font-size: 11px; color: #e94560; font-weight: bold; margin: 0 8px; }
+.info-panel { background: #16213e; border-radius: 12px; padding: 20px; margin-top: 16px; }
+.info-panel h3 { font-size: 14px; color: #ffd93d; margin-bottom: 8px; }
+.info-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px; }
+.info-item { background: #1a1a2e; border-radius: 8px; padding: 12px; }
+.info-item .label { font-size: 11px; color: #888; margin-bottom: 4px; }
+.info-item .value { font-size: 14px; font-weight: bold; }
+.info-item .value.good { color: #4ecdc4; }
+.info-item .value.warn { color: #ffd93d; }
+.info-item .value.bad { color: #e94560; }
+.legend { display: flex; gap: 16px; flex-wrap: wrap; margin-top: 16px; }
+.legend-item { display: flex; align-items: center; gap: 6px; font-size: 11px; }
+.legend-swatch { width: 14px; height: 14px; border-radius: 3px; }
+.model-config { background: #16213e; border-radius: 12px; padding: 16px; margin-bottom: 20px; }
+.model-config h3 { font-size: 13px; color: #ffd93d; margin-bottom: 8px; }
+.slider-row { display: flex; align-items: center; gap: 12px; margin: 6px 0; }
+.slider-row label { font-size: 12px; color: #888; width: 100px; }
+.slider-row input[type=range] { flex: 1; accent-color: #e94560; }
+.slider-row .val { font-size: 12px; color: #e94560; font-weight: bold; width: 60px; text-align: right; }
+</style>
+</head>
+<body>
+<h1>Parallelism Strategy Comparison</h1>
+<p class="subtitle">How each strategy distributes model state and data across GPUs. Select a strategy to see the memory layout.</p>
+
+<div class="model-config">
+<h3>Model Configuration</h3>
+<div class="slider-row">
+<label>Model Size:</label>
+<input type="range" id="modelSize" min="0" max="3" value="1" step="1">
+<span class="val" id="modelSizeVal">7B</span>
+</div>
+<div class="slider-row">
+<label>GPU Count:</label>
+<input type="range" id="gpuCount" min="1" max="5" value="3" step="1">
+<span class="val" id="gpuCountVal">8</span>
+</div>
+</div>
+
+<div class="controls">
+<button class="btn active" onclick="selectStrategy('dp')">Data Parallel</button>
+<button class="btn" onclick="selectStrategy('zero1')">ZeRO-1</button>
+<button class="btn" onclick="selectStrategy('zero3')">ZeRO-3 / FSDP</button>
+<button class="btn" onclick="selectStrategy('tp')">Tensor Parallel</button>
+<button class="btn" onclick="selectStrategy('pp')">Pipeline Parallel</button>
+<button class="btn" onclick="selectStrategy('5d')">5D Combined</button>
+</div>
+
+<div class="diagram-container">
+<div class="diagram" id="mainDiagram">
+<h2 id="diagTitle">Data Parallelism</h2>
+<div class="gpu-cluster" id="gpuCluster"></div>
+<div class="comm-arrow" id="commArrow">
+<span class="arrow">&harr;</span>
+<span class="comm-label" id="commLabel">All-Reduce (gradients)</span>
+</div>
+</div>
+<div class="diagram" id="sideDiagram" style="display:none;">
+<h2 id="sideDiagTitle"></h2>
+<div id="sideContent"></div>
+</div>
+</div>
+
+<div class="legend">
+<div class="legend-item"><div class="legend-swatch" style="background:#e94560;"></div>Parameters</div>
+<div class="legend-item"><div class="legend-swatch" style="background:#4ecdc4;"></div>Gradients</div>
+<div class="legend-item"><div class="legend-swatch" style="background:#ffd93d;"></div>Optimizer States</div>
+<div class="legend-item"><div class="legend-swatch" style="background:#c084fc;"></div>Activations</div>
+<div class="legend-item"><div class="legend-swatch" style="background:repeating-linear-gradient(45deg, #333, #333 3px, #444 3px, #444 6px);"></div>Empty / Bubble</div>
+</div>
+
+<div class="info-panel">
+<h3 id="infoTitle">Strategy Details</h3>
+<div class="info-grid" id="infoGrid"></div>
+</div>
+
+<script>
+const modelSizes = [
+  { name: '1B', params: 1, memBase: 16 },
+  { name: '7B', params: 7, memBase: 112 },
+  { name: '70B', params: 70, memBase: 1120 },
+  { name: '405B', params: 405, memBase: 6480 }
+];
+const gpuCounts = [1, 2, 4, 8, 16, 32];
+let currentStrategy = 'dp';
+
+function getModelSize() { return modelSizes[document.getElementById('modelSize').value]; }
+function getGpuCount() { return gpuCounts[document.getElementById('gpuCount').value]; }
+
+document.getElementById('modelSize').addEventListener('input', () => {
+  document.getElementById('modelSizeVal').textContent = getModelSize().name;
+  render();
+});
+document.getElementById('gpuCount').addEventListener('input', () => {
+  document.getElementById('gpuCountVal').textContent = getGpuCount();
+  render();
+});
+
+function selectStrategy(s) {
+  currentStrategy = s;
+  document.querySelectorAll('.btn').forEach(b => b.classList.remove('active'));
+  event.target.classList.add('active');
+  render();
+}
+
+function render() {
+  const model = getModelSize();
+  const nGpu = getGpuCount();
+  const N = model.params;
+  const cluster = document.getElementById('gpuCluster');
+  const commLabel = document.getElementById('commLabel');
+  const diagTitle = document.getElementById('diagTitle');
+  cluster.innerHTML = '';
+
+  const strategies = {
+    dp: {
+      title: 'Data Parallelism',
+      comm: 'All-Reduce (gradients)',
+      getSegs: (i) => [
+        { cls: 'seg-params', w: 12.5, label: 'P' },
+        { cls: 'seg-grads', w: 12.5, label: 'G' },
+        { cls: 'seg-optim', w: 50, label: 'Optimizer' },
+        { cls: 'seg-act', w: 25, label: `Act (batch ${i+1})` }
+      ],
+      info: [
+        { label: 'Per-GPU Memory', value: `${(N * 16).toFixed(0)} GB + act`, cls: 'bad' },
+        { label: 'Communication', value: '2N (all-reduce)', cls: 'warn' },
+        { label: 'Overlap', value: 'Yes (with backward)', cls: 'good' },
+        { label: 'Activation Savings', value: 'None', cls: 'bad' },
+        { label: 'Scales Across Nodes', value: 'Yes, but degrades', cls: 'warn' }
+      ]
+    },
+    zero1: {
+      title: 'ZeRO-1 (Shard Optimizer)',
+      comm: 'Reduce-Scatter (grads) + All-Gather (params)',
+      getSegs: (i) => [
+        { cls: 'seg-params', w: 12.5, label: 'P' },
+        { cls: 'seg-grads', w: 12.5, label: 'G' },
+        { cls: 'seg-optim', w: 50 / nGpu, label: `Opt/${nGpu}` },
+        { cls: 'seg-act', w: 25, label: `Act` },
+        { cls: 'seg-empty', w: 50 - 50/nGpu, label: 'saved' }
+      ],
+      info: [
+        { label: 'Per-GPU Memory', value: `${(N * (4 + 12/nGpu)).toFixed(0)} GB + act`, cls: nGpu >= 4 ? 'good' : 'warn' },
+        { label: 'Communication', value: '2N (same as DP)', cls: 'good' },
+        { label: 'Optimizer Savings', value: `${nGpu}x`, cls: 'good' },
+        { label: 'Activation Savings', value: 'None', cls: 'bad' },
+        { label: 'Overhead vs DP', value: 'None', cls: 'good' }
+      ]
+    },
+    zero3: {
+      title: 'ZeRO-3 / FSDP',
+      comm: 'All-Gather (params, 2x) + Reduce-Scatter (grads)',
+      getSegs: (i) => [
+        { cls: 'seg-params', w: 12.5 / nGpu, label: `P/${nGpu}` },
+        { cls: 'seg-grads', w: 12.5 / nGpu, label: `G/${nGpu}` },
+        { cls: 'seg-optim', w: 50 / nGpu, label: `O/${nGpu}` },
+        { cls: 'seg-act', w: 25, label: 'Act' },
+        { cls: 'seg-empty', w: 75 - 75/nGpu, label: 'saved' }
+      ],
+      info: [
+        { label: 'Per-GPU Memory', value: `${(N * 16 / nGpu).toFixed(0)} GB + act`, cls: 'good' },
+        { label: 'Communication', value: '3N (50% more than DP)', cls: 'warn' },
+        { label: 'Total Savings', value: `${nGpu}x (params+grads+optim)`, cls: 'good' },
+        { label: 'Activation Savings', value: 'None', cls: 'bad' },
+        { label: 'Prefetch Overlap', value: 'Possible with large mbs', cls: 'warn' }
+      ]
+    },
+    tp: {
+      title: 'Tensor Parallelism',
+      comm: 'All-Reduce (2 per block, on critical path)',
+      getSegs: (i) => [
+        { cls: 'seg-params', w: 12.5 / nGpu, label: `P/${nGpu}` },
+        { cls: 'seg-grads', w: 12.5 / nGpu, label: `G/${nGpu}` },
+        { cls: 'seg-optim', w: 50 / nGpu, label: `O/${nGpu}` },
+        { cls: 'seg-act', w: 25 / nGpu, label: `A/${nGpu}` },
+        { cls: 'seg-empty', w: 100 - 100/nGpu, label: 'saved' }
+      ],
+      info: [
+        { label: 'Per-GPU Memory', value: `${(N * 16 / nGpu).toFixed(0)} GB + act/${nGpu}`, cls: 'good' },
+        { label: 'Communication', value: 'On critical path (cannot overlap)', cls: 'bad' },
+        { label: 'Activation Savings', value: `${nGpu}x (hidden dim split)`, cls: 'good' },
+        { label: 'Max Practical TP', value: '8 (intra-node NVLink)', cls: 'warn' },
+        { label: 'Throughput Loss @ TP=8', value: '~11%', cls: 'warn' }
+      ]
+    },
+    pp: {
+      title: 'Pipeline Parallelism',
+      comm: 'P2P activations (between adjacent stages)',
+      getSegs: (i) => {
+        const layerFrac = 1 / nGpu;
+        return [
+          { cls: 'seg-params', w: 12.5 / nGpu, label: `Layers ${Math.floor(i*80/nGpu)+1}-${Math.floor((i+1)*80/nGpu)}` },
+          { cls: 'seg-grads', w: 12.5 / nGpu, label: `G` },
+          { cls: 'seg-optim', w: 50 / nGpu, label: `Opt` },
+          { cls: 'seg-act', w: 25, label: 'Full activations' },
+          { cls: 'seg-bubble', w: Math.min(40, (nGpu-1)/nGpu * 50), label: 'Bubble' }
+        ];
+      },
+      info: [
+        { label: 'Per-GPU Params', value: `${(N * 2 / nGpu).toFixed(1)} GB`, cls: 'good' },
+        { label: 'Activation Memory', value: 'NOT reduced (full batch)', cls: 'bad' },
+        { label: 'Bubble Overhead', value: `${((nGpu-1)/Math.max(nGpu,8)*100).toFixed(0)}% (naive)`, cls: nGpu <= 4 ? 'warn' : 'bad' },
+        { label: 'Cross-Node Perf', value: 'Good (low bandwidth needs)', cls: 'good' },
+        { label: 'Communication', value: 'P2P only (minimal)', cls: 'good' }
+      ]
+    },
+    '5d': {
+      title: '5D: TP=8 x PP=4 x DP=remainder',
+      comm: 'TP: all-reduce intra-node | PP: P2P inter-node | DP: all-reduce',
+      getSegs: (i) => {
+        const tp = Math.min(8, nGpu);
+        const pp = nGpu > 8 ? Math.min(4, Math.floor(nGpu/8)) : 1;
+        const dp = Math.max(1, Math.floor(nGpu / (tp * pp)));
+        return [
+          { cls: 'seg-params', w: 12.5 / (tp * pp), label: `P/${tp*pp}` },
+          { cls: 'seg-grads', w: 12.5 / (tp * pp), label: `G/${tp*pp}` },
+          { cls: 'seg-optim', w: 50 / (tp * pp * dp), label: `O/${tp*pp*dp}` },
+          { cls: 'seg-act', w: 25 / tp, label: `A/${tp}` },
+          { cls: 'seg-empty', w: Math.max(5, 100 - (12.5/(tp*pp))*2 - 50/(tp*pp*dp) - 25/tp), label: '' }
+        ];
+      },
+      info: [
+        { label: 'TP Scope', value: 'Intra-node (NVLink)', cls: 'good' },
+        { label: 'PP Scope', value: 'Inter-node', cls: 'good' },
+        { label: 'DP Scope', value: 'Remaining GPUs', cls: 'good' },
+        { label: 'Total GPUs', value: `${nGpu}`, cls: 'warn' },
+        { label: 'Approach', value: 'Industry standard for 70B+', cls: 'good' }
+      ]
+    }
+  };
+
+  const strat = strategies[currentStrategy];
+  diagTitle.textContent = strat.title;
+  commLabel.textContent = strat.comm;
+
+  const displayGpus = Math.min(nGpu, 8);
+  for (let i = 0; i < displayGpus; i++) {
+    const row = document.createElement('div');
+    row.className = 'gpu-row';
+    const label = document.createElement('div');
+    label.className = 'gpu-label';
+    label.textContent = `GPU ${i}`;
+    row.appendChild(label);
+    const bar = document.createElement('div');
+    bar.className = 'gpu-bar';
+    const segs = strat.getSegs(i);
+    segs.forEach(s => {
+      const seg = document.createElement('div');
+      seg.className = `seg ${s.cls}`;
+      seg.style.width = Math.max(s.w, 0) + '%';
+      seg.title = s.label;
+      if (s.w > 8) seg.textContent = s.label;
+      bar.appendChild(seg);
+    });
+    row.appendChild(bar);
+    cluster.appendChild(row);
+  }
+  if (nGpu > 8) {
+    const more = document.createElement('div');
+    more.className = 'gpu-row';
+    more.innerHTML = `<div class="gpu-label" style="color:#e94560;">...</div><div style="font-size:12px; color:#888;">+ ${nGpu - 8} more GPUs (same pattern)</div>`;
+    cluster.appendChild(more);
+  }
+
+  const infoGrid = document.getElementById('infoGrid');
+  infoGrid.innerHTML = '';
+  strat.info.forEach(item => {
+    const div = document.createElement('div');
+    div.className = 'info-item';
+    div.innerHTML = `<div class="label">${item.label}</div><div class="value ${item.cls}">${item.value}</div>`;
+    infoGrid.appendChild(div);
+  });
+}
+
+render();
+</script>
+</body>
+</html>

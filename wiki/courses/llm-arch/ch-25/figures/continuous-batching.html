@@ -1,0 +1,346 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Continuous Batching: Dynamic Request Scheduling</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { background: #0f0f1a; color: #e0e0e0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; padding: 24px; min-height: 100vh; }
+h1 { font-size: 20px; color: #fff; margin-bottom: 4px; }
+.subtitle { color: #888; font-size: 13px; margin-bottom: 24px; }
+.container { max-width: 960px; margin: 0 auto; }
+.mode-toggle { display: flex; gap: 8px; margin-bottom: 20px; }
+.mode-btn { background: #1a1a2e; border: 1px solid #333; color: #888; padding: 10px 20px; border-radius: 8px; cursor: pointer; font-size: 13px; font-weight: bold; transition: all 0.2s; }
+.mode-btn:hover { border-color: #4ecdc4; color: #4ecdc4; }
+.mode-btn.active { background: #4ecdc4; color: #0f0f1a; border-color: #4ecdc4; }
+.timeline-container { position: relative; margin-bottom: 24px; }
+.timeline-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; }
+.play-btn { background: #4ecdc4; color: #0f0f1a; border: none; padding: 8px 20px; border-radius: 6px; cursor: pointer; font-weight: bold; font-size: 13px; }
+.play-btn:hover { background: #3dbdb4; }
+.speed-ctrl { display: flex; align-items: center; gap: 8px; }
+.speed-ctrl label { color: #888; font-size: 12px; }
+.speed-slider { width: 80px; accent-color: #4ecdc4; }
+
+/* Timeline grid */
+.grid-wrap { overflow-x: auto; }
+.grid { display: grid; gap: 0; border: 1px solid #333; border-radius: 8px; overflow: hidden; }
+.grid-row { display: flex; }
+.grid-label { width: 80px; min-width: 80px; padding: 8px; font-size: 12px; font-weight: bold; display: flex; align-items: center; background: #1a1a2e; border-right: 1px solid #333; }
+.grid-cells { display: flex; flex: 1; }
+.cell { width: 40px; min-width: 40px; height: 36px; border-right: 1px solid #222; border-bottom: 1px solid #222; display: flex; align-items: center; justify-content: center; font-size: 10px; font-weight: bold; transition: background 0.3s; }
+.cell.idle { background: #16213e; color: #333; }
+.cell.padding { background: #2a1520; color: #e94560; }
+.cell.active { border: none; }
+.cell.prefill { opacity: 0.7; }
+
+/* Request colors */
+.req-0 { background: #0d4f4a; color: #4ecdc4; }
+.req-1 { background: #4a0d1a; color: #e94560; }
+.req-2 { background: #3d2e00; color: #ffd93d; }
+.req-3 { background: #1a0d4a; color: #a29bfe; }
+.req-4 { background: #0d3a1a; color: #55efc4; }
+
+/* Time axis */
+.time-axis { display: flex; margin-left: 80px; }
+.time-tick { width: 40px; min-width: 40px; text-align: center; font-size: 10px; color: #666; padding-top: 4px; }
+.time-marker { width: 40px; min-width: 40px; height: 3px; }
+.time-marker.current { background: #4ecdc4; }
+
+/* Stats panels */
+.stats-row { display: flex; gap: 16px; margin-top: 20px; flex-wrap: wrap; }
+.stat-panel { flex: 1; min-width: 140px; background: #1a1a2e; border-radius: 8px; padding: 16px; text-align: center; }
+.stat-val { font-size: 28px; font-weight: bold; }
+.stat-val.good { color: #4ecdc4; }
+.stat-val.bad { color: #e94560; }
+.stat-val.neutral { color: #ffd93d; }
+.stat-desc { font-size: 11px; color: #888; margin-top: 4px; }
+
+/* Legend */
+.legend { display: flex; gap: 16px; margin-top: 16px; flex-wrap: wrap; }
+.legend-item { display: flex; align-items: center; gap: 6px; font-size: 11px; color: #888; }
+.legend-swatch { width: 14px; height: 14px; border-radius: 3px; }
+
+/* Explanation */
+.explanation { background: #1a1a2e; border-radius: 8px; padding: 16px; margin-top: 20px; font-size: 13px; line-height: 1.7; color: #ccc; border-left: 3px solid #4ecdc4; }
+.explanation strong { color: #fff; }
+.explanation.static-exp { border-left-color: #e94560; }
+</style>
+</head>
+<body>
+<div class="container">
+<h1>Continuous Batching vs Static Batching</h1>
+<p class="subtitle">How dynamic request scheduling improves GPU utilization during LLM serving</p>
+
+<div class="mode-toggle">
+<button class="mode-btn active" id="btn-static" onclick="setMode('static')">Static Batching</button>
+<button class="mode-btn" id="btn-continuous" onclick="setMode('continuous')">Continuous Batching</button>
+</div>
+
+<div class="timeline-container">
+<div class="timeline-header">
+<div>
+<button class="play-btn" id="play-btn" onclick="togglePlay()">Play</button>
+</div>
+<div class="speed-ctrl">
+<label>Speed:</label>
+<input type="range" class="speed-slider" id="speed" min="1" max="5" value="3">
+</div>
+</div>
+
+<div class="grid-wrap">
+<div class="grid" id="grid"></div>
+<div class="time-axis" id="time-axis"></div>
+</div>
+</div>
+
+<div class="legend">
+<div class="legend-item"><div class="legend-swatch" style="background:#0d4f4a; border:1px solid #4ecdc4;"></div> Active (generating)</div>
+<div class="legend-item"><div class="legend-swatch" style="background:#2a1520; border:1px solid #e94560;"></div> Padding (wasted)</div>
+<div class="legend-item"><div class="legend-swatch" style="background:#16213e; border:1px solid #333;"></div> Idle (no request)</div>
+</div>
+
+<div class="stats-row" id="stats-row"></div>
+<div id="explanation"></div>
+</div>
+
+<script>
+const SLOTS = 4;
+const TIMESTEPS = 20;
+
+// Requests: [arrivalTime, generationLength]
+const allRequests = [
+  { id: 'A', arrival: 0, len: 5, color: 0 },
+  { id: 'B', arrival: 0, len: 12, color: 1 },
+  { id: 'C', arrival: 0, len: 3, color: 2 },
+  { id: 'D', arrival: 0, len: 8, color: 3 },
+  { id: 'E', arrival: 3, len: 6, color: 4 },
+  { id: 'F', arrival: 6, len: 4, color: 0 },
+  { id: 'G', arrival: 8, len: 7, color: 2 },
+  { id: 'H', arrival: 13, len: 5, color: 3 },
+];
+
+let mode = 'static';
+let currentStep = 0;
+let playing = false;
+let interval = null;
+
+function computeStatic() {
+  // Static: batch requests that arrive together, wait for longest to finish
+  const grid = Array.from({length: SLOTS}, () => Array(TIMESTEPS).fill(null));
+  const queue = [...allRequests];
+  let t = 0;
+
+  while (queue.length > 0 && t < TIMESTEPS) {
+    // Find requests that have arrived by time t
+    const available = queue.filter(r => r.arrival <= t);
+    if (available.length === 0) { t++; continue; }
+
+    // Take up to SLOTS requests
+    const batch = available.slice(0, SLOTS);
+    const maxLen = Math.max(...batch.map(r => r.len));
+
+    for (let s = 0; s < SLOTS; s++) {
+      const req = batch[s];
+      if (!req) {
+        // Empty slot in batch — idle
+        for (let dt = 0; dt < maxLen && t + dt < TIMESTEPS; dt++) {
+          grid[s][t + dt] = { state: 'idle' };
+        }
+      } else {
+        for (let dt = 0; dt < maxLen && t + dt < TIMESTEPS; dt++) {
+          if (dt < req.len) {
+            grid[s][t + dt] = { state: 'active', req: req, color: req.color, label: req.id };
+          } else {
+            grid[s][t + dt] = { state: 'padding', label: '---' };
+          }
+        }
+        queue.splice(queue.indexOf(req), 1);
+      }
+    }
+    t += maxLen;
+  }
+
+  // Fill remaining with idle
+  for (let s = 0; s < SLOTS; s++) {
+    for (let t2 = 0; t2 < TIMESTEPS; t2++) {
+      if (!grid[s][t2]) grid[s][t2] = { state: 'idle' };
+    }
+  }
+  return grid;
+}
+
+function computeContinuous() {
+  const grid = Array.from({length: SLOTS}, () => Array(TIMESTEPS).fill(null));
+  const queue = [...allRequests];
+  // Track active requests per slot: { req, remaining }
+  const active = Array(SLOTS).fill(null);
+
+  for (let t = 0; t < TIMESTEPS; t++) {
+    // Check for completions
+    for (let s = 0; s < SLOTS; s++) {
+      if (active[s] && active[s].remaining <= 0) {
+        active[s] = null;
+      }
+    }
+
+    // Fill empty slots with waiting requests
+    for (let s = 0; s < SLOTS; s++) {
+      if (!active[s]) {
+        const next = queue.find(r => r.arrival <= t);
+        if (next) {
+          active[s] = { req: next, remaining: next.len };
+          queue.splice(queue.indexOf(next), 1);
+        }
+      }
+    }
+
+    // Record this timestep
+    for (let s = 0; s < SLOTS; s++) {
+      if (active[s]) {
+        grid[s][t] = { state: 'active', req: active[s].req, color: active[s].req.color, label: active[s].req.id };
+        active[s].remaining--;
+      } else {
+        grid[s][t] = { state: 'idle' };
+      }
+    }
+  }
+
+  return grid;
+}
+
+function render(grid, upToStep) {
+  const gridEl = document.getElementById('grid');
+  let html = '';
+
+  for (let s = 0; s < SLOTS; s++) {
+    html += '<div class="grid-row">';
+    html += `<div class="grid-label" style="color: #888;">Slot ${s}</div>`;
+    html += '<div class="grid-cells">';
+    for (let t = 0; t < TIMESTEPS; t++) {
+      const cell = grid[s][t];
+      const visible = t <= upToStep;
+      if (!visible) {
+        html += `<div class="cell idle"></div>`;
+      } else if (cell.state === 'active') {
+        html += `<div class="cell active req-${cell.color}">${cell.label}</div>`;
+      } else if (cell.state === 'padding') {
+        html += `<div class="cell padding">${cell.label}</div>`;
+      } else {
+        html += `<div class="cell idle"></div>`;
+      }
+    }
+    html += '</div></div>';
+  }
+  gridEl.innerHTML = html;
+
+  // Time axis
+  const taxEl = document.getElementById('time-axis');
+  let taxHTML = '';
+  for (let t = 0; t < TIMESTEPS; t++) {
+    const cls = t === upToStep ? 'time-marker current' : 'time-marker';
+    taxHTML += `<div class="time-tick">${t}</div>`;
+  }
+  taxEl.innerHTML = taxHTML;
+
+  // Compute stats up to current step
+  let activeCount = 0, paddingCount = 0, idleCount = 0;
+  for (let s = 0; s < SLOTS; s++) {
+    for (let t = 0; t <= upToStep && t < TIMESTEPS; t++) {
+      const cell = grid[s][t];
+      if (cell.state === 'active') activeCount++;
+      else if (cell.state === 'padding') paddingCount++;
+      else idleCount++;
+    }
+  }
+  const total = activeCount + paddingCount + idleCount;
+  const utilization = total > 0 ? Math.round((activeCount / total) * 100) : 0;
+  const wasteRate = total > 0 ? Math.round(((paddingCount + idleCount) / total) * 100) : 0;
+
+  // Count completed requests
+  let completed = 0;
+  const seen = new Set();
+  for (let s = 0; s < SLOTS; s++) {
+    for (let t = 0; t <= upToStep && t < TIMESTEPS; t++) {
+      const cell = grid[s][t];
+      if (cell.state === 'active' && cell.req) {
+        seen.add(cell.req.id);
+      }
+    }
+  }
+  // A request is completed if all its tokens have been generated
+  for (const id of seen) {
+    let tokensSeen = 0;
+    for (let s = 0; s < SLOTS; s++) {
+      for (let t = 0; t <= upToStep && t < TIMESTEPS; t++) {
+        if (grid[s][t].state === 'active' && grid[s][t].label === id) tokensSeen++;
+      }
+    }
+    const req = allRequests.find(r => r.id === id);
+    if (req && tokensSeen >= req.len) completed++;
+  }
+
+  document.getElementById('stats-row').innerHTML = `
+    <div class="stat-panel"><div class="stat-val good">${utilization}%</div><div class="stat-desc">GPU Utilization</div></div>
+    <div class="stat-panel"><div class="stat-val bad">${paddingCount}</div><div class="stat-desc">Padding Slots (wasted)</div></div>
+    <div class="stat-panel"><div class="stat-val neutral">${completed}</div><div class="stat-desc">Requests Completed</div></div>
+    <div class="stat-panel"><div class="stat-val" style="color:#a29bfe;">${upToStep + 1}</div><div class="stat-desc">Timesteps Elapsed</div></div>
+  `;
+}
+
+function setMode(m) {
+  mode = m;
+  document.getElementById('btn-static').classList.toggle('active', m === 'static');
+  document.getElementById('btn-continuous').classList.toggle('active', m === 'continuous');
+  stopPlay();
+  currentStep = 0;
+
+  const grid = mode === 'static' ? computeStatic() : computeContinuous();
+  render(grid, TIMESTEPS - 1);
+
+  const expEl = document.getElementById('explanation');
+  if (m === 'static') {
+    expEl.innerHTML = `<div class="explanation static-exp">
+      <strong>Static batching</strong> groups requests into fixed batches and waits for the longest request to finish before admitting new requests.
+      Short requests (like C with 3 tokens) must wait while long requests (like B with 12 tokens) complete — the GPU processes padding for finished requests.
+      New requests (E, F, G) wait in a queue even though slots are effectively idle. The red "---" cells represent <strong>wasted GPU computation</strong>.
+    </div>`;
+  } else {
+    expEl.innerHTML = `<div class="explanation">
+      <strong>Continuous batching</strong> checks for completed requests at <em>every</em> decoding step. When Request C finishes at step 3, its slot is immediately filled by the next waiting request.
+      No padding is ever needed — a slot is either doing useful work or truly idle (no waiting requests). GPU utilization stays near 100% as long as the request queue is non-empty.
+      Notice how requests E, F, G, and H are served much earlier than in static batching.
+    </div>`;
+  }
+}
+
+function togglePlay() {
+  if (playing) {
+    stopPlay();
+  } else {
+    playing = true;
+    currentStep = 0;
+    document.getElementById('play-btn').textContent = 'Stop';
+    const grid = mode === 'static' ? computeStatic() : computeContinuous();
+    const speedVal = 6 - parseInt(document.getElementById('speed').value);
+    interval = setInterval(() => {
+      render(grid, currentStep);
+      currentStep++;
+      if (currentStep >= TIMESTEPS) {
+        stopPlay();
+      }
+    }, speedVal * 150);
+  }
+}
+
+function stopPlay() {
+  playing = false;
+  clearInterval(interval);
+  document.getElementById('play-btn').textContent = 'Play';
+}
+
+// Init
+setMode('static');
+</script>
+</body>
+</html>

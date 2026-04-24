@@ -5,6 +5,19 @@
      see-also: [[ch-10]], [[ch-18]]
 -->
 
+## Companion Materials
+
+**Interactive Figures:**
+- [Causal Mask Visualizer](figures/causal-mask-visualizer.html) -- click any cell to see what each token attends to; toggle between mask view and post-softmax weights
+- [GPT Lineage Architecture Comparison](figures/gpt-lineage-comparison.html) -- four views (scale, architecture, paradigm shift, full diff table) comparing GPT-1/2/3
+
+**Deep-Dive Excerpts:**
+- [Causal Masking Implementation](excerpts/causal-masking-implementation.md) -- numerical stability ($-10^9$ vs $-\infty$), teacher forcing coupling, FlashAttention integration, common pitfalls
+- [GPT-1/2/3 Architecture Diff Table](excerpts/gpt-architecture-diff.md) -- every parameter-level change across three generations, which changes were essential for scaling vs incidental
+- [Encoder-Decoder vs Decoder-Only: When Each Wins](excerpts/encoder-decoder-vs-decoder-only.md) -- structural analysis, decision framework, the unification argument
+
+---
+
 ## Overview
 
 The original Transformer from [[ch-03]] was an encoder-decoder architecture designed for sequence-to-sequence tasks like machine translation. Within a year of its publication, two divergent bets were placed: BERT ([[bert|paper]]) took the encoder and discarded the decoder; GPT took the decoder and discarded the encoder. By 2020, the decoder-only lineage had won so decisively that every frontier model — GPT-4, Claude, Gemini, LLaMA, DeepSeek — uses a decoder-only Transformer.

@@ -1,0 +1,422 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Gemma 3: SoftCap vs QK-Norm</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    background: #0f0f1a;
+    color: #e0e0e0;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    padding: 32px;
+    min-height: 100vh;
+  }
+  h1 { font-size: 22px; margin-bottom: 8px; color: #fff; }
+  .subtitle { color: #888; font-size: 14px; margin-bottom: 32px; }
+
+  .comparison {
+    display: grid; grid-template-columns: 1fr 1fr;
+    gap: 24px; max-width: 960px; margin: 0 auto;
+  }
+  @media (max-width: 700px) { .comparison { grid-template-columns: 1fr; } }
+
+  .panel {
+    background: #1a1a2e; border-radius: 12px; padding: 24px;
+    position: relative;
+  }
+  .panel h2 { font-size: 16px; margin-bottom: 4px; }
+  .panel .model-tag {
+    font-size: 12px; font-weight: 600; margin-bottom: 16px;
+    display: inline-block; padding: 2px 8px; border-radius: 4px;
+  }
+  .panel.softcap { border-top: 3px solid #e94560; }
+  .panel.softcap .model-tag { background: #e94560; color: #fff; }
+  .panel.qknorm { border-top: 3px solid #4ecdc4; }
+  .panel.qknorm .model-tag { background: #4ecdc4; color: #1a1a2e; }
+
+  canvas { width: 100%; height: 220px; display: block; margin: 12px 0; }
+
+  .pipeline {
+    display: flex; flex-direction: column; gap: 6px;
+    margin-top: 16px;
+  }
+  .pipe-step {
+    display: flex; align-items: center; gap: 8px;
+    font-size: 12px;
+  }
+  .pipe-box {
+    padding: 6px 10px; border-radius: 6px;
+    font-weight: 600; font-size: 11px; min-width: 110px;
+    text-align: center;
+  }
+  .pipe-arrow { color: #555; font-size: 16px; }
+  .pipe-note { color: #888; font-size: 11px; }
+
+  .softcap .pipe-box { background: #2d1a2e; color: #e94560; border: 1px solid #e94560; }
+  .qknorm .pipe-box { background: #1a2e2d; color: #4ecdc4; border: 1px solid #4ecdc4; }
+  .pipe-box.neutral { background: #16213e; color: #aaa; border: 1px solid #333; }
+
+  .verdict {
+    max-width: 960px; margin: 32px auto 0;
+    display: grid; grid-template-columns: 1fr 1fr; gap: 16px;
+  }
+  .verdict-card {
+    background: #1a1a2e; border-radius: 10px; padding: 16px;
+  }
+  .verdict-card h3 { font-size: 14px; margin-bottom: 10px; }
+  .verdict-item {
+    display: flex; align-items: flex-start; gap: 8px;
+    font-size: 12px; margin-bottom: 8px; line-height: 1.5;
+  }
+  .verdict-icon { font-size: 14px; flex-shrink: 0; margin-top: 1px; }
+
+  .controls {
+    max-width: 960px; margin: 0 auto 24px;
+    display: flex; gap: 16px; align-items: center;
+  }
+  .controls label { font-size: 13px; color: #aaa; }
+  .controls input[type=range] {
+    width: 200px; background: #1a1a2e;
+  }
+
+  .math-box {
+    background: #16213e; border-radius: 8px; padding: 12px;
+    font-family: 'Courier New', monospace; font-size: 12px;
+    margin: 12px 0; line-height: 1.6; color: #bbb;
+  }
+  .math-box .highlight { color: #ffd93d; font-weight: bold; }
+</style>
+</head>
+<body>
+
+<h1>SoftCap vs QK-Norm: Attention Logit Stabilization</h1>
+<p class="subtitle">Gemma 2 bounded outputs; Gemma 3 normalizes inputs</p>
+
+<div class="controls">
+  <label>Raw logit magnitude:
+    <input type="range" id="logitMag" min="1" max="200" value="80">
+    <span id="logitLabel">80</span>
+  </label>
+  <label>SoftCap value (c):
+    <input type="range" id="capValue" min="10" max="100" value="50">
+    <span id="capLabel">50</span>
+  </label>
+</div>
+
+<div class="comparison">
+  <!-- SoftCap Panel -->
+  <div class="panel softcap">
+    <h2>SoftCap (Gemma 2)</h2>
+    <span class="model-tag">Deprecated</span>
+
+    <div class="math-box">
+      SoftCap(x, c) = c * tanh(x / c)<br>
+      Bounds output to <span class="highlight">(-c, c)</span><br>
+      Applied <span class="highlight">after</span> QK^T, before softmax
+    </div>
+
+    <canvas id="canvasSoftcap"></canvas>
+
+    <div class="pipeline">
+      <div class="pipe-step">
+        <div class="pipe-box neutral">Q, K vectors</div>
+        <div class="pipe-note">unbounded norms</div>
+      </div>
+      <div class="pipe-step"><div class="pipe-arrow">|</div></div>
+      <div class="pipe-step">
+        <div class="pipe-box neutral">QK^T / sqrt(d)</div>
+        <div class="pipe-note">can grow large</div>
+      </div>
+      <div class="pipe-step"><div class="pipe-arrow">|</div></div>
+      <div class="pipe-step">
+        <div class="pipe-box">c * tanh(x/c)</div>
+        <div class="pipe-note">clamp to [-c, c]</div>
+      </div>
+      <div class="pipe-step"><div class="pipe-arrow">|</div></div>
+      <div class="pipe-step">
+        <div class="pipe-box neutral">softmax</div>
+        <div class="pipe-note">bounded input</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- QK-Norm Panel -->
+  <div class="panel qknorm">
+    <h2>QK-Norm (Gemma 3)</h2>
+    <span class="model-tag">Current</span>
+
+    <div class="math-box">
+      Q' = RMSNorm(Q), K' = RMSNorm(K)<br>
+      |q'_i * k'_j| &le; ||q'|| * ||k'|| = <span class="highlight">1</span><br>
+      Applied <span class="highlight">before</span> QK^T computation
+    </div>
+
+    <canvas id="canvasQKnorm"></canvas>
+
+    <div class="pipeline">
+      <div class="pipe-step">
+        <div class="pipe-box neutral">Q, K vectors</div>
+        <div class="pipe-note">unbounded norms</div>
+      </div>
+      <div class="pipe-step"><div class="pipe-arrow">|</div></div>
+      <div class="pipe-step">
+        <div class="pipe-box">RMSNorm(Q), RMSNorm(K)</div>
+        <div class="pipe-note">unit RMS norm</div>
+      </div>
+      <div class="pipe-step"><div class="pipe-arrow">|</div></div>
+      <div class="pipe-step">
+        <div class="pipe-box neutral">Q'K'^T / sqrt(d)</div>
+        <div class="pipe-note">naturally bounded</div>
+      </div>
+      <div class="pipe-step"><div class="pipe-arrow">|</div></div>
+      <div class="pipe-step">
+        <div class="pipe-box neutral">softmax</div>
+        <div class="pipe-note">bounded input</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="verdict">
+  <div class="verdict-card">
+    <h3 style="color:#e94560;">SoftCap Drawbacks</h3>
+    <div class="verdict-item">
+      <span class="verdict-icon" style="color:#e94560;">x</span>
+      <span>Breaks Flash Attention tiling -- tanh inside the attention loop requires custom kernels</span>
+    </div>
+    <div class="verdict-item">
+      <span class="verdict-icon" style="color:#e94560;">x</span>
+      <span>Compresses gradients for large logits, potentially slowing learning of strong attention patterns</span>
+    </div>
+    <div class="verdict-item">
+      <span class="verdict-icon" style="color:#e94560;">x</span>
+      <span>Adds hyperparameters (c_attn=50, c_final=30) that need per-scale tuning</span>
+    </div>
+    <div class="verdict-item">
+      <span class="verdict-icon" style="color:#ffd93d;">~</span>
+      <span>Effective at preventing logit explosion -- the output is strictly bounded</span>
+    </div>
+  </div>
+  <div class="verdict-card">
+    <h3 style="color:#4ecdc4;">QK-Norm Advantages</h3>
+    <div class="verdict-item">
+      <span class="verdict-icon" style="color:#4ecdc4;">+</span>
+      <span>Fully compatible with Flash Attention -- normalization happens before the attention kernel</span>
+    </div>
+    <div class="verdict-item">
+      <span class="verdict-icon" style="color:#4ecdc4;">+</span>
+      <span>No additional hyperparameters -- uses the same RMSNorm primitive as the rest of the model</span>
+    </div>
+    <div class="verdict-item">
+      <span class="verdict-icon" style="color:#4ecdc4;">+</span>
+      <span>Independently validated by OLMo 2 -- cross-org convergence on the same solution</span>
+    </div>
+    <div class="verdict-item">
+      <span class="verdict-icon" style="color:#4ecdc4;">+</span>
+      <span>Cauchy-Schwarz guarantee: dot products of unit-norm vectors are naturally bounded</span>
+    </div>
+  </div>
+</div>
+
+<script>
+function drawSoftcap(canvas, logitRange, cap) {
+  const ctx = canvas.getContext('2d');
+  const w = canvas.width = canvas.offsetWidth * 2;
+  const h = canvas.height = canvas.offsetHeight * 2;
+  ctx.scale(2, 2);
+  const cw = w / 2, ch = h / 2;
+
+  ctx.clearRect(0, 0, cw, ch);
+
+  const pad = 40;
+  const plotW = cw - 2 * pad;
+  const plotH = ch - 2 * pad;
+
+  // Axes
+  ctx.strokeStyle = '#333';
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(pad, pad); ctx.lineTo(pad, ch - pad);
+  ctx.lineTo(cw - pad, ch - pad);
+  ctx.stroke();
+
+  // Labels
+  ctx.fillStyle = '#888';
+  ctx.font = '10px sans-serif';
+  ctx.textAlign = 'center';
+  ctx.fillText('Raw logit (QK^T)', cw / 2, ch - 5);
+  ctx.save();
+  ctx.translate(12, ch / 2);
+  ctx.rotate(-Math.PI / 2);
+  ctx.fillText('Output', 0, 0);
+  ctx.restore();
+
+  const maxX = logitRange * 1.2;
+  const maxY = cap * 1.3;
+
+  function toCanvasX(x) { return pad + ((x + maxX) / (2 * maxX)) * plotW; }
+  function toCanvasY(y) { return ch - pad - ((y + maxY) / (2 * maxY)) * plotH; }
+
+  // Identity line
+  ctx.strokeStyle = '#333';
+  ctx.setLineDash([4, 4]);
+  ctx.beginPath();
+  ctx.moveTo(toCanvasX(-maxX), toCanvasY(-maxX));
+  ctx.lineTo(toCanvasX(maxX), toCanvasY(maxX));
+  ctx.stroke();
+  ctx.setLineDash([]);
+
+  // Cap bounds
+  ctx.strokeStyle = '#e94560';
+  ctx.globalAlpha = 0.3;
+  ctx.setLineDash([6, 3]);
+  ctx.beginPath();
+  ctx.moveTo(pad, toCanvasY(cap));
+  ctx.lineTo(cw - pad, toCanvasY(cap));
+  ctx.stroke();
+  ctx.beginPath();
+  ctx.moveTo(pad, toCanvasY(-cap));
+  ctx.lineTo(cw - pad, toCanvasY(-cap));
+  ctx.stroke();
+  ctx.setLineDash([]);
+  ctx.globalAlpha = 1;
+
+  // SoftCap curve
+  ctx.strokeStyle = '#e94560';
+  ctx.lineWidth = 2.5;
+  ctx.beginPath();
+  const steps = 200;
+  for (let i = 0; i <= steps; i++) {
+    const x = -maxX + (2 * maxX * i) / steps;
+    const y = cap * Math.tanh(x / cap);
+    const cx = toCanvasX(x);
+    const cy = toCanvasY(y);
+    if (i === 0) ctx.moveTo(cx, cy); else ctx.lineTo(cx, cy);
+  }
+  ctx.stroke();
+
+  // Labels
+  ctx.fillStyle = '#e94560';
+  ctx.font = 'bold 11px sans-serif';
+  ctx.textAlign = 'right';
+  ctx.fillText('c = ' + cap, cw - pad - 4, toCanvasY(cap) - 6);
+  ctx.fillText('-c = -' + cap, cw - pad - 4, toCanvasY(-cap) + 14);
+
+  // Tick marks
+  ctx.fillStyle = '#666';
+  ctx.font = '9px sans-serif';
+  ctx.textAlign = 'center';
+  for (let x = -Math.floor(maxX); x <= maxX; x += Math.ceil(maxX / 3)) {
+    if (x === 0) continue;
+    ctx.fillText(x, toCanvasX(x), ch - pad + 14);
+  }
+}
+
+function drawQKnorm(canvas, logitRange) {
+  const ctx = canvas.getContext('2d');
+  const w = canvas.width = canvas.offsetWidth * 2;
+  const h = canvas.height = canvas.offsetHeight * 2;
+  ctx.scale(2, 2);
+  const cw = w / 2, ch = h / 2;
+
+  ctx.clearRect(0, 0, cw, ch);
+
+  const pad = 40;
+  const plotW = cw - 2 * pad;
+  const plotH = ch - 2 * pad;
+
+  // Axes
+  ctx.strokeStyle = '#333';
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(pad, pad); ctx.lineTo(pad, ch - pad);
+  ctx.lineTo(cw - pad, ch - pad);
+  ctx.stroke();
+
+  ctx.fillStyle = '#888';
+  ctx.font = '10px sans-serif';
+  ctx.textAlign = 'center';
+  ctx.fillText('Raw logit (QK^T)', cw / 2, ch - 5);
+  ctx.save();
+  ctx.translate(12, ch / 2);
+  ctx.rotate(-Math.PI / 2);
+  ctx.fillText('Output', 0, 0);
+  ctx.restore();
+
+  const maxX = logitRange * 1.2;
+  const bound = 1.0;
+  const maxY = bound * 2;
+
+  function toCanvasX(x) { return pad + ((x + maxX) / (2 * maxX)) * plotW; }
+  function toCanvasY(y) { return ch - pad - ((y + maxY) / (2 * maxY)) * plotH; }
+
+  // Bounded region
+  ctx.fillStyle = 'rgba(78, 205, 196, 0.08)';
+  ctx.fillRect(pad, toCanvasY(bound), plotW, toCanvasY(-bound) - toCanvasY(bound));
+
+  // Bound lines
+  ctx.strokeStyle = '#4ecdc4';
+  ctx.globalAlpha = 0.4;
+  ctx.setLineDash([6, 3]);
+  ctx.beginPath();
+  ctx.moveTo(pad, toCanvasY(bound));
+  ctx.lineTo(cw - pad, toCanvasY(bound));
+  ctx.stroke();
+  ctx.beginPath();
+  ctx.moveTo(pad, toCanvasY(-bound));
+  ctx.lineTo(cw - pad, toCanvasY(-bound));
+  ctx.stroke();
+  ctx.setLineDash([]);
+  ctx.globalAlpha = 1;
+
+  // Scatter: normalized dot products cluster within [-1, 1]
+  const rng = (seed) => {
+    let s = seed;
+    return () => { s = (s * 16807 + 0) % 2147483647; return s / 2147483647; };
+  };
+  const rand = rng(42);
+
+  ctx.fillStyle = '#4ecdc4';
+  ctx.globalAlpha = 0.5;
+  for (let i = 0; i < 300; i++) {
+    const rawX = (rand() - 0.5) * 2 * logitRange;
+    const normY = (rand() - 0.5) * 2 * bound * 0.85;
+    ctx.beginPath();
+    ctx.arc(toCanvasX(rawX), toCanvasY(normY), 2, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  ctx.globalAlpha = 1;
+
+  // Labels
+  ctx.fillStyle = '#4ecdc4';
+  ctx.font = 'bold 11px sans-serif';
+  ctx.textAlign = 'right';
+  ctx.fillText('bound = 1', cw - pad - 4, toCanvasY(bound) - 6);
+  ctx.fillText('bound = -1', cw - pad - 4, toCanvasY(-bound) + 14);
+
+  ctx.fillStyle = '#4ecdc4';
+  ctx.font = '11px sans-serif';
+  ctx.textAlign = 'center';
+  ctx.fillText('After RMSNorm: all dot products in [-1, 1]', cw / 2, pad + 14);
+}
+
+function update() {
+  const logitMag = parseInt(document.getElementById('logitMag').value);
+  const capValue = parseInt(document.getElementById('capValue').value);
+  document.getElementById('logitLabel').textContent = logitMag;
+  document.getElementById('capLabel').textContent = capValue;
+
+  drawSoftcap(document.getElementById('canvasSoftcap'), logitMag, capValue);
+  drawQKnorm(document.getElementById('canvasQKnorm'), logitMag);
+}
+
+document.getElementById('logitMag').addEventListener('input', update);
+document.getElementById('capValue').addEventListener('input', update);
+
+window.addEventListener('resize', update);
+update();
+</script>
+</body>
+</html>

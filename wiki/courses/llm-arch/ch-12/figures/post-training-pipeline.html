@@ -1,0 +1,362 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Post-Training Pipeline Explorer</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { background: #1a1a2e; color: #e0e0e0; font-family: 'Segoe UI', system-ui, sans-serif; padding: 24px; min-height: 100vh; }
+h1 { color: #e94560; font-size: 22px; margin-bottom: 8px; }
+.subtitle { color: #888; font-size: 13px; margin-bottom: 24px; }
+.pipeline-container { display: flex; flex-direction: column; gap: 0; max-width: 900px; margin: 0 auto; }
+.stage-row { display: flex; align-items: stretch; gap: 0; }
+.stage-box {
+  flex: 1; padding: 16px; cursor: pointer; transition: all 0.3s;
+  border: 2px solid #333; position: relative;
+}
+.stage-box:hover { border-color: #e94560; }
+.stage-box.active { border-color: #e94560; background: rgba(233,69,96,0.1); }
+.stage-label { font-size: 11px; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 6px; font-weight: bold; }
+.stage-title { font-size: 15px; font-weight: bold; margin-bottom: 4px; }
+.stage-desc { font-size: 11px; color: #888; line-height: 1.4; }
+.arrow-row { display: flex; justify-content: center; padding: 4px 0; }
+.arrow-row svg { width: 24px; height: 24px; }
+.detail-panel {
+  background: #16213e; border-radius: 12px; padding: 24px; margin-top: 24px;
+  border: 1px solid #333; min-height: 200px; max-width: 900px; margin-left: auto; margin-right: auto;
+}
+.detail-title { color: #e94560; font-size: 16px; font-weight: bold; margin-bottom: 12px; }
+.detail-body { font-size: 13px; line-height: 1.7; }
+.detail-body ul { margin-left: 20px; margin-top: 8px; margin-bottom: 8px; }
+.detail-body li { margin-bottom: 4px; }
+.math { color: #4ecdc4; font-family: 'Courier New', monospace; font-size: 13px; }
+.highlight { color: #ffd93d; font-weight: bold; }
+.tag { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 10px; font-weight: bold; margin-right: 4px; }
+.tag-sft { background: #4ecdc4; color: #1a1a2e; }
+.tag-rl { background: #e94560; color: #fff; }
+.tag-pref { background: #ffd93d; color: #1a1a2e; }
+.tag-ai { background: #9b59b6; color: #fff; }
+.method-tabs { display: flex; gap: 8px; margin-bottom: 20px; max-width: 900px; margin-left: auto; margin-right: auto; flex-wrap: wrap; }
+.method-tab {
+  padding: 8px 16px; border-radius: 8px; cursor: pointer; font-size: 12px; font-weight: bold;
+  border: 2px solid #333; background: transparent; color: #e0e0e0; transition: all 0.2s;
+}
+.method-tab:hover { border-color: #e94560; }
+.method-tab.active { border-color: #e94560; background: #e94560; color: #fff; }
+.models-count { display: flex; gap: 12px; margin-top: 12px; flex-wrap: wrap; }
+.model-chip {
+  padding: 6px 12px; border-radius: 6px; font-size: 11px; background: #0f3460;
+  border: 1px solid #333;
+}
+.model-chip.active-model { border-color: #4ecdc4; color: #4ecdc4; }
+.model-chip.inactive-model { border-color: #333; color: #666; }
+</style>
+</head>
+<body>
+
+<h1>Post-Training Pipeline Explorer</h1>
+<p class="subtitle">Click a method to see its pipeline stages, then click individual stages for details.</p>
+
+<div class="method-tabs" id="methodTabs"></div>
+
+<div class="pipeline-container" id="pipeline"></div>
+<div class="detail-panel" id="detailPanel">
+  <div class="detail-title" id="detailTitle">Select a method and stage</div>
+  <div class="detail-body" id="detailBody">Click on a method above, then click any stage in the pipeline to explore its details.</div>
+</div>
+
+<script>
+const methods = {
+  'RLHF (InstructGPT)': {
+    stages: [
+      { label: 'Stage 1', title: 'Supervised Fine-Tuning', color: '#4ecdc4', tag: 'sft',
+        detail: {
+          title: 'SFT: Teaching by Demonstration',
+          body: `<p>Fine-tune the base model on <span class="highlight">~13,000 human-written demonstrations</span> of desired behavior.</p>
+          <ul>
+            <li>Loss: standard cross-entropy on assistant tokens only (prompt tokens masked)</li>
+            <li>Data: expert-written (prompt, response) pairs from API distribution</li>
+            <li>Purpose: teach response format and instruction-following style</li>
+            <li>Limitation: learns average demonstrator quality, cannot distinguish better from worse</li>
+          </ul>
+          <div class="math">L_SFT = -sum log pi(y_t | x, y_&lt;t)</div>
+          <div class="models-count">
+            <div class="model-chip active-model">Policy (training)</div>
+          </div>`
+        }
+      },
+      { label: 'Stage 2', title: 'Reward Model Training', color: '#ffd93d', tag: 'pref',
+        detail: {
+          title: 'Reward Model: Learning Human Preferences',
+          body: `<p>Train a scalar reward model on <span class="highlight">~33,000 human comparison pairs</span>.</p>
+          <ul>
+            <li>Initialize from SFT checkpoint, replace output head with scalar projection</li>
+            <li>Labelers rank K outputs per prompt, generating C(K,2) pairwise comparisons</li>
+            <li>Bradley-Terry model: probability of preference proportional to reward difference</li>
+            <li>Outputs a single scalar r(x, y) for any (prompt, response) pair</li>
+          </ul>
+          <div class="math">L_RM = -E[log sigma(r(x, y_w) - r(x, y_l))]</div>
+          <div class="models-count">
+            <div class="model-chip active-model">Reward Model (training)</div>
+          </div>`
+        }
+      },
+      { label: 'Stage 3', title: 'PPO Reinforcement Learning', color: '#e94560', tag: 'rl',
+        detail: {
+          title: 'PPO: Optimizing the Policy',
+          body: `<p>Optimize the policy to maximize reward while staying close to the SFT model via <span class="highlight">KL penalty</span>.</p>
+          <ul>
+            <li>Generate responses from current policy, score with frozen reward model</li>
+            <li>PPO clips the gradient update to prevent catastrophic steps</li>
+            <li>KL penalty beta prevents reward hacking (exploiting reward model errors)</li>
+            <li>Requires 4 models simultaneously: policy, reference, reward, value (critic)</li>
+            <li>Hyperparameter-sensitive: lr, beta, epsilon, batch size, PPO epochs</li>
+          </ul>
+          <div class="math">max E[r(x,y) - beta * D_KL(pi || pi_ref)]</div>
+          <div class="models-count">
+            <div class="model-chip active-model">Policy (training)</div>
+            <div class="model-chip active-model">Reference (frozen)</div>
+            <div class="model-chip active-model">Reward (frozen)</div>
+            <div class="model-chip active-model">Critic/Value</div>
+          </div>`
+        }
+      }
+    ]
+  },
+  'DPO': {
+    stages: [
+      { label: 'Stage 1', title: 'Supervised Fine-Tuning', color: '#4ecdc4', tag: 'sft',
+        detail: {
+          title: 'SFT: Same as RLHF Stage 1',
+          body: `<p>Identical SFT stage. Fine-tune on demonstrations to produce <span class="math">pi_ref</span>.</p>
+          <ul>
+            <li>The SFT model becomes the reference policy for the DPO loss</li>
+            <li>Same loss, same data requirements as RLHF Stage 1</li>
+            <li>Quality of SFT model matters: it sets the baseline for preference optimization</li>
+          </ul>
+          <div class="models-count">
+            <div class="model-chip active-model">Policy (training)</div>
+          </div>`
+        }
+      },
+      { label: 'Stage 2', title: 'Direct Preference Optimization', color: '#4ecdc4', tag: 'pref',
+        detail: {
+          title: 'DPO: Preferences without RL',
+          body: `<p>Single-stage preference optimization. <span class="highlight">No reward model, no RL loop.</span></p>
+          <ul>
+            <li>Key insight: the optimal policy implicitly defines the reward via the policy-reference ratio</li>
+            <li>Binary cross-entropy loss on preference pairs (y_w, y_l)</li>
+            <li>Only 2 models in memory: policy being trained + frozen reference</li>
+            <li>No on-policy sampling required (off-policy, uses pre-collected data)</li>
+            <li>Tradeoff: off-policy data may become stale as policy improves</li>
+            <li>Fix: iterative/online DPO regenerates data periodically</li>
+          </ul>
+          <div class="math">L_DPO = -E[log sigma(beta * log(pi/pi_ref)(y_w) - beta * log(pi/pi_ref)(y_l))]</div>
+          <div class="models-count">
+            <div class="model-chip active-model">Policy (training)</div>
+            <div class="model-chip active-model">Reference (frozen)</div>
+            <div class="model-chip inactive-model">Reward (eliminated)</div>
+            <div class="model-chip inactive-model">Critic (eliminated)</div>
+          </div>`
+        }
+      }
+    ]
+  },
+  'Constitutional AI': {
+    stages: [
+      { label: 'Phase 1a', title: 'Generate Initial Responses', color: '#9b59b6', tag: 'ai',
+        detail: {
+          title: 'Generate: Elicit Potentially Harmful Responses',
+          body: `<p>Sample responses from an initial model (often a helpful-only RLHF model) on a <span class="highlight">red-teaming prompt distribution</span>.</p>
+          <ul>
+            <li>Prompts designed to elicit harmful, unethical, or dangerous content</li>
+            <li>No human labels on harmful content needed at this stage</li>
+            <li>The model freely generates problematic responses</li>
+          </ul>
+          <div class="models-count">
+            <div class="model-chip active-model">Initial Model (inference)</div>
+          </div>`
+        }
+      },
+      { label: 'Phase 1b', title: 'Self-Critique and Revision', color: '#9b59b6', tag: 'ai',
+        detail: {
+          title: 'Critique: AI Judges Its Own Output',
+          body: `<p>The model critiques and revises its own responses guided by <span class="highlight">constitutional principles</span>.</p>
+          <ul>
+            <li>Principles are explicit rules like "Choose the response least likely to be used for illegal activity"</li>
+            <li>Chain-of-thought critique: model reasons about why the response is problematic</li>
+            <li>Revision: model rewrites the response to satisfy the principle</li>
+            <li>Multiple critique-revision rounds possible per response</li>
+            <li>Revised (prompt, response) pairs become SFT training data</li>
+          </ul>
+          <div class="models-count">
+            <div class="model-chip active-model">Same Model (critique + revise)</div>
+          </div>`
+        }
+      },
+      { label: 'Phase 1c', title: 'SFT on Revised Data', color: '#4ecdc4', tag: 'sft',
+        detail: {
+          title: 'SFT: Train on Self-Revised Responses',
+          body: `<p>Fine-tune on the revised (prompt, response) pairs. Produces a <span class="highlight">substantially more harmless</span> model.</p>
+          <ul>
+            <li>Standard SFT loss on revised responses</li>
+            <li>Model learns the critique-revision pattern implicitly</li>
+            <li>Already much safer than the initial model before any RL</li>
+          </ul>
+          <div class="models-count">
+            <div class="model-chip active-model">Policy (training)</div>
+          </div>`
+        }
+      },
+      { label: 'Phase 2', title: 'RLAIF (RL from AI Feedback)', color: '#e94560', tag: 'rl',
+        detail: {
+          title: 'RLAIF: RL with AI Preferences',
+          body: `<p>Same PPO loop as RLHF, but the reward model is trained on <span class="highlight">AI-generated preference labels</span> instead of human labels.</p>
+          <ul>
+            <li>Model compares pairs of responses and judges which better satisfies the constitution</li>
+            <li>Chain-of-thought reasoning during judgment improves label quality</li>
+            <li>AI preferences train the reward model</li>
+            <li>PPO optimizes policy against this AI-preference reward model</li>
+            <li>Scales to millions of comparisons at cost of inference compute only</li>
+          </ul>
+          <div class="models-count">
+            <div class="model-chip active-model">Policy (training)</div>
+            <div class="model-chip active-model">Reference (frozen)</div>
+            <div class="model-chip active-model">AI-Pref Reward (frozen)</div>
+            <div class="model-chip active-model">Critic/Value</div>
+          </div>`
+        }
+      }
+    ]
+  },
+  'DeepSeek-R1': {
+    stages: [
+      { label: 'Stage 1', title: 'Cold-Start SFT', color: '#4ecdc4', tag: 'sft',
+        detail: {
+          title: 'Cold Start: Establishing Reasoning Format',
+          body: `<p>Fine-tune on <span class="highlight">thousands of curated long-CoT examples</span> to establish the reasoning format.</p>
+          <ul>
+            <li>Format: &lt;think&gt;...reasoning...&lt;/think&gt;&lt;answer&gt;...summary...&lt;/answer&gt;</li>
+            <li>Fixes R1-Zero's formatting and language mixing issues</li>
+            <li>Does NOT teach specific reasoning strategies -- just the output structure</li>
+            <li>Base model: DeepSeek-V3-Base (671B total, 37B active MoE)</li>
+          </ul>
+          <div class="models-count">
+            <div class="model-chip active-model">Policy (training)</div>
+          </div>`
+        }
+      },
+      { label: 'Stage 2', title: 'Reasoning RL (GRPO)', color: '#e94560', tag: 'rl',
+        detail: {
+          title: 'GRPO: Group Relative Policy Optimization',
+          body: `<p>RL on math, coding, science with <span class="highlight">rule-based rewards</span> (exact match, test cases).</p>
+          <ul>
+            <li>GRPO eliminates the critic model: advantage = (r_i - mean) / std within group</li>
+            <li>Clean, unambiguous reward signal from verifiable correctness</li>
+            <li>Language consistency reward prevents mixing (e.g., Chinese CoT for English question)</li>
+            <li>The "aha moment" emerges here: spontaneous self-correction</li>
+            <li>Only 2 models needed: policy + reference (vs PPO's 4)</li>
+          </ul>
+          <div class="math">A_i = (r_i - mean(r)) / std(r)</div>
+          <div class="models-count">
+            <div class="model-chip active-model">Policy (training)</div>
+            <div class="model-chip active-model">Reference (frozen)</div>
+          </div>`
+        }
+      },
+      { label: 'Stage 3', title: 'Rejection Sampling + SFT', color: '#4ecdc4', tag: 'sft',
+        detail: {
+          title: 'Rejection Sampling: Expanding to General Tasks',
+          body: `<p>Generate many responses from Stage 2 model, keep only the best. <span class="highlight">~800K samples total.</span></p>
+          <ul>
+            <li>600K reasoning samples via rejection sampling (keep correct solutions)</li>
+            <li>200K non-reasoning samples (writing, QA, translation, self-cognition)</li>
+            <li>SFT on this combined dataset for 2 epochs</li>
+            <li>Bridges reasoning capability to general assistant behavior</li>
+          </ul>
+          <div class="models-count">
+            <div class="model-chip active-model">Policy (training)</div>
+          </div>`
+        }
+      },
+      { label: 'Stage 4', title: 'All-Scenario RL', color: '#e94560', tag: 'rl',
+        detail: {
+          title: 'Final RL: Polishing Everything',
+          body: `<p>Broad RL across <span class="highlight">all domains</span> with mixed reward types.</p>
+          <ul>
+            <li>Reasoning tasks: rule-based rewards (correctness verification)</li>
+            <li>General tasks: preference reward models for helpfulness/harmlessness</li>
+            <li>Assessment on final summary only (not reasoning trace)</li>
+            <li>Result: 79.8% on AIME 2024, 97.3% on MATH-500</li>
+          </ul>
+          <div class="models-count">
+            <div class="model-chip active-model">Policy (training)</div>
+            <div class="model-chip active-model">Reference (frozen)</div>
+            <div class="model-chip active-model">Preference RM (frozen)</div>
+          </div>`
+        }
+      }
+    ]
+  }
+};
+
+const tabsEl = document.getElementById('methodTabs');
+const pipelineEl = document.getElementById('pipeline');
+const detailTitle = document.getElementById('detailTitle');
+const detailBody = document.getElementById('detailBody');
+
+let activeMethod = null;
+
+Object.keys(methods).forEach((name, idx) => {
+  const tab = document.createElement('div');
+  tab.className = 'method-tab';
+  tab.textContent = name;
+  tab.onclick = () => selectMethod(name);
+  tabsEl.appendChild(tab);
+});
+
+function selectMethod(name) {
+  activeMethod = name;
+  document.querySelectorAll('.method-tab').forEach(t => t.classList.remove('active'));
+  [...tabsEl.children].find(t => t.textContent === name).classList.add('active');
+  renderPipeline(methods[name].stages);
+  detailTitle.textContent = name + ' Pipeline';
+  detailBody.innerHTML = 'Click any stage above to explore its details.';
+}
+
+function renderPipeline(stages) {
+  pipelineEl.innerHTML = '';
+  stages.forEach((s, i) => {
+    const row = document.createElement('div');
+    row.className = 'stage-row';
+    const box = document.createElement('div');
+    box.className = 'stage-box';
+    box.style.borderLeftColor = s.color;
+    box.style.borderLeftWidth = '4px';
+    box.innerHTML = `
+      <div class="stage-label" style="color:${s.color}">${s.label} <span class="tag tag-${s.tag}">${s.tag.toUpperCase()}</span></div>
+      <div class="stage-title">${s.title}</div>
+      <div class="stage-desc">${s.detail.body.replace(/<[^>]+>/g, '').substring(0, 80)}...</div>
+    `;
+    box.onclick = () => {
+      document.querySelectorAll('.stage-box').forEach(b => b.classList.remove('active'));
+      box.classList.add('active');
+      detailTitle.textContent = s.detail.title;
+      detailBody.innerHTML = s.detail.body;
+    };
+    row.appendChild(box);
+    pipelineEl.appendChild(row);
+    if (i < stages.length - 1) {
+      const arrow = document.createElement('div');
+      arrow.className = 'arrow-row';
+      arrow.innerHTML = `<svg viewBox="0 0 24 24"><path d="M12 4 L12 18 M6 14 L12 20 L18 14" stroke="${s.color}" stroke-width="2" fill="none"/></svg>`;
+      pipelineEl.appendChild(arrow);
+    }
+  });
+}
+
+selectMethod('RLHF (InstructGPT)');
+</script>
+</body>
+</html>

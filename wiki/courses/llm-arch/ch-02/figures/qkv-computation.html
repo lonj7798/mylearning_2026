@@ -1,0 +1,325 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>QKV Computation — Step-by-Step Animation</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { background: #1a1a2e; color: #e0e0e0; font-family: 'Segoe UI', system-ui, sans-serif; padding: 20px; min-height: 100vh; }
+h1 { color: #e94560; font-size: 22px; text-align: center; margin-bottom: 6px; }
+.subtitle { color: #888; font-size: 13px; text-align: center; margin-bottom: 20px; }
+.container { max-width: 960px; margin: 0 auto; }
+.panel { background: #16213e; border-radius: 12px; padding: 20px; margin-bottom: 16px; }
+.panel-title { color: #e94560; font-weight: bold; font-size: 15px; margin-bottom: 12px; }
+.step-nav { display: flex; gap: 6px; justify-content: center; margin-bottom: 16px; flex-wrap: wrap; }
+.step-btn { padding: 8px 16px; border-radius: 6px; background: #0f3460; color: #aaa; border: 1px solid #333; cursor: pointer; font-size: 12px; transition: all 0.2s; }
+.step-btn.active { background: #e94560; color: #fff; border-color: #e94560; font-weight: bold; }
+.step-btn:hover { border-color: #e94560; }
+.step-description { background: #0f3460; border-radius: 8px; padding: 16px; margin-bottom: 16px; font-size: 13px; line-height: 1.6; min-height: 80px; }
+.step-description .formula { color: #4ecdc4; font-family: monospace; font-size: 14px; margin: 8px 0; }
+.step-description .highlight { color: #e94560; font-weight: bold; }
+canvas { width: 100%; border-radius: 8px; background: #0a0a1a; display: block; }
+.dims { display: flex; gap: 16px; justify-content: center; flex-wrap: wrap; margin-bottom: 12px; }
+.dim-tag { background: #0f3460; border-radius: 6px; padding: 6px 12px; font-size: 11px; font-family: monospace; }
+.dim-tag .key { color: #888; }
+.dim-tag .val { color: #4ecdc4; font-weight: bold; }
+.info { background: #0f3460; border-radius: 8px; padding: 12px; font-size: 12px; color: #aaa; line-height: 1.6; margin-top: 12px; }
+.info strong { color: #e94560; }
+</style>
+</head>
+<body>
+<div class="container">
+<h1>QKV Computation Animation</h1>
+<p class="subtitle">Step through the scaled dot-product attention computation from input to output</p>
+
+<div class="panel">
+<div class="dims">
+<div class="dim-tag"><span class="key">n =</span> <span class="val">4</span> (tokens)</div>
+<div class="dim-tag"><span class="key">d_model =</span> <span class="val">8</span> (embedding dim)</div>
+<div class="dim-tag"><span class="key">d_k = d_v =</span> <span class="val">4</span> (head dim)</div>
+<div class="dim-tag"><span class="key">h =</span> <span class="val">1</span> (single head for clarity)</div>
+</div>
+
+<div class="step-nav" id="stepNav"></div>
+<div class="step-description" id="stepDesc"></div>
+<canvas id="mainCanvas" height="400"></canvas>
+</div>
+
+<div class="info">
+<strong>Dimensions at each step:</strong>
+X (4x8) -- W_Q (8x4) --> Q (4x4) |
+X (4x8) -- W_K (8x4) --> K (4x4) |
+X (4x8) -- W_V (8x4) --> V (4x4) |
+QK^T (4x4) / sqrt(4) --> S (4x4) |
+softmax(S) --> A (4x4) |
+A * V --> Output (4x4)
+<br><strong>Total compute:</strong> 3 projections (4x8x4 = 96 each) + score matrix (4x4x4 = 64) + output (4x4x4 = 64) = ~420 FLOPs for this tiny example.
+</div>
+</div>
+
+<script>
+const steps = [
+  { id: 0, label: '1. Input X', formula: 'X ∈ R^{n x d_model}', desc: 'The input matrix X contains n=4 token embeddings, each of dimension d_model=8. These could be raw token embeddings plus positional encodings (layer 1) or the output of the previous layer.' },
+  { id: 1, label: '2. Project Q', formula: 'Q = X · W_Q, W_Q ∈ R^{8x4}', desc: 'Each token is projected into a 4-dimensional <span class="highlight">query</span> space. The query encodes "what am I looking for?" For each row of X, we compute a 4-dim query vector.' },
+  { id: 2, label: '3. Project K', formula: 'K = X · W_K, W_K ∈ R^{8x4}', desc: 'Each token is projected into a 4-dimensional <span class="highlight">key</span> space. The key encodes "what do I advertise?" Keys and queries live in the same space so their dot product measures compatibility.' },
+  { id: 3, label: '4. Project V', formula: 'V = X · W_V, W_V ∈ R^{8x4}', desc: 'Each token is projected into a 4-dimensional <span class="highlight">value</span> space. The value encodes "what information do I provide when attended to?" Values can encode entirely different aspects than keys.' },
+  { id: 4, label: '5. Scores QK^T', formula: 'S = Q · K^T / sqrt(d_k)', desc: 'Compute pairwise query-key dot products, producing an n x n score matrix. S[i,j] = how much query i matches key j. Division by sqrt(4) = 2 keeps scores in a well-behaved range for softmax.' },
+  { id: 5, label: '6. Softmax', formula: 'A = softmax(S, dim=-1)', desc: 'Apply softmax row-wise to convert scores into attention weights. Each row sums to 1.0. A[i,j] = the fraction of attention that token i pays to token j. With causal masking, future positions are set to -inf before softmax.' },
+  { id: 6, label: '7. Output AV', formula: 'Out = A · V', desc: 'Weighted sum of value vectors. Output[i] = sum_j A[i,j] * V[j]. Each output row is a blend of all value vectors, weighted by attention. This is the "soft dictionary lookup" result.' },
+];
+
+let currentStep = 0;
+
+// tiny example data
+const tokens = ['The', 'cat', 'sat', '.'];
+const n = 4, dmodel = 8, dk = 4;
+
+function seededRNG(seed) {
+  let s = seed;
+  return () => { s = (s * 16807 + 0) % 2147483647; return (s - 1) / 2147483646; };
+}
+
+const rng = seededRNG(123);
+function randMat(rows, cols) {
+  const m = [];
+  for (let i = 0; i < rows; i++) {
+    m[i] = [];
+    for (let j = 0; j < cols; j++) m[i][j] = (rng() - 0.5) * 2;
+  }
+  return m;
+}
+
+function matmul(A, B) {
+  const m = A.length, k = A[0].length, n2 = B[0].length;
+  const C = [];
+  for (let i = 0; i < m; i++) {
+    C[i] = [];
+    for (let j = 0; j < n2; j++) {
+      let s = 0;
+      for (let l = 0; l < k; l++) s += A[i][l] * B[l][j];
+      C[i][j] = s;
+    }
+  }
+  return C;
+}
+
+function transpose(M) {
+  const r = M.length, c = M[0].length, T = [];
+  for (let j = 0; j < c; j++) { T[j] = []; for (let i = 0; i < r; i++) T[j][i] = M[i][j]; }
+  return T;
+}
+
+function softmaxRows(M) {
+  return M.map(row => {
+    const mx = Math.max(...row);
+    const exps = row.map(v => Math.exp(v - mx));
+    const s = exps.reduce((a, b) => a + b, 0);
+    return exps.map(e => e / s);
+  });
+}
+
+const X = randMat(n, dmodel);
+const Wq = randMat(dmodel, dk);
+const Wk = randMat(dmodel, dk);
+const Wv = randMat(dmodel, dk);
+const Q = matmul(X, Wq);
+const K = matmul(X, Wk);
+const V = matmul(X, Wv);
+const Kt = transpose(K);
+const rawScores = matmul(Q, Kt);
+const scores = rawScores.map(row => row.map(v => v / Math.sqrt(dk)));
+const attnWeights = softmaxRows(scores);
+const output = matmul(attnWeights, V);
+
+function buildStepNav() {
+  const nav = document.getElementById('stepNav');
+  nav.innerHTML = '';
+  steps.forEach((s, i) => {
+    const btn = document.createElement('div');
+    btn.className = 'step-btn' + (i === currentStep ? ' active' : '');
+    btn.textContent = s.label;
+    btn.addEventListener('click', () => { currentStep = i; render(); });
+    nav.appendChild(btn);
+  });
+}
+
+function renderDescription() {
+  const s = steps[currentStep];
+  document.getElementById('stepDesc').innerHTML = `
+    <div class="formula">${s.formula}</div>
+    <div>${s.desc}</div>
+  `;
+}
+
+function drawMatrix(ctx, mat, x, y, cellW, cellH, label, rowLabels, colLabels, colorFn, highlight) {
+  const rows = mat.length, cols = mat[0].length;
+
+  // label
+  ctx.fillStyle = '#e94560'; ctx.font = 'bold 13px sans-serif'; ctx.textAlign = 'center';
+  ctx.fillText(label, x + (cols * cellW) / 2, y - 8);
+
+  // column labels
+  if (colLabels) {
+    ctx.fillStyle = '#888'; ctx.font = '9px monospace'; ctx.textAlign = 'center';
+    colLabels.forEach((cl, j) => {
+      ctx.fillText(cl, x + j * cellW + cellW / 2, y - 20);
+    });
+  }
+
+  for (let i = 0; i < rows; i++) {
+    // row label
+    if (rowLabels) {
+      ctx.fillStyle = '#888'; ctx.font = '10px monospace'; ctx.textAlign = 'right';
+      ctx.fillText(rowLabels[i], x - 6, y + i * cellH + cellH / 2 + 4);
+    }
+
+    for (let j = 0; j < cols; j++) {
+      const val = mat[i][j];
+      const [r, g, b, a] = colorFn(val, i, j);
+      ctx.fillStyle = `rgba(${r},${g},${b},${a})`;
+
+      const isHighlighted = highlight && highlight(i, j);
+      if (isHighlighted) {
+        ctx.fillStyle = `rgba(${r},${g},${b},${Math.min(a + 0.2, 1)})`;
+      }
+
+      ctx.fillRect(x + j * cellW, y + i * cellH, cellW - 1, cellH - 1);
+
+      // value text
+      ctx.fillStyle = a > 0.5 ? '#fff' : '#aaa';
+      ctx.font = '9px monospace'; ctx.textAlign = 'center';
+      ctx.fillText(val.toFixed(2), x + j * cellW + cellW / 2, y + i * cellH + cellH / 2 + 3);
+    }
+  }
+
+  // dimension annotation
+  ctx.fillStyle = '#555'; ctx.font = '9px monospace'; ctx.textAlign = 'center';
+  ctx.fillText(`${rows}x${cols}`, x + (cols * cellW) / 2, y + rows * cellH + 14);
+}
+
+function colorGeneral(val) {
+  const t = (val + 1) / 2; // normalize [-1,1] to [0,1]
+  return [Math.floor(15 + t * 200), Math.floor(52 + (1 - t) * 50), Math.floor(96 - t * 30), 0.7];
+}
+
+function colorAttn(val) {
+  return [233, 69, 96, val];
+}
+
+function renderCanvas() {
+  const canvas = document.getElementById('mainCanvas');
+  const ctx2 = canvas.getContext('2d');
+  const dpr = window.devicePixelRatio || 1;
+  const rect = canvas.getBoundingClientRect();
+  canvas.width = rect.width * dpr; canvas.height = rect.height * dpr;
+  ctx2.setTransform(dpr, 0, 0, dpr, 0, 0);
+  const W = rect.width, H = rect.height;
+
+  ctx2.clearRect(0, 0, W, H);
+
+  const cellW = 36, cellH = 24;
+  const gap = 20;
+
+  const step = currentStep;
+
+  // always show X
+  const xStart = 30;
+  const yStart = 60;
+
+  const dimLabels = Array.from({ length: dmodel }, (_, i) => `d${i}`);
+  const dkLabels = Array.from({ length: dk }, (_, i) => `d${i}`);
+
+  drawMatrix(ctx2, X, xStart, yStart, cellW, cellH, 'X (input)', tokens, null, colorGeneral, null);
+
+  if (step >= 1) {
+    // show W_Q and Q
+    const wxStart = xStart + dmodel * cellW + gap + 30;
+    drawMatrix(ctx2, Wq, wxStart, yStart, cellW, cellH, 'W_Q', null, null, colorGeneral, null);
+
+    // arrow
+    ctx2.strokeStyle = '#e94560'; ctx2.lineWidth = 2;
+    ctx2.beginPath();
+    ctx2.moveTo(xStart + dmodel * cellW + 8, yStart + n * cellH / 2);
+    ctx2.lineTo(wxStart - 8, yStart + n * cellH / 2);
+    ctx2.stroke();
+    ctx2.fillStyle = '#e94560'; ctx2.font = '10px sans-serif'; ctx2.textAlign = 'center';
+    ctx2.fillText('x', (xStart + dmodel * cellW + wxStart) / 2, yStart + n * cellH / 2 - 6);
+
+    const qStart = wxStart + dk * cellW + gap + 30;
+    drawMatrix(ctx2, Q, qStart, yStart, cellW, cellH, 'Q', tokens, null, (v) => [233, 69, 96, (v + 2) / 4], null);
+
+    // arrow
+    ctx2.strokeStyle = '#e94560';
+    ctx2.beginPath();
+    ctx2.moveTo(wxStart + dk * cellW + 8, yStart + n * cellH / 2);
+    ctx2.lineTo(qStart - 8, yStart + n * cellH / 2);
+    ctx2.stroke();
+    ctx2.fillText('=', (wxStart + dk * cellW + qStart) / 2, yStart + n * cellH / 2 - 6);
+  }
+
+  if (step >= 2) {
+    const y2 = yStart + n * cellH + 50;
+    const wxStart = xStart + dmodel * cellW + gap + 30;
+    drawMatrix(ctx2, Wk, wxStart, y2, cellW, cellH, 'W_K', null, null, colorGeneral, null);
+    const kStart = wxStart + dk * cellW + gap + 30;
+    drawMatrix(ctx2, K, kStart, y2, cellW, cellH, 'K', tokens, null, (v) => [78, 205, 196, (v + 2) / 4], null);
+
+    ctx2.strokeStyle = '#4ecdc4'; ctx2.lineWidth = 2;
+    ctx2.beginPath();
+    ctx2.moveTo(wxStart + dk * cellW + 8, y2 + n * cellH / 2);
+    ctx2.lineTo(kStart - 8, y2 + n * cellH / 2);
+    ctx2.stroke();
+  }
+
+  if (step >= 3) {
+    const y3 = yStart + 2 * (n * cellH + 50);
+    const wxStart = xStart + dmodel * cellW + gap + 30;
+    drawMatrix(ctx2, Wv, wxStart, y3, cellW, cellH, 'W_V', null, null, colorGeneral, null);
+    const vStart = wxStart + dk * cellW + gap + 30;
+    drawMatrix(ctx2, V, vStart, y3, cellW, cellH, 'V', tokens, null, (v) => [255, 217, 61, (v + 2) / 4], null);
+
+    ctx2.strokeStyle = '#ffd93d'; ctx2.lineWidth = 2;
+    ctx2.beginPath();
+    ctx2.moveTo(wxStart + dk * cellW + 8, y3 + n * cellH / 2);
+    ctx2.lineTo(vStart - 8, y3 + n * cellH / 2);
+    ctx2.stroke();
+  }
+
+  if (step >= 4) {
+    // show QK^T / sqrt(dk) -> S
+    const sY = yStart;
+    const sX = W - n * cellW - 60;
+    drawMatrix(ctx2, scores, sX, sY, cellW, cellH, 'S = QK^T/sqrt(d_k)', tokens, tokens, (v) => {
+      const t = (v + 3) / 6;
+      return [Math.floor(t * 233), Math.floor(60 + (1 - t) * 100), Math.floor(96), 0.7];
+    }, null);
+  }
+
+  if (step >= 5) {
+    const aY = yStart + n * cellH + 50;
+    const aX = W - n * cellW - 60;
+    drawMatrix(ctx2, attnWeights, aX, aY, cellW, cellH, 'A = softmax(S)', tokens, tokens, colorAttn, null);
+  }
+
+  if (step >= 6) {
+    const oY = yStart + 2 * (n * cellH + 50);
+    const oX = W - dk * cellW - 60;
+    drawMatrix(ctx2, output, oX, oY, cellW, cellH, 'Output = AV', tokens, null, (v) => {
+      const t = (v + 2) / 4;
+      return [78, 205, 196, Math.max(0.2, t)];
+    }, null);
+  }
+}
+
+function render() {
+  buildStepNav();
+  renderDescription();
+  renderCanvas();
+}
+
+render();
+window.addEventListener('resize', render);
+</script>
+</body>
+</html>
