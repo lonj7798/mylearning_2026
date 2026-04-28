@@ -1,0 +1,901 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<title>ch-08 Visualizations — TCP / WebSocket / Protocol Flows</title>
+<style>
+  * { box-sizing: border-box; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    max-width: 1000px;
+    margin: 0 auto;
+    padding: 2rem;
+    background: #0d1117;
+    color: #e6edf3;
+    line-height: 1.6;
+  }
+  h1 { color: #58a6ff; border-bottom: 2px solid #30363d; padding-bottom: 0.5rem; }
+  h2 { color: #79c0ff; margin-top: 2.5rem; }
+  h3 { color: #a5d6ff; }
+  .section {
+    background: #161b22;
+    border: 1px solid #30363d;
+    border-radius: 8px;
+    padding: 1.5rem;
+    margin-bottom: 1.5rem;
+  }
+  .controls {
+    margin: 1rem 0;
+    display: flex;
+    gap: 0.5rem;
+  }
+  button {
+    background: #238636;
+    color: white;
+    border: none;
+    padding: 0.5rem 1rem;
+    border-radius: 6px;
+    cursor: pointer;
+    font-size: 0.9rem;
+  }
+  button:hover { background: #2ea043; }
+  button.reset { background: #da3633; }
+  button.reset:hover { background: #f85149; }
+
+  /* ==== Protocol stack ==== */
+  .stack {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    max-width: 600px;
+    margin: 1rem auto;
+  }
+  .layer {
+    padding: 1rem;
+    border-radius: 4px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    font-family: ui-monospace, monospace;
+  }
+  .layer .label { font-weight: bold; }
+  .layer .examples { color: #8b949e; font-size: 0.85rem; }
+  .layer-7 { background: #1f6feb; color: white; }
+  .layer-4 { background: #7d4fc0; color: white; }
+  .layer-3 { background: #bf8700; color: white; }
+  .layer-2 { background: #6e7681; color: white; }
+  .layer-1 { background: #484f58; color: white; }
+
+  /* ==== Network animation ==== */
+  .diagram {
+    position: relative;
+    height: 340px;
+    background: #0d1117;
+    border: 1px solid #30363d;
+    border-radius: 8px;
+    margin: 1rem 0;
+    overflow: hidden;
+  }
+  .endpoint {
+    position: absolute;
+    top: 20px;
+    padding: 0.8rem 1.2rem;
+    background: #21262d;
+    border: 2px solid #58a6ff;
+    border-radius: 6px;
+    font-weight: bold;
+    font-family: ui-monospace, monospace;
+    color: #58a6ff;
+  }
+  .endpoint.client { left: 20px; }
+  .endpoint.server { right: 20px; }
+  .endpoint.active { background: #1f6feb; color: white; }
+
+  .wire {
+    position: absolute;
+    left: 100px;
+    right: 100px;
+    top: 80px;
+    bottom: 20px;
+    border-left: 2px dashed #30363d;
+    border-right: 2px dashed #30363d;
+  }
+  .packet {
+    position: absolute;
+    padding: 0.4rem 0.8rem;
+    border-radius: 4px;
+    font-family: ui-monospace, monospace;
+    font-size: 0.85rem;
+    white-space: nowrap;
+    opacity: 0;
+    pointer-events: none;
+    z-index: 20;
+  }
+  .endpoint { z-index: 5; }
+  .packet.client-to-server {
+    left: 100px;
+    background: #238636;
+    color: white;
+    transition: left 0.9s ease-in-out, opacity 0.3s;
+  }
+  .packet.server-to-client {
+    right: 100px;
+    background: #bf4b00;
+    color: white;
+    transition: right 0.9s ease-in-out, opacity 0.3s;
+  }
+  .packet.visible { opacity: 1; }
+  .packet.sent-client { left: calc(100% - 240px); }
+  .packet.sent-server { right: calc(100% - 240px); }
+
+  /* ==== Full-duplex demo ==== */
+  .duplex {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 1rem;
+    margin: 1rem 0;
+  }
+  .duplex-side {
+    background: #0d1117;
+    border: 1px solid #30363d;
+    border-radius: 6px;
+    padding: 1rem;
+    min-height: 250px;
+  }
+  .duplex-side h4 { margin-top: 0; color: #79c0ff; }
+  .frame-log {
+    font-family: ui-monospace, monospace;
+    font-size: 0.85rem;
+    max-height: 200px;
+    overflow-y: auto;
+  }
+  .frame {
+    padding: 0.3rem 0.5rem;
+    margin: 0.2rem 0;
+    border-radius: 4px;
+    animation: fadein 0.3s;
+  }
+  .frame.out { background: #1f6feb; color: white; }
+  .frame.in { background: #1a7f37; color: white; }
+  @keyframes fadein {
+    from { opacity: 0; transform: translateY(-5px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+
+  /* ==== WebSocket frame ==== */
+  .frame-viz {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 4px;
+    margin: 1rem 0;
+  }
+  .field {
+    padding: 0.8rem;
+    border-radius: 4px;
+    text-align: center;
+    font-family: ui-monospace, monospace;
+    font-size: 0.85rem;
+  }
+  .field-name { font-weight: bold; font-size: 0.9rem; margin-bottom: 0.3rem; }
+  .field-fin { background: #da3633; color: white; grid-column: span 1; }
+  .field-opcode { background: #bf8700; color: white; grid-column: span 1; }
+  .field-mask { background: #1f6feb; color: white; grid-column: span 1; }
+  .field-len { background: #6639ba; color: white; grid-column: span 1; }
+  .field-payload { background: #1a7f37; color: white; grid-column: span 4; padding: 1.2rem; }
+
+  .note {
+    background: #1d2125;
+    border-left: 4px solid #58a6ff;
+    padding: 0.8rem 1rem;
+    margin: 1rem 0;
+    font-size: 0.9rem;
+  }
+
+  code {
+    background: #30363d;
+    padding: 0.1rem 0.3rem;
+    border-radius: 3px;
+    font-size: 0.9em;
+  }
+
+  /* ==== Layered flow animation ==== */
+  .layered-col {
+    background: #161b22;
+    border: 2px solid #30363d;
+    border-radius: 6px;
+    padding: 0.8rem;
+    text-align: center;
+    transition: background 0.3s, border 0.3s, transform 0.3s;
+  }
+  .layered-col.active {
+    background: #1f6feb;
+    border-color: #58a6ff;
+    transform: scale(1.05);
+    box-shadow: 0 0 16px rgba(88, 166, 255, 0.5);
+  }
+  .layered-col.working {
+    background: #6639ba;
+    border-color: #a371f7;
+  }
+  .layered-title {
+    font-weight: bold;
+    color: #e6edf3;
+    font-family: ui-monospace, monospace;
+    margin-bottom: 0.2rem;
+  }
+  .layered-desc {
+    font-size: 0.8rem;
+    color: #8b949e;
+    font-family: ui-monospace, monospace;
+  }
+  .layered-col.active .layered-desc,
+  .layered-col.working .layered-desc {
+    color: #e6edf3;
+  }
+  .sc-btn {
+    background: #30363d;
+    color: #e6edf3;
+    border: 1px solid #484f58;
+    padding: 0.4rem 0.8rem;
+    border-radius: 4px;
+    font-size: 0.85rem;
+    cursor: pointer;
+  }
+  .sc-btn:hover { background: #484f58; }
+  .sc-btn.selected {
+    background: #1f6feb;
+    border-color: #58a6ff;
+    color: white;
+  }
+
+  /* ==== Sequence diagram (lifelines + per-step arrows) ==== */
+  #la-sequence {
+    position: relative;
+    min-height: 100px;
+    padding: 0.5rem 0;
+    background: #0d1117;
+    border-radius: 4px;
+    overflow: hidden;
+  }
+  .lifeline {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    width: 2px;
+    background-image: linear-gradient(to bottom, #30363d 50%, transparent 50%);
+    background-size: 2px 10px;
+    transform: translateX(-1px);
+    z-index: 1;
+  }
+  .step-row {
+    position: relative;
+    height: 38px;
+    opacity: 0.4;
+    transition: opacity 0.3s;
+  }
+  .step-row.current { opacity: 1; }
+  .step-row.past { opacity: 0.55; }
+  .step-arrow {
+    position: absolute;
+    top: 50%;
+    transform: translateY(-50%);
+    padding: 4px 10px;
+    border-radius: 4px;
+    color: white;
+    font-family: ui-monospace, monospace;
+    font-size: 0.75rem;
+    white-space: nowrap;
+    z-index: 5;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.4rem;
+    min-height: 22px;
+  }
+  .step-arrow.left-to-right::after {
+    content: '▶';
+    color: rgba(255,255,255,0.85);
+    font-size: 0.7rem;
+  }
+  .step-arrow.right-to-left::before {
+    content: '◀';
+    color: rgba(255,255,255,0.85);
+    font-size: 0.7rem;
+  }
+  .step-self {
+    position: absolute;
+    top: 50%;
+    transform: translate(-50%, -50%);
+    padding: 3px 8px;
+    border-radius: 12px;
+    background: #6639ba;
+    border: 1px solid #a371f7;
+    color: white;
+    font-family: ui-monospace, monospace;
+    font-size: 0.72rem;
+    white-space: nowrap;
+    z-index: 5;
+  }
+  .step-note {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    color: #6e7681;
+    font-family: ui-monospace, monospace;
+    font-size: 0.72rem;
+    font-style: italic;
+  }
+</style>
+</head>
+<body>
+
+<h1>ch-08 Visualizations</h1>
+<p>Interactive visualizations for TCP, WebSocket, and boson-agent's Gateway wire protocol. Click the buttons to animate.</p>
+
+<!-- ============================================ -->
+<div class="section">
+<h2>1. Protocol Stack</h2>
+<p>Each layer adds a header to the payload below. When you <code>await websocket.send("hello")</code>, "hello" travels down four layers before leaving your machine.</p>
+<div class="stack">
+  <div class="layer layer-7">
+    <span class="label">Application (L7)</span>
+    <span class="examples">HTTP / WebSocket / SSH / DNS / gRPC</span>
+  </div>
+  <div class="layer layer-4">
+    <span class="label">Transport (L4)</span>
+    <span class="examples">TCP · UDP · QUIC</span>
+  </div>
+  <div class="layer layer-3">
+    <span class="label">Network (L3)</span>
+    <span class="examples">IP (v4/v6) · ICMP</span>
+  </div>
+  <div class="layer layer-2">
+    <span class="label">Link (L2)</span>
+    <span class="examples">Ethernet · WiFi</span>
+  </div>
+  <div class="layer layer-1">
+    <span class="label">Physical (L1)</span>
+    <span class="examples">cables · radio waves</span>
+  </div>
+</div>
+<div class="note">boson-agent lives in L7 (WebSocket). Everything below happens in the OS kernel.</div>
+</div>
+
+<!-- ============================================ -->
+<div class="section">
+<h2>2. TCP 3-Way Handshake</h2>
+<p>Before any data flows, TCP does a three-step handshake to establish a connection. Click <b>Start</b> to animate.</p>
+<div class="diagram" id="tcp-diagram">
+  <div class="endpoint client" id="tcp-client">Client</div>
+  <div class="endpoint server" id="tcp-server">Server</div>
+  <div class="wire"></div>
+  <div class="packet client-to-server" id="tcp-p1" style="top: 120px;">SYN (seq=X)</div>
+  <div class="packet server-to-client" id="tcp-p2" style="top: 180px;">SYN-ACK (seq=Y, ack=X+1)</div>
+  <div class="packet client-to-server" id="tcp-p3" style="top: 240px;">ACK (ack=Y+1)</div>
+  <div id="tcp-status" style="position:absolute;bottom:20px;left:20px;right:20px;text-align:center;color:#8b949e;font-family:monospace;"></div>
+</div>
+<div class="controls">
+  <button onclick="animateTCP()">▶ Start Handshake</button>
+  <button class="reset" onclick="resetTCP()">↻ Reset</button>
+</div>
+<div class="note">
+Each arrow is a packet. After three round-trips both sides agree they are <b>connected</b> — now a TCP connection exists between them, with sequence numbers initialized and buffers allocated. Application data can start flowing.
+</div>
+</div>
+
+<!-- ============================================ -->
+<div class="section">
+<h2>3. WebSocket Upgrade</h2>
+<p>WebSocket starts as an HTTP request on the already-established TCP connection, then "upgrades" to a different protocol on the same socket.</p>
+<div class="diagram" id="ws-diagram">
+  <div class="endpoint client" id="ws-client">Browser</div>
+  <div class="endpoint server" id="ws-server">Gateway</div>
+  <div class="wire"></div>
+  <div class="packet client-to-server" id="ws-p1" style="top: 110px;">GET /ws · Upgrade: websocket</div>
+  <div class="packet server-to-client" id="ws-p2" style="top: 170px;">101 Switching Protocols</div>
+  <div class="packet client-to-server" id="ws-p3" style="top: 230px;">[text frame: user_message]</div>
+  <div class="packet server-to-client" id="ws-p4" style="top: 290px;">[text frame: text_delta × N]</div>
+  <div id="ws-status" style="position:absolute;bottom:5px;left:20px;right:20px;text-align:center;color:#8b949e;font-family:monospace;font-size:0.8rem;"></div>
+</div>
+<div class="controls">
+  <button onclick="animateWS()">▶ Start Upgrade</button>
+  <button class="reset" onclick="resetWS()">↻ Reset</button>
+</div>
+<div class="note">
+After the 101 response, the TCP connection stops speaking HTTP and starts speaking WebSocket <b>frames</b>. It is the same TCP socket — no new connection.
+</div>
+</div>
+
+<!-- ============================================ -->
+<div class="section">
+<h2>4. Full-Duplex in Action</h2>
+<p>Once the WebSocket is open, both sides can send frames <b>at any time</b>, even while the other side is still sending. Click <b>Start Demo</b> to simulate a streaming LLM response with a mid-stream user interruption.</p>
+<div class="duplex">
+  <div class="duplex-side">
+    <h4>Client (Browser)</h4>
+    <div class="frame-log" id="client-log"></div>
+  </div>
+  <div class="duplex-side">
+    <h4>Server (Gateway)</h4>
+    <div class="frame-log" id="server-log"></div>
+  </div>
+</div>
+<div class="controls">
+  <button onclick="nextStep()" id="duplex-next">▶ Next Step</button>
+  <button onclick="startDuplex()">⏩ Auto Play</button>
+  <button class="reset" onclick="resetDuplex()">↻ Reset</button>
+</div>
+<div id="duplex-caption" style="background:#1d2125;border-left:4px solid #d29922;padding:0.8rem 1rem;margin:1rem 0;font-size:0.9rem;min-height:2.5rem;">Press <b>Next Step</b> to walk through frame by frame.</div>
+<div class="note">
+Pay attention to <b>steps 6 and 7</b> — the client sends <b>"barge-in: stop!"</b> while the server is still sending <b>text_delta</b> frames. Full-duplex is what makes this possible. In half-duplex (walkie-talkie style)the client would have to wait until the server paused — barge-in would not work.
+</div>
+
+<h3 style="margin-top:2rem;">4b. Where is IN and where is OUT — the two independent channels</h3>
+<p>The key insight: each side has <b>two separate channels</b> — one for sending (OUT) and one for receiving (IN). They operate independently; no lock, no coordination needed. Start the animation to see packets flowing in both channels at the same time.</p>
+
+<div id="io-diagram" style="position:relative;background:#0d1117;border:1px solid #30363d;border-radius:8px;padding:1.5rem;margin:1rem 0;">
+  <div style="display:grid;grid-template-columns:1fr 100px 1fr;gap:0;align-items:center;">
+    <!-- Client box -->
+    <div style="background:#161b22;border:2px solid #58a6ff;border-radius:8px;padding:1rem;"><div style="color:#58a6ff;font-weight:bold;text-align:center;margin-bottom:0.8rem;font-size:1.1rem;">CLIENT (Browser)</div><div style="display:flex;flex-direction:column;gap:0.8rem;"><!-- OUT channel --><div style="background:#0d3066;padding:0.6rem;border-radius:4px;border-left:4px solid #58a6ff;"><div style="font-family:monospace;font-size:0.8rem;color:#8b949e;">channel: OUT</div><div style="font-family:monospace;font-weight:bold;color:white;">ws.send(json.dumps(msg))</div><div style="font-family:monospace;font-size:0.75rem;color:#8b949e;margin-top:0.2rem;">user types → wrap in frame → write</div></div><!-- IN channel --><div style="background:#0d4417;padding:0.6rem;border-radius:4px;border-left:4px solid #3fb950;"><div style="font-family:monospace;font-size:0.8rem;color:#8b949e;">channel: IN</div><div style="font-family:monospace;font-weight:bold;color:white;">async for msg in ws:</div><div style="font-family:monospace;font-size:0.75rem;color:#8b949e;margin-top:0.2rem;">await frame → parse → render to UI</div></div></div>
+    </div>
+
+    <!-- Center: two directional lanes -->
+    <div style="position:relative;height:200px;display:flex;flex-direction:column;justify-content:space-around;align-items:center;"><!-- Lane 1: client OUT → server IN (top) --><div style="width:100%;height:3px;background:linear-gradient(90deg,#58a6ff 0%,#58a6ff 100%);position:relative;"><div id="io-packet-up" style="position:absolute;top:-14px;left:0;padding:0.25rem 0.5rem;background:#1f6feb;color:white;border-radius:4px;font-family:monospace;font-size:0.7rem;transition:left 1.2s linear;opacity:0;white-space:nowrap;">msg</div></div><div style="font-family:monospace;font-size:0.7rem;color:#8b949e;">↑ lane A (C→S)</div><div style="font-family:monospace;font-size:0.7rem;color:#8b949e;">↓ lane B (S→C)</div><!-- Lane 2: server OUT → client IN (bottom) --><div style="width:100%;height:3px;background:linear-gradient(90deg,#3fb950 0%,#3fb950 100%);position:relative;"><div id="io-packet-down" style="position:absolute;top:-14px;right:0;padding:0.25rem 0.5rem;background:#238636;color:white;border-radius:4px;font-family:monospace;font-size:0.7rem;transition:right 1.2s linear;opacity:0;white-space:nowrap;">msg</div></div>
+    </div>
+
+    <!-- Server box -->
+    <div style="background:#161b22;border:2px solid #3fb950;border-radius:8px;padding:1rem;"><div style="color:#3fb950;font-weight:bold;text-align:center;margin-bottom:0.8rem;font-size:1.1rem;">SERVER (Gateway)</div><div style="display:flex;flex-direction:column;gap:0.8rem;"><!-- IN channel --><div style="background:#0d3066;padding:0.6rem;border-radius:4px;border-left:4px solid #58a6ff;"><div style="font-family:monospace;font-size:0.8rem;color:#8b949e;">channel: IN</div><div style="font-family:monospace;font-weight:bold;color:white;">async for msg in ws:</div><div style="font-family:monospace;font-size:0.75rem;color:#8b949e;margin-top:0.2rem;">await frame → handle_message(...)</div></div><!-- OUT channel --><div style="background:#0d4417;padding:0.6rem;border-radius:4px;border-left:4px solid #3fb950;"><div style="font-family:monospace;font-size:0.8rem;color:#8b949e;">channel: OUT</div><div style="font-family:monospace;font-weight:bold;color:white;">await ws.send(chunk)</div><div style="font-family:monospace;font-size:0.75rem;color:#8b949e;margin-top:0.2rem;">run_agent_loop yields → frame → write</div></div></div>
+    </div>
+  </div>
+
+  <!-- Status -->
+  <div id="io-status" style="text-align:center;color:#d29922;font-family:monospace;margin-top:1rem;min-height:1.2rem;">Press "Start Flow" to see packets move independently in both lanes.</div>
+</div>
+
+<div class="controls">
+  <button onclick="startIOFlow()">▶ Start Flow</button>
+  <button class="reset" onclick="resetIOFlow()">↻ Reset</button>
+</div>
+
+<div class="note">
+<b>Key observations:</b>
+<ul style="margin:0.5rem 0 0 0;padding-left:1.2rem;">
+  <li><b>Blue lane (top)</b>: client's <code>OUT</code> → server's <code>IN</code>. Only the client puts things here.</li>
+  <li><b>Green lane (bottom)</b>: server's <code>OUT</code> → client's <code>IN</code>. Only the server puts things here.</li>
+  <li>The two lanes are <b>physically different channels</b> (different TCP sequence space, different OS send/recv buffers). A packet in one lane cannot interfere with a packet in the other.</li>
+  <li>That is why both sides can write at the same time without any lock, mutex, or turn-taking.</li>
+</ul>
+</div>
+</div>
+
+<!-- ============================================ -->
+<div class="section">
+<h2>5. WebSocket Frame Structure</h2>
+<p>Every message sent over a WebSocket is wrapped in a frame. Key fields shown below (simplified).</p>
+<div class="frame-viz">
+  <div class="field field-fin">
+    <div class="field-name">FIN</div>
+    <div>1 bit</div>
+    <div style="font-size:0.7rem;margin-top:0.3rem;">last fragment?</div>
+  </div>
+  <div class="field field-opcode">
+    <div class="field-name">opcode</div>
+    <div>4 bits</div>
+    <div style="font-size:0.7rem;margin-top:0.3rem;">0x1=text, 0x2=bin, 0x8=close</div>
+  </div>
+  <div class="field field-mask">
+    <div class="field-name">MASK</div>
+    <div>1 bit</div>
+    <div style="font-size:0.7rem;margin-top:0.3rem;">client→server must be masked</div>
+  </div>
+  <div class="field field-len">
+    <div class="field-name">length</div>
+    <div>7/16/64 bits</div>
+    <div style="font-size:0.7rem;margin-top:0.3rem;">payload byte count</div>
+  </div>
+  <div class="field field-payload">
+    <div class="field-name">Payload</div>
+    <div>variable length</div>
+    <div style="font-size:0.8rem;margin-top:0.3rem;">actual message bytes — boson-agent puts JSON here, e.g. <code>{"type":"text_delta","text":"hi"}</code></div>
+  </div>
+</div>
+<div class="note">
+This framing is what lets WebSocket restore <b>message boundaries</b> that raw TCP streams lose. When your code does <code>await ws.recv()</code>, you get exactly one complete frame's payload — no partial reads, no concatenation.
+</div>
+</div>
+
+<!-- ============================================ -->
+<div class="section">
+<h2>6. boson-agent's Layered View</h2>
+<p>When a user types "What's the weather in Seoul?" and hits send:</p>
+<pre style="background:#0d1117;padding:1rem;border-radius:6px;font-size:0.85rem;overflow-x:auto;">
+Browser                               Gateway                          Agent Loop               LLM API
+───────                               ───────                          ──────────               ───────
+user types "weather?" ──╮
+    send WebSocket frame ↓
+    [text frame: user_message]  ──→   ws.recv() receives frameparse JSON, get session_idhandle_message(session_id, text)run rule engine  (ch-10)build AgentRuntime (ch-07)call run_agent_loop           ──→  provider.stream()──→ [HTTPS POST /messages][SSE: TextDelta × N]async for event         ←──yield TextDelta    ──→streaming bridge (ch-07)
+    [text frame: text_delta]      ←── ws.send(chunk)
+    [text frame: text_delta]      ←── ws.send(chunk)
+    ...                               ...
+    [text frame: turn_end]        ←── ws.send(final)
+</pre>
+<div class="note">
+Each <code>text frame</code> arrow is one WebSocket frame = one JSON message. The TCP connection underneath stays open for the whole conversation. Multiple <code>handle_message</code> calls share the same TCP connection,same WebSocket, same SessionState.
+</div>
+
+<h3 style="margin-top:2rem;">6b. Animated flow — five scenarios</h3>
+<p>Step through different interaction patterns. Use the scenario selector to switch, then Next Step to walk through.</p>
+
+<div style="display:flex;gap:0.5rem;flex-wrap:wrap;margin:1rem 0;">
+  <button onclick="loadScenario('simple')" id="sc-simple" class="sc-btn">Simple text response</button>
+  <button onclick="loadScenario('tool')" id="sc-tool" class="sc-btn">Tool calling</button>
+  <button onclick="loadScenario('chain')" id="sc-chain" class="sc-btn">Tool chain (multi-step)</button>
+  <button onclick="loadScenario('barge')" id="sc-barge" class="sc-btn">Interruption / Barge-in</button>
+  <button onclick="loadScenario('preload')" id="sc-preload" class="sc-btn">Pre-load tool (PreTool action)</button>
+  <button onclick="loadScenario('maxturns')" id="sc-maxturns" class="sc-btn">Max turns exceeded</button>
+</div>
+
+<div id="layered-anim" style="background:#0d1117;border:1px solid #30363d;border-radius:8px;padding:1.5rem;margin:1rem 0;">
+  <!-- Four columns representing the layers -->
+  <div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:1rem;margin-bottom:1rem;">
+    <div class="layered-col" id="la-browser"><div class="layered-title">Browser</div><div class="layered-desc">WebSocket client</div>
+    </div>
+    <div class="layered-col" id="la-gateway"><div class="layered-title">Gateway</div><div class="layered-desc">handle_message</div>
+    </div>
+    <div class="layered-col" id="la-agent"><div class="layered-title">Agent Loop</div><div class="layered-desc">run_agent_loop</div>
+    </div>
+    <div class="layered-col" id="la-llm"><div class="layered-title">LLM API</div><div class="layered-desc">Anthropic / OpenAI</div>
+    </div>
+  </div>
+
+  <!-- Sequence diagram: lifelines + per-step arrows (builds up as you click Next Step) -->
+  <div id="la-sequence">
+    <div class="lifeline" style="left:12.5%"></div>
+    <div class="lifeline" style="left:37.5%"></div>
+    <div class="lifeline" style="left:62.5%"></div>
+    <div class="lifeline" style="left:87.5%"></div>
+    <div id="la-steps" style="position:relative;z-index:2;padding-top:0.3rem;"></div>
+  </div>
+
+  <!-- Caption -->
+  <div id="la-caption" style="background:#1d2125;border-left:4px solid #d29922;padding:0.8rem 1rem;font-size:0.9rem;min-height:3rem;">Press <b>Next Step</b> to trace one user message through all layers and back.</div>
+</div>
+
+<div class="controls">
+  <button onclick="nextLayered()">▶ Next Step</button>
+  <button onclick="autoLayered()">⏩ Auto Play</button>
+  <button class="reset" onclick="resetLayered()">↻ Reset</button>
+</div>
+
+<div class="note">
+Watch how the packet crosses the <b>WebSocket boundary</b> only at steps 1 and 8+. The internal Gateway → agent_loop → LLM traversal is in-process (Python function calls, async generator yields) — not network. The "streaming" the user perceives is pieces of the LLM's output propagating back up the same chain.
+</div>
+</div>
+
+<script>
+// ==== TCP handshake ====
+let tcpStep = 0;
+function animateTCP() {
+  resetTCP();
+  const steps = [
+    () => { document.getElementById('tcp-p1').classList.add('visible'); setTimeout(() => document.getElementById('tcp-p1').classList.add('sent-client'), 50); document.getElementById('tcp-status').textContent = 'Step 1: Client → SYN'; },
+    () => { document.getElementById('tcp-p2').classList.add('visible'); setTimeout(() => document.getElementById('tcp-p2').classList.add('sent-server'), 50); document.getElementById('tcp-status').textContent = 'Step 2: Server → SYN-ACK'; },
+    () => { document.getElementById('tcp-p3').classList.add('visible'); setTimeout(() => document.getElementById('tcp-p3').classList.add('sent-client'), 50); document.getElementById('tcp-status').textContent = 'Step 3: Client → ACK'; },
+    () => {document.getElementById('tcp-client').classList.add('active');document.getElementById('tcp-server').classList.add('active');document.getElementById('tcp-status').textContent = '✓ Connection ESTABLISHED — data can flow';
+    }
+  ];
+  steps.forEach((fn, i) => setTimeout(fn, i * 1200));
+}
+function resetTCP() {
+  ['tcp-p1','tcp-p2','tcp-p3'].forEach(id => {
+    const el = document.getElementById(id);
+    el.classList.remove('visible','sent-client','sent-server');
+  });
+  document.getElementById('tcp-client').classList.remove('active');
+  document.getElementById('tcp-server').classList.remove('active');
+  document.getElementById('tcp-status').textContent = '';
+}
+
+// ==== WebSocket upgrade ====
+function animateWS() {
+  resetWS();
+  const steps = [
+    () => { document.getElementById('ws-p1').classList.add('visible'); setTimeout(() => document.getElementById('ws-p1').classList.add('sent-client'), 50); document.getElementById('ws-status').textContent = 'Step 1: HTTPGET + Upgrade header'; },
+    () => { document.getElementById('ws-p2').classList.add('visible'); setTimeout(() => document.getElementById('ws-p2').classList.add('sent-server'), 50); document.getElementById('ws-status').textContent = 'Step 2: 101Switching Protocols — same TCP, new protocol'; },
+    () => { document.getElementById('ws-p3').classList.add('visible'); setTimeout(() => document.getElementById('ws-p3').classList.add('sent-client'), 50); document.getElementById('ws-status').textContent = 'Step 3: First WebSocket text frame (user_message)'; },
+    () => { document.getElementById('ws-p4').classList.add('visible'); setTimeout(() => document.getElementById('ws-p4').classList.add('sent-server'), 50); document.getElementById('ws-status').textContent = 'Step 4: Server streams text_delta frames'; }
+  ];
+  steps.forEach((fn, i) => setTimeout(fn, i * 1400));
+}
+function resetWS() {
+  ['ws-p1','ws-p2','ws-p3','ws-p4'].forEach(id => {
+    const el = document.getElementById(id);
+    el.classList.remove('visible','sent-client','sent-server');
+  });
+  document.getElementById('ws-status').textContent = '';
+}
+
+// ==== Full-duplex demo ====
+const duplexSteps = [
+  { actions: [['client','out','user_message: "weather Seoul?"']], caption: 'Step 1: Client sends the user message frame. It is now in flight over TCP.' },
+  { actions: [['server','in','user_message: "weather Seoul?"']], caption: 'Step 2: Server receives the frame. handle_message(session_id, text) begins.' },
+  { actions: [['server','out','text_delta: "Looking"'], ['client','in','text_delta: "Looking"']], caption: 'Step 3: LLM starts streaming. Server sends first text_delta; client receives it immediately.' },
+  { actions: [['server','out','text_delta: " it up"'], ['client','in','text_delta: " it up"']], caption: 'Step 4: Next delta. Notice how each frame is a discrete message, not a raw byte stream.' },
+  { actions: [['server','out','text_delta: "..."'], ['client','in','text_delta: "..."']], caption: 'Step 5: Still streaming. So far one-directional (server → client).' },
+  { actions: [['client','out','⚠ barge_in: "stop!"']], caption: 'Step 6: ⚠ BARGE-IN! User clicks "stop" while server is still streaming. Client sends a frame in the OPPOSITE direction — this is only possible because full-duplex allows simultaneous bidirectional frames.' },
+  { actions: [['server','out','text_delta: " in"'], ['client','in','text_delta: " in"']], caption: 'Step 7: Server has not yet received the barge-in (frames cross in flight). It continues sending text_delta. This IS thefull-duplex overlap.' },
+  { actions: [['server','in','⚠ barge_in: "stop!"']], caption: 'Step 8: Barge-in finally arrives at the server. In half-duplex this could not have happened while server was sending.' },
+  { actions: [['server','out','interrupt_ack'], ['client','in','interrupt_ack']], caption: 'Step 9: Server acknowledges the interrupt. (See ch-09 for actual cancellation propagation.)' },
+  { actions: [['server','out','turn_end (cancelled)'], ['client','in','turn_end (cancelled)']], caption: 'Step 10: Turn ends with cancelled state. Connection stays open for the next turn.' },
+];
+let duplexIdx = 0;
+function logFrame(side, dir, text) {
+  const el = document.createElement('div');
+  el.className = 'frame ' + dir;
+  el.textContent = (dir === 'out' ? '→ ' : '← ') + text;
+  const container = document.getElementById(side === 'client' ? 'client-log' : 'server-log');
+  container.appendChild(el);
+  container.scrollTop = 1e9;
+}
+function nextStep() {
+  if (duplexIdx >= duplexSteps.length) {
+    document.getElementById('duplex-caption').innerHTML = '<b>✓ Demo complete.</b> Press <b>Reset</b> to restart.';
+    return;
+  }
+  const step = duplexSteps[duplexIdx];
+  step.actions.forEach(a => logFrame(a[0], a[1], a[2]));
+  document.getElementById('duplex-caption').innerHTML = `<b>(${duplexIdx + 1}/${duplexSteps.length})</b> ${step.caption}`;
+  duplexIdx++;
+}
+let autoPlayTimer;
+function startDuplex() {
+  resetDuplex();
+  const tick = () => {
+    if (duplexIdx >= duplexSteps.length) return;
+    nextStep();
+    autoPlayTimer = setTimeout(tick, 2500);
+  };
+  tick();
+}
+function resetDuplex() {
+  if (autoPlayTimer) { clearTimeout(autoPlayTimer); autoPlayTimer = null; }
+  document.getElementById('client-log').innerHTML = '';
+  document.getElementById('server-log').innerHTML = '';
+  document.getElementById('duplex-caption').innerHTML = 'Press <b>Next Step</b> to walk through frame by frame.';
+  duplexIdx = 0;
+}
+
+// ==== IO flow (where is IN and OUT) ====
+let ioTimers = [];
+function sendPacketUp(label) {
+  const p = document.getElementById('io-packet-up');
+  p.textContent = label;
+  p.style.left = '0%';
+  p.style.opacity = '1';
+  setTimeout(() => { p.style.left = 'calc(100% - 40px)'; }, 30);
+  ioTimers.push(setTimeout(() => { p.style.opacity = '0'; p.style.left = '0%'; }, 1350));
+}
+function sendPacketDown(label) {
+  const p = document.getElementById('io-packet-down');
+  p.textContent = label;
+  p.style.right = '0%';
+  p.style.opacity = '1';
+  setTimeout(() => { p.style.right = 'calc(100% - 40px)'; }, 30);
+  ioTimers.push(setTimeout(() => { p.style.opacity = '0'; p.style.right = '0%'; }, 1350));
+}
+function startIOFlow() {
+  resetIOFlow();
+  const status = document.getElementById('io-status');
+  const events = [
+    { t: 0,    fn: () => { sendPacketUp('user_message'); status.textContent = 'Client sends user_message in blue lane (C→S)'; } },
+    { t: 1500, fn: () => { sendPacketDown('text_delta #1'); status.textContent = 'Server streams text_delta in green lane (S→C)'; } },
+    { t: 2800, fn: () => { sendPacketDown('text_delta #2'); status.textContent = 'More text_delta frames — still green lane only'; } },
+    { t: 3800, fn: () => { sendPacketDown('text_delta #3'); sendPacketUp('barge_in'); status.textContent = '⚠ BOTH lanes active AT THE SAME TIME — barge_in going up, text_delta going down'; } },
+    { t: 5200, fn: () => { sendPacketDown('interrupt_ack'); status.textContent = 'Server acknowledges interrupt in green lane'; } },
+    { t: 6700, fn: () => { status.textContent = '✓ Flow complete. Notice at step 4 both lanes carried packets simultaneously — that is full-duplex.'; } },
+  ];
+  events.forEach(e => ioTimers.push(setTimeout(e.fn, e.t)));
+}
+function resetIOFlow() {
+  ioTimers.forEach(t => clearTimeout(t));
+  ioTimers = [];
+  const up = document.getElementById('io-packet-up');
+  const down = document.getElementById('io-packet-down');
+  up.style.transition = 'none'; up.style.opacity = '0'; up.style.left = '0%';
+  down.style.transition = 'none'; down.style.opacity = '0'; down.style.right = '0%';
+  setTimeout(() => {
+    up.style.transition = 'left 1.2s linear, opacity 0.3s';
+    down.style.transition = 'right 1.2s linear, opacity 0.3s';
+  }, 50);
+  document.getElementById('io-status').textContent = 'Press "Start Flow" to see packets move independently in both lanes.';
+}
+
+// ==== Layered flow animation ====
+// Lane centers as percentages (aligned with column centers)
+const LANE_X = { browser: 12.5, gateway: 37.5, agent: 62.5, llm: 87.5 };
+
+// Scenario definitions
+const SCENARIOS = {
+  simple: [
+    { active: ['browser'], pulse: null, caption: '<b>User types "weather Seoul?"</b> in the browser. WebSocket client wraps it in a text frame.' },
+    { active: ['gateway'], pulse: { from: 'browser', to: 'gateway', label: 'user_message', color: '#1f6feb' }, caption: '<b>WebSocket hop.</b> Gateway <code>async for msg in ws</code> receives, routes to <code>handle_message</code>.' },
+    { working: ['gateway'], pulse: null, caption: '<b>Gateway pre-processing (in-process).</b> Rule engine, stage checks, <code>_build_agent_runtime</code>. No network hop.' },
+    { active: ['agent'], pulse: { from: 'gateway', to: 'agent', label: 'runtime + content', color: '#6639ba' }, caption: '<b>Agent loop invocation (in-process).</b> Python function call, not network.' },
+    { active: ['llm'], pulse: { from: 'agent', to: 'llm', label: 'HTTPS POST /messages', color: '#da3633' }, caption: '<b>LLM API network hop.</b> <code>provider.stream(...)</code> opens HTTPS connection. Separate TCP from the user\'s WebSocket.' },
+    { active: ['llm'], pulse: { from: 'llm', to: 'agent', label: 'SSE: TextDelta', color: '#3fb950' }, caption: '<b>LLM streams tokens.</b> Provider adapter normalizes SSE to StreamEvent types.' },
+    { active: ['agent'], pulse: { from: 'agent', to: 'gateway', label: 'yield TextDelta', color: '#3fb950' }, caption: '<b>Agent yields events.</b> <code>yield event</code> returns control to Gateway\'s <code>async for</code>.' },
+    { active: ['gateway'], pulse: null, caption: '<b>Streaming bridge.</b> System-reminder guard + filler logic + forwarding decision.' },
+    { active: ['browser'], pulse: { from: 'gateway', to: 'browser', label: 'text_delta', color: '#1f6feb' }, caption: '<b>WebSocket hop back.</b> Browser appends to UI. Repeats per token.' },
+    { active: [], pulse: null, caption: '<b>Steps 5-9 repeat</b> until MessageEnd. Then <code>turn_end</code> frame. WebSocket stays open.' },
+  ],
+
+  tool: [
+    { active: ['browser'], pulse: null, caption: '<b>User:</b> "What\'s the weather in Seoul?" — sent as user_message frame.' },
+    { active: ['gateway'], pulse: { from: 'browser', to: 'gateway', label: 'user_message', color: '#1f6feb' }, caption: 'Gateway receives, runs rule engine, builds AgentRuntime.' },
+    { active: ['agent'], pulse: { from: 'gateway', to: 'agent', label: 'runtime', color: '#6639ba' }, caption: '<code>run_agent_loop</code> starts. <b>tool_uses = []</b>.' },
+    { active: ['llm'], pulse: { from: 'agent', to: 'llm', label: 'HTTPS + tools=[get_weather]', color: '#da3633' }, caption: '<b>LLM called with tool schemas.</b> LLM decides it needs to call a tool.' },
+    { active: ['llm'], pulse: { from: 'llm', to: 'agent', label: 'TextDelta "Looking it up..."', color: '#3fb950' }, caption: '<b>Preamble text.</b> LLM streams filler before tool. Note: this is a <i>pre-tool thinking</i> text.' },
+    { active: ['llm'], pulse: { from: 'llm', to: 'agent', label: 'ToolUseStart + InputJsonDelta', color: '#d29922' }, caption: '<b>Tool call boundary.</b> LLM emits ToolUseStart(id, name="get_weather") + streamed JSON args "{city:\\"Seoul\\"}".' },
+    { active: ['agent'], pulse: null, caption: '<b>Stream ends (stop_reason="tool_use").</b> <code>tool_uses</code> list now non-empty. Agent loop takes tool branch.' },
+    { working: ['agent'], pulse: null, caption: '<b>Tool execution (in-process).</b> <code>_execute_tool_uses</code> runs. fires PRE_TOOL_CALL hook → calls <code>get_weather(city="Seoul")</code> → fires POST_TOOL_CALL. Returns ToolResultBlock.' },
+    { active: ['agent'], pulse: null, caption: '<b>Tool result appended to context.</b> Loop <code>continue</code> — jumps back to top of <code>while</code>.' },
+    { active: ['llm'], pulse: { from: 'agent', to: 'llm', label: '2nd LLM call (history now includes tool_use + tool_result)', color: '#da3633' }, caption: '<b>Second LLM call.</b> Same tools, but history now has tool_use + tool_result pair. LLM sees the result and composes a text answer.' },
+    { active: ['llm'], pulse: { from: 'llm', to: 'agent', label: 'TextDelta × N (final answer)', color: '#3fb950' }, caption: '<b>Text-only response.</b> stop_reason="end_turn". <code>POST_LLM_CALL</code> hook fires (this one time, not on the first call).' },
+    { active: ['browser'], pulse: { from: 'gateway', to: 'browser', label: 'text_delta × N', color: '#1f6feb' }, caption: '<b>Final text streams to user.</b> Browser shows "The weather in Seoul is sunny, 22°C."' },
+  ],
+
+  chain: [
+    { active: ['browser'], pulse: null, caption: '<b>User:</b> "Compare weather in Seoul and Tokyo." — needs 2 tool calls.' },
+    { active: ['agent'], pulse: { from: 'gateway', to: 'agent', label: 'turn 1 start', color: '#6639ba' }, caption: 'Agent loop starts. <code>turn_count = 0</code>.' },
+    { active: ['llm'], pulse: { from: 'agent', to: 'llm', label: 'LLM call #1', color: '#da3633' }, caption: '<b>Iteration 1:</b> LLM sees user question, calls <code>get_weather("Seoul")</code>.' },
+    { working: ['agent'], pulse: null, caption: 'Execute tool #1. Result: "Seoul: 22°C sunny" appended to history.' },
+    { active: ['llm'], pulse: { from: 'agent', to: 'llm', label: 'LLM call #2', color: '#da3633' }, caption: '<b>Iteration 2:</b> LLM sees Seoul result, now calls <code>get_weather("Tokyo")</code>.' },
+    { working: ['agent'], pulse: null, caption: 'Execute tool #2. Result: "Tokyo: 18°C cloudy" appended.' },
+    { active: ['llm'], pulse: { from: 'agent', to: 'llm', label: 'LLM call #3', color: '#da3633' }, caption: '<b>Iteration 3:</b> LLM has both results, composes comparison text.' },
+    { active: ['llm'], pulse: { from: 'llm', to: 'agent', label: 'TextDelta (comparison)', color: '#3fb950' }, caption: '<b>Final text.</b> "Seoul is warmer and sunnier than Tokyo today."' },
+    { active: ['browser'], pulse: { from: 'gateway', to: 'browser', label: 'text_delta × N', color: '#1f6feb' }, caption: 'Streams to browser. POST_LLM_CALL fires exactly once (only on the text-only call, not on the twotool-use calls).' },
+    { active: [], pulse: null, caption: '<b>Key insight:</b> one turn, three LLM calls, two tool executions. Tool chain is the "act → observe → re-think" loop inside a single turn.' },
+  ],
+
+  barge: [
+    { active: ['browser'], pulse: null, caption: '<b>User:</b> "Write me a long essay about Rome." — starts a long response.' },
+    { active: ['agent'], pulse: { from: 'gateway', to: 'agent', label: 'agent start', color: '#6639ba' }, caption: 'Agent loop kicks off, calls LLM.' },
+    { active: ['llm'], pulse: { from: 'llm', to: 'agent', label: 'TextDelta "The history"', color: '#3fb950' }, caption: 'LLM streaming essay. TextDelta after TextDelta flowing back.' },
+    { active: ['browser'], pulse: { from: 'gateway', to: 'browser', label: 'text_delta "The history"', color: '#1f6feb' }, caption: 'Browser displaying chunks. So far one-directional (server → client).' },
+    { active: ['browser','gateway'], pulse: { from: 'browser', to: 'gateway', label: '⚠ barge_in', color: '#da3633' }, caption: '<b>User clicks STOP.</b> Browser sends <code>barge_in</code> frame. <b>Full-duplex:</b> this frame travels up while text_delta frames are still flowing down — crossing in flight.' },
+    { active: ['llm'], pulse: { from: 'llm', to: 'agent', label: 'more TextDelta', color: '#3fb950' }, caption: '<b>Server still streaming.</b> Gateway has not yet processed barge_in; LLM is unaware. This overlap IS full-duplex.' },
+    { working: ['gateway'], pulse: null, caption: '<b>Gateway processes barge_in.</b> InterruptHandler sets cancellation event. <code>asyncio.Event</code> is signaled.' },
+    { active: ['agent'], pulse: null, caption: '<b>Agent loop sees cancellation.</b> On next <code>await</code>, the cancelled task raises CancelledError. Provider stream is aborted (HTTPS connection to LLM can close early).' },
+    { active: ['browser'], pulse: { from: 'gateway', to: 'browser', label: 'turn_end (cancelled)', color: '#1f6feb' }, caption: '<b>Gateway sends turn_end with cancelled state.</b> Partial transcript preserved in SharedHistory (see ch-09).' },
+    { active: [], pulse: null, caption: '<b>WebSocket stays open.</b> User can send next message immediately. Session state intact.' },
+  ],
+
+  preload: [
+    { active: ['browser'], pulse: null, caption: '<b>User:</b> "Show my orders." — this triggers a rule that pre-fetches orders before LLM runs.' },
+    { active: ['gateway'], pulse: { from: 'browser', to: 'gateway', label: 'user_message', color: '#1f6feb' }, caption: 'Gateway receives, enters <code>handle_message</code>.' },
+    { working: ['gateway'], pulse: null, caption: '<b>Rule engine runs (ch-10).</b> A <code>@check</code> rule matches "show orders" → returns <code>PreTool</code> action (ch-11).' },
+    { working: ['gateway'], pulse: null, caption: '<b>PreTool action dispatched.</b> Gateway synthesizes a fake tool_use + tool_result pair and appends both to history <i>before</i> the LLM runs. <b>No LLM call yet.</b>'},
+    { active: ['agent'], pulse: { from: 'gateway', to: 'agent', label: 'runtime (history has pre-tool result)', color: '#6639ba' }, caption: '<b>Agent loop invoked.</b> History already contains fetched orders — LLM willsee them as if it called the tool itself.' },
+    { active: ['llm'], pulse: { from: 'agent', to: 'llm', label: 'LLM call (no tool needed)', color: '#da3633' }, caption: '<b>LLM sees pre-fetched data.</b> Often responds with text directly — no tool call needed because the data is already there.' },
+    { active: ['llm'], pulse: { from: 'llm', to: 'agent', label: 'TextDelta (summary)', color: '#3fb950' }, caption: 'Text response — summarizes the orders.' },
+    { active: ['browser'], pulse: { from: 'gateway', to: 'browser', label: 'text_delta', color: '#1f6feb' }, caption: '<b>Result: 1 LLM call instead of 2.</b> PreTool saves latency by pre-loading expected data.' },
+    { active: [], pulse: null, caption: '<b>Trade-off:</b> PreTool assumes the rule correctly predicted what tool the LLM would call. If the LLM wanted something else, the pre-fetched data wastes tokens. Rule authors must be selective.' },
+  ],
+
+  maxturns: [
+    { active: ['browser'], pulse: null, caption: '<b>User:</b> asks something that makes the LLM keep calling tools infinitely (a bug in LLM reasoning or a tool-chain trap).' },
+    { active: ['llm'], pulse: { from: 'agent', to: 'llm', label: 'turn 1 — tool call', color: '#da3633' }, caption: 'Iteration 1: LLM calls tool A.' },
+    { active: ['agent'], pulse: null, caption: 'Execute tool A, continue.' },
+    { active: ['llm'], pulse: { from: 'agent', to: 'llm', label: 'turn 2 — tool call', color: '#da3633' }, caption: 'Iteration 2: LLM calls tool B.' },
+    { active: ['agent'], pulse: null, caption: 'Execute tool B, continue.' },
+    { active: ['agent'], pulse: null, caption: 'Iterations 3, 4, 5 ... each ends with another tool_use. <b>POST_LLM_CALL fires 0 times</b> so far.' },
+    { active: ['agent'], pulse: null, caption: '<b>turn_count reaches max_turns (e.g., 10).</b> <code>while turn_count &lt; max_turns</code> condition becomes false.' },
+    { working: ['agent'], pulse: null, caption: '<b>while...else</b> triggers. Python: the else branch runs because the loop exited without <code>break</code>. <b>No exception raised</b> — this is controlled termination.' },
+    { active: ['agent'], pulse: null, caption: 'Yields <code>TextDelta("[Max turns exceeded — stopping]")</code> + <code>MessageEnd(stop_reason="max_turns")</code>.' },
+    { active: ['browser'], pulse: { from: 'gateway', to: 'browser', label: 'text_delta "[Max turns...]"', color: '#1f6feb' }, caption: 'User sees the max-turns message. <b>ON_TURN_END fires</b> (same cleanup path as normal). <b>POST_LLM_CALL never fires this turn.</b>' },
+    { active: [], pulse: null, caption: '<b>Key observation:</b> in this scenario POST_LLM_CALL fires 0 times because every LLM response ended with tool_use, none reached text-only termination. This is the ch-02 Q1 scenario.' },
+  ],
+};
+
+let layeredSteps = SCENARIOS.simple;
+let layeredIdx = 0;
+let layeredTimer;
+
+function loadScenario(key) {
+  resetLayered();
+  layeredSteps = SCENARIOS[key];
+  document.querySelectorAll('.sc-btn').forEach(b => b.classList.remove('selected'));
+  document.getElementById('sc-' + key).classList.add('selected');
+  document.getElementById('la-caption').innerHTML = `<b>Scenario: ${key}</b> loaded (${layeredSteps.length} steps). Press <b>Next Step</b> to start.`;
+}
+
+function clearLayered() {
+  ['la-browser','la-gateway','la-agent','la-llm'].forEach(id => {
+    document.getElementById(id).classList.remove('active','working');
+  });
+}
+function buildStepRow(step) {
+  const row = document.createElement('div');
+  row.className = 'step-row current';
+  if (step.pulse) {
+    const fromX = LANE_X[step.pulse.from];
+    const toX = LANE_X[step.pulse.to];
+    const arrow = document.createElement('div');
+    const isLtoR = fromX < toX;
+    arrow.className = 'step-arrow ' + (isLtoR ? 'left-to-right' : 'right-to-left');
+    arrow.style.left = Math.min(fromX, toX) + '%';
+    arrow.style.right = (100 - Math.max(fromX, toX)) + '%';
+    arrow.style.background = step.pulse.color || '#1f6feb';
+    const label = document.createElement('span');
+    label.style.flex = '1';
+    label.style.overflow = 'hidden';
+    label.style.textOverflow = 'ellipsis';
+    label.style.textAlign = 'center';
+    label.textContent = step.pulse.label;
+    arrow.appendChild(label);
+    row.appendChild(arrow);
+  } else if (step.working && step.working.length > 0) {
+    step.working.forEach(k => {
+      const badge = document.createElement('div');
+      badge.className = 'step-self';
+      badge.style.left = LANE_X[k] + '%';
+      badge.textContent = '⟳ in-process';
+      row.appendChild(badge);
+    });
+  } else if (step.active && step.active.length > 0) {
+    step.active.forEach(k => {
+      const dot = document.createElement('div');
+      dot.className = 'step-self';
+      dot.style.left = LANE_X[k] + '%';
+      dot.style.background = '#1f6feb';
+      dot.style.borderColor = '#58a6ff';
+      dot.textContent = '● active';
+      row.appendChild(dot);
+    });
+  } else {
+    const note = document.createElement('div');
+    note.className = 'step-note';
+    note.textContent = '· · ·';
+    row.appendChild(note);
+  }
+  return row;
+}
+function nextLayered() {
+  if (layeredIdx >= layeredSteps.length) {
+    document.getElementById('la-caption').innerHTML = '<b>✓ Flow complete.</b> Press <b>Reset</b> to restart.';
+    return;
+  }
+  const step = layeredSteps[layeredIdx];
+  clearLayered();
+  (step.active || []).forEach(k => document.getElementById('la-' + k).classList.add('active'));
+  (step.working || []).forEach(k => document.getElementById('la-' + k).classList.add('working'));
+  const steps = document.getElementById('la-steps');
+  steps.querySelectorAll('.step-row.current').forEach(r => { r.classList.remove('current'); r.classList.add('past'); });
+  steps.appendChild(buildStepRow(step));
+  document.getElementById('la-caption').innerHTML = `<b>(${layeredIdx + 1}/${layeredSteps.length})</b> ${step.caption.replace(/^<b>Step \d+ — /, '<b>')}`;
+  layeredIdx++;
+}
+function autoLayered() {
+  resetLayered();
+  const tick = () => {
+    if (layeredIdx >= layeredSteps.length) return;
+    nextLayered();
+    layeredTimer = setTimeout(tick, 2500);
+  };
+  tick();
+}
+function resetLayered() {
+  if (layeredTimer) { clearTimeout(layeredTimer); layeredTimer = null; }
+  clearLayered();
+  document.getElementById('la-steps').innerHTML = '';
+  document.getElementById('la-caption').innerHTML = 'Press <b>Next Step</b> to trace one user message through all layers and back.';
+  layeredIdx = 0;
+}
+
+// Initialize default scenario selected
+document.getElementById('sc-simple').classList.add('selected');
+</script>
+
+</body>
+</html>

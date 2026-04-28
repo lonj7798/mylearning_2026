@@ -1,0 +1,155 @@
+{
+  "kind": "draft",
+  "course_slug": "boson-agent",
+  "generated_at": "2026-04-17T00:00:00Z",
+  "chapters": [
+    {
+      "id": "ch-01",
+      "title": "Framework Orientation and Two-Package Architecture",
+      "deps": [],
+      "concepts": [
+        "Basement (core) vs Gateway (orchestrator) split and what each owns",
+        "Agent folder convention: BOSON.md, config.yaml, tools/, hooks/, skills/",
+        "Zero-registration auto-discovery: why dropping files in standard folders works",
+        "LLM-Oriented Design (LOD) principles: small files, one responsibility, deterministic vs flexible layers",
+        "Installation, Python 3.11+ requirement, and the python -m basement / python -m gateway entry points"
+      ]
+    },
+    {
+      "id": "ch-02",
+      "title": "The Think-Act-Observe Agent Loop",
+      "deps": ["ch-01"],
+      "concepts": [
+        "run_agent_loop() as the core think -> act -> observe orchestrator",
+        "Turn lifecycle: add user message, stream LLM, execute tool_uses, repeat until text-only response",
+        "Tool chaining via inner loop and the max_turns safety bound",
+        "StreamEvent types: TextDelta, ToolUseStart, InputJsonDelta, ToolUseEnd, MessageEnd",
+        "AgentRuntime dataclass as the single bundle of runtime components (AD3)"
+      ]
+    },
+    {
+      "id": "ch-03",
+      "title": "LLM Providers and Streaming Abstraction",
+      "deps": ["ch-01"],
+      "concepts": [
+        "Provider protocol: Anthropic, OpenAI, Google behind a uniform streaming interface",
+        "LLMConfig fields: provider, model, temperature, max_tokens, api_key",
+        "The provider registry (get_provider) and how new providers are registered",
+        "Streaming of text deltas vs tool_use blocks and how the agent loop consumes them",
+        "API key resolution via environment variables and the .env discovery walk-up"
+      ]
+    },
+    {
+      "id": "ch-04",
+      "title": "Defining Tools with the @tool Decorator",
+      "deps": ["ch-02"],
+      "concepts": [
+        "@tool decorator: required docstring (becomes description) and required type hints",
+        "Automatic JSON Schema generation from Python type hints (str, int, float, bool, list[X], Optional[X])",
+        "ToolSpec structure: name, description, input_schema, handler",
+        "Sync vs async tool handlers and how return values become strings for the LLM",
+        "ToolRegistry auto-discovery from the agent's tools/ folder"
+      ]
+    },
+    {
+      "id": "ch-05",
+      "title": "Observing and Intervening with Hooks",
+      "deps": ["ch-02"],
+      "concepts": [
+        "@hook decorator and the HookEvent enum (ON_TURN_START, PRE/POST_LLM_CALL, PRE/POST_TOOL_CALL, ON_ERROR, ON_COMPACT, ON_TURN_END, ON_SKILL_INVOKE)",
+        "HookContext fields and priority ordering (lower priority runs first)",
+        "ConversationAPI: inject_assistant_tool_use, inject_tool_result, inject_system_reminder",
+        "AD1 mutation timing: append operations are immediate, destructive operations (remove/replace) are deferred to turn boundary via flush_pending",
+        "Supervisor hooks as syntactic sugar for ON_ERROR with early priority for retry/recovery"
+      ]
+    },
+    {
+      "id": "ch-06",
+      "title": "Skills, Permissions, ToolRouter, and MCP",
+      "deps": ["ch-04"],
+      "concepts": [
+        "Skills as .md prompt injections activated via the use_skill meta-tool",
+        "PermissionChecker semantics: allowed_tools whitelist, denied_tools blacklist, deny-overrides-allow rule",
+        "ToolRouter: hiding native tools and exposing only use_tool + use_skill meta-tools to the LLM",
+        "router.dispatch() unifying native and MCP tool execution behind one interface",
+        "MCPClient / MCPManager for connecting to external Model Context Protocol servers"
+      ]
+    },
+    {
+      "id": "ch-07",
+      "title": "Gateway: Conversation Ownership",
+      "deps": ["ch-02"],
+      "concepts": [
+        "Why the Gateway exists: it owns the conversation while the agent owns a single turn",
+        "GatewayCore.handle_message() per-turn flow: session lookup, rules, executor, agent loop",
+        "SessionStore and SessionState (session_id, messages, active_stage, active_skill, pending_compact)",
+        "SharedHistory adapter: direct reference (not copy) so Gateway and agent mutations are mutually visible",
+        "How turn-scoped (agent) and conversation-scoped (gateway) state stay in sync without copying"
+      ]
+    },
+    {
+      "id": "ch-08",
+      "title": "Gateway Networking: WebSocket Server and Protocol",
+      "deps": ["ch-07"],
+      "concepts": [
+        "WebSocket server startup and endpoint wiring (packages/gateway/gateway/server/websocket.py)",
+        "Connection lifecycle: how an incoming socket is bound to a session_id via SessionStore (packages/gateway/gateway/session/store.py)",
+        "Inbound wire message: user_message schema as defined in packages/gateway/gateway/server/protocol.py",
+        "Outbound wire messages: text_delta (streamed tokens), turn_end (completion marker), error (fail_open semantics)",
+        "Per-turn translation: converting GatewayCore streaming output into protocol frames pushed to the client",
+        "Client usage pattern demonstrated by agents/demo-gateway/client.py and agents/test-lina-gateway/client.py",
+        "Protocol design history: docs/plan/v0_3/06-phase5-websocket.md (initial) and docs/plan/v0_4/07-phase6-websocket-e2e.md (E2E integration)"
+      ]
+    },
+    {
+      "id": "ch-09",
+      "title": "Concurrency, Interrupts, and Barge-in Over WebSocket",
+      "deps": ["ch-08"],
+      "concepts": [
+        "Per-session locks: preventing overlapping turns on a single connection (docs/plan/v0_6/04-phase4-websocket-concurrency.md)",
+        "Concurrent turn guards: how a new user_message mid-stream is detected and queued or rejected",
+        "Barge-in as a wire event: user_message arriving while a turn is still emitting text_delta frames",
+        "Cancel handlers and interrupt tags: cooperative cancellation of in-flight tool calls on the agent side",
+        "Partial transcripts: preserving the assistant's emitted text up to the interrupt point in SharedHistory",
+        "Reconnect behavior: session rebind after a dropped WebSocket, state restoration from SessionStore",
+        "Interrupt-related schemas and policies referenced in docs/plan/v0_4/01-phase0-interrupt-schemas.md and docs/plan/v0_4/02-phase1-bargein-policies.md"
+      ]
+    },
+    {
+      "id": "ch-10",
+      "title": "The Rule Engine: @check, Modes, and Priorities",
+      "deps": ["ch-07"],
+      "concepts": [
+        "@check decorator parameters: name, mode (sequential/parallel), priority, check_type (deterministic/llm)",
+        "Sequential phase: priority-ordered, short-circuits on the first non-CONTINUE action",
+        "Parallel phase: asyncio.gather concurrent execution, all non-CONTINUE results collected",
+        "Check signature (messages, user_message, session) and stateful rules via custom session attributes",
+        "Fail-open behavior: logged warning + Continue() on exception (toggled by fail_open flag)"
+      ]
+    },
+    {
+      "id": "ch-11",
+      "title": "Actions: Continue, Respond, Inject, PreTool, Compact, StageTransition",
+      "deps": ["ch-10"],
+      "concepts": [
+        "Continue / Pass as the no-op default that proceeds to the agent",
+        "Respond: return a fixed string and skip the agent loop entirely",
+        "Inject: append a system-reminder to history, then continue to the agent",
+        "PreTool: execute a named tool before the agent turn to reduce latency or seed context",
+        "StageTransition and Compact as orchestration-level actions coordinated with the stage machine and compact pipeline"
+      ]
+    },
+    {
+      "id": "ch-12",
+      "title": "Stage Machine, Layers, and Async Compaction",
+      "deps": ["ch-11"],
+      "concepts": [
+        "Stage definitions in stage_config.py: tools, skills, transitions allowlist, preloads, initial_stage",
+        "Per-stage tool and meta-tool filtering via ToolRouter.set_allowed_tools() at turn start",
+        "Stage preloads: synthesized tool_use/tool_result pairs and skill prompt injection on stage entry",
+        "Layer pipeline (e.g. 01-guard, 02-analyzer, 03-orchestrator) with ctx.data used to pass state between layers",
+        "AsyncCompactPipeline: threshold_messages trigger, background summarization task, pending_compact swap on next turn, keep_recent window"
+      ]
+    }
+  ]
+}
