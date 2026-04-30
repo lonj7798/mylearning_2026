@@ -1,0 +1,216 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Agent Action Spaces — web vs terminal vs repo vs sandbox</title>
+<style>
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+         max-width: 1200px; margin: 2em auto; padding: 0 1em; color: #222;
+         background: #fafafa; }
+  h1 { font-size: 1.4em; margin-bottom: 0.2em; }
+  .subtitle { color: #666; margin-top: 0; font-size: 0.95em; }
+  .tabs { display: flex; gap: 6px; margin: 1em 0 0.6em 0; flex-wrap: wrap; }
+  .tab {
+    padding: 8px 14px; border: 1px solid #bbb; background: #eee; cursor: pointer;
+    border-radius: 6px 6px 0 0; font-weight: 600; font-size: 0.92em;
+    color: #333; user-select: none;
+  }
+  .tab:hover { background: #ddd; }
+  .tab.active { background: #2b6cb0; color: #fff; border-color: #2b6cb0; }
+  .panel {
+    border: 1px solid #2b6cb0; background: #fff;
+    padding: 1em 1.2em; border-radius: 0 6px 6px 6px;
+  }
+  .panel h2 { margin-top: 0; font-size: 1.1em; color: #2b6cb0; }
+  .grid {
+    display: grid; grid-template-columns: 1fr 1fr; gap: 0.9em; margin-top: 0.8em;
+  }
+  .cell {
+    background: #f7fafc; border-left: 3px solid #2b6cb0; padding: 0.5em 0.8em;
+    border-radius: 3px;
+  }
+  .cell h3 { margin: 0 0 0.3em 0; font-size: 0.85em; color: #2b6cb0;
+             text-transform: uppercase; letter-spacing: 0.04em; }
+  .cell .body { font-size: 0.9em; line-height: 1.45; color: #222; }
+  .example {
+    margin-top: 1em; background: #1e1e2e; color: #cdd6f4;
+    padding: 0.9em 1.1em; border-radius: 4px; font-family: 'SF Mono', Menlo, monospace;
+    font-size: 0.82em; white-space: pre-wrap; line-height: 1.5; overflow-x: auto;
+  }
+  .example .role-obs { color: #94e2d5; }
+  .example .role-think { color: #f9e2af; }
+  .example .role-act { color: #f38ba8; }
+  .example .role-env { color: #a6adc8; font-style: italic; }
+  .legend {
+    margin-top: 1em; font-size: 0.82em; color: #666;
+    display: flex; gap: 1.2em; flex-wrap: wrap;
+  }
+  .legend span { display: inline-block; }
+  .legend .sw { display: inline-block; width: 10px; height: 10px;
+                border-radius: 2px; margin-right: 4px; vertical-align: middle; }
+  code { background: #eef; padding: 1px 5px; border-radius: 3px;
+         font-family: 'SF Mono', Menlo, monospace; font-size: 0.88em; }
+  .footer {
+    margin-top: 1.2em; padding-top: 0.8em; border-top: 1px solid #ddd;
+    font-size: 0.82em; color: #555; line-height: 1.5;
+  }
+</style>
+</head>
+<body>
+
+<h1>Agent Action Spaces — web vs terminal vs repo vs sandbox</h1>
+<p class="subtitle">Pick an environment to see its observation type, action vocabulary, reward signal, and a walkthrough of one trajectory step.</p>
+
+<div class="tabs" id="tabs">
+  <div class="tab active" data-env="web">Web browser</div>
+  <div class="tab" data-env="term">Terminal</div>
+  <div class="tab" data-env="repo">Repo / SWE</div>
+  <div class="tab" data-env="sandbox">Sandbox (sim)</div>
+</div>
+
+<div class="panel" id="panel"></div>
+
+<div class="legend">
+  <span><span class="sw" style="background:#94e2d5"></span>observation</span>
+  <span><span class="sw" style="background:#f9e2af"></span>thought</span>
+  <span><span class="sw" style="background:#f38ba8"></span>action</span>
+  <span><span class="sw" style="background:#a6adc8"></span>environment reply</span>
+</div>
+
+<div class="footer">
+Sources: WebArena (Zhou 2023), OpenHands scaffold (Wang 2024), SWE-Gym (Pan 2024), SWE-RL (Wei 2025),
+Kimi K2 agentic data (Moonshot 2025). See <code>ch-27/read.md</code> §5 for the comparison table.
+</div>
+
+<script>
+const envs = {
+  web: {
+    title: "Web browser (WebArena / VisualWebArena)",
+    obs: "Accessibility tree (text) or screenshot + tree. A11y tree is a flattened DOM with element IDs, roles, and text content — no CSS, no images by default.",
+    actions: "<code>click [id]</code>, <code>type [id] [text]</code>, <code>hover</code>, <code>press [key]</code>, <code>scroll [dir]</code>, <code>tab</code>, <code>new_tab</code>, <code>goto [url]</code>, <code>go_back</code>, <code>stop [answer]</code>",
+    reward: "Predicate over URL + page content + DB state. Three categories: info-lookup (gold-string), content-producing (predicate), state-modifying (DB assert).",
+    length: "5–30 steps. 10K–50K tokens per trajectory. Multimodal variants 2× bigger.",
+    example: [
+      ["obs", "[button 12] 'Create issue'\n[textbox 18] title=''\n[textbox 22] description=''"],
+      ["think", "I need to create a new issue with title 'Login bug' and description 'Users cannot log in'."],
+      ["act", "click [12]"],
+      ["env", "(page reloads; issue form now visible)"],
+      ["obs", "[textbox 18] title=''  (focused)"],
+      ["act", "type [18] Login bug"],
+      ["env", "(title field populated)"],
+      ["act", "type [22] Users cannot log in"],
+      ["act", "click [submit]"],
+      ["env", "(URL changes to /issues/42 — success predicate: URL matches /issues/N and title==Login bug PASSES)"],
+    ],
+  },
+  term: {
+    title: "Terminal (Terminal-Bench / OpenHands bash track)",
+    obs: "stdout + stderr streams + exit code + CWD. No DOM, no structured schema — just text and return codes.",
+    actions: "<code>execute_bash [cmd]</code>, optionally <code>execute_ipython_cell [code]</code>. That's the whole API. Composition happens inside the bash invocations themselves (<code>|</code>, <code>&amp;&amp;</code>, <code>$(...)</code>).",
+    reward: "Test-suite pass, file-state check, or CLI predicate (file exists, process running, port listening). No partial credit by default.",
+    length: "5–50 steps. 5K–40K tokens. Debug-heavy trajectories can tail longer.",
+    example: [
+      ["obs", "Task: Create a file named /tmp/hello.txt containing 'hi' and verify its sha256."],
+      ["think", "I'll write the file with echo, then hash with sha256sum."],
+      ["act", "execute_bash: echo 'hi' > /tmp/hello.txt"],
+      ["env", "(exit 0, no output)"],
+      ["act", "execute_bash: sha256sum /tmp/hello.txt"],
+      ["env", "98ea6e4f216f2fb4b69fff9b3a44842c... /tmp/hello.txt"],
+      ["think", "Task complete. Exit code 0 on sha256sum confirms file exists with expected content."],
+      ["act", "finish"],
+      ["env", "(predicate test: does /tmp/hello.txt exist with sha256==... ? PASS)"],
+    ],
+  },
+  repo: {
+    title: "Repo / SWE (SWE-Gym / SWE-Bench / OpenHands)",
+    obs: "File contents (on view), directory listing, test output, issue text. Observation is implicit state of the filesystem.",
+    actions: "<code>str_replace_editor.view / create / str_replace / insert / undo_edit</code>, <code>execute_bash</code>, <code>browse</code>, <code>think</code>, <code>finish</code>. Composable: edit then run tests then edit again.",
+    reward: "SWE-Gym: hidden pytest pass (binary). SWE-RL: <code>difflib.SequenceMatcher.ratio()</code> vs gold PR patch (dense, [0,1]).",
+    length: "10–100+ steps. 15K–100K tokens. Long debugging sessions tail past 100K.",
+    example: [
+      ["obs", "Issue: DataFrame.groupby().sum() returns wrong dtype for float32 input.\nRepo: pandas @ 8af2a3b.\nHidden test: tests/test_groupby_dtype.py"],
+      ["act", "str_replace_editor view pandas/core/groupby/ops.py"],
+      ["env", "lines 412-428: def _aggregate(...): ... return result.astype(self.dtype)"],
+      ["think", "Bug is in the astype cast — should preserve input dtype, not self.dtype."],
+      ["act", "str_replace_editor str_replace pandas/core/groupby/ops.py 'result.astype(self.dtype)' 'result.astype(input.dtype)'"],
+      ["act", "execute_bash: pytest tests/test_groupby_dtype.py -x"],
+      ["env", "PASSED tests/test_groupby_dtype.py::test_float32_sum_preserves_dtype"],
+      ["act", "finish  (submit patch)"],
+      ["env", "(hidden test suite: all pass → trajectory labeled SUCCESS)"],
+    ],
+  },
+  sandbox: {
+    title: "Sandbox (Kimi-K2 synthetic simulator / AgentInstruct tool-use)",
+    obs: "Simulated tool-response JSON. No real API hit — a larger teacher model invents a plausible response shape.",
+    actions: "OpenAI-style <code>tool_calls</code> JSON over a registry of 20,000+ schemas (web search, file ops, DB, calendar, enterprise APIs, custom). One schema per tool; call-args validated against schema.",
+    reward: "Critic-LLM score + JSON-schema validity + no-repeat-loop + end-to-end task-coherence check. Dense but drift-prone.",
+    length: "1–20+ tool calls. Trajectory length varies wildly by task type; median a few thousand tokens.",
+    example: [
+      ["obs", "User query: 'Book a meeting with Alice next Thursday at 2pm and email her the agenda.'"],
+      ["think", "Need two tools: calendar.create_event and email.send. Plan calendar first, then email."],
+      ["act", "tool_call: calendar.create_event({title:'Meeting w/ Alice', start:'2026-04-30T14:00', attendees:['alice@corp.com']})"],
+      ["env", "{'event_id':'evt_9821','status':'created','join_url':'...'}  (simulated)"],
+      ["act", "tool_call: email.send({to:'alice@corp.com', subject:'Thursday agenda', body:'See you at 2pm — agenda attached.', attachments:[]})"],
+      ["env", "{'message_id':'msg_4412','status':'delivered'}  (simulated)"],
+      ["think", "Both actions succeeded. Summarize for user."],
+      ["act", "Meeting booked for Thursday 2pm, email sent to Alice with agenda."],
+      ["env", "(critic score: 4.8/5 — coherent plan, correct tool order, valid args. Kept in training mix.)"],
+    ],
+  },
+};
+
+const panel = document.getElementById("panel");
+const tabs = document.getElementById("tabs");
+
+function render(key) {
+  const e = envs[key];
+  const steps = e.example.map(([role, text]) => {
+    const cls = role === "obs" ? "role-obs" :
+                role === "think" ? "role-think" :
+                role === "act" ? "role-act" : "role-env";
+    const label = role === "obs" ? "[obs]    " :
+                  role === "think" ? "[think]  " :
+                  role === "act" ? "[action] " :
+                  "[env]    ";
+    // escape HTML
+    const safe = text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+    return `<span class="${cls}">${label}${safe}</span>`;
+  }).join("\n");
+
+  panel.innerHTML = `
+    <h2>${e.title}</h2>
+    <div class="grid">
+      <div class="cell">
+        <h3>Observation type</h3>
+        <div class="body">${e.obs}</div>
+      </div>
+      <div class="cell">
+        <h3>Action vocabulary</h3>
+        <div class="body">${e.actions}</div>
+      </div>
+      <div class="cell">
+        <h3>Reward signal</h3>
+        <div class="body">${e.reward}</div>
+      </div>
+      <div class="cell">
+        <h3>Typical length</h3>
+        <div class="body">${e.length}</div>
+      </div>
+    </div>
+    <div class="example">${steps}</div>
+  `;
+}
+
+tabs.addEventListener("click", (ev) => {
+  const t = ev.target.closest(".tab");
+  if (!t) return;
+  document.querySelectorAll(".tab").forEach(x => x.classList.remove("active"));
+  t.classList.add("active");
+  render(t.dataset.env);
+});
+
+render("web");
+</script>
+
+</body>
+</html>

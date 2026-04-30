@@ -1,0 +1,275 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>ch-41 — Reward-model overoptimization and multi-attribute calibration</title>
+<style>
+  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+         background: #fafafa; color: #222; margin: 0; padding: 24px; }
+  h1 { font-size: 20px; margin: 0 0 4px; }
+  h2 { font-size: 15px; margin: 24px 0 8px; color: #444; }
+  .sub { font-size: 13px; color: #666; margin-bottom: 16px; }
+  .panel { background: #fff; border: 1px solid #ddd; border-radius: 6px; padding: 16px; margin-bottom: 20px; }
+  .controls { display: flex; flex-wrap: wrap; gap: 18px; margin-bottom: 12px; }
+  .control { display: flex; flex-direction: column; font-size: 12px; min-width: 180px; }
+  .control label { color: #555; margin-bottom: 4px; }
+  .control input[type=range] { width: 180px; }
+  .control .v { font-family: ui-monospace, "SF Mono", monospace; color: #0a6; }
+  canvas { display: block; border: 1px solid #eee; background: #fff; }
+  .legend { font-size: 12px; margin-top: 8px; }
+  .legend span { display: inline-block; width: 12px; height: 12px; vertical-align: middle; margin: 0 4px 0 10px; border-radius: 2px; }
+  .note { font-size: 12px; color: #666; margin-top: 10px; line-height: 1.45; }
+  .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+  @media (max-width: 900px) { .grid { grid-template-columns: 1fr; } }
+  code { font-family: ui-monospace, "SF Mono", monospace; background: #f3f3f3; padding: 1px 4px; border-radius: 3px; }
+</style>
+</head>
+<body>
+
+<h1>Reward-model overoptimization and multi-attribute calibration</h1>
+<div class="sub">ch-41 companion. Panel A sweeps Gao 2022's inverted-U over RM quality and ensemble size. Panel B contrasts scalar-BT calibration against a 5-dim HelpSteer2 head.</div>
+
+<div class="grid">
+
+<div class="panel">
+  <h2>Panel A — Gold reward vs KL budget</h2>
+  <div class="sub">Horizontal axis <code>d = sqrt(KL(π‖π_ref))</code>. Proxy grows monotonically; gold follows an inverted-U. Larger / ensembled RMs shift the peak right, but do not eliminate it.</div>
+  <div class="controls">
+    <div class="control">
+      <label>RM quality α <span class="v" id="vAlpha">1.60</span></label>
+      <input type="range" id="alpha" min="0.6" max="2.4" step="0.01" value="1.6">
+    </div>
+    <div class="control">
+      <label>RM error β <span class="v" id="vBeta">0.24</span></label>
+      <input type="range" id="beta" min="0.06" max="0.60" step="0.01" value="0.24">
+    </div>
+    <div class="control">
+      <label>Ensemble K <span class="v" id="vK">1</span></label>
+      <input type="range" id="K" min="1" max="10" step="1" value="1">
+    </div>
+    <div class="control">
+      <label>Mode</label>
+      <select id="mode">
+        <option value="ppo">PPO  (d·(α − β·log d))</option>
+        <option value="bon">BoN  (d·(α − β·d))</option>
+      </select>
+    </div>
+  </div>
+  <canvas id="cA" width="520" height="340"></canvas>
+  <div class="legend">
+    <span style="background:#4a7"></span>gold reward (true)
+    <span style="background:#888"></span>proxy reward (RM)
+    <span style="background:#c64"></span>peak d*
+  </div>
+  <div class="note" id="noteA"></div>
+</div>
+
+<div class="panel">
+  <h2>Panel B — Scalar vs 5-dim RM calibration</h2>
+  <div class="sub">Reliability bars per dimension: predicted preference probability vs empirical win-rate, bucketed. A scalar BT RM mashes all axes into one score; a HelpSteer2 head keeps them separable.</div>
+  <div class="controls">
+    <div class="control">
+      <label>Scenario</label>
+      <select id="scenario">
+        <option value="base">Baseline (Likert mid)</option>
+        <option value="verbose">Verbose-biased policy</option>
+        <option value="short">Terse policy</option>
+        <option value="hack">Reward-hacked policy</option>
+      </select>
+    </div>
+    <div class="control">
+      <label>Compose weights w_k</label>
+      <div style="font-size:11px; color:#666;">Helpful=0.35 · Correct=0.35 · Coherence=0.15 · Complexity=0.10 · Verbosity=0.05</div>
+    </div>
+  </div>
+  <canvas id="cB" width="520" height="340"></canvas>
+  <div class="legend">
+    <span style="background:#49a"></span>5-dim HelpSteer2
+    <span style="background:#c84"></span>Scalar BT (aggregate)
+    <span style="background:#ccc"></span>ideal (predicted = empirical)
+  </div>
+  <div class="note" id="noteB"></div>
+</div>
+
+</div>
+
+<script>
+// ---------- Panel A ----------
+const cA = document.getElementById('cA'), gA = cA.getContext('2d');
+const vAlpha = document.getElementById('vAlpha'),
+      vBeta  = document.getElementById('vBeta'),
+      vK     = document.getElementById('vK'),
+      noteA  = document.getElementById('noteA');
+
+function drawPanelA() {
+  const alpha0 = parseFloat(document.getElementById('alpha').value);
+  const beta0  = parseFloat(document.getElementById('beta').value);
+  const K      = parseInt(document.getElementById('K').value);
+  const mode   = document.getElementById('mode').value;
+  vAlpha.textContent = alpha0.toFixed(2);
+  vBeta.textContent  = beta0.toFixed(2);
+  vK.textContent     = K;
+
+  // Ensembling shrinks RM error variance by ~1/K; the effective beta scales roughly like 1/sqrt(K).
+  // (Coste 2023: peak shifts right with K; gain saturates past K=5.)
+  const beta = beta0 / Math.sqrt(K);
+  const alpha = alpha0;
+
+  const W = cA.width, H = cA.height, pad = 38;
+  gA.clearRect(0,0,W,H);
+
+  gA.strokeStyle = '#ccc'; gA.lineWidth = 1;
+  gA.beginPath(); gA.moveTo(pad, H-pad); gA.lineTo(W-10, H-pad); gA.moveTo(pad, H-pad); gA.lineTo(pad, 10); gA.stroke();
+  gA.fillStyle = '#555'; gA.font = '11px sans-serif';
+  gA.fillText('d = sqrt(KL(π‖π_ref))', W-150, H-10);
+  gA.save(); gA.translate(12, 110); gA.rotate(-Math.PI/2); gA.fillText('reward (arb. units)', 0, 0); gA.restore();
+
+  const dMax = 10, yMax = 6.0, yMin = -3.0;
+  const x = d => pad + (d/dMax) * (W - pad - 12);
+  const y = v => (H-pad) - ((v - yMin)/(yMax - yMin)) * (H - pad - 12);
+
+  gA.fillStyle = '#999'; gA.font = '10px sans-serif';
+  for (let dt = 0; dt <= dMax; dt += 2) {
+    gA.fillText(dt.toString(), x(dt)-3, H-pad+12);
+    gA.strokeStyle = '#f0f0f0'; gA.beginPath(); gA.moveTo(x(dt), H-pad); gA.lineTo(x(dt), 12); gA.stroke();
+  }
+  for (let yt = -3; yt <= 6; yt += 1) {
+    gA.fillText(yt.toString(), 6, y(yt)+3);
+    gA.strokeStyle = yt===0 ? '#ccc' : '#f5f5f5'; gA.beginPath(); gA.moveTo(pad, y(yt)); gA.lineTo(W-10, y(yt)); gA.stroke();
+  }
+
+  function gold(d) {  // Gao 2022 closed forms
+    if (d <= 0) return 0;
+    if (mode === 'bon') return d * (alpha - beta * d);
+    return d * (alpha - beta * Math.log(Math.max(d, 1e-3)));
+  }
+  function proxy(d) { return d * alpha - 0.05 * d + beta * d * d * 0.4 - 0.2; }
+
+  gA.strokeStyle = '#888'; gA.lineWidth = 1.5; gA.setLineDash([4,3]); gA.beginPath();
+  for (let d = 0; d <= dMax; d += 0.1) {
+    const px = x(d), py = y(proxy(d));
+    if (d === 0) gA.moveTo(px, py); else gA.lineTo(px, py);
+  }
+  gA.stroke(); gA.setLineDash([]);
+
+  gA.strokeStyle = '#4a7'; gA.lineWidth = 2.2; gA.beginPath();
+  let peakD = 0, peakR = -Infinity;
+  for (let d = 0; d <= dMax; d += 0.05) {
+    const r = gold(d);
+    if (r > peakR) { peakR = r; peakD = d; }
+    const px = x(d), py = y(r);
+    if (d === 0) gA.moveTo(px, py); else gA.lineTo(px, py);
+  }
+  gA.stroke();
+
+  // peak marker
+  gA.fillStyle = '#c64';
+  gA.beginPath(); gA.arc(x(peakD), y(peakR), 5, 0, Math.PI*2); gA.fill();
+  gA.fillStyle = '#c64'; gA.font = '11px ui-monospace, monospace';
+  gA.fillText(`d* = ${peakD.toFixed(2)},  R_gold* = ${peakR.toFixed(2)}`,
+              x(peakD)+8, y(peakR)-8);
+
+  // explanation note
+  const effBeta = beta.toFixed(3);
+  const peakForm = mode === 'bon'
+    ? `d* = α/(2β) = ${(alpha/(2*beta)).toFixed(2)}`
+    : `d* = exp(α/β − 1) / e  ≈ ${Math.exp(alpha/beta - 1).toFixed(2)}`;
+  noteA.innerHTML =
+    `Mode: <code>${mode.toUpperCase()}</code>. ` +
+    `Ensemble K=${K} shrinks effective β to ${effBeta} (variance ↓ ~1/K; ` +
+    `Coste 2023 shows peak shifts from d≈3 single-RM baseline to d≈5–8 at K=3–5). ` +
+    `Closed-form peak: ${peakForm}. ` +
+    `Past d*, proxy keeps climbing (dashed) while gold falls — the Goodhart gap.`;
+}
+
+['alpha','beta','K','mode'].forEach(id =>
+  document.getElementById(id).addEventListener('input', drawPanelA));
+drawPanelA();
+
+// ---------- Panel B ----------
+const cB = document.getElementById('cB'), gB = cB.getContext('2d');
+const noteB = document.getElementById('noteB');
+
+// Attested HelpSteer2 dimensions (Nemotron-4-340B technical report).
+const DIMS = ['Helpfulness','Correctness','Coherence','Complexity','Verbosity'];
+const WK   = [0.35, 0.35, 0.15, 0.10, 0.05];
+
+// Per-scenario calibration gap: empirical minus predicted, per dimension,
+// for 5-dim RM vs scalar aggregate. Stylized but attribution matches the text:
+// verbose policies blow up Verbosity gap for scalar RM because it cannot
+// separate length from helpfulness. Reward-hacked policies blow up Correctness
+// gap because the scalar RM has been gamed on surface features.
+const SCENARIOS = {
+  base:    { five:[0.02, 0.03, 0.02, 0.04, 0.03], scalar:[0.08, 0.09, 0.06, 0.07, 0.18] },
+  verbose: { five:[0.03, 0.04, 0.03, 0.05, 0.05], scalar:[0.16, 0.18, 0.11, 0.14, 0.42] },
+  short:   { five:[0.04, 0.03, 0.02, 0.05, 0.04], scalar:[0.22, 0.14, 0.08, 0.12, 0.34] },
+  hack:    { five:[0.05, 0.06, 0.04, 0.06, 0.05], scalar:[0.34, 0.44, 0.18, 0.26, 0.28] }
+};
+
+function drawPanelB() {
+  const key = document.getElementById('scenario').value;
+  const sc = SCENARIOS[key];
+  const W = cB.width, H = cB.height, pad = 48;
+  gB.clearRect(0,0,W,H);
+
+  gB.strokeStyle = '#ccc'; gB.beginPath();
+  gB.moveTo(pad, H-pad); gB.lineTo(W-10, H-pad); gB.moveTo(pad, H-pad); gB.lineTo(pad, 16); gB.stroke();
+  gB.fillStyle = '#555'; gB.font = '11px sans-serif';
+  gB.fillText('HelpSteer2 dimension', W-150, H-12);
+  gB.save(); gB.translate(12, 170); gB.rotate(-Math.PI/2); gB.fillText('|empirical − predicted|  (lower = better calibrated)', 0, 0); gB.restore();
+
+  const maxGap = 0.50;
+  const plotH = H - pad - 20;
+  const groupW = (W - pad - 20) / DIMS.length;
+  const barW = (groupW - 8) / 2;
+
+  // y grid + ticks
+  gB.strokeStyle = '#f2f2f2';
+  for (let v = 0; v <= maxGap; v += 0.1) {
+    const y = (H-pad) - (v/maxGap) * plotH;
+    gB.beginPath(); gB.moveTo(pad, y); gB.lineTo(W-10, y); gB.stroke();
+    gB.fillStyle = '#999'; gB.font = '10px sans-serif';
+    gB.fillText(v.toFixed(1), 18, y+3);
+  }
+
+  // bars
+  DIMS.forEach((d, i) => {
+    const cx = pad + 12 + i * groupW;
+    const five = sc.five[i], sca = sc.scalar[i];
+    const fiveH = (five/maxGap) * plotH, scaH = (sca/maxGap) * plotH;
+    // 5-dim bar
+    gB.fillStyle = '#49a';
+    gB.fillRect(cx, (H-pad) - fiveH, barW, fiveH);
+    // scalar bar
+    gB.fillStyle = '#c84';
+    gB.fillRect(cx + barW + 4, (H-pad) - scaH, barW, scaH);
+    // value labels
+    gB.fillStyle = '#333'; gB.font = '10px ui-monospace, monospace';
+    gB.fillText(five.toFixed(2), cx-2, (H-pad) - fiveH - 4);
+    gB.fillText(sca.toFixed(2),  cx + barW + 2, (H-pad) - scaH - 4);
+    // dim label
+    gB.fillStyle = '#444'; gB.font = '11px sans-serif';
+    gB.fillText(d, cx - 4, H-pad+14);
+    gB.fillStyle = '#888'; gB.font = '10px sans-serif';
+    gB.fillText('w='+WK[i].toFixed(2), cx + 8, H-pad+26);
+  });
+
+  // per-scenario caption
+  const caption = {
+    base:    'Both RMs land near the diagonal — scalar is only marginally worse on Verbosity.',
+    verbose: 'Scalar RM eats length as a free feature — Verbosity gap blows to 0.42 while the 5-dim head stays flat at 0.05.',
+    short:   'Terse policy flips the story: scalar RM underestimates Helpfulness because it conflated length with quality during training.',
+    hack:    'Reward-hacked policy: scalar RM is gamed on surface features; 5-dim separates Correctness from Coherence so Helpfulness composition stays calibrated.'
+  }[key];
+  noteB.innerHTML =
+    `<b>Scenario:</b> ${key}. ${caption} ` +
+    `The 5-dim head (<code>r_compose = Σ w_k · r_k</code>) lets you reweight at RL time without retraining ` +
+    `the RM — the Nemotron-4 / HelpSteer2 compositional pattern.`;
+}
+
+document.getElementById('scenario').addEventListener('change', drawPanelB);
+drawPanelB();
+</script>
+
+</body>
+</html>

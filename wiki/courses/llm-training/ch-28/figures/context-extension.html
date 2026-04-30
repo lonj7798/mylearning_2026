@@ -1,0 +1,350 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<title>Ch-28 — Context Extension: RoPE, Needle, Effective Context</title>
+<style>
+  :root {
+    --bg: #0f1115; --panel: #171a21; --text: #e6e8eb;
+    --muted: #8a95a4; --accent: #5ec8ff; --warn: #ffb86b;
+    --good: #7dd87d; --bad: #ff6b6b; --grid: #2a2f3a;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 20px; background: var(--bg); color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    font-size: 13px;
+  }
+  h1 { font-size: 16px; margin: 0 0 4px 0; }
+  h2 { font-size: 13px; color: var(--accent); margin: 0 0 8px 0; font-weight: 600; }
+  p.sub { color: var(--muted); margin: 0 0 16px 0; font-size: 12px; }
+  .controls {
+    background: var(--panel); padding: 12px 16px; border-radius: 6px;
+    margin-bottom: 16px; display: flex; flex-wrap: wrap; gap: 18px; align-items: center;
+  }
+  .control { display: flex; flex-direction: column; gap: 4px; min-width: 180px; }
+  .control label { font-size: 11px; color: var(--muted); }
+  .control .val { font-variant-numeric: tabular-nums; color: var(--accent); font-weight: 600; }
+  input[type=range] { width: 180px; }
+  .toggle { display: flex; gap: 4px; }
+  .toggle button {
+    background: #232833; border: 1px solid #2a2f3a; color: var(--text);
+    padding: 4px 10px; border-radius: 4px; cursor: pointer; font-size: 11px;
+  }
+  .toggle button.active { background: var(--accent); color: #0f1115; border-color: var(--accent); }
+  .grid {
+    display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 14px;
+  }
+  .panel {
+    background: var(--panel); padding: 14px; border-radius: 6px;
+    min-height: 360px; display: flex; flex-direction: column;
+  }
+  canvas { width: 100%; height: 260px; background: #0b0d11; border-radius: 4px; }
+  .legend { display: flex; gap: 12px; font-size: 11px; color: var(--muted); margin-top: 8px; }
+  .legend span.sw { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 4px; vertical-align: middle; }
+  .stat-row { display: flex; justify-content: space-between; font-size: 11px; color: var(--muted); margin-top: 4px; }
+  .stat-row .v { color: var(--text); font-variant-numeric: tabular-nums; }
+  .haystack {
+    background: #0b0d11; border-radius: 4px; padding: 6px; height: 260px;
+    overflow: hidden; position: relative;
+  }
+  .hay-line { height: 3px; margin: 1px 0; background: #1f2530; border-radius: 1px; }
+  .hay-line.needle { background: var(--warn); height: 4px; box-shadow: 0 0 6px var(--warn); }
+  .caption { font-size: 11px; color: var(--muted); margin-top: 10px; line-height: 1.5; }
+</style>
+</head>
+<body>
+
+<h1>Chapter 28 — Context Extension Explorer</h1>
+<p class="sub">Drag the context slider. The RoPE frequency bands stretch, the NIAH haystack grows, and the claimed-vs-effective curves diverge. All three panels share the same max-context state.</p>
+
+<div class="controls">
+  <div class="control">
+    <label>Max context (tokens) <span id="ctxLabel" class="val">8192</span></label>
+    <input id="ctx" type="range" min="8" max="1024" value="8" step="8"
+           title="scale: 8 → 8K, 1024 → 1M tokens (linear on log-bucket index)" />
+  </div>
+  <div class="control">
+    <label>Needle depth <span id="depthLabel" class="val">50%</span></label>
+    <input id="depth" type="range" min="0" max="100" value="50" step="5" />
+  </div>
+  <div class="control">
+    <label>RoPE mode</label>
+    <div class="toggle" id="mode">
+      <button data-mode="uniform" class="active">Uniform NTK</button>
+      <button data-mode="longrope">LongRoPE per-dim</button>
+    </div>
+  </div>
+  <div class="control">
+    <label>Training cap (reference, tokens) <span id="trainLabel" class="val">256K</span></label>
+    <input id="train" type="range" min="8" max="1024" value="256" step="8" />
+  </div>
+</div>
+
+<div class="grid">
+
+  <!-- Panel 1: RoPE frequency bands -->
+  <div class="panel">
+    <h2>RoPE frequency bands</h2>
+    <canvas id="rope" width="440" height="260"></canvas>
+    <div class="legend">
+      <span><span class="sw" style="background:#5ec8ff"></span>θᵢ per dimension</span>
+      <span><span class="sw" style="background:#ffb86b"></span>usable-range band</span>
+    </div>
+    <div class="stat-row"><span>θ (base)</span><span class="v" id="thetaBase">500,000</span></div>
+    <div class="stat-row"><span>Effective λ (avg)</span><span class="v" id="lambdaAvg">1.00×</span></div>
+    <p class="caption">Uniform NTK scales every band by the same λ. LongRoPE searches per-dim λᵢ — high-freq bands (small i) mostly untouched, low-freq bands compressed harder so aliasing is pushed past the target context.</p>
+  </div>
+
+  <!-- Panel 2: NIAH haystack -->
+  <div class="panel">
+    <h2>NIAH haystack (needle at depth)</h2>
+    <div class="haystack" id="hay"></div>
+    <div class="stat-row"><span>Haystack lines</span><span class="v" id="hayLines">128</span></div>
+    <div class="stat-row"><span>Needle position</span><span class="v" id="needlePos">line 64</span></div>
+    <p class="caption">Each line is ~64 tokens. As context grows, the haystack grows linearly but the retrieval load grows super-linearly when distractors, multi-hop, or aggregation are added (RULER / BABILong).</p>
+  </div>
+
+  <!-- Panel 3: Claimed vs Effective -->
+  <div class="panel">
+    <h2>Claimed vs effective context</h2>
+    <canvas id="curve" width="440" height="260"></canvas>
+    <div class="legend">
+      <span><span class="sw" style="background:#7dd87d"></span>NIAH</span>
+      <span><span class="sw" style="background:#5ec8ff"></span>RULER (13-task)</span>
+      <span><span class="sw" style="background:#ff6b6b"></span>BABILong reasoning</span>
+    </div>
+    <div class="stat-row"><span>NIAH @ ctx</span><span class="v" id="niahCur">100%</span></div>
+    <div class="stat-row"><span>RULER @ ctx</span><span class="v" id="rulerCur">95%</span></div>
+    <div class="stat-row"><span>BABILong @ ctx</span><span class="v" id="babiCur">85%</span></div>
+    <p class="caption">NIAH stays near 100% well past the training cap (single-needle is easy). RULER tracks the training cap more closely. BABILong reasoning-in-a-haystack collapses first — the "effective context" gap that Llama-3.1-70B exhibits at 128K.</p>
+  </div>
+
+</div>
+
+<script>
+(function(){
+  const ctxSlider = document.getElementById('ctx');
+  const depthSlider = document.getElementById('depth');
+  const trainSlider = document.getElementById('train');
+  const ctxLabel = document.getElementById('ctxLabel');
+  const depthLabel = document.getElementById('depthLabel');
+  const trainLabel = document.getElementById('trainLabel');
+  const thetaBase = document.getElementById('thetaBase');
+  const lambdaAvg = document.getElementById('lambdaAvg');
+  const hayDiv = document.getElementById('hay');
+  const hayLinesEl = document.getElementById('hayLines');
+  const needlePos = document.getElementById('needlePos');
+  const niahCur = document.getElementById('niahCur');
+  const rulerCur = document.getElementById('rulerCur');
+  const babiCur = document.getElementById('babiCur');
+  const ropeC = document.getElementById('rope').getContext('2d');
+  const curveC = document.getElementById('curve').getContext('2d');
+  let mode = 'uniform';
+
+  // Toggle buttons
+  document.querySelectorAll('#mode button').forEach(btn => {
+    btn.addEventListener('click', () => {
+      document.querySelectorAll('#mode button').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      mode = btn.dataset.mode;
+      render();
+    });
+  });
+
+  function fmtK(n) {
+    if (n >= 1024) return (n/1024).toFixed(1).replace(/\.0$/, '') + 'M';
+    return n + 'K';
+  }
+
+  function render() {
+    const ctxK = parseInt(ctxSlider.value);          // in units of 1K tokens, 8..1024
+    const depthPct = parseInt(depthSlider.value);
+    const trainK = parseInt(trainSlider.value);
+    ctxLabel.textContent = fmtK(ctxK);
+    depthLabel.textContent = depthPct + '%';
+    trainLabel.textContent = fmtK(trainK);
+
+    // RoPE frequency plot
+    drawRope(ctxK);
+
+    // Haystack
+    drawHay(ctxK, depthPct);
+
+    // Curves
+    drawCurve(ctxK, trainK);
+  }
+
+  function drawRope(ctxK) {
+    const d = 128; // head dim
+    const w = 440, h = 260;
+    ropeC.clearRect(0, 0, w, h);
+    // background grid
+    ropeC.strokeStyle = '#2a2f3a';
+    ropeC.lineWidth = 1;
+    for (let i = 0; i < 5; i++) {
+      const y = 20 + i * ((h-40)/4);
+      ropeC.beginPath(); ropeC.moveTo(30, y); ropeC.lineTo(w-10, y); ropeC.stroke();
+    }
+    // Theta base grows with target context
+    const baseTheta = 10000 * Math.pow(ctxK / 8, 1.6);
+    thetaBase.textContent = Math.round(baseTheta).toLocaleString();
+
+    // Per-dim frequencies θ_i = base^(-2i/d)
+    const freqs = [];
+    for (let i = 0; i < d/2; i++) {
+      const theta_i = Math.pow(baseTheta, -2*i/d);
+      let lam = 1.0;
+      if (mode === 'uniform') {
+        lam = Math.max(1, ctxK/8);  // uniform rescale grows with context
+      } else {
+        // LongRoPE: high-freq (small i) left alone; low-freq (large i) rescaled hard
+        const frac = i / (d/2);
+        lam = 1 + Math.pow(frac, 0.6) * (ctxK/8 - 1);
+      }
+      freqs.push({ theta: theta_i / lam, lam });
+    }
+    const lamMean = freqs.reduce((a,b)=>a+b.lam,0) / freqs.length;
+    lambdaAvg.textContent = lamMean.toFixed(2) + '×';
+
+    // plot log(theta_i) across dims
+    const maxLog = Math.log(freqs[0].theta);
+    const minLog = Math.log(freqs[freqs.length-1].theta);
+    ropeC.strokeStyle = '#5ec8ff';
+    ropeC.lineWidth = 2;
+    ropeC.beginPath();
+    freqs.forEach((f, i) => {
+      const x = 30 + (i / (d/2-1)) * (w-40);
+      const norm = (Math.log(f.theta) - minLog) / (maxLog - minLog + 1e-9);
+      const y = h - 20 - norm * (h-40);
+      if (i === 0) ropeC.moveTo(x, y); else ropeC.lineTo(x, y);
+    });
+    ropeC.stroke();
+
+    // usable-range shading: show which dim indices still resolve at the target context
+    // heuristic: dim i resolves if 2*pi/theta_i >= ctxK*1024 * 0.3 (half wavelength must cover context)
+    ropeC.fillStyle = 'rgba(255,184,107,0.18)';
+    let usableEnd = 0;
+    for (let i = 0; i < freqs.length; i++) {
+      const wavelength = 2 * Math.PI / Math.max(freqs[i].theta, 1e-12);
+      if (wavelength >= ctxK * 1024 * 0.3) usableEnd = i;
+    }
+    ropeC.fillRect(30, 20, (usableEnd / (d/2-1)) * (w-40), h-40);
+
+    // axis labels
+    ropeC.fillStyle = '#8a95a4';
+    ropeC.font = '10px sans-serif';
+    ropeC.fillText('dim 0 (high freq)', 32, h-6);
+    ropeC.fillText('dim ' + (d/2-1) + ' (low freq)', w-110, h-6);
+    ropeC.fillText('log θᵢ', 4, 30);
+  }
+
+  function drawHay(ctxK, depthPct) {
+    hayDiv.innerHTML = '';
+    // Map context to number of lines, with visual ceiling at 80
+    const approxLines = Math.min(80, Math.max(8, Math.round(ctxK / 12)));
+    hayLinesEl.textContent = approxLines + ' visible (ctx=' + fmtK(ctxK) + ')';
+    const needleIdx = Math.round((depthPct / 100) * (approxLines - 1));
+    needlePos.textContent = 'line ' + needleIdx + ' of ' + approxLines;
+    for (let i = 0; i < approxLines; i++) {
+      const d = document.createElement('div');
+      d.className = 'hay-line' + (i === needleIdx ? ' needle' : '');
+      // randomized-ish width to evoke filler text
+      const wpct = 40 + ((i * 83) % 55);
+      d.style.width = wpct + '%';
+      hayDiv.appendChild(d);
+    }
+  }
+
+  function drawCurve(ctxK, trainK) {
+    const w = 440, h = 260;
+    curveC.clearRect(0, 0, w, h);
+    // grid
+    curveC.strokeStyle = '#2a2f3a';
+    curveC.lineWidth = 1;
+    for (let i = 0; i < 5; i++) {
+      const y = 20 + i * ((h-40)/4);
+      curveC.beginPath(); curveC.moveTo(30, y); curveC.lineTo(w-10, y); curveC.stroke();
+    }
+    // threshold line at 85.6 (Llama2-7B baseline from RULER)
+    curveC.strokeStyle = '#444';
+    curveC.setLineDash([3,3]);
+    const yThr = 20 + (1 - 0.856) * (h-40);
+    curveC.beginPath(); curveC.moveTo(30, yThr); curveC.lineTo(w-10, yThr); curveC.stroke();
+    curveC.setLineDash([]);
+    curveC.fillStyle = '#555'; curveC.font='10px sans-serif';
+    curveC.fillText('85.6 baseline', w-90, yThr-3);
+
+    // log-x axis: 8K .. 1M  (i.e. ctxK from 8 to 1024)
+    const xs = [];
+    for (let i = 0; i <= 40; i++) {
+      const frac = i/40;
+      const logMin = Math.log(8), logMax = Math.log(1024);
+      const c = Math.exp(logMin + frac*(logMax-logMin));
+      xs.push(c);
+    }
+
+    function niah(c, tr) {
+      // easy; stays near 1 until 2x training cap, then gentle decline
+      const r = c / tr;
+      if (r <= 1) return 0.98;
+      return Math.max(0.55, 0.98 - 0.08 * Math.log2(r));
+    }
+    function ruler(c, tr) {
+      // tracks training cap more closely
+      const r = c / tr;
+      if (r <= 0.5) return 0.95;
+      if (r <= 1) return 0.90 - 0.05 * ((r-0.5)/0.5);
+      return Math.max(0.35, 0.85 - 0.22 * Math.log2(r));
+    }
+    function babi(c, tr) {
+      // reasoning-in-a-haystack collapses first
+      const r = c / tr;
+      if (r <= 0.5) return 0.82;
+      if (r <= 1) return 0.78 - 0.12 * ((r-0.5)/0.5);
+      return Math.max(0.15, 0.66 - 0.32 * Math.log2(r));
+    }
+
+    function plot(color, fn) {
+      curveC.strokeStyle = color;
+      curveC.lineWidth = 2;
+      curveC.beginPath();
+      xs.forEach((c, i) => {
+        const xFrac = i/(xs.length-1);
+        const x = 30 + xFrac * (w-40);
+        const y = 20 + (1 - fn(c, trainK)) * (h-40);
+        if (i === 0) curveC.moveTo(x, y); else curveC.lineTo(x, y);
+      });
+      curveC.stroke();
+    }
+    plot('#7dd87d', niah);
+    plot('#5ec8ff', ruler);
+    plot('#ff6b6b', babi);
+
+    // mark current context with a vertical
+    const frac = (Math.log(ctxK)-Math.log(8)) / (Math.log(1024)-Math.log(8));
+    const cx = 30 + frac*(w-40);
+    curveC.strokeStyle = '#e6e8eb';
+    curveC.setLineDash([4,4]);
+    curveC.beginPath(); curveC.moveTo(cx, 20); curveC.lineTo(cx, h-20); curveC.stroke();
+    curveC.setLineDash([]);
+
+    niahCur.textContent  = (niah(ctxK, trainK)*100).toFixed(1) + '%';
+    rulerCur.textContent = (ruler(ctxK, trainK)*100).toFixed(1) + '%';
+    babiCur.textContent  = (babi(ctxK, trainK)*100).toFixed(1) + '%';
+
+    // axis labels
+    curveC.fillStyle = '#8a95a4';
+    curveC.font = '10px sans-serif';
+    curveC.fillText('8K', 30, h-6);
+    curveC.fillText('128K', 30+(Math.log(128)-Math.log(8))/(Math.log(1024)-Math.log(8))*(w-40), h-6);
+    curveC.fillText('1M', w-20, h-6);
+    curveC.fillText('score', 4, 30);
+  }
+
+  [ctxSlider, depthSlider, trainSlider].forEach(s => s.addEventListener('input', render));
+  render();
+})();
+</script>
+</body>
+</html>

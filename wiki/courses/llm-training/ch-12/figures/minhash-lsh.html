@@ -1,0 +1,372 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>MinHash + LSH S-curve, and the Semantic-Dedup Diversity Tradeoff</title>
+<style>
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+         max-width: 1140px; margin: 1.8em auto; padding: 0 1em; color: #222;
+         background: #fafafa; }
+  h1 { font-size: 1.3em; margin-bottom: 0.15em; }
+  .subtitle { color: #666; margin-top: 0; font-size: 0.92em; line-height: 1.5; }
+  .layout { display: grid; grid-template-columns: 1fr 1fr; gap: 1.2em;
+            margin-top: 1.2em; }
+  .panel { border: 1px solid #dcdcdc; border-radius: 6px; background: #fff;
+           padding: 0.9em 1.1em; }
+  h2 { font-size: 1.05em; margin: 0 0 0.5em 0; color: #333;
+       border-bottom: 1px solid #eee; padding-bottom: 0.3em; }
+  .controls { display: grid; grid-template-columns: auto 1fr auto; gap: 0.5em 0.8em;
+              align-items: center; margin: 0.6em 0; font-size: 0.88em; }
+  .controls label { color: #333; font-weight: 600; }
+  .controls input[type=range] { width: 100%; }
+  .controls .val { font-family: 'SF Mono', Menlo, monospace; color: #335;
+                   min-width: 3.4em; text-align: right; font-size: 0.85em; }
+  canvas { width: 100%; height: 260px; background: #fff; border: 1px solid #eee;
+           border-radius: 4px; display: block; }
+  table.readout { width: 100%; border-collapse: collapse; margin-top: 0.6em;
+                  font-size: 0.85em; }
+  table.readout td { padding: 0.28em 0.4em; border-bottom: 1px dotted #e2e2e2; }
+  table.readout td.k { color: #555; width: 55%; }
+  table.readout td.v { font-family: 'SF Mono', Menlo, monospace; color: #1b3a70;
+                       text-align: right; }
+  .note { font-size: 0.8em; color: #666; margin-top: 0.7em; line-height: 1.5; }
+  .equation { font-family: 'SF Mono', Menlo, monospace; font-size: 0.85em;
+              background: #f3f3f9; padding: 0.5em 0.8em; border-radius: 4px;
+              border-left: 3px solid #5a6caa; margin: 0.5em 0; }
+  .chip { display: inline-block; font-size: 0.72em; padding: 1px 7px;
+          border-radius: 10px; background: #eef; color: #335; margin-left: 0.25em; }
+  .chip.warn { background: #fff4e0; color: #7a4a00; }
+  .chip.ok   { background: #e6f4ea; color: #1b5e20; }
+  .chip.bad  { background: #fde7e7; color: #802020; }
+</style>
+</head>
+<body>
+
+<h1>MinHash + LSH: the S-curve, and the semantic-dedup diversity tradeoff</h1>
+<p class="subtitle">
+  Left panel derives the collision probability of r-rows-by-b-bands locality-sensitive
+  hashing over MinHash signatures: P(collision | J) = 1 - (1 - J^r)^b. Move the sliders
+  and watch the curve. The right panel is the semantic-dedup (SemDeDup / D4) analog:
+  as the cosine-similarity threshold gets more aggressive, recall of real duplicates
+  rises but the effective domain-coverage entropy of the retained set collapses.
+</p>
+
+<div class="layout">
+
+  <div class="panel">
+    <h2>LSH S-curve: P(collision | J) = 1 - (1 - J^r)^b</h2>
+    <canvas id="lshCanvas" width="600" height="260"></canvas>
+
+    <div class="controls">
+      <label for="r">rows per band r</label>
+      <input id="r" type="range" min="1" max="20" step="1" value="9">
+      <span class="val" id="rVal">9</span>
+
+      <label for="b">bands b</label>
+      <input id="b" type="range" min="1" max="40" step="1" value="20">
+      <span class="val" id="bVal">20</span>
+
+      <label for="jstar">target Jaccard J*</label>
+      <input id="jstar" type="range" min="0.50" max="0.99" step="0.01" value="0.80">
+      <span class="val" id="jstarVal">0.80</span>
+    </div>
+
+    <div class="equation">
+      t &asymp; (1 / b)^(1/r)  &nbsp;&nbsp;(the 0.5-threshold Jaccard)
+    </div>
+
+    <table class="readout">
+      <tr><td class="k">total signatures m = r * b</td>
+          <td class="v" id="mOut">180</td></tr>
+      <tr><td class="k">threshold t (where P = 0.5)</td>
+          <td class="v" id="tOut">--</td></tr>
+      <tr><td class="k">P(collision) at J = J*</td>
+          <td class="v" id="pstarOut">--</td></tr>
+      <tr><td class="k">P(collision) at J = 0.5 &nbsp;<span class="chip bad">false positives</span></td>
+          <td class="v" id="fpOut">--</td></tr>
+      <tr><td class="k">1 - P(collision) at J = 0.9 &nbsp;<span class="chip warn">false negatives</span></td>
+          <td class="v" id="fnOut">--</td></tr>
+    </table>
+    <p class="note">
+      Lee 2021 uses r=450, b=20 (m=9000). Under the formula above t &asymp; 0.993, so
+      LSH alone would accept nearly everything at J&ge;0.8. The paper runs an explicit
+      Jaccard post-filter on every LSH candidate pair; the massive signature count is
+      a recall-maxing choice, not a threshold-setting one. Typical production values
+      are r=9, b=20 (m=180, t&asymp;0.75) paired with a J&ge;0.8 verifier.
+    </p>
+  </div>
+
+  <div class="panel">
+    <h2>Semantic dedup (SemDeDup / D4): recall vs domain coverage</h2>
+    <canvas id="semCanvas" width="600" height="260"></canvas>
+
+    <div class="controls">
+      <label for="tau">cosine threshold &tau;</label>
+      <input id="tau" type="range" min="0.50" max="1.00" step="0.01" value="0.95">
+      <span class="val" id="tauVal">0.95</span>
+
+      <label for="kclust">cluster count k / sqrt(N)</label>
+      <input id="kclust" type="range" min="0.5" max="3.0" step="0.1" value="1.0">
+      <span class="val" id="kclustVal">1.0</span>
+
+      <label for="tail">tail-domain mass (long-tail share)</label>
+      <input id="tail" type="range" min="0.05" max="0.50" step="0.01" value="0.20">
+      <span class="val" id="tailVal">0.20</span>
+    </div>
+
+    <table class="readout">
+      <tr><td class="k">recall of true near-duplicates</td>
+          <td class="v" id="recallOut">--</td></tr>
+      <tr><td class="k">fraction of corpus removed</td>
+          <td class="v" id="removedOut">--</td></tr>
+      <tr><td class="k">domain-coverage entropy H(domain | kept)</td>
+          <td class="v" id="entOut">--</td></tr>
+      <tr><td class="k">long-tail retention (niche domains)</td>
+          <td class="v" id="tailRetOut">--</td></tr>
+    </table>
+    <p class="note">
+      At &tau;=0.95 you remove near-copies; at &tau;=0.80 you remove topical
+      redundants; at &tau;&lt;0.70 you start deleting domain coverage. D4 observes
+      that aggressive clustering (high k) plus low &tau; preferentially eats the
+      long tail: MMLU creeps up while niche-domain evals fall. Use &tau; as a
+      downstream-eval-gated knob, not a fixed duplicate threshold.
+    </p>
+  </div>
+
+</div>
+
+<script>
+(function () {
+  // ---------- Left panel: LSH S-curve ----------
+  const rEl = document.getElementById('r');
+  const bEl = document.getElementById('b');
+  const jstarEl = document.getElementById('jstar');
+  const rVal = document.getElementById('rVal');
+  const bVal = document.getElementById('bVal');
+  const jstarVal = document.getElementById('jstarVal');
+  const mOut = document.getElementById('mOut');
+  const tOut = document.getElementById('tOut');
+  const pstarOut = document.getElementById('pstarOut');
+  const fpOut = document.getElementById('fpOut');
+  const fnOut = document.getElementById('fnOut');
+  const cvs = document.getElementById('lshCanvas');
+  const ctx = cvs.getContext('2d');
+
+  function pLSH(J, r, b) {
+    return 1 - Math.pow(1 - Math.pow(J, r), b);
+  }
+  function thresholdT(r, b) {
+    // root of 1 - (1 - t^r)^b = 0.5
+    // t = (1 - 0.5^(1/b))^(1/r)
+    return Math.pow(1 - Math.pow(0.5, 1 / b), 1 / r);
+  }
+
+  function drawLSH() {
+    const r = parseInt(rEl.value);
+    const b = parseInt(bEl.value);
+    const jstar = parseFloat(jstarEl.value);
+    rVal.textContent = r;
+    bVal.textContent = b;
+    jstarVal.textContent = jstar.toFixed(2);
+
+    const W = cvs.width, H = cvs.height;
+    ctx.clearRect(0, 0, W, H);
+    // axes
+    const pad = 34;
+    ctx.strokeStyle = '#aaa'; ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(pad, H - pad); ctx.lineTo(W - 8, H - pad);
+    ctx.moveTo(pad, H - pad); ctx.lineTo(pad, 8);
+    ctx.stroke();
+    // gridlines
+    ctx.strokeStyle = '#eee';
+    for (let g = 0; g <= 10; g++) {
+      const x = pad + (W - pad - 8) * g / 10;
+      const y = 8 + (H - pad - 8) * g / 10;
+      ctx.beginPath(); ctx.moveTo(x, 8); ctx.lineTo(x, H - pad); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(pad, y); ctx.lineTo(W - 8, y); ctx.stroke();
+    }
+    // axis labels
+    ctx.fillStyle = '#555'; ctx.font = '11px sans-serif';
+    ctx.fillText('J (Jaccard)', W - 70, H - 10);
+    ctx.save(); ctx.translate(10, H / 2); ctx.rotate(-Math.PI / 2);
+    ctx.fillText('P(collision)', -30, 0); ctx.restore();
+    for (let g = 0; g <= 10; g += 2) {
+      ctx.fillText((g / 10).toFixed(1), pad + (W - pad - 8) * g / 10 - 8, H - pad + 14);
+      ctx.fillText((1 - g / 10).toFixed(1), 6, 8 + (H - pad - 8) * g / 10 + 4);
+    }
+    // S-curve
+    ctx.strokeStyle = '#2a5db0'; ctx.lineWidth = 2.2;
+    ctx.beginPath();
+    let first = true;
+    for (let i = 0; i <= 400; i++) {
+      const J = i / 400;
+      const p = pLSH(J, r, b);
+      const x = pad + (W - pad - 8) * J;
+      const y = 8 + (H - pad - 8) * (1 - p);
+      if (first) { ctx.moveTo(x, y); first = false; }
+      else ctx.lineTo(x, y);
+    }
+    ctx.stroke();
+    // threshold line
+    const t = thresholdT(r, b);
+    if (t >= 0 && t <= 1) {
+      const xt = pad + (W - pad - 8) * t;
+      ctx.strokeStyle = '#c03030'; ctx.setLineDash([4, 4]); ctx.lineWidth = 1.5;
+      ctx.beginPath(); ctx.moveTo(xt, 8); ctx.lineTo(xt, H - pad); ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.fillStyle = '#c03030';
+      ctx.fillText('t (P=0.5)', xt + 4, 22);
+    }
+    // J* marker
+    const xj = pad + (W - pad - 8) * jstar;
+    const pj = pLSH(jstar, r, b);
+    const yj = 8 + (H - pad - 8) * (1 - pj);
+    ctx.fillStyle = '#1b5e20';
+    ctx.beginPath(); ctx.arc(xj, yj, 4, 0, 2 * Math.PI); ctx.fill();
+    ctx.fillText('J*=' + jstar.toFixed(2) + ', P=' + pj.toFixed(3), xj + 6, yj - 6);
+
+    // readout
+    mOut.textContent = (r * b).toString();
+    tOut.textContent = t.toFixed(4);
+    pstarOut.textContent = pj.toFixed(4);
+    fpOut.textContent = pLSH(0.5, r, b).toExponential(2);
+    fnOut.textContent = (1 - pLSH(0.9, r, b)).toExponential(2);
+  }
+
+  rEl.addEventListener('input', drawLSH);
+  bEl.addEventListener('input', drawLSH);
+  jstarEl.addEventListener('input', drawLSH);
+  drawLSH();
+
+  // ---------- Right panel: SemDeDup tradeoff ----------
+  const tauEl = document.getElementById('tau');
+  const kclustEl = document.getElementById('kclust');
+  const tailEl = document.getElementById('tail');
+  const tauVal = document.getElementById('tauVal');
+  const kclustVal = document.getElementById('kclustVal');
+  const tailVal = document.getElementById('tailVal');
+  const recallOut = document.getElementById('recallOut');
+  const removedOut = document.getElementById('removedOut');
+  const entOut = document.getElementById('entOut');
+  const tailRetOut = document.getElementById('tailRetOut');
+  const cvs2 = document.getElementById('semCanvas');
+  const ctx2 = cvs2.getContext('2d');
+
+  // Synthetic model of the SemDeDup tradeoff. Recall rises as tau drops;
+  // long-tail retention collapses below tau ~= 0.85, more sharply for bigger k.
+  function recallAt(tau) {
+    // logistic in -tau: lower tau -> more aggressive -> higher recall
+    const x = (0.95 - tau) * 18;
+    return 1 / (1 + Math.exp(-x));
+  }
+  function removedAt(tau, k) {
+    const base = Math.max(0, (1 - tau));
+    return Math.min(0.8, base * (0.6 + 0.4 * k));
+  }
+  function tailRetentionAt(tau, k, tailMass) {
+    // as tau drops below 0.85, tail dies proportionally to k
+    const drop = Math.max(0, (0.90 - tau)) * (0.8 + 0.6 * k);
+    return Math.max(0.02, 1 - drop);
+  }
+  function entropyAt(tau, k, tailMass) {
+    // toy domain entropy: H_max = log(10); shrinks as tail dies
+    const H_max = Math.log(10);
+    const tailRet = tailRetentionAt(tau, k, tailMass);
+    // convex combination of two-part distribution (head + tail)
+    const head = 1 - tailMass;
+    const tail = tailMass * tailRet;
+    const total = head + tail;
+    const pHead = head / total;
+    const pTail = tail / total;
+    let H = 0;
+    if (pHead > 0) H -= pHead * Math.log(pHead);
+    if (pTail > 0) H -= pTail * Math.log(pTail);
+    // scale toward H_max assuming 10 sub-domains in head
+    const effective = H + Math.log(9) * (pHead);
+    return Math.min(H_max, effective);
+  }
+
+  function drawSem() {
+    const tau = parseFloat(tauEl.value);
+    const k = parseFloat(kclustEl.value);
+    const tailMass = parseFloat(tailEl.value);
+    tauVal.textContent = tau.toFixed(2);
+    kclustVal.textContent = k.toFixed(1);
+    tailVal.textContent = tailMass.toFixed(2);
+
+    const W = cvs2.width, H = cvs2.height;
+    ctx2.clearRect(0, 0, W, H);
+    const pad = 34;
+    // axes
+    ctx2.strokeStyle = '#aaa'; ctx2.lineWidth = 1;
+    ctx2.beginPath();
+    ctx2.moveTo(pad, H - pad); ctx2.lineTo(W - 8, H - pad);
+    ctx2.moveTo(pad, H - pad); ctx2.lineTo(pad, 8);
+    ctx2.stroke();
+    ctx2.strokeStyle = '#eee';
+    for (let g = 0; g <= 10; g++) {
+      const x = pad + (W - pad - 8) * g / 10;
+      const y = 8 + (H - pad - 8) * g / 10;
+      ctx2.beginPath(); ctx2.moveTo(x, 8); ctx2.lineTo(x, H - pad); ctx2.stroke();
+      ctx2.beginPath(); ctx2.moveTo(pad, y); ctx2.lineTo(W - 8, y); ctx2.stroke();
+    }
+    ctx2.fillStyle = '#555'; ctx2.font = '11px sans-serif';
+    ctx2.fillText('tau (cosine threshold)', W - 170, H - 10);
+    ctx2.save(); ctx2.translate(10, H / 2); ctx2.rotate(-Math.PI / 2);
+    ctx2.fillText('fraction', -20, 0); ctx2.restore();
+    for (let g = 0; g <= 10; g += 2) {
+      const tg = 0.5 + 0.05 * g;
+      ctx2.fillText(tg.toFixed(2), pad + (W - pad - 8) * g / 10 - 10, H - pad + 14);
+      ctx2.fillText((1 - g / 10).toFixed(1), 6, 8 + (H - pad - 8) * g / 10 + 4);
+    }
+    // curves: recall (blue) and tail-retention (red)
+    function plotCurve(color, fn) {
+      ctx2.strokeStyle = color; ctx2.lineWidth = 2.2;
+      ctx2.beginPath();
+      let first = true;
+      for (let i = 0; i <= 200; i++) {
+        const tauI = 0.5 + 0.5 * i / 200;
+        const v = fn(tauI);
+        const x = pad + (W - pad - 8) * ((tauI - 0.5) / 0.5);
+        const y = 8 + (H - pad - 8) * (1 - v);
+        if (first) { ctx2.moveTo(x, y); first = false; }
+        else ctx2.lineTo(x, y);
+      }
+      ctx2.stroke();
+    }
+    plotCurve('#2a5db0', (tv) => recallAt(tv));
+    plotCurve('#c03030', (tv) => tailRetentionAt(tv, k, tailMass));
+
+    // current tau marker
+    const xTau = pad + (W - pad - 8) * ((tau - 0.5) / 0.5);
+    ctx2.strokeStyle = '#444'; ctx2.setLineDash([3, 3]); ctx2.lineWidth = 1.2;
+    ctx2.beginPath(); ctx2.moveTo(xTau, 8); ctx2.lineTo(xTau, H - pad); ctx2.stroke();
+    ctx2.setLineDash([]);
+
+    // legend
+    ctx2.fillStyle = '#2a5db0'; ctx2.fillRect(W - 160, 12, 10, 10);
+    ctx2.fillStyle = '#333'; ctx2.fillText('recall of duplicates', W - 146, 22);
+    ctx2.fillStyle = '#c03030'; ctx2.fillRect(W - 160, 30, 10, 10);
+    ctx2.fillStyle = '#333'; ctx2.fillText('long-tail retention', W - 146, 40);
+
+    // readouts
+    const rec = recallAt(tau);
+    const rem = removedAt(tau, k);
+    const ret = tailRetentionAt(tau, k, tailMass);
+    const H_ = entropyAt(tau, k, tailMass);
+    recallOut.textContent = (rec * 100).toFixed(1) + ' %';
+    removedOut.textContent = (rem * 100).toFixed(1) + ' %';
+    entOut.textContent = H_.toFixed(3) + ' nats';
+    tailRetOut.textContent = (ret * 100).toFixed(1) + ' %';
+  }
+
+  tauEl.addEventListener('input', drawSem);
+  kclustEl.addEventListener('input', drawSem);
+  tailEl.addEventListener('input', drawSem);
+  drawSem();
+})();
+</script>
+
+</body>
+</html>

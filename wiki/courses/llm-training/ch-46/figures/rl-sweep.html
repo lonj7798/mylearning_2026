@@ -1,0 +1,306 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>RL Sweep Cube - beta / KL x training step x metric</title>
+<style>
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+         max-width: 1180px; margin: 1.6em auto; padding: 0 1em; color: #1f1f1f;
+         background: #fafafa; }
+  h1 { font-size: 1.3em; margin-bottom: 0.25em; }
+  .subtitle { color: #5a5a5a; margin-top: 0; font-size: 0.92em; line-height: 1.5; }
+  .layout { display: grid; grid-template-columns: 1fr 360px; gap: 1.2em; margin-top: 1em; }
+  .panel { border: 1px solid #dcdcdc; border-radius: 6px; background: #fff;
+           padding: 0.9em 1em; }
+  h2 { font-size: 1.0em; margin: 0 0 0.6em 0; color: #2b2b2b;
+       border-bottom: 1px solid #ececec; padding-bottom: 0.3em; }
+  svg.plot { width: 100%; height: 380px; display: block; background: #fcfcfc;
+             border: 1px solid #ececec; border-radius: 4px; }
+  .axis { stroke: #666; stroke-width: 1; fill: none; }
+  .axis-text { font-family: 'SF Mono', Menlo, monospace; font-size: 10px; fill: #444; }
+  .grid { stroke: #eee; stroke-width: 1; }
+  .curve { fill: none; stroke-width: 2.2; }
+  .curve.c0 { stroke: #2e5aa8; }
+  .curve.c1 { stroke: #2f8a4a; }
+  .curve.c2 { stroke: #c4793d; }
+  .legend-item { font-family: 'SF Mono', Menlo, monospace; font-size: 11px; fill: #222; }
+  .controls { display: flex; flex-direction: column; gap: 0.55em; margin-bottom: 0.6em; }
+  .controls label { font-family: 'SF Mono', Menlo, monospace; font-size: 0.85em;
+                    color: #333; }
+  .controls select, .controls input[type=range] {
+    width: 100%; font-family: 'SF Mono', Menlo, monospace; font-size: 0.88em; }
+  .step-readout { font-family: 'SF Mono', Menlo, monospace; font-size: 0.82em;
+                  color: #5a6a80; margin-top: -0.15em; }
+  .detail-title { font-family: 'SF Mono', Menlo, monospace; font-size: 0.95em;
+                  color: #204080; margin: 0 0 0.4em 0; }
+  .detail-body { font-size: 0.86em; color: #333; line-height: 1.5;
+                 background: #f5f7fb; padding: 0.55em 0.75em; border-radius: 4px;
+                 border-left: 3px solid #2e5aa8; }
+  .detail-src { font-size: 0.78em; color: #5a6a80; margin-top: 0.4em; }
+  code { background: #eef; padding: 1px 4px; border-radius: 3px;
+         font-family: 'SF Mono', Menlo, monospace; font-size: 0.85em; }
+</style>
+</head>
+<body>
+
+<h1>RL Sweep Cube</h1>
+<p class="subtitle">
+  Three axes: <code>sweep-value</code> (beta for DPO / beta_KL for RLVR), <code>training-step</code>,
+  and <code>metric</code>. Pick option + metric, drag the step slider; three overlaid curves
+  (one per sweep cell) show illustrative shapes. Curves are illustrative, directions
+  are attested by <code>dpo</code>, <code>grpo</code>, <code>dr-grpo</code>,
+  <code>rlvr-tulu3</code>, and <code>entropy-mechanism-llm-rl</code>.
+</p>
+
+<div class="layout">
+
+<div class="panel">
+  <h2>Curves</h2>
+  <svg id="plot" class="plot" viewBox="0 0 720 380" preserveAspectRatio="xMidYMid meet"></svg>
+</div>
+
+<div class="panel">
+  <h2>Sweep controls</h2>
+  <div class="controls">
+    <label>Option
+      <select id="opt">
+        <option value="A">A - DPO (sweep beta in {0.05, 0.1, 0.3})</option>
+        <option value="B">B - RLVR (sweep beta_KL in {0.01, 0.05, 0.1})</option>
+      </select>
+    </label>
+    <label>Metric
+      <select id="metric">
+        <option value="reward">reward_mean (DPO margin / RLVR pass-rate)</option>
+        <option value="entropy">entropy H(pi)</option>
+        <option value="kl">KL(pi || pi_ref)</option>
+        <option value="len">response length (mean tokens)</option>
+      </select>
+    </label>
+    <label>Training step: <span id="step-v">500</span> / 1000
+      <input id="step" type="range" min="0" max="1000" value="500" step="10">
+    </label>
+    <div class="step-readout" id="readout">values at step 500</div>
+  </div>
+
+  <h2>Scenario</h2>
+  <p class="detail-title" id="d-title">-</p>
+  <div class="detail-body" id="d-just">-</div>
+  <p class="detail-src" id="d-src">-</p>
+</div>
+
+</div>
+
+<script>
+// Grid: 0..1000 training steps in 10-step increments.
+const STEPS = Array.from({length: 101}, (_, i) => i * 10);
+const W = 720, H = 380, MX = 48, MY = 26;
+const svg = document.getElementById("plot");
+const NS = "http://www.w3.org/2000/svg";
+
+// Cell shapes are illustrative but direction-attested.
+// Helpers for shape primitives.
+const sat   = (t, t_half, ceil) => ceil * (1 - Math.exp(-t / t_half));
+const decay = (t, t_half, floor, ceil) => floor + (ceil - floor) * Math.exp(-t / t_half);
+const spike_then_flat = (t, peak_t, peak_v, tail_v) => {
+  const up = peak_v * (t / peak_t);
+  const down = peak_v - (peak_v - tail_v) * Math.min(1, (t - peak_t) / peak_t);
+  return t < peak_t ? up : down;
+};
+
+// Scenarios keyed by "opt-metric-cell_idx".
+// For each, returns array of 101 values over STEPS.
+const SERIES = {};
+function compute() {
+  // ----- Option A: DPO, beta in {0.05, 0.1, 0.3} -----
+  SERIES["A-reward-0"] = STEPS.map(t => spike_then_flat(t, 300, 0.9, 0.55));   // beta=0.05: peak then drift
+  SERIES["A-reward-1"] = STEPS.map(t => sat(t, 400, 0.65));                     // beta=0.1: clean saturation
+  SERIES["A-reward-2"] = STEPS.map(t => sat(t, 700, 0.32));                     // beta=0.3: underfits
+  SERIES["A-entropy-0"] = STEPS.map(t => decay(t, 180, 0.05, 1.2));              // beta=0.05: collapse-ish
+  SERIES["A-entropy-1"] = STEPS.map(t => decay(t, 600, 0.55, 1.2));              // beta=0.1: gentle
+  SERIES["A-entropy-2"] = STEPS.map(t => decay(t, 1400, 0.95, 1.2));             // beta=0.3: barely moves
+  SERIES["A-kl-0"]      = STEPS.map(t => sat(t, 300, 9.0));                       // beta=0.05: runaway KL
+  SERIES["A-kl-1"]      = STEPS.map(t => sat(t, 500, 2.6));                       // beta=0.1: bounded
+  SERIES["A-kl-2"]      = STEPS.map(t => sat(t, 700, 0.6));                       // beta=0.3: very bounded
+  SERIES["A-len-0"]     = STEPS.map(t => 220 + sat(t, 400, 120));                 // length inflation
+  SERIES["A-len-1"]     = STEPS.map(t => 220 + sat(t, 900, 25));                  // flat
+  SERIES["A-len-2"]     = STEPS.map(t => 220 + sat(t, 900, 5));                   // flat
+
+  // ----- Option B: RLVR, beta_KL in {0.01, 0.05, 0.1} -----
+  // "reward" for RLVR = verifier pass-rate on training prompts.
+  SERIES["B-reward-0"] = STEPS.map(t => sat(t, 140, 0.42));                       // KL=0.01: fast then collapse ceiling
+  SERIES["B-reward-1"] = STEPS.map(t => sat(t, 300, 0.63));                       // KL=0.05: clean
+  SERIES["B-reward-2"] = STEPS.map(t => sat(t, 600, 0.48));                       // KL=0.1: slow, underfits
+  SERIES["B-entropy-0"] = STEPS.map(t => decay(t, 110, 0.04, 1.6));                // KL=0.01: collapse
+  SERIES["B-entropy-1"] = STEPS.map(t => decay(t, 550, 0.55, 1.6));                // KL=0.05: healthy
+  SERIES["B-entropy-2"] = STEPS.map(t => decay(t, 1500, 1.05, 1.6));               // KL=0.1: very wide
+  SERIES["B-kl-0"]      = STEPS.map(t => sat(t, 200, 12.0));                        // runaway
+  SERIES["B-kl-1"]      = STEPS.map(t => sat(t, 500, 3.2));                         // near target
+  SERIES["B-kl-2"]      = STEPS.map(t => sat(t, 800, 0.9));                         // tightly held
+  SERIES["B-len-0"]     = STEPS.map(t => 280 + sat(t, 500, 30));                    // modest (dr_grpo flattens)
+  SERIES["B-len-1"]     = STEPS.map(t => 280 + sat(t, 900, 15));
+  SERIES["B-len-2"]     = STEPS.map(t => 280 + sat(t, 900, 8));
+}
+compute();
+
+// Scenario strings keyed by opt-metric.
+const SCEN = {
+  "A-reward": {
+    title: "DPO implicit-reward margin vs step",
+    just: "beta=0.05 (blue): margin peaks near step ~300 then DRIFTS as pi moves too far from pi_ref; combined with the entropy view, this is the canonical beta-too-low length-hack regime. beta=0.1 (green): clean monotone saturation; the default recipe. beta=0.3 (orange): anchor dominates, margin barely moves (underfit preference).",
+    src: "Attested: dpo (Eq. 7 + KL-budget role of beta); reward-hacking-taxonomy (length bias)"
+  },
+  "A-entropy": {
+    title: "DPO policy entropy vs step",
+    just: "beta=0.05: entropy drops sharply; per entropy-mechanism-llm-rl, below H ~ 0.1 nats you are in the R = -a*exp(H) + b saturation regime. beta=0.1: gentle decline, stays healthy. beta=0.3: entropy almost unchanged -- pi barely moves, which is why its reward barely moves.",
+    src: "Attested: entropy-mechanism-llm-rl (collapse law); dpo (beta as KL budget)"
+  },
+  "A-kl": {
+    title: "DPO KL(pi || pi_ref)",
+    just: "DPO's beta controls exactly this curve. beta=0.05: KL runs away -- the implicit reward r_hat = beta log(pi/pi_ref) is amplified by low beta inside the sigmoid. beta=0.1: bounded around 2-3 nats. beta=0.3: tight anchor.",
+    src: "Attested: dpo (Section 4, beta-KL identity)"
+  },
+  "A-len": {
+    title: "DPO response length",
+    just: "beta=0.05 grows response length ~50% across training -- the textbook DPO length hack. beta=0.1 and beta=0.3 stay flat. The SimPO paper and reward-hacking-taxonomy both name this as the default-to-watch failure.",
+    src: "Attested: dpo (Hyperparameters table, length-normalization caveat); reward-hacking-taxonomy"
+  },
+  "B-reward": {
+    title: "RLVR verifier pass-rate on training prompts",
+    just: "KL=0.01 (blue): fast early rise, then ceiling -- entropy collapses first (see entropy view) so exploration dies before solving harder buckets. KL=0.05 (green): best trajectory; clean saturation at a higher ceiling. KL=0.1 (orange): slow and underfits; the anchor is too tight for the policy to move.",
+    src: "Attested: rlvr-tulu3 (beta_KL ~ 0.04 recipe); entropy-mechanism-llm-rl (ceiling law)"
+  },
+  "B-entropy": {
+    title: "RLVR policy entropy vs step",
+    just: "KL=0.01: collapse within ~200 steps -- matches Cui 2025 Figure 1 shape; KL=0.05: bounded decline; KL=0.1: stays wide, almost static. The entropy curve is what openrlhf-entropy-debugging says to inspect FIRST in triage.",
+    src: "Attested: entropy-mechanism-llm-rl (Fig 1); openrlhf-entropy-debugging (triage step 1)"
+  },
+  "B-kl": {
+    title: "RLVR KL(pi || pi_ref)",
+    just: "With GRPO, beta_KL inside the loss (Eq. 3) bounds this directly. KL=0.01: weakly bounded; KL=0.05: near a ~3-nat target (Tulu 3 operating point); KL=0.1: tightly held, which is why the corresponding reward underfits.",
+    src: "Attested: grpo (Eq. 3 with k3 KL estimator); rlvr-tulu3 (operating point)"
+  },
+  "B-len": {
+    title: "RLVR response length",
+    just: "Illustrative curves assume Dr.GRPO aggregation (loss_type='dr_grpo'). With vanilla GRPO, the KL=0.01 curve would inflate ~30-50% and the KL=0.05 curve would inflate ~15% -- the classic Liu 2025 length bias. Switching aggregation is the single-line fix.",
+    src: "Attested: dr-grpo (Figure 1, ~30% shorter completions); trl-grpo (_compute_loss loss_type branches)"
+  }
+};
+
+const LABELS = {
+  A: ["beta=0.05", "beta=0.1", "beta=0.3"],
+  B: ["KL=0.01", "KL=0.05", "KL=0.1"]
+};
+const YLABEL = {
+  reward: "reward (margin or pass-rate)",
+  entropy: "entropy H (nats)",
+  kl: "KL(pi || pi_ref)",
+  len: "response length (tokens)"
+};
+
+function render() {
+  const opt = document.getElementById("opt").value;
+  const metric = document.getElementById("metric").value;
+  const step = parseInt(document.getElementById("step").value, 10);
+
+  // Pull the three series.
+  const series = [0,1,2].map(i => SERIES[`${opt}-${metric}-${i}`]);
+  const allVals = series.flat();
+  const yMin = Math.min(0, ...allVals);
+  const yMax = Math.max(...allVals) * 1.05;
+
+  // Clear svg.
+  while (svg.firstChild) svg.removeChild(svg.firstChild);
+
+  // Axes.
+  const xOf = s => MX + (s / 1000) * (W - 2 * MX);
+  const yOf = v => H - MY - ((v - yMin) / (yMax - yMin)) * (H - 2 * MY);
+
+  // Grid + axis lines.
+  for (let g = 0; g <= 4; g++) {
+    const y = MY + g * (H - 2 * MY) / 4;
+    const ln = document.createElementNS(NS, "line");
+    ln.setAttribute("x1", MX); ln.setAttribute("y1", y);
+    ln.setAttribute("x2", W - MX); ln.setAttribute("y2", y);
+    ln.setAttribute("class", "grid");
+    svg.appendChild(ln);
+    const t = document.createElementNS(NS, "text");
+    t.setAttribute("x", 6); t.setAttribute("y", y + 3);
+    t.setAttribute("class", "axis-text");
+    t.textContent = (yMax - g * (yMax - yMin) / 4).toFixed(2);
+    svg.appendChild(t);
+  }
+  for (let g = 0; g <= 5; g++) {
+    const x = MX + g * (W - 2 * MX) / 5;
+    const t = document.createElementNS(NS, "text");
+    t.setAttribute("x", x - 10); t.setAttribute("y", H - 8);
+    t.setAttribute("class", "axis-text");
+    t.textContent = `${g * 200}`;
+    svg.appendChild(t);
+  }
+  const xaxis = document.createElementNS(NS, "line");
+  xaxis.setAttribute("x1", MX); xaxis.setAttribute("y1", H - MY);
+  xaxis.setAttribute("x2", W - MX); xaxis.setAttribute("y2", H - MY);
+  xaxis.setAttribute("class", "axis"); svg.appendChild(xaxis);
+  const yaxis = document.createElementNS(NS, "line");
+  yaxis.setAttribute("x1", MX); yaxis.setAttribute("y1", MY);
+  yaxis.setAttribute("x2", MX); yaxis.setAttribute("y2", H - MY);
+  yaxis.setAttribute("class", "axis"); svg.appendChild(yaxis);
+  // Axis labels.
+  const xlbl = document.createElementNS(NS, "text");
+  xlbl.setAttribute("x", W / 2 - 40); xlbl.setAttribute("y", H - 2);
+  xlbl.setAttribute("class", "axis-text"); xlbl.textContent = "training step";
+  svg.appendChild(xlbl);
+  const ylbl = document.createElementNS(NS, "text");
+  ylbl.setAttribute("x", 8); ylbl.setAttribute("y", 14);
+  ylbl.setAttribute("class", "axis-text"); ylbl.textContent = YLABEL[metric];
+  svg.appendChild(ylbl);
+
+  // Draw curves.
+  series.forEach((s, i) => {
+    let d = "";
+    s.forEach((v, k) => {
+      const x = xOf(STEPS[k]), y = yOf(v);
+      d += (k === 0 ? "M" : "L") + x.toFixed(1) + "," + y.toFixed(1);
+    });
+    const p = document.createElementNS(NS, "path");
+    p.setAttribute("d", d);
+    p.setAttribute("class", `curve c${i}`);
+    svg.appendChild(p);
+    // Legend swatch.
+    const lg = document.createElementNS(NS, "text");
+    lg.setAttribute("x", W - MX - 90); lg.setAttribute("y", MY + 14 + i * 15);
+    lg.setAttribute("class", "legend-item");
+    lg.setAttribute("fill", i === 0 ? "#2e5aa8" : i === 1 ? "#2f8a4a" : "#c4793d");
+    lg.textContent = LABELS[opt][i];
+    svg.appendChild(lg);
+  });
+
+  // Step cursor.
+  const sx = xOf(step);
+  const cur = document.createElementNS(NS, "line");
+  cur.setAttribute("x1", sx); cur.setAttribute("y1", MY);
+  cur.setAttribute("x2", sx); cur.setAttribute("y2", H - MY);
+  cur.setAttribute("stroke", "#d06060"); cur.setAttribute("stroke-dasharray", "4 3");
+  cur.setAttribute("stroke-width", 1.2);
+  svg.appendChild(cur);
+
+  // Step readout: interpolate the three series to the step.
+  const k = Math.round(step / 10);
+  const vals = series.map(s => s[k].toFixed(3));
+  document.getElementById("readout").textContent =
+    `${LABELS[opt][0]}=${vals[0]}   ${LABELS[opt][1]}=${vals[1]}   ${LABELS[opt][2]}=${vals[2]}`;
+  document.getElementById("step-v").textContent = step;
+
+  // Scenario text.
+  const key = `${opt}-${metric}`;
+  document.getElementById("d-title").textContent = SCEN[key].title;
+  document.getElementById("d-just").textContent = SCEN[key].just;
+  document.getElementById("d-src").textContent = SCEN[key].src;
+}
+
+["opt","metric","step"].forEach(id => document.getElementById(id).addEventListener("input", render));
+render();
+</script>
+
+</body>
+</html>

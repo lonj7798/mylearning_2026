@@ -1,0 +1,331 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Synthetic-SFT Filter Cascade — interactive Sankey</title>
+<style>
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+         max-width: 1200px; margin: 1.6em auto; padding: 0 1em; color: #1f1f1f;
+         background: #fafafa; }
+  h1 { font-size: 1.3em; margin-bottom: 0.25em; }
+  .subtitle { color: #5a5a5a; margin-top: 0; font-size: 0.92em; line-height: 1.5; }
+  .layout { display: grid; grid-template-columns: 1fr 340px; gap: 1.2em;
+            margin-top: 1em; }
+  .panel { border: 1px solid #dcdcdc; border-radius: 6px; background: #fff;
+           padding: 0.9em 1em; }
+  h2 { font-size: 1.0em; margin: 0 0 0.6em 0; color: #2b2b2b;
+       border-bottom: 1px solid #ececec; padding-bottom: 0.3em; }
+  svg { width: 100%; height: 420px; display: block; }
+  .stage-rect { cursor: pointer; transition: stroke-width 0.15s; }
+  .stage-rect:hover { stroke-width: 3; }
+  .stage-label { font-family: 'SF Mono', Menlo, monospace; font-size: 12px;
+                 fill: #1b1b1b; text-anchor: middle; font-weight: 600; }
+  .stage-count { font-family: 'SF Mono', Menlo, monospace; font-size: 14px;
+                 fill: #1b1b1b; text-anchor: middle; }
+  .stage-rate  { font-family: 'SF Mono', Menlo, monospace; font-size: 10px;
+                 fill: #666; text-anchor: middle; }
+  .flow-path { fill-opacity: 0.55; stroke: none; }
+  .reject-path { fill: #d0a0a0; fill-opacity: 0.35; stroke: none; }
+  .slider-row { margin: 0.55em 0; font-size: 0.88em; }
+  .slider-row label { display: block; color: #333; margin-bottom: 0.2em; }
+  .slider-row .row { display: flex; align-items: center; gap: 0.5em; }
+  .slider-row input[type=range] { flex: 1; }
+  .slider-row .val { font-family: 'SF Mono', Menlo, monospace; font-size: 0.88em;
+                     color: #204080; min-width: 3.2em; text-align: right; }
+  .legend { font-size: 0.82em; color: #444; margin-top: 0.6em; line-height: 1.6; }
+  .legend .chip { display: inline-block; width: 10px; height: 10px;
+                  border-radius: 2px; margin-right: 4px; vertical-align: middle; }
+  .notes { font-size: 0.85em; color: #444; line-height: 1.5; margin-top: 0.4em;
+           background: #f5f7fb; padding: 0.55em 0.75em; border-radius: 4px;
+           border-left: 3px solid #2e5aa8; }
+  .tooltip { position: absolute; background: #fff; border: 1px solid #ccc;
+             border-radius: 4px; padding: 0.45em 0.65em; font-size: 0.82em;
+             pointer-events: none; box-shadow: 0 2px 6px rgba(0,0,0,0.1);
+             display: none; max-width: 260px; line-height: 1.45; }
+  code { background: #eef; padding: 1px 4px; border-radius: 3px;
+         font-family: 'SF Mono', Menlo, monospace; font-size: 0.85em; }
+</style>
+</head>
+<body>
+
+<h1>Synthetic-SFT Filter Cascade</h1>
+<p class="subtitle">
+  Horizontal Sankey. Starting count: <span id="rawCount">5000</span> raw instructions from
+  <code>self-instruct + evol-instruct</code>. Each stage has a slider controlling its pass-rate.
+  The blue-green flow is <strong>accepted</strong>; the red-brown flow diverted downward is
+  <strong>rejected</strong>. Hover a stage box to see its rejection reason profile; click to
+  pin the explanation.
+</p>
+
+<div class="layout">
+
+<div class="panel">
+  <h2>Cascade flow</h2>
+  <svg id="sankey" viewBox="0 0 900 420" preserveAspectRatio="xMidYMid meet"></svg>
+  <div class="legend">
+    <span class="chip" style="background:#4a8fb8"></span> accepted &nbsp;
+    <span class="chip" style="background:#d0a0a0"></span> rejected &nbsp;
+    <span class="chip" style="background:#2e5aa8"></span> stage box (height = survivors)
+  </div>
+</div>
+
+<div class="panel">
+  <h2>Stage thresholds</h2>
+
+  <div class="slider-row">
+    <label>Raw pool size</label>
+    <div class="row">
+      <input type="range" id="s_raw" min="500" max="15000" step="500" value="5000">
+      <span class="val" id="v_raw">5000</span>
+    </div>
+  </div>
+
+  <div class="slider-row">
+    <label>Format pass-rate (strictness: low&rarr;high)</label>
+    <div class="row">
+      <input type="range" id="s_format" min="0.50" max="0.95" step="0.01" value="0.78">
+      <span class="val" id="v_format">0.78</span>
+    </div>
+  </div>
+
+  <div class="slider-row">
+    <label>IFD keep-fraction (top-K by difficulty &lt; 1)</label>
+    <div class="row">
+      <input type="range" id="s_ifd" min="0.05" max="0.50" step="0.01" value="0.15">
+      <span class="val" id="v_ifd">0.15</span>
+    </div>
+  </div>
+
+  <div class="slider-row">
+    <label>MinHash Jaccard threshold (0=loose, 1=strict)</label>
+    <div class="row">
+      <input type="range" id="s_dedup" min="0.50" max="0.95" step="0.01" value="0.80">
+      <span class="val" id="v_dedup">0.80</span>
+    </div>
+  </div>
+
+  <div class="slider-row">
+    <label>Verifier pass-rate (reasoning/tool subset only)</label>
+    <div class="row">
+      <input type="range" id="s_verify" min="0.40" max="0.98" step="0.01" value="0.75">
+      <span class="val" id="v_verify">0.75</span>
+    </div>
+  </div>
+
+  <div class="notes" id="notes">
+    Click any stage box to pin an explanation here.
+  </div>
+</div>
+
+</div>
+
+<div class="tooltip" id="tooltip"></div>
+
+<script>
+// ---- Cascade model ----------------------------------------------------------
+// Survival at each stage is the product of previous survival * this stage's pass-rate.
+// Dedup survival is 1 - (1 - threshold)*collapseFactor because tighter threshold
+// keeps more; this is a pedagogical approximation of [[deduplicating-training-data]]'s
+// LSH behaviour (b=20, r=450 -> ~0.8 Jaccard).
+
+const stages = [
+  { id:"raw",    label:"RAW",         desc:"Teacher outputs before any filter.",
+                 reject:"Generated by self-instruct (~70%) + evol-instruct (~30%)." },
+  { id:"format", label:"FORMAT",      desc:"Strip empties, length outliers, multimodal refs, input==output.",
+                 reject:"Dominant rejection: empty output, input==output, >2K-token runaway." },
+  { id:"ifd",    label:"IFD",         desc:"Keep top-K of samples with PPL(a|q)/PPL(a) < 1.",
+                 reject:"Dominant rejection: IFD >= 1 (instruction not informative to response)." },
+  { id:"dedup",  label:"MINHASH",     desc:"5-gram shingles, MinHash-LSH, threshold J.",
+                 reject:"Dominant rejection: paraphrased evol-instruct near-duplicates." },
+  { id:"verify", label:"VERIFIER",    desc:"3-layer: format(JSON)+exec+judge (reasoning/tool subset).",
+                 reject:"Dominant rejection: execution exception (timeout or wrong arg type)." },
+];
+
+function computeFlow(params) {
+  const raw = params.raw;
+  const afterFormat = Math.round(raw * params.format);
+  const afterIfd    = Math.round(afterFormat * params.ifd);
+  // dedup: looser threshold drops more; survival = 0.55 + 0.45*threshold
+  const dedupSurv   = 0.55 + 0.45 * params.dedup;
+  const afterDedup  = Math.round(afterIfd * dedupSurv);
+  // verifier applies only to the ~40% reasoning/tool subset
+  const toolSubset  = Math.round(afterDedup * 0.40);
+  const toolKept    = Math.round(toolSubset * params.verify);
+  const afterVerify = afterDedup - toolSubset + toolKept;
+  return { raw, format: afterFormat, ifd: afterIfd, dedup: afterDedup, verify: afterVerify };
+}
+
+// ---- SVG layout -------------------------------------------------------------
+const SVG_W = 900, SVG_H = 420;
+const MARGIN_X = 40, MARGIN_Y = 30;
+const N = stages.length;
+const colGap = (SVG_W - 2 * MARGIN_X) / (N - 1);
+const BOX_W = 84;
+const MAX_BOX_H = SVG_H - 2 * MARGIN_Y - 40;
+const CENTER_Y = SVG_H / 2;
+
+const svg = document.getElementById("sankey");
+const tooltip = document.getElementById("tooltip");
+const notes = document.getElementById("notes");
+let pinnedStage = null;
+
+function drawCascade(flow) {
+  svg.innerHTML = "";
+  // Normalize heights
+  const maxCount = flow.raw;
+  const heights = stages.map(s => Math.max(6, (flow[s.id] / maxCount) * MAX_BOX_H));
+
+  // Pre-compute stage coordinates
+  const boxes = stages.map((s, i) => {
+    const cx = MARGIN_X + i * colGap;
+    const h = heights[i];
+    return { id: s.id, label: s.label, x: cx - BOX_W/2, y: CENTER_Y - h/2,
+             w: BOX_W, h, count: flow[s.id] };
+  });
+
+  // Flow paths between consecutive boxes (accepted = narrowing trapezoid)
+  for (let i = 0; i < N - 1; i++) {
+    const a = boxes[i], b = boxes[i+1];
+    const x0 = a.x + a.w, x1 = b.x;
+    const y0top = a.y, y0bot = a.y + a.h;
+    const y1top = b.y, y1bot = b.y + b.h;
+    // Smooth curve using cubic bezier
+    const cx0 = x0 + (x1 - x0) * 0.45;
+    const cx1 = x0 + (x1 - x0) * 0.55;
+    const d = `M ${x0} ${y0top} C ${cx0} ${y0top} ${cx1} ${y1top} ${x1} ${y1top}
+               L ${x1} ${y1bot} C ${cx1} ${y1bot} ${cx0} ${y0bot} ${x0} ${y0bot} Z`;
+    const p = document.createElementNS("http://www.w3.org/2000/svg", "path");
+    p.setAttribute("d", d);
+    p.setAttribute("class", "flow-path");
+    p.setAttribute("fill", "#4a8fb8");
+    svg.appendChild(p);
+
+    // Reject flow: diverted downward below the box
+    if (a.count > b.count) {
+      const rejectH = (a.count - b.count) / maxCount * MAX_BOX_H;
+      const rTop = y0bot;
+      const rBot = y0bot + rejectH;
+      const rx1 = x1 - 6;
+      const dR = `M ${x0} ${rTop} C ${cx0} ${rTop} ${cx1} ${rBot} ${rx1} ${rBot}
+                  L ${rx1} ${rBot + 4} L ${x0} ${rTop + 4} Z`;
+      const pR = document.createElementNS("http://www.w3.org/2000/svg", "path");
+      pR.setAttribute("d", dR);
+      pR.setAttribute("class", "reject-path");
+      svg.appendChild(pR);
+    }
+  }
+
+  // Boxes and labels
+  boxes.forEach((b, i) => {
+    const g = document.createElementNS("http://www.w3.org/2000/svg", "g");
+    const r = document.createElementNS("http://www.w3.org/2000/svg", "rect");
+    r.setAttribute("x", b.x); r.setAttribute("y", b.y);
+    r.setAttribute("width", b.w); r.setAttribute("height", b.h);
+    r.setAttribute("rx", 4);
+    r.setAttribute("class", "stage-rect");
+    r.setAttribute("fill", "#eaf0f8");
+    r.setAttribute("stroke", "#2e5aa8");
+    r.setAttribute("stroke-width", pinnedStage === b.id ? 3 : 1.4);
+    g.appendChild(r);
+
+    const t1 = document.createElementNS("http://www.w3.org/2000/svg", "text");
+    t1.setAttribute("x", b.x + b.w/2); t1.setAttribute("y", b.y + b.h + 18);
+    t1.setAttribute("class", "stage-label");
+    t1.textContent = b.label;
+    g.appendChild(t1);
+
+    const t2 = document.createElementNS("http://www.w3.org/2000/svg", "text");
+    t2.setAttribute("x", b.x + b.w/2); t2.setAttribute("y", b.y + b.h + 34);
+    t2.setAttribute("class", "stage-count");
+    t2.textContent = b.count.toLocaleString();
+    g.appendChild(t2);
+
+    if (i > 0) {
+      const prev = boxes[i-1].count;
+      const rate = prev > 0 ? (b.count / prev * 100).toFixed(1) + "%" : "-";
+      const t3 = document.createElementNS("http://www.w3.org/2000/svg", "text");
+      t3.setAttribute("x", b.x + b.w/2); t3.setAttribute("y", b.y - 6);
+      t3.setAttribute("class", "stage-rate");
+      t3.textContent = "pass " + rate;
+      g.appendChild(t3);
+    }
+
+    g.addEventListener("mouseenter", e => showTooltip(e, stages[i]));
+    g.addEventListener("mousemove", moveTooltip);
+    g.addEventListener("mouseleave", hideTooltip);
+    g.addEventListener("click", () => pinStage(stages[i]));
+    svg.appendChild(g);
+  });
+
+  // Final survival summary text
+  const finalT = document.createElementNS("http://www.w3.org/2000/svg", "text");
+  finalT.setAttribute("x", SVG_W - MARGIN_X);
+  finalT.setAttribute("y", MARGIN_Y - 8);
+  finalT.setAttribute("text-anchor", "end");
+  finalT.setAttribute("class", "stage-rate");
+  const overall = flow.raw > 0 ? (flow.verify / flow.raw * 100).toFixed(1) : "-";
+  finalT.textContent = `end-to-end survival: ${overall}%`;
+  svg.appendChild(finalT);
+}
+
+function showTooltip(e, stage) {
+  tooltip.style.display = "block";
+  tooltip.innerHTML = `<strong>${stage.label}</strong><br>${stage.desc}<br>` +
+                      `<em style="color:#7a4a4a">${stage.reject}</em>`;
+}
+function moveTooltip(e) {
+  tooltip.style.left = (e.pageX + 14) + "px";
+  tooltip.style.top  = (e.pageY + 10) + "px";
+}
+function hideTooltip() { tooltip.style.display = "none"; }
+
+function pinStage(stage) {
+  pinnedStage = stage.id;
+  notes.innerHTML = `<strong>${stage.label}</strong> &mdash; ${stage.desc}` +
+                    `<br><span style="color:#7a4a4a">${stage.reject}</span>`;
+  run();
+}
+
+// ---- Wiring -----------------------------------------------------------------
+const inputs = {
+  raw:    document.getElementById("s_raw"),
+  format: document.getElementById("s_format"),
+  ifd:    document.getElementById("s_ifd"),
+  dedup:  document.getElementById("s_dedup"),
+  verify: document.getElementById("s_verify"),
+};
+const vals = {
+  raw:    document.getElementById("v_raw"),
+  format: document.getElementById("v_format"),
+  ifd:    document.getElementById("v_ifd"),
+  dedup:  document.getElementById("v_dedup"),
+  verify: document.getElementById("v_verify"),
+};
+
+function readParams() {
+  return {
+    raw:    parseInt(inputs.raw.value),
+    format: parseFloat(inputs.format.value),
+    ifd:    parseFloat(inputs.ifd.value),
+    dedup:  parseFloat(inputs.dedup.value),
+    verify: parseFloat(inputs.verify.value),
+  };
+}
+
+function run() {
+  const p = readParams();
+  vals.raw.textContent    = p.raw.toLocaleString();
+  vals.format.textContent = p.format.toFixed(2);
+  vals.ifd.textContent    = p.ifd.toFixed(2);
+  vals.dedup.textContent  = p.dedup.toFixed(2);
+  vals.verify.textContent = p.verify.toFixed(2);
+  document.getElementById("rawCount").textContent = p.raw.toLocaleString();
+  drawCascade(computeFlow(p));
+}
+
+Object.values(inputs).forEach(el => el.addEventListener("input", run));
+run();
+</script>
+
+</body>
+</html>

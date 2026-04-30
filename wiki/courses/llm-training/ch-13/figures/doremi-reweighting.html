@@ -1,0 +1,282 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>DoReMi — Group-DRO reweighting across domains</title>
+<style>
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; max-width: 1100px; margin: 1.4em auto; padding: 0 1em; color: #222; background: #fafafa; }
+  h1 { font-size: 1.3em; margin-bottom: 0.15em; }
+  .subtitle { color: #666; margin-top: 0; font-size: 0.92em; }
+  .controls { display: flex; flex-wrap: wrap; gap: 1.2em; align-items: center; margin: 0.9em 0; padding: 0.7em 1em; background: #fff; border: 1px solid #dcdcdc; border-radius: 6px; }
+  .control { display: flex; flex-direction: column; font-size: 0.85em; }
+  .control label { color: #444; margin-bottom: 0.2em; }
+  .control input[type="range"] { width: 180px; }
+  .control .val { font-family: 'SF Mono', Menlo, monospace; color: #226; font-weight: 600; }
+  button { font-size: 0.85em; padding: 6px 14px; border: 1px solid #bbb; background: #f4f4f4; border-radius: 4px; cursor: pointer; }
+  button:hover { background: #e8e8e8; }
+  button.primary { background: #2b5fb3; color: #fff; border-color: #1b3f7a; }
+  button.primary:hover { background: #1f4a94; }
+  .layout { display: grid; grid-template-columns: 1.2fr 1fr; gap: 1em; }
+  .panel { border: 1px solid #dcdcdc; border-radius: 6px; background: #fff; padding: 0.6em 0.9em; }
+  h2 { font-size: 1em; margin: 0.1em 0 0.5em 0; color: #333; border-bottom: 1px solid #eee; padding-bottom: 0.3em; }
+  canvas { width: 100%; height: auto; display: block; }
+  .legend { font-size: 0.75em; color: #555; margin-top: 0.4em; display: flex; flex-wrap: wrap; gap: 0.9em; }
+  .legend span { display: inline-flex; align-items: center; gap: 0.3em; }
+  .swatch { width: 10px; height: 10px; display: inline-block; border-radius: 2px; }
+  .metric { font-family: 'SF Mono', Menlo, monospace; font-size: 0.82em; color: #333; }
+  .note { font-size: 0.8em; color: #666; margin-top: 0.6em; line-height: 1.45; }
+  table { width: 100%; border-collapse: collapse; font-size: 0.82em; }
+  th, td { padding: 3px 6px; border-bottom: 1px dashed #eee; text-align: right; }
+  th:first-child, td:first-child { text-align: left; }
+  th { color: #555; font-weight: 600; }
+  .bar-cell { position: relative; height: 14px; background: #f0f0f0; border-radius: 2px; overflow: hidden; }
+  .bar-fill { position: absolute; left: 0; top: 0; bottom: 0; background: #4a7fd1; transition: width 80ms linear; }
+</style>
+</head>
+<body>
+
+<h1>DoReMi — exponentiated-gradient reweighting across domains</h1>
+<p class="subtitle">A proxy LM's per-domain excess loss drives an adversary that reweights the mix. Adjust η (EG step) and watch α converge. Domain "difficulty" is simulated so you can see the equilibrium without a real LM.</p>
+
+<div class="controls">
+  <div class="control">
+    <label>η (EG step) <span class="val" id="eta-val">0.30</span></label>
+    <input type="range" id="eta" min="0.02" max="2.0" step="0.02" value="0.30">
+  </div>
+  <div class="control">
+    <label>Learner rate (θ tracking) <span class="val" id="lr-val">0.06</span></label>
+    <input type="range" id="lr" min="0.01" max="0.4" step="0.01" value="0.06">
+  </div>
+  <div class="control">
+    <label>Steps / click <span class="val" id="steps-val">50</span></label>
+    <input type="range" id="steps" min="1" max="200" step="1" value="50">
+  </div>
+  <button id="step-btn" class="primary">Step</button>
+  <button id="run-btn">Run 500</button>
+  <button id="reset-btn">Reset</button>
+</div>
+
+<div class="layout">
+  <div class="panel">
+    <h2>Domain weights α over time</h2>
+    <canvas id="alpha-canvas" width="680" height="330"></canvas>
+    <div class="legend" id="alpha-legend"></div>
+    <div class="note">Starts uniform; EG update concentrates mass on domains with high excess loss. Time-averaged ᾱ is the transferable weight vector.</div>
+  </div>
+
+  <div class="panel">
+    <h2>Per-domain excess loss ℓ_k</h2>
+    <canvas id="loss-canvas" width="480" height="330"></canvas>
+    <div class="note">Proxy loss minus reference loss on each domain. The adversary reads this vector and reweights. Pareto result: all ℓ_k fall, even for downweighted domains.</div>
+  </div>
+</div>
+
+<div class="panel" style="margin-top: 1em;">
+  <h2>Current state (step <span class="metric" id="step-num">0</span>, time-avg ᾱ shown)</h2>
+  <table id="state-table">
+    <thead>
+      <tr><th>Domain</th><th>baseline</th><th>α now</th><th>ᾱ avg</th><th>ℓ_k</th><th>α bar</th></tr>
+    </thead>
+    <tbody></tbody>
+  </table>
+  <div class="note">
+    Intuition: when ℓ_k is large, α_k grows (softmax of η · cumulative ℓ). When ℓ_k is small, α_k shrinks but never reaches zero (EG keeps all coordinates strictly positive). Increase η to make the adversary more aggressive; observe oscillations at high η.
+  </div>
+</div>
+
+<script>
+// Simulated domains — rough Pile-like. "difficulty" is the irreducible loss
+// floor; "learnability" controls how fast θ closes the excess-loss gap.
+const DOMAINS = [
+  { name: "CommonCrawl",   color: "#4a7fd1", baseline: 0.15, difficulty: 3.2, learnability: 0.012 },
+  { name: "Books",         color: "#d17f4a", baseline: 0.12, difficulty: 2.8, learnability: 0.010 },
+  { name: "Wikipedia",     color: "#4ad17f", baseline: 0.10, difficulty: 2.3, learnability: 0.014 },
+  { name: "GitHub (code)", color: "#a94ad1", baseline: 0.12, difficulty: 3.6, learnability: 0.008 },
+  { name: "arXiv (math)",  color: "#d14a9f", baseline: 0.05, difficulty: 4.1, learnability: 0.006 },
+  { name: "StackExchange", color: "#7fc04a", baseline: 0.08, difficulty: 3.0, learnability: 0.011 },
+  { name: "PubMed",        color: "#d1a74a", baseline: 0.04, difficulty: 3.4, learnability: 0.009 },
+  { name: "OpenWebText",   color: "#4ad1c0", baseline: 0.20, difficulty: 3.1, learnability: 0.013 },
+  { name: "PhilPapers",    color: "#8b5a2b", baseline: 0.03, difficulty: 3.5, learnability: 0.007 },
+  { name: "USPTO",         color: "#5a5a5a", baseline: 0.11, difficulty: 3.3, learnability: 0.010 },
+];
+
+const K = DOMAINS.length;
+let alpha, theta, step, alphaHistory, alphaRunningSum;
+
+function reset() {
+  alpha = DOMAINS.map(() => 1 / K);
+  // theta tracks a "how close is proxy loss to the reference loss" state per domain.
+  // theta_k ∈ [0, 1]: 0 = at reference loss (no excess), 1 = at initialization.
+  theta = DOMAINS.map(() => 1.0);
+  step = 0;
+  alphaHistory = [alpha.slice()];
+  alphaRunningSum = alpha.slice();
+  drawAll();
+  updateTable();
+  document.getElementById("step-num").textContent = step;
+}
+
+function lossVector() {
+  // excess loss ℓ_k = difficulty * theta_k  — positive while proxy is worse
+  // than reference on domain k; shrinks to ~0 as theta tracks to reference.
+  return DOMAINS.map((d, k) => d.difficulty * theta[k]);
+}
+
+function doStep(eta, lr) {
+  const ell = lossVector();
+
+  // 1) adversary EG update:  α_k ∝ α_k * exp(η * ℓ_k)
+  const log_unnorm = alpha.map((a, k) => Math.log(a + 1e-12) + eta * ell[k]);
+  const maxLog = Math.max(...log_unnorm);
+  const exp_shifted = log_unnorm.map(l => Math.exp(l - maxLog));
+  const Z = exp_shifted.reduce((s, x) => s + x, 0);
+  alpha = exp_shifted.map(x => x / Z);
+
+  // 2) learner update: θ_k shrinks at rate proportional to α_k * learnability.
+  // This is the simulation-level analogue of "more gradient signal on domain k
+  // when α_k is high, so the proxy closes the gap faster there."
+  for (let k = 0; k < K; k++) {
+    const gradEffect = alpha[k] * DOMAINS[k].learnability / DOMAINS[k].baseline;
+    theta[k] = Math.max(0.02, theta[k] - lr * gradEffect * 10);
+  }
+
+  step += 1;
+  alphaHistory.push(alpha.slice());
+  if (alphaHistory.length > 800) alphaHistory.shift();
+  for (let k = 0; k < K; k++) alphaRunningSum[k] += alpha[k];
+}
+
+function runSteps(n) {
+  const eta = parseFloat(document.getElementById("eta").value);
+  const lr = parseFloat(document.getElementById("lr").value);
+  for (let i = 0; i < n; i++) doStep(eta, lr);
+  drawAll();
+  updateTable();
+  document.getElementById("step-num").textContent = step;
+}
+
+function drawAlphaCanvas() {
+  const c = document.getElementById("alpha-canvas");
+  const ctx = c.getContext("2d");
+  const W = c.width, H = c.height;
+  ctx.clearRect(0, 0, W, H);
+  // axes
+  ctx.strokeStyle = "#ccc";
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(40, 10); ctx.lineTo(40, H - 22); ctx.lineTo(W - 10, H - 22);
+  ctx.stroke();
+  // gridlines for α = 0.1, 0.2, ...
+  ctx.fillStyle = "#888";
+  ctx.font = "10px monospace";
+  for (let v = 0; v <= 0.6; v += 0.1) {
+    const y = H - 22 - v * (H - 40) / 0.6;
+    ctx.strokeStyle = "#eee"; ctx.beginPath();
+    ctx.moveTo(40, y); ctx.lineTo(W - 10, y); ctx.stroke();
+    ctx.fillText(v.toFixed(1), 6, y + 3);
+  }
+  // time axis labels
+  const T = alphaHistory.length;
+  ctx.fillText("step 0", 42, H - 8);
+  ctx.fillText("step " + step, W - 60, H - 8);
+  // plot each domain
+  for (let k = 0; k < K; k++) {
+    ctx.strokeStyle = DOMAINS[k].color;
+    ctx.lineWidth = 1.6;
+    ctx.beginPath();
+    for (let t = 0; t < T; t++) {
+      const x = 40 + (t / Math.max(1, T - 1)) * (W - 50);
+      const v = Math.min(0.6, alphaHistory[t][k]);
+      const y = H - 22 - v * (H - 40) / 0.6;
+      if (t === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+    }
+    ctx.stroke();
+  }
+}
+
+function drawLossCanvas() {
+  const c = document.getElementById("loss-canvas");
+  const ctx = c.getContext("2d");
+  const W = c.width, H = c.height;
+  ctx.clearRect(0, 0, W, H);
+  const ell = lossVector();
+  const maxEll = Math.max(0.1, ...ell);
+  const bw = (W - 60) / K;
+  ctx.fillStyle = "#888"; ctx.font = "10px monospace";
+  ctx.fillText("ℓ_k", 6, 14);
+  // horizontal ticks
+  for (let v = 0; v <= maxEll + 0.5; v += Math.max(0.5, Math.round(maxEll / 4))) {
+    const y = H - 30 - (v / (maxEll + 0.2)) * (H - 50);
+    ctx.strokeStyle = "#eee"; ctx.beginPath();
+    ctx.moveTo(40, y); ctx.lineTo(W - 10, y); ctx.stroke();
+    ctx.fillText(v.toFixed(1), 6, y + 3);
+  }
+  for (let k = 0; k < K; k++) {
+    const x = 44 + k * bw;
+    const h = (ell[k] / (maxEll + 0.2)) * (H - 50);
+    ctx.fillStyle = DOMAINS[k].color;
+    ctx.fillRect(x, H - 30 - h, bw - 4, h);
+  }
+  // x-axis labels (rotated short names)
+  ctx.fillStyle = "#555";
+  ctx.font = "9px -apple-system, sans-serif";
+  for (let k = 0; k < K; k++) {
+    const x = 44 + k * bw + (bw - 4) / 2;
+    ctx.save(); ctx.translate(x, H - 22); ctx.rotate(-Math.PI / 5);
+    ctx.textAlign = "right";
+    ctx.fillText(DOMAINS[k].name, 0, 0);
+    ctx.restore();
+  }
+}
+
+function drawLegend() {
+  const el = document.getElementById("alpha-legend");
+  el.innerHTML = DOMAINS.map(d =>
+    '<span><span class="swatch" style="background:' + d.color + '"></span>' + d.name + '</span>'
+  ).join("");
+}
+
+function updateTable() {
+  const ell = lossVector();
+  const ta = DOMAINS.map((_, k) => alphaRunningSum[k] / Math.max(1, alphaHistory.length));
+  const maxAlpha = Math.max(...alpha, ...ta);
+  const tbody = document.querySelector("#state-table tbody");
+  tbody.innerHTML = "";
+  for (let k = 0; k < K; k++) {
+    const tr = document.createElement("tr");
+    tr.innerHTML =
+      "<td><span class='swatch' style='background:" + DOMAINS[k].color + "'></span> " + DOMAINS[k].name + "</td>" +
+      "<td>" + DOMAINS[k].baseline.toFixed(3) + "</td>" +
+      "<td>" + alpha[k].toFixed(3) + "</td>" +
+      "<td>" + ta[k].toFixed(3) + "</td>" +
+      "<td>" + ell[k].toFixed(2) + "</td>" +
+      "<td><div class='bar-cell'><div class='bar-fill' style='width:" +
+        (alpha[k] / maxAlpha * 100).toFixed(1) + "%;background:" + DOMAINS[k].color + "'></div></div></td>";
+    tbody.appendChild(tr);
+  }
+}
+
+function drawAll() { drawAlphaCanvas(); drawLossCanvas(); }
+
+// wire up
+document.getElementById("eta").addEventListener("input", e => {
+  document.getElementById("eta-val").textContent = parseFloat(e.target.value).toFixed(2);
+});
+document.getElementById("lr").addEventListener("input", e => {
+  document.getElementById("lr-val").textContent = parseFloat(e.target.value).toFixed(2);
+});
+document.getElementById("steps").addEventListener("input", e => {
+  document.getElementById("steps-val").textContent = e.target.value;
+});
+document.getElementById("step-btn").addEventListener("click", () => {
+  runSteps(parseInt(document.getElementById("steps").value, 10));
+});
+document.getElementById("run-btn").addEventListener("click", () => runSteps(500));
+document.getElementById("reset-btn").addEventListener("click", reset);
+
+drawLegend();
+reset();
+</script>
+
+</body>
+</html>

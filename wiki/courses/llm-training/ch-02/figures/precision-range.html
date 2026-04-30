@@ -1,0 +1,234 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Precision Range — fp32 / fp16 / bf16 / fp8 on the Real Line</title>
+<style>
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+         max-width: 960px; margin: 2em auto; padding: 0 1em; color: #222; }
+  h1 { font-size: 1.4em; margin-bottom: 0.2em; }
+  .subtitle { color: #666; margin-top: 0; }
+  .panel { border: 1px solid #ddd; border-radius: 6px; padding: 1em; margin: 1em 0;
+           background: #fafafa; }
+  .controls { display: flex; gap: 1em; flex-wrap: wrap; align-items: center; }
+  .control { display: flex; flex-direction: column; }
+  label { font-size: 0.85em; color: #555; margin-bottom: 0.2em; }
+  input[type="range"] { width: 320px; }
+  canvas { background: white; border: 1px solid #ccc; display: block; margin: 1em auto; }
+  .legend { display: flex; gap: 1.5em; justify-content: center; font-size: 0.9em;
+            flex-wrap: wrap; }
+  .swatch { display: inline-block; width: 12px; height: 12px; margin-right: 4px;
+            vertical-align: middle; border-radius: 2px; }
+  .value { font-variant-numeric: tabular-nums; color: #333; font-weight: 600; }
+  .note { font-size: 0.88em; color: #555; line-height: 1.5; }
+  code { background: #eef; padding: 1px 4px; border-radius: 3px; font-size: 0.9em; }
+  table.status { margin: 0.5em auto; border-collapse: collapse; font-size: 0.88em; }
+  table.status th, table.status td { padding: 4px 10px; border: 1px solid #ddd;
+                                     text-align: left; }
+  table.status th { background: #f0f0f0; }
+  .ok   { color: #2e7d32; font-weight: 600; }
+  .warn { color: #b8860b; font-weight: 600; }
+  .bad  { color: #c62828; font-weight: 600; }
+</style>
+</head>
+<body>
+
+<h1>Precision Range — fp32 / fp16 / bf16 / fp8 on the Real Line</h1>
+<p class="subtitle">
+  Each bar spans the representable positive values of a floating-point format
+  on a shared log-scale axis. Move the slider to probe a target value at
+  <span class="value" id="targetLabel">1.00e+0</span> and see which formats
+  carry it normally, with poor precision, or underflow it to zero.
+</p>
+
+<div class="panel">
+  <div class="controls">
+    <div class="control">
+      <label>Target value (log-scale, 1e-10 to 1e+10)</label>
+      <input type="range" id="target" min="-10" max="10" step="0.1" value="0">
+    </div>
+  </div>
+</div>
+
+<canvas id="plot" width="900" height="320"></canvas>
+
+<div class="legend">
+  <span><span class="swatch" style="background:#2e7d32"></span>representable (normal range)</span>
+  <span><span class="swatch" style="background:#f9a825"></span>representable but coarse (near max / denormal)</span>
+  <span><span class="swatch" style="background:#c62828"></span>underflow / overflow</span>
+  <span><span class="swatch" style="background:#333"></span>target value marker</span>
+</div>
+
+<div class="panel">
+  <table class="status" id="statusTable">
+    <thead><tr><th>Format</th><th>Min positive normal</th><th>Max positive</th>
+      <th>Δ at 1.0 (2<sup>−m</sup>)</th><th>Target status</th></tr></thead>
+    <tbody></tbody>
+  </table>
+</div>
+
+<div class="panel note">
+  <strong>Why bf16 matches fp32 range.</strong> bf16 keeps all 8 exponent bits of fp32
+  and sacrifices 16 of fp32's 23 mantissa bits. Exponent bits set the dynamic range
+  (<code>~1e-38</code> to <code>3e38</code>), mantissa bits set the relative precision
+  near 1.0. So bf16 covers the same real line as fp32 but with only ~7.8e-3 relative
+  precision (vs 1.2e-7). For LLM gradients, range beats precision — which is why 2023+
+  frontier runs dropped fp16.
+  <br><br>
+  <strong>Why fp16 needs loss scaling.</strong> fp16's minimum normal is <code>~6e-8</code>.
+  A large fraction of real LLM gradients (especially in deep transformer stacks) fall
+  below <code>1e-8</code>, so they silently underflow to zero and the update vanishes.
+  Loss scaling multiplies the loss by <code>S ≈ 2^15</code> before <code>.backward()</code>
+  to shift the whole gradient distribution up into fp16's window; the optimizer
+  unscales by <code>S</code> just before stepping.
+  <br><br>
+  <strong>Why E4M3 is used for forward and E5M2 for backward.</strong> fp8-E4M3 has one
+  more mantissa bit (so finer precision) but one fewer exponent bit (narrower range,
+  up to 448). Activations and weights are bounded — LayerNorm and initialization keep
+  them near unit scale — so E4M3's range is sufficient and the extra mantissa bit helps.
+  Gradients span many orders of magnitude, so the backward pass uses E5M2: wider range
+  (up to 57344, floor ~6e-8, matching fp16) at the cost of one mantissa bit.
+</div>
+
+<script>
+// Source: wiki/raw-data/llm-training/classics/mixed-precision.md
+// Relative precision at 1.0 = 2^-mantissa_bits.
+const formats = [
+  { name: 'fp32',      color: '#1565c0', minNormal: 1.175494e-38, max: 3.402823e+38, mantBits: 23 },
+  { name: 'fp16',      color: '#6a1b9a', minNormal: 6.103516e-8,  max: 65504,        mantBits: 10 },
+  { name: 'bf16',      color: '#2e7d32', minNormal: 1.175494e-38, max: 3.389531e+38, mantBits: 7  },
+  { name: 'fp8-E4M3',  color: '#ef6c00', minNormal: 1.953125e-3,  max: 448,          mantBits: 3  },
+  { name: 'fp8-E5M2',  color: '#c62828', minNormal: 6.103516e-5,  max: 57344,        mantBits: 2  },
+];
+// Note on mins: fp8-E4M3 min normal = 2^-6; fp8-E5M2 min normal = 2^-14.
+// The read.md reports subnormal extents (2e-7 / 6e-8); the bars show min normal,
+// and subnormal tails are rendered as a yellow fade.
+const subnormalFloor = {
+  'fp32':     1e-45,
+  'fp16':     6e-8,
+  'bf16':     1e-40,
+  'fp8-E4M3': 1.953e-3 / 8,     // 2^-9  ≈ 2e-3/8
+  'fp8-E5M2': 6.103e-5 / 4,     // 2^-16
+};
+
+const cvs = document.getElementById('plot');
+const ctx = cvs.getContext('2d');
+
+const AXIS_MIN = -40, AXIS_MAX = 40;   // log10 range of x axis
+
+function xFor(val, pad, W) {
+  const l = Math.log10(val);
+  const clamped = Math.max(AXIS_MIN, Math.min(AXIS_MAX, l));
+  return pad.l + ((clamped - AXIS_MIN) / (AXIS_MAX - AXIS_MIN)) * W;
+}
+
+function fmt(x) {
+  if (x === 0) return '0';
+  const e = Math.floor(Math.log10(Math.abs(x)));
+  const m = x / Math.pow(10, e);
+  return m.toFixed(2) + 'e' + (e >= 0 ? '+' : '') + e;
+}
+
+function classify(fmtDef, target) {
+  if (target > fmtDef.max) return { cls: 'bad',  text: 'overflow (> max)' };
+  if (target >= fmtDef.minNormal) {
+    // Coarse if within ~4x of the max (rounding loses a bit) or very near the floor.
+    if (target > fmtDef.max / 4) return { cls: 'warn', text: 'normal, near max' };
+    if (target < fmtDef.minNormal * 4) return { cls: 'warn', text: 'normal, near floor' };
+    return { cls: 'ok', text: 'normal' };
+  }
+  const sub = subnormalFloor[fmtDef.name];
+  if (target >= sub) return { cls: 'warn', text: 'subnormal (coarse)' };
+  return { cls: 'bad', text: 'underflow → 0' };
+}
+
+function render() {
+  const tLog = +document.getElementById('target').value;
+  const target = Math.pow(10, tLog);
+  document.getElementById('targetLabel').textContent = fmt(target);
+
+  ctx.clearRect(0, 0, cvs.width, cvs.height);
+  const pad = { l: 90, r: 30, t: 30, b: 50 };
+  const W = cvs.width - pad.l - pad.r;
+  const H = cvs.height - pad.t - pad.b;
+  const rowH = H / formats.length;
+
+  // axis grid every 10 decades
+  ctx.strokeStyle = '#eee'; ctx.lineWidth = 1;
+  ctx.fillStyle = '#888'; ctx.font = '11px sans-serif'; ctx.textAlign = 'center';
+  for (let e = AXIS_MIN; e <= AXIS_MAX; e += 10) {
+    const x = xFor(Math.pow(10, e), pad, W);
+    ctx.beginPath(); ctx.moveTo(x, pad.t); ctx.lineTo(x, pad.t + H); ctx.stroke();
+    ctx.fillText('1e' + (e >= 0 ? '+' : '') + e, x, pad.t + H + 16);
+  }
+  ctx.fillText('value (log scale)', pad.l + W / 2, pad.t + H + 36);
+
+  // bars
+  formats.forEach((f, i) => {
+    const y = pad.t + i * rowH + rowH * 0.2;
+    const bh = rowH * 0.55;
+    const xMin = xFor(f.minNormal, pad, W);
+    const xMax = xFor(f.max, pad, W);
+    // subnormal tail (yellow) from subnormalFloor → minNormal
+    const sub = subnormalFloor[f.name];
+    if (sub < f.minNormal) {
+      const xSub = xFor(sub, pad, W);
+      ctx.fillStyle = '#fff3c4';
+      ctx.fillRect(xSub, y, xMin - xSub, bh);
+    }
+    // normal-range bar
+    ctx.fillStyle = f.color + '22';  // light fill
+    ctx.fillRect(xMin, y, xMax - xMin, bh);
+    ctx.strokeStyle = f.color; ctx.lineWidth = 1.5;
+    ctx.strokeRect(xMin, y, xMax - xMin, bh);
+
+    // label
+    ctx.fillStyle = '#222'; ctx.font = 'bold 12px sans-serif'; ctx.textAlign = 'right';
+    ctx.fillText(f.name, pad.l - 10, y + bh * 0.65);
+    // mantissa precision annotation on the bar
+    ctx.fillStyle = f.color; ctx.font = '10px sans-serif'; ctx.textAlign = 'left';
+    const prec = Math.pow(2, -f.mantBits);
+    ctx.fillText('Δ≈' + prec.toExponential(1), xMin + 4, y + bh * 0.65);
+  });
+
+  // target value marker
+  const xT = xFor(target, pad, W);
+  ctx.strokeStyle = '#333'; ctx.lineWidth = 2; ctx.setLineDash([4, 3]);
+  ctx.beginPath(); ctx.moveTo(xT, pad.t - 8); ctx.lineTo(xT, pad.t + H + 4); ctx.stroke();
+  ctx.setLineDash([]);
+  ctx.fillStyle = '#333'; ctx.font = 'bold 11px sans-serif'; ctx.textAlign = 'center';
+  ctx.fillText('target = ' + fmt(target), xT, pad.t - 12);
+
+  // dots on each bar colored by status
+  formats.forEach((f, i) => {
+    const y = pad.t + i * rowH + rowH * 0.2 + rowH * 0.275;
+    const s = classify(f, target);
+    const color = s.cls === 'ok' ? '#2e7d32' : s.cls === 'warn' ? '#f9a825' : '#c62828';
+    ctx.fillStyle = color;
+    ctx.beginPath(); ctx.arc(xT, y, 5, 0, Math.PI * 2); ctx.fill();
+    ctx.strokeStyle = '#fff'; ctx.lineWidth = 1.5; ctx.stroke();
+  });
+
+  // status table
+  const tbody = document.querySelector('#statusTable tbody');
+  tbody.innerHTML = '';
+  formats.forEach(f => {
+    const s = classify(f, target);
+    const prec = Math.pow(2, -f.mantBits);
+    const tr = document.createElement('tr');
+    tr.innerHTML =
+      '<td><strong>' + f.name + '</strong></td>' +
+      '<td>' + f.minNormal.toExponential(2) + '</td>' +
+      '<td>' + f.max.toExponential(2) + '</td>' +
+      '<td>' + prec.toExponential(2) + '</td>' +
+      '<td class="' + s.cls + '">' + s.text + '</td>';
+    tbody.appendChild(tr);
+  });
+}
+
+document.getElementById('target').addEventListener('input', render);
+render();
+</script>
+
+</body>
+</html>

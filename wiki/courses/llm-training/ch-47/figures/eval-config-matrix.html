@@ -1,0 +1,370 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Eval Config Matrix - task_shape x harness x inference_config</title>
+<style>
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+         max-width: 1180px; margin: 1.6em auto; padding: 0 1em; color: #1f1f1f;
+         background: #fafafa; font-feature-settings: "tnum" 1; font-variant-numeric: tabular-nums; }
+  h1 { font-size: 1.3em; margin-bottom: 0.25em; }
+  .subtitle { color: #5a5a5a; margin-top: 0; font-size: 0.92em; line-height: 1.5; }
+  .layout { display: grid; grid-template-columns: 1fr 380px; gap: 1.2em; margin-top: 1em; }
+  .panel { border: 1px solid #dcdcdc; border-radius: 6px; background: #fff;
+           padding: 0.9em 1em; }
+  h2 { font-size: 1.0em; margin: 0 0 0.6em 0; color: #2b2b2b;
+       border-bottom: 1px solid #ececec; padding-bottom: 0.3em; }
+  .controls { display: flex; flex-direction: column; gap: 0.55em; margin-bottom: 0.6em; }
+  .controls label { font-family: 'SF Mono', Menlo, monospace; font-size: 0.85em;
+                    color: #333; display: flex; flex-direction: column; gap: 0.2em; }
+  .controls select, .controls input[type=range] {
+    width: 100%; font-family: 'SF Mono', Menlo, monospace; font-size: 0.88em; }
+  table.matrix { border-collapse: collapse; width: 100%; font-size: 0.86em;
+                 font-family: 'SF Mono', Menlo, monospace; }
+  table.matrix th, table.matrix td { border: 1px solid #e0e0e0; padding: 6px 8px;
+                                      text-align: left; vertical-align: top; }
+  table.matrix th { background: #f3f5f8; font-weight: 600; color: #203050; }
+  .cell-title { font-family: 'SF Mono', Menlo, monospace; font-size: 0.95em;
+                color: #204080; margin: 0 0 0.4em 0; }
+  .cell-body { font-size: 0.86em; color: #333; line-height: 1.5;
+               background: #f5f7fb; padding: 0.55em 0.75em; border-radius: 4px;
+               border-left: 3px solid #2e5aa8; }
+  .pitfall { font-size: 0.82em; color: #333; line-height: 1.5;
+             background: #fbf5ef; padding: 0.45em 0.65em; border-radius: 4px;
+             border-left: 3px solid #c4793d; margin-top: 0.35em; }
+  .src { font-size: 0.78em; color: #5a6a80; margin-top: 0.4em; }
+  code { background: #eef; padding: 1px 4px; border-radius: 3px;
+         font-family: 'SF Mono', Menlo, monospace; font-size: 0.85em; }
+  .score-bar { height: 14px; background: #eaeef4; border-radius: 3px; overflow: hidden;
+               border: 1px solid #dde2ea; }
+  .score-bar > div { height: 100%; background: linear-gradient(90deg, #2e5aa8 0%, #2f8a4a 100%); }
+  .score-row { display: grid; grid-template-columns: 170px 1fr 54px; gap: 0.5em;
+               align-items: center; font-size: 0.82em; margin: 0.25em 0; }
+  .score-row span.lbl { color: #444; }
+  .score-row span.val { color: #204080; font-weight: 600; text-align: right; }
+  .readout { font-family: 'SF Mono', Menlo, monospace; font-size: 0.82em;
+             color: #5a6a80; margin-top: 0.3em; }
+</style>
+</head>
+<body>
+
+<h1>Eval Config Matrix</h1>
+<p class="subtitle">
+  Three axes: <code>task_shape</code> (MCQ / generation / open-ended / agentic),
+  <code>harness</code> (lm-eval / OLMES / AgentBench), and <code>inference_config</code>
+  (temperature + max_tokens + few-shot preset). Pick a cell; the panel shows the expected
+  metric surface, the matcher that fires, the slicing primitive, the versioning axis, and
+  the three most common pitfalls. Score surface below the matrix is an illustrative
+  seven-bar chart showing how the same 7B model moves across the config preset --
+  directions attested by <code>bfcl</code>, <code>judge-llm-bias</code>, <code>ruler</code>,
+  and <code>olmo-3</code>; absolute numbers are example-only.
+</p>
+
+<div class="layout">
+
+<div class="panel">
+  <h2>Config surface</h2>
+  <table class="matrix">
+    <thead>
+      <tr><th style="width:18%">axis</th><th style="width:41%">what fires</th><th style="width:41%">where it lives</th></tr>
+    </thead>
+    <tbody id="matrix-body"></tbody>
+  </table>
+  <h2 style="margin-top:1em">Illustrative score surface (7B)</h2>
+  <div id="scores"></div>
+  <p class="readout" id="readout">-</p>
+</div>
+
+<div class="panel">
+  <h2>Pick a cell</h2>
+  <div class="controls">
+    <label>task_shape
+      <select id="shape">
+        <option value="mcq">MCQ - MMLU / ARC / HellaSwag</option>
+        <option value="gen">generation-verifiable - GSM8K / HumanEval / BFCL</option>
+        <option value="open">open-ended - MT-Bench / AlpacaEval</option>
+        <option value="agent">agentic - WebArena / BFCL-V3 / SWE-bench</option>
+      </select>
+    </label>
+    <label>harness
+      <select id="harness">
+        <option value="lmeval">lm-eval-harness (EleutherAI)</option>
+        <option value="olmes">OLMES (AllenAI, co-released with OLMo 3)</option>
+        <option value="agentbench">AgentBench / WebArena-style</option>
+      </select>
+    </label>
+    <label>inference preset
+      <select id="cfg">
+        <option value="greedy-short">greedy-short: T=0.0 top_p=1.0 max_tokens=16</option>
+        <option value="greedy-long">greedy-long: T=0.0 top_p=1.0 max_tokens=512</option>
+        <option value="passk">pass@k: T=0.8 top_p=0.95 n=10 max_tokens=512</option>
+        <option value="chatty">chatty: T=0.7 top_p=0.95 max_tokens=1024</option>
+      </select>
+    </label>
+  </div>
+  <h2>Cell summary</h2>
+  <p class="cell-title" id="c-title">-</p>
+  <div class="cell-body" id="c-body">-</div>
+  <h2 style="margin-top:0.8em">Common pitfalls</h2>
+  <div id="c-pitfalls"></div>
+  <p class="src" id="c-src">-</p>
+</div>
+
+</div>
+
+<script>
+// Cells keyed by "shape-harness". The cfg knob modifies the score bars only,
+// plus one pitfall line, because inference_config is an orthogonal axis that
+// multiplies onto any (shape, harness) cell.
+const CELLS = {
+  "mcq-lmeval": {
+    title: "MCQ x lm-eval-harness",
+    body: "Letter-perplexity is the native path: score log P(A|prompt), log P(B|prompt), ... and argmax. 5-shot is the lm-eval default on MMLU. Matcher is argmax-log-prob; there is no generation and no parsing -- the harness is effectively running forward passes over four (or more) choice tokens.",
+    pitfalls: [
+      "Letter-perplexity and generate-and-match give different numbers on the same model; moving between them silently shifts MMLU by 2-5 points.",
+      "lm-eval's task definitions have been renamed across versions (mmlu -> mmlu_flan_n_shot in 2023); pin the commit SHA.",
+      "Tokenizer edge: a tokenizer that splits ' A' vs 'A' differently changes scores. Always compare under the same tokenizer family."
+    ],
+    src: "Attested: lm-eval-harness task YAML; olmo-3 on eval-as-artifact"
+  },
+  "mcq-olmes": {
+    title: "MCQ x OLMES",
+    body: "OLMES pins the prompt format in the task id itself -- olmes:mmlu:v1.1 is the contract. Default 5-shot; per-subset and per-difficulty slicing are first-class. The task id embeds the inference-config hash so a number cannot travel without its eval recipe.",
+    pitfalls: [
+      "Do not compare olmes:mmlu:v1.1 to olmes:mmlu:v1.2 without re-running; prompt-format bumps are accountable but not reversible.",
+      "Format-version drift is where release-time regressions hide; always report against the exact id.",
+      "OLMES default few-shot (5) differs from some lm-eval defaults (0 or 1); cross-harness comparison must normalize this."
+    ],
+    src: "Attested: olmo-3 (fully-open eval release); OLMES task-id convention"
+  },
+  "mcq-agentbench": {
+    title: "MCQ x AgentBench (mismatch)",
+    body: "Agentic harnesses are not built for MCQ. They can be coerced -- wrap the MCQ as a single-turn env with a 'submit_answer' tool -- but the protocol overhead (tool-call tokens, env round-trip) measures agent-plumbing more than knowledge. Prefer lm-eval or OLMES for MCQ.",
+    pitfalls: [
+      "Tool-call-format errors become MCQ errors; you are measuring the agent scaffold, not the base-model MCQ ability.",
+      "Inference budget (max-turns) implicitly caps the answer -- a one-shot MCQ should not need turns.",
+      "Results are not comparable to any standard MMLU table; treat as agent-plumbing sanity check, not as an MCQ score."
+    ],
+    src: "Attested by inference: BFCL relevance-detection uses this pattern when MCQ-like abstention is the capability"
+  },
+  "gen-lmeval": {
+    title: "generation-verifiable x lm-eval-harness",
+    body: "Generate at T=0 for pass@1 or at T=0.8 top_p=0.95 for pass@k; matcher is regex (GSM8K \\boxed{...}) or unit-test (HumanEval). lm-eval has HumanEval and GSM8K tasks but the executor sandbox is user-provided.",
+    pitfalls: [
+      "max_tokens too low (e.g. 256) truncates HumanEval solutions mid-function; pass@1 drops 3-6 points.",
+      "Regex matcher fails on 'The answer is **42**.' when the bold or period trails; score what the model could produce, not what the regex accepts.",
+      "pass@k at low T becomes pass@1 with waste; use T>=0.6 if k>1."
+    ],
+    src: "Attested: llama-3 eval suite reports generate@k, not MCQ; bfcl AST-matcher protocol"
+  },
+  "gen-olmes": {
+    title: "generation-verifiable x OLMES",
+    body: "OLMES treats generation tasks the same way: prompt-format version pinned, 0-shot or 5-shot per task-id, generation with deterministic decoding for pass@1. The number is strictly versioned; moving to a new task-id is a new benchmark.",
+    pitfalls: [
+      "Prompt-format version change is often invisible in diffs but worth 1-4 points on GSM8K.",
+      "Stop-string set is part of the task id; do not override at the harness level.",
+      "For code, OLMES does not ship a sandbox -- executors are still user-provided, so executor bugs look like model regressions."
+    ],
+    src: "Attested: olmo-3 as model-flow artifact incl. eval"
+  },
+  "gen-agentbench": {
+    title: "generation-verifiable x AgentBench / BFCL-executable",
+    body: "When the verifier is an executor (HumanEval unit tests, BFCL live API calls, WebArena predicates), this is the natural home. Matcher runs the output. Slicing by task-category and pass^k (BFCL V3+: every of k rollouts must pass) are first-class. Docker digest is the version primitive.",
+    pitfalls: [
+      "Sandbox determinism: non-deterministic environment (clock, network) corrupts pass rate; pin everything.",
+      "pass@k vs pass^k conflation: pass@k averages, pass^k demands consistency. Reporting the wrong one is a known headline-inflation path.",
+      "V1 leaderboards saturate (BFCL V1 ~98% on frontier); always move to the latest version (V2-Live, V3-multi-turn, V4-agentic)."
+    ],
+    src: "Attested: bfcl V1->V4 version generations; webarena predicate-based success"
+  },
+  "open-lmeval": {
+    title: "open-ended x lm-eval (LLM-judge, second-class)",
+    body: "lm-eval can call an LLM judge but it is not first-class. T=0.7 for the candidate, judge prompts and swap-and-average must be configured by the user. The numbers are valid only under the exact judge + rubric + ordering pinned in the task file.",
+    pitfalls: [
+      "Position bias: A-vs-B ordering flips winner in 22-40% of judge calls (judge-llm-bias Fig 2). Always swap-and-average.",
+      "Verbosity bias: longer responses win at a rate above length-controlled baseline. Residualize by length or cap max_tokens.",
+      "Self-enhancement: never let the candidate judge itself. Attested on GPT-4 and Claude."
+    ],
+    src: "Attested: judge-llm-bias (MT-Bench/Chatbot Arena bias quantification)"
+  },
+  "open-olmes": {
+    title: "open-ended x OLMES",
+    body: "OLMES has open-ended tasks but the judge pipeline is not its focus; when used, the rubric and judge model are embedded in the task id. Reference-guided grading (provide the judge a gold solution) raises judge-human agreement ~10 pp per judge-llm-bias.",
+    pitfalls: [
+      "Judge-model identity is a harness-version coordinate: GPT-4-0613 vs GPT-4o give different win-rates.",
+      "Chain-of-thought judging helps agreement but does not eliminate biases; still swap-and-average.",
+      "Tie-handling is not neutral for Elo: many ties compress the leaderboard."
+    ],
+    src: "Attested: judge-llm-bias; olmo-3 eval-as-artifact"
+  },
+  "open-agentbench": {
+    title: "open-ended x AgentBench (mismatch)",
+    body: "Agent harnesses are not designed for free-form open-ended scoring. If the environment has a predicate (task-success), the shape is agentic, not open-ended. If you want Elo, use a pairwise judge harness.",
+    pitfalls: [
+      "Conflating 'agent did the task' with 'the writing was good' -- the predicate measures only the former.",
+      "Pair-wise comparison across agent trajectories is hard to attribute; the response is a multi-turn tape.",
+      "No standard LLM-judge plugin; roll your own and pin rubric + judge ID."
+    ],
+    src: "Inferred: webarena predicate scope; judge-llm-bias biases apply if coerced"
+  },
+  "agent-lmeval": {
+    title: "agentic x lm-eval (mismatch)",
+    body: "lm-eval does not run environments. An agent task requires state, tools, and a reset protocol. You would be building an agent harness on top; use AgentBench / WebArena instead.",
+    pitfalls: [
+      "Multi-turn trajectories do not fit a single-response schema; truncation hides failure modes.",
+      "No slot for tool calls or environment state in task output; predicate matcher cannot run.",
+      "Running agent tasks through a generation-only harness measures prompt-engineering, not agent capability."
+    ],
+    src: "Inferred: bfcl V3 multi-turn, webarena state reset"
+  },
+  "agent-olmes": {
+    title: "agentic x OLMES (mismatch)",
+    body: "OLMES focuses on static tasks with pinned format strings. Agentic tasks need a live environment; OLMES is not the right tool. Use BFCL (V3+), WebArena, SWE-bench, or a purpose-built AgentBench task.",
+    pitfalls: [
+      "Same single-response-schema limit as lm-eval; stateful tasks do not slot in.",
+      "OLMES version discipline does not cover Docker-image digests; agent tasks need that versioning primitive instead.",
+      "Cross-harness comparison between 'OLMES agentic (coerced)' and BFCL-V3 scores is invalid."
+    ],
+    src: "Inferred: olmo-3 scope; bfcl V3 / webarena as the native home"
+  },
+  "agent-agentbench": {
+    title: "agentic x AgentBench / WebArena / BFCL-V3+",
+    body: "Native home. Env = Docker bundle with predicate checks; trajectory = sequence of (obs, thought, action); success = predicate. Version axis is Docker image digest + task JSON hash. pass^k (every of k must succeed) is the agent-reliability metric.",
+    pitfalls: [
+      "Docker image drift: package updates silently change env behaviour; pin digests explicitly.",
+      "Shortcut learning: URL-hacking, cached answers -- predicate must be strict. webarena's predicate design is a good template.",
+      "Observation format (accessibility tree vs screenshot) is a harness-version coordinate; WebArena and VisualWebArena numbers are not comparable."
+    ],
+    src: "Attested: webarena-data (Docker-compose + predicate); bfcl V3/V4 multi-turn + agentic"
+  }
+};
+
+// Score baseline per (shape, harness) -- illustrative 7B scores in [0, 100].
+const BASE = {
+  "mcq-lmeval": 62, "mcq-olmes": 64, "mcq-agentbench": 28,
+  "gen-lmeval": 40, "gen-olmes": 42, "gen-agentbench": 44,
+  "open-lmeval": 52, "open-olmes": 54, "open-agentbench": 20,
+  "agent-lmeval": 8, "agent-olmes": 10, "agent-agentbench": 32
+};
+
+// cfg deltas illustrate the third-column effect of inference_config.
+const CFG_DELTA = {
+  "greedy-short":  { mcq: 0,  gen: -8, open: -6, agent: -10 },
+  "greedy-long":   { mcq: 0,  gen: 4,  open: 0,  agent: 2 },
+  "passk":         { mcq: -2, gen: 8,  open: 2,  agent: 6 },
+  "chatty":        { mcq: -3, gen: 1,  open: 4,  agent: 0 }
+};
+
+// A fourth pitfall is injected based on cfg.
+const CFG_PITFALL = {
+  "greedy-short": "max_tokens=16 truncates any free-form answer; prefer this only for MCQ letter output.",
+  "greedy-long":  "T=0 can lock into deterministic wrong paths on math; pair with pass@k sampling if tree search matters.",
+  "passk":        "pass@k at T=0.8 n=10 inflates compute 10x; confirm the capability is consistency-limited before spending.",
+  "chatty":       "T=0.7 chatty config disagrees with deterministic judges; swap-and-average becomes mandatory."
+};
+
+function getKey() {
+  return document.getElementById("shape").value + "-" + document.getElementById("harness").value;
+}
+
+function matcherFor(shape, harness) {
+  if (shape === "mcq") return harness === "olmes" ? "argmax log-prob over letter tokens" : "argmax log-prob OR regex letter-extract";
+  if (shape === "gen") return harness === "agentbench" ? "unit-test / executable / AST (BFCL)" : "regex (GSM8K) or unit-test (HumanEval)";
+  if (shape === "open") return "LLM-judge with swap-and-average; reference-guided if available";
+  if (shape === "agent") return "env predicate over final state; pass^k across k rollouts";
+}
+function slicingFor(shape, harness) {
+  if (harness === "olmes") return "per-subset + per-difficulty (first-class)";
+  if (harness === "agentbench") return "per-task-category; pass^k by task family";
+  if (shape === "open") return "per-prompt, per-category (user configured)";
+  return "per-subtask (JSON output; not per-difficulty by default)";
+}
+function versioningFor(shape, harness) {
+  if (harness === "olmes") return "format-versioned task-id (e.g. olmes:mmlu:v1.1)";
+  if (harness === "agentbench") return "Docker image digest + task JSON hash";
+  return "commit SHA + task-file hash";
+}
+function cfgFor(shape) {
+  return {
+    mcq:   "T=0 for letter-perplexity or T=0 max_tokens~16 for generate-and-match; 5-shot OLMES default",
+    gen:   "pass@1: T=0 max_tokens=512; pass@k: T=0.8 top_p=0.95 n=10-100",
+    open:  "T=0.7 max_tokens=1024-2048; judge prompt pinned; swap sides; reference-guided when objective",
+    agent: "T=0 or T=0.6, tool-call-budget >=30 turns; env reset per task"
+  }[shape];
+}
+
+function render() {
+  const shape = document.getElementById("shape").value;
+  const harness = document.getElementById("harness").value;
+  const cfg = document.getElementById("cfg").value;
+  const key = shape + "-" + harness;
+  const cell = CELLS[key];
+
+  // Matrix body.
+  const mb = document.getElementById("matrix-body");
+  mb.innerHTML = "";
+  const rows = [
+    ["task_shape",        shape.toUpperCase(),                                  "what the capability actually is"],
+    ["harness",           harness,                                              "the infra object; not the model"],
+    ["matcher",           matcherFor(shape, harness),                           "where accuracy is decided"],
+    ["inference_config",  cfg + "  (" + cfgFor(shape) + ")",                    "the silent third column"],
+    ["subset_slice",      slicingFor(shape, harness),                           "aggregate hides the hacks"],
+    ["harness_version",   versioningFor(shape, harness),                        "attribute drift to the harness"]
+  ];
+  for (const [ax, w, l] of rows) {
+    const tr = document.createElement("tr");
+    const c1 = document.createElement("td"); c1.innerHTML = "<code>" + ax + "</code>";
+    const c2 = document.createElement("td"); c2.textContent = w;
+    const c3 = document.createElement("td"); c3.textContent = l;
+    tr.appendChild(c1); tr.appendChild(c2); tr.appendChild(c3);
+    mb.appendChild(tr);
+  }
+
+  // Cell text.
+  document.getElementById("c-title").textContent = cell.title;
+  document.getElementById("c-body").textContent = cell.body;
+  document.getElementById("c-src").textContent = cell.src;
+
+  // Pitfalls.
+  const pf = document.getElementById("c-pitfalls");
+  pf.innerHTML = "";
+  for (const p of cell.pitfalls) {
+    const div = document.createElement("div");
+    div.className = "pitfall";
+    div.textContent = p;
+    pf.appendChild(div);
+  }
+  const pfCfg = document.createElement("div");
+  pfCfg.className = "pitfall";
+  pfCfg.textContent = "inference_config (" + cfg + "): " + CFG_PITFALL[cfg];
+  pf.appendChild(pfCfg);
+
+  // Scores across cfg presets for the current (shape, harness).
+  const sc = document.getElementById("scores");
+  sc.innerHTML = "";
+  const presets = ["greedy-short", "greedy-long", "passk", "chatty"];
+  for (const p of presets) {
+    const base = BASE[key];
+    const delta = CFG_DELTA[p][shape];
+    const v = Math.max(0, Math.min(100, base + delta));
+    const row = document.createElement("div");
+    row.className = "score-row";
+    const lbl = document.createElement("span"); lbl.className = "lbl"; lbl.textContent = p;
+    const bar = document.createElement("div"); bar.className = "score-bar";
+    const fill = document.createElement("div"); fill.style.width = v + "%";
+    bar.appendChild(fill);
+    const val = document.createElement("span"); val.className = "val"; val.textContent = v.toFixed(0);
+    row.appendChild(lbl); row.appendChild(bar); row.appendChild(val);
+    sc.appendChild(row);
+  }
+  document.getElementById("readout").textContent =
+    "baseline " + BASE[key] + " at (shape=" + shape + ", harness=" + harness + ")  delta from cfg: " + (CFG_DELTA[cfg][shape] >= 0 ? "+" : "") + CFG_DELTA[cfg][shape];
+}
+
+["shape", "harness", "cfg"].forEach(id =>
+  document.getElementById(id).addEventListener("input", render));
+render();
+</script>
+
+</body>
+</html>

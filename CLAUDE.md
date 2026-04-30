@@ -33,6 +33,45 @@ This file is the teacher's operating contract. Read it at session start. Follow 
 
 ---
 
+## Raw source libraries
+
+Long-running courses maintain a pre-collected source library under `wiki/raw-data/<course-slug>/` (older courses use `wiki/sources/<course-slug>/`). Each library follows the layout in its own `README.md` and tracks target coverage in `COLLECTION-PLAN.md`.
+
+**Rules**:
+- Before planning a new course or writing a new chapter, read `wiki/raw-data/<slug>/COLLECTION-PLAN.md` and `insights.md` first. Only crawl the open web if a needed source is missing and the gap log confirms it.
+- Each source file is one artifact (paper / blog / tech report / framework module) and follows the header schema in the library README (Core Insight + Guideline + Technical Details).
+- When a chapter's `read.md` cites a source, link it via `[[source-slug]]` so the wiki-maintainer can validate references.
+- If you discover new must-read material during course authoring, add a file to the library and append a row to `insights.md` — do not inline the extract into a chapter.
+
+Active libraries and courses:
+
+| Slug | Library path | Course outline | Scope |
+|------|--------------|----------------|-------|
+| `llm-arch` | `wiki/sources/llm-arch/` | `wiki/courses/llm-arch/outline.json` | Transformer architecture, attention variants, positional encoding, MoE, inference kernels |
+| `llm-training` | `wiki/raw-data/llm-training/` | `wiki/courses/llm-training/outline.json` | Classical training fundamentals + data curation + synthetic-data generation + SFT + RL; 60 chapters across 4 tracks (data / synthetic / sft / rl) |
+
+For `llm-training`, the outline groups chapters into four explicit tracks (see the `tracks` field in `outline.json`). Treat each track as a self-contained professional course — dependencies within a track are sequential, but different tracks can in principle be interleaved if the learner wants a different order.
+
+---
+
+## Chapter authoring — HTML visualizations
+
+Each chapter's `read.md` is a markdown file, but chapters are free to **emit and link companion HTML files** whenever a concept is genuinely easier to learn interactively than in prose. Put HTML companions under `wiki/courses/<slug>/ch-XX/figures/` (or `.../animations/`) and link them from `read.md` with relative links.
+
+Use an HTML companion when it adds understanding that markdown cannot match. Good fits include:
+
+- **Architecture diagrams** beyond what mermaid handles: attention-head flow, RL rollout pipelines, reward-model stacks, SFT→RL handoffs
+- **Animated step-by-step walkthroughs**: PPO-clip behaviour across advantage signs, DPO loss landscape as β varies, entropy-collapse trajectories, rollout-buffer dynamics
+- **Interactive sliders / parameter explorers**: KL-vs-reward tradeoff, rejection-sampling accept rate vs temperature, top-p/top-k sampling, RoPE frequency bands, MinHash collision probability
+- **Inline math + plot combos** for scaling laws, entropy plots, reward over-optimisation curves
+- **Code + execution sandboxes** when lifting actual framework snippets (verl/OpenRLHF/TRL) with live-editable parameters
+
+Keep HTML companions self-contained: inline CSS/JS (no external CDNs), plain HTML + vanilla JS or a single small library embedded as a `<script>` tag so the file renders offline. Every companion must be referenced from the `read.md` at the point where it's most useful — don't drop a standalone HTML page with no textual cue pointing to it.
+
+Do **not** use HTML to replace prose exposition. Markdown + wikilinks remains the backbone; HTML is an amplifier, not a substitute.
+
+---
+
 ## What never to edit
 
 | Path | Owner | Reason |

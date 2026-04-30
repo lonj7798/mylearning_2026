@@ -1,0 +1,237 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Self-Improvement Loop — interactive animator</title>
+<style>
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; max-width: 1200px; margin: 1.4em auto; padding: 0 1em; color: #1f1f1f; background: #fafafa; }
+  h1 { font-size: 1.25em; margin-bottom: 0.2em; }
+  .sub { color: #5a5a5a; margin-top: 0; font-size: 0.9em; line-height: 1.5; }
+  .layout { display: grid; grid-template-columns: 1fr 360px; gap: 1.2em; margin-top: 1em; }
+  .panel { border: 1px solid #dcdcdc; border-radius: 6px; background: #fff; padding: 0.9em 1em; }
+  h2 { font-size: 0.98em; margin: 0 0 0.6em 0; color: #2b2b2b; border-bottom: 1px solid #ececec; padding-bottom: 0.3em; }
+  svg { width: 100%; display: block; }
+  .method-row { display: flex; gap: 0.4em; flex-wrap: wrap; margin: 0.5em 0 1em 0; }
+  .mbtn { padding: 0.4em 0.7em; border: 1px solid #c0c8d2; background: #fff; border-radius: 4px; font-size: 0.85em; cursor: pointer; font-family: 'SF Mono', Menlo, monospace; color: #222; }
+  .mbtn.on { background: #2e5aa8; color: #fff; border-color: #2e5aa8; }
+  .controls { display: flex; gap: 0.5em; align-items: center; margin: 0.3em 0; }
+  .controls button { padding: 0.4em 0.8em; background: #4a6fb0; color: #fff; border: none; border-radius: 4px; cursor: pointer; font-size: 0.85em; }
+  .controls button:disabled { background: #aaa; cursor: not-allowed; }
+  .controls label { font-size: 0.85em; color: #444; }
+  .loop-box { stroke: #8391a3; stroke-width: 1.4; fill: #f4f7fb; rx: 6; ry: 6; }
+  .loop-box.active { stroke: #2e5aa8; stroke-width: 2.4; fill: #e4edfb; }
+  .loop-label { font-family: 'SF Mono', Menlo, monospace; font-size: 11px; fill: #1e2630; text-anchor: middle; }
+  .loop-note { font-family: 'SF Mono', Menlo, monospace; font-size: 9.5px; fill: #556; text-anchor: middle; }
+  .loop-arrow { stroke: #4a5a70; stroke-width: 1.3; fill: none; marker-end: url(#arrow); }
+  .loop-arrow.active { stroke: #2e5aa8; stroke-width: 2.4; }
+  .gain-axis { stroke: #888; stroke-width: 1; }
+  .gain-axis-label { font-size: 10px; fill: #555; font-family: 'SF Mono', Menlo, monospace; }
+  .gain-line { stroke: #2e5aa8; stroke-width: 2.0; fill: none; }
+  .gain-dot { fill: #2e5aa8; }
+  .gain-plateau { stroke: #c44; stroke-width: 1.2; stroke-dasharray: 4 3; fill: none; }
+  .detail { font-size: 0.88em; color: #333; line-height: 1.5; }
+  .detail .k { font-family: 'SF Mono', Menlo, monospace; color: #204080; }
+  .filt { background: #fff5d6; padding: 0.3em 0.5em; border-radius: 3px; font-family: 'SF Mono', Menlo, monospace; font-size: 0.82em; display: inline-block; margin: 0.15em 0; }
+  .src { font-size: 0.78em; color: #5a6a80; margin-top: 0.5em; }
+</style>
+</head>
+<body>
+
+<h1>Self-Improvement Loop — pick a filter, run the loop</h1>
+<p class="sub">
+  Every self-improvement method in ch-45 is <b>generate -> filter -> retrain</b>. Choose the filter
+  and the loop reveals its saturation profile. Gain curves are illustrative but arrow directions
+  and plateau step are attested in the cited sources.
+</p>
+
+<div class="method-row" id="methods"></div>
+
+<div class="controls">
+  <button id="stepBtn">Step iter</button>
+  <button id="runBtn">Run 5 iters</button>
+  <button id="resetBtn">Reset</button>
+  <label>Iter: <span id="iterLabel">0</span> / 5</label>
+</div>
+
+<div class="layout">
+
+<div class="panel">
+  <h2>The loop — node in purple is the active step</h2>
+  <svg id="loopSvg" viewBox="0 0 700 320" preserveAspectRatio="xMidYMid meet">
+    <defs>
+      <marker id="arrow" markerWidth="6" markerHeight="6" refX="5" refY="3" orient="auto">
+        <polygon points="0 0, 6 3, 0 6" fill="#4a5a70"/>
+      </marker>
+    </defs>
+  </svg>
+
+  <h2 style="margin-top:0.8em">Cumulative gain vs iteration</h2>
+  <svg id="gainSvg" viewBox="0 0 700 220" preserveAspectRatio="xMidYMid meet"></svg>
+</div>
+
+<div class="panel">
+  <h2>Method detail</h2>
+  <div id="detail" class="detail"></div>
+</div>
+
+</div>
+
+<script>
+const METHODS = {
+  "self-rewarding": { label: "Self-Rewarding", filter: "policy-as-judge, 5-pt rubric, argmax/argmin of 4 samples", retrain: "DPO, beta=0.1, 1 epoch", note: "judge drifts; cap at 3 iters", curve: [9.94, 15.38, 20.44, 20.8, 19.5, 18.0], yMax: 25, yLabel: "AlpacaEval 2 win-rate %", plateauAt: 3, src: "Yuan 2024 (Self-Rewarding LM); Llama-2-70B" },
+  "meta-rewarding": { label: "Meta-Rewarding", filter: "policy-as-judge + meta-judge pairwise on 11 judgments", retrain: "DPO on actor and on judge", note: "meta-judge pushes plateau to iter 5", curve: [22.9, 29.8, 34.2, 37.5, 39.4, 39.2], yMax: 45, yLabel: "AlpacaEval 2 LC %", plateauAt: 5, src: "Wu 2024 (Meta-Rewarding LM); Llama-3-8B-Instruct" },
+  "spin": { label: "SPIN", filter: "chosen = y_human, rejected = y_{t-1}(x)", retrain: "DPO beta=0.1, 3 epochs", note: "Nash = match data; bounded by SFT corpus", curve: [6.39, 6.78, 7.00, 7.12, 7.10, 7.08], yMax: 8.0, yLabel: "MT-Bench", plateauAt: 3, src: "Chen 2024 (SPIN); Zephyr-7B on UltraChat" },
+  "score": { label: "SCoRe", filter: "outcome reward r(y2) - r(y1), two-turn rollout", retrain: "Stage I RL on turn-2; Stage II joint w/ shape alpha=2.0", note: "crosses zero on MATH self-correct (prior methods <= 0)", curve: [0.0, 4.2, 9.0, 12.5, 14.8, 15.6], yMax: 18, yLabel: "MATH self-correct delta (pts)", plateauAt: 5, src: "Kumar 2024 (SCoRe); Gemini 1.0 Pro" },
+  "rest-em": { label: "ReST-EM", filter: "E-step: K=32 @ T=1.0, keep verifier-correct (top-4 distinct)", retrain: "M-step: SFT 1 epoch, lr 1e-5", note: "iter-3 regresses without diversity cap", curve: [34.1, 42.0, 50.6, 49.0, 47.0, 45.0], yMax: 55, yLabel: "MATH accuracy %", plateauAt: 2, src: "Singh 2023 (ReST-EM); PaLM-2-L" },
+  "r1-zero": { label: "R1-Zero", filter: "rule verifier: r_acc + r_format, no PRM", retrain: "GRPO, group size 16-64, ctx 32k", note: "emergent long CoT; base-model reasoning prior required", curve: [15, 32, 48, 58, 65, 70], yMax: 80, yLabel: "AIME 2024 pass@1 %", plateauAt: 10, src: "DeepSeek-R1 2025; V3-Base" }
+};
+
+const ORDER = ["self-rewarding", "meta-rewarding", "spin", "score", "rest-em", "r1-zero"];
+const LOOP_NODES = [
+  { id: "gen",  x: 120, y: 100, w: 150, h: 58, label: "generate",  note: "pi_{t-1} rollouts" },
+  { id: "filt", x: 330, y: 100, w: 150, h: 58, label: "filter",    note: "signal source" },
+  { id: "retr", x: 540, y: 100, w: 150, h: 58, label: "retrain",   note: "DPO / SFT / RL" },
+  { id: "ref",  x: 330, y: 230, w: 150, h: 58, label: "reset pi_ref", note: "pi_ref <- pi_{t-1}" }
+];
+const LOOP_EDGES = [
+  { from: "gen",  to: "filt" },
+  { from: "filt", to: "retr" },
+  { from: "retr", to: "ref"  },
+  { from: "ref",  to: "gen"  }
+];
+
+let state = { method: "self-rewarding", iter: 0, activeStep: -1, timer: null };
+
+function el(id) { return document.getElementById(id); }
+
+function renderMethodButtons() {
+  const row = el("methods");
+  row.innerHTML = "";
+  for (const k of ORDER) {
+    const b = document.createElement("button");
+    b.className = "mbtn" + (k === state.method ? " on" : "");
+    b.textContent = METHODS[k].label;
+    b.onclick = () => { state.method = k; state.iter = 0; state.activeStep = -1; stopTimer(); renderAll(); };
+    row.appendChild(b);
+  }
+}
+
+function renderLoop() {
+  const svg = el("loopSvg");
+  let h = svg.querySelector("defs").outerHTML;
+  for (const e of LOOP_EDGES) {
+    const a = LOOP_NODES.find(n => n.id === e.from);
+    const b = LOOP_NODES.find(n => n.id === e.to);
+    const x1 = a.x + a.w/2, y1 = a.y + a.h/2;
+    const x2 = b.x + b.w/2, y2 = b.y + b.h/2;
+    const active = (state.activeStep >= 0) && isEdgeActive(e, state.activeStep);
+    h += `<path class="loop-arrow ${active?"active":""}"
+             d="M ${x1} ${y1} L ${x2} ${y2}"/>`;
+  }
+  LOOP_NODES.forEach((n, i) => {
+    const active = (i === state.activeStep);
+    h += `<rect class="loop-box ${active?"active":""}" x="${n.x}" y="${n.y}" width="${n.w}" height="${n.h}"/>`;
+    h += `<text class="loop-label" x="${n.x+n.w/2}" y="${n.y+24}">${n.label}</text>`;
+    h += `<text class="loop-note"  x="${n.x+n.w/2}" y="${n.y+42}">${n.note}</text>`;
+  });
+  svg.innerHTML = h;
+}
+
+function isEdgeActive(edge, step) {
+  const idx = ["gen","filt","retr","ref"];
+  return idx[step] === edge.from;
+}
+
+function renderGain() {
+  const m = METHODS[state.method];
+  const svg = el("gainSvg");
+  const W = 700, H = 220, padL = 50, padR = 20, padT = 16, padB = 30;
+  const xs = (i) => padL + (i / 5) * (W - padL - padR);
+  const ys = (v) => H - padB - (v / m.yMax) * (H - padT - padB);
+
+  let h = "";
+  h += `<line class="gain-axis" x1="${padL}" y1="${H-padB}" x2="${W-padR}" y2="${H-padB}"/>`;
+  h += `<line class="gain-axis" x1="${padL}" y1="${padT}"   x2="${padL}"    y2="${H-padB}"/>`;
+  for (let v = 0; v <= m.yMax; v += m.yMax/5) {
+    const yy = ys(v);
+    h += `<line class="gain-axis" x1="${padL-3}" y1="${yy}" x2="${padL}" y2="${yy}"/>`;
+    h += `<text class="gain-axis-label" x="${padL-6}" y="${yy+3}" text-anchor="end">${v.toFixed(v<10?1:0)}</text>`;
+  }
+  for (let i = 0; i <= 5; i++) {
+    h += `<text class="gain-axis-label" x="${xs(i)}" y="${H-padB+14}" text-anchor="middle">iter ${i}</text>`;
+  }
+  h += `<text class="gain-axis-label" x="${padL-32}" y="${padT+10}">${m.yLabel}</text>`;
+
+  const shown = Math.max(state.iter, 0);
+  if (shown >= 1) {
+    let d = `M ${xs(0)} ${ys(m.curve[0])}`;
+    for (let i = 1; i <= shown; i++) d += ` L ${xs(i)} ${ys(m.curve[i])}`;
+    h += `<path class="gain-line" d="${d}"/>`;
+  }
+  for (let i = 0; i <= shown; i++) {
+    h += `<circle class="gain-dot" cx="${xs(i)}" cy="${ys(m.curve[i])}" r="3.5"/>`;
+  }
+
+  if (m.plateauAt <= 5) {
+    const px = xs(m.plateauAt);
+    h += `<line class="gain-plateau" x1="${px}" y1="${padT}" x2="${px}" y2="${H-padB}"/>`;
+    h += `<text class="gain-axis-label" x="${px+4}" y="${padT+10}" fill="#c44">plateau</text>`;
+  }
+
+  svg.innerHTML = h;
+}
+
+function renderDetail() {
+  const m = METHODS[state.method];
+  const d = el("detail");
+  const stepName = ["generate", "filter", "retrain", "reset pi_ref"][state.activeStep] || "-";
+  d.innerHTML = `
+    <p><b>${m.label}</b></p>
+    <div><span class="k">filter:</span> <span class="filt">${m.filter}</span></div>
+    <div><span class="k">retrain:</span> <span class="filt">${m.retrain}</span></div>
+    <div><span class="k">saturation:</span> ${m.note}</div>
+    <div><span class="k">active step:</span> ${stepName} (iter ${state.iter})</div>
+    <div><span class="k">current gain:</span> ${m.curve[state.iter].toFixed(m.yMax<10?2:1)} ${m.yLabel}</div>
+    <p class="src">Source: ${m.src}</p>
+    <p style="font-size:0.82em;color:#444;margin-top:0.6em;">
+      Every run hits the same 4-step cycle. What changes is the
+      <b>signal source</b> that the filter consumes. Saturation iter
+      is the empirical plateau reported in the source paper.
+    </p>
+  `;
+}
+
+function renderAll() {
+  renderMethodButtons();
+  renderLoop();
+  renderGain();
+  renderDetail();
+  el("iterLabel").textContent = state.iter;
+}
+
+function stepOnce() {
+  if (state.iter >= 5 && state.activeStep === 3) return;
+  state.activeStep = (state.activeStep + 1) % 4;
+  if (state.activeStep === 0 && state.iter < 5) state.iter += 1;
+  renderAll();
+}
+
+function stopTimer() {
+  if (state.timer) { clearInterval(state.timer); state.timer = null; }
+}
+
+el("stepBtn").onclick = () => { stopTimer(); stepOnce(); };
+el("runBtn").onclick = () => {
+  stopTimer(); state.iter = 0; state.activeStep = -1;
+  state.timer = setInterval(() => {
+    stepOnce();
+    if (state.iter >= 5 && state.activeStep === 3) stopTimer();
+  }, 420);
+};
+el("resetBtn").onclick = () => { stopTimer(); state.iter = 0; state.activeStep = -1; renderAll(); };
+
+renderAll();
+</script>
+
+</body>
+</html>

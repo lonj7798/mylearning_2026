@@ -1,0 +1,279 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Annotation Workflow — three-tier pipeline with configurable κ threshold</title>
+<style>
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+         max-width: 1100px; margin: 2em auto; padding: 0 1em; color: #222; background: #fafafa; }
+  h1 { font-size: 1.35em; margin-bottom: 0.2em; }
+  .subtitle { color: #666; margin-top: 0; font-size: 0.95em; }
+  .layout { display: grid; grid-template-columns: 1.15fr 1fr; gap: 1.2em; margin-top: 1.2em; }
+  .panel { border: 1px solid #dcdcdc; border-radius: 6px; background: #fff; padding: 0.9em 1.1em; }
+  h2 { font-size: 1.05em; margin: 0 0 0.6em 0; color: #333;
+       border-bottom: 1px solid #eee; padding-bottom: 0.3em; }
+  .ctrl-row { display: grid; grid-template-columns: 160px 1fr 60px; gap: 0.5em;
+              align-items: center; padding: 0.35em 0; }
+  .ctrl-row label { font-size: 0.9em; color: #333; }
+  input[type="range"] { width: 100%; }
+  .val { font-family: 'SF Mono', Menlo, monospace; font-size: 0.85em; background: #eef;
+         padding: 2px 6px; border-radius: 3px; text-align: right; }
+  select, input[type="number"] { font-family: inherit; font-size: 0.9em; padding: 3px 6px;
+                                  border: 1px solid #ccc; border-radius: 3px; }
+  .pipeline { display: flex; justify-content: space-between; align-items: stretch;
+              margin: 0.8em 0 0.4em 0; }
+  .stage { flex: 1; text-align: center; padding: 0.6em 0.4em; border: 1px solid #bbb;
+           border-radius: 5px; background: #f6f6fa; margin: 0 0.3em; }
+  .stage-name { font-weight: 600; font-size: 0.92em; color: #333; }
+  .stage-load { font-family: 'SF Mono', Menlo, monospace; font-size: 1.15em;
+                color: #2a4a8a; margin-top: 0.2em; }
+  .stage-unit { font-size: 0.72em; color: #777; }
+  .arrow { font-size: 1.4em; color: #aaa; align-self: center; padding: 0 0.15em; }
+  .verdict-row { display: flex; align-items: center; justify-content: space-between;
+                 padding: 0.45em 0.15em; border-bottom: 1px solid #eee; }
+  .verdict-row:last-child { border-bottom: none; }
+  .verdict-name { font-weight: 600; font-size: 0.9em; }
+  .verdict-val { font-family: 'SF Mono', Menlo, monospace; font-size: 0.9em; padding: 3px 9px;
+                 border-radius: 4px; font-weight: 600; }
+  .ok   { background: #e6f4ea; color: #1b5e20; border: 1px solid #b7dfc2; }
+  .warn { background: #fff4e0; color: #7a4a00; border: 1px solid #e6ca93; }
+  .fail { background: #fde7e7; color: #8b1a1a; border: 1px solid #e9b8b8; }
+  .note { font-size: 0.82em; color: #666; margin-top: 1em; line-height: 1.5; }
+  .bars { margin-top: 0.3em; }
+  .bar-row { display: grid; grid-template-columns: 130px 1fr 80px; gap: 0.5em;
+             align-items: center; padding: 2px 0; font-size: 0.85em; }
+  .bar-track { background: #eee; border-radius: 3px; height: 14px; overflow: hidden; }
+  .bar-fill { height: 100%; background: linear-gradient(90deg, #6a9cd8, #345b9a); }
+  code { background: #eef; padding: 1px 4px; border-radius: 3px;
+         font-family: 'SF Mono', Menlo, monospace; font-size: 0.85em; }
+</style>
+</head>
+<body>
+
+<h1>Annotation Workflow — configurable three-tier pipeline</h1>
+<p class="subtitle">
+  Adjust the κ threshold, item volume, per-tier cost, and annotation mode.
+  Escalation rate, expert load, total cost, and the production-readiness
+  verdict update live. Source: <code>[[rlhf-instructgpt]]</code>,
+  <code>[[hh-rlhf]]</code>, <code>[[prm800k]]</code>, <code>[[tulu-3-sft-mix]]</code>.
+</p>
+
+<div class="layout">
+
+  <div class="panel">
+    <h2>Pipeline knobs</h2>
+
+    <div class="ctrl-row">
+      <label for="kappa">Observed κ (inter-rater)</label>
+      <input type="range" id="kappa" min="0.00" max="0.95" step="0.01" value="0.60">
+      <span class="val" id="kappaVal">0.60</span>
+    </div>
+
+    <div class="ctrl-row">
+      <label for="kthresh">κ threshold for keep (no escalation if ≥)</label>
+      <input type="range" id="kthresh" min="0.30" max="0.95" step="0.01" value="0.60">
+      <span class="val" id="kthreshVal">0.60</span>
+    </div>
+
+    <div class="ctrl-row">
+      <label for="nitems">Items per month</label>
+      <input type="number" id="nitems" min="1000" max="2000000" step="1000" value="100000">
+      <span class="val" id="nitemsVal">100k</span>
+    </div>
+
+    <div class="ctrl-row">
+      <label for="mode">Annotation mode</label>
+      <select id="mode">
+        <option value="single">Single annotator (1× cost, no filter)</option>
+        <option value="double" selected>Double + expert tiebreak (production default)</option>
+        <option value="triple">Triple + majority vote (safety-critical)</option>
+      </select>
+      <span></span>
+    </div>
+
+    <div class="ctrl-row">
+      <label for="costWorker">Crowdworker $ / item</label>
+      <input type="number" id="costWorker" min="0.05" max="20" step="0.05" value="0.50">
+      <span class="val">USD</span>
+    </div>
+
+    <div class="ctrl-row">
+      <label for="costReviewer">Reviewer $ / item</label>
+      <input type="number" id="costReviewer" min="0.1" max="40" step="0.1" value="1.50">
+      <span class="val">USD</span>
+    </div>
+
+    <div class="ctrl-row">
+      <label for="costExpert">Expert adjudicator $ / item</label>
+      <input type="number" id="costExpert" min="1" max="100" step="0.5" value="5.00">
+      <span class="val">USD</span>
+    </div>
+
+    <h2 style="margin-top:1em;">Load per tier</h2>
+    <div class="pipeline">
+      <div class="stage">
+        <div class="stage-name">Annotator</div>
+        <div class="stage-load" id="loadAnn">—</div>
+        <div class="stage-unit">items/mo</div>
+      </div>
+      <div class="arrow">→</div>
+      <div class="stage">
+        <div class="stage-name">Reviewer</div>
+        <div class="stage-load" id="loadRev">—</div>
+        <div class="stage-unit">items/mo</div>
+      </div>
+      <div class="arrow">→</div>
+      <div class="stage">
+        <div class="stage-name">Adjudicator</div>
+        <div class="stage-load" id="loadAdj">—</div>
+        <div class="stage-unit">items/mo</div>
+      </div>
+    </div>
+
+    <div class="bars">
+      <div class="bar-row">
+        <span>Escalation rate</span>
+        <div class="bar-track"><div class="bar-fill" id="barEsc" style="width:0%"></div></div>
+        <span class="val" id="escVal">—</span>
+      </div>
+      <div class="bar-row">
+        <span>Kept at reviewer</span>
+        <div class="bar-track"><div class="bar-fill" id="barKept" style="width:0%"></div></div>
+        <span class="val" id="keptVal">—</span>
+      </div>
+    </div>
+  </div>
+
+  <div>
+    <div class="panel">
+      <h2>Cost and readiness verdict</h2>
+      <div class="verdict-row">
+        <span class="verdict-name">Total monthly spend</span>
+        <span class="verdict-val" id="vCost">—</span>
+      </div>
+      <div class="verdict-row">
+        <span class="verdict-name">Cost per usable label</span>
+        <span class="verdict-val" id="vPerLabel">—</span>
+      </div>
+      <div class="verdict-row">
+        <span class="verdict-name">Expert-tier share of budget</span>
+        <span class="verdict-val" id="vExpertShare">—</span>
+      </div>
+      <div class="verdict-row">
+        <span class="verdict-name">Rubric quality (Landis-Koch)</span>
+        <span class="verdict-val" id="vKappaClass">—</span>
+      </div>
+      <div class="verdict-row">
+        <span class="verdict-name">Production-ready?</span>
+        <span class="verdict-val" id="vReady">—</span>
+      </div>
+    </div>
+
+    <div class="panel" style="margin-top:1em;">
+      <h2>How the model works</h2>
+      <p style="font-size:0.86em; line-height:1.5; margin:0.3em 0 0.6em 0;">
+        Disagreement rate ≈ <code>(1−κ)/2</code> under balanced marginals; triple
+        annotation with majority vote escalates only if all three disagree ≈
+        <code>((1−κ)/2)²</code>. Reviewer absorbs agreed-on doubles cheaply;
+        adjudicator resolves the rest at 3–10× the rate.
+      </p>
+      <p style="font-size:0.86em; line-height:1.5; margin:0 0 0.2em 0;">
+        Moving κ from <strong>0.5 → 0.7</strong> on the default config cuts the
+        adjudicator line by roughly half — the dominant ROI of rubric iteration.
+      </p>
+    </div>
+  </div>
+</div>
+
+<div class="note">
+  Simplifications: assumes balanced label marginals, no annotator dropout,
+  no rubric version drift. Real operations additionally pay for onboarding,
+  calibration sessions (~1 week of every annotator's time at project start),
+  and anchor-set re-runs for drift detection.
+</div>
+
+<script>
+const el = id => document.getElementById(id);
+const ids = ["kappa","kthresh","nitems","mode","costWorker","costReviewer","costExpert"];
+
+function fmtMoney(x) {
+  if (x >= 1e6) return "$" + (x/1e6).toFixed(2) + "M";
+  if (x >= 1e3) return "$" + (x/1e3).toFixed(1) + "k";
+  return "$" + x.toFixed(0);
+}
+function fmtInt(x) {
+  if (x >= 1e6) return (x/1e6).toFixed(2) + "M";
+  if (x >= 1e3) return (x/1e3).toFixed(0) + "k";
+  return x.toFixed(0);
+}
+function kappaClass(k) {
+  if (k < 0.2) return {txt: "slight (unship)", cls: "fail"};
+  if (k < 0.4) return {txt: "fair", cls: "fail"};
+  if (k < 0.6) return {txt: "moderate", cls: "warn"};
+  if (k < 0.8) return {txt: "substantial", cls: "ok"};
+  return {txt: "almost perfect", cls: "ok"};
+}
+function setBadge(node, text, cls) { node.textContent = text; node.className = "verdict-val " + cls; }
+
+function render() {
+  const kappa   = parseFloat(el("kappa").value);
+  const kthresh = parseFloat(el("kthresh").value);
+  const nItems  = parseInt(el("nitems").value);
+  const mode    = el("mode").value;
+  const cW = parseFloat(el("costWorker").value);
+  const cR = parseFloat(el("costReviewer").value);
+  const cE = parseFloat(el("costExpert").value);
+
+  el("kappaVal").textContent   = kappa.toFixed(2);
+  el("kthreshVal").textContent = kthresh.toFixed(2);
+  el("nitemsVal").textContent  = fmtInt(nItems);
+
+  // Disagreement model: pairwise disagreement ≈ (1-kappa)/2 under balanced marginals.
+  const pDisagreePair = Math.max(0, (1 - kappa) / 2);
+  let annLoad, revLoad, adjLoad, escRate, keptRate;
+
+  if (mode === "single") {
+    annLoad = nItems; revLoad = 0; adjLoad = 0; escRate = 0; keptRate = 1;
+  } else if (mode === "double") {
+    annLoad = nItems * 2; revLoad = nItems;
+    escRate = pDisagreePair;
+    if (kappa < kthresh) escRate = Math.min(1, escRate * 1.5);  // rubric below threshold -> floods adjudicator
+    adjLoad = nItems * escRate; keptRate = 1 - escRate;
+  } else {  // triple + majority vote: escalate only if all disagree ≈ pDisagreePair^2
+    annLoad = nItems * 3; revLoad = nItems;
+    escRate = pDisagreePair * pDisagreePair;
+    if (kappa < kthresh) escRate = Math.min(1, escRate * 1.5);
+    adjLoad = nItems * escRate; keptRate = 1 - escRate;
+  }
+
+  const total = annLoad * cW + revLoad * cR + adjLoad * cE;
+  const perLabel = total / Math.max(1, nItems);
+  const expShare = total > 0 ? (adjLoad * cE) / total : 0;
+
+  el("loadAnn").textContent = fmtInt(annLoad);
+  el("loadRev").textContent = fmtInt(revLoad);
+  el("loadAdj").textContent = fmtInt(adjLoad);
+  el("escVal").textContent  = (escRate * 100).toFixed(1) + "%";
+  el("keptVal").textContent = (keptRate * 100).toFixed(1) + "%";
+  el("barEsc").style.width  = Math.min(100, escRate * 100) + "%";
+  el("barKept").style.width = Math.min(100, keptRate * 100) + "%";
+
+  setBadge(el("vCost"),        fmtMoney(total), "warn");
+  setBadge(el("vPerLabel"),    "$" + perLabel.toFixed(2), "warn");
+  setBadge(el("vExpertShare"), (expShare * 100).toFixed(1) + "%",
+           expShare > 0.5 ? "fail" : (expShare > 0.3 ? "warn" : "ok"));
+  const kc = kappaClass(kappa);
+  setBadge(el("vKappaClass"), "κ=" + kappa.toFixed(2) + " · " + kc.txt, kc.cls);
+  const ready = (kappa >= kthresh) && (mode !== "single" || kappa >= 0.8);
+  setBadge(el("vReady"), ready ? "ship" : "iterate on rubric", ready ? "ok" : "fail");
+}
+
+ids.forEach(id => {
+  el(id).addEventListener("input", render);
+  el(id).addEventListener("change", render);
+});
+render();
+</script>
+
+</body>
+</html>

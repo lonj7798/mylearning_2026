@@ -1,0 +1,254 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<title>Tülu 3 vs Llama 3 — Linear Pipeline vs Six-Round Flywheel</title>
+<style>
+  * { box-sizing: border-box; }
+  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #fafaf7; color: #1a1a1a; margin: 0; padding: 24px; line-height: 1.45; }
+  h1 { font-size: 20px; margin: 0 0 8px 0; }
+  .sub { font-size: 13px; color: #555; margin-bottom: 24px; max-width: 900px; }
+  .wrap { display: grid; grid-template-columns: 1fr 1fr; gap: 28px; max-width: 1200px; }
+  .col { background: #fff; border: 1px solid #ddd; border-radius: 6px; padding: 18px 20px; }
+  .col h2 { font-size: 15px; margin: 0 0 4px 0; }
+  .col .tag { font-size: 11px; color: #666; margin-bottom: 14px; }
+  .stage { border: 1px solid #ddd; border-left: 4px solid #3a6ea5; padding: 10px 12px; margin-bottom: 10px; border-radius: 4px; background: #fbfcfe; }
+  .stage.dpo { border-left-color: #a5633a; }
+  .stage.rlvr { border-left-color: #4a8a4a; }
+  .stage h3 { font-size: 13px; margin: 0 0 4px 0; }
+  .stage .meta { font-size: 11px; color: #666; margin-bottom: 4px; }
+  .bar-row { font-size: 11px; margin: 2px 0; display: grid; grid-template-columns: 90px 1fr 48px; gap: 6px; align-items: center; }
+  .bar { background: #eaeaea; height: 10px; border-radius: 2px; overflow: hidden; }
+  .bar > div { height: 100%; background: #3a6ea5; }
+  .stage.dpo .bar > div { background: #a5633a; }
+  .stage.rlvr .bar > div { background: #4a8a4a; }
+  .val { font-size: 11px; text-align: right; color: #444; font-variant-numeric: tabular-nums; }
+  .round-picker { display: flex; gap: 4px; margin-bottom: 12px; flex-wrap: wrap; }
+  .round-picker button { font-size: 12px; padding: 5px 10px; border: 1px solid #aaa; background: #fff; border-radius: 3px; cursor: pointer; }
+  .round-picker button.active { background: #3a6ea5; color: #fff; border-color: #3a6ea5; }
+  .round-detail { border: 1px solid #ddd; border-left: 4px solid #3a6ea5; padding: 10px 12px; border-radius: 4px; background: #fbfcfe; margin-bottom: 10px; }
+  .round-detail .focus { font-size: 12px; font-weight: 600; margin-bottom: 4px; }
+  .round-detail .body { font-size: 11px; color: #333; margin-bottom: 8px; }
+  .split-row { display: grid; grid-template-columns: 90px 1fr 48px; gap: 6px; align-items: center; font-size: 11px; margin: 4px 0; }
+  .split-bar { background: #eaeaea; height: 12px; border-radius: 2px; display: flex; overflow: hidden; }
+  .split-bar .syn { background: #a5633a; } .split-bar .hum { background: #4a8a4a; }
+  .legend { font-size: 10px; color: #555; margin-top: 4px; }
+  .eval-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 4px 12px; margin-top: 6px; }
+  .eval-item { font-size: 11px; } .eval-name { color: #555; }
+  .eval-delta { font-variant-numeric: tabular-nums; }
+  .delta-up { color: #2d7a2d; } .delta-flat { color: #666; } .delta-down { color: #a43a3a; }
+  .caveat { font-size: 11px; color: #555; font-style: italic; border-top: 1px dashed #ccc; padding-top: 10px; margin-top: 12px; }
+  .toggle-row { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; font-size: 11px; color: #444; }
+  .toggle-row input { margin: 0; }
+</style>
+</head>
+<body>
+  <h1>Tülu 3 vs Llama 3 — linear pipeline vs six-round flywheel</h1>
+  <div class="sub">
+    Left: Tülu 3's three-stage linear recipe (SFT → DPO → RLVR). Each stage's contribution bars are attested from [[rlvr-tulu3]] (RLVR deltas) and [[allenai-tulu-sft-recipe]] (SFT ablations).
+    Right: Llama 3's six-round SFT → rejection-sampling → DPO flywheel. Click a round to see its synthetic-vs-human mix and the (inferred) capability it targets. Per-round eval deltas are reasoned reconstructions, not a published Meta table — see the caveat at the bottom.
+  </div>
+
+  <div class="wrap">
+    <!-- TÜLU 3 LINEAR PIPELINE -->
+    <div class="col">
+      <h2>Tülu 3 — linear pipeline</h2>
+      <div class="tag">Llama 3.1 base · 8B reference config · 939K SFT · 270K DPO pairs · 10M RLVR episodes</div>
+
+      <div class="stage sft">
+        <h3>Stage 1 · SFT</h3>
+        <div class="meta">939,344 prompts · 57% public / 43% persona-synth · 2 epochs · LR 5e-6 · packing · response-only loss</div>
+        <div class="bar-row"><span>Chat / general</span><div class="bar"><div style="width:90%"></div></div><span class="val">27%</span></div>
+        <div class="bar-row"><span>Math</span><div class="bar"><div style="width:70%"></div></div><span class="val">21%</span></div>
+        <div class="bar-row"><span>Code</span><div class="bar"><div style="width:47%"></div></div><span class="val">14%</span></div>
+        <div class="bar-row"><span>Precise IF</span><div class="bar"><div style="width:37%"></div></div><span class="val">11%</span></div>
+        <div class="bar-row"><span>Safety</span><div class="bar"><div style="width:33%"></div></div><span class="val">10%</span></div>
+        <div class="bar-row"><span>Reasoning</span><div class="bar"><div style="width:33%"></div></div><span class="val">10%</span></div>
+        <div class="bar-row"><span>Multilingual</span><div class="bar"><div style="width:23%"></div></div><span class="val">7%</span></div>
+      </div>
+
+      <div class="stage dpo">
+        <h3>Stage 2 · DPO</h3>
+        <div class="meta">~270K preference pairs · length-normalized DPO · β=5.0 (8B) · LR 5e-7 · off-policy (UltraFeedback) + on-policy SFT rollouts</div>
+        <div class="eval-grid">
+          <div class="eval-item"><span class="eval-name">AlpacaEval-2:</span> <span class="eval-delta delta-up">+chat style</span></div>
+          <div class="eval-item"><span class="eval-name">Arena-Hard:</span> <span class="eval-delta delta-up">+preferences</span></div>
+          <div class="eval-item"><span class="eval-name">WildJailbreak:</span> <span class="eval-delta delta-up">+refusal calib</span></div>
+          <div class="eval-item"><span class="eval-name">GSM8K/MATH:</span> <span class="eval-delta delta-flat">neutral</span></div>
+        </div>
+      </div>
+
+      <div class="stage rlvr">
+        <h3>Stage 3 · RLVR (PPO + verifier)</h3>
+        <div class="meta">PPO · no RM · r = v(x,y) ∈ {0,1} · LR 3e-7 · β_KL 0.05 · clip 0.2 · K=4 · GAE λ=0.95 · 10M episodes</div>
+        <div class="bar-row"><span>GSM8K Δ</span><div class="bar"><div style="width:60%"></div></div><span class="val delta-up">+5–10 pp</span></div>
+        <div class="bar-row"><span>MATH Δ</span><div class="bar"><div style="width:25%"></div></div><span class="val delta-up">+~2 pp</span></div>
+        <div class="bar-row"><span>IFEval Δ</span><div class="bar"><div style="width:30%"></div></div><span class="val delta-up">+~4 pp</span></div>
+        <div class="bar-row"><span>HumanEval Δ</span><div class="bar"><div style="width:15%"></div></div><span class="val delta-up">+1–2 pp</span></div>
+        <div class="bar-row"><span>Other evals</span><div class="bar"><div style="width:5%"></div></div><span class="val delta-flat">neutral</span></div>
+        <div class="legend">Verifiers: SymPy eq. for MATH · integer match for GSM8K · regex constraint for IFEval · sandboxed unit-test exec for code.</div>
+      </div>
+
+      <div class="caveat">
+        RLVR gains attested for Tülu 3 8B vs DPO-only checkpoint ([[rlvr-tulu3]]). SFT bucket shares attested from the Tülu 3 blog [[allenai-tulu-sft-recipe]].
+      </div>
+    </div>
+
+    <!-- LLAMA 3 FLYWHEEL -->
+    <div class="col">
+      <h2>Llama 3 — six-round flywheel</h2>
+      <div class="tag">Llama 3 base · 405B flagship · 6 rounds of (fresh RM → rejection-sample → SFT → DPO) · DPO LR 1e-5 · β=0.1 · NLL aux 0.2</div>
+
+      <div class="toggle-row">
+        <label><input type="checkbox" id="showInferred" checked />Show inferred per-round capability target</label>
+      </div>
+
+      <div class="round-picker" id="roundPicker"></div>
+      <div id="roundDetail"></div>
+
+      <div class="caveat">
+        Synthetic-share numbers span the 50–80% window attested in [[llama-3]]; the per-round specific share is a reasoned reconstruction of the monotone ramp, not a published figure. Per-round capability emphasis is inferred from [[llama-3]] and [[llama-3-synthetic-pipeline]] — Meta does not publish a round-by-round eval table. Use this panel to build intuition for the flywheel, not to cite numbers.
+      </div>
+    </div>
+  </div>
+
+<script>
+  // All non-round-1 numbers are INFERRED reconstructions, as documented in the caveat.
+  const rounds = [
+    {
+      n: 1,
+      syn: 35,
+      hum: 65,
+      focus: "Round 1 · bootstrap — human SFT dominant",
+      body: "No strong RM exists yet, so rejection-sampled synthetic data is limited. The round uses mostly human SFT demonstrations and a seed preference batch.",
+      evals: [
+        { name: "Chat format",       delta: "+baseline",       cls: "delta-up" },
+        { name: "Basic IF",          delta: "+baseline",       cls: "delta-up" },
+        { name: "Code pass@1",       delta: "weak",            cls: "delta-flat" },
+        { name: "Math reasoning",    delta: "weak",            cls: "delta-flat" },
+      ],
+      attested: "attested: rejection-sampled share is smaller in round 1 because RM is not yet strong",
+    },
+    {
+      n: 2,
+      syn: 50,
+      hum: 50,
+      focus: "Round 2 · first mature RM drives rejection sampling",
+      body: "The first well-trained RM scores the round-1 best chat model's generations; the top-scoring completions replace most of the human SFT pool. Code and math format regressions from round 1 are visible in evals and the mixture reweights toward them.",
+      evals: [
+        { name: "Code pass@1",       delta: "+mid",            cls: "delta-up" },
+        { name: "GSM8K",             delta: "+mid",            cls: "delta-up" },
+        { name: "Chat helpfulness",  delta: "+small",          cls: "delta-up" },
+        { name: "Long context",      delta: "flat",            cls: "delta-flat" },
+      ],
+      attested: "inferred: specific capability targets not published by Meta",
+    },
+    {
+      n: 3,
+      syn: 62,
+      hum: 38,
+      focus: "Round 3 · code-exec filter and math verifier enter",
+      body: "Synthetic code is filtered by unit-test execution; synthetic math is filtered by a reference-answer verifier. The factuality pipeline ([[llama-3-synthetic-pipeline]]) turns consistently-wrong informative answers into refusals and enters the mix.",
+      evals: [
+        { name: "HumanEval / MBPP",  delta: "+large",          cls: "delta-up" },
+        { name: "MATH",              delta: "+mid",            cls: "delta-up" },
+        { name: "Factuality",        delta: "+mid",            cls: "delta-up" },
+        { name: "Tool call",         delta: "weak",            cls: "delta-flat" },
+      ],
+      attested: "inferred: factuality sub-pipeline attested in [[llama-3-synthetic-pipeline]]; per-eval delta is reconstruction",
+    },
+    {
+      n: 4,
+      syn: 70,
+      hum: 30,
+      focus: "Round 4 · multi-turn tool-use traces + long-context QA",
+      body: "Synthesized multi-turn traces with tool calls enter the SFT pool; long-context QA over 32K-extended documents targets long-context regressions from the context extension stage.",
+      evals: [
+        { name: "BFCL / tool-call",  delta: "+large",          cls: "delta-up" },
+        { name: "Long-context QA",   delta: "+mid",            cls: "delta-up" },
+        { name: "Multi-turn chat",   delta: "+small",          cls: "delta-up" },
+        { name: "Safety",            delta: "flat",            cls: "delta-flat" },
+      ],
+      attested: "inferred: tool-use / long-context synthetic flows are attested in [[llama-3]] §Post-Training; eval deltas reconstructed",
+    },
+    {
+      n: 5,
+      syn: 75,
+      hum: 25,
+      focus: "Round 5 · multilingual + Llama Guard 3 enters",
+      body: "Multilingual synthetic augmentation closes regressions in non-English; Llama Guard 3 (safety classifier) is co-trained and its signal enters the policy via preference ranking and refusal prompts.",
+      evals: [
+        { name: "Multilingual IF",   delta: "+mid",            cls: "delta-up" },
+        { name: "Refusal calib",     delta: "+mid",            cls: "delta-up" },
+        { name: "Helpfulness",       delta: "slight dip → fix",cls: "delta-flat" },
+        { name: "Reasoning",         delta: "+small",          cls: "delta-up" },
+      ],
+      attested: "inferred: Llama Guard 3 is attested; multilingual ramp is inferred",
+    },
+    {
+      n: 6,
+      syn: 80,
+      hum: 20,
+      focus: "Round 6 · final polish — most-recent preference batch only",
+      body: "DPO on the newest preference batch with NLL-on-chosen coefficient 0.2 stabilizes chosen-logprob. Old preference batches are explicitly NOT reused — they would re-introduce formats the policy has outgrown.",
+      evals: [
+        { name: "Arena-Hard",        delta: "+mid",            cls: "delta-up" },
+        { name: "Helpfulness",       delta: "+mid",            cls: "delta-up" },
+        { name: "Format drift",      delta: "resolved",        cls: "delta-up" },
+        { name: "Safety / helpful",  delta: "pareto tuned",    cls: "delta-up" },
+      ],
+      attested: "attested: most-recent-batch-only rule and NLL coefficient 0.2 ([[llama-3]])",
+    },
+  ];
+
+  const picker = document.getElementById("roundPicker");
+  const detail = document.getElementById("roundDetail");
+  const showInferred = document.getElementById("showInferred");
+  let current = 0;
+
+  function render() {
+    picker.innerHTML = "";
+    rounds.forEach((r, i) => {
+      const b = document.createElement("button");
+      b.textContent = "R" + r.n;
+      if (i === current) b.classList.add("active");
+      b.onclick = () => { current = i; render(); };
+      picker.appendChild(b);
+    });
+
+    const r = rounds[current];
+    const showTarget = showInferred.checked;
+
+    let evalsHtml = "";
+    if (showTarget) {
+      evalsHtml = '<div class="eval-grid">' +
+        r.evals.map(e =>
+          `<div class="eval-item"><span class="eval-name">${e.name}:</span> <span class="eval-delta ${e.cls}">${e.delta}</span></div>`
+        ).join("") +
+      '</div>';
+    }
+
+    detail.innerHTML = `
+      <div class="round-detail">
+        <div class="focus">${r.focus}</div>
+        <div class="body">${r.body}</div>
+        <div class="split-row">
+          <span>Data mix</span>
+          <div class="split-bar">
+            <div class="syn" style="width:${r.syn}%"></div>
+            <div class="hum" style="width:${r.hum}%"></div>
+          </div>
+          <span class="val">${r.syn}/${r.hum}</span>
+        </div>
+        <div class="legend"><span style="color:#a5633a">synthetic (rejection-sampled)</span> / <span style="color:#4a8a4a">human + curated</span></div>
+        ${evalsHtml}
+        <div class="legend" style="margin-top:8px; font-style:italic;">${r.attested}</div>
+      </div>
+    `;
+  }
+
+  showInferred.onchange = render;
+  render();
+</script>
+</body>
+</html>

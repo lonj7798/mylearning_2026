@@ -1,0 +1,246 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Open curation pipelines compared — CCNet, C4, Dolma, FineWeb</title>
+<style>
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+         max-width: 1200px; margin: 1.4em auto; padding: 0 1em; color: #222;
+         background: #fafafa; }
+  h1 { font-size: 1.3em; margin-bottom: 0.2em; }
+  .subtitle { color: #666; margin-top: 0.1em; font-size: 0.92em; }
+  .lanes { display: grid; grid-template-columns: repeat(4, 1fr); gap: 0.8em;
+           margin-top: 1.2em; }
+  .lane { background: #fff; border: 1px solid #dcdcdc; border-radius: 6px;
+          padding: 0.7em 0.8em; }
+  .lane h2 { margin: 0 0 0.3em 0; font-size: 1em; color: #333; }
+  .lane .year { font-size: 0.78em; color: #888; margin-bottom: 0.6em; }
+  .stage { display: block; width: 100%; text-align: left;
+           padding: 0.55em 0.65em; margin: 0.25em 0;
+           border: 1px solid #c8d2e0; background: #f3f6fb;
+           border-radius: 4px; cursor: pointer; font-size: 0.87em;
+           font-family: inherit; color: #222; line-height: 1.35; }
+  .stage:hover { background: #e8eef7; }
+  .stage.active { background: #1e3a5f; color: #fff; border-color: #1e3a5f; }
+  .stage .num { display: inline-block; width: 18px; color: #556;
+                font-weight: 600; font-size: 0.8em; }
+  .stage.active .num { color: #cfd8e5; }
+  .stage .pill { display: inline-block; font-size: 0.7em; padding: 1px 6px;
+                 border-radius: 10px; margin-left: 4px; vertical-align: middle;
+                 background: #e4ebf5; color: #334; }
+  .stage.active .pill { background: #3c5a82; color: #e8eef7; }
+  .arrow { text-align: center; color: #aab; font-size: 0.8em; margin: -2px 0; }
+  .detail { background: #fff; border: 1px solid #dcdcdc; border-radius: 6px;
+            padding: 0.9em 1.1em; margin-top: 1em; min-height: 140px; }
+  .detail h3 { margin: 0 0 0.4em 0; font-size: 1em; color: #1e3a5f; }
+  .detail .meta { font-size: 0.82em; color: #666; margin-bottom: 0.5em; }
+  .detail p { margin: 0.25em 0; font-size: 0.92em; line-height: 1.55; }
+  .detail code { background: #eef; padding: 1px 5px; border-radius: 3px;
+                 font-family: 'SF Mono', Menlo, monospace; font-size: 0.85em; }
+  .detail .ablation { margin-top: 0.5em; font-size: 0.85em; color: #444;
+                      border-left: 3px solid #1e3a5f; padding-left: 0.6em; }
+  .empty { color: #888; font-style: italic; font-size: 0.9em; }
+  .legend { margin-top: 0.8em; font-size: 0.8em; color: #555; }
+  .legend .pill { background: #e4ebf5; color: #334; padding: 1px 6px;
+                  border-radius: 10px; margin-right: 0.3em; }
+  .legend .pill.q { background: #fff4e0; color: #7a4a00; }
+  .legend .pill.c { background: #e6f4ea; color: #1b5e20; }
+  .legend .pill.d { background: #fde7e7; color: #802020; }
+</style>
+</head>
+<body>
+
+<h1>Open curation pipelines compared — CCNet, C4, Dolma, FineWeb</h1>
+<p class="subtitle">
+  Four lanes, one per pipeline. Click any stage to see the exact filter — what
+  signal it uses, what threshold it applies, and (where reported) how ablating
+  it moved downstream evals. Stages that look similar across lanes often differ
+  by one or two numbers; the detail panel is where the differences live.
+</p>
+
+<div class="lanes" id="lanes"></div>
+<div class="detail" id="detail">
+  <span class="empty">Click a stage in any lane to inspect its exact filter.</span>
+</div>
+
+<div class="legend">
+  Pill legend:
+  <span class="pill">structural</span> (langID, extraction, URL)
+  <span class="pill q">quality</span> (heuristics, classifier, perplexity)
+  <span class="pill c">content</span> (PII, toxicity, blocklist)
+  <span class="pill d">dedup</span> (exact / near / paragraph)
+  &nbsp;·&nbsp; Sources: CCNet (Wenzek 2019), C4 (Raffel 2019),
+  Dolma (Soldaini 2024), FineWeb (Penedo 2024).
+</div>
+
+<script>
+// ------------------------------------------------------------
+// Pipeline data — each stage carries the exact filter + threshold
+// and, where the paper reports one, a one-line ablation note.
+// ------------------------------------------------------------
+const PIPELINES = [
+  {
+    id: "ccnet",
+    title: "CCNet",
+    year: "2019 · Wenzek et al. (FAIR)",
+    stages: [
+      { kind: "structural", label: "WET text extract from Common Crawl",
+        detail: "Read WET files (pre-extracted plaintext from WARC). Chunk into ~5 GB shards for parallel processing. Multilingual by design — no English restriction at this step.",
+        ablation: "CCNet is multilingual; later English-only stacks (C4, FineWeb) drop all non-English here instead of at langID." },
+      { kind: "dedup", label: "Paragraph-level exact dedup (per shard)",
+        detail: "Hash each paragraph (normalized: lowercased, digits removed, punctuation stripped). Within a shard of ~1 M documents, drop duplicate paragraphs. Done before langID because dedup is cheap and removes common boilerplate that would bias the classifier.",
+        ablation: "Roughly 70% of paragraphs from Common Crawl are duplicates across the crawl. Paragraph dedup reduces corpus size by ~3× before any semantic filtering runs." },
+      { kind: "structural", label: "fastText language ID",
+        detail: "Run fastText lid.176 classifier on each document. Keep documents whose top-predicted language has score ≥ 0.5. Assign document to its top language for downstream per-language processing.",
+        ablation: "Threshold 0.5 is a recall-precision trade; CCNet uses it per-language, so low-resource languages do not lose their tail to a global threshold." },
+      { kind: "quality", label: "KenLM perplexity filter vs Wikipedia",
+        detail: "Train a 5-gram KenLM on Wikipedia of the target language. Score each document's perplexity. Partition into head / middle / tail by perplexity percentile. Lower perplexity = more 'Wikipedia-like'.",
+        ablation: "The three-partition output is the downstream user's choice — CCNet does not discard the tail, it labels it. Later recipes (e.g. RedPajama) ship only the head partition as the 'high quality' English slice." },
+    ],
+  },
+  {
+    id: "c4",
+    title: "C4",
+    year: "2019 · Raffel et al. (T5)",
+    stages: [
+      { kind: "structural", label: "Common Crawl April 2019 WET",
+        detail: "Start from one CC snapshot (April 2019 WET) — ~1.4T raw tokens. C4 is single-snapshot; reproducibility = pin the snapshot id.",
+        ablation: "Single-snapshot is the reason C4 reproduces deterministically; later pipelines combine 90+ snapshots and so do not." },
+      { kind: "quality", label: "Terminal-punctuation heuristic (per line)",
+        detail: "Keep only lines ending in a terminal punctuation mark (. ! ? \"). Drops menu items, captions, table rows, boilerplate.",
+        ablation: "This single rule removes ~50% of raw lines — the most aggressive filter in C4. Also the most blunt: it deletes code lines, bullet points, and titles wholesale." },
+      { kind: "quality", label: "Line length ≥ 5 words",
+        detail: "Drop lines with fewer than 5 words. Targets navigation fragments, error messages, one-word captions.",
+        ablation: "Low-magnitude filter on its own; compounds with the terminal-punctuation rule to aggressively prune non-prose." },
+      { kind: "content", label: "Bad-word blocklist",
+        detail: "Remove any document containing any word from the 'List of Dirty, Naughty, Obscene and Otherwise Bad Words' (~400 entries). Document-level drop, not line-level.",
+        ablation: "Later audits (Dodge et al. 2021) showed this disproportionately removes documents about LGBTQ identities, medical content, and some dialects of English. Blunt-instrument cost of heuristic content filtering." },
+      { kind: "quality", label: "JavaScript-line strip",
+        detail: "Remove any line containing the word 'javascript' (case-insensitive). Targets 'Please enable JavaScript to view this page' boilerplate.",
+        ablation: "Also deletes legitimate prose discussing the JavaScript language — a lexical collision the heuristic does not resolve." },
+      { kind: "quality", label: "{ Curly-brace } placeholder strip",
+        detail: "Drop pages containing a pair of { } — typically template placeholders that leaked into rendered HTML.",
+        ablation: "Near-zero false-positive rate in practice; one of the few C4 rules that is strictly additive." },
+      { kind: "quality", label: "'Lorem ipsum' strip",
+        detail: "Drop pages containing the literal string 'lorem ipsum'. Filler text for design mockups.",
+        ablation: "Tiny recall loss; catches template noise." },
+      { kind: "structural", label: "langdetect → English",
+        detail: "Run langdetect. Keep documents with P(English) ≥ 0.99. This is stricter than CCNet's 0.5 because C4 is explicitly an English-only corpus.",
+        ablation: "The 0.99 threshold is what causes C4 to underrepresent African-American English and code-switched text (Dodge 2021)." },
+      { kind: "dedup", label: "Three-sentence line dedup",
+        detail: "Emit all contiguous 3-sentence spans; within the corpus, keep only one copy of each unique span. Line-rather-than-document granularity.",
+        ablation: "Catches the long tail of templated boilerplate (legal disclaimers, site footers) that document-level dedup misses." },
+    ],
+  },
+  {
+    id: "dolma",
+    title: "Dolma (web lane)",
+    year: "2024 · Soldaini et al. (AI2)",
+    stages: [
+      { kind: "structural", label: "URL + Bloom dedup across CC snapshots",
+        detail: "Hash URLs across all included Common Crawl snapshots into a Bloom filter with FP ≤ 1e-6. Drop duplicate URLs. Done first because re-crawls dominate CC volume.",
+        ablation: "Removing this stage doubles downstream token count with near-duplicate re-crawls; OLMo downstream eval drops by the doc-dedup row of the Dolma ablation table." },
+      { kind: "dedup", label: "Document-level near dedup",
+        detail: "Bloom-filter hash of normalized document text. Collision → drop. Complements URL dedup: same content served from different URLs.",
+        ablation: "Dolma ablation (Table 5): removing doc-dedup reduces downstream task accuracy at 1B-model × 150B-token eval." },
+      { kind: "structural", label: "fastText language ID → English",
+        detail: "fastText lid.176 classifier. Keep documents with P(English) ≥ threshold (Dolma uses a loose English threshold similar to CCNet).",
+        ablation: "Not ablated independently; Dolma treats langID as non-optional infrastructure." },
+      { kind: "quality", label: "Gopher + C4 quality heuristics",
+        detail: "Stacked heuristics adapted from Gopher and C4: symbol-to-word ratio < 0.1, mean line length > 5, fraction of lines ending in punctuation > 0.6, stopword ratio > 0.06, duplicate-line fraction < 0.3, etc.",
+        ablation: "Dolma ablation shows the quality filter contributes ~half of the total downstream-eval gain from the full pipeline." },
+      { kind: "content", label: "fastText toxicity/NSFW classifier",
+        detail: "fastText classifier trained on Jigsaw Toxic Comments. Score each document for 'hate' and 'NSFW'; drop above threshold. Binary-thresholded, not score-weighted.",
+        ablation: "Content filter contribution is small on general-knowledge evals but matters for RLHF-era safety benchmarks." },
+      { kind: "content", label: "High-precision PII regex",
+        detail: "Three categories only: email addresses, IP addresses, phone numbers. Regex-based, no ML classifier. Documents above a PII-density threshold are dropped rather than redacted in place.",
+        ablation: "Scoped deliberately narrow — higher-precision than recall. Dolma argues comprehensive PII removal is a policy problem the pipeline cannot solve." },
+      { kind: "dedup", label: "Paragraph-level dedup (last)",
+        detail: "Bloom-filter exact match on paragraphs. Alternative 'dolma-ngram' variant: split paragraph into n-grams, mark duplicate if fraction of duplicated n-grams exceeds threshold T (default T = 1.0 = exact).",
+        ablation: "Paragraph dedup last because earlier filters change the surviving distribution. The ablation row shows this stage's contribution is smaller than doc-dedup but non-zero." },
+    ],
+  },
+  {
+    id: "fineweb",
+    title: "FineWeb / FineWeb-Edu",
+    year: "2024 · Penedo et al. (HF)",
+    stages: [
+      { kind: "structural", label: "URL blocklist filter",
+        detail: "Remove WARCs whose source URL matches a curated adult/spam blocklist before HTML extraction. Cheap, eliminates load downstream.",
+        ablation: "Ablated: removing URL filter alone costs < 1 pp on MMLU; keeps the pipeline from wasting dedup effort on spam." },
+      { kind: "structural", label: "Trafilatura HTML→text extraction",
+        detail: "Use Trafilatura (not CCNet's extractor, not WET). Trafilatura preserves paragraph structure and strips chrome more aggressively than WET's boilerpipe-style extractor.",
+        ablation: "Ablation in FineWeb paper: swapping WET for Trafilatura gives a several-token-per-doc quality bump before any semantic filter runs." },
+      { kind: "structural", label: "fastText language ID → English",
+        detail: "fastText lid.176. Keep P(English) ≥ 0.65. Looser than C4's 0.99 — FineWeb is permissive at langID and tightens later via quality filtering.",
+        ablation: "The 0.65 threshold is empirical: higher thresholds removed enough valid English dialect to hurt downstream evals." },
+      { kind: "quality", label: "Gopher + C4 heuristic cascade",
+        detail: "Same stack as Dolma: terminal-punctuation fraction, symbol ratio, stopword ratio, line-length, duplicate-line fraction. FineWeb confirms Gopher rules generalize to 2024 CC.",
+        ablation: "Ablation shows stacking more heuristics beyond this cascade plateaus on MMLU — the empirical motivation for the classifier." },
+      { kind: "dedup", label: "MinHash dedup — per snapshot (not global)",
+        detail: "MinHash-LSH on 5-grams, Jaccard threshold 0.8, applied within each of 96 CC snapshots. Global dedup across snapshots was tested and found to hurt downstream evals.",
+        ablation: "Per-dump vs global is the surprise finding: global removes too many high-quality documents that re-appear across snapshots; per-dump keeps 'evergreen' pages that contribute to training signal." },
+      { kind: "content", label: "PII redaction (email, phone)",
+        detail: "Regex-based redaction — replace matches with placeholder tokens rather than drop documents. Preserves surrounding text.",
+        ablation: "Narrower scope than Dolma's PII stage; FineWeb argues redaction preserves more training signal than document-drop." },
+      { kind: "quality", label: "FineWeb-Edu classifier (score ≥ 3)",
+        detail: "Train a small classifier head on top of a frozen embedding model, using 450 K web pages annotated by Llama-3-70B-Instruct with integer scores 0–5 on educational value. Keep documents with score ≥ 3. Classifier F1 ≈ 82 % on a 46,867-sample hold-out.",
+        ablation: "Threshold sweep (0–5) shows: threshold 3 best trade-off — MMLU +2–3 pp vs FineWeb base; threshold 4 gains MMLU but loses HellaSwag. Score≥3 discards ≈ 92 % of FineWeb, leaving 1.3 T tokens from 15 T." },
+    ],
+  },
+];
+
+// ------------------------------------------------------------
+// Render lanes
+// ------------------------------------------------------------
+const lanesDiv  = document.getElementById("lanes");
+const detailDiv = document.getElementById("detail");
+
+const KIND_PILL = {
+  structural: "",
+  quality:    "q",
+  content:    "c",
+  dedup:      "d",
+};
+
+PIPELINES.forEach(p => {
+  const lane = document.createElement("div");
+  lane.className = "lane";
+  lane.innerHTML = `<h2>${p.title}</h2><div class="year">${p.year}</div>`;
+  p.stages.forEach((s, i) => {
+    if (i > 0) {
+      const a = document.createElement("div");
+      a.className = "arrow";
+      a.textContent = "↓";
+      lane.appendChild(a);
+    }
+    const btn = document.createElement("button");
+    btn.className = "stage";
+    btn.dataset.pipeline = p.id;
+    btn.dataset.index    = i;
+    const pillCls = KIND_PILL[s.kind] || "";
+    btn.innerHTML = `<span class="num">${i + 1}.</span> ${s.label}
+                     <span class="pill ${pillCls}">${s.kind}</span>`;
+    btn.addEventListener("click", () => showStage(p, s, btn));
+    lane.appendChild(btn);
+  });
+  lanesDiv.appendChild(lane);
+});
+
+function showStage(pipeline, stage, btn) {
+  document.querySelectorAll(".stage.active").forEach(b => b.classList.remove("active"));
+  btn.classList.add("active");
+  const ablation = stage.ablation
+    ? `<div class="ablation"><strong>Ablation / note:</strong> ${stage.ablation}</div>`
+    : "";
+  detailDiv.innerHTML = `
+    <h3>${pipeline.title} · stage ${Number(btn.dataset.index) + 1} — ${stage.label}</h3>
+    <div class="meta">kind: ${stage.kind} · pipeline: ${pipeline.year}</div>
+    <p>${stage.detail}</p>
+    ${ablation}
+  `;
+}
+</script>
+
+</body>
+</html>

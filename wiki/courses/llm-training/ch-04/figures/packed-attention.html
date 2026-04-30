@@ -1,0 +1,300 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Packed Attention — Block-Diagonal Causal Mask Visualiser</title>
+<style>
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+         max-width: 960px; margin: 2em auto; padding: 0 1em; color: #222; }
+  h1 { font-size: 1.4em; margin-bottom: 0.2em; }
+  .subtitle { color: #666; margin-top: 0; }
+  .panel { border: 1px solid #ddd; border-radius: 6px; padding: 1em; margin: 1em 0;
+           background: #fafafa; }
+  .controls { display: flex; gap: 0.6em; flex-wrap: wrap; align-items: center; }
+  .seqbox { display: inline-flex; align-items: center; gap: 0.3em; padding: 4px 6px;
+            border: 1px solid #cfcfcf; border-radius: 4px; background: white; }
+  .seqbox .name { font-size: 0.8em; color: #666; }
+  .seqbox .len  { font-variant-numeric: tabular-nums; font-weight: 600;
+                  min-width: 1.6em; text-align: center; color: #333; }
+  button { font: inherit; padding: 2px 8px; border: 1px solid #bbb; background: #fff;
+           border-radius: 3px; cursor: pointer; color: #333; }
+  button:hover { background: #eef; }
+  button.remove { color: #a00; border-color: #e0bcbc; }
+  button.add    { color: #070; border-color: #bce0bc; margin-left: 0.4em; }
+  .slider-row { margin-top: 0.8em; display: flex; gap: 0.6em; align-items: center; }
+  input[type="range"] { width: 220px; }
+  canvas { background: white; border: 1px solid #ccc; display: block;
+           margin: 1em auto; }
+  .legend { display: flex; gap: 1.5em; justify-content: center; font-size: 0.9em;
+            flex-wrap: wrap; }
+  .swatch { display: inline-block; width: 12px; height: 12px; margin-right: 4px;
+            vertical-align: middle; border-radius: 2px; border: 1px solid #999; }
+  .value { font-variant-numeric: tabular-nums; color: #333; font-weight: 600; }
+  .note { font-size: 0.88em; color: #555; line-height: 1.55; }
+  code { background: #eef; padding: 1px 5px; border-radius: 3px; font-size: 0.88em;
+         font-variant-numeric: tabular-nums; }
+  .arrays { display: grid; grid-template-columns: 130px 1fr; row-gap: 0.4em;
+            column-gap: 0.8em; align-items: center; margin: 0.6em 0; }
+  .arrays .label { font-size: 0.85em; color: #555; }
+  .arrays code { display: block; padding: 4px 8px; word-break: break-all; }
+  .gauge { height: 22px; border: 1px solid #aaa; border-radius: 3px; display: flex;
+           overflow: hidden; background: #eee; }
+  .gauge .data { background: #3c9c55; color: #fff; font-size: 0.8em;
+                 display: flex; align-items: center; justify-content: center; }
+  .gauge .pad  { background: #d9736a; color: #fff; font-size: 0.8em;
+                 display: flex; align-items: center; justify-content: center; }
+  .warn { color: #a33; font-size: 0.85em; }
+</style>
+</head>
+<body>
+
+<h1>Packed Attention — Block-Diagonal Causal Mask Visualiser</h1>
+<p class="subtitle">
+  Edit the sub-sequence lengths of one packed SFT block. The green cells show which
+  (query, key) pairs FlashAttention's varlen kernel keeps; grey cells are masked;
+  the red band on the right is padding. <strong>Tokens in sub-sequence k only
+  attend backward inside sub-sequence k.</strong>
+</p>
+
+<div class="panel">
+  <div>
+    <span class="label" style="font-size:0.85em; color:#555;">Sub-sequence lengths (edit with +/-):</span>
+    <div class="controls" id="seqControls" style="margin-top:0.4em;"></div>
+  </div>
+  <div class="slider-row">
+    <label style="font-size:0.85em; color:#555;">max_seq_len</label>
+    <input type="range" id="maxLen" min="16" max="32" step="1" value="20">
+    <span class="value" id="maxLenLabel">20</span>
+    <span class="warn" id="overflowWarn"></span>
+  </div>
+</div>
+
+<canvas id="mask" width="720" height="540"></canvas>
+
+<div class="legend">
+  <span><span class="swatch" style="background:#3c9c55"></span>valid attention (causal, same sub-seq)</span>
+  <span><span class="swatch" style="background:#e8e8e8"></span>masked (cross-seq or future)</span>
+  <span><span class="swatch" style="background:#f2c6c0; border-color:#a33"></span>PAD row/col</span>
+  <span><span class="swatch" style="background:white; border-color:#1763b0"></span>sub-seq boundary</span>
+</div>
+
+<div class="panel">
+  <div class="arrays">
+    <span class="label">cu_seqlens</span>
+    <code id="cuOut"></code>
+    <span class="label">position_ids</span>
+    <code id="posOut"></code>
+    <span class="label">segment_ids</span>
+    <code id="segOut"></code>
+  </div>
+  <div style="margin-top:0.6em;">
+    <div class="label" style="font-size:0.85em; color:#555;">Padding ratio</div>
+    <div class="gauge" id="gauge"><div class="data"></div><div class="pad"></div></div>
+  </div>
+</div>
+
+<div class="panel note">
+  <strong>What you're seeing.</strong>
+  Each green square at <code>(i, j)</code> means query token <code>i</code> is allowed to read
+  key token <code>j</code>. The rule: same sub-sequence AND <code>j &le; i</code>. Flip one
+  sub-sequence into another by editing lengths &mdash; notice the green block splits cleanly,
+  never touching off-diagonal cells.
+  <br><br>
+  <strong>Why it matters.</strong>
+  Drop the block-diagonal mask and the softmax in sub-seq 2 includes keys from sub-seq 1 in its
+  partition function <code>Z = &Sigma;<sub>j</sub> exp(q<sub>i</sub>&middot;k<sub>j</sub>)</code>.
+  Loss stays plausible; gradients silently leak between unrelated documents. A
+  <code>max_seq_len = 4096</code> dense mask is 16M entries &mdash; instead
+  <code>flash_attn_varlen_func(..., cu_seqlens_q, cu_seqlens_k, causal=True)</code> consumes only
+  the cumulative offsets shown above and computes the diagonal blocks in-kernel. Memory is
+  <code>O(&Sigma; L<sub>i</sub>)</code>, not <code>O(N&sup2;)</code>.
+  <br><br>
+  <strong>position_ids reset at every boundary.</strong>
+  RoPE uses the position for its rotation angle, and learned embeddings index into a table.
+  Forgetting the reset means sub-sequence 2's first token looks like it sits at position
+  <code>L<sub>1</sub></code>, not <code>0</code> &mdash; the model effectively sees one very long
+  conversation instead of many short ones.
+</div>
+
+<script>
+const lens = [5, 3, 7, 2];  // default sub-sequence lengths (sum = 17)
+const cvs = document.getElementById('mask');
+const ctx = cvs.getContext('2d');
+
+function rebuildControls() {
+  const host = document.getElementById('seqControls');
+  host.innerHTML = '';
+  lens.forEach((L, k) => {
+    const box = document.createElement('span');
+    box.className = 'seqbox';
+    box.innerHTML =
+      '<span class="name">s' + (k+1) + '</span>' +
+      '<button data-k="'+k+'" data-d="-1">&minus;</button>' +
+      '<span class="len">' + L + '</span>' +
+      '<button data-k="'+k+'" data-d="1">+</button>' +
+      '<button class="remove" data-k="'+k+'" data-rm="1">&times;</button>';
+    host.appendChild(box);
+  });
+  const addBtn = document.createElement('button');
+  addBtn.className = 'add';
+  addBtn.textContent = '+ sub-seq';
+  addBtn.addEventListener('click', () => { lens.push(3); rebuildControls(); render(); });
+  host.appendChild(addBtn);
+
+  host.querySelectorAll('button[data-k]').forEach(b => {
+    b.addEventListener('click', () => {
+      const k = +b.dataset.k;
+      if (b.dataset.rm) {
+        if (lens.length > 1) lens.splice(k, 1);
+      } else {
+        const d = +b.dataset.d;
+        lens[k] = Math.max(1, Math.min(16, lens[k] + d));
+      }
+      rebuildControls();
+      render();
+    });
+  });
+}
+
+function render() {
+  const maxLen = +document.getElementById('maxLen').value;
+  document.getElementById('maxLenLabel').textContent = maxLen;
+
+  // cumulative offsets, position_ids, segment_ids (data region only)
+  const cu = [0];
+  const pos = [];
+  const seg = [];
+  let total = 0;
+  for (let k = 0; k < lens.length; k++) {
+    const L = lens[k];
+    if (total + L > maxLen) {
+      // truncate last sub-seq to fit
+      const fit = Math.max(0, maxLen - total);
+      for (let p = 0; p < fit; p++) { pos.push(p); seg.push(k); }
+      total += fit;
+      cu.push(total);
+      break;
+    }
+    for (let p = 0; p < L; p++) { pos.push(p); seg.push(k); }
+    total += L;
+    cu.push(total);
+  }
+  const padLen = Math.max(0, maxLen - total);
+  // pad region: segment = -1, position = 0 (convention: pad positions pinned to 0)
+  for (let p = 0; p < padLen; p++) { pos.push(0); seg.push(-1); }
+
+  const sumL = lens.reduce((a,b)=>a+b, 0);
+  const warn = document.getElementById('overflowWarn');
+  warn.textContent = (sumL > maxLen)
+    ? '(data overflows max_seq_len by ' + (sumL - maxLen) + ' — last sub-seq truncated)'
+    : '';
+
+  // draw grid
+  const N = maxLen;
+  const margin = { l: 40, t: 40, r: 20, b: 20 };
+  const avail = Math.min(cvs.width - margin.l - margin.r,
+                         cvs.height - margin.t - margin.b);
+  const cell = Math.floor(avail / N);
+  const side = cell * N;
+  ctx.clearRect(0, 0, cvs.width, cvs.height);
+
+  // cells
+  for (let i = 0; i < N; i++) {
+    for (let j = 0; j < N; j++) {
+      const si = seg[i], sj = seg[j];
+      const inPadRow = (si === -1);
+      const inPadCol = (sj === -1);
+      let fill = '#e8e8e8';  // masked default
+      if (inPadRow || inPadCol) {
+        fill = '#f7dad4';    // pad tint
+      } else if (si === sj && j <= i) {
+        fill = '#3c9c55';    // valid causal same-seq
+      }
+      ctx.fillStyle = fill;
+      ctx.fillRect(margin.l + j*cell, margin.t + i*cell, cell - 1, cell - 1);
+    }
+  }
+
+  // sub-seq boundary lines (blue)
+  ctx.strokeStyle = '#1763b0';
+  ctx.lineWidth = 1.5;
+  for (let k = 1; k < cu.length; k++) {
+    const p = cu[k];
+    if (p > N) break;
+    ctx.beginPath();
+    ctx.moveTo(margin.l + p*cell, margin.t);
+    ctx.lineTo(margin.l + p*cell, margin.t + side);
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(margin.l,           margin.t + p*cell);
+    ctx.lineTo(margin.l + side,    margin.t + p*cell);
+    ctx.stroke();
+  }
+  // pad boundary (red)
+  if (padLen > 0 && total <= N) {
+    ctx.strokeStyle = '#a33';
+    ctx.setLineDash([4, 3]);
+    ctx.beginPath();
+    ctx.moveTo(margin.l + total*cell, margin.t);
+    ctx.lineTo(margin.l + total*cell, margin.t + side);
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(margin.l,          margin.t + total*cell);
+    ctx.lineTo(margin.l + side,   margin.t + total*cell);
+    ctx.stroke();
+    ctx.setLineDash([]);
+  }
+
+  // outer box
+  ctx.strokeStyle = '#888';
+  ctx.lineWidth = 1;
+  ctx.strokeRect(margin.l, margin.t, side, side);
+
+  // axis labels
+  ctx.fillStyle = '#555';
+  ctx.font = '11px sans-serif';
+  ctx.textAlign = 'center';
+  ctx.fillText('key token j  →', margin.l + side/2, margin.t - 20);
+  ctx.save();
+  ctx.translate(12, margin.t + side/2);
+  ctx.rotate(-Math.PI/2);
+  ctx.fillText('query token i  →', 0, 0);
+  ctx.restore();
+
+  // axis ticks every 4
+  ctx.fillStyle = '#777';
+  ctx.textAlign = 'center';
+  for (let j = 0; j < N; j += 4) {
+    ctx.fillText(j.toString(), margin.l + j*cell + cell/2, margin.t - 6);
+  }
+  ctx.textAlign = 'right';
+  for (let i = 0; i < N; i += 4) {
+    ctx.fillText(i.toString(), margin.l - 4, margin.t + i*cell + cell - 2);
+  }
+
+  // arrays + gauge
+  document.getElementById('cuOut').textContent =
+    '[' + cu.join(', ') + ']';
+  document.getElementById('posOut').textContent =
+    '[' + pos.join(', ') + ']';
+  document.getElementById('segOut').textContent =
+    '[' + seg.map(s => s === -1 ? 'P' : s).join(', ') + ']';
+
+  const dataFrac = total / maxLen;
+  const padFrac  = padLen / maxLen;
+  const gauge = document.getElementById('gauge');
+  const dEl = gauge.querySelector('.data');
+  const pEl = gauge.querySelector('.pad');
+  dEl.style.flexBasis = (dataFrac * 100).toFixed(1) + '%';
+  pEl.style.flexBasis = (padFrac  * 100).toFixed(1) + '%';
+  dEl.textContent = 'data ' + total + ' (' + (dataFrac*100).toFixed(0) + '%)';
+  pEl.textContent = (padLen > 0) ? ('pad ' + padLen + ' (' + (padFrac*100).toFixed(0) + '%)') : '';
+}
+
+document.getElementById('maxLen').addEventListener('input', render);
+rebuildControls();
+render();
+</script>
+
+</body>
+</html>

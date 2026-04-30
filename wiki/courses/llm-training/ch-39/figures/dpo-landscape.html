@@ -1,0 +1,315 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Offline Preference Optimization — Loss Landscape Explorer</title>
+<style>
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+         max-width: 1200px; margin: 1.5em auto; padding: 0 1em; color: #1d1d1f;
+         background: #fafafa; }
+  h1 { font-size: 1.35em; margin-bottom: 0.2em; }
+  .subtitle { color: #5a5a5a; margin-top: 0; font-size: 0.93em; line-height: 1.5; }
+  .layout { display: grid; grid-template-columns: 1fr 340px; gap: 1.2em; margin-top: 1em; }
+  .panel { border: 1px solid #dcdcdc; border-radius: 6px; background: #fff;
+           padding: 0.9em 1em; }
+  h2 { font-size: 1.0em; margin: 0 0 0.6em 0; color: #2b2b2b;
+       border-bottom: 1px solid #ececec; padding-bottom: 0.3em; }
+  svg { width: 100%; height: 420px; display: block; }
+  .axis { stroke: #333; stroke-width: 1; }
+  .grid { stroke: #e8e8e8; stroke-width: 1; }
+  .axis-label { font-family: 'SF Mono', Menlo, monospace; font-size: 11px; fill: #444; }
+  .curve { fill: none; stroke-width: 2; }
+  .curve-dpo  { stroke: #2e5aa8; }
+  .curve-ipo  { stroke: #8d2c8f; }
+  .curve-kto-pos { stroke: #3d8b3d; }
+  .curve-kto-neg { stroke: #3d8b3d; stroke-dasharray: 5 3; }
+  .curve-simpo { stroke: #c8701c; }
+  .target-line { stroke: #999; stroke-width: 1; stroke-dasharray: 3 3; }
+  .target-label { font-family: 'SF Mono', Menlo, monospace; font-size: 10px; fill: #777; }
+  .control-row { display: flex; align-items: center; gap: 0.5em; margin: 0.4em 0;
+                 font-size: 0.88em; }
+  .control-row label { flex: 0 0 60px; font-family: 'SF Mono', Menlo, monospace; }
+  .control-row input[type=range] { flex: 1; }
+  .control-row .val { flex: 0 0 54px; text-align: right;
+                      font-family: 'SF Mono', Menlo, monospace; font-size: 0.82em;
+                      color: #355; }
+  .toggle-row { display: flex; flex-wrap: wrap; gap: 0.4em; margin: 0.6em 0; }
+  .toggle-row label { display: inline-flex; align-items: center; gap: 0.25em;
+                      font-family: 'SF Mono', Menlo, monospace; font-size: 0.82em;
+                      padding: 3px 7px; border: 1px solid #ccc; border-radius: 4px;
+                      cursor: pointer; user-select: none; background: #fcfcfc; }
+  .toggle-row input[type=checkbox] { margin: 0; }
+  .legend { font-family: 'SF Mono', Menlo, monospace; font-size: 0.82em;
+            color: #333; line-height: 1.7; margin-top: 0.5em; }
+  .legend .sw { display: inline-block; width: 22px; height: 3px; border-radius: 2px;
+                vertical-align: middle; margin-right: 5px; }
+  .hover-panel { font-size: 0.85em; color: #333; line-height: 1.45;
+                 background: #f5f7fb; padding: 0.55em 0.7em; border-radius: 4px;
+                 border-left: 3px solid #2e5aa8; min-height: 4.5em; margin-top: 0.4em; }
+  .note { font-size: 0.82em; color: #5a5a5a; margin-top: 0.5em; line-height: 1.5; }
+  code { background: #eef; padding: 1px 4px; border-radius: 3px;
+         font-family: 'SF Mono', Menlo, monospace; font-size: 0.85em; }
+</style>
+</head>
+<body>
+
+<h1>Offline Preference Optimization — Loss Landscape Explorer</h1>
+<p class="subtitle">
+  Single-pair loss <code>L(m)</code> as a function of the implicit-reward margin
+  <code>m = r&#770;_w - r&#770;_l</code> for DPO, IPO, KTO (desirable and undesirable
+  branches), and SimPO. Slide &beta;, &tau;, &gamma;; toggle variants. Hover the plot to
+  read <code>L</code> and <code>|dL/dm|</code> at that margin. The curves are
+  directionally attested by the original papers; absolute scales depend on the chosen
+  hyperparameters.
+</p>
+
+<div class="layout">
+
+<div class="panel">
+  <h2>Loss vs implicit-reward margin</h2>
+  <svg id="plot" viewBox="0 0 720 420" preserveAspectRatio="xMidYMid meet"></svg>
+  <div class="hover-panel" id="hover">
+    Move cursor over the plot to see per-variant loss and gradient magnitude at the margin.
+  </div>
+  <div class="legend" id="legend">
+    <span class="sw" style="background:#2e5aa8"></span>DPO
+      &nbsp;&nbsp;<span class="sw" style="background:#8d2c8f"></span>IPO
+      &nbsp;&nbsp;<span class="sw" style="background:#3d8b3d"></span>KTO (desirable)
+      &nbsp;&nbsp;<span class="sw" style="background:#3d8b3d; border-top:1px dashed #fff"></span>KTO (undesirable, dashed)
+      &nbsp;&nbsp;<span class="sw" style="background:#c8701c"></span>SimPO
+  </div>
+</div>
+
+<div class="panel">
+  <h2>Controls</h2>
+
+  <div class="control-row">
+    <label>&beta; (DPO/KTO)</label>
+    <input id="beta" type="range" min="0.02" max="2.0" step="0.02" value="0.10">
+    <span class="val" id="betaVal">0.10</span>
+  </div>
+  <div class="control-row">
+    <label>&tau; (IPO)</label>
+    <input id="tau" type="range" min="0.02" max="2.0" step="0.02" value="0.10">
+    <span class="val" id="tauVal">0.10</span>
+  </div>
+  <div class="control-row">
+    <label>&gamma; (SimPO)</label>
+    <input id="gamma" type="range" min="0.0" max="3.0" step="0.05" value="1.0">
+    <span class="val" id="gammaVal">1.00</span>
+  </div>
+  <div class="control-row">
+    <label>&beta;&#8320; (SimPO)</label>
+    <input id="betaS" type="range" min="0.5" max="10.0" step="0.1" value="2.5">
+    <span class="val" id="betaSVal">2.50</span>
+  </div>
+
+  <h2 style="margin-top:1em;">Variants</h2>
+  <div class="toggle-row" id="toggles">
+    <label><input type="checkbox" data-v="dpo" checked>DPO</label>
+    <label><input type="checkbox" data-v="ipo" checked>IPO</label>
+    <label><input type="checkbox" data-v="kto" checked>KTO</label>
+    <label><input type="checkbox" data-v="simpo" checked>SimPO</label>
+  </div>
+
+  <h2 style="margin-top:1em;">Reading the shapes</h2>
+  <p class="note">
+    <b>DPO</b>: <code>-log &sigma;(&beta;m)</code>. Saturates toward 0 as m&#8594;+&infin;
+    and grows linearly as m&#8594;-&infin;. No finite optimum &mdash; pushes m unboundedly
+    when labels are deterministic (IPO's motivating failure).
+  </p>
+  <p class="note">
+    <b>IPO</b>: <code>(m - 1/(2&tau;))&sup2;</code>. Minimum at the <i>finite</i> target
+    <code>1/(2&tau;)</code>. Larger &tau; &rarr; smaller target &rarr; weaker preference
+    enforcement and closer to &pi;_ref.
+  </p>
+  <p class="note">
+    <b>KTO</b>: the desirable branch scores <code>&sigma;(&beta;(r&#770;-z&#8320;))</code>
+    &mdash; loss decreases as the reward moves above the batch reference <code>z&#8320;</code>.
+    The undesirable branch is a mirror; together they form the prospect-theory
+    concave-gain / steeper-loss asymmetry.
+  </p>
+  <p class="note">
+    <b>SimPO</b>: <code>-log &sigma;(m - &gamma;)</code>. The whole DPO curve shifts right
+    by &gamma; &mdash; the margin must exceed &gamma; before the loss saturates. Per-token
+    reward units mean &beta; sits at ~2&ndash;10 here (not 0.1).
+  </p>
+</div>
+
+</div>
+
+<script>
+// ---- geometry ----
+const svg = document.getElementById("plot");
+const NS = "http://www.w3.org/2000/svg";
+const W = 720, H = 420;
+const padL = 54, padR = 16, padT = 20, padB = 40;
+const plotW = W - padL - padR;
+const plotH = H - padT - padB;
+
+const X_MIN = -4.0, X_MAX = 4.0;      // implicit-reward margin m
+const Y_MIN = 0.0,  Y_MAX = 3.5;      // loss
+
+function sx(x) { return padL + (x - X_MIN) / (X_MAX - X_MIN) * plotW; }
+function sy(y) { return padT + (1 - (y - Y_MIN) / (Y_MAX - Y_MIN)) * plotH; }
+
+// ---- loss families ----
+function sigmoid(z) { return 1 / (1 + Math.exp(-z)); }
+function softplus(z) {
+  // numerically stable -log sigma(z) = softplus(-z)
+  return z > 30 ? z : Math.log1p(Math.exp(-z));
+}
+
+function lossDPO(m, beta)        { return softplus(-(beta * m)); }
+function gradDPO(m, beta)        { return -beta * (1 - sigmoid(beta * m)); }
+
+function lossIPO(m, tau)         { const d = m - 1/(2*tau); return d*d; }
+function gradIPO(m, tau)         { return 2 * (m - 1/(2*tau)); }
+
+// KTO per-branch on a single example. Here we visualize the value function
+// shape v(m') where m' = r - z_0 (desirable) or m' = z_0 - r (undesirable).
+// For intuition we set lambda_D = lambda_U = 1 so the loss is 1 - sigma(beta * m').
+function lossKTOpos(m, beta)     { return 1 - sigmoid(beta * m); }
+function gradKTOpos(m, beta)     { const s = sigmoid(beta * m); return -beta * s * (1 - s); }
+function lossKTOneg(m, beta)     { return 1 - sigmoid(-beta * m); }  // mirror
+function gradKTOneg(m, beta)     { const s = sigmoid(-beta * m); return beta * s * (1 - s); }
+
+function lossSimPO(m, betaS, g)  { return softplus(-(m - g)); }
+function gradSimPO(m, betaS, g)  { return -(1 - sigmoid(m - g)); }
+
+// ---- state ----
+const state = {
+  beta: 0.10, tau: 0.10, gamma: 1.0, betaS: 2.5,
+  show: { dpo: true, ipo: true, kto: true, simpo: true },
+};
+
+// ---- rendering ----
+function clearSvg() { while (svg.firstChild) svg.removeChild(svg.firstChild); }
+
+function addLine(x1, y1, x2, y2, cls) {
+  const el = document.createElementNS(NS, "line");
+  el.setAttribute("x1", x1); el.setAttribute("y1", y1);
+  el.setAttribute("x2", x2); el.setAttribute("y2", y2);
+  el.setAttribute("class", cls); svg.appendChild(el); return el;
+}
+function addText(x, y, t, cls) {
+  const el = document.createElementNS(NS, "text");
+  el.setAttribute("x", x); el.setAttribute("y", y);
+  el.setAttribute("class", cls); el.textContent = t;
+  svg.appendChild(el); return el;
+}
+function addPath(points, cls) {
+  const d = points.map((p, i) => (i ? "L" : "M") + p[0].toFixed(1) + " " + p[1].toFixed(1)).join(" ");
+  const el = document.createElementNS(NS, "path");
+  el.setAttribute("d", d); el.setAttribute("class", "curve " + cls);
+  svg.appendChild(el); return el;
+}
+
+function drawAxes() {
+  // gridlines
+  for (let x = -4; x <= 4; x += 1) {
+    addLine(sx(x), sy(Y_MIN), sx(x), sy(Y_MAX), "grid");
+    addText(sx(x) - 4, sy(Y_MIN) + 16, x.toString(), "axis-label");
+  }
+  for (let y = 0; y <= 3; y += 1) {
+    addLine(sx(X_MIN), sy(y), sx(X_MAX), sy(y), "grid");
+    addText(sx(X_MIN) - 28, sy(y) + 4, y.toFixed(1), "axis-label");
+  }
+  // axes
+  addLine(sx(X_MIN), sy(Y_MIN), sx(X_MAX), sy(Y_MIN), "axis");
+  addLine(sx(X_MIN), sy(Y_MIN), sx(X_MIN), sy(Y_MAX), "axis");
+  addText(padL + plotW/2 - 40, H - 8, "margin m = r\u0302_w - r\u0302_l", "axis-label");
+  addText(6, padT + 12, "loss L", "axis-label");
+}
+
+function sample(fn, ...args) {
+  const pts = []; const N = 400;
+  for (let i = 0; i <= N; i++) {
+    const x = X_MIN + (X_MAX - X_MIN) * (i / N);
+    const y = fn(x, ...args);
+    if (isFinite(y) && y >= Y_MIN - 0.5 && y <= Y_MAX + 0.5) {
+      pts.push([sx(x), sy(Math.min(Math.max(y, Y_MIN), Y_MAX))]);
+    }
+  }
+  return pts;
+}
+
+function drawCurves() {
+  clearSvg(); drawAxes();
+
+  if (state.show.ipo) {
+    // target vertical line at m = 1/(2 tau)
+    const target = 1 / (2 * state.tau);
+    if (target >= X_MIN && target <= X_MAX) {
+      addLine(sx(target), sy(Y_MIN), sx(target), sy(Y_MAX), "target-line");
+      addText(sx(target) + 4, sy(Y_MAX) + 10, "IPO target 1/(2\u03c4)", "target-label");
+    }
+    addPath(sample(lossIPO, state.tau), "curve-ipo");
+  }
+  if (state.show.dpo)   addPath(sample(lossDPO,   state.beta),                 "curve-dpo");
+  if (state.show.kto) {
+    addPath(sample(lossKTOpos, state.beta), "curve-kto-pos");
+    addPath(sample(lossKTOneg, state.beta), "curve-kto-neg");
+  }
+  if (state.show.simpo) {
+    // gamma vertical line: loss flips from linear to saturated at m = gamma
+    if (state.gamma >= X_MIN && state.gamma <= X_MAX) {
+      addLine(sx(state.gamma), sy(Y_MIN), sx(state.gamma), sy(Y_MAX), "target-line");
+      addText(sx(state.gamma) + 4, sy(Y_MIN) - 4, "SimPO \u03b3", "target-label");
+    }
+    addPath(sample(lossSimPO, state.betaS, state.gamma), "curve-simpo");
+  }
+}
+
+// ---- hover panel ----
+function attachHover() {
+  svg.addEventListener("mousemove", (e) => {
+    const rect = svg.getBoundingClientRect();
+    const px = (e.clientX - rect.left) * (W / rect.width);
+    if (px < padL || px > padL + plotW) return;
+    const m = X_MIN + ((px - padL) / plotW) * (X_MAX - X_MIN);
+    const parts = [`m = ${m.toFixed(2)}`];
+    if (state.show.dpo) {
+      parts.push(`DPO L=${lossDPO(m, state.beta).toFixed(3)}, |dL|=${Math.abs(gradDPO(m, state.beta)).toFixed(3)}`);
+    }
+    if (state.show.ipo) {
+      parts.push(`IPO L=${lossIPO(m, state.tau).toFixed(3)}, |dL|=${Math.abs(gradIPO(m, state.tau)).toFixed(3)}`);
+    }
+    if (state.show.kto) {
+      parts.push(`KTO+ L=${lossKTOpos(m, state.beta).toFixed(3)}, KTO- L=${lossKTOneg(m, state.beta).toFixed(3)}`);
+    }
+    if (state.show.simpo) {
+      parts.push(`SimPO L=${lossSimPO(m, state.betaS, state.gamma).toFixed(3)}, |dL|=${Math.abs(gradSimPO(m, state.betaS, state.gamma)).toFixed(3)}`);
+    }
+    document.getElementById("hover").textContent = parts.join("  \u2022  ");
+  });
+}
+
+// ---- controls ----
+function bindSlider(id, key, label) {
+  const el = document.getElementById(id);
+  const valEl = document.getElementById(id + "Val");
+  el.addEventListener("input", () => {
+    state[key] = parseFloat(el.value);
+    valEl.textContent = state[key].toFixed(2);
+    drawCurves();
+  });
+}
+bindSlider("beta",   "beta");
+bindSlider("tau",    "tau");
+bindSlider("gamma",  "gamma");
+bindSlider("betaS",  "betaS");
+
+document.querySelectorAll("#toggles input[type=checkbox]").forEach(cb => {
+  cb.addEventListener("change", () => {
+    state.show[cb.dataset.v] = cb.checked;
+    drawCurves();
+  });
+});
+
+drawCurves();
+attachHover();
+</script>
+
+</body>
+</html>

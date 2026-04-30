@@ -1,0 +1,233 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Distillation SFT — 5-recipe comparator (ch-35)</title>
+<style>
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+         max-width: 1280px; margin: 1.4em auto; padding: 0 1em; color: #1d1d1d;
+         background: #fafafa; }
+  h1 { font-size: 1.25em; margin: 0 0 0.2em 0; }
+  .subtitle { color: #555; font-size: 0.9em; line-height: 1.5; margin: 0 0 1em 0; }
+  .layout { display: grid; grid-template-columns: 1fr 360px; gap: 1.2em; }
+  .cards { display: grid; grid-template-columns: repeat(5, 1fr); gap: 0.6em; }
+  .card { border: 1px solid #d8d8d8; border-radius: 6px; background: #fff;
+          padding: 0.7em 0.75em; cursor: pointer; transition: all 0.12s;
+          position: relative; min-height: 180px; }
+  .card:hover { border-color: #2e5aa8; box-shadow: 0 2px 6px rgba(46,90,168,0.12); }
+  .card.active { border-color: #2e5aa8; border-width: 2px; padding: calc(0.7em - 1px) calc(0.75em - 1px);
+                 background: #f3f7fc; }
+  .card h3 { font-size: 0.92em; margin: 0 0 0.35em 0; color: #1d1d1d; }
+  .card .meta { font-family: 'SF Mono', Menlo, monospace; font-size: 0.75em;
+                color: #444; line-height: 1.5; }
+  .card .count { font-family: 'SF Mono', Menlo, monospace; font-size: 1.1em;
+                 color: #2e5aa8; font-weight: 600; margin: 0.3em 0; }
+  .card .scores { font-family: 'SF Mono', Menlo, monospace; font-size: 0.72em;
+                  color: #555; margin-top: 0.4em; line-height: 1.45;
+                  border-top: 1px dashed #ddd; padding-top: 0.35em; }
+  .detail-panel { border: 1px solid #d8d8d8; border-radius: 6px; background: #fff;
+                  padding: 0.9em 1em; margin-top: 0.8em; min-height: 260px; }
+  .detail-panel h2 { font-size: 1.0em; margin: 0 0 0.5em 0; color: #1d1d1d;
+                     border-bottom: 1px solid #ececec; padding-bottom: 0.3em; }
+  .filter-stack { display: flex; flex-direction: column; gap: 0.4em; margin-top: 0.5em; }
+  .filter-row { display: grid; grid-template-columns: 130px 1fr 60px;
+                padding: 0.35em 0.55em; background: #f5f7fb; border-radius: 4px;
+                font-size: 0.82em; align-items: center; border-left: 3px solid #2e5aa8; }
+  .filter-row .layer { font-family: 'SF Mono', Menlo, monospace; font-weight: 600;
+                       color: #2e5aa8; font-size: 0.78em; }
+  .filter-row .desc { color: #333; line-height: 1.4; }
+  .filter-row .rate { text-align: right; font-family: 'SF Mono', Menlo, monospace;
+                      font-size: 0.78em; color: #666; }
+  .hparams { margin-top: 0.7em; font-family: 'SF Mono', Menlo, monospace;
+             font-size: 0.78em; color: #333; background: #fbfbfb;
+             border: 1px solid #e8e8e8; border-radius: 4px; padding: 0.55em 0.7em;
+             line-height: 1.5; }
+  .hparams .k { color: #888; }
+  .hparams .v { color: #204080; }
+  .caveat { margin-top: 0.55em; font-size: 0.8em; color: #884; line-height: 1.5;
+            background: #fffbea; border-left: 3px solid #c9a83e;
+            padding: 0.45em 0.65em; border-radius: 3px; }
+  .right { border: 1px solid #d8d8d8; border-radius: 6px; background: #fff;
+           padding: 0.9em 1em; font-size: 0.85em; }
+  .right h2 { font-size: 1.0em; margin: 0 0 0.5em 0; border-bottom: 1px solid #ececec;
+              padding-bottom: 0.3em; }
+  .tree { font-family: 'SF Mono', Menlo, monospace; font-size: 0.78em;
+          line-height: 1.6; white-space: pre; color: #333; }
+  .tree .hit { background: #fff3cf; padding: 1px 4px; border-radius: 2px;
+               color: #55421a; font-weight: 600; }
+  .legend { margin-top: 0.6em; font-size: 0.78em; color: #555; line-height: 1.5; }
+  .citation { margin-top: 0.8em; font-size: 0.75em; color: #666;
+              border-top: 1px solid #eee; padding-top: 0.55em; line-height: 1.5; }
+  code { background: #eef; padding: 1px 4px; border-radius: 3px;
+         font-family: 'SF Mono', Menlo, monospace; font-size: 0.82em; }
+</style>
+</head>
+<body>
+<h1>Distillation SFT — 5-recipe side-by-side</h1>
+<p class="subtitle">Click any recipe to expand the filter stack, attested hyperparameters,
+and the eval numbers. The decision tree on the right highlights the row that matches the
+current selection. Source: ch-35 raw-data library (Bespoke-Stratos, Sky-T1, OpenR1, s1, LIMO,
+DeepSeek-R1-distill).</p>
+
+<div class="layout">
+  <div>
+    <div class="cards" id="cards"></div>
+    <div class="detail-panel" id="detail"></div>
+  </div>
+  <div class="right">
+    <h2>When is SFT enough?</h2>
+    <div class="tree" id="tree">Is your base model reasoning-rich (>=32B, strong math pretrain)?
+|-- YES: SFT is likely enough
+|   Can you hand-curate?
+|   |-- <span id="t-handY">YES (strong curators)  -> s1 / LIMO (1K hand-picked)</span>
+|   \-- <span id="t-handN">NO                     -> Stratos / Sky-T1 (17K verifier)</span>
+|
+\-- NO (smaller / general base)
+    Is your target eval verifiable (math/code)?
+    |-- <span id="t-evalY">YES  -> SFT + GRPO/RLVR (OpenR1 pattern)</span>
+    \-- <span id="t-evalN">NO   -> Nemotron-style multi-attr RM + RL</span></div>
+    <div class="legend">Highlighted row = the recipe the currently-selected card
+    points to. OpenR1 shows the SFT-to-RL bridge: pure SFT gets MATH~80%/AIME24~40%;
+    a 40K-prompt GRPO stage adds +3-5 AIME points. That delta is the clearest public
+    evidence of where SFT's ceiling sits for well-verified distillation.</div>
+    <div class="citation">HelpSteer2 5-attribute rubric (Nemotron RM, referenced in
+    ch-35 §1.1): helpfulness / correctness / coherence / complexity / verbosity.
+    Per-attribute L2 regression on 10K human labels; weighted sum at RL time.</div>
+  </div>
+</div>
+
+<script>
+const RECIPES = [
+  {
+    id: 'r1-distill',
+    name: 'R1-Distill-Qwen-32B',
+    traces: '800,000',
+    teacher: 'DeepSeek-R1 (671B MoE)',
+    cost: 'not disclosed',
+    tree_hit: 't-handN',
+    filters: [
+      { layer: 'correctness', desc: 'V3-judge filters stage-1 RL samples for readability + answer correctness', rate: 'n/a' },
+      { layer: 'rejection-sampling', desc: '600K reasoning + 200K non-reasoning; per-prompt multi-trace sampling', rate: 'n/a' },
+    ],
+    hparams: { base: 'Qwen2.5-Math / Llama-3.1 / 3.3', training: 'pure SFT, no RL', LR: 'not disclosed', teacher_T: '~0.6-1.0' },
+    scores: 'AIME24 ~72 | MATH500 ~94 | GPQA-Dia ~62',
+    caveat: 'Corpus opacity: per-domain breakdown of the 600K reasoning slice is not published. Student license inherits R1 MIT weights + DeepSeek output-license permissive terms.'
+  },
+  {
+    id: 'stratos',
+    name: 'Bespoke-Stratos-32B',
+    traces: '17,000',
+    teacher: 'DeepSeek-R1 (API)',
+    cost: '~$800 API + ~$4K compute',
+    tree_hit: 't-handN',
+    filters: [
+      { layer: 'format', desc: 'reject missing </think> or missing \\boxed{}', rate: '~10%' },
+      { layer: 'math-SymPy', desc: 'symbolic equivalence against gold', rate: 'high reject on math' },
+      { layer: 'code-exec', desc: 'run against public unit tests; reject any-fail', rate: 'code dominates rejects' },
+      { layer: 'science-judge', desc: 'GPT-4o verdict vs reference', rate: 'low reject' },
+      { layer: 'MinHash dedup', desc: 'cross-prompt, default 0.8 Jaccard', rate: 'small' },
+    ],
+    hparams: { base: 'Qwen2.5-32B-Instruct', teacher_T: '0.6', retries: '3', domain_cap: 'per-source balance', training: '~8xH100 few hours' },
+    scores: 'AIME24 ~63 | MATH500 ~93 | LCB ~57 | GPQA-Dia ~59',
+    caveat: 'Contamination: AIME and MATH are public and R1 may have memorized solutions; AIME25 numbers represent the post-contamination reality and are weaker. Ablation: removing code-exec halves LCB; removing SymPy halves MATH.'
+  },
+  {
+    id: 'sky-t1',
+    name: 'Sky-T1-32B-Preview',
+    traces: '17,000',
+    teacher: 'QwQ-32B-preview (open weights)',
+    cost: '~$450 training ($0 teacher)',
+    tree_hit: 't-handN',
+    filters: [
+      { layer: 'math-SymPy', desc: 'parse \\boxed{}; compare via SymPy', rate: 'large reject' },
+      { layer: 'code-exec', desc: 'unit tests; reject any fail', rate: 'large reject' },
+      { layer: 'science-judge', desc: 'GPT-4o-mini verdict', rate: 'small reject' },
+      { layer: 'GPT-4o rewriter', desc: 'convert QwQ format -> <|im_start|> chat template, strip "Alright let me think" preambles', rate: 'cleanup pass' },
+    ],
+    hparams: { base: 'Qwen2.5-32B-Instruct', framework: 'Llama-Factory', epochs: '3', LR: '1e-5', seq_len: '32K', prec: 'BF16', parallel: 'FSDP x8', wall: '19h on 8xH100', teacher_T: '0.7', teacher_max: '8K tokens' },
+    scores: 'AIME24 ~43 | MATH500 ~82 | LCB-Easy ~86 | GPQA-Dia ~57',
+    caveat: 'Teacher ceiling: QwQ < R1 on AIME; Sky-T1 underperforms Stratos on AIME24 by ~20 points. Reformatting-alone lifted AIME by +4 points — the rewriter is not cosmetic. AIME25 drops further.'
+  },
+  {
+    id: 'openr1',
+    name: 'OpenR1-Qwen-7B',
+    traces: '~440,000 (220K x 2)',
+    teacher: 'DeepSeek-R1 (HF + API)',
+    cost: '~$10K teacher + multi-day H100',
+    tree_hit: 't-evalY',
+    filters: [
+      { layer: 'format', desc: 'reject missing </think> or \\boxed{}', rate: 'small' },
+      { layer: 'Math-Verify', desc: 'open-source SymPy-backed symbolic equivalence', rate: '~20% total reject' },
+      { layer: '(code/sci)', desc: 'not applied — math-only corpus', rate: 'n/a' },
+    ],
+    hparams: { base: 'Qwen2.5-7B-Instruct', traces_per_prompt: '2 (some up to 8)', teacher_T: '0.6', sft_stage: 'yes', grpo_stage: 'optional, +3-5 AIME' },
+    scores: 'AIME24 ~40 | MATH ~80 | +GRPO -> +3-5 AIME',
+    caveat: 'The +3-5 AIME from adding GRPO on a 40K-prompt subset with Math-Verify reward is the chapter\'s cleanest public evidence of a SFT ceiling. Math-only corpus; does not catch the "wrong-question-correctly" failure mode.'
+  },
+  {
+    id: 's1-limo',
+    name: 's1 / LIMO',
+    traces: '1,000 / 817',
+    teacher: 'Gemini + hand-curate (s1); mix + hand (LIMO)',
+    cost: '~$50 (s1, 26 min * 16 H100) | labor (LIMO)',
+    tree_hit: 't-handY',
+    filters: [
+      { layer: 'difficulty', desc: 'keep only problems strong baselines still miss', rate: 'large reject from 59K pool' },
+      { layer: 'diversity', desc: 'source + topic balance across competition math / logic', rate: 'shape' },
+      { layer: 'quality', desc: 'manual review for reflective structure, self-verification, step granularity', rate: 'hand cull' },
+      { layer: 'correctness', desc: 'exact-match on final gold answer', rate: 'small' },
+    ],
+    hparams: { base: 'Qwen2.5-32B-Instruct', s1_wall: '26 min x 16 H100', framework: 'PyTorch FSDP', infer_trick: 'budget-forcing: append "Wait" to suppress early stop, +7 AIME' },
+    scores: 's1: AIME24 56.7 | MATH500 93.0 | GPQA-Dia 59.6  --  LIMO: AIME24 63.3 | MATH500 95.6',
+    caveat: 'Requires a base model that already contains the latent reasoning capacity — LIMO is explicit about this ("Less-is-More Reasoning Hypothesis"). Weaker bases do not activate from 1K traces. Budget-forcing is an inference trick, not new capability.'
+  }
+];
+
+const cardsEl = document.getElementById('cards');
+const detailEl = document.getElementById('detail');
+let active = 'stratos';
+
+function render() {
+  cardsEl.innerHTML = '';
+  RECIPES.forEach(r => {
+    const div = document.createElement('div');
+    div.className = 'card' + (r.id === active ? ' active' : '');
+    div.innerHTML = `
+      <h3>${r.name}</h3>
+      <div class="count">${r.traces}</div>
+      <div class="meta"><b>teacher:</b> ${r.teacher}<br><b>cost:</b> ${r.cost}</div>
+      <div class="scores">${r.scores}</div>`;
+    div.onclick = () => { active = r.id; render(); };
+    cardsEl.appendChild(div);
+  });
+
+  const r = RECIPES.find(x => x.id === active);
+  detailEl.innerHTML = `
+    <h2>${r.name} — filter stack &amp; hyperparameters</h2>
+    <div class="filter-stack">
+      ${r.filters.map(f => `
+        <div class="filter-row">
+          <div class="layer">${f.layer}</div>
+          <div class="desc">${f.desc}</div>
+          <div class="rate">${f.rate}</div>
+        </div>`).join('')}
+    </div>
+    <div class="hparams">
+      ${Object.entries(r.hparams).map(([k, v]) =>
+        `<span class="k">${k}</span>=<span class="v">${v}</span>`).join('  ')}
+    </div>
+    <div class="caveat"><b>caveat.</b> ${r.caveat}</div>`;
+
+  // tree highlight
+  ['t-handY', 't-handN', 't-evalY', 't-evalN'].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.classList.remove('hit');
+  });
+  const hitEl = document.getElementById(r.tree_hit);
+  if (hitEl) hitEl.classList.add('hit');
+}
+
+render();
+</script>
+</body>
+</html>

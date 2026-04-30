@@ -1,0 +1,106 @@
+{
+  "chapter_id": "ch-38",
+  "chapter_title": "KL-Controlled RLHF — TRPO, PPO, InstructGPT",
+  "track": "rl",
+  "kind": "content",
+  "generated_at": "2026-04-23T00:00:00Z",
+  "course_outline_concepts": [
+    "TRPO trust-region surrogate and the natural-gradient ancestry (context only)",
+    "PPO clip objective L_CLIP — term-by-term derivation + GAE λ + value head",
+    "InstructGPT's PPO-ptx: per-token KL-to-reward, β, γ pretraining-mix coefficient",
+    "Llama-2 PPO: LR 1e-6, KL 0.01, two-RM (Helpfulness + Safety) design",
+    "Costa-Huang's 37 implementation details — the ones that actually matter for LLM-RL"
+  ],
+  "sources": [
+    {
+      "path": "wiki/raw-data/llm-training/papers/trpo.md",
+      "relevance": 0.9,
+      "role": "primary-context",
+      "what_to_extract": "Monotonic-improvement bound η(π_new) ≥ L_π_old(π_new) − C·D_KL^max; KL-constrained problem with δ=0.01; natural-gradient step θ_new = θ_old + √(2δ/g^T F^{-1} g) · F^{-1} g via conjugate gradient; why PPO replaced it (Fisher-vector-product cost, hard to tune in high-dim)."
+    },
+    {
+      "path": "wiki/raw-data/llm-training/papers/ppo.md",
+      "relevance": 1.0,
+      "role": "primary",
+      "what_to_extract": "Probability ratio r_t(θ) = π_θ/π_θ_old; clipped surrogate L^CLIP = E_t[min(r·A, clip(r,1-ε,1+ε)·A)]; combined loss L^CLIP+VF+S with c1=1, c2=0.01; GAE Â_t = Σ (γλ)^k δ_{t+k}; canonical ε=0.2, K=3–10 epochs, λ=0.95, γ=0.99, LR=3e-4; token-level vs sequence-level in LLM RL."
+    },
+    {
+      "path": "wiki/raw-data/llm-training/papers/rlhf-instructgpt.md",
+      "relevance": 1.0,
+      "role": "primary",
+      "what_to_extract": "Equation 2 PPO-ptx objective: E_{D_RL}[r_φ − β log(π^RL/π^SFT)] + γ·E_{D_pretrain}[log π^RL]; hyperparameters β=0.02, γ=27.8 (ptx) or 0, PPO LR 1.41e-5, 4 epochs per rollout; KL baked into per-token reward not loss; entropy handled by β KL to π_SFT."
+    },
+    {
+      "path": "wiki/raw-data/llm-training/papers/kl-control-rlhf.md",
+      "relevance": 1.0,
+      "role": "primary",
+      "what_to_extract": "RLHF is KL-regularized RL not pure RL; reverse KL(π‖π_ref) is mode-seeking; per-token KL estimator k3 = (π_ref/π)−1−log(π_ref/π) unbiased and ≥0; Korbak reformulation π*(y|x) ∝ π_ref(y|x)·exp(r(x,y)/β); adaptive KL controller; why KL is added to reward not loss."
+    },
+    {
+      "path": "wiki/raw-data/llm-training/model-reports/llama-2.md",
+      "relevance": 1.0,
+      "role": "primary",
+      "what_to_extract": "PPO used only in V4/V5 on top of RSFT; LR 1e-6 (70B policy), KL β=0.01, batch 512, seq 4K; two reward models (Helpfulness + Safety) combined with a piecewise safety-dominates-on-safety-prompts rule; margin labels in RM loss; context distillation for safety."
+    },
+    {
+      "path": "wiki/raw-data/llm-training/blogs/costa-huang-ppo-details.md",
+      "relevance": 1.0,
+      "role": "primary",
+      "what_to_extract": "37 concrete tricks; the RLHF-specific follow-up highlights (reward whitening, per-token log-prob for ratio, KL-to-reference in reward not loss, value-head init from RM's value head); subset that matters for LLM-RL: orthogonal init, LR annealing, advantage normalization, value-loss clipping, global grad clip, minibatch shuffle, GAE λ, ratio clip bounds."
+    },
+    {
+      "path": "wiki/raw-data/llm-training/blogs/hf-rlhf-illustrated.md",
+      "relevance": 0.8,
+      "role": "grounding",
+      "what_to_extract": "Three-stage pipeline framing; per-token reward r_t = −β·log(π_θ/π_ref) + r(x,y)·1[y=EOS]; β range 0.01–0.2; why KL regularization (prevents reward hacking outside RM's calibration region)."
+    },
+    {
+      "path": "wiki/raw-data/llm-training/blogs/lilianweng-rlhf.md",
+      "relevance": 0.8,
+      "role": "grounding",
+      "what_to_extract": "GAE λ=0.95 typical for RLHF, γ=1.0 (undiscounted because reward concentrates at EOS); reward whitening standard; entropy bonus usually dropped because KL-to-ref regularizes; reward hacking taxonomy (length, sycophancy, specification gaming)."
+    },
+    {
+      "path": "wiki/raw-data/llm-training/frameworks/trl-ppo.md",
+      "relevance": 1.0,
+      "role": "primary-framework",
+      "what_to_extract": "Inline PPO update at lines 820–870: ratio = exp(new_logprobs − mb_logprobs); pg_losses = −mb_advantage·ratio; pg_losses2 clipped; pg_loss = max(pg_losses, pg_losses2); value clipping on vpred; loss = pg_loss + vf_coef·vf_loss; approxkl = 0.5·(Δlogp)^2 (K2); KL added to reward outside loss."
+    },
+    {
+      "path": "wiki/raw-data/llm-training/frameworks/openrlhf-ppo.md",
+      "relevance": 0.9,
+      "role": "primary-framework",
+      "what_to_extract": "PolicyLoss module signature with clip_eps_low/high, dual_clip, token_level_loss, vllm IS correction; asymmetric clipping for DAPO; GSPO sequence-level ratio; AdaptiveKLController in ppo_trainer.py; KL-to-reference added via kl_ctl.value to per-token reward outside loss."
+    },
+    {
+      "path": "wiki/raw-data/llm-training/frameworks/verl-ppo-loss.md",
+      "relevance": 0.9,
+      "role": "primary-framework",
+      "what_to_extract": "compute_policy_loss_vanilla body: negative_approx_kl clamped to [-20,20]; ratio = exp(negative_approx_kl); asymmetric clip_ratio_low/high; dual-clip (Ye 2020) floors loss at clip_ratio_c·|adv| on negative-advantage tokens; loss_agg_mode {token-mean, seq-mean-token-sum, seq-mean-token-mean}; ppo_kl = mean(−Δlogp) logged only."
+    }
+  ],
+  "previous_chapters": ["ch-37"],
+  "next_chapters": ["ch-39"],
+  "style_reference": "wiki/courses/llm-training/ch-36/read.md",
+  "deliverables": [
+    "read.md (220–280 lines)",
+    "figures/ppo-clip.html (~200–280 lines, self-contained)",
+    "excerpts/ppo.md",
+    "excerpts/rlhf-instructgpt.md",
+    "excerpts/kl-control-rlhf.md",
+    "excerpts/llama-2-ppo.md",
+    "excerpts/costa-huang-ppo-details.md",
+    "excerpts/trl-ppo.md",
+    "excerpts/verl-ppo-loss.md"
+  ],
+  "hard_rules": [
+    "No edits outside wiki/courses/llm-training/ch-38/",
+    "No emojis in any deliverable",
+    "No external CDN references in HTML (inline CSS/JS only)",
+    "Derive L_CLIP term-by-term, not just state it",
+    "Show GAE expansion Â_t = Σ (γλ)^k δ_{t+k}",
+    "Quote InstructGPT Equation 2 and Llama-2 appendix hyperparameters verbatim",
+    "Name the 5–7 Costa-Huang tricks most load-bearing for LLM-RL, each with rationale",
+    "Frame TRPO as context only — do not derive the natural-gradient step"
+  ]
+}

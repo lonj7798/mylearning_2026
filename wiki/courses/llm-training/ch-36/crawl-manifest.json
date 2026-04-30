@@ -1,0 +1,107 @@
+{
+  "chapter_id": "ch-36",
+  "chapter_title": "Lab: Packed SFT Run with Masking Tests",
+  "track": "sft",
+  "kind": "lab",
+  "generated_at": "2026-04-23T00:00:00Z",
+  "course_outline_concepts": [
+    "Train a small (~3B) model on a 100K-sample mix combining your synthetic set (ch-29) and LIMA",
+    "Write unit tests for: chat-template rendering, loss-mask positions, packed cross-sample attention block",
+    "Run three ablations: packed vs unpacked, prompt-masked vs full-loss, with vs without NEFTune",
+    "Evaluate on a small MT-Bench-style suite; report a per-slice regression table",
+    "Deliverable: sft-run-memo.md with ablation table + one regression caught via the masking tests",
+    "Resource-constrained path: ~1B model on 20K-sample mix; run one ablation axis (packed vs unpacked) instead of three; masking-tests requirement is unchanged."
+  ],
+  "capstone_for": "sft-track (ch-30..ch-36)",
+  "sources": [
+    {
+      "path": "wiki/raw-data/llm-training/papers/sequence-packing.md",
+      "relevance": 1.0,
+      "role": "primary",
+      "what_to_extract": "cu_seqlens offsets, per-sub-sequence position-id reset, block-diagonal attention mask, flash_attn_varlen_func interface, SPFHP bin-packing, 2x throughput claim."
+    },
+    {
+      "path": "wiki/raw-data/llm-training/papers/packed-vs-unpacked-ablation.md",
+      "relevance": 1.0,
+      "role": "primary",
+      "what_to_extract": "Four failure modes (missing block-diagonal mask, un-reset position ids, label mask not re-applied per sub-sequence, dense flash_attn instead of varlen); diagnostic procedure (100-step packed vs unpacked loss-curve diff > 0.01 nats = bug); throughput model speedup ~ L_max/avg(L_i)."
+    },
+    {
+      "path": "wiki/raw-data/llm-training/papers/loss-masking-prompt.md",
+      "relevance": 1.0,
+      "role": "primary",
+      "what_to_extract": "labels[:prompt_len] = -100; multi-turn masks all user turns plus assistant turns 1..k-1; per-sub-sequence mask reset inside a packed block; Shi 2024 MT-Bench delta."
+    },
+    {
+      "path": "wiki/raw-data/llm-training/papers/neftune.md",
+      "relevance": 1.0,
+      "role": "primary",
+      "what_to_extract": "X_tilde = X + Uniform(-1,1) * alpha / sqrt(L*d); alpha in {5,10,15}; gain saturates on large SFT mixes (Tulu 3 reports neutral at 939K); stacks with packing and masking."
+    },
+    {
+      "path": "wiki/raw-data/llm-training/blogs/hf-alignment-handbook.md",
+      "relevance": 0.9,
+      "role": "primary",
+      "what_to_extract": "SFTConfig(packing=True, train_on_response_only=True, max_seq_length=2048); Zephyr hparams (LR 2e-5 cosine 10% warmup, BF16, FSDP FULL_SHARD, 1 epoch, global batch 128); 'decode a packed batch to verify chat template' rule."
+    },
+    {
+      "path": "wiki/raw-data/llm-training/blogs/allenai-tulu-sft-recipe.md",
+      "relevance": 0.9,
+      "role": "primary",
+      "what_to_extract": "Tulu 3 SFT hparams (LR 5e-6 linear 3% warmup, 2 epochs, packing yes, response-only, NEFTune off at 939K); packed ablation 2.5x throughput no quality delta; decontamination requirement."
+    },
+    {
+      "path": "wiki/raw-data/llm-training/papers/tulu-3-sft-mix.md",
+      "relevance": 0.8,
+      "role": "primary",
+      "what_to_extract": "Skill-specific mix composition (chat, math, code, IF, safety, multilingual); decontamination against eval sets; skill-specific submixes before merge."
+    },
+    {
+      "path": "wiki/raw-data/llm-training/papers/lima.md",
+      "relevance": 0.9,
+      "role": "baseline",
+      "what_to_extract": "1K handcurated seed; Superficial Alignment Hypothesis; LR schedule that drops through epochs to avoid overfit on a small set; the lab's baseline slice."
+    },
+    {
+      "path": "wiki/raw-data/llm-training/blogs/karpathy-training-neural-net-recipe.md",
+      "relevance": 1.0,
+      "role": "grounding",
+      "what_to_extract": "'Neural net training fails silently'; overfit-one-batch sanity; predict-outcome-before-run; ordered regularizer list; monitor clip-norm; all three ablations need one-change-one-prediction discipline."
+    },
+    {
+      "path": "wiki/raw-data/llm-training/papers/fsdp-sft.md",
+      "relevance": 0.8,
+      "role": "primary",
+      "what_to_extract": "FULL_SHARD memory formula; auto_wrap_policy on LlamaDecoderLayer; BF16 mixed precision defaults; typical 70B recipe (extrapolated down to 3B and 1B in this lab)."
+    }
+  ],
+  "previous_chapters": [
+    "ch-30",
+    "ch-31",
+    "ch-32",
+    "ch-33",
+    "ch-34",
+    "ch-35"
+  ],
+  "next_chapters": ["ch-37"],
+  "style_reference": "wiki/courses/llm-training/ch-29/read.md",
+  "deliverables": [
+    "read.md (220-280 lines, lab format)",
+    "figures/ablation-matrix.html (interactive 2x2x2 cube, self-contained, ~200-280 lines)",
+    "excerpts/sequence-packing.md",
+    "excerpts/packed-vs-unpacked-ablation.md",
+    "excerpts/loss-masking-prompt.md",
+    "excerpts/neftune.md",
+    "excerpts/hf-alignment-handbook.md",
+    "excerpts/allenai-tulu-sft-recipe.md",
+    "excerpts/karpathy-training-neural-net-recipe.md"
+  ],
+  "hard_rules": [
+    "No edits outside wiki/courses/llm-training/ch-36/",
+    "No emojis in any deliverable",
+    "No external CDN references in HTML (inline CSS/JS only)",
+    "Unit-test snippets must be concrete pytest (not pseudocode) with real import paths and assertions",
+    "Quote attested parameter values from raw-data sources; label inferred defaults when not attested",
+    "Capstone rule: the chapter must close the SFT track - it integrates packing (ch-33), masking (ch-32), NEFTune (ch-35), chat templates (ch-31), Tulu 3 + HF Alignment Handbook recipes, with synthetic set from ch-29 and LIMA as baselines"
+  ]
+}

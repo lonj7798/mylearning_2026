@@ -1,0 +1,1021 @@
+{
+  "kind": "draft",
+  "status": "ready-for-review-v4",
+  "revision": 4,
+  "course_slug": "llm-training",
+  "generated_at": "2026-04-22T08:00:00Z",
+  "source_library": "wiki/raw-data/llm-training/",
+  "collection_plan": "wiki/raw-data/llm-training/COLLECTION-PLAN.md",
+  "feedback_addressed": "wiki/courses/llm-training/outline_feedback.md",
+  "authoring_notes": {
+    "structure": "59 chapters across 7 tracks. Foundations + systems front-loaded. Synthetic led by the design-pattern chapter before modality surveys. SFT principles before case studies. RL consolidated into method families, not per-paper variants. Evaluation promoted to a first-class track. Content tracks (foundations, data, synthetic, sft, rl, eval) each end with a lab chapter; the Infra track ends with a capstone (ch-59) instead of a lab.",
+    "track_ordering": "Tracks are loosely sequential. Within a track, deps are strictly sequential. Foundations must come first. Eval can in principle be pulled forward once the learner has reached SFT.",
+    "chapter_types": "Each chapter has an explicit 'kind' field: 'content' for read-and-discuss chapters (5-6 concepts), 'lab' for hands-on track-end chapters that require producing an artifact (filter pipeline, synthetic set, SFT run, RL experiment, eval harness, framework read-through), and 'capstone' (exactly one, ch-57) for the final end-to-end reproduction.",
+    "per_chapter_format": "Each read.md quotes real code/equations from the raw-data library and extracts the chapter's core insight + guideline. Chapters may emit companion HTML files under ch-XX/figures/ or ch-XX/animations/ for architecture diagrams, parameter explorers, or step-by-step animations (see CLAUDE.md 'Chapter authoring \u2014 HTML visualizations').",
+    "depth_target": "Read pages should be long and source-rich \u2014 multiple source quotes, full equations, concrete hyperparameters extracted from model reports.",
+    "intended_format": "Flagship self-study program for someone targeting research-engineering or training-engineering work at a strong AI lab. Not a bootcamp, not a casual survey. Expect multi-month progression at the learner's own pace. It can also be consumed as three shorter specializations (Foundations+Data+Synthetic; SFT+RL; Eval+Infra+Capstone) if the learner needs to slice it that way.",
+    "rl_vs_eval_boundary": "RL track covers reward and judge topics as they are used during optimization \u2014 RM training, reward hacking, judge-driven preference loops, Constitutional AI, RLAIF. Eval track covers judges as measurement instruments \u2014 calibration, position/verbosity/self-enhancement bias audits, contamination workflow, slice analysis, go/no-go memos. If a topic is about producing a signal for training, it belongs in RL; if it is about auditing or comparing checkpoints, it belongs in Eval.",
+    "data_vs_infra_replay_boundary": "Data track handles replay as dataset / prompt-source design \u2014 which prompts to keep, how to mine difficulty, how to mix old vs new prompts. Infra track handles replay as runtime / systems architecture \u2014 replay buffers in the trainer, on-policy vs off-policy sampling, async rollout queues. They share the word but not the concern.",
+    "lab_paths": "Every lab chapter offers two paths. Full-budget path: multi-GPU, 1B\u20133B model, end-to-end run. Resource-constrained path: single-node or single-GPU, 125M\u20131B model, partial reproduction with replayed logs or precomputed rollouts where feasible. The memo/artifact requirement is the same in both paths \u2014 only the training scale differs."
+  },
+  "tracks": [
+    {
+      "phase": "foundations",
+      "title": "Foundations and Systems",
+      "chapters": "ch-01..ch-08",
+      "chapter_count": 8
+    },
+    {
+      "phase": "data",
+      "title": "Data Pipelines and Curation",
+      "chapters": "ch-09..ch-17",
+      "chapter_count": 9
+    },
+    {
+      "phase": "synthetic",
+      "title": "Synthetic Data Generation and Verification",
+      "chapters": "ch-18..ch-29",
+      "chapter_count": 12
+    },
+    {
+      "phase": "sft",
+      "title": "SFT and Distillation",
+      "chapters": "ch-30..ch-36",
+      "chapter_count": 7
+    },
+    {
+      "phase": "rl",
+      "title": "Preference Optimization and RL",
+      "chapters": "ch-37..ch-46",
+      "chapter_count": 10
+    },
+    {
+      "phase": "eval",
+      "title": "Evaluation, Safety, Reward and Judge Design",
+      "chapters": "ch-47..ch-53",
+      "chapter_count": 7
+    },
+    {
+      "phase": "infra",
+      "title": "Infrastructure Internals and Capstone",
+      "chapters": "ch-54..ch-59",
+      "chapter_count": 6
+    }
+  ],
+  "chapters": [
+    {
+      "id": "ch-01",
+      "title": "Optimization Fundamentals for Transformers",
+      "phase": "foundations",
+      "deps": [],
+      "concepts": [
+        "Policy gradient of the loss: SGD \u2192 Adam \u2192 AdamW \u2014 what decoupled weight decay actually decouples",
+        "Why \u03b2\u2082=0.95 and wd=0.1 are LLM defaults (vs ImageNet's \u03b2\u2082=0.999, wd=1e-4)",
+        "Gradient clipping \u2014 Pascanu 2013 global-norm formula; interaction with FSDP bucket sync and with RL reward spikes",
+        "When Adam beats SGD for transformers and why the 'no-momentum-for-transformers' myth is wrong",
+        "Muon, Lion, Shampoo, and 2025 optimizer variants \u2014 what actually ships in frontier runs vs what's research-only"
+      ],
+      "kind": "content"
+    },
+    {
+      "id": "ch-02",
+      "title": "Numerical Precision and Stability",
+      "phase": "foundations",
+      "deps": [
+        "ch-01"
+      ],
+      "concepts": [
+        "fp32 / fp16 / bf16 / fp8 \u2014 dynamic range vs mantissa tradeoffs; why bf16 beat fp16 for LLMs",
+        "Loss scaling in fp16; why bf16 doesn't need it",
+        "DeepSeek-V3 fp8 block scheme; per-block scaling as the 'fp8 that actually works'",
+        "Numerical-instability symptoms: loss spikes, NaNs, underflow in softmax, attention-score overflow",
+        "Mixed-precision master weights + gradient accumulation \u2014 common bug: accumulating in fp16/bf16 causes silent drift"
+      ],
+      "kind": "content"
+    },
+    {
+      "id": "ch-03",
+      "title": "LR Schedules, Weight Init, Norms",
+      "phase": "foundations",
+      "deps": [
+        "ch-02"
+      ],
+      "concepts": [
+        "Warmup + cosine + inverse-sqrt + WSD (warmup-stable-decay) \u2014 when each is chosen and why",
+        "Weight init: Xavier/Glorot, He/Kaiming, GPT-2 residual scale 1/sqrt(2N), \u03bcP for width-transfer",
+        "LayerNorm vs RMSNorm; pre-norm vs post-norm; QK-norm and reordered-norm (OLMo 2)",
+        "LR scaling with batch size (linear vs sqrt) and with width (\u03bcP's core claim)",
+        "Practitioner failure modes: cosine-decay-to-zero halting, warmup too short causing early divergence"
+      ],
+      "kind": "content"
+    },
+    {
+      "id": "ch-04",
+      "title": "Sequence Packing, Masking, and Chat Templates",
+      "phase": "foundations",
+      "deps": [
+        "ch-03"
+      ],
+      "concepts": [
+        "Sequence packing with FlashAttention's varlen API \u2014 memory/throughput math",
+        "Prompt masking vs full-sequence loss \u2014 when each is correct, measurable downstream impact",
+        "Chat template design: Llama 3 / Qwen ChatML / Anthropic-style; special tokens for thinking and tool calls",
+        "Chat-template leakage: what happens when eval inputs don't match training template; silent regression mode",
+        "Tokenizer implications: BPE merges for <think>, <tool_call>, refusal tokens; why tokenizer + template co-evolve"
+      ],
+      "kind": "content"
+    },
+    {
+      "id": "ch-05",
+      "title": "Distributed Training \u2014 FSDP, TP, PP, ZeRO",
+      "phase": "foundations",
+      "deps": [
+        "ch-04"
+      ],
+      "concepts": [
+        "Data parallelism \u2192 ZeRO-1/2/3 \u2192 FSDP \u2014 what's sharded at each stage",
+        "Tensor parallelism: column-wise + row-wise splits, the attention-head slicing convention",
+        "Pipeline parallelism: 1F1B schedule, bubble time, interleaving for better utilisation",
+        "DeepSpeed vs Megatron-LM vs FSDP2 \u2014 what 2025 frontier labs pick and why",
+        "3D parallelism \u2014 how Llama-3 405B / DeepSeek-V3 combine DP \u00d7 TP \u00d7 PP \u00d7 Expert Parallelism"
+      ],
+      "kind": "content"
+    },
+    {
+      "id": "ch-06",
+      "title": "Checkpointing, Resume, Instrumentation",
+      "phase": "foundations",
+      "deps": [
+        "ch-05"
+      ],
+      "concepts": [
+        "What goes in a checkpoint: weights + optimiser state + LR state + RNG + data-iter position + grad-norm history",
+        "Sharded checkpointing: per-rank save/load, format choices (DCP, Nanotron, custom)",
+        "Bit-exact resume vs approximate resume \u2014 when each matters",
+        "Instrumentation: grad-norm, loss-by-shard, entropy, KL, throughput, GPU util; what to log at what cadence",
+        "The failure that wasn't caught: silent data-iter desync across resumes"
+      ],
+      "kind": "content"
+    },
+    {
+      "id": "ch-07",
+      "title": "Common Training Failure Modes",
+      "phase": "foundations",
+      "deps": [
+        "ch-06"
+      ],
+      "concepts": [
+        "NaN/Inf root causes: softmax overflow, log(0) in KL, /0 in advantage normalisation",
+        "Loss divergence vs loss spike vs loss plateau \u2014 diagnostic trees",
+        "Dead data pipeline: upstream filter emits empty batches, trainer silently trains on padding",
+        "Masking bugs: prompt masking off-by-one, cross-sample attention leakage under packing",
+        "Distributed hangs: NCCL timeout, all-reduce rank drop, debugging with py-spy / gdb attach"
+      ],
+      "kind": "content"
+    },
+    {
+      "id": "ch-08",
+      "title": "Lab: Systems Tour and Minimal Trainer",
+      "phase": "foundations",
+      "deps": [
+        "ch-07"
+      ],
+      "concepts": [
+        "Read one small trainer end-to-end (pick: nanotron / torchtune / trl / HF transformers examples)",
+        "Map the code to the Track 1 concepts: where does clipping happen, where is masking applied, where is the optimiser stepped",
+        "Write a 1-page systems memo identifying the 3 places in the trainer most likely to fail silently",
+        "Artifact to produce: a working multi-GPU run of a small model (1B\u20133B) with FSDP and mixed precision, with packed SFT data and correct masking validated by unit test",
+        "Deliverable: failure-mode-checklist.md listing what you instrumented and what you would add next",
+        "Resource-constrained path: single-GPU with a 125M model on a CPU-feasible dataset; use DDP or FSDP-1-node, skip PP/TP; the memo requirement is unchanged."
+      ],
+      "kind": "lab"
+    },
+    {
+      "id": "ch-09",
+      "title": "Training Data Landscape",
+      "phase": "data",
+      "deps": [
+        "ch-08"
+      ],
+      "concepts": [
+        "CommonCrawl / Wikipedia / The Pile / RedPajama / SlimPajama \u2014 what each is, what each omits",
+        "The 22-domain Pile composition and which subsets have aged well",
+        "2023 \u2192 2026 shift: from raw-web maximalism to web+code+synthetic mix; why frontier labs stopped disclosing the mix",
+        "Licence and governance: copyright, opt-out registers, the enterprise-data constraint",
+        "Open vs closed pretraining data: what Dolma + FineWeb disclose that Llama 3 / Qwen don't"
+      ],
+      "kind": "content"
+    },
+    {
+      "id": "ch-10",
+      "title": "Open Curation Pipelines \u2014 CCNet, C4, Dolma, FineWeb",
+      "phase": "data",
+      "deps": [
+        "ch-09"
+      ],
+      "concepts": [
+        "CCNet three-stage: language ID \u2192 perplexity filter \u2192 dedup; why it's still the conceptual skeleton",
+        "C4 heuristic filters: bad-word list, terminal punctuation, javascript stripping; the line-dedup step",
+        "Dolma per-source pipelines (web vs code vs peS2o) and the full filter-ablation table",
+        "FineWeb-Edu classifier-based quality: Llama-3 annotation \u2192 classifier training \u2192 score threshold",
+        "How to read and critique a new pipeline: what filters, in what order, with what thresholds, ablated how"
+      ],
+      "kind": "content"
+    },
+    {
+      "id": "ch-11",
+      "title": "Data Operations \u2014 Tokenizers, Shards, Lineage, PII",
+      "phase": "data",
+      "deps": [
+        "ch-10"
+      ],
+      "kind": "content",
+      "concepts": [
+        "Tokenizer construction at scale: BPE/WordPiece/SentencePiece training, vocab-size choice, merges over code vs natural text",
+        "Shard and streaming layout: Mosaic streaming, WebDataset, tar / parquet choices; read-throughput vs seek cost",
+        "Dataset lineage and versioning: content-addressed hashing, doc-id tracking across filter stages, reproducing a mix months later",
+        "Code-repo filtering and executable screening: repo-level license checks, line-length heuristics, executability screens, secret detection",
+        "PII and secrets removal as operations (not policy): regex + classifier cascade, opt-out registries, audit log for removal events",
+        "Tokenizer extension pitfalls: adding special tokens (<think>, <tool_call>, reasoning tags) post-pretraining without embedding drift"
+      ]
+    },
+    {
+      "id": "ch-12",
+      "title": "Deduplication \u2014 Exact, Approximate, Semantic",
+      "phase": "data",
+      "deps": [
+        "ch-11"
+      ],
+      "concepts": [
+        "Lee 2021 \u2014 the foundational 'dedup improves models' evidence",
+        "MinHash + LSH: Jaccard approximation, permutation count, bucket collision math",
+        "SuffixArray for long-span exact dedup; when span-level matters over document-level",
+        "Semantic dedup: SemDeDup / D4, embedding choice, cluster-level selection",
+        "When dedup helps vs hurts: aggressive semantic dedup narrows domain coverage"
+      ],
+      "kind": "content"
+    },
+    {
+      "id": "ch-13",
+      "title": "Domain Mixing and DoReMi",
+      "phase": "data",
+      "deps": [
+        "ch-12"
+      ],
+      "concepts": [
+        "Fixed-mix era (GLaM, PaLM) \u2014 hand-tuned weights as the baseline",
+        "DoReMi: proxy model + group DRO to learn a domain reweighting; when proxy-optimal transfers",
+        "Alternatives: upweight-by-downstream-accuracy, DSIR (distribution-similarity selection)",
+        "Mix as a stage-specific lever: pretraining mix \u2260 mid-training mix \u2260 SFT mix",
+        "How Llama 3 / OLMo 2 set mixing weights in practice \u2014 what they report, what they hide"
+      ],
+      "kind": "content"
+    },
+    {
+      "id": "ch-14",
+      "title": "Scaling, Contamination, Knowledge Retention",
+      "phase": "data",
+      "deps": [
+        "ch-13"
+      ],
+      "concepts": [
+        "Data-constrained scaling (Muennighoff 2023): repeat vs new tokens, ~4-epoch threshold",
+        "Quality-vs-quantity scaling: quality shifts the irreducible-loss term",
+        "Physics-of-LM-3 (Allen-Zhu): linear capacity-per-parameter for fact storage; repetition as a factual-recall knob",
+        "Decontamination design: n-gram overlap against eval suites, false-positive/false-negative tradeoff",
+        "2025 contamination-as-weapon risk: poisoned web data, upstream-of-scrape adversaries; bridge to Eval track"
+      ],
+      "kind": "content"
+    },
+    {
+      "id": "ch-15",
+      "title": "Human Annotation and Label Operations",
+      "phase": "data",
+      "deps": [
+        "ch-14"
+      ],
+      "kind": "content",
+      "concepts": [
+        "Rubric design: criteria definition, edge-case enumeration, positive/negative exemplars \u2014 why the rubric is the real product",
+        "Annotator disagreement: inter-rater-agreement metrics (Cohen \u03ba, Krippendorff \u03b1), calibration sessions, drift detection over time",
+        "Adjudication workflow: single-vs-double-vs-triple annotation, expert adjudicator tier, cost/quality tradeoff per layer",
+        "Preference sampling policy: which response pairs to show annotators, close-pair mining, active-learning selection",
+        "When human data overrides synthetic / judge signals: safety-critical queries, frontier-reasoning verification, domain-expert adjudication",
+        "Operational reality: annotator onboarding, prompt-leak prevention, burnout and quality decay, audit trail design"
+      ]
+    },
+    {
+      "id": "ch-16",
+      "title": "RL Prompt Curation and Replay Data",
+      "phase": "data",
+      "deps": [
+        "ch-15"
+      ],
+      "concepts": [
+        "What an RL-stage 'prompt' is \u2014 verifiable or judge-able queries, typically filtered from SFT data",
+        "Difficulty mining: rollout-pass-rate filtering, Kimi-K2 / T\u00fclu-3 evidence",
+        "Replay buffers in RLHF: when useful, when they bias the policy",
+        "Curriculum in prompt space: cold-start prompts vs annealed difficulty",
+        "Bridge to synthetic \u2014 most 2025 RL prompts are synthetic and Track 3 will generate them"
+      ],
+      "kind": "content"
+    },
+    {
+      "id": "ch-17",
+      "title": "Lab: Small-Scale Filter Pipeline and Ablation Memo",
+      "phase": "data",
+      "deps": [
+        "ch-16"
+      ],
+      "concepts": [
+        "Implement a minimal CCNet-style pipeline on a 10GB CommonCrawl slice: lang-ID \u2192 perplexity filter \u2192 exact dedup \u2192 MinHash near-dedup",
+        "Train two small (~125M) models with and without each filter, run a small eval suite",
+        "Decontaminate against your eval suite; measure how many false positives the n-gram rule produces",
+        "Write ablation-memo.md: one table per filter, one paragraph per observation, explicit hypothesis for anything unexpected",
+        "Artifact: reproducible pipeline + memo + two trained checkpoints + eval report",
+        "Resource-constrained path: 1GB CommonCrawl slice instead of 10GB; train 50M models instead of 125M; use a smaller eval suite (HellaSwag + LAMBADA)."
+      ],
+      "kind": "lab"
+    },
+    {
+      "id": "ch-18",
+      "title": "The Synthetic-Data Design Pattern",
+      "phase": "synthetic",
+      "deps": [
+        "ch-17"
+      ],
+      "concepts": [
+        "The operational loop every synthetic pipeline is an instance of: generate \u2192 filter \u2192 dedup \u2192 verify \u2192 select \u2192 mix",
+        "Where each real pipeline (Self-Instruct, Nemotron-4, APIGen, OpenMathInstruct-2) sits in that loop",
+        "Why the loop is the right unit of analysis: it lets you port techniques between modalities",
+        "Failure mode per step: generation collapses to templates, filter over-prunes, dedup loses diversity, no verifier means no signal, selection biases the mix",
+        "The design-pattern lens is how the rest of this track will be taught \u2014 individual papers become cases, not doctrines"
+      ],
+      "kind": "content"
+    },
+    {
+      "id": "ch-19",
+      "title": "Generation Methods \u2014 Bootstrap, Evol, Extraction, Persona, Rephrase",
+      "phase": "synthetic",
+      "deps": [
+        "ch-18"
+      ],
+      "concepts": [
+        "Bootstrap lineage: Self-Instruct (Wang 2022, Yejin Choi group) seed+sample+filter loop; Alpaca's cheap replication",
+        "Evolution operators: Evol-Instruct depth + breadth, WizardMath/Coder specialisations",
+        "Aligned-model extraction: Magpie prefix-only sampling \u2014 no seed, no API",
+        "Persona-conditioned synthesis: Persona-Hub's 1B personas as a diversity operator",
+        "Web rephrasing: WRAP \u2014 why a small model can turn raw web into Q&A and beat raw web at equal tokens"
+      ],
+      "kind": "content"
+    },
+    {
+      "id": "ch-20",
+      "title": "Distillation-as-Data and R1-Distill Lineage",
+      "phase": "synthetic",
+      "deps": [
+        "ch-19"
+      ],
+      "concepts": [
+        "Orca 1/2 explanation-trace distillation via system-prompt scaffolding",
+        "Distilling-Step-by-Step: rationale + label joint training",
+        "R1-distill: what data DeepSeek actually generated and how",
+        "Open R1-distill curation: Bespoke-Stratos, Open-R1, Sky-T1 \u2014 how much curation + which filters",
+        "Teacher-bias inheritance \u2014 GPT-4/R1's quirks leaking into the student; licensing cliffs"
+      ],
+      "kind": "content"
+    },
+    {
+      "id": "ch-21",
+      "title": "Taxonomy-Driven and Textbook Synthesis",
+      "phase": "synthetic",
+      "deps": [
+        "ch-20"
+      ],
+      "concepts": [
+        "GLAN (Microsoft): taxonomy \u2192 subject \u2192 lesson \u2192 question, top-down generation",
+        "Nemotron-4 340B pipeline: >98% synthetic SFT + RM data, multi-stage generator + critic",
+        "Phi-textbooks line: Phi-1 / Phi-1.5 / Phi-3 / Phi-4 \u2014 textbook-style synthesis at pretraining scale",
+        "Coverage vs imagination: top-down misses combinations bottom-up finds",
+        "Where taxonomies come from \u2014 and the bias injection from a human-curated tree"
+      ],
+      "kind": "content"
+    },
+    {
+      "id": "ch-22",
+      "title": "Quality, Diversity, and Gradient-Based Selection",
+      "phase": "synthetic",
+      "deps": [
+        "ch-21"
+      ],
+      "concepts": [
+        "Classical filters: DEITA (complexity\u00d7quality\u00d7diversity), Cherry-LLM and IFD, Superfiltering, AlpaGasus",
+        "IFD score math: conditioned / unconditioned perplexity ratio \u2014 what it captures and misses",
+        "Gradient-based selection: LESS \u2014 select training samples whose gradients align with a validation target",
+        "Prismatic Synthesis (Jung 2025, Yejin Choi group): G-Vendi = entropy in gradient space; '7B beats 671B generator'",
+        "When each filter actually pays vs when it's cargo-culted"
+      ],
+      "kind": "content"
+    },
+    {
+      "id": "ch-23",
+      "title": "Model Collapse and Synthetic-Data Verification",
+      "phase": "synthetic",
+      "deps": [
+        "ch-22"
+      ],
+      "concepts": [
+        "Shumailov 2024 (Nature): recursive training on model outputs degrades future models",
+        "Dohmatob 2024 strong collapse; 2025 follow-ups (Gerstgrasser, Zhu, He, Garg)",
+        "When collapse is mitigable (fresh-human-data injection) vs unavoidable (closed feedback loops)",
+        "Verification as the defense: 2025 faithfulness-checking line",
+        "Practical: every synthetic loop needs a verifier gate before the next generation consumes it"
+      ],
+      "kind": "content"
+    },
+    {
+      "id": "ch-24",
+      "title": "Modality \u2014 Reasoning Traces (CoT \u2192 Long-CoT \u2192 Step-Level)",
+      "phase": "synthetic",
+      "deps": [
+        "ch-23"
+      ],
+      "concepts": [
+        "OpenMathInstruct 1/2: 1.8M \u2192 14M CoT traces via Mixtral \u2192 Llama-3.1-405B teacher",
+        "MathScale / MetaMath / MAmmoTH: concept-graph, self-verify-FOBAR, hybrid CoT+PoT",
+        "rStar / rStar-Math: MCTS + self-verification for small-model math",
+        "s1 (Muennighoff 2025) and LIMO (Ye 2025): 1000-trace curated sets beat massive sets",
+        "Step-level: Step-DPO + OmegaPRM automated MC labeling \u2014 bridge to Track 5 PRM chapter"
+      ],
+      "kind": "content"
+    },
+    {
+      "id": "ch-25",
+      "title": "Modality \u2014 Multi-Turn Conversation Synthesis",
+      "phase": "synthetic",
+      "deps": [
+        "ch-24"
+      ],
+      "concepts": [
+        "Baize (Xu 2023): ChatGPT self-chat from seed topic; exact turn-count distribution",
+        "UltraChat construction: three-sector taxonomy + two-model dialogue",
+        "CAMEL: role-play multi-agent synthesis",
+        "SODA + Prosocial-Dialog (Yejin Choi group): commonsense-grounded + safety-focused",
+        "OpenAssistant tree as a real-human baseline for evaluating synthetic conversation quality"
+      ],
+      "kind": "content"
+    },
+    {
+      "id": "ch-26",
+      "title": "Modality \u2014 Tool and Function-Calling Data",
+      "phase": "synthetic",
+      "deps": [
+        "ch-25"
+      ],
+      "concepts": [
+        "Toolformer (Schick 2023): self-supervised API annotation via perplexity-delta filter",
+        "ToolLLM: ToolBench 16K APIs + DFS-DT trajectory synthesis",
+        "xLAM + APIGen (Salesforce): 3-layer verification (format / execution / semantic)",
+        "APIGen-MT (2025) + ToolACE: blueprint-then-rollout for multi-turn function-call synthesis",
+        "BFCL leaderboard: how the benchmark shapes the data and the training target"
+      ],
+      "kind": "content"
+    },
+    {
+      "id": "ch-27",
+      "title": "Modality \u2014 Agentic Trajectories",
+      "phase": "synthetic",
+      "deps": [
+        "ch-26"
+      ],
+      "concepts": [
+        "AgentInstruct / AgentTuning / Lumos / FireAct / AutoAct / AgentFlan \u2014 design space of agent SFT",
+        "Environment-grounded synthesis: WebArena, SWE-Gym trajectories",
+        "SWE-RL (Meta 2025): rule-based reward (difflib ratio) for scalable agent RL",
+        "Kimi-K2 agentic: what a frontier lab actually does for long-horizon post-training",
+        "Action-space design: web vs terminal vs repo vs sandbox \u2014 each constrains the trajectory generator"
+      ],
+      "kind": "content"
+    },
+    {
+      "id": "ch-28",
+      "title": "Modality \u2014 Long-Context Synthesis",
+      "phase": "synthetic",
+      "deps": [
+        "ch-27"
+      ],
+      "concepts": [
+        "LongAlpaca / LongAlign: 32k\u2013100k instruction data early generation",
+        "ProLong (Gao 2024): coherence filter + staged schedule for 128k+",
+        "RULER + BABILong + NIAH \u2014 synthetic task families and the needle-retrieval lineage",
+        "Llama-3 long-context recipe: base=500K RoPE, staged data mix, position extrapolation",
+        "Qwen 2.5-1M / Qwen 3 + LongRoPE: per-dimension RoPE search + 1M-token pipeline"
+      ],
+      "kind": "content"
+    },
+    {
+      "id": "ch-29",
+      "title": "Lab: Synthetic Instruction Set with Filter+Dedup+Verify",
+      "phase": "synthetic",
+      "deps": [
+        "ch-28"
+      ],
+      "concepts": [
+        "Generate ~5K instructions with Self-Instruct-style bootstrap + Evol-Instruct depth operators",
+        "Apply three filters in sequence: format-validity, IFD difficulty, MinHash dedup \u2014 report survival-rate per stage",
+        "Add a verifier gate for any reasoning/tool-calling subset (exact-match, execution, or LLM-judge)",
+        "Train a small (~1B) SFT on your set vs on a matched-size LIMA-filtered subset; ablate each filter stage",
+        "Deliverable: synthetic-set-memo.md with survival tables, quality spot-check, and one failure-mode you discovered",
+        "Resource-constrained path: generate 1K instructions instead of 5K; train ~500M model for SFT; ablate only the two filters most novel to the learner."
+      ],
+      "kind": "lab"
+    },
+    {
+      "id": "ch-30",
+      "title": "SFT Design Axes",
+      "phase": "sft",
+      "deps": [
+        "ch-29"
+      ],
+      "concepts": [
+        "What SFT means across regimes: single-turn instruction, multi-turn chat, tool-call, reasoning, agentic",
+        "Loss masking per regime: system / user / assistant / tool-call / thought tokens",
+        "Chat-template design decisions and their downstream blast radius",
+        "Packing vs unpacking, NEFTune, prompt-masked vs full-sequence loss as tunable axes",
+        "What SFT can and cannot later be fixed by RL \u2014 the pre-determines framing"
+      ],
+      "kind": "content"
+    },
+    {
+      "id": "ch-31",
+      "title": "Iterative SFT\u2194RL Bridges",
+      "phase": "sft",
+      "deps": [
+        "ch-30"
+      ],
+      "concepts": [
+        "Rejection-sampling fine-tuning (RSFT) \u2014 Llama-2 appendix recipe",
+        "Best-of-N SFT: distilling own best samples back into SFT",
+        "STaR (Zelikman 2022) as the original self-improvement SFT bridge",
+        "The iterative-SFT \u2194 on-policy-RL crossover: when more SFT beats first RL round",
+        "Practical decision tree: when the right move is SFT, when RL, when alternation"
+      ],
+      "kind": "content"
+    },
+    {
+      "id": "ch-32",
+      "title": "Multi-Stage Pipelines \u2014 Mid-Training, Cold-Start, Long-Context",
+      "phase": "sft",
+      "deps": [
+        "ch-31"
+      ],
+      "concepts": [
+        "What 'mid-training' means in 2025: a distinct stage between pretrain and post-train",
+        "Cold-start SFT before RL: R1's cold-start recipe vs R1-Zero's pure-RL baseline",
+        "Long-context mid-training: staged position-encoding extensions + data curation",
+        "OLMo 3 model-flow worldview: each stage has its own data mix and eval gate",
+        "Open question: can better data skip mid-training? What the evidence says and doesn't"
+      ],
+      "kind": "content"
+    },
+    {
+      "id": "ch-33",
+      "title": "Case Studies A \u2014 T\u00fclu 3 and Llama 3",
+      "phase": "sft",
+      "deps": [
+        "ch-32"
+      ],
+      "concepts": [
+        "T\u00fclu 3 (Lambert 2024): 939K-sample SFT mix composition, multi-seed + decontam, full recipe-disclosure",
+        "T\u00fclu 3.1 delta: what changed between releases and why",
+        "Llama 3 multi-round RSFT: 6 rounds SFT + rejection sampling + DPO; data flywheel between rounds",
+        "Per-round data composition: synthetic/human ratio shift across rounds",
+        "Why multi-round beats single-pass: what each round's evals caught"
+      ],
+      "kind": "content"
+    },
+    {
+      "id": "ch-34",
+      "title": "Case Studies B \u2014 Qwen 2.5/3, OLMo 2/3, Phi 3/4",
+      "phase": "sft",
+      "deps": [
+        "ch-33"
+      ],
+      "concepts": [
+        "Qwen 2.5: 1M SFT + 150K DPO pairs; LR 7e-7, Online Merging Optimizer",
+        "Qwen 3 hybrid-thinking: single-model-two-modes training \u2014 data labeling to enable toggling",
+        "OLMo 2 (T\u00fclu-recipe) vs OLMo 3 (model-flow): what the open stages look like",
+        "Phi 3/4 synthetic-heavy SFT \u2014 pretrain/SFT boundary blurring",
+        "Phi-4-reasoning: long-CoT SFT on top and measured impact"
+      ],
+      "kind": "content"
+    },
+    {
+      "id": "ch-35",
+      "title": "Case Studies C \u2014 Nemotron, Distillation SFT",
+      "phase": "sft",
+      "deps": [
+        "ch-34"
+      ],
+      "concepts": [
+        "Nemotron-4 340B + Nemotron-Ultra: >98% synthetic SFT + 5-dim HelpSteer2 preference",
+        "R1-distill: what data DeepSeek generated and how it was SFT-consumed",
+        "Bespoke-Stratos ~17K trace curation: contamination checks, the 'cheap frontier reasoning' recipe",
+        "Sky-T1 $450 run \u2014 what they pulled from R1 and what they filtered out",
+        "When distillation SFT is enough vs when you still need RL (s1/LIMO vs full R1)"
+      ],
+      "kind": "content"
+    },
+    {
+      "id": "ch-36",
+      "title": "Lab: Packed SFT Run with Masking Tests",
+      "phase": "sft",
+      "deps": [
+        "ch-35"
+      ],
+      "concepts": [
+        "Train a small (~3B) model on a 100K-sample mix combining your synthetic set (ch-27) and LIMA",
+        "Write unit tests for: chat-template rendering, loss-mask positions, packed cross-sample attention block",
+        "Run three ablations: packed vs unpacked, prompt-masked vs full-loss, with vs without NEFTune",
+        "Evaluate on a small MT-Bench-style suite; report a per-slice regression table",
+        "Deliverable: sft-run-memo.md with ablation table + one regression you caught via the masking tests",
+        "Resource-constrained path: ~1B model on 20K-sample mix; run one ablation axis (packed vs unpacked) instead of three; masking-tests requirement is unchanged."
+      ],
+      "kind": "lab"
+    },
+    {
+      "id": "ch-37",
+      "title": "Policy-Gradient Foundations",
+      "phase": "rl",
+      "deps": [
+        "ch-36"
+      ],
+      "concepts": [
+        "Policy-gradient theorem \u2014 log-prob trick, score-function estimator",
+        "REINFORCE with and without baselines; variance reduction intuition",
+        "Actor-critic: bootstrapping trades bias for variance",
+        "Why LM-RL is special: discrete actions, deterministic dynamics, per-token credit assignment",
+        "Entropy term \u2014 regulariser vs bandaid for bad exploration"
+      ],
+      "kind": "content"
+    },
+    {
+      "id": "ch-38",
+      "title": "KL-Controlled RLHF \u2014 TRPO, PPO, InstructGPT",
+      "phase": "rl",
+      "deps": [
+        "ch-37"
+      ],
+      "concepts": [
+        "TRPO trust-region surrogate and the natural-gradient ancestry (context only)",
+        "PPO clip objective L_CLIP \u2014 term-by-term derivation + GAE \u03bb + value head",
+        "InstructGPT's PPO-ptx: per-token KL-to-reward, \u03b2, \u03b3 pretraining-mix coefficient",
+        "Llama-2 PPO: LR 1e-6, KL 0.01, two-RM (Helpfulness + Safety) design",
+        "Costa-Huang's 37 implementation details \u2014 the ones that actually matter for LLM-RL"
+      ],
+      "kind": "content"
+    },
+    {
+      "id": "ch-39",
+      "title": "Offline Preference Optimization Family",
+      "phase": "rl",
+      "deps": [
+        "ch-38"
+      ],
+      "concepts": [
+        "DPO (Rafailov 2023): closed-form derivation, implicit reward, \u03b2 schedule; Llama 3's DPO hparams",
+        "IPO (Azar 2023) and KTO (Ethayarajh 2024): what DPO overfits on, prospect-theory value function",
+        "SimPO + ORPO: reference-free alternatives; length-normalised reward, odds-ratio joint loss",
+        "RPO (Pang 2024): iterative preference optimisation",
+        "Decision framework: which variant by data shape, compute budget, and alignment target"
+      ],
+      "kind": "content"
+    },
+    {
+      "id": "ch-40",
+      "title": "Online / Group-Baseline RL Family",
+      "phase": "rl",
+      "deps": [
+        "ch-39"
+      ],
+      "concepts": [
+        "RLOO (Ahmadian 2024): REINFORCE leave-one-out as a group baseline",
+        "REINFORCE++ (2025): global advantage normalisation + variance tracking",
+        "GRPO (DeepSeekMath 2024): group-relative advantage with std normalisation + k3 KL inside loss",
+        "Dr.GRPO: bias-corrected GRPO \u2014 no /std, no 1/|o_i|, and why the original biases mattered",
+        "The 2024\u20132025 shift from value-function methods to group-baseline methods"
+      ],
+      "kind": "content"
+    },
+    {
+      "id": "ch-41",
+      "title": "Reward Modeling",
+      "phase": "rl",
+      "deps": [
+        "ch-40"
+      ],
+      "concepts": [
+        "Bradley-Terry preference model: derivation, identifiability, scaling",
+        "Gao 2022 reward-model over-optimisation: the inverted-U in policy-vs-RM KL",
+        "Reward ensembling (Coste 2023), PairRM, generative reward models",
+        "Multi-attribute RMs: Nemotron's 5-dim HelpSteer2, composing attributes at RL time",
+        "When to train a new RM vs reuse an existing one vs use a judge-LLM"
+      ],
+      "kind": "content"
+    },
+    {
+      "id": "ch-42",
+      "title": "Reward Hacking and Judge Design",
+      "phase": "rl",
+      "deps": [
+        "ch-41"
+      ],
+      "concepts": [
+        "Skalse-style taxonomy + LM-specific hacks: length bias, sycophancy, refusal-over-training, format abuse",
+        "Judge-LLM biases (Zheng 2023 MT-Bench): position, verbosity, self-enhancement",
+        "Constitutional AI + RLAIF + synthetic judges \u2014 Con-J, Self-Taught Evaluators, J1 line",
+        "Lilian Weng's reward-hacking survey \u2014 generalised mitigations",
+        "Pre-deployment detection: red-team evals, RM-vs-RM disagreement, diversity probes"
+      ],
+      "kind": "content"
+    },
+    {
+      "id": "ch-43",
+      "title": "Entropy Dynamics and KL Control",
+      "phase": "rl",
+      "deps": [
+        "ch-42"
+      ],
+      "concepts": [
+        "Cui 2025 entropy mechanism: R = -a\u00b7exp(H)+b empirical law",
+        "Entropy collapse threshold (H<0.1 nats); Clip-Cov / KL-Cov interventions",
+        "KL-control math: k1/k2/k3 estimators (Schulman's KL tricks blog)",
+        "KL-to-reward (per-token, PPO-style) vs KL-as-loss (DPO-style)",
+        "Max-ent RL ancestry (Haarnoja 2018 SAC) \u2014 what LM-RL inherited and what it dropped"
+      ],
+      "kind": "content"
+    },
+    {
+      "id": "ch-44",
+      "title": "Process Supervision and Verifiable Rewards",
+      "phase": "rl",
+      "deps": [
+        "ch-43"
+      ],
+      "concepts": [
+        "PRM800K (Lightman 2023): step-level labeling protocol + annotation cost",
+        "Let's-Verify-Step-by-Step: process vs outcome supervision comparison",
+        "Math-Shepherd + OmegaPRM: automated MC step labeling; GSM8K gains",
+        "RLVR (Lambert 2024 T\u00fclu 3): LR 3e-7, KL 0.05, verifier-as-reward",
+        "SWE-RL (Meta 2025): rule-based difflib reward as a scalable RL substrate"
+      ],
+      "kind": "content"
+    },
+    {
+      "id": "ch-45",
+      "title": "Self-Improvement Loops",
+      "phase": "rl",
+      "deps": [
+        "ch-44"
+      ],
+      "concepts": [
+        "Self-Rewarding (Yuan 2024) and Meta-Rewarding (Wu 2024): model-as-own-judge",
+        "SPiN (Chen 2024) + Nash-LM (Munos 2024): self-play preference approaches",
+        "SCoRe (Kumar 2024): self-correction as an RL target",
+        "ReST-EM + rest of expectation-maximisation self-training line",
+        "R1-Zero's emergent reasoning: what really happens in pure-RL and what the 2025 analyses settled"
+      ],
+      "kind": "content"
+    },
+    {
+      "id": "ch-46",
+      "title": "Lab: Small DPO or RLVR Experiment with Failure Analysis",
+      "phase": "rl",
+      "deps": [
+        "ch-45"
+      ],
+      "concepts": [
+        "Run option A (DPO): ~3B model + 10K-pair preference set; sweep \u03b2 \u2208 {0.05, 0.1, 0.3}",
+        "Run option B (RLVR): ~3B model + verifiable-math prompt set; sweep KL \u2208 {0.01, 0.05, 0.1}",
+        "Instrument: KL, entropy, reward mean/std, pass-rate per prompt-bucket",
+        "Find one failure mode (reward hacking, entropy collapse, length bias) and write its post-mortem",
+        "Deliverable: rl-experiment-memo.md with sweep table + training-curve plots + one failure post-mortem",
+        "Resource-constrained path: ~1B model; single \u03b2 or single KL value instead of the full sweep; keep the instrumentation + failure post-mortem \u2014 the analysis, not the scale, is the deliverable."
+      ],
+      "kind": "lab"
+    },
+    {
+      "id": "ch-47",
+      "title": "Eval Harness Design",
+      "phase": "eval",
+      "deps": [
+        "ch-36"
+      ],
+      "concepts": [
+        "Benchmark shape: multiple-choice vs generation vs open-ended; per-task metric choice",
+        "Harness architecture: lm-eval-harness / OLMES / AgentBench \u2014 what's common, what differs",
+        "Inference-time config as part of eval: temperature, top-p, max-tokens \u2014 these are eval hyperparameters",
+        "Slicing the harness: per-subset report, per-difficulty-bucket report",
+        "Versioning the harness: when a harness update changes numbers, which way you attribute regressions"
+      ],
+      "kind": "content",
+      "notes": [
+        "Dependency loosened from end-of-RL (ch-44) to end-of-SFT (ch-34) so the Eval track can run in parallel with RL. Learners who want the strict sequential path can still complete RL first."
+      ]
+    },
+    {
+      "id": "ch-48",
+      "title": "Contamination Workflow",
+      "phase": "eval",
+      "deps": [
+        "ch-47"
+      ],
+      "concepts": [
+        "n-gram overlap detection: bucket size, cutoff, false-positive/negative tradeoffs",
+        "Canary-string + watermark approaches; their limits with paraphrased leakage",
+        "Downstream contamination: train data leaked into RM pref data leaked into eval",
+        "Contamination reporting conventions: what a defensible memo claims vs doesn't",
+        "Live-in-wild contamination: benchmarks leaked onto the web within days of release"
+      ],
+      "kind": "content"
+    },
+    {
+      "id": "ch-49",
+      "title": "Judge Models and Judge Calibration",
+      "phase": "eval",
+      "deps": [
+        "ch-48"
+      ],
+      "concepts": [
+        "Judge-LLM as an eval primitive: MT-Bench, Arena-Hard, WildBench",
+        "Judge bias measurement: position swap, length-controlled pairs, confidence calibration",
+        "Con-J / Self-Taught Evaluators / J1 \u2014 2024/25 synthetic-judge line applied to eval",
+        "Judge-RM vs generative-RM \u2014 when eval-time judge \u2260 RL-time RM matters",
+        "Why 'GPT-4-as-judge' is slowly being replaced and what by"
+      ],
+      "kind": "content"
+    },
+    {
+      "id": "ch-50",
+      "title": "Slice Analysis and Failure Bucketing",
+      "phase": "eval",
+      "deps": [
+        "ch-49"
+      ],
+      "concepts": [
+        "Per-slice vs per-task metrics: why aggregate numbers hide the interesting story",
+        "Failure bucketing pipelines: cluster-by-reason, cluster-by-confusion-matrix",
+        "Comparing checkpoints: signed vs unsigned per-slice deltas, when a regression is real",
+        "Building a failure-ledger: what each known-failure-bucket looks like across training runs",
+        "The 'three-line chart vs 50-slice report' rule: pick based on decision being made"
+      ],
+      "kind": "content"
+    },
+    {
+      "id": "ch-51",
+      "title": "Metric Noise, Confidence, Go/No-Go",
+      "phase": "eval",
+      "deps": [
+        "ch-50"
+      ],
+      "concepts": [
+        "Per-run variance: dropout / temperature / prompt-permutation seeds; how to bound each",
+        "Bootstrap CIs at the item level \u2014 the cheap confidence estimate that most papers omit",
+        "Comparing two checkpoints: paired bootstrap, sign test, the 'two-run minimum' rule",
+        "Rolling averaging across checkpoints; smoothing vs masking real regressions",
+        "Writing the go/no-go memo: what claim, what evidence, what reviewer expected to check"
+      ],
+      "kind": "content"
+    },
+    {
+      "id": "ch-52",
+      "title": "Safety Eval and Red-Team",
+      "phase": "eval",
+      "deps": [
+        "ch-51"
+      ],
+      "concepts": [
+        "HarmBench + WildGuard: taxonomies + datasets for refusal and harm detection",
+        "Salad-Bench: multi-category safety eval with adversarial prompts",
+        "Circuit-Breakers: representation-engineering defense as complement to refusal SFT",
+        "Anthropic Sleeper-Agents: persistence of backdoors under safety training",
+        "Red-team protocol: closed/open team, manual vs synthetic attacks, reporting cadence"
+      ],
+      "kind": "content"
+    },
+    {
+      "id": "ch-53",
+      "title": "Lab: Eval Harness with Slices and Regression Tracking",
+      "phase": "eval",
+      "deps": [
+        "ch-52"
+      ],
+      "concepts": [
+        "Build a minimal harness covering 3 tasks across reasoning/chat/safety with slice reporting",
+        "Add contamination gate: fail-if-n-gram-overlap exceeds threshold against your training set",
+        "Add judge-bias probe: position-swap subset + length-controlled pairs",
+        "Run your ch-34 SFT + ch-44 RL checkpoints through the harness; write a comparative memo",
+        "Deliverable: harness code + contamination report + eval-memo.md with go/no-go recommendation",
+        "Resource-constrained path: one reasoning task + one safety task instead of three-across-axes; use precomputed rollouts from your ch-34 / ch-44 runs rather than live-generating."
+      ],
+      "kind": "lab"
+    },
+    {
+      "id": "ch-54",
+      "title": "Rollout, Replay, Async Infrastructure",
+      "phase": "infra",
+      "deps": [
+        "ch-53"
+      ],
+      "concepts": [
+        "Best-of-N (Stiennon 2020) and why it's the cheap alternative to full RL \u2014 and its ceiling",
+        "On-policy vs off-policy for LM-RL (Tang 2024 analysis)",
+        "Replay buffers in RLHF: when useful, when they bias policy",
+        "Async actor-learner: OpenRLHF and verl's decoupling of rollout GPUs from trainer GPUs",
+        "Mini-batch sharing across prompts: per-prompt vs pooled advantages"
+      ],
+      "kind": "content"
+    },
+    {
+      "id": "ch-55",
+      "title": "verl Internals",
+      "phase": "infra",
+      "deps": [
+        "ch-54"
+      ],
+      "concepts": [
+        "Repo tour: verl-project/verl, the SPMD-sync-retirement PR #4411 and what replaced it",
+        "PPO loss implementation \u2014 reading ppo_loss end-to-end with line refs",
+        "GRPO trainer \u2014 how the group baseline is computed, where KL is added",
+        "Rollout: HFRollout (reference) vs async vLLM server (production)",
+        "Entropy + KL logging: what verl ships by default and what you'd add"
+      ],
+      "kind": "content"
+    },
+    {
+      "id": "ch-56",
+      "title": "OpenRLHF Internals",
+      "phase": "infra",
+      "deps": [
+        "ch-55"
+      ],
+      "concepts": [
+        "Repo tour: OpenRLHF/OpenRLHF architecture",
+        "PPO trainer: loss + per-token KL-to-reward handling",
+        "DPO trainer: reference-policy management, pair batching",
+        "Ray-based multi-node orchestration and its quirks",
+        "Comparison with verl: what OpenRLHF does differently and the tradeoffs"
+      ],
+      "kind": "content"
+    },
+    {
+      "id": "ch-57",
+      "title": "TRL Internals",
+      "phase": "infra",
+      "deps": [
+        "ch-56"
+      ],
+      "concepts": [
+        "Repo tour: huggingface/trl \u2014 stable vs experimental folder split",
+        "PPO / GRPO / online-DPO trainers as they actually exist in the experimental folder",
+        "Accelerate-based single-process orchestration \u2014 what breaks at scale",
+        "HF ecosystem integrations (peft, datasets, transformers) and their eval-time implications",
+        "When TRL is the right choice and when you've outgrown it"
+      ],
+      "kind": "content"
+    },
+    {
+      "id": "ch-58",
+      "title": "Framework Comparison and When to Pick Which",
+      "phase": "infra",
+      "deps": [
+        "ch-57"
+      ],
+      "concepts": [
+        "Feature matrix across verl / OpenRLHF / TRL: rollout mode, parallelism, algos supported",
+        "Entropy / KL / loss logging patterns \u2014 what each ships by default",
+        "Performance characteristics: GPU utilisation, throughput, straggler handling",
+        "Community + maintenance velocity \u2014 which repos are where in 2026",
+        "Decision tree: which framework for which run (single-node exp vs 128-GPU production)"
+      ],
+      "kind": "content"
+    },
+    {
+      "id": "ch-59",
+      "title": "Capstone \u2014 Reproduce a 2025 Open Recipe at Small Scale",
+      "phase": "infra",
+      "deps": [
+        "ch-58"
+      ],
+      "concepts": [
+        "Pick one open recipe: T\u00fclu 3, OLMo 3, Phi-4-reasoning, or R1-distill on a small base model",
+        "Plan-to-memo: budget, decomposed phases, eval plan, failure-mode checklist, go/no-go criteria",
+        "Run the full pipeline end-to-end: SFT \u2192 preference tuning / RL \u2192 eval \u2192 safety pass",
+        "Write a comparative memo: your numbers vs reported numbers, explained deltas, ablation table",
+        "Deliverable: capstone repo + final-memo.md + presentation-quality training-curve + eval-report artifacts",
+        "Resource-constrained path: reproduce one *stage* of an open recipe (e.g. only the SFT stage of T\u00fclu 3, or only the RLVR stage) rather than the full pipeline; the comparative memo is still required."
+      ],
+      "kind": "capstone"
+    }
+  ]
+}

@@ -1,0 +1,242 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>PRM vs ORM vs RLVR — Eval Delta and Label Cost Explorer (ch-44)</title>
+<style>
+  :root { --bg:#fafaf7; --panel:#fff; --ink:#1b1b1b; --dim:#6a6a6a; --line:#d8d8d4;
+          --accent:#1e4f79; --orm:#8a2f2f; --prm:#2f6d3f; --rlvr:#9a6a1a; --code:#f2f1ec; }
+  body { background:var(--bg); color:var(--ink); font-family:-apple-system,"Helvetica Neue",Arial,sans-serif;
+         font-variant-numeric:tabular-nums; max-width:1080px; margin:24px auto; padding:0 20px; line-height:1.45; }
+  h1 { font-size:20px; margin:0 0 4px 0; }
+  h2 { font-size:14px; margin:18px 0 6px 0; color:var(--accent); letter-spacing:0.4px; }
+  .sub { color:var(--dim); font-size:13px; margin-bottom:18px; }
+  .wrap { display:grid; grid-template-columns:320px 1fr; gap:18px; }
+  .panel { background:var(--panel); border:1px solid var(--line); padding:14px 16px; border-radius:4px; }
+  .ctrl { margin-bottom:14px; }
+  .ctrl label { font-size:12px; color:var(--dim); display:block; margin-bottom:4px; text-transform:uppercase; letter-spacing:0.6px; }
+  .ctrl .row { display:flex; align-items:center; gap:10px; }
+  .ctrl input[type="range"] { flex:1; }
+  .ctrl .val { font-size:13px; min-width:56px; text-align:right; }
+  .ctrl select { width:100%; padding:6px 8px; border:1px solid var(--line); background:#fff; font:inherit; font-size:13px; border-radius:3px; }
+  canvas { width:100%; height:240px; display:block; background:#fff; border:1px solid var(--line); border-radius:3px; }
+  table { width:100%; border-collapse:collapse; font-size:12px; margin-top:8px; }
+  th, td { border:1px solid var(--line); padding:4px 8px; text-align:left; }
+  th { background:#f1efe8; font-weight:600; }
+  .legend { display:flex; gap:16px; font-size:12px; margin-top:8px; }
+  .swatch { display:inline-block; width:10px; height:10px; border-radius:2px; margin-right:4px; vertical-align:middle; }
+  .small { font-size:12px; color:var(--dim); }
+  pre { background:var(--code); padding:8px 10px; border-radius:3px; font-size:12px;
+        white-space:pre-wrap; border-left:3px solid var(--accent); margin:8px 0; }
+</style>
+</head>
+<body>
+
+<h1>PRM vs ORM vs RLVR — Eval Delta and Label Cost</h1>
+<p class="sub">Chapter 44 companion. Panel A plots the predicted eval score for three selection / training regimes as you vary base-model capability, PRM quality, and Best-of-N. Panel B compares label cost per one percentage point of eval gain across PRM800K, Math-Shepherd, OmegaPRM, and RLVR. The model is calibrated to the Lightman 2023 (MATH-500) and Lambert 2024 (Tulu-3) numbers in the read.md; it is an intuition tool, not a predictor.</p>
+
+<div class="wrap">
+
+  <div class="panel">
+    <h2>Controls</h2>
+
+    <div class="ctrl">
+      <label>Base-model pass@1 (percent)</label>
+      <div class="row">
+        <input type="range" id="base" min="5" max="90" step="1" value="35">
+        <span class="val" id="base_v">35</span>
+      </div>
+      <div class="small">Cobbe 2021 GSM8K-6B ~ 20; Llama-3.1-8B-Instruct MATH ~ 42; Gemini Pro 1.0 MATH ~ 51.</div>
+    </div>
+
+    <div class="ctrl">
+      <label>PRM quality (AUC-like, 0..1)</label>
+      <div class="row">
+        <input type="range" id="prmq" min="0.50" max="0.99" step="0.01" value="0.85">
+        <span class="val" id="prmq_v">0.85</span>
+      </div>
+      <div class="small">PRM800K on MATH-500 behaves around 0.88-0.92; Math-Shepherd PRMs ~0.80-0.86; below 0.70 the PRM selector is worse than majority.</div>
+    </div>
+
+    <div class="ctrl">
+      <label>Best-of-N samples</label>
+      <div class="row">
+        <input type="range" id="bon" min="0" max="11" step="1" value="6">
+        <span class="val" id="bon_v">64</span>
+      </div>
+      <div class="small">Lightman 2023 headline runs were N=1860; practical eval often uses N=64 or 256.</div>
+    </div>
+
+    <div class="ctrl">
+      <label>Task type</label>
+      <select id="task">
+        <option value="math">Math (MATH-500, GSM8K-like)</option>
+        <option value="code">Code (unit-test verifiable)</option>
+        <option value="swe">SWE patches (difflib ratio)</option>
+      </select>
+      <div class="small">Task type only affects Panel B cost bars and the RLVR applicability badge in Panel A.</div>
+    </div>
+
+    <h2>Anchor points (ch-44)</h2>
+    <table>
+      <tr><th>Anchor</th><th>Value</th></tr>
+      <tr><td>Majority (Lightman 2023)</td><td>69.6</td></tr>
+      <tr><td>ORM Best-of-1860</td><td>72.4</td></tr>
+      <tr><td>PRM Best-of-1860</td><td>78.2</td></tr>
+      <tr><td>Math-Shepherd GSM8K verify</td><td>77.9 -> 89.1</td></tr>
+      <tr><td>OmegaPRM MATH (Gemini Pro)</td><td>51.0 -> 69.4</td></tr>
+      <tr><td>Tulu-3 RLVR GSM8K delta</td><td>+5..+10 pp</td></tr>
+      <tr><td>SWE-RL SWE-Bench Verified</td><td>41.0</td></tr>
+    </table>
+  </div>
+
+  <div class="panel">
+    <h2>Panel A — Eval score under each regime</h2>
+    <canvas id="evalChart" width="720" height="240"></canvas>
+    <div class="legend">
+      <span><span class="swatch" style="background:#6a6a6a"></span>Majority / base pass@1</span>
+      <span><span class="swatch" style="background:var(--orm)"></span>ORM Best-of-N</span>
+      <span><span class="swatch" style="background:var(--prm)"></span>PRM Best-of-N</span>
+      <span><span class="swatch" style="background:var(--rlvr)"></span>RLVR (pass@1 after training)</span>
+    </div>
+    <pre id="report">loading...</pre>
+
+    <h2>Panel B — Label cost per 1pp eval gain</h2>
+    <canvas id="costChart" width="720" height="180"></canvas>
+    <div class="small" id="cost_note">Cost bars: lower is better. PRM800K cost is per-step human labor ~ 10x outcome labeling. MC-based PRMs (Math-Shepherd, OmegaPRM) cost compute instead of humans. RLVR cost is verifier engineering (amortized) + zero per-example label.</div>
+  </div>
+
+</div>
+
+<script>
+(function() {
+  const el = id => document.getElementById(id);
+  const base = el("base"), prmq = el("prmq"), bon = el("bon"), task = el("task");
+  const base_v = el("base_v"), prmq_v = el("prmq_v"), bon_v = el("bon_v");
+  const report = el("report");
+  const ec = el("evalChart"), cc = el("costChart");
+  const ectx = ec.getContext("2d"), cctx = cc.getContext("2d");
+
+  function bonVal() { return Math.pow(2, parseInt(bon.value, 10)); } // 1..2048
+
+  // Simplified monotonic model calibrated to the chapter anchors.
+  // pass@N under iid sampling: p_at_N = 1 - (1 - p1)^N
+  // selector of quality q: prob of picking a correct solution given at least one exists
+  //     p_select_correct = p_at_N * (q + (1-q) * p_at_N)   // crude: q controls how reliably selector picks correct when present
+  // ORM quality = 0.65; RLVR models pass@1 lift through a saturating logistic in KL-clamped regime.
+  function evalScore(p1, q, N) {
+    const p_at_N = 1 - Math.pow(1 - p1, N);
+    return p_at_N * (q + (1 - q) * p_at_N);
+  }
+  function rlvrPass1(p1, taskType) {
+    // RLVR gains saturate: small base -> small lift, mid base -> biggest absolute lift, high base -> compression.
+    // Calibrated so Tulu-3 GSM8K 84.7 -> 89..95 and Llama-SWE-RL 18 -> 41 feel right.
+    const capFactor = taskType === "swe" ? 1.6 : (taskType === "code" ? 1.3 : 1.0);
+    const bump = capFactor * 0.25 * Math.sin(Math.PI * Math.min(1, p1));
+    return Math.min(0.97, p1 + bump);
+  }
+
+  function drawEvalChart() {
+    const p1 = parseInt(base.value, 10) / 100;
+    const q = parseFloat(prmq.value);
+    const N = bonVal();
+    const ormQ = 0.62;
+    const maj = p1; // trivially, pass@1 ~ majority on single-sample regime
+    const orm = evalScore(p1, ormQ, N);
+    const prm = evalScore(p1, q, N);
+    const rlvr = rlvrPass1(p1, task.value);
+
+    base_v.textContent = (p1 * 100).toFixed(0);
+    prmq_v.textContent = q.toFixed(2);
+    bon_v.textContent = N;
+
+    // Axes + bars
+    const W = ec.width, H = ec.height, M = 28;
+    ectx.clearRect(0, 0, W, H);
+    ectx.strokeStyle = "#ccc"; ectx.beginPath();
+    ectx.moveTo(M, H - M); ectx.lineTo(W - 10, H - M); ectx.stroke();
+    for (let y = 0; y <= 100; y += 20) {
+      const yy = H - M - (y / 100) * (H - 2 * M);
+      ectx.strokeStyle = "#eee"; ectx.beginPath();
+      ectx.moveTo(M, yy); ectx.lineTo(W - 10, yy); ectx.stroke();
+      ectx.fillStyle = "#888"; ectx.font = "11px sans-serif";
+      ectx.fillText(y + "%", 2, yy + 4);
+    }
+    const labels = ["majority / pass@1", "ORM Bo" + N, "PRM Bo" + N, "RLVR pass@1"];
+    const vals = [maj, orm, prm, rlvr];
+    const colors = ["#6a6a6a", "#8a2f2f", "#2f6d3f", "#9a6a1a"];
+    const bw = (W - M - 20) / vals.length;
+    for (let i = 0; i < vals.length; i++) {
+      const x = M + 10 + i * bw;
+      const h = vals[i] * (H - 2 * M);
+      ectx.fillStyle = colors[i];
+      ectx.fillRect(x, H - M - h, bw * 0.7, h);
+      ectx.fillStyle = "#1b1b1b"; ectx.font = "12px sans-serif";
+      ectx.fillText((vals[i] * 100).toFixed(1), x + 4, H - M - h - 4);
+      ectx.fillStyle = "#555"; ectx.font = "11px sans-serif";
+      ectx.fillText(labels[i], x, H - M + 14);
+    }
+
+    // Report
+    const gapPRM = (prm - orm) * 100;
+    const gapRLVR = (rlvr - orm) * 100;
+    const applicable = (task.value !== "swe") ? "applicable (math/code verifier)" :
+                       "applicable via rule-based reward (SWE-RL difflib ratio)";
+    report.textContent =
+      "task           = " + task.value + "\n" +
+      "base pass@1    = " + (p1*100).toFixed(1) + "%\n" +
+      "PRM quality    = " + q.toFixed(2) + "\n" +
+      "N (Best-of-N)  = " + N + "\n" +
+      "-------------------------------------------\n" +
+      "majority       = " + (maj*100).toFixed(1) + "\n" +
+      "ORM Bo" + N + (N<10?"     ":N<100?"    ":N<1000?"   ":"  ") + "= " + (orm*100).toFixed(1) + "\n" +
+      "PRM Bo" + N + (N<10?"     ":N<100?"    ":N<1000?"   ":"  ") + "= " + (prm*100).toFixed(1) + "  (PRM-ORM gap = " + gapPRM.toFixed(1) + " pp)\n" +
+      "RLVR pass@1    = " + (rlvr*100).toFixed(1) + "  (RLVR-ORM gap at N=1 = " + gapRLVR.toFixed(1) + " pp)\n" +
+      "RLVR: " + applicable;
+  }
+
+  function drawCostChart() {
+    // Approximate label-cost per 1pp gain (arbitrary units, task-dependent).
+    // Calibration: PRM800K ~ 10x outcome labeling cost; Math-Shepherd ~ K*L rollouts; OmegaPRM ~ K*log(L); RLVR zero labels but verifier-engineering overhead.
+    const t = task.value;
+    const rows = (t === "math") ? [
+      ["PRM800K (human)",       100, "#8a2f2f"],
+      ["Math-Shepherd (MC)",     38, "#b5793b"],
+      ["OmegaPRM (D&C MC)",      22, "#2f6d3f"],
+      ["RLVR (verifier only)",    6, "#1e4f79"],
+    ] : (t === "code") ? [
+      ["PRM800K (human)",       160, "#8a2f2f"],
+      ["Math-Shepherd (MC)",     55, "#b5793b"],
+      ["OmegaPRM (D&C MC)",      30, "#2f6d3f"],
+      ["RLVR (unit tests)",      12, "#1e4f79"],
+    ] : [
+      ["PRM800K (human)",       300, "#8a2f2f"],
+      ["Math-Shepherd (MC)",    140, "#b5793b"],
+      ["OmegaPRM (D&C MC)",      80, "#2f6d3f"],
+      ["SWE-RL (difflib)",        4, "#1e4f79"],
+    ];
+
+    const W = cc.width, H = cc.height, M = 28;
+    cctx.clearRect(0, 0, W, H);
+    const maxv = Math.max.apply(null, rows.map(r => r[1]));
+    for (let i = 0; i < rows.length; i++) {
+      const y = M + i * ((H - 2 * M) / rows.length);
+      const w = (rows[i][1] / maxv) * (W - 260);
+      cctx.fillStyle = rows[i][2];
+      cctx.fillRect(200, y, w, 18);
+      cctx.fillStyle = "#1b1b1b"; cctx.font = "12px sans-serif";
+      cctx.fillText(rows[i][0], 10, y + 14);
+      cctx.fillText(rows[i][1] + " units / 1pp", 205 + w + 6, y + 14);
+    }
+    cctx.fillStyle = "#888"; cctx.font = "11px sans-serif";
+    cctx.fillText("(relative cost; lower is better)", 10, H - 8);
+  }
+
+  function redraw() { drawEvalChart(); drawCostChart(); }
+  [base, prmq, bon, task].forEach(e => e.addEventListener("input", redraw));
+  redraw();
+})();
+</script>
+
+</body>
+</html>
