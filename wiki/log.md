@@ -40,3 +40,7 @@ Index rebuilt.
 ## [2026-04-28] Session #8
 - course: boson-agent | chapter: ch-08 | phase: read
 - session ended: 2026-04-28T22:12:21.512Z
+
+## [2026-05-03] Session #9
+- course: boson-agent | chapter: ch-08 | phase: read
+- session ended: 2026-05-03T04:24:23.909Z
