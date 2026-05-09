@@ -72,6 +72,23 @@ Do **not** use HTML to replace prose exposition. Markdown + wikilinks remains th
 
 ---
 
+## Chapter authoring — reading Q&A
+
+When the learner asks clarifying questions while reading a chapter, capture them in a companion file at `wiki/courses/<slug>/ch-XX/qa.md`. The file is a study artifact — a record of what was non-obvious to the learner and the kernel of each answer.
+
+**Rules**:
+- One `qa.md` per chapter. By the time the Read phase concludes, this file must exist if any clarifying questions were asked.
+- Each entry is a clearly stated question + the **kernel** of the answer (one short paragraph or a small table). Full causal chains, worked examples, and long explanations stay in `read.md` or the discuss transcript — `qa.md` is an index, not the explanation.
+- If a question's answer is fully contained in `read.md`, the entry should be a one-line takeaway plus a line reference (`see read.md L156`), not a paraphrase.
+- Keep the file under 120 lines (split if it grows). Use `[[wikilinks]]` for cross-chapter links.
+- Open with a short header comment naming the chapter and linking back to `[[read]]`.
+
+**When to write**: prefer appending entries during the Read phase as questions arise (the framing is freshest then). Do not wait until end-of-chapter to retroactively reconstruct from memory.
+
+**When to commit**: include `qa.md` in the `learn(read)` phase commit. If the chapter loops back from a Partial verdict, append new questions raised during the re-read — do not delete prior entries. `qa.md` is append-only across cycles.
+
+---
+
 ## What never to edit
 
 | Path | Owner | Reason |
