@@ -81,7 +81,17 @@ so it is important to find the right balance of these 4-axes.
 
 ## Connections to other chapters
 
-Taxonomy-driven synthesis is also one of the way to generate synthetic data. so it connects to Ch-18, 19, 20.
+*Backward links (covered chapters)*:
+- [[ch-18]] — top-down taxonomy is one specialization of the *Stage-1 full-generate* category in the generate→filter→dedup→verify loop. RM-as-judge (Nemotron) is the filter+verify specialization. Cosmopedia 40% dedup signal is the *upstream-restructure-not-downstream-filter* lesson applied to the ch-18 loop's dedup step.
+- [[ch-19]] — top-down is the **direct answer to ch-19 verdict E5 diversity ceiling**: seed-bound composition (Bootstrap/Evol/Persona/Humpback) limited by what 175-500 seeds happen to span; top-down replaces seed pool with curator's tree → ceiling moves from *invisible seed-bound* to *visible curator-bound*. Bottom-up still wins on *cross-branch combinations* (line 219 white-space-between-branches).
+- [[ch-20]] — ch-20's 9-axis framework directly maps the 3 papers: GLAN (axis 9 max + axis 5 = 0), Nemotron (axis 5 + axis 9 both strong via RM), Phi (axis 9 + style filter, no verifier). Staged SFT (code → general) is mentioned at line 152, the cleaner-signal-first principle from ch-20 R1 4-stage isomorphism.
+
+*Forward links (unread — surface when reading)*:
+- [[ch-22]] — quality / diversity / gradient-based selection. The *combine* layer that pulls taxonomy-core + seed-supplement together without blowing up corpus size. Negative-anchor extension (ch-20 verdict E6) gets actual treatment here.
+- [[ch-23]] — model collapse + recursive-training risk. The reason "ALL synthetic" is impossible (Q10 bootstrapping paradox). Phi's defense is *single-shot teacher, no recursive self-distillation*.
+- [[ch-24]] — process reward model. Addresses Math-Verify's *outcome-only* limit (wrong-question-correctly, Q10 limit A) by judging reasoning path not just final answer.
+- [[ch-32]] / [[ch-34]] — Phi-3/4 and Nemotron-Ultra case studies in SFT recipes section.
+- [[ch-44]] — RLVR. The *quality ceiling-breaking mechanism* for the Q4 two-ceiling framework: verifier-grounded RL lets student exceed teacher in verifier-rich domains (math/code).
 
 ## Open questions / what I'm still unsure about
 
