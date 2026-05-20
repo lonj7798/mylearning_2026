@@ -85,6 +85,8 @@ When the learner asks clarifying questions while reading a chapter, capture them
 
 **When to write**: prefer appending entries during the Read phase as questions arise (the framing is freshest then). Do not wait until end-of-chapter to retroactively reconstruct from memory.
 
+**No confirmation required**: append entries to `qa.md` automatically as questions arise. Do **not** ask the learner "should I append this to qa.md?" before writing — the standing preference is yes. Just write the entry and continue.
+
 **When to commit**: include `qa.md` in the `learn(read)` phase commit. If the chapter loops back from a Partial verdict, append new questions raised during the re-read — do not delete prior entries. `qa.md` is append-only across cycles.
 
 ---
