@@ -1204,3 +1204,42 @@ N³        = 10²⁴   ← *datastore 능가*
 
 ### 한 줄
 **"LESS: O(N·d·P) datastore one-time + O(N·d) per query, *amortizable across targets*. Prismatic: O(N·d·P) + O(N²·d) Gram + O(N³) eigen + O(N·K³) greedy, *per-pool one-shot*. N=1M scale에선 둘 다 datastore dominant. N=100M에선 Prismatic eigen이 dominant. M targets면 LESS가 M× cheaper."**
+
+## Q24. PPL과 probability의 *역* 관계 — IFD direction 재확인
+
+### 학습자 confusion
+"IFD < 1 ⟹ PPL_cond < PPL_uncond ⟹ '(a|q) 상황의 probability가 더 *낮다*'" → 마지막 step에서 PPL과 probability를 동일시. *역*임.
+
+### 핵심 — PPL = 1/P
+```
+Cross-entropy: -log P(token)
+Perplexity: exp(cross-entropy) = exp(-log P) = 1/P
+```
+
+→ Probability ↑ → PPL ↓ (반비례).
+- PPL 낮음 = P 높음 = model 자신 있게 맞춤
+- PPL 높음 = P 낮음 = model 헷갈림
+
+### 비유 — "몇 개 option 중 헷갈리는가"
+- P=0.5 (50/50 동전) → PPL=2 (2 option)
+- P=0.1 (10 option uniform) → PPL=10
+- P=0.001 → PPL=1000
+
+### 3 scenario로 IFD 방향 확인
+| Scenario | P(a) | P(a\|q) | PPL_uncond | PPL_cond | IFD | 해석 |
+|---|---|---|---|---|---|---|
+| q 도움 (Paris) | 0.001 | 0.5 | 1000 | 2 | 0.002 | < 1 ✓ KEEP |
+| q 무관 (boilerplate) | 0.1 | 0.1 | 10 | 10 | 1.0 | ≈ 1 drop |
+| q 방해 (cake/calculus) | 0.01 | 0.0001 | 100 | 10000 | 100 | > 1 ✗ DROP |
+
+### 정확한 추론 chain
+```
+IFD < 1
+⟹ PPL_cond < PPL_uncond
+⟹ P_cond > P_uncond           ← 역수니까 부등호 *뒤집힘*
+⟹ q가 a 예측 *쉽게* 만듦
+⟹ 학습 signal 있음 (좋음)
+```
+
+### 한 줄
+**"PPL = 1/P (반비례). 학습자 confusion은 마지막 step에서 PPL과 P를 동일시. PPL_cond 작음 → P_cond 큼 → q 도움 → IFD < 1 좋음. 비유: PPL = '몇 option 중 헷갈리는가', 낮을수록 model 자신감."**

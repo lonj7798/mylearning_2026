@@ -32,11 +32,11 @@ also from WizardMath, generate diverse level of difficulty from the math questio
 By dividing the defficultiy, the model can handle the various level of questions.
 
 there are a few different ways to imrove the depth (difficulty)
-  1. Add constraints                               
-  2. Deepening                                                                                                                                                                        
-  3. Concretizing                              
-  4. Increased reasoning steps                                                                                                                                                        
-  5. Complicate input   
+  1. Add constraints
+  2. Deepening
+  3. Concretizing
+  4. Increased reasoning steps
+  5. Complicate input
 
 and for In breath, can use mutation. (rewriting the question with small change to keep the semantics)
 
