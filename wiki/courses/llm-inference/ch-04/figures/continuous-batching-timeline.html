@@ -1,0 +1,259 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Static vs Continuous Batching — Iteration-Level Scheduling</title>
+<style>
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+         max-width: 1100px; margin: 2em auto; padding: 0 1em; color: #222; }
+  h1 { font-size: 1.4em; margin-bottom: 0.2em; }
+  .subtitle { color: #666; margin-top: 0; }
+  .panel { border: 1px solid #ddd; border-radius: 6px; padding: 1em; margin: 1em 0;
+           background: #fafafa; }
+  .controls { display: flex; gap: 1em; flex-wrap: wrap; align-items: center; }
+  label { font-size: 0.85em; color: #555; }
+  button { padding: 6px 12px; font-size: 0.9em; cursor: pointer; }
+  .value { font-variant-numeric: tabular-nums; color: #333; font-weight: 600; }
+  .note { font-size: 0.88em; color: #555; line-height: 1.5; }
+  code { background: #eef; padding: 1px 4px; border-radius: 3px; font-size: 0.9em; }
+  .stage { display: grid; grid-template-columns: 1fr 1fr; gap: 1em; }
+  .col h3 { margin: 0 0 0.4em 0; font-size: 1em; text-align: center; }
+  canvas { background: white; border: 1px solid #ccc; display: block; margin: 0 auto; }
+  .metric { font-variant-numeric: tabular-nums; font-size: 0.9em; }
+  .metric .big { font-size: 1.15em; font-weight: 600; color: #1976d2; }
+  .summary { display: flex; gap: 2em; justify-content: center; margin-top: 0.5em;
+             font-size: 0.95em; }
+  .footer { font-size: 0.85em; color: #888; margin-top: 2em; text-align: center; }
+  a { color: #1976d2; text-decoration: none; }
+</style>
+</head>
+<body>
+
+<h1>Static vs Continuous Batching — Iteration-Level Scheduling</h1>
+<p class="subtitle">
+  Same 4 active requests + 8 queued. Watch how static batching wastes slots after each
+  request finishes, while continuous batching swaps in fresh work every decode step.
+</p>
+
+<div class="panel">
+  <div class="controls">
+    <button id="play">▶ play</button>
+    <button id="pause">❚❚ pause</button>
+    <button id="step">⏭ step</button>
+    <button id="reset">⟲ reset</button>
+    <label>speed:
+      <input type="range" id="spd" min="1" max="60" step="1" value="20"
+             style="vertical-align:middle;width:140px;">
+      <span class="value" id="spdL">20</span> tok/sec
+    </label>
+    <label>tick: <span class="value" id="tick">0</span></label>
+  </div>
+</div>
+
+<div class="stage">
+  <div class="col">
+    <h3>Static Batching (request-level scheduling)</h3>
+    <canvas id="cA" width="520" height="240"></canvas>
+    <div class="metric" style="text-align:center;margin-top:6px;">
+      useful tokens: <span class="big" id="uA">0</span> /
+      slot-ticks: <span id="sA">0</span> /
+      utilization: <span class="big" id="utA">0%</span>
+    </div>
+  </div>
+  <div class="col">
+    <h3>Continuous Batching (iteration-level, Orca)</h3>
+    <canvas id="cB" width="520" height="240"></canvas>
+    <div class="metric" style="text-align:center;margin-top:6px;">
+      useful tokens: <span class="big" id="uB">0</span> /
+      slot-ticks: <span id="sB">0</span> /
+      utilization: <span class="big" id="utB">0%</span>
+    </div>
+  </div>
+</div>
+
+<div class="summary">
+  <div>Throughput ratio (B / A): <span class="value" id="ratio">—</span>×</div>
+  <div>Static finished: <span class="value" id="dA">0</span> / 4</div>
+  <div>Continuous finished: <span class="value" id="dB">0</span> / 12</div>
+</div>
+
+<div class="panel note">
+  <strong>Caption.</strong> Static batching wastes GPU time after each request finishes;
+  continuous batching swaps in fresh work at every decode step. This is Orca's
+  iteration-level scheduling distilled to one diagram. Real-world speedups: 2-5× higher
+  throughput with the same GPU and the same latency budget.
+</div>
+
+<div class="footer"><a href="../read.md">← back to chapter</a></div>
+
+<script>
+const SLOTS = 4;
+const COLORS = ['#1976d2','#d32f2f','#388e3c','#f57c00','#7b1fa2','#0097a7',
+                '#5d4037','#c2185b','#455a64','#689f38','#fbc02d','#00796b'];
+// initial 4 requests + 8 queued (continuous side only uses queue)
+const INIT_LENS = [50, 100, 200, 500];
+const QUEUE_LENS = [80, 60, 150, 90, 40, 120, 70, 100];
+
+let state;
+function reset() {
+  state = {
+    t: 0,
+    A: {
+      slots: INIT_LENS.map((len, i) => ({ id: i, len, done: 0, color: COLORS[i], active: true })),
+      useful: 0,
+      slotTicks: 0,
+      finished: 0,
+      historyA: [],
+    },
+    B: {
+      slots: INIT_LENS.map((len, i) => ({ id: i, len, done: 0, color: COLORS[i], active: true })),
+      queue: QUEUE_LENS.map((len, i) => ({ id: 4 + i, len, done: 0, color: COLORS[4 + i] })),
+      useful: 0,
+      slotTicks: 0,
+      finished: 0,
+      historyB: [],
+    },
+  };
+  render();
+}
+
+function tick() {
+  state.t++;
+  // STATIC: still-running slots produce 1 token; finished slots are wasted
+  const aBuckets = [];
+  for (let s = 0; s < SLOTS; s++) {
+    const slot = state.A.slots[s];
+    let cell = null;
+    if (slot && slot.active && slot.done < slot.len) {
+      slot.done++;
+      state.A.useful++;
+      cell = slot.color;
+      if (slot.done >= slot.len) { slot.active = false; state.A.finished++; }
+    }
+    state.A.slotTicks++;
+    aBuckets.push(cell);
+  }
+  state.A.historyA.push(aBuckets);
+
+  // CONTINUOUS: any finished slot is immediately replaced from queue
+  const bBuckets = [];
+  for (let s = 0; s < SLOTS; s++) {
+    let slot = state.B.slots[s];
+    if (!slot || !slot.active) {
+      if (state.B.queue.length > 0) {
+        const next = state.B.queue.shift();
+        state.B.slots[s] = { ...next, active: true };
+        slot = state.B.slots[s];
+      } else {
+        slot = null;
+      }
+    }
+    let cell = null;
+    if (slot && slot.active && slot.done < slot.len) {
+      slot.done++;
+      state.B.useful++;
+      cell = slot.color;
+      if (slot.done >= slot.len) { slot.active = false; state.B.finished++; }
+    }
+    state.B.slotTicks++;
+    bBuckets.push(cell);
+  }
+  state.B.historyB.push(bBuckets);
+}
+
+function drawTimeline(canvasId, history) {
+  const cvs = document.getElementById(canvasId);
+  const ctx = cvs.getContext('2d');
+  ctx.clearRect(0, 0, cvs.width, cvs.height);
+  const pad = { l: 60, r: 12, t: 14, b: 24 };
+  const W = cvs.width - pad.l - pad.r;
+  const H = cvs.height - pad.t - pad.b;
+  const slotH = H / SLOTS;
+  const T = Math.max(history.length, 1);
+  const MAX_TICKS = 800;
+  const tail = history.slice(-MAX_TICKS);
+  const cw = W / Math.max(tail.length, 60);
+
+  // slot labels
+  ctx.fillStyle = '#555'; ctx.font = '11px sans-serif'; ctx.textAlign = 'right';
+  for (let s = 0; s < SLOTS; s++) {
+    ctx.fillText('slot ' + s, pad.l - 6, pad.t + slotH * (s + 0.5) + 4);
+  }
+  // grid
+  ctx.strokeStyle = '#eee';
+  for (let s = 0; s <= SLOTS; s++) {
+    const y = pad.t + slotH * s;
+    ctx.beginPath(); ctx.moveTo(pad.l, y); ctx.lineTo(pad.l + W, y); ctx.stroke();
+  }
+  // cells
+  for (let t = 0; t < tail.length; t++) {
+    const buckets = tail[t];
+    for (let s = 0; s < SLOTS; s++) {
+      const c = buckets[s];
+      const x = pad.l + cw * t;
+      const y = pad.t + slotH * s;
+      if (c) {
+        ctx.fillStyle = c;
+        ctx.fillRect(x, y + 2, Math.max(cw - 0.5, 1), slotH - 4);
+      } else {
+        ctx.fillStyle = '#e6e6e6';
+        ctx.fillRect(x, y + slotH * 0.4, Math.max(cw - 0.5, 1), slotH * 0.2);
+      }
+    }
+  }
+  // x label
+  ctx.fillStyle = '#666'; ctx.textAlign = 'center'; ctx.font = '10px sans-serif';
+  ctx.fillText('time (decode steps) →', pad.l + W / 2, pad.t + H + 16);
+}
+
+function render() {
+  document.getElementById('tick').textContent = state.t;
+  drawTimeline('cA', state.A.historyA);
+  drawTimeline('cB', state.B.historyB);
+  document.getElementById('uA').textContent = state.A.useful;
+  document.getElementById('sA').textContent = state.A.slotTicks;
+  document.getElementById('utA').textContent =
+    ((state.A.useful / Math.max(state.A.slotTicks, 1)) * 100).toFixed(1) + '%';
+  document.getElementById('uB').textContent = state.B.useful;
+  document.getElementById('sB').textContent = state.B.slotTicks;
+  document.getElementById('utB').textContent =
+    ((state.B.useful / Math.max(state.B.slotTicks, 1)) * 100).toFixed(1) + '%';
+  document.getElementById('dA').textContent = state.A.finished;
+  document.getElementById('dB').textContent = state.B.finished;
+  const ratio = state.A.useful > 0 ? (state.B.useful / state.A.useful) : 0;
+  document.getElementById('ratio').textContent = ratio.toFixed(2);
+}
+
+let timer = null;
+function play() {
+  if (timer) return;
+  const stepFn = () => {
+    const spd = +document.getElementById('spd').value;
+    document.getElementById('spdL').textContent = spd;
+    // run roughly spd ticks per second
+    tick();
+    render();
+    // stop when both sides are quiescent
+    const aDone = state.A.slots.every(s => !s.active);
+    const bDone = state.B.slots.every(s => !s.active) && state.B.queue.length === 0;
+    if (aDone && bDone) { pause(); return; }
+    timer = setTimeout(stepFn, 1000 / spd);
+  };
+  stepFn();
+}
+function pause() { if (timer) { clearTimeout(timer); timer = null; } }
+function stepOnce() { pause(); tick(); render(); }
+
+document.getElementById('play').addEventListener('click', play);
+document.getElementById('pause').addEventListener('click', pause);
+document.getElementById('step').addEventListener('click', stepOnce);
+document.getElementById('reset').addEventListener('click', () => { pause(); reset(); });
+document.getElementById('spd').addEventListener('input', () => {
+  document.getElementById('spdL').textContent = document.getElementById('spd').value;
+});
+
+reset();
+</script>
+
+</body>
+</html>

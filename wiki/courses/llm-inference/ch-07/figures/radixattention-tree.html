@@ -1,0 +1,355 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>RadixAttention — Prefix-Tree KV Cache</title>
+<style>
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+         max-width: 1100px; margin: 2em auto; padding: 0 1em; color: #222; }
+  h1 { font-size: 1.4em; margin-bottom: 0.2em; }
+  .subtitle { color: #666; margin-top: 0; }
+  .panel { border: 1px solid #ddd; border-radius: 6px; padding: 1em; margin: 1em 0;
+           background: #fafafa; }
+  .layout { display: grid; grid-template-columns: 1fr 240px; gap: 1.4em; }
+  .controls { display: flex; gap: 0.5em; flex-wrap: wrap; align-items: center; margin-bottom: 0.6em; }
+  input[type="text"] { padding: 5px 8px; border: 1px solid #aaa; border-radius: 4px;
+                       font-size: 0.9em; width: 360px; font-family: inherit; }
+  button { padding: 6px 10px; border: 1px solid #999; background: #fff; border-radius: 4px;
+           cursor: pointer; font-size: 0.85em; }
+  button:hover { background: #eef; }
+  canvas { background: white; border: 1px solid #ccc; display: block; margin: 0.4em auto; }
+  .stats { display: flex; flex-direction: column; gap: 0.5em; }
+  .stat { background: white; border: 1px solid #ddd; border-radius: 4px; padding: 0.5em 0.7em; }
+  .stat .k { font-size: 0.75em; color: #777; }
+  .stat .v { font-size: 1.05em; font-variant-numeric: tabular-nums; font-weight: 600; }
+  .legend { display: flex; gap: 1em; font-size: 0.85em; justify-content: center; flex-wrap: wrap; }
+  .swatch { display: inline-block; width: 12px; height: 12px; margin-right: 4px;
+            vertical-align: middle; border-radius: 2px; border: 1px solid #999; }
+  .note { font-size: 0.88em; color: #555; line-height: 1.5; }
+  code { background: #eef; padding: 1px 4px; border-radius: 3px; font-size: 0.9em; }
+  a { color: #1976d2; }
+  .log { font-size: 0.8em; color: #444; max-height: 140px; overflow-y: auto;
+         background: #fff; border: 1px solid #ddd; border-radius: 4px;
+         padding: 0.4em 0.6em; margin-top: 0.4em; font-family: monospace; }
+</style>
+</head>
+<body>
+
+<h1>RadixAttention — Prefix-Tree KV Cache</h1>
+<p class="subtitle">
+  KV cache laid out as a radix tree. Shared prefixes are never recomputed — every chat session
+  that inherits the same system prompt shares its KV blocks for free.
+</p>
+
+<div class="panel">
+  <div class="controls">
+    <input type="text" id="prompt"
+           value="You are a helpful assistant. Translate the following English to French:">
+    <button id="insert">Insert prompt</button>
+    <button id="evict">Evict LRU</button>
+    <button id="reset">Reset</button>
+  </div>
+  <div class="legend">
+    <span><span class="swatch" style="background:#90caf9"></span>existing (cache hit)</span>
+    <span><span class="swatch" style="background:#a5d6a7"></span>matched prefix on last insert</span>
+    <span><span class="swatch" style="background:#fff59d"></span>new suffix added</span>
+    <span><span class="swatch" style="background:#ef9a9a"></span>just evicted</span>
+  </div>
+</div>
+
+<div class="panel layout">
+  <div>
+    <canvas id="tree" width="780" height="440"></canvas>
+    <div class="log" id="log"></div>
+  </div>
+  <div class="stats">
+    <div class="stat"><div class="k">Cache hit rate</div><div class="v" id="hit">—</div></div>
+    <div class="stat"><div class="k">Matched tokens / total</div><div class="v" id="ratio">— / —</div></div>
+    <div class="stat"><div class="k">Total nodes</div><div class="v" id="nodes">—</div></div>
+    <div class="stat"><div class="k">Evictions</div><div class="v" id="evicts">—</div></div>
+  </div>
+</div>
+
+<div class="panel note">
+  <strong>What you should notice.</strong>
+  The root system-prompt node (<code>You are a helpful assistant...</code>) is reused by every
+  chat session — three children share it from the start. When you insert a new prompt that begins
+  with the same system message, the matching prefix is recognized greedily (green flash) and only
+  the unmatched suffix becomes a new branch (yellow). The hit-rate counter aggregates
+  <code>matched_tokens / total_tokens</code> across all inserts: chat workloads routinely sit at
+  50–90% because the system prompt + few-shot examples dwarf the per-turn user text. LRU eviction
+  removes the leaf with the oldest access time so popular subtrees stay resident.
+</div>
+
+<p class="note"><a href="../read.md">← back to chapter</a></p>
+
+<script>
+let nodeId = 0;
+let evictCount = 0;
+let totalTokens = 0;
+let matchedTokens = 0;
+let highlight = { matched: new Set(), inserted: new Set(), evicted: null };
+let logLines = [];
+
+function makeNode(tokens, parent) {
+  return {
+    id: nodeId++,
+    tokens,                 // array of "tokens" (we treat words as tokens)
+    parent,
+    children: [],
+    lastAccess: Date.now() + Math.random(),
+  };
+}
+
+let root;
+
+function tokenize(s) {
+  return s.trim().split(/\s+/).filter(Boolean);
+}
+
+function commonPrefixLen(a, b) {
+  let i = 0;
+  while (i < a.length && i < b.length && a[i] === b[i]) i++;
+  return i;
+}
+
+function insert(prompt) {
+  const toks = tokenize(prompt);
+  totalTokens += toks.length;
+  let node = root;
+  node.lastAccess = Date.now();
+  let i = 0;
+  let matchedThisInsert = 0;
+  highlight = { matched: new Set(), inserted: new Set(), evicted: null };
+
+  // Root holds the system prompt. Match its tokens first.
+  const rootMatch = commonPrefixLen(toks, node.tokens);
+  if (rootMatch < node.tokens.length) {
+    // The new prompt diverges inside the root — no cache hit beyond rootMatch.
+    matchedThisInsert += rootMatch;
+    highlight.matched.add(node.id);
+    matchedTokens += rootMatch;
+    // Add the divergent suffix as a brand new child of root.
+    const suffix = toks.slice(rootMatch);
+    if (suffix.length > 0) {
+      const child = makeNode(suffix, node);
+      node.children.push(child);
+      highlight.inserted.add(child.id);
+    }
+    finalizeInsert(matchedThisInsert, toks.length);
+    return;
+  }
+  matchedThisInsert += node.tokens.length;
+  highlight.matched.add(node.id);
+  i = node.tokens.length;
+
+  // Walk into children greedily.
+  while (i < toks.length) {
+    const remaining = toks.slice(i);
+    let bestChild = null, bestMatch = 0;
+    for (const c of node.children) {
+      const m = commonPrefixLen(remaining, c.tokens);
+      if (m > bestMatch) { bestMatch = m; bestChild = c; }
+    }
+    if (!bestChild || bestMatch === 0) {
+      // No matching child — add new leaf with the remainder.
+      const child = makeNode(remaining, node);
+      node.children.push(child);
+      highlight.inserted.add(child.id);
+      i = toks.length;
+      break;
+    }
+    bestChild.lastAccess = Date.now();
+    if (bestMatch === bestChild.tokens.length) {
+      // full match of this child's tokens — descend
+      matchedThisInsert += bestMatch;
+      highlight.matched.add(bestChild.id);
+      node = bestChild;
+      i += bestMatch;
+    } else {
+      // partial match — split the child node at bestMatch
+      const shared = bestChild.tokens.slice(0, bestMatch);
+      const oldRest = bestChild.tokens.slice(bestMatch);
+      const sharedNode = makeNode(shared, node);
+      // re-parent the old child's leftover & children
+      const oldNode = makeNode(oldRest, sharedNode);
+      oldNode.children = bestChild.children;
+      for (const c of oldNode.children) c.parent = oldNode;
+      sharedNode.children.push(oldNode);
+      // remove the old child from this node and add sharedNode
+      node.children = node.children.filter(c => c !== bestChild);
+      node.children.push(sharedNode);
+      matchedThisInsert += bestMatch;
+      highlight.matched.add(sharedNode.id);
+      // add a leaf for the *new* prompt's leftover suffix
+      const newRest = remaining.slice(bestMatch);
+      if (newRest.length > 0) {
+        const newLeaf = makeNode(newRest, sharedNode);
+        sharedNode.children.push(newLeaf);
+        highlight.inserted.add(newLeaf.id);
+      }
+      i = toks.length;
+      break;
+    }
+  }
+
+  matchedTokens += matchedThisInsert;
+  finalizeInsert(matchedThisInsert, toks.length);
+}
+
+function finalizeInsert(matched, total) {
+  logLines.unshift('insert: ' + matched + '/' + total + ' tokens reused (' +
+                   Math.round(100 * matched / total) + '% hit)');
+  if (logLines.length > 20) logLines.length = 20;
+  render();
+}
+
+function findLRULeaf(node) {
+  // Find leaf with smallest lastAccess; never evict root.
+  let best = null;
+  function walk(n) {
+    if (n.children.length === 0 && n !== root) {
+      if (!best || n.lastAccess < best.lastAccess) best = n;
+    } else {
+      for (const c of n.children) walk(c);
+    }
+  }
+  walk(node);
+  return best;
+}
+
+function evictLRU() {
+  const leaf = findLRULeaf(root);
+  if (!leaf) { logLines.unshift('evict: nothing to evict'); render(); return; }
+  highlight = { matched: new Set(), inserted: new Set(), evicted: leaf.id };
+  const p = leaf.parent;
+  p.children = p.children.filter(c => c !== leaf);
+  evictCount++;
+  logLines.unshift('evict: removed node #' + leaf.id + ' (' + leaf.tokens.length + ' tokens)');
+  if (logLines.length > 20) logLines.length = 20;
+  render();
+}
+
+function initTree() {
+  nodeId = 0; evictCount = 0; totalTokens = 0; matchedTokens = 0;
+  highlight = { matched: new Set(), inserted: new Set(), evicted: null };
+  logLines = [];
+  root = makeNode(tokenize('You are a helpful assistant.'), null);
+  const chatA = makeNode(tokenize('Translate the following English to French : Hello'), root);
+  const chatB = makeNode(tokenize('Summarize the following article in two sentences :'), root);
+  const chatC = makeNode(tokenize('Explain quantum computing to a 10 year old :'), root);
+  root.children.push(chatA, chatB, chatC);
+}
+
+function countNodes(n) {
+  let c = 1;
+  for (const ch of n.children) c += countNodes(ch);
+  return c;
+}
+
+// Recursive layout: assign positions to each node in tidy-tree style.
+function layout(node, depth, leafIndex) {
+  if (node.children.length === 0) {
+    node._x = leafIndex.i++;
+    node._y = depth;
+    return;
+  }
+  let sumX = 0;
+  for (const c of node.children) {
+    layout(c, depth + 1, leafIndex);
+    sumX += c._x;
+  }
+  node._x = sumX / node.children.length;
+  node._y = depth;
+}
+
+function drawTree() {
+  const cvs = document.getElementById('tree');
+  const ctx = cvs.getContext('2d');
+  ctx.clearRect(0, 0, cvs.width, cvs.height);
+
+  // layout
+  const leafIndex = { i: 0 };
+  layout(root, 0, leafIndex);
+  const nLeaves = leafIndex.i || 1;
+  const maxDepth = (function depth(n) {
+    let d = 0;
+    for (const c of n.children) d = Math.max(d, depth(c) + 1);
+    return d;
+  })(root);
+
+  const padX = 60, padY = 30;
+  const W = cvs.width - 2 * padX;
+  const H = cvs.height - 2 * padY;
+  const xFor = n => padX + (n._x / Math.max(1, nLeaves - 1)) * W;
+  const yFor = n => padY + (n._y / Math.max(1, maxDepth)) * H;
+
+  // draw edges
+  function walkEdges(n) {
+    for (const c of n.children) {
+      ctx.strokeStyle = '#aaa';
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.moveTo(xFor(n), yFor(n));
+      ctx.lineTo(xFor(c), yFor(c));
+      ctx.stroke();
+      walkEdges(c);
+    }
+  }
+  walkEdges(root);
+
+  // draw nodes as colored bars (proportional to token count)
+  function walkNodes(n) {
+    const x = xFor(n), y = yFor(n);
+    const w = Math.max(28, Math.min(120, n.tokens.length * 9));
+    const h = 16;
+    let fill = '#90caf9';
+    if (highlight.matched.has(n.id)) fill = '#a5d6a7';
+    if (highlight.inserted.has(n.id)) fill = '#fff59d';
+    if (highlight.evicted === n.id) fill = '#ef9a9a';
+    ctx.fillStyle = fill;
+    ctx.strokeStyle = '#555';
+    ctx.lineWidth = 1;
+    ctx.fillRect(x - w / 2, y - h / 2, w, h);
+    ctx.strokeRect(x - w / 2 + 0.5, y - h / 2 + 0.5, w, h);
+
+    ctx.fillStyle = '#222';
+    ctx.font = '10px sans-serif';
+    ctx.textAlign = 'center';
+    const label = n.tokens.length + ' tok';
+    ctx.fillText(label, x, y + 3);
+
+    // label first 2 tokens above the bar for clarity
+    ctx.fillStyle = '#555';
+    ctx.font = '9px sans-serif';
+    const preview = n.tokens.slice(0, 3).join(' ') + (n.tokens.length > 3 ? ' …' : '');
+    ctx.fillText(preview, x, y - h / 2 - 3);
+
+    for (const c of n.children) walkNodes(c);
+  }
+  walkNodes(root);
+}
+
+function render() {
+  drawTree();
+  document.getElementById('hit').textContent =
+    totalTokens === 0 ? '—' : Math.round(100 * matchedTokens / totalTokens) + '%';
+  document.getElementById('ratio').textContent = matchedTokens + ' / ' + totalTokens;
+  document.getElementById('nodes').textContent = countNodes(root);
+  document.getElementById('evicts').textContent = evictCount;
+  document.getElementById('log').innerHTML = logLines.map(l => '› ' + l).join('<br>');
+}
+
+document.getElementById('insert').addEventListener('click', () => {
+  const p = document.getElementById('prompt').value.trim();
+  if (p) insert(p);
+});
+document.getElementById('evict').addEventListener('click', evictLRU);
+document.getElementById('reset').addEventListener('click', () => { initTree(); render(); });
+
+initTree();
+render();
+</script>
+
+</body>
+</html>

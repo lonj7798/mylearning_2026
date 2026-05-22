@@ -1,0 +1,279 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Disaggregated Prefill / Decode — Architecture Comparison</title>
+<style>
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+         max-width: 980px; margin: 2em auto; padding: 0 1em; color: #222; }
+  h1 { font-size: 1.4em; margin-bottom: 0.2em; }
+  .subtitle { color: #666; margin-top: 0; }
+  .panel { border: 1px solid #ddd; border-radius: 6px; padding: 1em; margin: 1em 0;
+           background: #fafafa; }
+  .controls { display: flex; gap: 1em; flex-wrap: wrap; align-items: center; }
+  .control { display: flex; flex-direction: column; }
+  label { font-size: 0.85em; color: #555; margin-bottom: 0.2em; }
+  input[type="range"] { width: 180px; }
+  canvas { background: white; border: 1px solid #ccc; display: block; margin: 0.5em auto; }
+  .value { font-variant-numeric: tabular-nums; color: #333; font-weight: 600; }
+  .note { font-size: 0.88em; color: #555; line-height: 1.5; }
+  code { background: #eef; padding: 1px 4px; border-radius: 3px; font-size: 0.9em; }
+  .metrics { display: grid; grid-template-columns: 1fr 1fr; gap: 1em; margin-top: 0.5em; }
+  .metric-card { background: white; border: 1px solid #ddd; border-radius: 5px; padding: 0.6em 0.8em; }
+  .metric-card h3 { margin: 0 0 0.4em 0; font-size: 0.95em; }
+  .metric-row { display: flex; justify-content: space-between; font-size: 0.88em; padding: 2px 0; }
+  .colocated h3 { color: #c62828; }
+  .disagg h3 { color: #1565c0; }
+  footer { margin-top: 2em; font-size: 0.9em; color: #555; text-align: center; }
+  footer a { color: #1565c0; text-decoration: none; }
+</style>
+</head>
+<body>
+
+<h1>Disaggregation Architecture — Colocated vs Split Prefill/Decode</h1>
+<p class="subtitle">
+  Animate a request flowing through both architectures. Prefill is compute-bound; decode is
+  bandwidth-bound. Disaggregation lets each pool be sized and tuned independently — at the cost
+  of shipping the KV cache.
+</p>
+
+<div class="panel">
+  <div class="controls">
+    <div class="control">
+      <label>Request rate (req/s)</label>
+      <input type="range" id="rate" min="1" max="32" step="1" value="8">
+      <span class="value"><span id="rateLbl">8</span> req/s</span>
+    </div>
+    <div class="control">
+      <label>Prompt length (tokens)</label>
+      <input type="range" id="prompt" min="256" max="8192" step="256" value="1024">
+      <span class="value"><span id="promptLbl">1024</span> tok</span>
+    </div>
+    <div class="control">
+      <label>Generation length (tokens)</label>
+      <input type="range" id="gen" min="32" max="512" step="32" value="128">
+      <span class="value"><span id="genLbl">128</span> tok</span>
+    </div>
+  </div>
+</div>
+
+<canvas id="colocated" width="940" height="200"></canvas>
+<canvas id="disagg" width="940" height="240"></canvas>
+
+<div class="metrics">
+  <div class="metric-card colocated">
+    <h3>Colocated (4 GPUs mixed)</h3>
+    <div class="metric-row"><span>TTFT (p50)</span><span class="value" id="ttftCol">—</span></div>
+    <div class="metric-row"><span>TPOT (p50)</span><span class="value" id="tpotCol">—</span></div>
+    <div class="metric-row"><span>Goodput @ p99 SLO</span><span class="value" id="gpCol">—</span></div>
+  </div>
+  <div class="metric-card disagg">
+    <h3>Disaggregated (1 prefill + 3 decode)</h3>
+    <div class="metric-row"><span>TTFT (p50)</span><span class="value" id="ttftDis">—</span></div>
+    <div class="metric-row"><span>TPOT (p50)</span><span class="value" id="tpotDis">—</span></div>
+    <div class="metric-row"><span>Goodput @ p99 SLO</span><span class="value" id="gpDis">—</span></div>
+  </div>
+</div>
+
+<div class="panel note">
+  <strong>Caption.</strong> Disaggregation separates the compute-bound prefill stage from the
+  bandwidth-bound decode stage. KV transfer cost is the new bottleneck — solved with NVLink or
+  RDMA. The trade is clean: fewer prefill workers can saturate compute, more decode workers can
+  saturate HBM bandwidth, and each pool's batching policy is tuned to its own dominant cost.
+</div>
+
+<footer><a href="../read.md">← back to chapter</a></footer>
+
+<script>
+const colCv = document.getElementById('colocated');
+const disCv = document.getElementById('disagg');
+const colCtx = colCv.getContext('2d');
+const disCtx = disCv.getContext('2d');
+
+// rough model: prefill cost ~ L_prompt^2 / 1e6 ms-ish, decode ~ L_gen * 5 ms / token
+function metrics() {
+  const rate = +document.getElementById('rate').value;
+  const Lp = +document.getElementById('prompt').value;
+  const Lg = +document.getElementById('gen').value;
+
+  // per-request prefill time (ms): ~ a*Lp + b*Lp^2
+  const prefillMs = 0.4 * Lp + 0.000015 * Lp * Lp;
+  // per-token decode time (ms)
+  const tpotBase = 12 + 0.0012 * Lp; // grows slightly with context
+  const decodeMs = Lg * tpotBase;
+
+  // colocated: 4 workers; prefill and decode interfere => decode tpot inflated by queueing share
+  const colWorkers = 4;
+  const colUtil = Math.min(1, (rate * (prefillMs + decodeMs)) / (colWorkers * 1000));
+  const colInterference = 1 + 1.6 * colUtil; // chunked-prefill helps but not perfectly
+  const ttftCol = prefillMs * (1 + 0.8 * colUtil);
+  const tpotCol = tpotBase * colInterference;
+
+  // disagg: 1 prefill + 3 decode; KV transfer at ~ Lp * 0.04 ms (NVLink-class)
+  const kvShip = Lp * 0.04;
+  const prefillUtil = Math.min(1, (rate * prefillMs) / 1000);
+  const decodeUtil  = Math.min(1, (rate * decodeMs) / (3 * 1000));
+  const ttftDis = prefillMs * (1 + 0.6 * prefillUtil) + kvShip;
+  const tpotDis = tpotBase * (1 + 0.3 * decodeUtil);
+
+  // goodput @ p99: assume SLO 500 ms TTFT, 50 ms TPOT
+  const sloT = 500, sloP = 50;
+  const goodCol = rate * Math.max(0, Math.min(1, (sloT / (ttftCol*1.5)) * (sloP / (tpotCol*1.5))));
+  const goodDis = rate * Math.max(0, Math.min(1, (sloT / (ttftDis*1.5)) * (sloP / (tpotDis*1.5))));
+
+  return { rate, Lp, Lg, prefillMs, decodeMs, tpotBase, kvShip,
+           ttftCol, tpotCol, ttftDis, tpotDis, goodCol, goodDis };
+}
+
+function drawGPU(ctx, x, y, w, h, label, color, fillFrac) {
+  ctx.fillStyle = '#fff';
+  ctx.strokeStyle = color;
+  ctx.lineWidth = 1.5;
+  ctx.fillRect(x, y, w, h);
+  ctx.strokeRect(x, y, w, h);
+  // fill bar inside (utilization)
+  ctx.fillStyle = color + '33';
+  ctx.fillRect(x+2, y+2 + (h-4)*(1-fillFrac), w-4, (h-4)*fillFrac);
+  ctx.fillStyle = '#333';
+  ctx.font = '11px sans-serif';
+  ctx.textAlign = 'center';
+  ctx.fillText(label, x + w/2, y + h + 14);
+}
+
+let t0 = performance.now();
+function render() {
+  const m = metrics();
+  document.getElementById('rateLbl').textContent = m.rate;
+  document.getElementById('promptLbl').textContent = m.Lp;
+  document.getElementById('genLbl').textContent = m.Lg;
+  document.getElementById('ttftCol').textContent = m.ttftCol.toFixed(0) + ' ms';
+  document.getElementById('tpotCol').textContent = m.tpotCol.toFixed(1) + ' ms/tok';
+  document.getElementById('gpCol').textContent  = m.goodCol.toFixed(1) + ' req/s';
+  document.getElementById('ttftDis').textContent = m.ttftDis.toFixed(0) + ' ms';
+  document.getElementById('tpotDis').textContent = m.tpotDis.toFixed(1) + ' ms/tok';
+  document.getElementById('gpDis').textContent  = m.goodDis.toFixed(1) + ' req/s';
+
+  const t = (performance.now() - t0) / 1000; // seconds
+  const cycle = 3.0; // animation period
+  const phase = (t % cycle) / cycle; // 0..1
+
+  // ---- colocated panel ----
+  colCtx.clearRect(0, 0, colCv.width, colCv.height);
+  colCtx.fillStyle = '#c62828';
+  colCtx.font = 'bold 13px sans-serif';
+  colCtx.textAlign = 'left';
+  colCtx.fillText('Colocated: 4× GPU, mixed prefill + decode', 14, 22);
+  colCtx.fillStyle = '#666';
+  colCtx.font = '11px sans-serif';
+  colCtx.fillText('Each GPU services full requests — prefill bursts block in-flight decode tokens.', 14, 40);
+
+  const cy = 70;
+  for (let i = 0; i < 4; i++) {
+    const x = 60 + i * 200;
+    const util = Math.min(1, (m.rate / 32) * 0.9);
+    drawGPU(colCtx, x, cy, 110, 90, `GPU${i} (P+D)`, '#c62828', util);
+    // tiny prefill block + decode bars inside
+    colCtx.fillStyle = '#c62828';
+    colCtx.fillRect(x + 8, cy + 60, 14, 24);
+    colCtx.fillStyle = '#ef9a9a';
+    for (let k = 0; k < 6; k++) {
+      colCtx.fillRect(x + 28 + k*12, cy + 64 + (k%2)*4, 8, 16);
+    }
+  }
+
+  // animated request blob
+  const reqX = 30 + phase * (colCv.width - 60);
+  colCtx.fillStyle = '#1565c0';
+  colCtx.beginPath();
+  colCtx.arc(reqX, 180, 7, 0, Math.PI*2);
+  colCtx.fill();
+  colCtx.fillStyle = '#1565c0';
+  colCtx.font = '10px sans-serif';
+  colCtx.fillText('req', reqX - 9, 196);
+
+  // ---- disaggregated panel ----
+  disCtx.clearRect(0, 0, disCv.width, disCv.height);
+  disCtx.fillStyle = '#1565c0';
+  disCtx.font = 'bold 13px sans-serif';
+  disCtx.textAlign = 'left';
+  disCtx.fillText('Disaggregated: 1× prefill pool + 3× decode pool, KV shipped between', 14, 22);
+  disCtx.fillStyle = '#666';
+  disCtx.font = '11px sans-serif';
+  disCtx.fillText('Prefill tuned for compute saturation; decode tuned for HBM bandwidth. KV moves over NVLink/RDMA.', 14, 40);
+
+  // prefill pool (left)
+  drawGPU(disCtx, 60, 70, 120, 100, 'GPU0 (Prefill)', '#ef6c00', Math.min(1, m.rate / 24));
+  disCtx.fillStyle = '#ef6c00';
+  disCtx.fillRect(72, 130, 30, 30);
+
+  // decode pool (right)
+  for (let i = 0; i < 3; i++) {
+    const x = 540 + i * 130;
+    drawGPU(disCtx, x, 70, 110, 100, `GPU${i+1} (Decode)`, '#1565c0', Math.min(1, m.rate / 30));
+    disCtx.fillStyle = '#90caf9';
+    for (let k = 0; k < 8; k++) {
+      disCtx.fillRect(x + 8 + (k%4)*22, 130 + Math.floor(k/4)*16, 16, 10);
+    }
+  }
+
+  // KV transfer arrow (animated dashes)
+  const ax0 = 190, ax1 = 530, ay = 120;
+  disCtx.strokeStyle = '#7b1fa2';
+  disCtx.lineWidth = 2;
+  disCtx.setLineDash([8, 6]);
+  disCtx.lineDashOffset = -t * 30;
+  disCtx.beginPath();
+  disCtx.moveTo(ax0, ay);
+  disCtx.lineTo(ax1, ay);
+  disCtx.stroke();
+  disCtx.setLineDash([]);
+  // arrowhead
+  disCtx.fillStyle = '#7b1fa2';
+  disCtx.beginPath();
+  disCtx.moveTo(ax1, ay);
+  disCtx.lineTo(ax1 - 10, ay - 5);
+  disCtx.lineTo(ax1 - 10, ay + 5);
+  disCtx.closePath();
+  disCtx.fill();
+  disCtx.font = '11px sans-serif';
+  disCtx.textAlign = 'center';
+  disCtx.fillText(`KV transfer (~${m.kvShip.toFixed(1)} ms)`, (ax0+ax1)/2, ay - 8);
+
+  // animated request: prefill -> KV ship -> decode -> done
+  let rx, ry, rcol;
+  if (phase < 0.30) {
+    // approach prefill
+    const p = phase / 0.30;
+    rx = 30 + p * (120 - 30); ry = 200; rcol = '#1565c0';
+  } else if (phase < 0.55) {
+    // inside prefill (orange)
+    rx = 120; ry = 200; rcol = '#ef6c00';
+  } else if (phase < 0.75) {
+    // KV transfer (purple)
+    const p = (phase - 0.55) / 0.20;
+    rx = 190 + p * (530 - 190); ry = 200; rcol = '#7b1fa2';
+  } else {
+    // decode loop
+    const p = (phase - 0.75) / 0.25;
+    rx = 540 + p * (910 - 540); ry = 200; rcol = '#1565c0';
+  }
+  disCtx.fillStyle = rcol;
+  disCtx.beginPath();
+  disCtx.arc(rx, ry, 7, 0, Math.PI*2);
+  disCtx.fill();
+  disCtx.fillStyle = rcol;
+  disCtx.font = '10px sans-serif';
+  disCtx.fillText('req', rx, ry + 18);
+
+  requestAnimationFrame(render);
+}
+
+['rate', 'prompt', 'gen'].forEach(id => {
+  document.getElementById(id).addEventListener('input', () => {});
+});
+
+render();
+</script>
+
+</body>
+</html>

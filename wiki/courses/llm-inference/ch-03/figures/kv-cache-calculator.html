@@ -1,0 +1,218 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>KV Cache Calculator — Memory Budgeting for Long-Context Serving</title>
+<style>
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+         max-width: 1000px; margin: 2em auto; padding: 0 1em; color: #222; }
+  h1 { font-size: 1.4em; margin-bottom: 0.2em; }
+  .subtitle { color: #666; margin-top: 0; }
+  .panel { border: 1px solid #ddd; border-radius: 6px; padding: 1em; margin: 1em 0;
+           background: #fafafa; }
+  .controls { display: grid; grid-template-columns: 1fr 1fr; gap: 1em; }
+  .control { display: flex; flex-direction: column; }
+  label { font-size: 0.85em; color: #555; margin-bottom: 0.2em; }
+  input[type="range"] { width: 100%; }
+  .value { font-variant-numeric: tabular-nums; color: #333; font-weight: 600; }
+  .note { font-size: 0.88em; color: #555; line-height: 1.5; }
+  code { background: #eef; padding: 1px 4px; border-radius: 3px; font-size: 0.9em; }
+  .layout { display: grid; grid-template-columns: 2fr 1fr; gap: 1em; }
+  .out { font-size: 1em; }
+  .out .row { display: flex; justify-content: space-between; padding: 0.3em 0;
+              border-bottom: 1px dashed #ddd; }
+  .out .row .v { font-variant-numeric: tabular-nums; font-weight: 600; color: #1976d2; }
+  .out .row.alert .v { color: #d32f2f; }
+  canvas { background: white; border: 1px solid #ccc; display: block; margin: 0 auto; }
+  .formula { background: #f4f4ff; padding: 0.5em 0.8em; border-radius: 4px;
+             font-family: ui-monospace, monospace; font-size: 0.85em; }
+  .footer { font-size: 0.85em; color: #888; margin-top: 2em; text-align: center; }
+  a { color: #1976d2; text-decoration: none; }
+  select { padding: 4px; }
+  .radio-row { display: flex; gap: 1em; }
+  .h100 { background: #eef; height: 28px; border-radius: 4px; overflow: hidden;
+          border: 1px solid #ccd; position: relative; margin-top: 6px; }
+  .h100 .fill { background: linear-gradient(90deg, #1976d2, #d32f2f); height: 100%; }
+  .h100 .lbl { position: absolute; top: 4px; left: 8px; font-size: 0.8em; color: #fff;
+               text-shadow: 0 0 3px #000; }
+</style>
+</head>
+<body>
+
+<h1>KV Cache Calculator — Memory Budgeting for Long-Context Serving</h1>
+<p class="subtitle">
+  Compute the exact KV cache footprint for popular models. The same formula governs
+  serving capacity: how many concurrent requests fit on one H100?
+</p>
+
+<div class="panel">
+  <div class="controls">
+    <div class="control">
+      <label>preset</label>
+      <select id="preset">
+        <option value="llama3-8b">Llama-3-8B (32L, 8 KV, d=128)</option>
+        <option value="llama3-70b">Llama-3-70B (80L, 8 KV, d=128)</option>
+        <option value="deepseek-v3">DeepSeek-V3 (61L, MLA d_c=512)</option>
+        <option value="qwen3-32b">Qwen-3-32B (64L, 8 KV, d=128)</option>
+        <option value="custom">custom…</option>
+      </select>
+    </div>
+    <div class="control">
+      <label>dtype</label>
+      <div class="radio-row">
+        <label><input type="radio" name="dt" value="2" checked> FP16/BF16</label>
+        <label><input type="radio" name="dt" value="1"> FP8</label>
+        <label><input type="radio" name="dt" value="0.5"> INT4</label>
+      </div>
+    </div>
+    <div class="control">
+      <label>n_layers (L) — <span class="value" id="Llbl">32</span></label>
+      <input type="range" id="L" min="8" max="128" step="1" value="32">
+    </div>
+    <div class="control">
+      <label>n_kv_heads (H_kv) — <span class="value" id="Hlbl">8</span></label>
+      <input type="range" id="H" min="1" max="64" step="1" value="8">
+    </div>
+    <div class="control">
+      <label>head_dim (d_head) — <span class="value" id="Dlbl">128</span></label>
+      <input type="range" id="D" min="64" max="512" step="8" value="128">
+    </div>
+    <div class="control">
+      <label>seq_len T — <span class="value" id="Tlbl">8192</span></label>
+      <input type="range" id="T" min="512" max="1048576" step="512" value="8192">
+    </div>
+    <div class="control">
+      <label>batch_size B — <span class="value" id="Blbl">16</span></label>
+      <input type="range" id="B" min="1" max="256" step="1" value="16">
+    </div>
+  </div>
+</div>
+
+<div class="layout">
+  <div class="panel out">
+    <div class="formula" id="formula">2 × L × H_kv × d_head × T × dtype</div>
+    <div class="row"><span>per-token KV</span><span class="v" id="oTok">—</span></div>
+    <div class="row"><span>per-request KV (T tokens)</span><span class="v" id="oReq">—</span></div>
+    <div class="row"><span>batch total (B requests)</span><span class="v" id="oBatch">—</span></div>
+    <div class="row alert"><span>fraction of one 80 GB H100</span><span class="v" id="oFrac">—</span></div>
+    <div class="row"><span>max concurrent requests on H100<br><span style="font-size:0.75em;color:#888;">(KV only — ignores weights)</span></span><span class="v" id="oMax">—</span></div>
+    <div class="h100"><div class="fill" id="h100fill" style="width:0%"></div>
+                     <div class="lbl" id="h100lbl">0% of H100</div></div>
+  </div>
+  <div class="panel">
+    <strong style="font-size:0.9em;">prefill vs decode</strong>
+    <canvas id="phase" width="320" height="260"></canvas>
+    <div style="font-size:0.8em;color:#666;margin-top:6px;">
+      Prefill processes T tokens in parallel — <strong>compute-bound</strong>.
+      Decode emits one token per step, re-reads full KV cache — <strong>bandwidth-bound</strong>.
+    </div>
+  </div>
+</div>
+
+<div class="panel note">
+  <strong>Caption.</strong> KV cache scales linearly with batch × seq_len. Long-context
+  serving is fundamentally a KV-cache memory problem before it's anything else.
+  A Llama-3-70B serving 16 concurrent 8k-token requests in BF16 burns ~10 GB just on KV
+  cache; push T to 128k and the same batch overflows an H100.
+</div>
+
+<div class="footer"><a href="../read.md">← back to chapter</a></div>
+
+<script>
+const PRESETS = {
+  'llama3-8b':   { L: 32, H: 8, D: 128 },
+  'llama3-70b':  { L: 80, H: 8, D: 128 },
+  'deepseek-v3': { L: 61, H: 1, D: 512 },  // MLA latent: H_kv=1, d_c=512
+  'qwen3-32b':   { L: 64, H: 8, D: 128 },
+};
+const H100_BYTES = 80 * 1024 ** 3;
+
+function fmt(b) {
+  if (b < 1024) return b.toFixed(0) + ' B';
+  if (b < 1024 ** 2) return (b / 1024).toFixed(2) + ' KB';
+  if (b < 1024 ** 3) return (b / 1024 ** 2).toFixed(2) + ' MB';
+  if (b < 1024 ** 4) return (b / 1024 ** 3).toFixed(2) + ' GB';
+  return (b / 1024 ** 4).toFixed(2) + ' TB';
+}
+
+function drawPhase() {
+  const cvs = document.getElementById('phase');
+  const ctx = cvs.getContext('2d');
+  ctx.clearRect(0, 0, cvs.width, cvs.height);
+  // two zones
+  const W = cvs.width, H = cvs.height;
+  // compute-bound (prefill)
+  ctx.fillStyle = '#fde7e9';
+  ctx.fillRect(20, 20, W - 40, (H - 60) / 2);
+  ctx.fillStyle = '#d32f2f'; ctx.font = '12px sans-serif'; ctx.textAlign = 'center';
+  ctx.fillText('prefill — compute-bound', W / 2, 40);
+  ctx.font = '10px sans-serif'; ctx.fillStyle = '#666';
+  ctx.fillText('FLOPs/byte ratio ≈ T (high arithmetic intensity)', W / 2, 60);
+  ctx.fillText('limited by GPU TFLOPS', W / 2, 75);
+  // bandwidth-bound (decode)
+  ctx.fillStyle = '#e3f0fd';
+  ctx.fillRect(20, 20 + (H - 60) / 2 + 10, W - 40, (H - 60) / 2);
+  ctx.fillStyle = '#1976d2'; ctx.font = '12px sans-serif';
+  ctx.fillText('decode — bandwidth-bound', W / 2, 20 + (H - 60) / 2 + 30);
+  ctx.font = '10px sans-serif'; ctx.fillStyle = '#666';
+  ctx.fillText('1 token/step, reads full KV cache', W / 2, 20 + (H - 60) / 2 + 50);
+  ctx.fillText('limited by HBM GB/s', W / 2, 20 + (H - 60) / 2 + 65);
+}
+
+function applyPreset() {
+  const v = document.getElementById('preset').value;
+  if (v === 'custom') return;
+  const p = PRESETS[v];
+  document.getElementById('L').value = p.L;
+  document.getElementById('H').value = p.H;
+  document.getElementById('D').value = p.D;
+  render();
+}
+
+function render() {
+  const L = +document.getElementById('L').value;
+  const H = +document.getElementById('H').value;
+  const D = +document.getElementById('D').value;
+  const T = +document.getElementById('T').value;
+  const B = +document.getElementById('B').value;
+  const dt = +document.querySelector('input[name=dt]:checked').value;
+  document.getElementById('Llbl').textContent = L;
+  document.getElementById('Hlbl').textContent = H;
+  document.getElementById('Dlbl').textContent = D;
+  document.getElementById('Tlbl').textContent = T.toLocaleString();
+  document.getElementById('Blbl').textContent = B;
+
+  const perTok = 2 * L * H * D * dt;
+  const perReq = perTok * T;
+  const batch = perReq * B;
+  const frac = batch / H100_BYTES;
+  const maxConc = Math.floor(H100_BYTES / perReq);
+
+  document.getElementById('formula').textContent =
+    `2 × ${L} × ${H} × ${D} × ${T} × ${dt} = ${fmt(perReq)} per request`;
+  document.getElementById('oTok').textContent = fmt(perTok);
+  document.getElementById('oReq').textContent = fmt(perReq);
+  document.getElementById('oBatch').textContent = fmt(batch);
+  document.getElementById('oFrac').textContent = (frac * 100).toFixed(2) + '%';
+  document.getElementById('oMax').textContent = maxConc.toLocaleString();
+  const pct = Math.min(100, frac * 100);
+  document.getElementById('h100fill').style.width = pct + '%';
+  document.getElementById('h100lbl').textContent = pct.toFixed(1) + '% of H100';
+}
+
+['L', 'H', 'D', 'T', 'B'].forEach(id =>
+  document.getElementById(id).addEventListener('input', () => {
+    document.getElementById('preset').value = 'custom';
+    render();
+  }));
+document.querySelectorAll('input[name=dt]').forEach(el =>
+  el.addEventListener('change', render));
+document.getElementById('preset').addEventListener('change', applyPreset);
+
+drawPhase();
+applyPreset();
+render();
+</script>
+
+</body>
+</html>

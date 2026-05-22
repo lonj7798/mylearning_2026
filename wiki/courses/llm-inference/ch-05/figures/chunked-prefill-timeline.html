@@ -1,0 +1,275 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Chunked Prefill — TTFT vs TPOT Trade-off</title>
+<style>
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+         max-width: 1000px; margin: 2em auto; padding: 0 1em; color: #222; }
+  h1 { font-size: 1.4em; margin-bottom: 0.2em; }
+  .subtitle { color: #666; margin-top: 0; }
+  .panel { border: 1px solid #ddd; border-radius: 6px; padding: 1em; margin: 1em 0;
+           background: #fafafa; }
+  .controls { display: flex; gap: 1em; flex-wrap: wrap; align-items: center; }
+  .control { display: flex; flex-direction: column; }
+  label { font-size: 0.85em; color: #555; margin-bottom: 0.2em; }
+  input[type="range"] { width: 220px; }
+  canvas { background: white; border: 1px solid #ccc; display: block; margin: 0.6em auto; }
+  .legend { display: flex; gap: 1.5em; justify-content: center; font-size: 0.9em; flex-wrap: wrap; }
+  .swatch { display: inline-block; width: 12px; height: 12px; margin-right: 4px;
+            vertical-align: middle; border-radius: 2px; border: 1px solid #999; }
+  .value { font-variant-numeric: tabular-nums; color: #333; font-weight: 600; }
+  .note { font-size: 0.88em; color: #555; line-height: 1.5; }
+  .stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 0.5em; margin-top: 0.5em; }
+  .stat { background: white; border: 1px solid #ddd; border-radius: 4px; padding: 0.4em 0.7em; }
+  .stat .k { font-size: 0.75em; color: #777; }
+  .stat .v { font-size: 1.05em; font-variant-numeric: tabular-nums; font-weight: 600; }
+  code { background: #eef; padding: 1px 4px; border-radius: 3px; font-size: 0.9em; }
+  a { color: #1976d2; }
+  .ptitle { font-weight: 600; margin: 0.4em 0 0.2em 4px; font-size: 0.95em; }
+</style>
+</head>
+<body>
+
+<h1>Chunked Prefill — TTFT vs TPOT Trade-off</h1>
+<p class="subtitle">
+  A long-prompt request arrives while 8 decode requests are in flight. Compare three schedulers
+  on the same wall clock. <strong>Chunk size is the knob.</strong>
+</p>
+
+<div class="panel">
+  <div class="controls">
+    <div class="control">
+      <label>Chunk size (tokens per prefill chunk)</label>
+      <input type="range" id="chunkSize" min="0" max="3" step="1" value="1">
+      <span class="value" id="chunkLabel">500</span>
+    </div>
+    <div class="control">
+      <label>Prompt length (tokens)</label>
+      <input type="range" id="promptLen" min="500" max="4000" step="500" value="2000">
+      <span class="value"><span id="promptLabel">2000</span></span>
+    </div>
+  </div>
+  <div class="stats">
+    <div class="stat"><div class="k">TTFT for new request (ticks)</div><div class="v" id="ttft">—</div></div>
+    <div class="stat"><div class="k">TPOT lost across 8 in-flight decodes</div><div class="v" id="tpot">—</div></div>
+    <div class="stat"><div class="k">Chunks scheduled</div><div class="v" id="chunks">—</div></div>
+  </div>
+</div>
+
+<div class="panel">
+  <div class="ptitle">(a) decode-only batching — steady state, 8 in-flight requests</div>
+  <canvas id="panelA" width="940" height="110"></canvas>
+  <div class="ptitle">(b) full-prefill-then-decode — all 8 decodes stall while the long prefill runs</div>
+  <canvas id="panelB" width="940" height="110"></canvas>
+  <div class="ptitle">(c) chunked prefill — chunks share each batch tick with the 8 decode tokens</div>
+  <canvas id="panelC" width="940" height="110"></canvas>
+</div>
+
+<div class="legend">
+  <span><span class="swatch" style="background:#1976d2"></span>prefill chunk</span>
+  <span><span class="swatch" style="background:#388e3c"></span>decode token</span>
+  <span><span class="swatch" style="background:#d32f2f"></span>idle (stalled decode)</span>
+  <span><span class="swatch" style="background:#fff"></span>empty slot</span>
+</div>
+
+<div class="panel note">
+  <strong>What you should notice.</strong>
+  Panel (a) is the baseline: 8 decode tokens per tick, steady throughput.
+  Panel (b) shows the cliff: one 2000-token prompt arrives, the engine spends 4+ ticks doing
+  prefill exclusively, and the 8 in-flight decodes go red — they wait. That's a 4-tick TPOT spike
+  per request × 8 requests = 32 lost decode-token slots.
+  Panel (c) keeps the same compute budget per tick but slices the prefill into chunks; each tick
+  packs (8 decode + 1 chunk). TTFT for the new request rises slightly (it still needs all chunks),
+  but in-flight TPOT degradation drops to ≤ 1 tick. <strong>Chunked prefill trades a tiny TTFT
+  increase for a much smaller TPOT impact on in-flight decodes — chunk size is the knob.</strong>
+</div>
+
+<p class="note"><a href="../read.md">← back to chapter</a></p>
+
+<script>
+const chunkSizes = [250, 500, 1000, 2000];
+const PROMPT_DEFAULT = 2000;
+const N_DECODES = 8;
+const TICKS = 24;
+const NEW_REQ_TICK = 4;       // when the long prompt arrives
+const CELL_W = 36;
+const CELL_H = 14;
+const ROW_GAP = 2;
+const X0 = 50;
+const Y0 = 8;
+
+const COL = {
+  prefill: '#1976d2',
+  decode:  '#388e3c',
+  idle:    '#d32f2f',
+  empty:   '#ffffff',
+};
+
+function drawPanel(canvas, schedule, label) {
+  const ctx = canvas.getContext('2d');
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+  // y-axis: 9 rows (8 decode slots + 1 new-request slot)
+  const rows = N_DECODES + 1;
+
+  // row labels
+  ctx.fillStyle = '#555';
+  ctx.font = '10px sans-serif';
+  ctx.textAlign = 'right';
+  for (let r = 0; r < N_DECODES; r++) {
+    const y = Y0 + r * (CELL_H + ROW_GAP) + CELL_H - 3;
+    ctx.fillText('D' + (r + 1), X0 - 4, y);
+  }
+  ctx.fillStyle = '#1976d2';
+  const yNew = Y0 + N_DECODES * (CELL_H + ROW_GAP) + CELL_H - 3;
+  ctx.fillText('NEW', X0 - 4, yNew);
+
+  // cells
+  for (let t = 0; t < TICKS; t++) {
+    const col = schedule[t];          // array of length rows
+    for (let r = 0; r < rows; r++) {
+      const x = X0 + t * CELL_W;
+      const y = Y0 + r * (CELL_H + ROW_GAP);
+      const kind = col[r];
+      ctx.fillStyle = COL[kind] || '#fff';
+      ctx.fillRect(x, y, CELL_W - 2, CELL_H);
+      ctx.strokeStyle = '#bbb';
+      ctx.lineWidth = 0.5;
+      ctx.strokeRect(x + 0.5, y + 0.5, CELL_W - 2, CELL_H);
+
+      // small chunk-size annotation on prefill cells in the NEW row
+      if (kind === 'prefill' && r === N_DECODES && col.chunkN) {
+        ctx.fillStyle = '#fff';
+        ctx.font = 'bold 9px sans-serif';
+        ctx.textAlign = 'center';
+        ctx.fillText(col.chunkN, x + (CELL_W - 2) / 2, y + CELL_H - 4);
+      }
+    }
+  }
+
+  // x-axis ticks
+  ctx.fillStyle = '#777';
+  ctx.font = '9px sans-serif';
+  ctx.textAlign = 'center';
+  for (let t = 0; t < TICKS; t += 2) {
+    const x = X0 + t * CELL_W + (CELL_W - 2) / 2;
+    const y = Y0 + rows * (CELL_H + ROW_GAP) + 10;
+    ctx.fillText('t' + t, x, y);
+  }
+}
+
+function makeEmptySchedule() {
+  const sched = [];
+  for (let t = 0; t < TICKS; t++) {
+    const col = new Array(N_DECODES + 1).fill('empty');
+    sched.push(col);
+  }
+  return sched;
+}
+
+function panelAScheduleAll() {
+  // decode-only steady state — 8 decodes per tick, NEW row stays empty
+  const s = makeEmptySchedule();
+  for (let t = 0; t < TICKS; t++) {
+    for (let r = 0; r < N_DECODES; r++) s[t][r] = 'decode';
+    s[t][N_DECODES] = 'empty';
+  }
+  return s;
+}
+
+function panelBSchedule(promptLen) {
+  // full prefill then decode. Prefill consumes the whole tick.
+  // Token throughput per prefill tick ~ 500 tokens (illustrative).
+  const PREFILL_PER_TICK = 500;
+  const prefillTicks = Math.ceil(promptLen / PREFILL_PER_TICK);
+  const s = makeEmptySchedule();
+  for (let t = 0; t < TICKS; t++) {
+    if (t < NEW_REQ_TICK) {
+      // steady-state decode before the new request arrives
+      for (let r = 0; r < N_DECODES; r++) s[t][r] = 'decode';
+    } else if (t < NEW_REQ_TICK + prefillTicks) {
+      // big prefill: 8 in-flight decodes stall (idle), NEW row is prefill
+      for (let r = 0; r < N_DECODES; r++) s[t][r] = 'idle';
+      s[t][N_DECODES] = 'prefill';
+      s[t].chunkN = PREFILL_PER_TICK;
+    } else {
+      // resume; new request joins as a decode
+      for (let r = 0; r < N_DECODES; r++) s[t][r] = 'decode';
+      s[t][N_DECODES] = 'decode';
+    }
+  }
+  return { schedule: s, ttft: prefillTicks, tpotLost: prefillTicks * N_DECODES, chunks: 1 };
+}
+
+function panelCSchedule(promptLen, chunkSize) {
+  const chunkCount = Math.ceil(promptLen / chunkSize);
+  const s = makeEmptySchedule();
+  // For very large chunks, one chunk doesn't fit alongside 8 decodes -> stalls those decodes.
+  // Threshold: chunk <= 500 packs cleanly; > 500 forces a 1-tick stall on decodes for that chunk.
+  const PACKS_CLEAN = chunkSize <= 500;
+  let chunksLeft = chunkCount;
+  let tpotLost = 0;
+  let ttft = 0;
+  let arrived = false;
+
+  for (let t = 0; t < TICKS; t++) {
+    if (t < NEW_REQ_TICK) {
+      for (let r = 0; r < N_DECODES; r++) s[t][r] = 'decode';
+      continue;
+    }
+    if (!arrived) arrived = true;
+    if (chunksLeft > 0) {
+      if (PACKS_CLEAN) {
+        // pack decode + 1 chunk in the same tick
+        for (let r = 0; r < N_DECODES; r++) s[t][r] = 'decode';
+        s[t][N_DECODES] = 'prefill';
+        s[t].chunkN = chunkSize;
+        chunksLeft--;
+        ttft++;
+      } else {
+        // chunk too large to share — stall decodes this tick
+        for (let r = 0; r < N_DECODES; r++) s[t][r] = 'idle';
+        s[t][N_DECODES] = 'prefill';
+        s[t].chunkN = chunkSize;
+        tpotLost += N_DECODES;
+        chunksLeft--;
+        ttft++;
+      }
+    } else {
+      // prefill done; new request joins steady-state decode
+      for (let r = 0; r < N_DECODES; r++) s[t][r] = 'decode';
+      s[t][N_DECODES] = 'decode';
+    }
+  }
+  return { schedule: s, ttft, tpotLost, chunks: chunkCount };
+}
+
+function render() {
+  const chunkIdx = +document.getElementById('chunkSize').value;
+  const chunkSize = chunkSizes[chunkIdx];
+  const promptLen = +document.getElementById('promptLen').value;
+  document.getElementById('chunkLabel').textContent = chunkSize;
+  document.getElementById('promptLabel').textContent = promptLen;
+
+  drawPanel(document.getElementById('panelA'), panelAScheduleAll());
+  const b = panelBSchedule(promptLen);
+  drawPanel(document.getElementById('panelB'), b.schedule);
+  const c = panelCSchedule(promptLen, chunkSize);
+  drawPanel(document.getElementById('panelC'), c.schedule);
+
+  // stats reflect panel (c) — the chunked schedule that the slider controls
+  document.getElementById('ttft').textContent = c.ttft + ' ticks';
+  document.getElementById('tpot').textContent = c.tpotLost + ' decode-tokens lost';
+  document.getElementById('chunks').textContent = c.chunks;
+}
+
+['chunkSize', 'promptLen'].forEach(id => {
+  document.getElementById(id).addEventListener('input', render);
+});
+
+render();
+</script>
+
+</body>
+</html>

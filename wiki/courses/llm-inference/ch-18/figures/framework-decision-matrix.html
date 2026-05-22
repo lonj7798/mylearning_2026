@@ -1,0 +1,202 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Serving Framework Decision Matrix</title>
+<style>
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+         max-width: 1100px; margin: 2em auto; padding: 0 1em; color: #222; }
+  h1 { font-size: 1.4em; margin-bottom: 0.2em; }
+  .subtitle { color: #666; margin-top: 0; }
+  .panel { border: 1px solid #ddd; border-radius: 6px; padding: 1em; margin: 1em 0;
+           background: #fafafa; }
+  table { border-collapse: collapse; width: 100%; font-size: 0.85em; }
+  th, td { padding: 6px 8px; text-align: center; border-bottom: 1px solid #eee; }
+  th { background: #f0f4f8; font-weight: 600; color: #333; position: sticky; top: 0; }
+  th.fw { text-align: left; }
+  td.fw { text-align: left; font-weight: 600; color: #1976d2; }
+  .dot { display: inline-block; width: 18px; height: 18px; border-radius: 50%;
+         vertical-align: middle; }
+  .g { background: #4caf50; }
+  .y { background: #fdd835; }
+  .r { background: #e53935; }
+  .sliders { display: grid; grid-template-columns: repeat(2, 1fr); gap: 0.4em 1em; }
+  .slider-row { display: flex; align-items: center; gap: 0.5em; font-size: 0.85em; }
+  .slider-row label { flex: 0 0 200px; color: #555; }
+  .slider-row input[type=range] { flex: 1; }
+  .slider-row .v { flex: 0 0 30px; text-align: right; font-variant-numeric: tabular-nums;
+                   font-weight: 600; color: #1976d2; }
+  .scores { display: grid; grid-template-columns: repeat(2, 1fr); gap: 0.3em 1em;
+            font-size: 0.9em; margin-top: 0.5em; }
+  .score-row { display: flex; justify-content: space-between; padding: 4px 8px;
+               border-radius: 4px; }
+  .score-row.top { background: #e8f5e9; border-left: 4px solid #4caf50; }
+  .score-row .name { font-weight: 600; }
+  .score-row .val { font-variant-numeric: tabular-nums; color: #1976d2; }
+  .reco { margin-top: 0.8em; padding: 0.8em; background: #e3f2fd;
+          border-left: 4px solid #1976d2; border-radius: 4px; font-size: 0.95em; }
+  button { padding: 6px 12px; cursor: pointer; border: 1px solid #888;
+           background: #fff; border-radius: 4px; }
+  button:hover { background: #eef; }
+  .note { font-size: 0.88em; color: #555; line-height: 1.5; }
+  a { color: #1976d2; }
+  .legend-row { font-size: 0.82em; color: #555; margin-top: 0.5em; text-align: center; }
+</style>
+</head>
+<body>
+
+<h1>Serving Framework Decision Matrix</h1>
+<p class="subtitle">
+  Drag the factor sliders to weight what matters for <em>your</em> deployment.
+  The framework ranking recomputes live.
+</p>
+
+<div class="panel">
+  <strong>Factor importance (0–10):</strong>
+  <div class="sliders" id="sliders"></div>
+  <button id="reset" style="margin-top:0.6em">Reset to defaults</button>
+  <span class="legend-row">defaults bias toward production-OSS profile (vLLM-leaning)</span>
+</div>
+
+<div class="panel" style="overflow-x:auto">
+  <table id="matrix">
+    <thead>
+      <tr id="headerRow"><th class="fw">Framework</th></tr>
+    </thead>
+    <tbody id="bodyRows"></tbody>
+  </table>
+  <div class="legend-row">
+    <span class="dot g"></span> strong &nbsp;
+    <span class="dot y"></span> partial &nbsp;
+    <span class="dot r"></span> weak
+  </div>
+</div>
+
+<div class="panel">
+  <strong>Weighted scores:</strong>
+  <div class="scores" id="scores"></div>
+  <div class="reco" id="reco"></div>
+</div>
+
+<div class="panel note">
+  <strong>Caption.</strong>
+  There is no single best framework. The decision is workload-driven. This matrix shows the
+  trade-offs explicitly; weight the factors by your deployment. Canonical heuristics:
+  <em>vLLM</em> for general OSS production, <em>TensorRT-LLM</em> for NVIDIA-max-perf,
+  <em>SGLang</em> for prefix-heavy / structured workloads, <em>llama.cpp</em> for edge / CPU.
+  See <a href="../read.md">← back to chapter</a>.
+</div>
+
+<script>
+const factors = [
+  { id: 'prod', name: 'Production stability', def: 8 },
+  { id: 'nv',   name: 'NVIDIA perf ceiling', def: 6 },
+  { id: 'oss',  name: 'OSS flexibility', def: 7 },
+  { id: 'pcache', name: 'Prefix-cache support', def: 5 },
+  { id: 'quant', name: 'Quant format breadth', def: 5 },
+  { id: 'edge', name: 'Edge / CPU support', def: 2 },
+  { id: 'struct', name: 'Structured output', def: 4 },
+  { id: 'moe',  name: 'MoE support', def: 4 },
+];
+
+// 3 = green (strong), 2 = yellow (partial), 1 = red (weak)
+const frameworks = [
+  { name: 'vLLM',              scores: { prod:3, nv:2, oss:3, pcache:3, quant:2, edge:1, struct:2, moe:2 } },
+  { name: 'SGLang',            scores: { prod:2, nv:2, oss:3, pcache:3, quant:2, edge:1, struct:3, moe:2 } },
+  { name: 'TensorRT-LLM',      scores: { prod:3, nv:3, oss:1, pcache:2, quant:3, edge:1, struct:1, moe:2 } },
+  { name: 'TGI',               scores: { prod:3, nv:2, oss:2, pcache:2, quant:2, edge:1, struct:2, moe:2 } },
+  { name: 'llama.cpp',         scores: { prod:2, nv:1, oss:3, pcache:1, quant:3, edge:3, struct:2, moe:2 } },
+  { name: 'LightLLM',          scores: { prod:1, nv:2, oss:3, pcache:2, quant:1, edge:1, struct:1, moe:1 } },
+  { name: 'LMDeploy',          scores: { prod:2, nv:3, oss:2, pcache:2, quant:3, edge:1, struct:1, moe:2 } },
+  { name: 'DeepSpeed-FastGen', scores: { prod:2, nv:2, oss:2, pcache:2, quant:1, edge:1, struct:1, moe:3 } },
+];
+
+const dotClass = s => s === 3 ? 'g' : (s === 2 ? 'y' : 'r');
+
+function buildSliders() {
+  const c = document.getElementById('sliders');
+  c.innerHTML = '';
+  factors.forEach(f => {
+    const row = document.createElement('div'); row.className = 'slider-row';
+    row.innerHTML = `<label>${f.name}</label>
+      <input type="range" id="w_${f.id}" min="0" max="10" step="1" value="${f.def}">
+      <span class="v" id="vv_${f.id}">${f.def}</span>`;
+    c.appendChild(row);
+  });
+  factors.forEach(f => {
+    document.getElementById('w_' + f.id).addEventListener('input', () => {
+      document.getElementById('vv_' + f.id).textContent = document.getElementById('w_' + f.id).value;
+      render();
+    });
+  });
+}
+
+function buildHeader() {
+  const head = document.getElementById('headerRow');
+  factors.forEach(f => {
+    const th = document.createElement('th');
+    th.textContent = f.name; th.title = f.name;
+    head.appendChild(th);
+  });
+}
+
+function buildBody() {
+  const body = document.getElementById('bodyRows');
+  body.innerHTML = '';
+  frameworks.forEach(fw => {
+    const tr = document.createElement('tr');
+    tr.innerHTML = `<td class="fw">${fw.name}</td>` +
+      factors.map(f => `<td><span class="dot ${dotClass(fw.scores[f.id])}"></span></td>`).join('');
+    body.appendChild(tr);
+  });
+}
+
+function render() {
+  const weights = {};
+  factors.forEach(f => { weights[f.id] = +document.getElementById('w_' + f.id).value; });
+
+  const ranked = frameworks.map(fw => {
+    let s = 0, max = 0;
+    factors.forEach(f => {
+      s += weights[f.id] * fw.scores[f.id];
+      max += weights[f.id] * 3;
+    });
+    return { name: fw.name, score: s, pct: max > 0 ? (s / max) : 0 };
+  }).sort((a, b) => b.score - a.score);
+
+  const sc = document.getElementById('scores'); sc.innerHTML = '';
+  ranked.forEach((r, i) => {
+    const row = document.createElement('div');
+    row.className = 'score-row' + (i === 0 ? ' top' : '');
+    row.innerHTML = `<span class="name">${i + 1}. ${r.name}</span>
+      <span class="val">${r.score} &nbsp; (${(r.pct * 100).toFixed(0)}%)</span>`;
+    sc.appendChild(row);
+  });
+
+  const top = ranked[0];
+  let why = '';
+  const dominant = [...factors].sort((a, b) => weights[b.id] - weights[a.id]).slice(0, 2)
+    .map(f => f.name).join(' + ');
+  why = `Top match: <strong>${top.name}</strong>. Your weighting emphasises <em>${dominant}</em>; ` +
+        `${top.name} scores highest under that profile.`;
+  document.getElementById('reco').innerHTML = why;
+}
+
+function resetDefaults() {
+  factors.forEach(f => {
+    document.getElementById('w_' + f.id).value = f.def;
+    document.getElementById('vv_' + f.id).textContent = f.def;
+  });
+  render();
+}
+
+document.getElementById('reset').onclick = resetDefaults;
+
+buildSliders();
+buildHeader();
+buildBody();
+render();
+</script>
+
+</body>
+</html>

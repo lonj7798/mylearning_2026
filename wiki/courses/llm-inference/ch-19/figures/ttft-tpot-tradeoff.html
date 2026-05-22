@@ -1,0 +1,227 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>TTFT vs TPOT — Scheduler Configuration Trade-off</title>
+<style>
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+         max-width: 1000px; margin: 2em auto; padding: 0 1em; color: #222; }
+  h1 { font-size: 1.4em; margin-bottom: 0.2em; }
+  .subtitle { color: #666; margin-top: 0; }
+  .panel { border: 1px solid #ddd; border-radius: 6px; padding: 1em; margin: 1em 0;
+           background: #fafafa; }
+  .controls { display: flex; gap: 1.5em; flex-wrap: wrap; align-items: center; }
+  .control { display: flex; flex-direction: column; min-width: 180px; }
+  label { font-size: 0.85em; color: #555; margin-bottom: 0.2em; }
+  input[type="range"] { width: 200px; }
+  canvas { background: white; border: 1px solid #ccc; display: block; margin: 1em auto;
+           cursor: crosshair; }
+  .layout { display: flex; gap: 1em; }
+  .info { flex: 0 0 280px; font-size: 0.88em; }
+  .info h3 { margin: 0 0 0.4em; font-size: 1em; color: #333; }
+  .info .tip { padding: 0.6em 0.8em; background: #fff; border: 1px solid #ddd;
+               border-radius: 4px; min-height: 80px; line-height: 1.4; }
+  .stats { margin-top: 0.8em; font-size: 0.85em; }
+  .stat-row { display: flex; justify-content: space-between; padding: 3px 0;
+              border-bottom: 1px dotted #ddd; }
+  .stat-row .value { font-variant-numeric: tabular-nums; color: #1976d2; font-weight: 600; }
+  .legend { display: flex; gap: 1em; justify-content: center; font-size: 0.85em;
+            margin-top: 0.5em; flex-wrap: wrap; }
+  .swatch { display: inline-block; width: 12px; height: 12px; margin-right: 4px;
+            vertical-align: middle; border-radius: 50%; }
+  .note { font-size: 0.88em; color: #555; line-height: 1.5; }
+  code { background: #eef; padding: 1px 4px; border-radius: 3px; font-size: 0.9em; }
+  a { color: #1976d2; }
+  .value { font-variant-numeric: tabular-nums; color: #1976d2; font-weight: 600; }
+</style>
+</head>
+<body>
+
+<h1>TTFT vs TPOT — Scheduler Configuration Trade-off</h1>
+<p class="subtitle">
+  Each point is one serving configuration of the same model. Click a point for details.
+  Adjust the SLO box to see which configurations meet your latency budget.
+</p>
+
+<div class="panel">
+  <div class="controls">
+    <div class="control">
+      <label>SLO: TTFT ≤ <span class="value" id="ttftSloLabel">500</span> ms</label>
+      <input type="range" id="ttftSlo" min="100" max="2000" step="50" value="500">
+    </div>
+    <div class="control">
+      <label>SLO: TPOT ≤ <span class="value" id="tpotSloLabel">50</span> ms</label>
+      <input type="range" id="tpotSlo" min="10" max="200" step="5" value="50">
+    </div>
+    <div class="control">
+      <label>Compliant configs</label>
+      <span class="value" style="font-size:1.4em" id="compliantCount">0 / 0</span>
+    </div>
+  </div>
+</div>
+
+<div class="layout">
+  <canvas id="plot" width="680" height="460"></canvas>
+  <div class="info">
+    <div class="panel" style="margin:0">
+      <h3>Selected configuration</h3>
+      <div class="tip" id="tip">Click any point in the plot.</div>
+      <div class="stats" id="stats"></div>
+    </div>
+  </div>
+</div>
+
+<div class="legend">
+  <span><span class="swatch" style="background:#4caf50"></span>meets SLO</span>
+  <span><span class="swatch" style="background:#e53935"></span>violates SLO</span>
+  <span style="margin-left:1em; color:#666">box = SLO region</span>
+</div>
+
+<div class="panel note">
+  <strong>Caption.</strong>
+  Every config picks a point in the TTFT-vs-TPOT plane. <em>Chunked prefill + continuous batching</em>
+  is usually the dominated-by-nothing corner. Add <em>prefix caching</em> (cuts TTFT) and
+  <em>speculative decoding</em> (cuts TPOT) for an extra push. The wrong chunk size hurts one axis
+  while barely helping the other — chunks too large under-pipeline prefill (TPOT rises during big
+  chunks); chunks too small over-fragment (TTFT rises from per-step overhead).
+  See <a href="../read.md">← back to chapter</a>.
+</div>
+
+<script>
+// Hypothetical but realistic configurations: { name, ttft (ms), tpot (ms), desc }
+const points = [
+  { name: 'Static batching',                         ttft: 1400, tpot: 18,  desc: 'Whole batch waits for slowest. TTFT bloats by the slowest prefill in the batch; once decoding, throughput is great so TPOT is low.' },
+  { name: 'Continuous batching only',                ttft: 480,  tpot: 38,  desc: 'New requests join between decode steps. TTFT drops dramatically; TPOT is moderate because a long prefill in the batch still stalls all decodes for that step.' },
+  { name: 'Continuous + chunked prefill (chunk=512)',ttft: 240,  tpot: 22,  desc: 'Prefill split into chunks scheduled alongside decodes. Both axes are good — this is the typical sweet spot.' },
+  { name: 'Continuous + chunked prefill (chunk=2048)',ttft: 320, tpot: 55,  desc: 'Chunks too large: each prefill chunk still dominates a decode step, so TPOT climbs (decodes stall during big chunks).' },
+  { name: 'Continuous + chunked prefill (chunk=128)',ttft: 780,  tpot: 20,  desc: 'Chunks too small: per-step scheduling overhead and kernel-launch fixed costs dominate prefill, so TTFT rises.' },
+  { name: '+ speculative decoding (chunk=512)',      ttft: 260,  tpot: 12,  desc: 'Speculative decoding amortises forward passes across multiple draft tokens. TPOT roughly halves; TTFT unchanged (speculation only helps decode).' },
+  { name: '+ prefix caching, hit-rate 80%',          ttft: 90,   tpot: 22,  desc: 'Shared system prompt cached in KV. TTFT collapses (no recompute for the cached prefix); TPOT unchanged (decode workload identical).' },
+  { name: '+ FP8 quantization',                      ttft: 210,  tpot: 18,  desc: 'FP8 cuts memory bandwidth pressure. Both axes drop a bit; the big win is throughput / cost-per-token rather than per-request latency.' },
+  { name: '+ prefix cache + spec + FP8 (full stack)',ttft: 80,   tpot: 10,  desc: 'Stacked optimisations. Lower bound for this model under good cache locality.' },
+  { name: 'Prefix cache MISS (cold prompt)',         ttft: 450,  tpot: 22,  desc: 'Same system as the 80%-hit row, but on a cold prompt. Demonstrates that prefix-cache wins are workload-dependent — distribution of prompts matters.' },
+  { name: 'Long input (8k ctx), chunk=512',          ttft: 620,  tpot: 30,  desc: 'TTFT scales with prefill length even with chunking; TPOT scales slowly with context (attention cost grows).' },
+  { name: 'Disaggregated prefill+decode',            ttft: 200,  tpot: 16,  desc: 'Prefill on a separate pool, KV transferred to decode pool. Removes prefill-decode interference entirely; cost is the KV transfer hop.' },
+];
+
+const cvs = document.getElementById('plot');
+const ctx = cvs.getContext('2d');
+const pad = { l: 60, r: 30, t: 30, b: 50 };
+
+let selectedIdx = -1;
+
+function ttftSlo() { return +document.getElementById('ttftSlo').value; }
+function tpotSlo() { return +document.getElementById('tpotSlo').value; }
+
+function render() {
+  const W = cvs.width, H = cvs.height;
+  const pw = W - pad.l - pad.r, ph = H - pad.t - pad.b;
+  const xMax = 1600, yMax = 70;
+
+  document.getElementById('ttftSloLabel').textContent = ttftSlo();
+  document.getElementById('tpotSloLabel').textContent = tpotSlo();
+
+  ctx.clearRect(0, 0, W, H);
+
+  // axes / grid
+  ctx.strokeStyle = '#eee';
+  for (let i = 0; i <= 8; i++) {
+    const x = pad.l + (i / 8) * pw;
+    ctx.beginPath(); ctx.moveTo(x, pad.t); ctx.lineTo(x, pad.t + ph); ctx.stroke();
+  }
+  for (let j = 0; j <= 7; j++) {
+    const y = pad.t + (j / 7) * ph;
+    ctx.beginPath(); ctx.moveTo(pad.l, y); ctx.lineTo(pad.l + pw, y); ctx.stroke();
+  }
+
+  // SLO box (green shaded region)
+  const sloX = pad.l + Math.min(ttftSlo() / xMax, 1) * pw;
+  const sloY = pad.t + ph - Math.min(tpotSlo() / yMax, 1) * ph;
+  ctx.fillStyle = 'rgba(76,175,80,0.10)';
+  ctx.fillRect(pad.l, sloY, sloX - pad.l, pad.t + ph - sloY);
+  ctx.strokeStyle = '#4caf50'; ctx.lineWidth = 1.5; ctx.setLineDash([6, 4]);
+  ctx.strokeRect(pad.l, sloY, sloX - pad.l, pad.t + ph - sloY);
+  ctx.setLineDash([]);
+  ctx.fillStyle = '#4caf50'; ctx.font = '11px sans-serif'; ctx.textAlign = 'left';
+  ctx.fillText('SLO region', pad.l + 6, sloY + 14);
+
+  // axis labels & ticks
+  ctx.fillStyle = '#555'; ctx.font = '11px sans-serif';
+  ctx.textAlign = 'center';
+  for (let i = 0; i <= 8; i++) {
+    const x = pad.l + (i / 8) * pw;
+    ctx.fillText(Math.round((i / 8) * xMax).toString(), x, pad.t + ph + 16);
+  }
+  ctx.fillText('TTFT (ms) — Time-To-First-Token', pad.l + pw / 2, pad.t + ph + 36);
+
+  ctx.textAlign = 'right';
+  for (let j = 0; j <= 7; j++) {
+    const v = (1 - j / 7) * yMax;
+    const y = pad.t + (j / 7) * ph;
+    ctx.fillText(v.toFixed(0), pad.l - 6, y + 4);
+  }
+  ctx.save();
+  ctx.translate(16, pad.t + ph / 2); ctx.rotate(-Math.PI / 2);
+  ctx.textAlign = 'center';
+  ctx.fillText('TPOT (ms / token)', 0, 0);
+  ctx.restore();
+
+  // points
+  let compliant = 0;
+  points.forEach((p, i) => {
+    const cx = pad.l + Math.min(p.ttft / xMax, 1) * pw;
+    const cy = pad.t + ph - Math.min(p.tpot / yMax, 1) * ph;
+    const meets = p.ttft <= ttftSlo() && p.tpot <= tpotSlo();
+    if (meets) compliant++;
+    ctx.fillStyle = meets ? '#4caf50' : '#e53935';
+    ctx.strokeStyle = i === selectedIdx ? '#1976d2' : '#333';
+    ctx.lineWidth = i === selectedIdx ? 3 : 1;
+    ctx.beginPath();
+    ctx.arc(cx, cy, i === selectedIdx ? 9 : 6, 0, 2 * Math.PI);
+    ctx.fill(); ctx.stroke();
+
+    // small index label
+    ctx.fillStyle = '#222'; ctx.font = '10px sans-serif'; ctx.textAlign = 'center';
+    ctx.fillText((i + 1).toString(), cx, cy - 10);
+  });
+
+  document.getElementById('compliantCount').textContent = compliant + ' / ' + points.length;
+}
+
+cvs.addEventListener('click', (e) => {
+  const rect = cvs.getBoundingClientRect();
+  const mx = e.clientX - rect.left;
+  const my = e.clientY - rect.top;
+  const W = cvs.width, H = cvs.height;
+  const pw = W - pad.l - pad.r, ph = H - pad.t - pad.b;
+  const xMax = 1600, yMax = 70;
+
+  let best = -1, bestD = 1e9;
+  points.forEach((p, i) => {
+    const cx = pad.l + Math.min(p.ttft / xMax, 1) * pw;
+    const cy = pad.t + ph - Math.min(p.tpot / yMax, 1) * ph;
+    const d = (mx - cx) ** 2 + (my - cy) ** 2;
+    if (d < bestD) { bestD = d; best = i; }
+  });
+  if (bestD < 20 * 20) {
+    selectedIdx = best;
+    const p = points[best];
+    const meets = p.ttft <= ttftSlo() && p.tpot <= tpotSlo();
+    document.getElementById('tip').innerHTML =
+      `<strong>${best + 1}. ${p.name}</strong><br>${p.desc}`;
+    document.getElementById('stats').innerHTML =
+      `<div class="stat-row"><span>TTFT</span><span class="value">${p.ttft} ms</span></div>` +
+      `<div class="stat-row"><span>TPOT</span><span class="value">${p.tpot} ms/tok</span></div>` +
+      `<div class="stat-row"><span>SLO</span><span class="value" style="color:${meets ? '#4caf50' : '#e53935'}">${meets ? 'meets' : 'violates'}</span></div>`;
+    render();
+  }
+});
+
+document.getElementById('ttftSlo').addEventListener('input', render);
+document.getElementById('tpotSlo').addEventListener('input', render);
+
+render();
+</script>
+
+</body>
+</html>

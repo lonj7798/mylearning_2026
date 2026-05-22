@@ -1,0 +1,224 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Sampling Distribution — Temperature, Top-k, Top-p</title>
+<style>
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+         max-width: 960px; margin: 2em auto; padding: 0 1em; color: #222; }
+  h1 { font-size: 1.4em; margin-bottom: 0.2em; }
+  .subtitle { color: #666; margin-top: 0; }
+  .panel { border: 1px solid #ddd; border-radius: 6px; padding: 1em; margin: 1em 0;
+           background: #fafafa; }
+  .controls { display: flex; gap: 1.2em; flex-wrap: wrap; align-items: center; }
+  .control { display: flex; flex-direction: column; min-width: 160px; }
+  label { font-size: 0.85em; color: #555; margin-bottom: 0.2em; }
+  input[type="range"] { width: 180px; }
+  canvas { background: white; border: 1px solid #ccc; display: block; margin: 1em auto; }
+  .value { font-variant-numeric: tabular-nums; color: #333; font-weight: 600; }
+  .note { font-size: 0.88em; color: #555; line-height: 1.5; }
+  code { background: #eef; padding: 1px 4px; border-radius: 3px; font-size: 0.9em; }
+  .toggles { display: flex; gap: 1em; align-items: center; margin-bottom: 0.4em; }
+  .toggles label { font-size: 0.95em; color: #222; }
+  .metrics { display: flex; gap: 2em; justify-content: center; margin-top: 0.5em; }
+  .metric { font-size: 0.95em; }
+  .footer { font-size: 0.85em; color: #888; margin-top: 2em; text-align: center; }
+  a { color: #1976d2; text-decoration: none; }
+</style>
+</head>
+<body>
+
+<h1>Sampling Distribution — Temperature, Top-k, Top-p</h1>
+<p class="subtitle">
+  Reshape a raw logit distribution over 30 tokens with the four standard decoding knobs.
+  Bars show the resulting probability mass; gray bars are tokens filtered out.
+</p>
+
+<div class="panel">
+  <div class="toggles">
+    <label><input type="radio" name="mode" value="raw" checked> raw softmax</label>
+    <label><input type="radio" name="mode" value="greedy"> greedy (argmax)</label>
+    <label><input type="radio" name="mode" value="topk"> top-k</label>
+    <label><input type="radio" name="mode" value="topp"> top-p (nucleus)</label>
+  </div>
+  <div class="controls">
+    <div class="control">
+      <label>peakedness (logit scale)</label>
+      <input type="range" id="peak" min="0.3" max="4.0" step="0.1" value="1.5">
+      <span class="value"><span id="peakLabel">1.5</span></span>
+    </div>
+    <div class="control">
+      <label>temperature T</label>
+      <input type="range" id="temp" min="0.1" max="2.0" step="0.05" value="1.0">
+      <span class="value"><span id="tempLabel">1.00</span></span>
+    </div>
+    <div class="control">
+      <label>top-k</label>
+      <input type="range" id="topk" min="1" max="30" step="1" value="10">
+      <span class="value"><span id="topkLabel">10</span></span>
+    </div>
+    <div class="control">
+      <label>top-p</label>
+      <input type="range" id="topp" min="0.1" max="1.0" step="0.05" value="0.9">
+      <span class="value"><span id="toppLabel">0.90</span></span>
+    </div>
+    <div class="control">
+      <label>random seed</label>
+      <button id="reseed" style="padding:4px 10px;">resample logits</button>
+    </div>
+  </div>
+</div>
+
+<canvas id="plot" width="900" height="320"></canvas>
+
+<div class="metrics">
+  <div class="metric">entropy H = <span class="value" id="entropy">—</span> nats</div>
+  <div class="metric">effective vocab (e^H) = <span class="value" id="effvocab">—</span></div>
+  <div class="metric">kept tokens = <span class="value" id="kept">—</span> / 30</div>
+</div>
+
+<div class="panel note">
+  <strong>Caption.</strong> Temperature, top-k, and top-p reshape the logit distribution.
+  Lower temperature → more peaked → less diverse. Top-p truncates the long tail without
+  fixed-k pathology: when the distribution is already peaked, top-p keeps just 1-2 tokens;
+  when it's flat, top-p keeps many. Top-k always keeps exactly k regardless of context.
+</div>
+
+<div class="footer"><a href="../read.md">← back to chapter</a></div>
+
+<script>
+const N = 30;
+let baseLogits = [];
+
+function reseed() {
+  baseLogits = [];
+  for (let i = 0; i < N; i++) baseLogits.push(Math.random() * 2 - 1);
+}
+reseed();
+
+function softmax(logits) {
+  const m = Math.max(...logits);
+  const ex = logits.map(l => Math.exp(l - m));
+  const s = ex.reduce((a, b) => a + b, 0);
+  return ex.map(v => v / s);
+}
+
+function render() {
+  const peak = +document.getElementById('peak').value;
+  const temp = +document.getElementById('temp').value;
+  const topk = +document.getElementById('topk').value;
+  const topp = +document.getElementById('topp').value;
+  const mode = document.querySelector('input[name=mode]:checked').value;
+
+  document.getElementById('peakLabel').textContent = peak.toFixed(1);
+  document.getElementById('tempLabel').textContent = temp.toFixed(2);
+  document.getElementById('topkLabel').textContent = topk;
+  document.getElementById('toppLabel').textContent = topp.toFixed(2);
+
+  // construct logits: sorted descending so user sees a clean shape
+  // shape = base * peak, then noise
+  const idx = baseLogits.map((_, i) => i);
+  const sorted = [...baseLogits].sort((a, b) => b - a);
+  let logits = sorted.map((v, i) => peak * (1 - i / (N - 1)) * 3 + v * 0.4);
+
+  // apply temperature
+  const scaled = logits.map(l => l / Math.max(0.01, temp));
+  let probs = softmax(scaled);
+
+  // apply filter
+  let kept = new Array(N).fill(true);
+  if (mode === 'greedy') {
+    let best = 0;
+    for (let i = 1; i < N; i++) if (probs[i] > probs[best]) best = i;
+    kept = kept.map((_, i) => i === best);
+  } else if (mode === 'topk') {
+    const order = probs.map((p, i) => [p, i]).sort((a, b) => b[0] - a[0]);
+    const allowed = new Set(order.slice(0, topk).map(x => x[1]));
+    kept = kept.map((_, i) => allowed.has(i));
+  } else if (mode === 'topp') {
+    const order = probs.map((p, i) => [p, i]).sort((a, b) => b[0] - a[0]);
+    const allowed = new Set();
+    let cum = 0;
+    for (const [p, i] of order) {
+      allowed.add(i);
+      cum += p;
+      if (cum >= topp) break;
+    }
+    kept = kept.map((_, i) => allowed.has(i));
+  }
+
+  // renormalize over kept
+  let masked = probs.map((p, i) => kept[i] ? p : 0);
+  const z = masked.reduce((a, b) => a + b, 0) || 1;
+  const finalProbs = masked.map(p => p / z);
+
+  // entropy over final distribution
+  let H = 0;
+  for (const p of finalProbs) if (p > 0) H -= p * Math.log(p);
+  const keptCount = kept.filter(Boolean).length;
+  document.getElementById('entropy').textContent = H.toFixed(3);
+  document.getElementById('effvocab').textContent = Math.exp(H).toFixed(2);
+  document.getElementById('kept').textContent = keptCount;
+
+  // draw
+  const cvs = document.getElementById('plot');
+  const ctx = cvs.getContext('2d');
+  ctx.clearRect(0, 0, cvs.width, cvs.height);
+  const pad = { l: 50, r: 20, t: 20, b: 50 };
+  const W = cvs.width - pad.l - pad.r;
+  const H_ = cvs.height - pad.t - pad.b;
+  const bw = W / N;
+  const yMax = Math.max(...finalProbs, 0.05) * 1.1;
+
+  // grid
+  ctx.strokeStyle = '#eee';
+  for (let i = 0; i <= 5; i++) {
+    const y = pad.t + (H_ * i) / 5;
+    ctx.beginPath(); ctx.moveTo(pad.l, y); ctx.lineTo(pad.l + W, y); ctx.stroke();
+  }
+  // y axis ticks
+  ctx.fillStyle = '#555'; ctx.font = '11px sans-serif'; ctx.textAlign = 'right';
+  for (let i = 0; i <= 5; i++) {
+    const v = yMax * (1 - i / 5);
+    ctx.fillText(v.toFixed(2), pad.l - 6, pad.t + (H_ * i) / 5 + 4);
+  }
+
+  // bars
+  for (let i = 0; i < N; i++) {
+    const p = finalProbs[i];
+    const rawP = probs[i];
+    const x = pad.l + i * bw;
+    const h = (p / yMax) * H_;
+    if (!kept[i]) {
+      // show the (would-be) raw bar as a faint gray ghost
+      const gh = (rawP / yMax) * H_;
+      ctx.fillStyle = '#ddd';
+      ctx.fillRect(x + 1, pad.t + H_ - gh, bw - 2, gh);
+    } else {
+      ctx.fillStyle = (mode === 'greedy') ? '#d32f2f' : '#1976d2';
+      ctx.fillRect(x + 1, pad.t + H_ - h, bw - 2, h);
+    }
+  }
+
+  // x-axis label
+  ctx.fillStyle = '#555'; ctx.textAlign = 'center';
+  ctx.fillText('token rank (sorted by raw probability, 1 = most likely)',
+               pad.l + W / 2, pad.t + H_ + 32);
+  ctx.save();
+  ctx.translate(14, pad.t + H_ / 2);
+  ctx.rotate(-Math.PI / 2);
+  ctx.fillText('probability', 0, 0);
+  ctx.restore();
+}
+
+['peak', 'temp', 'topk', 'topp'].forEach(id =>
+  document.getElementById(id).addEventListener('input', render));
+document.querySelectorAll('input[name=mode]').forEach(el =>
+  el.addEventListener('change', render));
+document.getElementById('reseed').addEventListener('click', () => { reseed(); render(); });
+
+render();
+</script>
+
+</body>
+</html>

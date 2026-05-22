@@ -1,0 +1,270 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Serving Method Reproduction Memo &mdash; Capstone Template</title>
+<style>
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+         max-width: 1100px; margin: 2em auto; padding: 0 1em; color: #222; }
+  h1 { font-size: 1.4em; margin-bottom: 0.2em; }
+  .subtitle { color: #666; margin-top: 0; }
+  .panel { border: 1px solid #ddd; border-radius: 6px; padding: 1em; margin: 1em 0;
+           background: #fafafa; }
+  label { display: block; font-size: 0.9em; color: #444; font-weight: 600;
+          margin-bottom: 0.3em; }
+  input[type="text"], select { width: 100%; padding: 6px 8px; border: 1px solid #ccc;
+                                border-radius: 4px; font-size: 0.95em; box-sizing: border-box; }
+  .meta-grid { display: grid; grid-template-columns: 1fr 2fr; gap: 1em; }
+  table { border-collapse: collapse; width: 100%; font-size: 0.88em; margin: 1em 0;
+          font-variant-numeric: tabular-nums; }
+  th, td { border: 1px solid #ddd; padding: 6px 8px; text-align: right; }
+  th:first-child, td:first-child { text-align: left; font-weight: 600; }
+  th { background: #f0f0f0; }
+  td.metric-name { background: #fafafa; }
+  input.cell { width: 100%; padding: 4px 6px; border: 1px solid #ccc; border-radius: 3px;
+                font-variant-numeric: tabular-nums; text-align: right; box-sizing: border-box; }
+  td.gap-cell { background: #f5f5f5; color: #333; font-weight: 600; }
+  td.pass { background: #d4edda; color: #155724; font-weight: 600; text-align: center; }
+  td.fail { background: #f8d7da; color: #721c24; font-weight: 600; text-align: center; }
+  td.unknown { color: #999; text-align: center; }
+  textarea { width: 100%; min-height: 70px; padding: 6px 8px; border: 1px solid #ccc;
+              border-radius: 4px; font-family: inherit; font-size: 0.95em;
+              box-sizing: border-box; resize: vertical; }
+  .gap-form { display: grid; grid-template-columns: 1fr; gap: 0.8em; }
+  .controls { display: flex; gap: 0.5em; flex-wrap: wrap; margin: 1em 0; }
+  button { padding: 6px 12px; border: 1px solid #1976d2; background: white;
+           color: #1976d2; border-radius: 4px; cursor: pointer; font-size: 0.9em; }
+  button:hover { background: #1976d2; color: white; }
+  .caption { font-size: 0.88em; color: #555; line-height: 1.5; margin-top: 1.5em;
+             border-left: 3px solid #1976d2; padding-left: 1em; background: #f8fafd; }
+  footer { margin-top: 2em; font-size: 0.85em; color: #888; }
+  footer a { color: #1976d2; text-decoration: none; }
+  #preview { background: white; border: 1px solid #ddd; border-radius: 4px;
+              padding: 1em; font-family: ui-monospace, Menlo, monospace; font-size: 0.85em;
+              white-space: pre-wrap; max-height: 300px; overflow: auto; display: none; }
+</style>
+</head>
+<body>
+
+<h1>Serving Method Reproduction Memo &mdash; Capstone Template</h1>
+<p class="subtitle">
+  Document one serving-method reproduction. The table updates absolute and % gap as you
+  type. Use the gap-analysis form to record causes &mdash; export the result as Markdown.
+</p>
+
+<div class="panel meta-grid">
+  <div>
+    <label for="method">Method</label>
+    <select id="method">
+      <option>PagedAttention</option>
+      <option>RadixAttention</option>
+      <option>Speculative Decoding</option>
+      <option>EAGLE</option>
+      <option>DistServe</option>
+    </select>
+  </div>
+  <div>
+    <label for="paper">Paper title + arXiv ID</label>
+    <input type="text" id="paper" placeholder="e.g. Efficient Memory Management for Large Language Model Serving with PagedAttention (arXiv:2309.06180)">
+  </div>
+</div>
+
+<table id="metricTable">
+  <thead>
+    <tr>
+      <th>Reported metric</th>
+      <th>Paper reported</th>
+      <th>Your reproduced</th>
+      <th>Absolute gap</th>
+      <th>% gap</th>
+      <th>Within 10%?</th>
+    </tr>
+  </thead>
+  <tbody id="metricBody"></tbody>
+</table>
+
+<div class="panel">
+  <strong>Gap analysis</strong>
+  <div class="gap-form" style="margin-top:0.6em">
+    <div>
+      <label for="ga1">What hyperparameter differed from the paper?</label>
+      <textarea id="ga1" placeholder="e.g. paper used max_num_batched_tokens=2048, you used 1024 due to HBM limits..."></textarea>
+    </div>
+    <div>
+      <label for="ga2">What infrastructure differences (GPU, framework version, dataset) might explain the gap?</label>
+      <textarea id="ga2" placeholder="e.g. paper used 4xA100-40GB SXM4, you ran 4xA100-40GB PCIe; NVLink vs PCIe interconnect costs ~15% on TP throughput..."></textarea>
+    </div>
+    <div>
+      <label for="ga3">Did you find a bug? In your code or the paper's claim?</label>
+      <textarea id="ga3" placeholder="e.g. paper figure 6 shows 24x throughput over HF Transformers, but the HF baseline used naive padding without continuous batching. Apples-to-apples gap is ~3x..."></textarea>
+    </div>
+    <div>
+      <label for="ga4">What does the gap reveal about the method's robustness vs the paper's claim?</label>
+      <textarea id="ga4" placeholder="e.g. PagedAttention's memory-efficiency claim is robust (you matched within 5%); the throughput claim depends heavily on workload mix..."></textarea>
+    </div>
+  </div>
+</div>
+
+<div class="panel">
+  <label for="lessons">Lessons learned</label>
+  <textarea id="lessons" style="min-height:110px" placeholder="What you'd tell the next person attempting this reproduction. What surprised you. What the paper undersold or oversold..."></textarea>
+</div>
+
+<div class="controls">
+  <button onclick="exportMarkdown()">Export as Markdown</button>
+  <button onclick="togglePreview()">Toggle preview</button>
+  <button onclick="loadExample()">Load example (PagedAttention)</button>
+  <button onclick="clearAll()">Clear all</button>
+</div>
+
+<div id="preview"></div>
+
+<div class="caption">
+  The capstone deliverable is this memo. A well-documented 15% gap with diagnosis is worth
+  more than an unexplained perfect match. The point is to learn what makes the method tick.
+</div>
+
+<footer>
+  <a href="../read.md">&larr; back to chapter</a>
+</footer>
+
+<script>
+const metrics = [
+  { key: 'memutil', name: 'Memory utilization (%)', unit: '%' },
+  { key: 'tput',    name: 'Throughput (tok/s or req/s)', unit: '' },
+  { key: 'ttft',    name: 'TTFT (ms)', unit: 'ms' },
+  { key: 'tpot',    name: 'TPOT (ms)', unit: 'ms' },
+  { key: 'goodput', name: 'Goodput @ SLO (req/s)', unit: 'req/s' },
+  { key: 'accept',  name: 'Acceptance rate (spec/EAGLE only) (%)', unit: '%' },
+];
+
+const cells = {}; // cells[key] = { paper, repro }
+metrics.forEach(m => { cells[m.key] = { paper: null, repro: null }; });
+
+function buildTable() {
+  const body = document.getElementById('metricBody');
+  body.innerHTML = '';
+  metrics.forEach(m => {
+    const tr = document.createElement('tr');
+    tr.innerHTML = '<td class="metric-name">' + m.name + '</td>';
+    ['paper', 'repro'].forEach(which => {
+      const td = document.createElement('td');
+      const inp = document.createElement('input');
+      inp.className = 'cell'; inp.type = 'number'; inp.step = 'any';
+      inp.oninput = () => {
+        const v = inp.value === '' ? null : parseFloat(inp.value);
+        cells[m.key][which] = isNaN(v) ? null : v;
+        updateGapRow(m);
+      };
+      inp.dataset.key = m.key; inp.dataset.which = which;
+      td.appendChild(inp);
+      tr.appendChild(td);
+    });
+    // gap cells
+    ['abs', 'pct', 'pass'].forEach(kind => {
+      const td = document.createElement('td');
+      td.id = 'gap-' + m.key + '-' + kind;
+      td.className = kind === 'pass' ? 'unknown' : 'gap-cell';
+      td.textContent = '—';
+      tr.appendChild(td);
+    });
+    body.appendChild(tr);
+  });
+}
+
+function updateGapRow(m) {
+  const c = cells[m.key];
+  const absT = document.getElementById('gap-' + m.key + '-abs');
+  const pctT = document.getElementById('gap-' + m.key + '-pct');
+  const passT = document.getElementById('gap-' + m.key + '-pass');
+  if (c.paper == null || c.repro == null) {
+    absT.textContent = '—'; pctT.textContent = '—';
+    passT.textContent = '—'; passT.className = 'unknown';
+    return;
+  }
+  const abs = c.repro - c.paper;
+  const pct = c.paper === 0 ? null : (abs / c.paper) * 100;
+  absT.textContent = (abs >= 0 ? '+' : '') + abs.toFixed(2) + (m.unit ? ' ' + m.unit : '');
+  pctT.textContent = pct == null ? 'n/a' : (pct >= 0 ? '+' : '') + pct.toFixed(1) + '%';
+  if (pct == null) { passT.textContent = '—'; passT.className = 'unknown'; return; }
+  if (Math.abs(pct) <= 10) { passT.textContent = '✓'; passT.className = 'pass'; }
+  else { passT.textContent = '✗'; passT.className = 'fail'; }
+}
+
+function setCell(key, which, v) {
+  cells[key][which] = v;
+  const inp = document.querySelector('input.cell[data-key="' + key + '"][data-which="' + which + '"]');
+  if (inp) inp.value = v == null ? '' : v;
+  const m = metrics.find(x => x.key === key);
+  if (m) updateGapRow(m);
+}
+
+function clearAll() {
+  metrics.forEach(m => { setCell(m.key, 'paper', null); setCell(m.key, 'repro', null); });
+  document.getElementById('paper').value = '';
+  ['ga1','ga2','ga3','ga4','lessons'].forEach(id => document.getElementById(id).value = '');
+}
+
+function loadExample() {
+  document.getElementById('method').value = 'PagedAttention';
+  document.getElementById('paper').value = 'Efficient Memory Management for Large Language Model Serving with PagedAttention (arXiv:2309.06180)';
+  setCell('memutil', 'paper', 96);    setCell('memutil', 'repro', 92);
+  setCell('tput',    'paper', 1900);  setCell('tput',    'repro', 1620);
+  setCell('ttft',    'paper', 180);   setCell('ttft',    'repro', 215);
+  setCell('tpot',    'paper', 28);    setCell('tpot',    'repro', 31);
+  setCell('goodput', 'paper', 18);    setCell('goodput', 'repro', 15.2);
+  setCell('accept',  'paper', null);  setCell('accept',  'repro', null);
+  document.getElementById('ga1').value = 'Paper used max_num_batched_tokens=4096; I used 2048 due to A100 40GB vs paper\'s 80GB.';
+  document.getElementById('ga2').value = '4xA100-40GB PCIe vs paper\'s 4xA100-80GB SXM4. PCIe NVLink absence costs ~10-15% on TP=4. ShareGPT v3 vs paper\'s v2.';
+  document.getElementById('ga3').value = 'No bug. Gap is workload + hardware. Memory utilization claim is solid (within 5%).';
+  document.getElementById('ga4').value = 'The memory-efficiency claim is the load-bearing one and it reproduces tightly. Absolute throughput is workload-sensitive; the relative speedup over naive batching is what generalizes.';
+  document.getElementById('lessons').value = 'Always check what the paper\'s baseline is. The "24x speedup over HF" headline compared against naive padding; against a continuous-batching baseline the speedup is ~2-3x but still real and important.';
+}
+
+function exportMarkdown() {
+  const method = document.getElementById('method').value;
+  const paper = document.getElementById('paper').value || '(paper not specified)';
+  let md = '# Serving Reproduction Memo: ' + method + '\n\n';
+  md += '**Paper**: ' + paper + '\n\n';
+  md += '## Metric comparison\n\n';
+  md += '| Metric | Paper | Reproduced | Abs gap | % gap | Within 10% |\n';
+  md += '|---|---:|---:|---:|---:|:-:|\n';
+  metrics.forEach(m => {
+    const c = cells[m.key];
+    if (c.paper == null && c.repro == null) return;
+    const abs = (c.paper != null && c.repro != null) ? (c.repro - c.paper).toFixed(2) : '—';
+    const pct = (c.paper != null && c.repro != null && c.paper !== 0)
+      ? (((c.repro - c.paper) / c.paper) * 100).toFixed(1) + '%' : '—';
+    const pass = (c.paper != null && c.repro != null && c.paper !== 0)
+      ? (Math.abs((c.repro - c.paper) / c.paper) <= 0.1 ? 'PASS' : 'FAIL') : '—';
+    md += '| ' + m.name + ' | ' + (c.paper ?? '—') + ' | ' + (c.repro ?? '—') +
+          ' | ' + abs + ' | ' + pct + ' | ' + pass + ' |\n';
+  });
+  md += '\n## Gap analysis\n\n';
+  md += '### Hyperparameter differences\n' + (document.getElementById('ga1').value || '_(none recorded)_') + '\n\n';
+  md += '### Infrastructure differences\n' + (document.getElementById('ga2').value || '_(none recorded)_') + '\n\n';
+  md += '### Bugs found\n' + (document.getElementById('ga3').value || '_(none recorded)_') + '\n\n';
+  md += '### What the gap reveals about robustness\n' + (document.getElementById('ga4').value || '_(none recorded)_') + '\n\n';
+  md += '## Lessons learned\n\n' + (document.getElementById('lessons').value || '_(none recorded)_') + '\n';
+
+  const blob = new Blob([md], { type: 'text/markdown' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = 'reproduction-memo-' + method.toLowerCase().replace(/\s+/g, '-') + '.md';
+  a.click();
+
+  // also show in preview pane
+  const pv = document.getElementById('preview');
+  pv.textContent = md; pv.style.display = 'block';
+}
+
+function togglePreview() {
+  const pv = document.getElementById('preview');
+  pv.style.display = pv.style.display === 'none' ? 'block' : 'none';
+}
+
+buildTable();
+</script>
+
+</body>
+</html>

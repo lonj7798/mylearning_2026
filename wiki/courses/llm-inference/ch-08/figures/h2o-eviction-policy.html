@@ -1,0 +1,302 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>H2O vs Attention Sinks vs Random — KV Eviction Policies</title>
+<style>
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+         max-width: 1100px; margin: 2em auto; padding: 0 1em; color: #222; }
+  h1 { font-size: 1.4em; margin-bottom: 0.2em; }
+  .subtitle { color: #666; margin-top: 0; }
+  .panel { border: 1px solid #ddd; border-radius: 6px; padding: 1em; margin: 1em 0;
+           background: #fafafa; }
+  .controls { display: flex; gap: 1em; flex-wrap: wrap; align-items: center; }
+  .control { display: flex; flex-direction: column; }
+  label { font-size: 0.85em; color: #555; margin-bottom: 0.2em; }
+  input[type="range"] { width: 220px; }
+  .row { display: grid; grid-template-columns: 1fr 1fr 1fr 1fr; gap: 0.6em; }
+  .pcol { background: #fff; border: 1px solid #ddd; border-radius: 4px; padding: 0.5em; }
+  .pcol h3 { margin: 0 0 0.3em 0; font-size: 0.92em; text-align: center; }
+  canvas { display: block; margin: 0 auto; background: white; }
+  .metric { font-size: 0.82em; color: #444; text-align: center; margin-top: 0.3em; }
+  .metric .v { font-variant-numeric: tabular-nums; font-weight: 700; color: #1976d2; }
+  .legend { display: flex; gap: 1em; font-size: 0.82em; justify-content: center;
+            flex-wrap: wrap; margin-top: 0.4em; }
+  .swatch { display: inline-block; width: 12px; height: 12px; margin-right: 4px;
+            vertical-align: middle; border-radius: 2px; border: 1px solid #999; }
+  .value { font-variant-numeric: tabular-nums; font-weight: 600; }
+  .note { font-size: 0.88em; color: #555; line-height: 1.5; }
+  code { background: #eef; padding: 1px 4px; border-radius: 3px; font-size: 0.9em; }
+  a { color: #1976d2; }
+</style>
+</head>
+<body>
+
+<h1>H2O vs Attention Sinks vs Random — KV Eviction Policies</h1>
+<p class="subtitle">
+  Same 32×32 attention map under three eviction policies. Drop the budget and watch which policy
+  keeps the output closest to full attention.
+</p>
+
+<div class="panel">
+  <div class="controls">
+    <div class="control">
+      <label>KV budget (tokens kept)</label>
+      <input type="range" id="budget" min="4" max="32" step="1" value="12">
+      <span class="value"><span id="budgetLabel">12</span> / 32</span>
+    </div>
+    <div class="control">
+      <label>Seed (resample attention map)</label>
+      <input type="range" id="seed" min="1" max="20" step="1" value="3">
+      <span class="value" id="seedLabel">3</span>
+    </div>
+  </div>
+</div>
+
+<div class="panel">
+  <div class="row">
+    <div class="pcol">
+      <h3>Full attention (ground truth)</h3>
+      <canvas id="cFull" width="220" height="220"></canvas>
+      <div class="metric">cosine sim: <span class="v">1.000</span></div>
+    </div>
+    <div class="pcol">
+      <h3>H2O — keep heavy hitters</h3>
+      <canvas id="cH2O" width="220" height="220"></canvas>
+      <div class="metric">cosine sim to full: <span class="v" id="mH2O">—</span></div>
+    </div>
+    <div class="pcol">
+      <h3>Attention Sinks (StreamingLLM)</h3>
+      <canvas id="cSink" width="220" height="220"></canvas>
+      <div class="metric">cosine sim to full: <span class="v" id="mSink">—</span></div>
+    </div>
+    <div class="pcol">
+      <h3>Random eviction (baseline)</h3>
+      <canvas id="cRand" width="220" height="220"></canvas>
+      <div class="metric">cosine sim to full: <span class="v" id="mRand">—</span></div>
+    </div>
+  </div>
+  <div class="legend">
+    <span><span class="swatch" style="background:#0d47a1"></span>high attention weight</span>
+    <span><span class="swatch" style="background:#bbdefb"></span>low weight</span>
+    <span><span class="swatch" style="background:#eee"></span>evicted (zeroed)</span>
+  </div>
+</div>
+
+<div class="panel note">
+  <strong>What you should notice.</strong>
+  At a 12-token budget (out of 32), <strong>H2O</strong> keeps the tokens with the largest cumulative
+  attention mass — the "heavy hitters" — and tracks the diagonal + spike columns that actually
+  carry the signal. <strong>Attention Sinks</strong> blindly keeps the first 4 tokens (the soft anchors that
+  models trust by training accident) and the last 8 tokens (recency). For long-context Q&A this loses
+  middle-of-context evidence; for chat continuation, sinks usually win because the model just needs to
+  keep generating coherently. <strong>Random eviction</strong> is the floor — it tells you what your
+  workload would look like if you cared nothing about which tokens matter. Drag the budget slider:
+  watch H2O degrade gracefully while Random collapses fast.
+</div>
+
+<p class="note"><a href="../read.md">← back to chapter</a></p>
+
+<script>
+const N = 32;
+const CELL = 6;
+const MARGIN = 12;
+
+// Seedable RNG (mulberry32)
+function rngFrom(seed) {
+  let s = seed >>> 0;
+  return function() {
+    s |= 0; s = (s + 0x6D2B79F5) | 0;
+    let t = Math.imul(s ^ (s >>> 15), 1 | s);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+// Build a 32x32 lower-triangular attention map with heavy diagonal + a few spike columns.
+function buildAttention(seed) {
+  const rand = rngFrom(seed);
+  const A = Array.from({length: N}, () => new Array(N).fill(0));
+  // Pick 3 "heavy hitter" columns for this map
+  const spikes = [];
+  while (spikes.length < 3) {
+    const c = Math.floor(rand() * N);
+    if (!spikes.includes(c)) spikes.push(c);
+  }
+  for (let i = 0; i < N; i++) {
+    for (let j = 0; j <= i; j++) {
+      let v = 0.02 + rand() * 0.05;             // small noise floor
+      if (j === i) v += 0.4 + rand() * 0.3;     // strong diagonal
+      if (i - j <= 2) v += 0.15;                // recency bias
+      if (spikes.includes(j)) v += 0.35 + rand() * 0.25;  // spike columns
+      A[i][j] = v;
+    }
+    // softmax-row normalize
+    let s = 0;
+    for (let j = 0; j <= i; j++) s += A[i][j];
+    if (s > 0) for (let j = 0; j <= i; j++) A[i][j] /= s;
+  }
+  return { A, spikes };
+}
+
+function attentionOutput(A, kept) {
+  // Pseudo "output" = for each query row, sum of (kept attention weights × value-vector).
+  // We use a synthetic value vector = column index normalized, so the output is a scalar per row.
+  // This is enough to compute cosine similarity meaningfully.
+  const out = new Array(N).fill(0);
+  for (let i = 0; i < N; i++) {
+    let s = 0;
+    for (let j = 0; j <= i; j++) {
+      if (kept[i].has(j)) s += A[i][j] * ((j + 1) / N);
+    }
+    out[i] = s;
+  }
+  return out;
+}
+
+function cosine(a, b) {
+  let dot = 0, na = 0, nb = 0;
+  for (let i = 0; i < a.length; i++) {
+    dot += a[i] * b[i]; na += a[i] * a[i]; nb += b[i] * b[i];
+  }
+  if (na === 0 || nb === 0) return 0;
+  return dot / (Math.sqrt(na) * Math.sqrt(nb));
+}
+
+// === eviction policies ===
+
+function policyFull() {
+  const kept = [];
+  for (let i = 0; i < N; i++) {
+    const s = new Set();
+    for (let j = 0; j <= i; j++) s.add(j);
+    kept.push(s);
+  }
+  return kept;
+}
+
+function policyH2O(A, budget) {
+  const kept = [];
+  // running "score" per token = cumulative attention mass it has received so far
+  const score = new Array(N).fill(0);
+  for (let i = 0; i < N; i++) {
+    // include token i (current query) — it always gets a slot if budget > 0
+    for (let j = 0; j <= i; j++) score[j] += A[i][j];
+    // pick top-budget tokens among {0..i}
+    const idxs = [];
+    for (let j = 0; j <= i; j++) idxs.push(j);
+    idxs.sort((a, b) => score[b] - score[a]);
+    const top = idxs.slice(0, Math.min(budget, idxs.length));
+    kept.push(new Set(top));
+  }
+  return kept;
+}
+
+function policySink(A, budget) {
+  // Always keep first 4 (sinks) + the most recent (budget - 4) tokens.
+  const SINKS = Math.min(4, budget);
+  const kept = [];
+  for (let i = 0; i < N; i++) {
+    const s = new Set();
+    for (let j = 0; j < SINKS && j <= i; j++) s.add(j);
+    const recencyN = Math.max(0, budget - SINKS);
+    const start = Math.max(SINKS, i - recencyN + 1);
+    for (let j = start; j <= i; j++) s.add(j);
+    kept.push(s);
+  }
+  return kept;
+}
+
+function policyRandom(A, budget, seed) {
+  const rand = rngFrom(seed * 7919);
+  const kept = [];
+  for (let i = 0; i < N; i++) {
+    const idxs = [];
+    for (let j = 0; j <= i; j++) idxs.push(j);
+    // shuffle
+    for (let k = idxs.length - 1; k > 0; k--) {
+      const r = Math.floor(rand() * (k + 1));
+      [idxs[k], idxs[r]] = [idxs[r], idxs[k]];
+    }
+    kept.push(new Set(idxs.slice(0, Math.min(budget, idxs.length))));
+  }
+  return kept;
+}
+
+// === drawing ===
+
+function drawMap(canvas, A, kept) {
+  const ctx = canvas.getContext('2d');
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  // background light gray for "evicted" zone
+  ctx.fillStyle = '#fafafa';
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+  for (let i = 0; i < N; i++) {
+    for (let j = 0; j < N; j++) {
+      const x = MARGIN + j * CELL;
+      const y = MARGIN + i * CELL;
+      if (j > i) {
+        // upper triangle — masked, draw faint
+        ctx.fillStyle = '#f3f3f3';
+        ctx.fillRect(x, y, CELL - 0.5, CELL - 0.5);
+        continue;
+      }
+      if (kept[i].has(j)) {
+        const v = Math.min(1, A[i][j] * 3);
+        const r = Math.round(187 - v * 174);
+        const g = Math.round(222 - v * 151);
+        const b = Math.round(251 - v * 90);
+        ctx.fillStyle = `rgb(${r},${g},${b})`;
+      } else {
+        ctx.fillStyle = '#eee';
+      }
+      ctx.fillRect(x, y, CELL - 0.5, CELL - 0.5);
+    }
+  }
+  // border
+  ctx.strokeStyle = '#888';
+  ctx.lineWidth = 1;
+  ctx.strokeRect(MARGIN - 0.5, MARGIN - 0.5, N * CELL + 1, N * CELL + 1);
+}
+
+let attentionData;
+
+function render() {
+  const budget = +document.getElementById('budget').value;
+  const seed = +document.getElementById('seed').value;
+  document.getElementById('budgetLabel').textContent = budget;
+  document.getElementById('seedLabel').textContent = seed;
+
+  attentionData = buildAttention(seed);
+  const A = attentionData.A;
+
+  const kFull = policyFull();
+  const kH2O  = policyH2O(A, budget);
+  const kSink = policySink(A, budget);
+  const kRand = policyRandom(A, budget, seed);
+
+  drawMap(document.getElementById('cFull'), A, kFull);
+  drawMap(document.getElementById('cH2O'),  A, kH2O);
+  drawMap(document.getElementById('cSink'), A, kSink);
+  drawMap(document.getElementById('cRand'), A, kRand);
+
+  const oFull = attentionOutput(A, kFull);
+  const oH2O  = attentionOutput(A, kH2O);
+  const oSink = attentionOutput(A, kSink);
+  const oRand = attentionOutput(A, kRand);
+
+  document.getElementById('mH2O').textContent  = cosine(oFull, oH2O).toFixed(3);
+  document.getElementById('mSink').textContent = cosine(oFull, oSink).toFixed(3);
+  document.getElementById('mRand').textContent = cosine(oFull, oRand).toFixed(3);
+}
+
+['budget', 'seed'].forEach(id => {
+  document.getElementById(id).addEventListener('input', render);
+});
+
+render();
+</script>
+
+</body>
+</html>

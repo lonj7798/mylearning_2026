@@ -1,0 +1,427 @@
+{
+  "kind": "draft",
+  "status": "pending-user-review",
+  "revision": 0,
+  "course_slug": "llm-inference",
+  "generated_at": "2026-05-21T23:30:00Z",
+  "source_library": "wiki/raw-data/llm-inference/",
+  "collection_plan": "wiki/raw-data/llm-inference/COLLECTION-PLAN.md",
+  "authoring_notes": {
+    "structure": "22 chapters across 9 phases. Systems-first with mathematical grounding per the README. First 3 chapters explain how an autoregressive transformer actually generates text + the KV cache memory formula + the prefill vs decode bottleneck asymmetry — these are the foundation every later chapter rests on. Frameworks (vLLM, SGLang, TensorRT-LLM) appear in phase 7 *after* the learner understands what PagedAttention / RadixAttention / continuous batching are solving.",
+    "systems_first_rule": "Per the raw-data README, the course is systems-first: chapters ch-01..ch-03 establish the generation loop + inference math + KV-cache formula. No framework-specific deep dive (vLLM/SGLang internals) before ch-16. Production reports come last (ch-20).",
+    "learner_must_haves": "Per the insights.md gap log, the learner explicitly flagged: vllm, sglang, pagedattention, sglang-radixattention, kv-cache-memory-formula, prefill-vs-decode, flashattention, flashattention-2, flashattention-3, flashdecoding, flashinfer. All are present and explicit chapter anchors.",
+    "per_chapter_format": "Each ch-XX/read.md (~200-280 lines) cites the actual loop pseudocode / KV-cache formula / scheduler policy / kernel layout from the raw-data source. ch-XX/excerpts/ contains 3-5 per-source extract files (~50-80 lines each) with verbatim equations + key code paths + key quotes. ch-XX/figures/ contains one self-contained HTML companion per chapter (inline CSS/JS, no CDN).",
+    "depth_target": "Foundation chapters (ch-01..ch-03) include explicit equations (attention complexity, KV-cache memory formula, prefill vs decode arithmetic intensity). Algorithm chapters include the verbatim algorithm + the exact policy/threshold/block size + at least one concrete TTFT/TPOT/throughput number from the source.",
+    "framework_chapter_policy": "Framework chapters (ch-16, ch-17, ch-18) are *code-level* deep dives: cite real file paths (vllm/v1/core/scheduler.py, sglang/srt/managers/scheduler.py, etc.) and lift actual config knobs / API signatures. They are NOT marketing summaries.",
+    "intended_format": "Self-study program for someone targeting LLM serving / inference research at a frontier lab or a serving startup. Phase 1-5 give the systems foundation; phase 6 covers the inference-time acceleration literature; phase 7 grounds everything in real production stacks; phase 8 establishes the measurement vocabulary; phase 9 is hands-on.",
+    "lab_paths": "Lab (ch-21) and capstone (ch-22) each offer two execution paths: full-budget (H100 + Llama-3-8B, vLLM vs SGLang head-to-head) and resource-constrained (single consumer GPU + Qwen-1.8B/Llama-3.2-3B, scaled-down benchmark). Memo deliverable is the same."
+  },
+  "tracks": [
+    {
+      "phase": "generation-foundations",
+      "title": "Autoregressive Generation Loop and Inference Math",
+      "chapters": "ch-01..ch-03",
+      "chapter_count": 3
+    },
+    {
+      "phase": "scheduling",
+      "title": "Batch Scheduling for Token-by-Token Decode",
+      "chapters": "ch-04..ch-05",
+      "chapter_count": 2
+    },
+    {
+      "phase": "kv-cache",
+      "title": "KV Cache Engineering",
+      "chapters": "ch-06..ch-08",
+      "chapter_count": 3
+    },
+    {
+      "phase": "serving-architecture",
+      "title": "Serving Architecture: Disaggregation, Admission, Goodput",
+      "chapters": "ch-09..ch-10",
+      "chapter_count": 2
+    },
+    {
+      "phase": "kernels-runtime",
+      "title": "Kernels and Runtime Optimizations",
+      "chapters": "ch-11..ch-13",
+      "chapter_count": 3
+    },
+    {
+      "phase": "decoding-acceleration",
+      "title": "Decoding-Time Acceleration (Speculative + Multi-Token)",
+      "chapters": "ch-14..ch-15",
+      "chapter_count": 2
+    },
+    {
+      "phase": "framework-internals",
+      "title": "Framework Internals: vLLM, SGLang, TensorRT-LLM, Production Stacks",
+      "chapters": "ch-16..ch-18",
+      "chapter_count": 3
+    },
+    {
+      "phase": "benchmarks-production",
+      "title": "Benchmarks, Metrics, and Production Reports",
+      "chapters": "ch-19..ch-20",
+      "chapter_count": 2
+    },
+    {
+      "phase": "lab-capstone",
+      "title": "Lab and Capstone",
+      "chapters": "ch-21..ch-22",
+      "chapter_count": 2
+    }
+  ],
+  "chapters": [
+    {
+      "id": "ch-01",
+      "title": "Autoregressive Generation Loop + Sampling",
+      "phase": "generation-foundations",
+      "deps": [],
+      "sources": ["attention-is-all-you-need", "language-models-are-unsupervised-multitask-learners", "neural-text-degeneration", "beam-search", "hf-generation-strategies", "openai-streaming-and-token-usage", "structured-generation-constrained-decoding"],
+      "concepts": [
+        "Autoregressive loop pseudocode: prompt → prefill → decode loop → stop condition; what 'one forward pass per token' actually means",
+        "Logits → probabilities → sampled token: greedy, beam, top-k, top-p (nucleus), min-p, temperature, frequency/presence penalties",
+        "Why beam search underperforms in chat (Holtzman 2019 neural-text-degeneration): degenerate repetition + low-probability surface forms",
+        "Streaming + token accounting: chunked SSE responses, finish_reason, prompt/completion token counting at the API boundary",
+        "Structured output / constrained decoding: JSON / regex / grammar finite-state masking applied to the logits"
+      ],
+      "kind": "content",
+      "figures_optional": ["sampling-distribution.html"]
+    },
+    {
+      "id": "ch-02",
+      "title": "Transformer Inference Math: Attention Cost + MHA/MQA/GQA + RoPE",
+      "phase": "generation-foundations",
+      "deps": ["ch-01"],
+      "sources": ["attention-is-all-you-need", "multi-query-attention", "grouped-query-attention", "rope", "alibi", "attention-complexity"],
+      "concepts": [
+        "Attention complexity: O(L²·d) for prefill, O(L·d) per decode step with KV cache; the asymmetry that drives everything downstream",
+        "MHA vs MQA vs GQA: bandwidth and KV-cache memory tradeoffs; why GQA (Llama 2/3, Qwen 3) is now the default",
+        "Positional encoding for inference: RoPE rotation matrix + the inference-time context-extension consequences (YaRN, NTK-aware scaling); ALiBi as the extrapolation baseline",
+        "Per-layer per-token compute breakdown: attention vs FFN cost; why FFN dominates at small batch and attention dominates at long context",
+        "Causal mask + KV reuse: why we don't recompute past K, V at each decode step"
+      ],
+      "kind": "content",
+      "figures_optional": ["mha-mqa-gqa-bandwidth.html"]
+    },
+    {
+      "id": "ch-03",
+      "title": "KV Cache Memory Formula + Prefill vs Decode Bottlenecks",
+      "phase": "generation-foundations",
+      "deps": ["ch-02"],
+      "sources": ["kv-cache-memory-formula", "prefill-vs-decode", "batching-for-inference"],
+      "concepts": [
+        "KV cache formula: bytes = 2 × layers × kv_heads × head_dim × tokens × dtype_bytes; per-request, per-batch, per-fleet implications",
+        "Prefill is compute-bound (full attention over L tokens); decode is memory-bandwidth-bound (one token, read all KV cache); the arithmetic intensity gap",
+        "Worked example: Llama-3-70B at 8k context → ~10 GB KV per request; what this means for batch size at 80 GB H100",
+        "Static vs dynamic vs continuous batching: the three baselines that all serving systems improve on",
+        "Why decode latency is roughly KV cache size / memory bandwidth — and what every later optimization is trying to relax in this formula"
+      ],
+      "kind": "content",
+      "figures_optional": ["kv-cache-calculator.html"]
+    },
+    {
+      "id": "ch-04",
+      "title": "Continuous Batching: Iteration-Level Scheduling",
+      "phase": "scheduling",
+      "deps": ["ch-03"],
+      "sources": ["orca", "continuous-batching", "vllm-scheduler"],
+      "concepts": [
+        "Static batching's problem: requests in the same batch must finish together; one long request stalls the whole batch",
+        "Orca's iteration-level scheduling + selective batching: schedule at the token-step granularity, not the request granularity",
+        "Continuous batching: at each decode step, swap in new requests and swap out finished ones; the throughput multiplier",
+        "What it gives you: 2-5× throughput at the same latency vs static batching",
+        "vLLM scheduler implementation: how WAITING / RUNNING / SWAPPED queues + priority + preemption interact"
+      ],
+      "kind": "content",
+      "figures_optional": ["continuous-batching-timeline.html"]
+    },
+    {
+      "id": "ch-05",
+      "title": "Chunked Prefill + Mixed-Batch Scheduling (Sarathi-Serve)",
+      "phase": "scheduling",
+      "deps": ["ch-04"],
+      "sources": ["sarathi-serve", "vllm-scheduler", "continuous-batching"],
+      "concepts": [
+        "Why pure continuous batching is not enough: prefill bursts (big compute) stall decode tokens (latency-sensitive)",
+        "Chunked prefill: split a long prefill into smaller chunks and interleave them with decode steps",
+        "Mixed-batch scheduling: a single forward pass contains both prefill chunks and decode tokens, balanced against the GPU's compute capacity",
+        "Configuration knobs: max_num_batched_tokens, max_chunk_size; how to tune them",
+        "Effect on TTFT vs TPOT: TTFT goes up slightly, TPOT goes down significantly, total throughput rises"
+      ],
+      "kind": "content",
+      "figures_optional": ["chunked-prefill-timeline.html"]
+    },
+    {
+      "id": "ch-06",
+      "title": "PagedAttention + Block-Based KV Cache (vLLM)",
+      "phase": "kv-cache",
+      "deps": ["ch-03"],
+      "sources": ["pagedattention", "vllm-kv-cache-manager", "vllm", "vllm-scheduler"],
+      "concepts": [
+        "The fragmentation problem: contiguous per-request KV cache wastes memory at the end of each sequence and during preemption",
+        "Virtual-memory analogy: PagedAttention splits KV cache into fixed-size blocks (typically 16 tokens) and maintains a per-sequence block table",
+        "Memory utilization: PagedAttention's headline 96 % utilization vs ~60 % for naive contiguous allocation",
+        "Copy-on-write for parallel sampling / beam search: same block shared across siblings until divergence",
+        "PagedAttention kernel: how the attention computation indexes through block tables at runtime"
+      ],
+      "kind": "content",
+      "figures_optional": ["pagedattention-block-table.html"]
+    },
+    {
+      "id": "ch-07",
+      "title": "Prefix Caching + RadixAttention (SGLang)",
+      "phase": "kv-cache",
+      "deps": ["ch-06"],
+      "sources": ["sglang-radixattention", "sglang", "sglang-scheduler", "sglang-hicache", "vllm-kv-cache-manager"],
+      "concepts": [
+        "Prefix caching: shared system prompts / few-shot exemplars / system instructions across many requests — recompute or reuse?",
+        "vLLM's APC (Automatic Prefix Cache): hash-based block matching + LRU eviction",
+        "SGLang's RadixAttention: store KV blocks in a radix tree keyed by token sequences; automatic matching of any prefix prefix",
+        "Hit rates in practice: 50-90 % for chat workloads with fixed system prompts; 20-50 % for arbitrary user prompts",
+        "Hierarchical cache (SGLang HiCache): GPU → CPU → distributed storage tiers; eviction across tiers"
+      ],
+      "kind": "content",
+      "figures_optional": ["radixattention-tree.html"]
+    },
+    {
+      "id": "ch-08",
+      "title": "KV Cache Compression + Eviction (H2O / SnapKV / Attention Sinks / Quest)",
+      "phase": "kv-cache",
+      "deps": ["ch-03", "ch-06"],
+      "sources": ["h2o", "snapkv", "attention-sinks", "quest-kv", "cachegen", "infllm"],
+      "concepts": [
+        "Heavy-Hitter Oracle (H2O): a small fraction of past tokens dominate attention weight; evict the rest",
+        "SnapKV observation window: use the last few tokens' attention patterns to decide which past tokens to keep",
+        "Attention Sinks (Streaming LLM): keep the first N tokens always; they act as soft attention anchors",
+        "Quest query-aware sparsity: at decode time, fetch only the KV pages relevant to the current query",
+        "InfLLM long-context inference: external memory + cached-block reuse for million-token context"
+      ],
+      "kind": "content",
+      "figures_optional": ["h2o-eviction-policy.html"]
+    },
+    {
+      "id": "ch-09",
+      "title": "Prefill/Decode Disaggregation (DistServe / Splitwise / Mooncake)",
+      "phase": "serving-architecture",
+      "deps": ["ch-05"],
+      "sources": ["distserve", "splitwise", "mooncake", "prefill-decode-disaggregation"],
+      "concepts": [
+        "Why prefill and decode interfere even with chunked prefill: different ideal batch sizes, different memory needs, different SLO targets",
+        "Disaggregation: dedicate one pool of GPUs to prefill, another to decode; ship KV cache between them",
+        "DistServe's TTFT vs TPOT tradeoff: optimize each pool independently",
+        "Splitwise + Mooncake: KV-cache-centric serving architecture; cross-pool RDMA / NVLink KV transfer",
+        "When disaggregation pays off (high QPS, mixed long+short requests) vs when it doesn't (uniform short requests)"
+      ],
+      "kind": "content",
+      "figures_optional": ["disaggregation-architecture.html"]
+    },
+    {
+      "id": "ch-10",
+      "title": "Admission Control + Goodput + Fair Scheduling (VTC / Niyama / SLO)",
+      "phase": "serving-architecture",
+      "deps": ["ch-04"],
+      "sources": ["vtc", "niyama", "admission-control-goodput", "serving-optimization-foundations-2026", "llm-serving-survey"],
+      "concepts": [
+        "Throughput vs goodput: throughput counts all completed requests; goodput counts only those meeting their SLO",
+        "Admission control: reject incoming requests if you can predict you can't meet their SLO; saves resources for in-flight requests",
+        "Fair scheduling — Virtual Token Counter (VTC): give each user their fair share of tokens; the LLM-serving equivalent of fair queueing",
+        "Niyama QoS-driven scheduling: separate interactive (low-TPOT) and batch (high-throughput) tiers",
+        "The 2026 trend: serving needs mathematical optimization, not heuristics; mixed-integer scheduling formulations starting to appear"
+      ],
+      "kind": "content",
+      "figures_optional": ["goodput-vs-throughput-slo.html"]
+    },
+    {
+      "id": "ch-11",
+      "title": "FlashAttention Lineage (1/2/3 + FlashDecoding + FlashInfer)",
+      "phase": "kernels-runtime",
+      "deps": ["ch-02"],
+      "sources": ["flashattention", "flashattention-2", "flashattention-3", "flashdecoding", "flashinfer", "xformers-memory-efficient-attention"],
+      "concepts": [
+        "FlashAttention 1 (Dao 2022): IO-aware tiling — avoid materializing the L×L attention matrix in HBM; everything stays in SRAM",
+        "FlashAttention 2 (Dao 2023): better work partitioning + lower non-matmul FLOPs; 2× faster than FA1",
+        "FlashAttention 3 (2024): Hopper-era asynchronous + FP8 attention; ping-pong pipelining + WGMMA",
+        "FlashDecoding: split-K decoding for long-context; parallelize the KV-cache scan across multiple SMs",
+        "FlashInfer: serving-system-aware kernel library; paged attention + cascade attention + prefix-shared kernels"
+      ],
+      "kind": "content",
+      "figures_optional": ["flashattention-tiling.html"]
+    },
+    {
+      "id": "ch-12",
+      "title": "CUDA Graphs + Runtime Optimizations",
+      "phase": "kernels-runtime",
+      "deps": ["ch-04", "ch-11"],
+      "sources": ["cuda-graphs-inference", "vllm", "tensorrt-llm", "sglang"],
+      "concepts": [
+        "Launch overhead: ~10 µs per kernel; with ~80 layers × 10 kernels/layer, decode latency is half kernel launches",
+        "CUDA Graphs: capture a static graph of kernel invocations, replay with one launch — eliminates the overhead",
+        "The 'static shape' constraint: graph capture requires fixed batch size, sequence length, etc.; serving needs piecewise capture",
+        "Frameworks' approach: vLLM piecewise CUDA graphs (one graph per discrete batch-size bucket); TensorRT-LLM ahead-of-time engine build",
+        "Other runtime wins: NCCL collective fusion, kernel fusion, dynamic-shape JIT"
+      ],
+      "kind": "content",
+      "figures_optional": ["cuda-graph-overhead.html"]
+    },
+    {
+      "id": "ch-13",
+      "title": "Parallel Inference: Tensor / Pipeline / Expert Parallel",
+      "phase": "kernels-runtime",
+      "deps": ["ch-02"],
+      "sources": ["tensor-parallel-inference", "pipeline-parallel-inference", "expert-parallel-inference"],
+      "concepts": [
+        "Tensor parallelism for inference: split QKV/FFN matrices across GPUs; all-reduce after each matmul; what overhead this adds",
+        "Pipeline parallelism for inference: split layers across GPUs; microbatching; the bubble cost",
+        "Expert parallelism for MoE inference: route each token to expert GPUs; the all-to-all collective",
+        "Combined: TP×PP×EP for frontier MoE models (DeepSeek V3 671B, Mixtral 8x7B/8x22B); when each helps",
+        "Communication patterns: NCCL all-reduce vs all-to-all; intra-node NVLink vs inter-node InfiniBand"
+      ],
+      "kind": "content",
+      "figures_optional": ["parallel-inference-comparison.html"]
+    },
+    {
+      "id": "ch-14",
+      "title": "Speculative Decoding Foundations",
+      "phase": "decoding-acceleration",
+      "deps": ["ch-03"],
+      "sources": ["speculative-decoding", "fast-inference-from-transformers-via-speculative-decoding", "hf-assisted-generation"],
+      "concepts": [
+        "The core idea: a small draft model proposes K tokens; the target model verifies them in one forward pass",
+        "Speculative sampling rule (Chen et al.): accept token if u ≤ p_target(x) / p_draft(x); otherwise reject and resample from the residual distribution",
+        "Why it preserves the target distribution exactly (no quality loss)",
+        "Speedup math: expected acceptance rate α × (K speedup) − overhead; typical 1.5-3× speedup",
+        "Choice of draft model: smaller LLM (Llama-2-7B as draft for Llama-2-70B) vs distilled draft vs n-gram speculation"
+      ],
+      "kind": "content",
+      "figures_optional": ["speculative-acceptance-rate.html"]
+    },
+    {
+      "id": "ch-15",
+      "title": "Multi-Head + Feature-Level + N-Gram Draft Methods (Medusa / EAGLE / Lookahead / PLD / MTP)",
+      "phase": "decoding-acceleration",
+      "deps": ["ch-14"],
+      "sources": ["medusa", "eagle", "eagle-2", "lookahead-decoding", "prompt-lookup-decoding", "self-speculative-decoding", "multi-token-prediction-inference"],
+      "concepts": [
+        "Medusa: multiple decoding heads on the target model itself; draft + verify in a single forward pass — no separate draft model needed",
+        "EAGLE / EAGLE-2: feature-level draft (operates on hidden states, not tokens); dynamic draft tree; 3-4× speedup",
+        "Lookahead Decoding: Jacobi-style parallel n-gram generation; no draft model required",
+        "Prompt Lookup Decoding (PLD): if a draft token already appears in the prompt, use it directly; nearly-free speedup for RAG / code completion",
+        "Multi-Token Prediction heads: train the model to predict K tokens at once (DeepSeek V3 used this for native speculative decoding)"
+      ],
+      "kind": "content",
+      "figures_optional": ["draft-method-comparison.html"]
+    },
+    {
+      "id": "ch-16",
+      "title": "vLLM Internals: Scheduler + Cache Manager + Structured Output",
+      "phase": "framework-internals",
+      "deps": ["ch-04", "ch-06", "ch-12"],
+      "sources": ["vllm", "vllm-scheduler", "vllm-kv-cache-manager", "vllm-structured-output", "vllm-project"],
+      "concepts": [
+        "Architecture overview: API server → engine → scheduler → model executor → worker; what runs where",
+        "Scheduler internals: WAITING / RUNNING / SWAPPED queues; iteration-level scheduling loop; chunked prefill integration",
+        "Block manager: free-block pool, block tables per sequence, copy-on-write for parallel sampling, APC prefix cache integration",
+        "Structured output backend: outlines / xgrammar integration; guided JSON / regex / EBNF",
+        "Production knobs: max_num_seqs, max_num_batched_tokens, gpu_memory_utilization, swap_space, prefix-caching enable"
+      ],
+      "kind": "content",
+      "figures_optional": ["vllm-architecture.html"]
+    },
+    {
+      "id": "ch-17",
+      "title": "SGLang Internals: RadixAttention + HiCache + Frontend Language",
+      "phase": "framework-internals",
+      "deps": ["ch-07"],
+      "sources": ["sglang", "sglang-scheduler", "sglang-radixattention", "sglang-hicache", "sglang-structured-output", "sglang-project"],
+      "concepts": [
+        "Architecture overview: frontend (Python DSL with gen / select / fork) → runtime → RadixAttention-aware scheduler → backend",
+        "Frontend language: parallel + nested LLM calls expressed as a coroutine-style DSL; the cross-call prefix-reuse value prop",
+        "RadixAttention end-to-end: tree structure → prefix matching → KV-block reuse → LRU eviction",
+        "HiCache: GPU → CPU → distributed storage tiers; per-tier hit-rate measurement; offload bandwidth as a bottleneck",
+        "Structured output: grammar-guided decoding integrated with prefix cache"
+      ],
+      "kind": "content",
+      "figures_optional": ["sglang-architecture.html"]
+    },
+    {
+      "id": "ch-18",
+      "title": "Production Serving Stacks: TensorRT-LLM, TGI, LightLLM, LMDeploy, DeepSpeed-FastGen, llama.cpp",
+      "phase": "framework-internals",
+      "deps": ["ch-12", "ch-16"],
+      "sources": ["tensorrt-llm", "tensorrt-llm-paged-kv", "hf-tgi", "lightllm", "lmdeploy", "deepspeed-fastgen", "llama-cpp-server", "nvidia-inference", "huggingface-inference"],
+      "concepts": [
+        "TensorRT-LLM: ahead-of-time engine build, paged KV, inflight batching, FP8/NVFP4 path, Triton integration",
+        "HF TGI: router + shards, Rust frontend, integration with Transformers, focus on production deployment ergonomics",
+        "LightLLM / LMDeploy / DeepSpeed-FastGen: per-architecture engineering choices; what they do better/worse than vLLM",
+        "llama.cpp / llama-server: CPU + Apple-Silicon-first; gguf integration; slot-based batching",
+        "Choose-by-workload rubric: who picks what and why (vLLM for OSS flexibility, TensorRT-LLM for NVIDIA-only max-perf, SGLang for prefix-heavy workloads, llama.cpp for edge)"
+      ],
+      "kind": "content",
+      "figures_optional": ["framework-decision-matrix.html"]
+    },
+    {
+      "id": "ch-19",
+      "title": "Inference Benchmarks + Metrics (TTFT / TPOT / ITL / Goodput)",
+      "phase": "benchmarks-production",
+      "deps": ["ch-04", "ch-05", "ch-10"],
+      "sources": ["ttft-tpot-itl", "sharegpt-workload", "vllm-benchmarks", "sglang-benchmarks", "genai-perf", "llmperf", "mlperf-inference-llm", "helm-inference", "goodput-slo"],
+      "concepts": [
+        "The four core metrics: TTFT (time to first token), TPOT (time per output token), ITL (inter-token latency), throughput (tokens/sec); when each one matters",
+        "Common traps: percentile lies (p50 looks good, p99 disasters), warm-up cache contamination, request-rate sweeps that miss the saturation point",
+        "Workload design: ShareGPT-style synthetic traces; request length distributions; request-rate sweeps",
+        "Benchmark stacks: GenAI-Perf (NVIDIA), LLMPerf (Anyscale), MLPerf Inference LLM, HELM, vLLM/SGLang built-in benchmarks",
+        "Goodput under SLO: the metric that actually matches business value; how to define your SLO and report goodput correctly"
+      ],
+      "kind": "content",
+      "figures_optional": ["ttft-tpot-tradeoff.html"]
+    },
+    {
+      "id": "ch-20",
+      "title": "Production Model Inference Reports: Llama 3 / Qwen 3 / DeepSeek V3+R1 / GPT-OSS / Mixtral / Gemma",
+      "phase": "benchmarks-production",
+      "deps": ["ch-13", "ch-19"],
+      "sources": ["llama-3-inference", "qwen-3-inference", "deepseek-v3-inference", "deepseek-r1-inference", "gpt-oss-inference", "mixtral-inference", "gemma-inference", "phi-inference"],
+      "concepts": [
+        "Llama 3: GQA-8 (Llama-3-8B) / GQA-128 (70B); 128k context; tokenizer + chat-template gotchas",
+        "Qwen 3: hybrid thinking/non-thinking; MoE 30B/235B; YaRN context scaling; serving implications",
+        "DeepSeek V3: 671B MoE, 37B active, MLA (Multi-head Latent Attention) compressing KV; FP8 deployment",
+        "DeepSeek R1: long-CoT generation patterns; sampling and serving implications (max_tokens, finish_reason, latency budget)",
+        "GPT-OSS, Mixtral, Gemma, Phi: representative serving cases — MXFP4 MoE, sparse routing, edge inference, small-model local"
+      ],
+      "kind": "content",
+      "figures_optional": ["model-inference-spec-table.html"]
+    },
+    {
+      "id": "ch-21",
+      "title": "Lab — Deploy + Benchmark vLLM vs SGLang Head-to-Head",
+      "phase": "lab-capstone",
+      "deps": ["ch-16", "ch-17", "ch-19"],
+      "sources": ["vllm", "sglang", "vllm-benchmarks", "sglang-benchmarks", "ttft-tpot-itl", "sharegpt-workload"],
+      "concepts": [
+        "Full-budget path: H100 + Llama-3-8B-Instruct; deploy vLLM and SGLang side-by-side; run ShareGPT request-rate sweep (1 → 32 req/s) and capture TTFT / TPOT / throughput / goodput@p99",
+        "Resource-constrained path: single 24 GB GPU + Qwen-1.8B; same benchmarks at smaller scale",
+        "Required ablation: enable/disable prefix caching, vary max_num_batched_tokens, vary chunked-prefill chunk_size; report effect",
+        "Memo deliverable: side-by-side TTFT / TPOT / throughput / goodput table at 3 saturation points; which framework wins for which workload and why",
+        "Reflection: under what circumstances would your conclusion flip (longer context, more prefix sharing, lower SLO)?"
+      ],
+      "kind": "lab"
+    },
+    {
+      "id": "ch-22",
+      "title": "Capstone — Reproduce a Serving Optimization From Scratch",
+      "phase": "lab-capstone",
+      "deps": ["ch-06", "ch-07", "ch-09", "ch-14", "ch-15"],
+      "sources": ["pagedattention", "sglang-radixattention", "distserve", "speculative-decoding", "eagle", "mooncake"],
+      "concepts": [
+        "Pick one of {PagedAttention, RadixAttention, Speculative Decoding, EAGLE, Disaggregated Prefill/Decode}; implement from the paper (no copy-paste from author repo)",
+        "Full-budget path: H100 + Llama-3-8B; reproduce the paper's headline number (PagedAttention 96% utilization, RadixAttention 5× throughput on shared-prefix workloads, Speculative Decoding 2-3× TPOT speedup, EAGLE 3× TPOT speedup, DistServe N% goodput improvement)",
+        "Resource-constrained path: single 24 GB GPU + Qwen-1.8B; reproduce the qualitative result if you can't match the absolute number",
+        "Reproduction memo: did you match within 10 %? If not, where is the gap (hardware, batch size, dataset, hyperparameter)?",
+        "Optional stretch: PR your implementation to vLLM or SGLang as a draft contribution"
+      ],
+      "kind": "capstone"
+    }
+  ]
+}

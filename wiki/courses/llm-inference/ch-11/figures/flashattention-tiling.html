@@ -1,0 +1,284 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>FlashAttention Tiling — Naive vs FA1 vs FA2</title>
+<style>
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+         max-width: 980px; margin: 2em auto; padding: 0 1em; color: #222; }
+  h1 { font-size: 1.4em; margin-bottom: 0.2em; }
+  .subtitle { color: #666; margin-top: 0; }
+  .panel { border: 1px solid #ddd; border-radius: 6px; padding: 1em; margin: 1em 0;
+           background: #fafafa; }
+  .controls { display: flex; gap: 1em; flex-wrap: wrap; align-items: center; }
+  .control { display: flex; flex-direction: column; }
+  label { font-size: 0.85em; color: #555; margin-bottom: 0.2em; }
+  input[type="range"] { width: 180px; }
+  canvas { background: white; border: 1px solid #ccc; display: block; margin: 0.5em auto; }
+  .value { font-variant-numeric: tabular-nums; color: #333; font-weight: 600; }
+  .note { font-size: 0.88em; color: #555; line-height: 1.5; }
+  code { background: #eef; padding: 1px 4px; border-radius: 3px; font-size: 0.9em; }
+  .tabs { display: flex; gap: 0; margin-top: 0.5em; }
+  .tab { padding: 6px 14px; border: 1px solid #ccc; border-bottom: none;
+         background: #eee; cursor: pointer; font-size: 0.9em; }
+  .tab.active { background: white; color: #1976d2; font-weight: 600; }
+  .metrics { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 0.5em; margin-top: 0.5em; }
+  .metric-card { background: white; border: 1px solid #ddd; border-radius: 5px; padding: 0.5em 0.7em; }
+  .metric-card h4 { margin: 0 0 0.3em 0; font-size: 0.85em; color: #555; }
+  .metric-val { font-size: 1.1em; font-weight: 600; font-variant-numeric: tabular-nums; }
+  footer { margin-top: 2em; font-size: 0.9em; color: #555; text-align: center; }
+  footer a { color: #1565c0; text-decoration: none; }
+</style>
+</head>
+<body>
+
+<h1>FlashAttention Tiling — IO-Aware Attention</h1>
+<p class="subtitle">
+  Switch between three implementations and watch how the L×L attention matrix is (or isn't)
+  materialized. The win is not FLOPs — it is <em>HBM traffic</em>.
+</p>
+
+<div class="panel">
+  <div class="controls">
+    <div class="control">
+      <label>Sequence length L</label>
+      <input type="range" id="L" min="128" max="8192" step="128" value="2048">
+      <span class="value"><span id="LLbl">2048</span></span>
+    </div>
+    <div class="control">
+      <label>d_head</label>
+      <input type="range" id="d" min="32" max="128" step="16" value="64">
+      <span class="value"><span id="dLbl">64</span></span>
+    </div>
+    <div class="control">
+      <label>Br (Q-tile rows)</label>
+      <input type="range" id="Br" min="32" max="128" step="16" value="64">
+      <span class="value"><span id="BrLbl">64</span></span>
+    </div>
+    <div class="control">
+      <label>Bc (K/V-tile cols)</label>
+      <input type="range" id="Bc" min="32" max="128" step="16" value="64">
+      <span class="value"><span id="BcLbl">64</span></span>
+    </div>
+  </div>
+  <div class="tabs">
+    <div class="tab active" data-mode="naive">Naive</div>
+    <div class="tab" data-mode="fa1">FlashAttention 1</div>
+    <div class="tab" data-mode="fa2">FlashAttention 2</div>
+  </div>
+</div>
+
+<canvas id="diag" width="940" height="320"></canvas>
+
+<div class="metrics">
+  <div class="metric-card">
+    <h4>HBM accesses (relative)</h4>
+    <div class="metric-val" id="hbm">—</div>
+  </div>
+  <div class="metric-card">
+    <h4>SRAM accesses (relative)</h4>
+    <div class="metric-val" id="sram">—</div>
+  </div>
+  <div class="metric-card">
+    <h4>Effective throughput (TFLOPS)</h4>
+    <div class="metric-val" id="tflops">—</div>
+  </div>
+</div>
+
+<div class="panel note">
+  <strong>Caption.</strong> FlashAttention's whole trick is IO awareness: never materialize the
+  L×L matrix in HBM, do everything in SRAM-sized tiles. FA2 better parallelizes the tiling
+  across SMs (one warpgroup per Q-tile instead of per K/V-tile). FA3 adds Hopper async + FP8.
+</div>
+
+<footer><a href="../read.md">← back to chapter</a></footer>
+
+<script>
+const cvs = document.getElementById('diag');
+const ctx = cvs.getContext('2d');
+let mode = 'naive';
+let t0 = performance.now();
+
+document.querySelectorAll('.tab').forEach(t => {
+  t.addEventListener('click', () => {
+    document.querySelectorAll('.tab').forEach(x => x.classList.remove('active'));
+    t.classList.add('active');
+    mode = t.dataset.mode;
+  });
+});
+
+function updateLabels() {
+  ['L','d','Br','Bc'].forEach(id => {
+    document.getElementById(id+'Lbl').textContent = document.getElementById(id).value;
+  });
+}
+
+function metrics() {
+  const L = +document.getElementById('L').value;
+  const d = +document.getElementById('d').value;
+  const Br = +document.getElementById('Br').value;
+  const Bc = +document.getElementById('Bc').value;
+
+  // HBM access cost (rough proportional to L*d for tiled; L^2 for naive)
+  // FA1: O(L^2 * d / SRAM_size) ~ O(N^2 d^2 / M) with constants
+  const naiveHBM = (L * L * 1.0 + 4 * L * d); // L^2 score matrix
+  const fa1HBM  = (4 * L * d) + (L * L * d / Math.max(Bc, 1)) * 0.01;
+  const fa2HBM  = fa1HBM * 0.85; // slightly less due to better partitioning
+
+  const sram = mode === 'naive' ? 1 : (mode === 'fa1' ? (Br * d + Bc * d) : (Br * d + Bc * d));
+
+  // throughput model: FA2 is highest, FA1 close, naive saturates HBM
+  // Hopper-ish peak ~ 250 TFLOPS for fp16; degrade with L for naive
+  const peak = 250;
+  let tflops;
+  if (mode === 'naive') {
+    // HBM bound: throughput drops as L grows
+    tflops = peak * Math.min(1, 200 / Math.sqrt(L));
+  } else if (mode === 'fa1') {
+    tflops = peak * 0.55 * Math.min(1, 1 - 0.00002 * L);
+  } else {
+    tflops = peak * 0.75 * Math.min(1, 1 - 0.00001 * L);
+  }
+  tflops = Math.max(5, tflops);
+
+  return { L, d, Br, Bc,
+           hbm: mode === 'naive' ? naiveHBM : (mode === 'fa1' ? fa1HBM : fa2HBM),
+           sram, tflops };
+}
+
+function drawMatrix(x, y, w, h, label, color='#1976d2', alpha=1, dashed=false) {
+  ctx.save();
+  ctx.fillStyle = color + (alpha < 1 ? Math.floor(alpha*255).toString(16).padStart(2,'0') : '');
+  ctx.fillRect(x, y, w, h);
+  ctx.strokeStyle = '#333';
+  if (dashed) ctx.setLineDash([4, 3]);
+  ctx.strokeRect(x, y, w, h);
+  ctx.setLineDash([]);
+  ctx.fillStyle = '#fff';
+  ctx.font = 'bold 12px sans-serif';
+  ctx.textAlign = 'center';
+  ctx.fillText(label, x + w/2, y + h/2 + 4);
+  ctx.restore();
+}
+
+function render() {
+  updateLabels();
+  const m = metrics();
+  document.getElementById('hbm').textContent = m.hbm.toExponential(1);
+  document.getElementById('sram').textContent = m.sram.toString();
+  document.getElementById('tflops').textContent = m.tflops.toFixed(1) + ' TF';
+
+  ctx.clearRect(0, 0, cvs.width, cvs.height);
+  ctx.fillStyle = '#333';
+  ctx.font = 'bold 13px sans-serif';
+  ctx.textAlign = 'left';
+  const titles = {
+    naive: 'Naive: materialize full L×L score matrix in HBM',
+    fa1:   'FA1: tile Q into Br × d, K/V into Bc × d; one tile at a time in SRAM',
+    fa2:   'FA2: same tiling, but parallelize across SMs along the Q dimension (one warpgroup per Q-tile)'
+  };
+  ctx.fillText(titles[mode], 14, 22);
+
+  // common Q, K, V boxes
+  const baseY = 60;
+  const sz = 80;
+  drawMatrix(40,  baseY, sz, sz, 'Q', '#1565c0');
+  drawMatrix(140, baseY, sz, sz, 'K', '#2e7d32');
+  drawMatrix(240, baseY, sz, sz, 'V', '#ef6c00');
+
+  // attention diagram (varies by mode)
+  if (mode === 'naive') {
+    // big red L x L matrix
+    drawMatrix(380, baseY-10, 200, 200, 'L×L scores (HBM!)', '#d32f2f');
+    ctx.fillStyle = '#d32f2f';
+    ctx.font = '11px sans-serif';
+    ctx.textAlign = 'left';
+    ctx.fillText('cost = O(L² · d) HBM reads/writes', 380, baseY + 220);
+    ctx.fillText('quadratic memory: blows up past L=4k', 380, baseY + 236);
+  } else {
+    // tiled view: show grid of tiles and animate the active tile
+    const tx = 380, ty = baseY - 10;
+    const tilesR = Math.max(1, Math.round(m.L / m.Br));
+    const tilesC = Math.max(1, Math.round(m.L / m.Bc));
+    const cellW = 200 / Math.min(tilesC, 8);
+    const cellH = 200 / Math.min(tilesR, 8);
+    const showR = Math.min(tilesR, 8);
+    const showC = Math.min(tilesC, 8);
+    // draw grid
+    ctx.strokeStyle = '#aaa';
+    for (let i = 0; i <= showR; i++) {
+      ctx.beginPath();
+      ctx.moveTo(tx, ty + i * cellH);
+      ctx.lineTo(tx + showC * cellW, ty + i * cellH);
+      ctx.stroke();
+    }
+    for (let j = 0; j <= showC; j++) {
+      ctx.beginPath();
+      ctx.moveTo(tx + j * cellW, ty);
+      ctx.lineTo(tx + j * cellW, ty + showR * cellH);
+      ctx.stroke();
+    }
+
+    // animated active tile
+    const t = (performance.now() - t0) / 1000;
+    const total = showR * showC;
+    const idx = Math.floor((t * 4) % total);
+    let activeR = Math.floor(idx / showC);
+    let activeC = idx % showC;
+
+    if (mode === 'fa2') {
+      // FA2 parallelizes across Q-rows: highlight a whole row of tiles
+      ctx.fillStyle = '#1976d2aa';
+      for (let j = 0; j < showC; j++) {
+        ctx.fillRect(tx + j * cellW + 1, ty + activeR * cellH + 1, cellW - 2, cellH - 2);
+      }
+      // SM workers on the left
+      ctx.fillStyle = '#333';
+      ctx.font = '10px sans-serif';
+      ctx.textAlign = 'right';
+      for (let r = 0; r < showR; r++) {
+        ctx.fillText('SM ' + r, tx - 4, ty + r * cellH + cellH/2 + 3);
+      }
+    } else {
+      ctx.fillStyle = '#388e3caa';
+      ctx.fillRect(tx + activeC * cellW + 1, ty + activeR * cellH + 1, cellW - 2, cellH - 2);
+    }
+
+    ctx.fillStyle = '#333';
+    ctx.textAlign = 'left';
+    ctx.font = '11px sans-serif';
+    ctx.fillText(`tile grid: ${tilesR} × ${tilesC}`, tx, ty + 210);
+    ctx.fillText(`each tile fits in SRAM (Br=${m.Br}, Bc=${m.Bc}, d=${m.d})`, tx, ty + 226);
+    if (mode === 'fa2') ctx.fillText('FA2: one warpgroup per Q-tile row → better SM utilization', tx, ty + 242);
+    else ctx.fillText('FA1: outer loop over K/V tiles, inner over Q tiles', tx, ty + 242);
+  }
+
+  // arrows Q,K,V -> attention region
+  ctx.strokeStyle = '#666';
+  ctx.lineWidth = 1.2;
+  [80, 180, 280].forEach((x, i) => {
+    ctx.beginPath();
+    ctx.moveTo(x, baseY + sz);
+    ctx.lineTo(380 + 20*i, baseY + 90);
+    ctx.stroke();
+  });
+
+  // SRAM/HBM legend
+  ctx.fillStyle = '#555';
+  ctx.font = '11px sans-serif';
+  ctx.textAlign = 'left';
+  ctx.fillText('HBM (slow, big) — naive keeps L×L here; FA keeps only Q,K,V and output here', 40, 280);
+  ctx.fillText('SRAM (fast, tiny) — FA streams Br×Bc tiles in/out; never materializes L×L', 40, 296);
+
+  requestAnimationFrame(render);
+}
+
+['L','d','Br','Bc'].forEach(id => {
+  document.getElementById(id).addEventListener('input', updateLabels);
+});
+
+render();
+</script>
+
+</body>
+</html>

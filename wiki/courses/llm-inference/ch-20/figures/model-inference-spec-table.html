@@ -1,0 +1,230 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Frontier Model Serving Specs — Interactive Comparison Table</title>
+<style>
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+         max-width: 1200px; margin: 2em auto; padding: 0 1em; color: #222; }
+  h1 { font-size: 1.4em; margin-bottom: 0.2em; }
+  .subtitle { color: #666; margin-top: 0; }
+  table { border-collapse: collapse; width: 100%; font-size: 0.88em; margin: 1em 0;
+          font-variant-numeric: tabular-nums; }
+  th, td { border: 1px solid #ddd; padding: 6px 8px; text-align: right; }
+  th:first-child, td:first-child { text-align: left; font-weight: 600; }
+  th { background: #f0f0f0; cursor: pointer; user-select: none; position: relative; }
+  th:hover { background: #e0e8f0; }
+  th.sorted::after { content: ' \25BE'; color: #1976d2; }
+  th.sorted.asc::after { content: ' \25B4'; color: #1976d2; }
+  tr.row { cursor: pointer; }
+  tr.row:hover { background: #fafafa; }
+  tr.row.selected { background: #fff7d6; }
+  .moe-yes { color: #b85c00; font-weight: 600; }
+  .moe-no { color: #888; }
+  .panel { border: 1px solid #ddd; border-radius: 6px; padding: 1em; margin: 1em 0;
+           background: #fafafa; }
+  .where-best { min-height: 3em; font-size: 0.95em; line-height: 1.5; color: #333; }
+  .where-best.empty { color: #999; font-style: italic; }
+  .caption { font-size: 0.88em; color: #555; line-height: 1.5; margin-top: 1.5em;
+             border-left: 3px solid #1976d2; padding-left: 1em; background: #f8fafd; }
+  footer { margin-top: 2em; font-size: 0.85em; color: #888; }
+  footer a { color: #1976d2; text-decoration: none; }
+  code { background: #eef; padding: 1px 4px; border-radius: 3px; font-size: 0.85em; }
+</style>
+</head>
+<body>
+
+<h1>Frontier Model Serving Specs &mdash; Interactive Comparison</h1>
+<p class="subtitle">
+  KV-cache-per-token is computed from the published architecture
+  (<code>2 &times; layers &times; kv_heads &times; head_dim &times; bytes</code>).
+  Click any row for the "where it serves best" sentence. Click a column header to sort.
+</p>
+
+<table id="modelTable">
+  <thead>
+    <tr>
+      <th data-col="name">Model</th>
+      <th data-col="active">Active Params</th>
+      <th data-col="context">Context</th>
+      <th data-col="attn">Attention</th>
+      <th data-col="kvbf16">KV/token BF16</th>
+      <th data-col="quant">Native Quant</th>
+      <th data-col="gpus_fp16">GPUs (FP16)</th>
+      <th data-col="gpus_fp8">GPUs (FP8/MXFP4)</th>
+      <th data-col="moe">MoE</th>
+    </tr>
+  </thead>
+  <tbody id="tbody"></tbody>
+</table>
+
+<div class="panel">
+  <strong>Where it serves best:</strong>
+  <div id="whereBest" class="where-best empty">(click a row above)</div>
+</div>
+
+<div class="caption">
+  These are the frontier production models &mdash; each with distinct serving requirements
+  (GQA-N, MoE, MLA, native FP8). The KV-cache-per-token column is the single most important
+  number for sizing a fleet: at 128KB/token a 32K-context request costs 4&nbsp;GB of HBM just
+  in KV, before weights or activations.
+</div>
+
+<footer>
+  <a href="../read.md">&larr; back to chapter</a>
+</footer>
+
+<script>
+// Architecture from published configs / model cards.
+// kv_per_token_bf16 = 2 * layers * kv_heads * head_dim * 2 bytes
+function kvBF16(L, kvH, hd) { return 2 * L * kvH * hd * 2; }
+// MLA cache for DeepSeek = compressed latent dim per layer (~576 bytes/layer at BF16 in V3)
+function kvMLA(L, latentBytes) { return L * latentBytes; }
+
+const models = [
+  { name: 'Llama-3-8B', active: 8.0, total: 8.0, context: 8192,
+    attn: 'GQA-8', L: 32, kvH: 8, hd: 128,
+    kv: kvBF16(32, 8, 128),
+    quant: 'BF16', gpus_fp16: 1, gpus_fp8: 1, moe: null,
+    best: 'Single H100/A100 80GB. Saturates a single GPU under heavy concurrency thanks to GQA-8 shrinking KV to 128&nbsp;KB/token. Default vLLM target; no tensor-parallel needed.' },
+
+  { name: 'Llama-3-70B', active: 70, total: 70, context: 8192,
+    attn: 'GQA-8', L: 80, kvH: 8, hd: 128,
+    kv: kvBF16(80, 8, 128),
+    quant: 'BF16', gpus_fp16: 2, gpus_fp8: 1, moe: null,
+    best: 'TP=2 on 2&times;H100 80GB at BF16, or single H100 at FP8. KV is only 320&nbsp;KB/token so prefill scales well; vLLM with chunked-prefill is the workhorse.' },
+
+  { name: 'Llama-3-405B', active: 405, total: 405, context: 128000,
+    attn: 'GQA-8', L: 126, kvH: 8, hd: 128,
+    kv: kvBF16(126, 8, 128),
+    quant: 'FP8', gpus_fp16: 16, gpus_fp8: 8, moe: null,
+    best: '8&times;H100 with FP8 (Meta released an official FP8 checkpoint). TP=8 + chunked prefill. Long-context (128K) requires aggressive PagedAttention &mdash; 504&nbsp;KB/token &times; 128K = 64&nbsp;GB KV per request.' },
+
+  { name: 'Qwen-3-32B', active: 32, total: 32, context: 32768,
+    attn: 'GQA-8', L: 64, kvH: 8, hd: 128,
+    kv: kvBF16(64, 8, 128),
+    quant: 'BF16', gpus_fp16: 1, gpus_fp8: 1, moe: null,
+    best: 'Single H100 80GB. Reasoning-focused dense model; SGLang RadixAttention shines when many requests share the same long system prompt.' },
+
+  { name: 'Qwen-3-235B-MoE', active: 22, total: 235, context: 32768,
+    attn: 'GQA-4', L: 94, kvH: 4, hd: 128,
+    kv: kvBF16(94, 4, 128),
+    quant: 'FP8', gpus_fp16: 8, gpus_fp8: 4, moe: { experts: 128, active: 8 },
+    best: '4&times;H100 at FP8 with expert parallelism. Only 22B active params per token despite 235B total &mdash; throughput-bound by MoE all-to-all, not by FLOPs. SGLang and vLLM both ship EP kernels.' },
+
+  { name: 'DeepSeek-V3-671B', active: 37, total: 671, context: 128000,
+    attn: 'MLA', L: 61, kvH: 1, hd: 128,
+    kv: kvMLA(61, 1152),
+    quant: 'FP8', gpus_fp16: 16, gpus_fp8: 8, moe: { experts: 256, active: 8 },
+    best: '8&times;H100/H200 at FP8 with MLA + expert parallelism. MLA compresses KV to ~70&nbsp;KB/token, ~5&times; smaller than a comparable GQA model &mdash; this is what makes 128K context economically viable.' },
+
+  { name: 'DeepSeek-R1', active: 37, total: 671, context: 128000,
+    attn: 'MLA', L: 61, kvH: 1, hd: 128,
+    kv: kvMLA(61, 1152),
+    quant: 'FP8', gpus_fp16: 16, gpus_fp8: 8, moe: { experts: 256, active: 8 },
+    best: 'Same hardware as V3 but reasoning traces are long: TPOT and KV-eviction policy dominate cost. RadixAttention prefix-sharing is a big win when many CoT traces share early tokens.' },
+
+  { name: 'GPT-OSS-120B', active: 5.1, total: 117, context: 128000,
+    attn: 'GQA-8', L: 36, kvH: 8, hd: 64,
+    kv: kvBF16(36, 8, 64),
+    quant: 'MXFP4', gpus_fp16: 4, gpus_fp8: 1, moe: { experts: 128, active: 4 },
+    best: 'Single H100 at MXFP4 (OpenAI shipped MXFP4 weights natively). Tiny 36&nbsp;KB/token KV + only 5B active params per token &mdash; the cheapest frontier-grade model to serve in 2025.' },
+
+  { name: 'Mixtral-8x7B', active: 13, total: 47, context: 32768,
+    attn: 'GQA-8', L: 32, kvH: 8, hd: 128,
+    kv: kvBF16(32, 8, 128),
+    quant: 'BF16', gpus_fp16: 2, gpus_fp8: 1, moe: { experts: 8, active: 2 },
+    best: '2&times;A100 80GB or single H100 at FP8. The MoE that put Mistral on the map; vLLM expert-parallel works out of the box.' },
+
+  { name: 'Mixtral-8x22B', active: 39, total: 141, context: 65536,
+    attn: 'GQA-8', L: 56, kvH: 8, hd: 128,
+    kv: kvBF16(56, 8, 128),
+    quant: 'BF16', gpus_fp16: 4, gpus_fp8: 2, moe: { experts: 8, active: 2 },
+    best: '4&times;H100 at BF16 or 2&times;H100 at FP8 with TP+EP. Wider experts than 8x7B make all-to-all heavier; SGLang has the better tuned kernels here.' },
+
+  { name: 'Gemma-3-27B', active: 27, total: 27, context: 128000,
+    attn: 'GQA-8', L: 62, kvH: 8, hd: 128,
+    kv: kvBF16(62, 8, 128),
+    quant: 'BF16', gpus_fp16: 1, gpus_fp8: 1, moe: null,
+    best: 'Single H100 80GB. Google interleaves local + global attention every 5 layers, dramatically cutting effective KV for long context &mdash; the "free 128K" model.' },
+
+  { name: 'Phi-3-medium', active: 14, total: 14, context: 128000,
+    attn: 'GQA-10', L: 40, kvH: 10, hd: 128,
+    kv: kvBF16(40, 10, 128),
+    quant: 'BF16', gpus_fp16: 1, gpus_fp8: 1, moe: null,
+    best: 'Single A100 40GB or H100. Microsoft\'s small-model bet; dense and simple to serve, but 400&nbsp;KB/token KV is heavy for its size &mdash; long context fills HBM fast.' },
+];
+
+function fmtBytes(b) {
+  if (b >= 1024 * 1024) return (b / (1024 * 1024)).toFixed(2) + ' MB';
+  if (b >= 1024) return (b / 1024).toFixed(1) + ' KB';
+  return b + ' B';
+}
+function fmtContext(c) { return (c / 1024).toFixed(0) + 'K'; }
+function fmtParams(p) { return p >= 100 ? p.toFixed(0) + 'B' : p.toFixed(1) + 'B'; }
+function moeStr(m) {
+  if (!m) return '<span class="moe-no">no</span>';
+  return '<span class="moe-yes">yes (' + m.experts + ', top-' + m.active + ')</span>';
+}
+
+let sortCol = 'kvbf16';
+let sortAsc = true;
+let selected = null;
+
+function valOf(m, col) {
+  switch (col) {
+    case 'name': return m.name;
+    case 'active': return m.active;
+    case 'context': return m.context;
+    case 'attn': return m.attn;
+    case 'kvbf16': return m.kv;
+    case 'quant': return m.quant;
+    case 'gpus_fp16': return m.gpus_fp16;
+    case 'gpus_fp8': return m.gpus_fp8;
+    case 'moe': return m.moe ? m.moe.experts : 0;
+  }
+}
+
+function render() {
+  const sorted = [...models].sort((a, b) => {
+    const va = valOf(a, sortCol), vb = valOf(b, sortCol);
+    if (typeof va === 'string') return sortAsc ? va.localeCompare(vb) : vb.localeCompare(va);
+    return sortAsc ? va - vb : vb - va;
+  });
+  const tbody = document.getElementById('tbody');
+  tbody.innerHTML = '';
+  sorted.forEach(m => {
+    const tr = document.createElement('tr');
+    tr.className = 'row' + (selected === m.name ? ' selected' : '');
+    tr.innerHTML =
+      '<td>' + m.name + '</td>' +
+      '<td>' + fmtParams(m.active) + (m.total !== m.active ? ' / ' + fmtParams(m.total) : '') + '</td>' +
+      '<td>' + fmtContext(m.context) + '</td>' +
+      '<td>' + m.attn + '</td>' +
+      '<td>' + fmtBytes(m.kv) + '</td>' +
+      '<td>' + m.quant + '</td>' +
+      '<td>' + m.gpus_fp16 + '</td>' +
+      '<td>' + m.gpus_fp8 + '</td>' +
+      '<td>' + moeStr(m.moe) + '</td>';
+    tr.onclick = () => { selected = m.name; document.getElementById('whereBest').innerHTML = m.best; document.getElementById('whereBest').className = 'where-best'; render(); };
+    tbody.appendChild(tr);
+  });
+  document.querySelectorAll('th').forEach(th => {
+    th.classList.remove('sorted', 'asc');
+    if (th.dataset.col === sortCol) { th.classList.add('sorted'); if (sortAsc) th.classList.add('asc'); }
+  });
+}
+
+document.querySelectorAll('th').forEach(th => {
+  th.onclick = () => {
+    const c = th.dataset.col;
+    if (sortCol === c) sortAsc = !sortAsc; else { sortCol = c; sortAsc = true; }
+    render();
+  };
+});
+
+render();
+</script>
+
+</body>
+</html>

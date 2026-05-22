@@ -1,0 +1,266 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Draft Method Comparison — Medusa / EAGLE / Lookahead / PLD / MTP</title>
+<style>
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+         max-width: 1100px; margin: 2em auto; padding: 0 1em; color: #222; }
+  h1 { font-size: 1.4em; margin-bottom: 0.2em; }
+  .subtitle { color: #666; margin-top: 0; }
+  .panel { border: 1px solid #ddd; border-radius: 6px; padding: 1em; margin: 1em 0;
+           background: #fafafa; }
+  table { border-collapse: collapse; width: 100%; font-size: 0.85em; }
+  th, td { border: 1px solid #ddd; padding: 6px 8px; text-align: left; }
+  th { background: #eef; }
+  td.y { background: #e8f5e9; }
+  td.n { background: #ffebee; }
+  .controls { display: flex; gap: 1em; align-items: center; }
+  select { padding: 4px 8px; font-size: 0.9em; }
+  canvas { background: white; border: 1px solid #ccc; display: block; margin: 1em auto; }
+  .note { font-size: 0.88em; color: #555; line-height: 1.5; }
+  code { background: #eef; padding: 1px 4px; border-radius: 3px; font-size: 0.9em; }
+  a { color: #1976d2; }
+</style>
+</head>
+<body>
+
+<h1>Draft Method Comparison</h1>
+<p class="subtitle">Five major speculative-decoding draft strategies, side by side.</p>
+
+<table>
+  <thead>
+  <tr>
+    <th>Method</th><th>Draft model?</th><th>Multi-heads</th><th>Tree?</th>
+    <th>Training</th><th>Typical speedup</th><th>Pros</th><th>Cons</th>
+  </tr>
+  </thead>
+  <tbody>
+  <tr>
+    <td><strong>Medusa</strong></td>
+    <td class="n">No (heads)</td><td class="y">Yes (k heads)</td><td class="y">Yes</td>
+    <td>Heads only (LoRA-cheap)</td><td>2.0&ndash;2.5&times;</td>
+    <td>Simple; reuses target hidden state</td>
+    <td>Lower acceptance than draft-model schemes</td>
+  </tr>
+  <tr>
+    <td><strong>EAGLE</strong></td>
+    <td class="n">No (feature head)</td><td class="y">Yes (recurrent)</td><td class="y">Yes</td>
+    <td>Small feature predictor</td><td>2.5&ndash;3.0&times;</td>
+    <td>Best quality; feature-level uncertainty</td>
+    <td>Trickier to train &amp; integrate</td>
+  </tr>
+  <tr>
+    <td><strong>Lookahead</strong></td>
+    <td class="n">No</td><td class="n">No</td><td>n-gram grid</td>
+    <td>None (decode-time)</td><td>1.5&ndash;2.0&times;</td>
+    <td>Zero training; uses jacobi iterations</td>
+    <td>Acceptance varies by domain</td>
+  </tr>
+  <tr>
+    <td><strong>PLD (Prompt-Lookup)</strong></td>
+    <td class="n">No</td><td class="n">No</td><td class="n">No</td>
+    <td>None</td><td>1.5&ndash;4&times; (RAG)</td>
+    <td>Free; huge wins for copy-heavy tasks</td>
+    <td>Useless when output doesn't echo prompt</td>
+  </tr>
+  <tr>
+    <td><strong>MTP</strong></td>
+    <td class="n">No (built-in)</td><td class="y">Yes (k heads)</td><td class="y">Yes</td>
+    <td>Pretraining-time</td><td>1.8&ndash;2.2&times;</td>
+    <td>Co-trained with target; cheapest at inference</td>
+    <td>Requires retraining base model</td>
+  </tr>
+  </tbody>
+</table>
+
+<div class="panel">
+  <div class="controls">
+    <label>Visualize method:</label>
+    <select id="method">
+      <option value="medusa">Medusa</option>
+      <option value="eagle">EAGLE</option>
+      <option value="lookahead">Lookahead</option>
+      <option value="pld">PLD (Prompt-Lookup)</option>
+      <option value="mtp">MTP</option>
+    </select>
+  </div>
+</div>
+
+<canvas id="diagram" width="1000" height="280"></canvas>
+<canvas id="accPlot" width="1000" height="180"></canvas>
+
+<div class="panel note">
+  <strong>Trade space.</strong> Each method moves on a different axis: training cost vs draft quality vs implementation simplicity.
+  PLD is free for retrieval/copy workloads; EAGLE wins per-token acceptance; Medusa wins simplicity (drop-in heads);
+  MTP wins because the model itself was pretrained to predict ahead. Modern serving stacks ship multiple to let the
+  workload pick the best.
+</div>
+
+<p><a href="../read.md">&larr; back to chapter</a></p>
+
+<script>
+const cvs = document.getElementById('diagram');
+const ctx = cvs.getContext('2d');
+const acc = document.getElementById('accPlot');
+const actx = acc.getContext('2d');
+
+const accRates = {
+  medusa:    [0.78, 0.62, 0.50, 0.40, 0.32],
+  eagle:     [0.84, 0.72, 0.61, 0.52, 0.44],
+  lookahead: [0.70, 0.55, 0.42, 0.32, 0.24],
+  pld:       [0.90, 0.85, 0.80, 0.75, 0.70],
+  mtp:       [0.80, 0.65, 0.52, 0.42, 0.34],
+};
+
+const colors = {
+  medusa: '#1976d2', eagle: '#388e3c', lookahead: '#f57c00',
+  pld: '#7b1fa2', mtp: '#c2185b'
+};
+
+function box(x, y, w, h, label, color, fill) {
+  ctx.fillStyle = fill || '#fff';
+  ctx.strokeStyle = color; ctx.lineWidth = 1.5;
+  ctx.fillRect(x, y, w, h); ctx.strokeRect(x, y, w, h);
+  ctx.fillStyle = '#222'; ctx.font = '11px sans-serif'; ctx.textAlign = 'center';
+  const lines = label.split('\n');
+  lines.forEach((l, i) => ctx.fillText(l, x + w / 2, y + h / 2 + 4 + (i - (lines.length - 1) / 2) * 14));
+}
+
+function arr(x1, y1, x2, y2, c) {
+  ctx.strokeStyle = c; ctx.lineWidth = 1.5;
+  ctx.beginPath(); ctx.moveTo(x1, y1); ctx.lineTo(x2, y2); ctx.stroke();
+  const ang = Math.atan2(y2 - y1, x2 - x1);
+  ctx.beginPath();
+  ctx.moveTo(x2, y2);
+  ctx.lineTo(x2 - 8 * Math.cos(ang - 0.4), y2 - 8 * Math.sin(ang - 0.4));
+  ctx.lineTo(x2 - 8 * Math.cos(ang + 0.4), y2 - 8 * Math.sin(ang + 0.4));
+  ctx.closePath();
+  ctx.fillStyle = c; ctx.fill();
+}
+
+function drawMedusa() {
+  box(60, 110, 160, 60, 'Target model\n(hidden state h_t)', '#1976d2', '#e3f2fd');
+  for (let i = 0; i < 4; i++) {
+    box(280 + i * 30, 30 + i * 20, 70, 32, 'Head ' + (i + 1), '#1976d2', '#fff');
+    arr(220, 140, 280 + i * 30, 46 + i * 20, '#1976d2');
+    box(420 + i * 80, 30 + i * 20, 70, 32, 'tok_' + (i + 1), '#1976d2', '#e3f2fd');
+    arr(350 + i * 30, 46 + i * 20, 420 + i * 80, 46 + i * 20, '#1976d2');
+  }
+  ctx.fillStyle = '#555'; ctx.font = '11px sans-serif'; ctx.textAlign = 'left';
+  ctx.fillText('Medusa: k parallel heads predict k future tokens from h_t; verified as a tree.', 60, 210);
+}
+
+function drawEagle() {
+  box(60, 110, 160, 60, 'Target hidden h_t\n(feature)', '#388e3c', '#e8f5e9');
+  box(280, 110, 160, 60, 'Feature head\n(small auto-regressive)', '#388e3c', '#fff');
+  arr(220, 140, 280, 140, '#388e3c');
+  // tree
+  const cx = 540, cy = 140;
+  box(cx - 30, cy - 16, 70, 32, 't_1', '#388e3c', '#e8f5e9');
+  arr(440, 140, cx - 30, cy, '#388e3c');
+  for (let i = 0; i < 2; i++) {
+    box(cx + 80, cy - 50 + i * 60, 70, 32, 't_2.' + (i + 1), '#388e3c', '#e8f5e9');
+    arr(cx + 40, cy, cx + 80, cy - 34 + i * 60, '#388e3c');
+    for (let j = 0; j < 2; j++) {
+      box(cx + 180, cy - 70 + i * 60 + j * 30, 70, 24, 't_3', '#388e3c', '#fff');
+      arr(cx + 150, cy - 34 + i * 60, cx + 180, cy - 58 + i * 60 + j * 30, '#388e3c');
+    }
+  }
+  ctx.fillStyle = '#555'; ctx.font = '11px sans-serif'; ctx.textAlign = 'left';
+  ctx.fillText('EAGLE: features (not tokens) are predicted; produces a draft tree with high acceptance.', 60, 230);
+}
+
+function drawLookahead() {
+  ctx.fillStyle = '#555'; ctx.font = '11px sans-serif'; ctx.textAlign = 'left';
+  ctx.fillText('Lookahead: parallel n-gram grid (Jacobi iteration over window W, n-gram size N).', 60, 30);
+  const W = 8, N = 4;
+  for (let r = 0; r < N; r++) {
+    for (let c = 0; c < W; c++) {
+      const x = 60 + c * 80, y = 60 + r * 40;
+      ctx.fillStyle = (r + c) % 2 === 0 ? '#fff8e1' : '#fff'; ctx.strokeStyle = '#f57c00';
+      ctx.fillRect(x, y, 76, 36); ctx.strokeRect(x, y, 76, 36);
+      ctx.fillStyle = '#333'; ctx.textAlign = 'center'; ctx.font = '10px sans-serif';
+      ctx.fillText('t' + (c + 1) + ',' + (r + 1), x + 38, y + 22);
+    }
+  }
+}
+
+function drawPLD() {
+  box(40, 60, 800, 50, 'Prompt: "... user asks about REINFORCE which is a policy gradient ..."', '#7b1fa2', '#f3e5f5');
+  ctx.fillStyle = '#7b1fa2'; ctx.font = 'bold 11px sans-serif';
+  ctx.fillText('scan for n-gram match', 380, 140);
+  arr(440, 140, 440, 170, '#7b1fa2');
+  box(280, 180, 360, 50, 'Match: "policy gradient" → use directly as draft', '#7b1fa2', '#f3e5f5');
+  ctx.fillStyle = '#555'; ctx.font = '11px sans-serif'; ctx.textAlign = 'left';
+  ctx.fillText('PLD: scan recent prompt tokens, reuse matching n-gram as draft. Zero model, zero training.', 60, 260);
+}
+
+function drawMTP() {
+  box(60, 110, 200, 60, 'Target (pretrained with\nmulti-token heads)', '#c2185b', '#fce4ec');
+  for (let i = 0; i < 4; i++) {
+    box(320 + i * 130, 110, 110, 60, 'MTP head ' + (i + 1) + '\ntok t+' + (i + 1), '#c2185b', '#fff');
+    arr(260, 140, 320 + i * 130, 140, '#c2185b');
+  }
+  ctx.fillStyle = '#555'; ctx.font = '11px sans-serif'; ctx.textAlign = 'left';
+  ctx.fillText('MTP: heads were co-trained at pretraining; zero extra inference cost beyond the heads.', 60, 230);
+}
+
+function render() {
+  ctx.clearRect(0, 0, cvs.width, cvs.height);
+  const m = document.getElementById('method').value;
+  if (m === 'medusa') drawMedusa();
+  else if (m === 'eagle') drawEagle();
+  else if (m === 'lookahead') drawLookahead();
+  else if (m === 'pld') drawPLD();
+  else drawMTP();
+
+  // acceptance plot — all methods
+  actx.clearRect(0, 0, acc.width, acc.height);
+  const pad = { l: 50, r: 20, t: 20, b: 40 };
+  const W = acc.width - pad.l - pad.r;
+  const H = acc.height - pad.t - pad.b;
+  actx.fillStyle = '#555'; actx.font = '11px sans-serif'; actx.textAlign = 'left';
+  actx.fillText('Acceptance rate vs draft position (1..5)', pad.l, 14);
+  // axes
+  actx.strokeStyle = '#ddd'; actx.lineWidth = 1;
+  for (let i = 0; i <= 5; i++) {
+    const y = pad.t + (H * i) / 5;
+    actx.beginPath(); actx.moveTo(pad.l, y); actx.lineTo(pad.l + W, y); actx.stroke();
+    actx.fillStyle = '#555'; actx.textAlign = 'right';
+    actx.fillText(((5 - i) * 0.2).toFixed(1), pad.l - 4, y + 4);
+  }
+  for (let k = 1; k <= 5; k++) {
+    const x = pad.l + ((k - 1) / 4) * W;
+    actx.fillStyle = '#555'; actx.textAlign = 'center';
+    actx.fillText('k=' + k, x, pad.t + H + 18);
+  }
+  Object.keys(accRates).forEach(name => {
+    const isCur = name === m;
+    actx.strokeStyle = colors[name];
+    actx.lineWidth = isCur ? 3 : 1;
+    actx.globalAlpha = isCur ? 1 : 0.4;
+    actx.beginPath();
+    accRates[name].forEach((v, k) => {
+      const x = pad.l + (k / 4) * W;
+      const y = pad.t + H - v * H;
+      if (k === 0) actx.moveTo(x, y); else actx.lineTo(x, y);
+    });
+    actx.stroke();
+    // legend dot
+    actx.fillStyle = colors[name];
+    const lx = pad.l + W - 90, ly = pad.t + 12 + Object.keys(accRates).indexOf(name) * 14;
+    actx.fillRect(lx, ly - 6, 10, 10);
+    actx.fillStyle = '#333'; actx.textAlign = 'left'; actx.font = isCur ? 'bold 11px sans-serif' : '11px sans-serif';
+    actx.fillText(name, lx + 14, ly + 3);
+    actx.font = '11px sans-serif';
+  });
+  actx.globalAlpha = 1;
+}
+
+document.getElementById('method').addEventListener('change', render);
+render();
+</script>
+
+</body>
+</html>

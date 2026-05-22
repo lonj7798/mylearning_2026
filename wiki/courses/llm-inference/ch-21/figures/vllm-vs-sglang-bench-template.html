@@ -1,0 +1,291 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>vLLM vs SGLang &mdash; Head-to-Head Benchmark Template</title>
+<style>
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+         max-width: 1200px; margin: 2em auto; padding: 0 1em; color: #222; }
+  h1 { font-size: 1.4em; margin-bottom: 0.2em; }
+  .subtitle { color: #666; margin-top: 0; }
+  table { border-collapse: collapse; width: 100%; font-size: 0.85em; margin: 1em 0;
+          font-variant-numeric: tabular-nums; }
+  th, td { border: 1px solid #ddd; padding: 5px 6px; text-align: center; }
+  th { background: #f0f0f0; font-weight: 600; }
+  th.vllm-grp { background: #e3f0ff; }
+  th.sglang-grp { background: #ffe9d6; }
+  td.row-label { text-align: left; font-weight: 600; background: #fafafa; }
+  td.rate-cell { background: #fafafa; }
+  input[type="number"] { width: 60px; padding: 2px 4px; border: 1px solid #ccc;
+                          border-radius: 3px; font-variant-numeric: tabular-nums;
+                          text-align: right; font-size: 0.9em; }
+  input[type="number"]:focus { outline: 2px solid #1976d2; outline-offset: -1px; }
+  td.winner-vllm { background: #d6e9ff; font-weight: 600; }
+  td.winner-sglang { background: #ffd9b3; font-weight: 600; }
+  .controls { display: flex; gap: 0.5em; flex-wrap: wrap; margin: 1em 0; }
+  button { padding: 6px 12px; border: 1px solid #1976d2; background: white;
+           color: #1976d2; border-radius: 4px; cursor: pointer; font-size: 0.9em; }
+  button:hover { background: #1976d2; color: white; }
+  canvas { background: white; border: 1px solid #ccc; display: block; margin: 1em auto; }
+  .legend { display: flex; gap: 1.5em; justify-content: center; font-size: 0.9em; }
+  .dot { display: inline-block; width: 10px; height: 10px; border-radius: 50%;
+         margin-right: 4px; vertical-align: middle; }
+  .panel { border: 1px solid #ddd; border-radius: 6px; padding: 1em; margin: 1em 0;
+           background: #fafafa; }
+  .caption { font-size: 0.88em; color: #555; line-height: 1.5; margin-top: 1.5em;
+             border-left: 3px solid #1976d2; padding-left: 1em; background: #f8fafd; }
+  footer { margin-top: 2em; font-size: 0.85em; color: #888; }
+  footer a { color: #1976d2; text-decoration: none; }
+  #winnerBadge { display: inline-block; padding: 2px 8px; border-radius: 10px;
+                  font-size: 0.8em; margin-left: 6px; }
+</style>
+</head>
+<body>
+
+<h1>vLLM vs SGLang &mdash; Head-to-Head Benchmark Template</h1>
+<p class="subtitle">
+  Fill in your measured numbers. Empty cells stay empty &mdash; the Pareto plot below
+  updates as you type. Highlight winners by goodput@p99 SLO, then export.
+</p>
+
+<div class="controls">
+  <button onclick="fillDemo()">Fill with example demo numbers</button>
+  <button onclick="highlightWinners()">Highlight winner per rate (by goodput)</button>
+  <button onclick="clearWinners()">Clear highlights</button>
+  <button onclick="exportCSV()">Export as CSV</button>
+  <button onclick="clearAll()">Clear all</button>
+</div>
+
+<table id="benchTable">
+  <thead>
+    <tr>
+      <th rowspan="2">Request rate</th>
+      <th class="vllm-grp" colspan="6">vLLM</th>
+      <th class="sglang-grp" colspan="6">SGLang</th>
+    </tr>
+    <tr>
+      <th class="vllm-grp">TTFT p50 (ms)</th>
+      <th class="vllm-grp">TTFT p99 (ms)</th>
+      <th class="vllm-grp">TPOT p50 (ms)</th>
+      <th class="vllm-grp">TPOT p99 (ms)</th>
+      <th class="vllm-grp">Throughput (tok/s)</th>
+      <th class="vllm-grp">Goodput@p99 (req/s)</th>
+      <th class="sglang-grp">TTFT p50 (ms)</th>
+      <th class="sglang-grp">TTFT p99 (ms)</th>
+      <th class="sglang-grp">TPOT p50 (ms)</th>
+      <th class="sglang-grp">TPOT p99 (ms)</th>
+      <th class="sglang-grp">Throughput (tok/s)</th>
+      <th class="sglang-grp">Goodput@p99 (req/s)</th>
+    </tr>
+  </thead>
+  <tbody id="benchBody"></tbody>
+</table>
+
+<canvas id="pareto" width="800" height="380"></canvas>
+
+<div class="legend">
+  <span><span class="dot" style="background:#1976d2"></span>vLLM</span>
+  <span><span class="dot" style="background:#e67e22"></span>SGLang</span>
+  <span style="color:#888">(marker area &prop; throughput; lower-left is better)</span>
+</div>
+
+<div class="panel" id="winnerSummary" style="display:none">
+  <strong>Winner summary:</strong>
+  <div id="winnerText"></div>
+</div>
+
+<div class="caption">
+  The lab deliverable is this table filled in for your benchmark. Empty cells are honest
+  &mdash; partial data is better than wrong data. Goodput@p99 is the metric that matters:
+  raw throughput hides p99 violations that would fail an SLO in production.
+</div>
+
+<footer>
+  <a href="../read.md">&larr; back to chapter</a>
+</footer>
+
+<script>
+const rates = [4, 16, 32]; // req/s
+const cols = ['ttft_p50', 'ttft_p99', 'tpot_p50', 'tpot_p99', 'tput', 'goodput'];
+const frameworks = ['vllm', 'sglang'];
+
+const data = {}; // data[rate][framework][col] = number | null
+rates.forEach(r => {
+  data[r] = {};
+  frameworks.forEach(f => {
+    data[r][f] = {};
+    cols.forEach(c => { data[r][f][c] = null; });
+  });
+});
+
+function buildTable() {
+  const body = document.getElementById('benchBody');
+  body.innerHTML = '';
+  rates.forEach(r => {
+    const tr = document.createElement('tr');
+    tr.innerHTML = '<td class="rate-cell">' + r + ' req/s</td>';
+    frameworks.forEach(f => {
+      cols.forEach(c => {
+        const td = document.createElement('td');
+        td.dataset.rate = r; td.dataset.fw = f; td.dataset.col = c;
+        const inp = document.createElement('input');
+        inp.type = 'number'; inp.step = 'any'; inp.min = '0';
+        inp.oninput = () => {
+          const v = inp.value === '' ? null : parseFloat(inp.value);
+          data[r][f][c] = isNaN(v) ? null : v;
+          drawPareto();
+        };
+        td.appendChild(inp);
+        tr.appendChild(td);
+      });
+    });
+    body.appendChild(tr);
+  });
+}
+
+function setCellValue(r, f, c, v) {
+  data[r][f][c] = v;
+  const td = document.querySelector('td[data-rate="' + r + '"][data-fw="' + f + '"][data-col="' + c + '"]');
+  if (td) td.querySelector('input').value = v === null ? '' : v;
+}
+
+function fillDemo() {
+  // SGLang wins at low rate (RadixAttention prefix sharing); vLLM wins at high rate (mature chunked-prefill)
+  const demo = {
+    4:  { vllm:   { ttft_p50: 95, ttft_p99: 180, tpot_p50: 22, tpot_p99: 35, tput: 1600, goodput: 3.9 },
+          sglang: { ttft_p50: 60, ttft_p99: 120, tpot_p50: 19, tpot_p99: 30, tput: 1750, goodput: 4.0 } },
+    16: { vllm:   { ttft_p50: 140, ttft_p99: 320, tpot_p50: 28, tpot_p99: 48, tput: 5800, goodput: 15.4 },
+          sglang: { ttft_p50: 130, ttft_p99: 340, tpot_p50: 30, tpot_p99: 55, tput: 5500, goodput: 14.6 } },
+    32: { vllm:   { ttft_p50: 210, ttft_p99: 520, tpot_p50: 36, tpot_p99: 70, tput: 9800, goodput: 28.4 },
+          sglang: { ttft_p50: 280, ttft_p99: 780, tpot_p50: 44, tpot_p99: 95, tput: 8900, goodput: 24.1 } },
+  };
+  rates.forEach(r => frameworks.forEach(f => cols.forEach(c => setCellValue(r, f, c, demo[r][f][c]))));
+  drawPareto();
+}
+
+function clearAll() {
+  rates.forEach(r => frameworks.forEach(f => cols.forEach(c => setCellValue(r, f, c, null))));
+  clearWinners();
+  document.getElementById('winnerSummary').style.display = 'none';
+  drawPareto();
+}
+
+function highlightWinners() {
+  clearWinners();
+  const summary = [];
+  rates.forEach(r => {
+    const gv = data[r].vllm.goodput, gs = data[r].sglang.goodput;
+    if (gv == null || gs == null) return;
+    const winner = gv > gs ? 'vllm' : (gs > gv ? 'sglang' : null);
+    if (!winner) return;
+    cols.forEach(c => {
+      const td = document.querySelector('td[data-rate="' + r + '"][data-fw="' + winner + '"][data-col="' + c + '"]');
+      if (td) td.classList.add('winner-' + winner);
+    });
+    summary.push(r + ' req/s &rarr; <strong>' + (winner === 'vllm' ? 'vLLM' : 'SGLang') +
+                 '</strong> wins (' + (winner === 'vllm' ? gv : gs).toFixed(2) + ' vs ' +
+                 (winner === 'vllm' ? gs : gv).toFixed(2) + ' req/s goodput)');
+  });
+  if (summary.length) {
+    document.getElementById('winnerSummary').style.display = 'block';
+    document.getElementById('winnerText').innerHTML = summary.join('<br>');
+  }
+}
+
+function clearWinners() {
+  document.querySelectorAll('td.winner-vllm, td.winner-sglang').forEach(td => {
+    td.classList.remove('winner-vllm', 'winner-sglang');
+  });
+}
+
+function exportCSV() {
+  const header = ['rate_req_s'];
+  frameworks.forEach(f => cols.forEach(c => header.push(f + '_' + c)));
+  const lines = [header.join(',')];
+  rates.forEach(r => {
+    const row = [r];
+    frameworks.forEach(f => cols.forEach(c => {
+      row.push(data[r][f][c] == null ? '' : data[r][f][c]);
+    }));
+    lines.push(row.join(','));
+  });
+  const blob = new Blob([lines.join('\n')], { type: 'text/csv' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = 'vllm-vs-sglang-bench.csv';
+  a.click();
+}
+
+const cvs = document.getElementById('pareto');
+const ctx = cvs.getContext('2d');
+
+function drawPareto() {
+  ctx.clearRect(0, 0, cvs.width, cvs.height);
+  const pad = { l: 70, r: 30, t: 30, b: 50 };
+  const W = cvs.width - pad.l - pad.r, H = cvs.height - pad.t - pad.b;
+
+  const points = [];
+  rates.forEach(r => frameworks.forEach(f => {
+    const d = data[r][f];
+    if (d.ttft_p99 != null && d.tpot_p99 != null) {
+      points.push({ x: d.ttft_p99, y: d.tpot_p99, tput: d.tput || 0, fw: f, r: r });
+    }
+  }));
+
+  // axes
+  let maxX = 1000, maxY = 100;
+  if (points.length) {
+    maxX = Math.max(maxX, ...points.map(p => p.x)) * 1.1;
+    maxY = Math.max(maxY, ...points.map(p => p.y)) * 1.1;
+  }
+  const xFor = v => pad.l + (v / maxX) * W;
+  const yFor = v => pad.t + H - (v / maxY) * H;
+
+  ctx.strokeStyle = '#eee'; ctx.lineWidth = 1;
+  for (let i = 0; i <= 5; i++) {
+    const y = pad.t + (H * i) / 5;
+    ctx.beginPath(); ctx.moveTo(pad.l, y); ctx.lineTo(pad.l + W, y); ctx.stroke();
+    const x = pad.l + (W * i) / 5;
+    ctx.beginPath(); ctx.moveTo(x, pad.t); ctx.lineTo(x, pad.t + H); ctx.stroke();
+  }
+  ctx.strokeStyle = '#333'; ctx.lineWidth = 1.5;
+  ctx.beginPath(); ctx.moveTo(pad.l, pad.t); ctx.lineTo(pad.l, pad.t + H);
+  ctx.lineTo(pad.l + W, pad.t + H); ctx.stroke();
+
+  ctx.fillStyle = '#555'; ctx.font = '11px sans-serif'; ctx.textAlign = 'right';
+  for (let i = 0; i <= 5; i++) {
+    ctx.fillText((maxY * (1 - i / 5)).toFixed(0), pad.l - 6, pad.t + (H * i) / 5 + 4);
+  }
+  ctx.textAlign = 'center';
+  for (let i = 0; i <= 5; i++) {
+    ctx.fillText((maxX * i / 5).toFixed(0), pad.l + (W * i) / 5, pad.t + H + 16);
+  }
+  ctx.fillText('TTFT p99 (ms)', pad.l + W / 2, pad.t + H + 38);
+  ctx.save(); ctx.translate(18, pad.t + H / 2); ctx.rotate(-Math.PI / 2);
+  ctx.fillText('TPOT p99 (ms)', 0, 0); ctx.restore();
+
+  // points
+  const maxTput = Math.max(1, ...points.map(p => p.tput));
+  points.forEach(p => {
+    const radius = 5 + 15 * Math.sqrt(p.tput / maxTput);
+    ctx.fillStyle = p.fw === 'vllm' ? 'rgba(25,118,210,0.55)' : 'rgba(230,126,34,0.55)';
+    ctx.strokeStyle = p.fw === 'vllm' ? '#1976d2' : '#e67e22';
+    ctx.lineWidth = 1.5;
+    ctx.beginPath(); ctx.arc(xFor(p.x), yFor(p.y), radius, 0, 2 * Math.PI);
+    ctx.fill(); ctx.stroke();
+    ctx.fillStyle = '#222'; ctx.textAlign = 'center'; ctx.font = '10px sans-serif';
+    ctx.fillText(p.r + ' req/s', xFor(p.x), yFor(p.y) - radius - 4);
+  });
+
+  if (!points.length) {
+    ctx.fillStyle = '#aaa'; ctx.textAlign = 'center'; ctx.font = '13px sans-serif';
+    ctx.fillText('(fill in TTFT p99 and TPOT p99 to see Pareto points)', pad.l + W / 2, pad.t + H / 2);
+  }
+}
+
+buildTable();
+drawPareto();
+</script>
+
+</body>
+</html>

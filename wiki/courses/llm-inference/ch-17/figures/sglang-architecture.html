@@ -1,0 +1,278 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>SGLang — Frontend + RadixAttention + HiCache</title>
+<style>
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+         max-width: 1000px; margin: 2em auto; padding: 0 1em; color: #222; }
+  h1 { font-size: 1.4em; margin-bottom: 0.2em; }
+  .subtitle { color: #666; margin-top: 0; }
+  .panel { border: 1px solid #ddd; border-radius: 6px; padding: 1em; margin: 1em 0;
+           background: #fafafa; }
+  .controls { display: flex; gap: 0.5em; flex-wrap: wrap; align-items: center; }
+  button { padding: 6px 12px; font-size: 0.9em; cursor: pointer;
+           border: 1px solid #888; background: #fff; border-radius: 4px; }
+  button:hover { background: #eef; }
+  button.active { background: #1976d2; color: #fff; border-color: #1976d2; }
+  canvas { background: white; border: 1px solid #ccc; display: block; margin: 1em auto; }
+  .layout { display: flex; gap: 1em; }
+  .stats { flex: 0 0 220px; font-size: 0.88em; }
+  .stats h3 { margin: 0.2em 0 0.4em; font-size: 0.95em; color: #333; }
+  .stat-row { display: flex; justify-content: space-between; padding: 2px 0;
+              border-bottom: 1px dotted #ddd; }
+  .stat-row .value { font-variant-numeric: tabular-nums; color: #1976d2; font-weight: 600; }
+  .legend { display: flex; gap: 1.2em; justify-content: center; font-size: 0.85em;
+            flex-wrap: wrap; margin-top: 0.5em; }
+  .swatch { display: inline-block; width: 12px; height: 12px; margin-right: 4px;
+            vertical-align: middle; border-radius: 2px; }
+  .note { font-size: 0.88em; color: #555; line-height: 1.5; }
+  code { background: #eef; padding: 1px 4px; border-radius: 3px; font-size: 0.9em; }
+  a { color: #1976d2; }
+</style>
+</head>
+<body>
+
+<h1>SGLang — Frontend Language + RadixAttention + HiCache</h1>
+<p class="subtitle">
+  Watch a <code>fork → N completions → select</code> coroutine flow through the SGLang stack.
+  The shared prefix is cached once in RadixAttention; only the divergent suffixes occupy extra blocks.
+</p>
+
+<div class="panel">
+  <div class="controls">
+    <strong>Fork width:</strong>
+    <button id="fork4" class="forkBtn active">fork 4</button>
+    <button id="fork8" class="forkBtn">fork 8</button>
+    <button id="fork16" class="forkBtn">fork 16</button>
+    <button id="reset" style="margin-left:auto">reset</button>
+  </div>
+</div>
+
+<div class="layout">
+  <canvas id="diagram" width="740" height="520"></canvas>
+  <div class="stats">
+    <div class="panel">
+      <h3>RadixAttention</h3>
+      <div class="stat-row"><span>Shared-prefix tokens</span><span class="value" id="sharedTokens">0</span></div>
+      <div class="stat-row"><span>Unique-suffix tokens</span><span class="value" id="uniqueTokens">0</span></div>
+      <div class="stat-row"><span>Effective savings</span><span class="value" id="savings">0%</span></div>
+    </div>
+    <div class="panel">
+      <h3>HiCache hit rate</h3>
+      <div class="stat-row"><span>GPU tier</span><span class="value" id="gpuHit">—</span></div>
+      <div class="stat-row"><span>CPU tier</span><span class="value" id="cpuHit">—</span></div>
+      <div class="stat-row"><span>Disk tier</span><span class="value" id="diskHit">—</span></div>
+    </div>
+    <div class="panel">
+      <h3>Phase</h3>
+      <div id="phase" style="font-weight:600; color:#388e3c">idle</div>
+    </div>
+  </div>
+</div>
+
+<div class="legend">
+  <span><span class="swatch" style="background:#1976d2"></span>shared prefix (cached)</span>
+  <span><span class="swatch" style="background:#fb8c00"></span>fork suffixes (unique)</span>
+  <span><span class="swatch" style="background:#388e3c"></span>selected branch</span>
+  <span><span class="swatch" style="background:#bbb"></span>evicted</span>
+</div>
+
+<div class="panel note">
+  <strong>Caption.</strong>
+  SGLang's <em>Frontend Language + RadixAttention</em> is the combo. The DSL surfaces the
+  shared-prefix structure (the <code>fork</code> point makes parallelism explicit); RadixAttention
+  reuses the prefix KV blocks across all branches for free. <em>HiCache</em> extends the win
+  across memory tiers — when blocks are evicted from GPU they spill to CPU and then to disk,
+  so a later request hitting the same prompt still avoids a full recompute.
+  See <a href="../read.md">← back to chapter</a>.
+</div>
+
+<script>
+const cvs = document.getElementById('diagram');
+const ctx = cvs.getContext('2d');
+
+let forkN = 4;
+let animPhase = 'idle'; // idle | fork | diverge | select | evict
+let animT = 0;
+let rafId = null;
+
+const PREFIX_TOKENS = 256;
+const SUFFIX_TOKENS = 64;
+
+function setFork(n, btn) {
+  forkN = n;
+  document.querySelectorAll('.forkBtn').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+  startAnim();
+}
+
+document.getElementById('fork4').onclick = (e) => setFork(4, e.target);
+document.getElementById('fork8').onclick = (e) => setFork(8, e.target);
+document.getElementById('fork16').onclick = (e) => setFork(16, e.target);
+document.getElementById('reset').onclick = () => { animPhase = 'idle'; animT = 0; render(); updateStats(false); };
+
+function startAnim() {
+  cancelAnimationFrame(rafId);
+  animPhase = 'fork';
+  animT = 0;
+  step();
+}
+
+function step() {
+  animT += 1;
+  if (animPhase === 'fork' && animT > 60) { animPhase = 'diverge'; animT = 0; }
+  else if (animPhase === 'diverge' && animT > 80) { animPhase = 'select'; animT = 0; }
+  else if (animPhase === 'select' && animT > 60) { animPhase = 'evict'; animT = 0; }
+  else if (animPhase === 'evict' && animT > 60) { animPhase = 'done'; }
+  render();
+  updateStats(true);
+  if (animPhase !== 'done') rafId = requestAnimationFrame(step);
+}
+
+function updateStats(active) {
+  const shared = PREFIX_TOKENS;
+  const unique = (animPhase === 'evict' || animPhase === 'done')
+    ? SUFFIX_TOKENS
+    : SUFFIX_TOKENS * forkN;
+  const naive = PREFIX_TOKENS * forkN + SUFFIX_TOKENS * forkN;
+  const actual = shared + unique;
+  const sav = active ? (1 - actual / naive) : 0;
+  document.getElementById('sharedTokens').textContent = shared;
+  document.getElementById('uniqueTokens').textContent = unique;
+  document.getElementById('savings').textContent = (sav * 100).toFixed(0) + '%';
+
+  // hypothetical HiCache hit rates that improve with cache reuse
+  document.getElementById('gpuHit').textContent = active ? (animPhase === 'idle' ? '—' : '92%') : '—';
+  document.getElementById('cpuHit').textContent = active ? (animPhase === 'idle' ? '—' : '6%') : '—';
+  document.getElementById('diskHit').textContent = active ? (animPhase === 'idle' ? '—' : '2%') : '—';
+
+  document.getElementById('phase').textContent = animPhase;
+}
+
+function box(x, y, w, h, fill, stroke, label, sub) {
+  ctx.fillStyle = fill; ctx.strokeStyle = stroke; ctx.lineWidth = 1.5;
+  ctx.beginPath(); ctx.roundRect(x, y, w, h, 6); ctx.fill(); ctx.stroke();
+  ctx.fillStyle = '#222'; ctx.font = '12px sans-serif'; ctx.textAlign = 'center';
+  ctx.fillText(label, x + w/2, y + h/2);
+  if (sub) {
+    ctx.fillStyle = '#666'; ctx.font = '10px sans-serif';
+    ctx.fillText(sub, x + w/2, y + h/2 + 14);
+  }
+}
+
+function arrow(x1, y1, x2, y2) {
+  ctx.strokeStyle = '#888'; ctx.lineWidth = 1.5; ctx.fillStyle = '#888';
+  ctx.beginPath(); ctx.moveTo(x1, y1); ctx.lineTo(x2, y2); ctx.stroke();
+  const a = Math.atan2(y2 - y1, x2 - x1);
+  ctx.beginPath();
+  ctx.moveTo(x2, y2);
+  ctx.lineTo(x2 - 8*Math.cos(a - 0.4), y2 - 8*Math.sin(a - 0.4));
+  ctx.lineTo(x2 - 8*Math.cos(a + 0.4), y2 - 8*Math.sin(a + 0.4));
+  ctx.closePath(); ctx.fill();
+}
+
+function render() {
+  ctx.clearRect(0, 0, cvs.width, cvs.height);
+
+  // Top row: pipeline
+  box(20, 20, 160, 50, '#fff8e1', '#fbc02d', 'Frontend Python DSL', 'gen / select / fork');
+  arrow(180, 45, 210, 45);
+  box(210, 20, 130, 50, '#e3f2fd', '#1976d2', 'Runtime');
+  arrow(340, 45, 370, 45);
+  box(370, 20, 200, 50, '#e8f5e9', '#388e3c', 'RadixAttention Scheduler', 'prefix-tree aware');
+  arrow(570, 45, 600, 45);
+  box(600, 20, 120, 50, '#fce4ec', '#c2185b', 'Backend GPU');
+
+  // Middle: prefix tree visualisation
+  ctx.fillStyle = '#444'; ctx.font = '12px sans-serif'; ctx.textAlign = 'left';
+  ctx.fillText('RadixAttention prefix tree', 20, 110);
+
+  // shared prefix block
+  const px = 100, py = 140, pw = 540, ph = 30;
+  ctx.fillStyle = '#1976d2'; ctx.strokeStyle = '#0d47a1'; ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.roundRect(px, py, pw, ph, 4); ctx.fill(); ctx.stroke();
+  ctx.fillStyle = '#fff'; ctx.textAlign = 'center'; ctx.font = '11px sans-serif';
+  ctx.fillText('shared prefix — ' + PREFIX_TOKENS + ' tokens (cached once across all branches)', px + pw/2, py + 20);
+
+  // fork point marker
+  const fx = px + pw, fy = py + ph/2;
+  ctx.fillStyle = '#fb8c00'; ctx.beginPath(); ctx.arc(fx, fy, 5, 0, 2*Math.PI); ctx.fill();
+  ctx.fillStyle = '#666'; ctx.font = '10px sans-serif'; ctx.textAlign = 'left';
+  ctx.fillText('fork', fx + 8, fy + 4);
+
+  // suffix branches
+  const sy0 = 195;
+  const branchSpacing = Math.min(18, 230 / forkN);
+  const showSelectedOnly = (animPhase === 'evict' || animPhase === 'done');
+  const selectedIdx = Math.floor(forkN / 2);
+  const visible = animPhase === 'fork' ? Math.min(forkN, Math.ceil(animT / 60 * forkN)) :
+                  (animPhase === 'idle' ? 0 : forkN);
+
+  for (let i = 0; i < forkN; i++) {
+    const yy = sy0 + i * branchSpacing;
+    const len = 140;
+    let color = '#fb8c00';
+    if (showSelectedOnly && i !== selectedIdx) color = '#bbb';
+    if (showSelectedOnly && i === selectedIdx) color = '#388e3c';
+    if (animPhase === 'select' && i === selectedIdx) color = '#388e3c';
+
+    if (i >= visible) continue;
+
+    // line from fork to branch start
+    ctx.strokeStyle = color; ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.moveTo(fx, fy); ctx.lineTo(fx + 20, yy + 4); ctx.stroke();
+
+    // branch suffix bar
+    ctx.fillStyle = color;
+    ctx.fillRect(fx + 20, yy, len * (animPhase === 'diverge' ? Math.min(1, animT/80) : 1), 8);
+
+    if (i === 0) {
+      ctx.fillStyle = '#666'; ctx.font = '10px sans-serif'; ctx.textAlign = 'left';
+      ctx.fillText('suffix ' + SUFFIX_TOKENS + ' tok', fx + 20 + len + 6, yy + 8);
+    }
+  }
+
+  // HiCache tiers
+  const hy = 380;
+  ctx.fillStyle = '#444'; ctx.font = '12px sans-serif'; ctx.textAlign = 'left';
+  ctx.fillText('HiCache tiers (auto-spillover)', 20, hy);
+
+  box(40, hy + 15, 180, 55, '#ffebee', '#c62828', 'GPU HBM',  'fast · small (~80GB)');
+  box(260, hy + 15, 180, 55, '#fff3e0', '#ef6c00', 'CPU DRAM', 'mid · larger (~1TB)');
+  box(480, hy + 15, 220, 55, '#e8f5e9', '#2e7d32', 'Disk / Distributed', 'slow · massive (~10TB+)');
+  arrow(220, hy + 42, 260, hy + 42);
+  arrow(440, hy + 42, 480, hy + 42);
+
+  // labels for evict transitions
+  ctx.fillStyle = '#888'; ctx.font = '10px sans-serif'; ctx.textAlign = 'center';
+  ctx.fillText('evict', 240, hy + 35);
+  ctx.fillText('evict', 460, hy + 35);
+
+  // current phase indicator on tiers
+  if (animPhase !== 'idle') {
+    ctx.strokeStyle = '#1976d2'; ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.roundRect(40, hy + 15, 180, 55, 6); ctx.stroke();
+  }
+}
+
+// roundRect polyfill
+if (!CanvasRenderingContext2D.prototype.roundRect) {
+  CanvasRenderingContext2D.prototype.roundRect = function(x, y, w, h, r) {
+    this.beginPath();
+    this.moveTo(x + r, y);
+    this.arcTo(x + w, y, x + w, y + h, r);
+    this.arcTo(x + w, y + h, x, y + h, r);
+    this.arcTo(x, y + h, x, y, r);
+    this.arcTo(x, y, x + w, y, r);
+    this.closePath();
+    return this;
+  };
+}
+
+render();
+updateStats(false);
+</script>
+
+</body>
+</html>

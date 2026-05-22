@@ -1,0 +1,227 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>CUDA Graph Overhead — Eager Launches vs Graph Replay</title>
+<style>
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+         max-width: 980px; margin: 2em auto; padding: 0 1em; color: #222; }
+  h1 { font-size: 1.4em; margin-bottom: 0.2em; }
+  .subtitle { color: #666; margin-top: 0; }
+  .panel { border: 1px solid #ddd; border-radius: 6px; padding: 1em; margin: 1em 0;
+           background: #fafafa; }
+  .controls { display: flex; gap: 1em; flex-wrap: wrap; align-items: center; }
+  .control { display: flex; flex-direction: column; }
+  label { font-size: 0.85em; color: #555; margin-bottom: 0.2em; }
+  input[type="range"] { width: 180px; }
+  canvas { background: white; border: 1px solid #ccc; display: block; margin: 0.5em auto; }
+  .value { font-variant-numeric: tabular-nums; color: #333; font-weight: 600; }
+  .note { font-size: 0.88em; color: #555; line-height: 1.5; }
+  code { background: #eef; padding: 1px 4px; border-radius: 3px; font-size: 0.9em; }
+  .metrics { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 0.5em; margin-top: 0.5em; }
+  .metric-card { background: white; border: 1px solid #ddd; border-radius: 5px; padding: 0.5em 0.7em; }
+  .metric-card h4 { margin: 0 0 0.3em 0; font-size: 0.85em; color: #555; }
+  .metric-val { font-size: 1.1em; font-weight: 600; font-variant-numeric: tabular-nums; }
+  .eager { color: #c62828; }
+  .graph { color: #1565c0; }
+  footer { margin-top: 2em; font-size: 0.9em; color: #555; text-align: center; }
+  footer a { color: #1565c0; text-decoration: none; }
+</style>
+</head>
+<body>
+
+<h1>CUDA Graph Overhead — Per-Token Launch Cost</h1>
+<p class="subtitle">
+  At small batch sizes, the GPU isn't busy doing math — it's waiting on the CPU to issue
+  kernels. CUDA Graphs replay a captured sequence as a single launch.
+</p>
+
+<div class="panel">
+  <div class="controls">
+    <div class="control">
+      <label>Transformer layers</label>
+      <input type="range" id="layers" min="16" max="128" step="4" value="80">
+      <span class="value"><span id="layersLbl">80</span></span>
+    </div>
+    <div class="control">
+      <label>Kernels per layer</label>
+      <input type="range" id="kpl" min="5" max="20" step="1" value="10">
+      <span class="value"><span id="kplLbl">10</span></span>
+    </div>
+    <div class="control">
+      <label>Per-kernel launch overhead (µs)</label>
+      <input type="range" id="ovh" min="2" max="30" step="1" value="10">
+      <span class="value"><span id="ovhLbl">10</span> µs</span>
+    </div>
+    <div class="control">
+      <label>Per-kernel compute (µs)</label>
+      <input type="range" id="cmp" min="1" max="30" step="1" value="5">
+      <span class="value"><span id="cmpLbl">5</span> µs</span>
+    </div>
+  </div>
+</div>
+
+<canvas id="tl" width="940" height="280"></canvas>
+
+<div class="metrics">
+  <div class="metric-card eager">
+    <h4>Eager per-token latency</h4>
+    <div class="metric-val" id="latEager">—</div>
+  </div>
+  <div class="metric-card graph">
+    <h4>CUDA Graph per-token latency</h4>
+    <div class="metric-val" id="latGraph">—</div>
+  </div>
+  <div class="metric-card">
+    <h4>Speedup</h4>
+    <div class="metric-val" id="speedup">—</div>
+  </div>
+</div>
+
+<div class="panel note">
+  <strong>Caption.</strong> Launch overhead dominates decode latency at small batch sizes. CUDA
+  Graphs eliminate it via static replay: the kernel sequence is captured once and re-issued
+  with a single launch. The <code>static shape</code> constraint forces frameworks to capture
+  one graph per discrete batch-size bucket (powers of two are typical), which is why vLLM /
+  TensorRT-LLM precompile a small set of buckets at startup.
+</div>
+
+<footer><a href="../read.md">← back to chapter</a></footer>
+
+<script>
+const cvs = document.getElementById('tl');
+const ctx = cvs.getContext('2d');
+let t0 = performance.now();
+
+function compute() {
+  const layers = +document.getElementById('layers').value;
+  const kpl = +document.getElementById('kpl').value;
+  const ovh = +document.getElementById('ovh').value;     // µs per launch
+  const cmp = +document.getElementById('cmp').value;     // µs per compute slice
+  const N = layers * kpl;
+  const eager = N * (ovh + cmp);                          // every kernel pays launch
+  const graph = ovh + N * cmp;                            // one launch, all compute
+  return { layers, kpl, ovh, cmp, N, eager, graph };
+}
+
+function updateLabels() {
+  ['layers','kpl','ovh','cmp'].forEach(id => {
+    document.getElementById(id+'Lbl').textContent = document.getElementById(id).value;
+  });
+}
+
+function render() {
+  updateLabels();
+  const m = compute();
+  document.getElementById('latEager').textContent = (m.eager / 1000).toFixed(2) + ' ms';
+  document.getElementById('latGraph').textContent = (m.graph / 1000).toFixed(2) + ' ms';
+  document.getElementById('speedup').textContent = (m.eager / m.graph).toFixed(2) + '×';
+
+  ctx.clearRect(0, 0, cvs.width, cvs.height);
+
+  // headers
+  ctx.fillStyle = '#c62828';
+  ctx.font = 'bold 13px sans-serif';
+  ctx.textAlign = 'left';
+  ctx.fillText(`Eager mode: ${m.N} kernels per token, each pays ${m.ovh}µs launch`, 14, 22);
+  ctx.fillStyle = '#1565c0';
+  ctx.fillText('CUDA Graph: one launch replays the entire captured sequence', 14, 168);
+
+  // ----- eager timeline -----
+  const tlX = 20, tlYe = 50, tlW = 900, tlH = 80;
+  ctx.fillStyle = '#fafafa';
+  ctx.fillRect(tlX, tlYe, tlW, tlH);
+  ctx.strokeStyle = '#ccc';
+  ctx.strokeRect(tlX, tlYe, tlW, tlH);
+
+  // Animate progress
+  const t = (performance.now() - t0) / 1000;
+  const cycle = 4.0;
+  const phase = (t % cycle) / cycle; // 0..1
+  const eagerProgress = Math.min(1, phase * 1.05);
+
+  // Map total eager µs onto tlW; clamp display to first ~80 kernels for readability
+  const showK = Math.min(m.N, 80);
+  const slotW = tlW / showK;
+  const ovhFrac = m.ovh / (m.ovh + m.cmp);
+  for (let i = 0; i < showK; i++) {
+    const x = tlX + i * slotW;
+    const xVisible = (i / showK) <= eagerProgress;
+    // launch overhead block (red)
+    ctx.fillStyle = xVisible ? '#ef9a9a' : '#f5f5f5';
+    ctx.fillRect(x + 1, tlYe + 8, slotW * ovhFrac - 1, tlH - 16);
+    // compute block (dark red)
+    ctx.fillStyle = xVisible ? '#b71c1c' : '#eeeeee';
+    ctx.fillRect(x + slotW * ovhFrac, tlYe + 8, slotW * (1-ovhFrac) - 1, tlH - 16);
+  }
+  if (m.N > showK) {
+    ctx.fillStyle = '#555';
+    ctx.font = '10px sans-serif';
+    ctx.textAlign = 'right';
+    ctx.fillText(`(showing first ${showK} of ${m.N} kernels)`, tlX + tlW - 4, tlYe - 2);
+  }
+  // legend tag
+  ctx.fillStyle = '#555';
+  ctx.font = '11px sans-serif';
+  ctx.textAlign = 'left';
+  ctx.fillText('■ launch overhead   ■ compute', tlX, tlYe + tlH + 16);
+  ctx.fillText(`total per-token: ${(m.eager/1000).toFixed(2)} ms (≈ ${m.N}×${m.ovh+m.cmp}µs)`,
+               tlX + 220, tlYe + tlH + 16);
+
+  // ----- graph timeline -----
+  const tlYg = 195;
+  ctx.fillStyle = '#fafafa';
+  ctx.fillRect(tlX, tlYg, tlW, tlH);
+  ctx.strokeStyle = '#ccc';
+  ctx.strokeRect(tlX, tlYg, tlW, tlH);
+
+  // single launch block (small) + one big compute block
+  const totalGraph = m.graph; // µs
+  // overhead occupies (m.ovh / totalGraph) of width
+  const overFrac = m.ovh / totalGraph;
+  const overW = tlW * overFrac;
+  ctx.fillStyle = '#90caf9';
+  ctx.fillRect(tlX + 1, tlYg + 8, Math.max(4, overW - 1), tlH - 16);
+  ctx.fillStyle = '#0d47a1';
+  // compute progress reveal
+  const computeFullW = tlW - overW;
+  const visW = computeFullW * eagerProgress;
+  ctx.fillRect(tlX + overW, tlYg + 8, visW - 1, tlH - 16);
+  // ghost outline of full compute
+  ctx.strokeStyle = '#90caf9';
+  ctx.setLineDash([3, 3]);
+  ctx.strokeRect(tlX + overW, tlYg + 8, computeFullW - 1, tlH - 16);
+  ctx.setLineDash([]);
+
+  ctx.fillStyle = '#0d47a1';
+  ctx.font = 'bold 11px sans-serif';
+  ctx.textAlign = 'left';
+  if (overW > 30) ctx.fillText('1 launch', tlX + 4, tlYg + tlH/2 + 4);
+  ctx.fillStyle = '#fff';
+  ctx.fillText(`${m.N} kernels replayed (${(m.N*m.cmp/1000).toFixed(2)} ms compute)`,
+               tlX + overW + 10, tlYg + tlH/2 + 4);
+
+  ctx.fillStyle = '#555';
+  ctx.font = '11px sans-serif';
+  ctx.textAlign = 'left';
+  ctx.fillText(`total per-token: ${(m.graph/1000).toFixed(2)} ms (≈ ${m.ovh}µs launch + ${m.N}×${m.cmp}µs compute)`,
+               tlX, tlYg + tlH + 16);
+
+  // Speedup callout
+  ctx.fillStyle = '#1b5e20';
+  ctx.font = 'bold 12px sans-serif';
+  ctx.textAlign = 'right';
+  ctx.fillText(`speedup: ${(m.eager/m.graph).toFixed(2)}×`, tlX + tlW - 4, tlYg + tlH + 16);
+
+  requestAnimationFrame(render);
+}
+
+['layers','kpl','ovh','cmp'].forEach(id => {
+  document.getElementById(id).addEventListener('input', updateLabels);
+});
+
+render();
+</script>
+
+</body>
+</html>

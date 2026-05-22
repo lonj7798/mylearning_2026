@@ -1,0 +1,261 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>PagedAttention — Virtual Memory for the KV Cache</title>
+<style>
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+         max-width: 1100px; margin: 2em auto; padding: 0 1em; color: #222; }
+  h1 { font-size: 1.4em; margin-bottom: 0.2em; }
+  .subtitle { color: #666; margin-top: 0; }
+  .panel { border: 1px solid #ddd; border-radius: 6px; padding: 1em; margin: 1em 0;
+           background: #fafafa; }
+  .layout { display: grid; grid-template-columns: 320px 1fr; gap: 1.4em; }
+  .controls { display: flex; gap: 0.6em; flex-wrap: wrap; align-items: center; margin-bottom: 0.6em; }
+  button { padding: 6px 10px; border: 1px solid #999; background: #fff; border-radius: 4px;
+           cursor: pointer; font-size: 0.85em; }
+  button:hover { background: #eef; }
+  input[type="range"] { width: 160px; vertical-align: middle; }
+  label { font-size: 0.85em; color: #555; }
+  .value { font-variant-numeric: tabular-nums; font-weight: 600; }
+  .blockgrid { display: grid; grid-template-columns: repeat(8, 1fr); gap: 4px; }
+  .block { aspect-ratio: 1; border: 1px solid #888; border-radius: 4px;
+           display: flex; align-items: center; justify-content: center;
+           font-size: 0.7em; font-family: monospace; color: #fff;
+           position: relative; }
+  .block.free { background: #e0e0e0; color: #777; border-color: #bbb; }
+  .block .shared { position: absolute; top: 2px; right: 4px; font-size: 0.8em; color: #fff; }
+  .seqlist { display: flex; flex-direction: column; gap: 0.7em; }
+  .seq { border: 1px solid #ccc; border-radius: 4px; padding: 0.5em 0.6em; background: #fff; }
+  .seq h3 { margin: 0 0 0.3em 0; font-size: 0.95em; }
+  .strip { display: flex; gap: 2px; flex-wrap: wrap; }
+  .tok { width: 12px; height: 14px; border-radius: 2px; border: 1px solid rgba(0,0,0,0.15); }
+  .blocktable { font-family: monospace; font-size: 0.78em; color: #555; margin-top: 0.3em; }
+  .stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 0.4em; margin-top: 0.6em; }
+  .stat { background: white; border: 1px solid #ddd; border-radius: 4px; padding: 0.4em 0.6em; }
+  .stat .k { font-size: 0.72em; color: #777; }
+  .stat .v { font-size: 1.0em; font-variant-numeric: tabular-nums; font-weight: 600; }
+  .note { font-size: 0.88em; color: #555; line-height: 1.5; }
+  code { background: #eef; padding: 1px 4px; border-radius: 3px; font-size: 0.9em; }
+  a { color: #1976d2; }
+</style>
+</head>
+<body>
+
+<h1>PagedAttention — Virtual Memory for the KV Cache</h1>
+<p class="subtitle">
+  32 physical blocks (each holds 16 KV tokens). Each sequence has its own block table.
+  Allocate, free, beam-fork — watch fragmentation.
+</p>
+
+<div class="panel">
+  <div class="controls">
+    <label>New seq E length: <span class="value" id="newLenLabel">64</span> tokens</label>
+    <input type="range" id="newLen" min="16" max="256" step="16" value="64">
+    <button id="allocE">Allocate seq E</button>
+    <button id="freeA">Free seq A</button>
+    <button id="forkB">Beam-fork seq B</button>
+    <button id="reset">Reset</button>
+  </div>
+  <div class="stats">
+    <div class="stat"><div class="k">Physical blocks</div><div class="v">32</div></div>
+    <div class="stat"><div class="k">Allocated</div><div class="v" id="alloc">—</div></div>
+    <div class="stat"><div class="k">Free</div><div class="v" id="free">—</div></div>
+    <div class="stat"><div class="k">Fragmentation</div><div class="v" id="frag">—</div></div>
+  </div>
+</div>
+
+<div class="panel layout">
+  <div>
+    <h3 style="margin-top:0;font-size:0.95em">Physical block pool (32 × 16 tokens)</h3>
+    <div class="blockgrid" id="grid"></div>
+  </div>
+  <div>
+    <h3 style="margin-top:0;font-size:0.95em">Logical sequences and block tables</h3>
+    <div class="seqlist" id="seqs"></div>
+  </div>
+</div>
+
+<div class="panel note">
+  <strong>What you should notice.</strong>
+  Naive contiguous KV (the pre-vLLM way) reserves <code>max_seq_len</code> per request and burns
+  60%+ of memory on slack. PagedAttention splits the cache into fixed-size blocks (here 16 tokens
+  each) and gives each sequence a block table — exactly like an OS page table over physical
+  frames. <strong>Beam-fork uses copy-on-write</strong>: the first divergent block is duplicated,
+  but every earlier block is shared, so beam search and chat-session prefix sharing cost almost
+  nothing. The reported fragmentation is <em>internal</em> — wasted tokens inside partially filled
+  blocks. PagedAttention pushes KV utilization to ~96% in practice vs ~60% for contiguous.
+</div>
+
+<p class="note"><a href="../read.md">← back to chapter</a></p>
+
+<script>
+const N_BLOCKS = 32;
+const TOKENS_PER_BLOCK = 16;
+const COLORS = {
+  A: '#d32f2f', B: '#1976d2', C: '#388e3c', D: '#f57c00',
+  E: '#7b1fa2', F: '#00838f', "B'": '#5c6bc0',
+};
+
+let state;
+
+function initState() {
+  // physical blocks: array of { owner, tokensUsed }
+  const blocks = Array.from({length: N_BLOCKS}, () => ({ owner: null, tokensUsed: 0, shared: 0 }));
+  // sequences
+  const seqs = {};
+
+  function alloc(name, tokens) {
+    const need = Math.ceil(tokens / TOKENS_PER_BLOCK);
+    const tbl = [];
+    let placed = 0, remaining = tokens;
+    for (let i = 0; i < N_BLOCKS && placed < need; i++) {
+      if (blocks[i].owner === null) {
+        blocks[i].owner = name;
+        blocks[i].tokensUsed = Math.min(TOKENS_PER_BLOCK, remaining);
+        remaining -= blocks[i].tokensUsed;
+        tbl.push(i);
+        placed++;
+      }
+    }
+    seqs[name] = { name, tokens, table: tbl };
+  }
+
+  alloc('A', 48);   // 3 blocks
+  alloc('B', 80);   // 5 blocks
+  alloc('C', 32);   // 2 blocks
+  alloc('D', 64);   // 4 blocks
+  state = { blocks, seqs };
+}
+
+function freeSeq(name) {
+  if (!state.seqs[name]) return;
+  for (const idx of state.seqs[name].table) {
+    const b = state.blocks[idx];
+    if (b.shared > 0) {
+      b.shared--;
+    } else {
+      b.owner = null;
+      b.tokensUsed = 0;
+    }
+  }
+  delete state.seqs[name];
+}
+
+function allocSeq(name, tokens) {
+  if (state.seqs[name]) return false;
+  const need = Math.ceil(tokens / TOKENS_PER_BLOCK);
+  const free = state.blocks.filter(b => b.owner === null).length;
+  if (free < need) {
+    alert('Not enough free blocks (' + free + ' free, ' + need + ' required). Try freeing first.');
+    return false;
+  }
+  const tbl = [];
+  let placed = 0, remaining = tokens;
+  for (let i = 0; i < N_BLOCKS && placed < need; i++) {
+    if (state.blocks[i].owner === null) {
+      state.blocks[i].owner = name;
+      state.blocks[i].tokensUsed = Math.min(TOKENS_PER_BLOCK, remaining);
+      remaining -= state.blocks[i].tokensUsed;
+      tbl.push(i);
+      placed++;
+    }
+  }
+  state.seqs[name] = { name, tokens, table: tbl };
+  return true;
+}
+
+function beamForkB() {
+  if (!state.seqs['B']) return;
+  if (state.seqs["B'"]) { alert("Seq B' already exists."); return; }
+  const tbl = state.seqs['B'].table;
+  if (tbl.length === 0) return;
+  // Share all blocks except the last (divergence point) — copy-on-write the last.
+  const newTbl = tbl.slice(0, -1);
+  for (const idx of newTbl) state.blocks[idx].shared++;
+  // Duplicate the last block to a free slot
+  const free = state.blocks.findIndex(b => b.owner === null);
+  if (free === -1) { alert('No free block for copy-on-write.'); return; }
+  const last = state.blocks[tbl[tbl.length - 1]];
+  state.blocks[free].owner = "B'";
+  state.blocks[free].tokensUsed = last.tokensUsed;
+  newTbl.push(free);
+  state.seqs["B'"] = { name: "B'", tokens: state.seqs['B'].tokens, table: newTbl };
+}
+
+function fragmentationPct() {
+  let used = 0, capacity = 0;
+  for (const b of state.blocks) {
+    if (b.owner !== null) {
+      used += b.tokensUsed;
+      capacity += TOKENS_PER_BLOCK;
+    }
+  }
+  if (capacity === 0) return 0;
+  return Math.round((1 - used / capacity) * 100);
+}
+
+function render() {
+  // grid
+  const grid = document.getElementById('grid');
+  grid.innerHTML = '';
+  state.blocks.forEach((b, i) => {
+    const d = document.createElement('div');
+    d.className = 'block' + (b.owner === null ? ' free' : '');
+    if (b.owner !== null) {
+      d.style.background = COLORS[b.owner] || '#666';
+      d.textContent = b.owner;
+      if (b.shared > 0) {
+        const s = document.createElement('span');
+        s.className = 'shared';
+        s.textContent = '×' + (b.shared + 1);
+        d.appendChild(s);
+      }
+    } else {
+      d.textContent = i;
+    }
+    d.title = 'block ' + i + (b.owner ? (' — ' + b.owner + ' (' + b.tokensUsed + '/' + TOKENS_PER_BLOCK + ' tokens)' + (b.shared ? ' shared×' + (b.shared + 1) : '')) : ' — free');
+    grid.appendChild(d);
+  });
+
+  // sequences
+  const seqs = document.getElementById('seqs');
+  seqs.innerHTML = '';
+  Object.values(state.seqs).forEach(s => {
+    const div = document.createElement('div');
+    div.className = 'seq';
+    const strip = '<div class="strip">' +
+      Array.from({length: s.tokens}, () =>
+        `<div class="tok" style="background:${COLORS[s.name] || '#666'}"></div>`).join('') +
+      '</div>';
+    div.innerHTML =
+      `<h3 style="color:${COLORS[s.name] || '#666'}">seq ${s.name} — ${s.tokens} tokens, ${s.table.length} blocks</h3>` +
+      strip +
+      `<div class="blocktable">block_table → [${s.table.join(', ')}]</div>`;
+    seqs.appendChild(div);
+  });
+
+  // stats
+  const allocated = state.blocks.filter(b => b.owner !== null).length;
+  document.getElementById('alloc').textContent = allocated;
+  document.getElementById('free').textContent = (N_BLOCKS - allocated);
+  document.getElementById('frag').textContent = fragmentationPct() + '%';
+}
+
+document.getElementById('allocE').addEventListener('click', () => {
+  const len = +document.getElementById('newLen').value;
+  if (allocSeq('E', len)) render();
+});
+document.getElementById('freeA').addEventListener('click', () => { freeSeq('A'); render(); });
+document.getElementById('forkB').addEventListener('click', () => { beamForkB(); render(); });
+document.getElementById('reset').addEventListener('click', () => { initState(); render(); });
+document.getElementById('newLen').addEventListener('input', e => {
+  document.getElementById('newLenLabel').textContent = e.target.value;
+});
+
+initState();
+render();
+</script>
+
+</body>
+</html>

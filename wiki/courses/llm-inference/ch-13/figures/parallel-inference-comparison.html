@@ -1,0 +1,278 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Parallel Inference — TP vs PP vs EP</title>
+<style>
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+         max-width: 1100px; margin: 2em auto; padding: 0 1em; color: #222; }
+  h1 { font-size: 1.4em; margin-bottom: 0.2em; }
+  .subtitle { color: #666; margin-top: 0; }
+  .panel { border: 1px solid #ddd; border-radius: 6px; padding: 1em; margin: 1em 0;
+           background: #fafafa; }
+  .controls { display: flex; gap: 1.5em; flex-wrap: wrap; align-items: center; }
+  .control { display: flex; flex-direction: column; }
+  label { font-size: 0.85em; color: #555; margin-bottom: 0.2em; }
+  input[type="range"] { width: 200px; }
+  .panels { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 1em; }
+  .scheme { border: 1px solid #ccc; border-radius: 6px; padding: 0.6em; background: white; }
+  .scheme h3 { margin: 0 0 0.3em 0; font-size: 1em; }
+  canvas { background: white; display: block; margin: 0 auto; }
+  .summary { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 1em; margin-top: 0.4em; font-size: 0.85em; }
+  .summary div { background: #f0f4ff; padding: 0.5em; border-radius: 4px; }
+  .value { font-variant-numeric: tabular-nums; color: #333; font-weight: 600; }
+  .note { font-size: 0.88em; color: #555; line-height: 1.5; }
+  code { background: #eef; padding: 1px 4px; border-radius: 3px; font-size: 0.9em; }
+  a { color: #1976d2; }
+</style>
+</head>
+<body>
+
+<h1>Parallel Inference — Tensor / Pipeline / Expert Parallelism</h1>
+<p class="subtitle">
+  Three ways to split a transformer layer across GPUs. Animation shows compute, communication, and idle bubbles.
+</p>
+
+<div class="panel">
+  <div class="controls">
+    <div class="control">
+      <label>Number of GPUs</label>
+      <input type="range" id="nGpu" min="2" max="16" step="2" value="4">
+      <span class="value"><span id="nGpuLabel">4</span></span>
+    </div>
+    <div class="control">
+      <label>Batch size</label>
+      <input type="range" id="bs" min="1" max="32" step="1" value="8">
+      <span class="value"><span id="bsLabel">8</span></span>
+    </div>
+    <div class="control">
+      <label>Tokens per batch</label>
+      <input type="range" id="tok" min="256" max="2048" step="128" value="1024">
+      <span class="value"><span id="tokLabel">1024</span></span>
+    </div>
+  </div>
+</div>
+
+<div class="panels">
+  <div class="scheme">
+    <h3 style="color:#1976d2">Tensor Parallel (TP)</h3>
+    <canvas id="cvTP" width="330" height="220"></canvas>
+  </div>
+  <div class="scheme">
+    <h3 style="color:#388e3c">Pipeline Parallel (PP)</h3>
+    <canvas id="cvPP" width="330" height="220"></canvas>
+  </div>
+  <div class="scheme">
+    <h3 style="color:#d32f2f">Expert Parallel (EP)</h3>
+    <canvas id="cvEP" width="330" height="220"></canvas>
+  </div>
+</div>
+
+<div class="summary">
+  <div><strong>TP</strong><br>Latency: <span id="latTP" class="value">—</span><br>Comm: <span id="bwTP" class="value">—</span></div>
+  <div><strong>PP</strong><br>Latency: <span id="latPP" class="value">—</span><br>Comm: <span id="bwPP" class="value">—</span> · Bubble: <span id="bubPP" class="value">—</span></div>
+  <div><strong>EP</strong><br>Latency: <span id="latEP" class="value">—</span><br>Comm: <span id="bwEP" class="value">—</span> · Skew: <span id="skewEP" class="value">—</span></div>
+</div>
+
+<div class="panel note">
+  <strong>Takeaway.</strong> TP keeps every GPU busy but pays NVLink all-reduce on every matmul (~2 collectives per layer).
+  PP scales to more GPUs and uses less bandwidth, but the pipeline fill/drain bubble wastes ~ (P-1)/(M+P-1) of the steps.
+  EP unlocks MoE scaling but the all-to-all is bandwidth-hungry and load is skewed when expert popularity is uneven.
+</div>
+
+<p><a href="../read.md">&larr; back to chapter</a></p>
+
+<script>
+const STAGE = { TP: 'TP', PP: 'PP', EP: 'EP' };
+let frame = 0;
+
+function drawGPU(ctx, x, y, w, h, label, color, fill) {
+  ctx.fillStyle = fill || '#fff';
+  ctx.strokeStyle = color;
+  ctx.lineWidth = 1.5;
+  ctx.fillRect(x, y, w, h);
+  ctx.strokeRect(x, y, w, h);
+  ctx.fillStyle = '#333';
+  ctx.font = '10px sans-serif';
+  ctx.textAlign = 'center';
+  ctx.fillText(label, x + w / 2, y + h / 2 + 3);
+}
+
+function arrow(ctx, x1, y1, x2, y2, color) {
+  ctx.strokeStyle = color; ctx.lineWidth = 1.5;
+  ctx.beginPath(); ctx.moveTo(x1, y1); ctx.lineTo(x2, y2); ctx.stroke();
+  const ang = Math.atan2(y2 - y1, x2 - x1);
+  ctx.beginPath();
+  ctx.moveTo(x2, y2);
+  ctx.lineTo(x2 - 6 * Math.cos(ang - 0.4), y2 - 6 * Math.sin(ang - 0.4));
+  ctx.lineTo(x2 - 6 * Math.cos(ang + 0.4), y2 - 6 * Math.sin(ang + 0.4));
+  ctx.closePath();
+  ctx.fillStyle = color; ctx.fill();
+}
+
+function drawTP(ctx, nGpu, phase) {
+  ctx.clearRect(0, 0, 330, 220);
+  const G = Math.min(nGpu, 8);
+  const w = 280 / G, h = 50;
+  ctx.fillStyle = '#555'; ctx.font = '10px sans-serif'; ctx.textAlign = 'left';
+  ctx.fillText('Each GPU holds 1/N of QKV+FFN', 10, 12);
+  // compute phase
+  for (let i = 0; i < G; i++) {
+    const x = 25 + i * w, y = 30;
+    const busy = phase < 0.7;
+    drawGPU(ctx, x, y, w - 4, h,
+      'GPU' + i + '\n1/' + G,
+      '#1976d2',
+      busy ? '#e3f2fd' : '#fff');
+  }
+  // matmul label
+  ctx.fillStyle = '#555'; ctx.textAlign = 'center';
+  ctx.fillText('column-shard matmul', 165, 100);
+  // all-reduce ring (red arrows at phase>0.7)
+  if (phase >= 0.7) {
+    ctx.fillStyle = '#d32f2f'; ctx.font = 'bold 11px sans-serif';
+    ctx.fillText('ALL-REDUCE (blocking)', 165, 130);
+    for (let i = 0; i < G; i++) {
+      const x = 25 + i * w + (w - 4) / 2;
+      arrow(ctx, x, 85, x, 145, '#d32f2f');
+    }
+  }
+  // output
+  for (let i = 0; i < G; i++) {
+    const x = 25 + i * w, y = 160;
+    drawGPU(ctx, x, y, w - 4, 40, 'y_i', '#888', '#f5f5f5');
+  }
+}
+
+function drawPP(ctx, nGpu, phase) {
+  ctx.clearRect(0, 0, 330, 220);
+  const G = Math.min(nGpu, 8);
+  const M = 4; // microbatches
+  const cellW = 26, cellH = 18;
+  const totalSteps = G + M - 1;
+  const startX = 30, startY = 30;
+
+  ctx.fillStyle = '#555'; ctx.font = '10px sans-serif'; ctx.textAlign = 'left';
+  ctx.fillText('GPU i holds layer i; row=GPU, col=time', 10, 12);
+
+  // grid: each cell either microbatch m or bubble
+  const curStep = Math.floor(phase * totalSteps);
+  for (let g = 0; g < G; g++) {
+    ctx.fillStyle = '#555'; ctx.textAlign = 'right'; ctx.font = '9px sans-serif';
+    ctx.fillText('L' + g, startX - 4, startY + g * cellH + 12);
+    for (let t = 0; t < totalSteps; t++) {
+      const x = startX + t * cellW, y = startY + g * cellH;
+      const mb = t - g; // active microbatch
+      const isBubble = mb < 0 || mb >= M;
+      const past = t <= curStep;
+      ctx.fillStyle = isBubble ? '#eee' : (past ? '#c8e6c9' : '#fff');
+      ctx.strokeStyle = '#888';
+      ctx.fillRect(x, y, cellW - 2, cellH - 2);
+      ctx.strokeRect(x, y, cellW - 2, cellH - 2);
+      if (!isBubble && past) {
+        ctx.fillStyle = '#1b5e20'; ctx.font = '9px sans-serif'; ctx.textAlign = 'center';
+        ctx.fillText('μ' + mb, x + (cellW - 2) / 2, y + 12);
+      }
+    }
+  }
+  ctx.fillStyle = '#555'; ctx.font = '10px sans-serif'; ctx.textAlign = 'left';
+  ctx.fillText('Grey cells = bubble (idle GPU)', 30, startY + G * cellH + 16);
+}
+
+function drawEP(ctx, nGpu, phase) {
+  ctx.clearRect(0, 0, 330, 220);
+  const G = Math.min(nGpu, 8);
+  const E = G * 2; // 2 experts per GPU
+  // popularity (uneven)
+  const pop = [];
+  for (let e = 0; e < E; e++) {
+    pop.push(0.5 + 0.5 * Math.sin(e * 1.3));
+  }
+  const maxPop = Math.max(...pop);
+
+  ctx.fillStyle = '#555'; ctx.font = '10px sans-serif'; ctx.textAlign = 'left';
+  ctx.fillText('Each GPU hosts 2 experts; tokens routed via all-to-all', 10, 12);
+
+  const w = 280 / G, h = 60;
+  for (let i = 0; i < G; i++) {
+    const x = 25 + i * w, y = 30;
+    drawGPU(ctx, x, y, w - 4, h, 'GPU' + i, '#d32f2f', '#ffebee');
+    // expert load bars
+    for (let k = 0; k < 2; k++) {
+      const idx = i * 2 + k;
+      const load = pop[idx] / maxPop;
+      const bx = x + 4 + k * (w / 2 - 4), by = y + 24 + (1 - load) * 28;
+      ctx.fillStyle = '#d32f2f';
+      ctx.fillRect(bx, by, (w - 12) / 2, load * 28);
+      ctx.fillStyle = '#333'; ctx.font = '8px sans-serif'; ctx.textAlign = 'center';
+      ctx.fillText('E' + idx, bx + (w - 12) / 4, y + 18);
+    }
+  }
+  // all-to-all arrows
+  if (phase > 0.3 && phase < 0.9) {
+    for (let i = 0; i < G; i++) {
+      const x1 = 25 + i * w + w / 2;
+      for (let j = 0; j < G; j++) {
+        if (i === j) continue;
+        const x2 = 25 + j * w + w / 2;
+        const alpha = 0.25 + 0.3 * pop[j * 2] / maxPop;
+        ctx.strokeStyle = 'rgba(211,47,47,' + alpha.toFixed(2) + ')';
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.moveTo(x1, 110);
+        ctx.bezierCurveTo(x1, 150, x2, 150, x2, 110);
+        ctx.stroke();
+      }
+    }
+    ctx.fillStyle = '#d32f2f'; ctx.font = 'bold 11px sans-serif'; ctx.textAlign = 'center';
+    ctx.fillText('ALL-TO-ALL (token routing)', 165, 175);
+  }
+  // skew bar
+  ctx.fillStyle = '#555'; ctx.font = '10px sans-serif'; ctx.textAlign = 'left';
+  const skew = (maxPop - Math.min(...pop)) / maxPop;
+  ctx.fillText('expert load skew = ' + (skew * 100).toFixed(0) + '%', 10, 205);
+}
+
+function recompute() {
+  const nGpu = +document.getElementById('nGpu').value;
+  const bs = +document.getElementById('bs').value;
+  const tok = +document.getElementById('tok').value;
+  document.getElementById('nGpuLabel').textContent = nGpu;
+  document.getElementById('bsLabel').textContent = bs;
+  document.getElementById('tokLabel').textContent = tok;
+
+  // toy cost model (relative units)
+  const baseFlops = bs * tok;
+  const tpLat = baseFlops / nGpu + 0.15 * baseFlops; // compute + all-reduce
+  const ppLat = baseFlops + (nGpu - 1) * (baseFlops / 4); // serial + bubble proxy
+  const epLat = baseFlops / nGpu + 0.25 * baseFlops; // compute + all-to-all
+
+  document.getElementById('latTP').textContent = tpLat.toFixed(0) + ' u';
+  document.getElementById('bwTP').textContent = (2 * (nGpu - 1) / nGpu * bs * tok * 2 / 1024).toFixed(1) + ' KB/all-reduce';
+  document.getElementById('latPP').textContent = ppLat.toFixed(0) + ' u';
+  document.getElementById('bwPP').textContent = (bs * tok * 2 / 1024).toFixed(1) + ' KB act';
+  document.getElementById('bubPP').textContent = ((nGpu - 1) / (nGpu + 3) * 100).toFixed(0) + '%';
+  document.getElementById('latEP').textContent = epLat.toFixed(0) + ' u';
+  document.getElementById('bwEP').textContent = (bs * tok * 2 / 1024 * (nGpu - 1) / nGpu).toFixed(1) + ' KB a2a';
+  document.getElementById('skewEP').textContent = '~40%';
+}
+
+function animate() {
+  frame = (frame + 1) % 120;
+  const phase = frame / 120;
+  const nGpu = +document.getElementById('nGpu').value;
+  drawTP(document.getElementById('cvTP').getContext('2d'), nGpu, phase);
+  drawPP(document.getElementById('cvPP').getContext('2d'), nGpu, phase);
+  drawEP(document.getElementById('cvEP').getContext('2d'), nGpu, phase);
+  requestAnimationFrame(animate);
+}
+
+['nGpu', 'bs', 'tok'].forEach(id => {
+  document.getElementById(id).addEventListener('input', recompute);
+});
+recompute();
+animate();
+</script>
+
+</body>
+</html>

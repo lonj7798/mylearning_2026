@@ -1,0 +1,266 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Goodput vs Throughput — SLO, Admission Control, VTC</title>
+<style>
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+         max-width: 980px; margin: 2em auto; padding: 0 1em; color: #222; }
+  h1 { font-size: 1.4em; margin-bottom: 0.2em; }
+  .subtitle { color: #666; margin-top: 0; }
+  .panel { border: 1px solid #ddd; border-radius: 6px; padding: 1em; margin: 1em 0;
+           background: #fafafa; }
+  .controls { display: flex; gap: 1em; flex-wrap: wrap; align-items: center; }
+  .control { display: flex; flex-direction: column; }
+  label { font-size: 0.85em; color: #555; margin-bottom: 0.2em; }
+  input[type="range"] { width: 180px; }
+  canvas { background: white; border: 1px solid #ccc; display: block; margin: 0.5em auto; }
+  .legend { display: flex; gap: 1.5em; justify-content: center; font-size: 0.9em;
+            flex-wrap: wrap; }
+  .swatch { display: inline-block; width: 12px; height: 12px; margin-right: 4px;
+            vertical-align: middle; border-radius: 2px; }
+  .value { font-variant-numeric: tabular-nums; color: #333; font-weight: 600; }
+  .note { font-size: 0.88em; color: #555; line-height: 1.5; }
+  code { background: #eef; padding: 1px 4px; border-radius: 3px; font-size: 0.9em; }
+  .toggles label { display: inline-flex; align-items: center; gap: 4px; margin-right: 1em; font-size: 0.9em; }
+  footer { margin-top: 2em; font-size: 0.9em; color: #555; text-align: center; }
+  footer a { color: #1565c0; text-decoration: none; }
+</style>
+</head>
+<body>
+
+<h1>Goodput vs Throughput — the SLO-Aware Metric</h1>
+<p class="subtitle">
+  As offered load rises, throughput keeps climbing until the server saturates — but goodput
+  (requests that <em>meet</em> the SLO) collapses much earlier. Admission control trades
+  raw throughput for SLO compliance.
+</p>
+
+<div class="panel">
+  <div class="controls">
+    <div class="control">
+      <label>TTFT SLO (ms)</label>
+      <input type="range" id="ttftSLO" min="250" max="2000" step="50" value="500">
+      <span class="value"><span id="ttftSLOLbl">500</span> ms</span>
+    </div>
+    <div class="control">
+      <label>TPOT SLO (ms/token)</label>
+      <input type="range" id="tpotSLO" min="10" max="100" step="5" value="30">
+      <span class="value"><span id="tpotSLOLbl">30</span> ms/tok</span>
+    </div>
+    <div class="control toggles">
+      <label><input type="checkbox" id="adm" checked> admission control</label>
+      <label><input type="checkbox" id="vtc" checked> VTC fair-share</label>
+    </div>
+  </div>
+</div>
+
+<canvas id="plot" width="940" height="360"></canvas>
+
+<div class="legend">
+  <span><span class="swatch" style="background:#1976d2"></span>throughput (completed reqs)</span>
+  <span><span class="swatch" style="background:#388e3c"></span>goodput (meets SLO)</span>
+  <span><span class="swatch" style="background:#ef6c00"></span>goodput with admission control</span>
+  <span><span class="swatch" style="background:#bbb"></span>server saturation</span>
+</div>
+
+<canvas id="vtcCv" width="940" height="180"></canvas>
+
+<div class="panel note">
+  <strong>Caption.</strong> Goodput is the metric that actually matches user-facing SLOs.
+  Throughput says “I am busy”; goodput says “I am useful.” The lower panel shows VTC
+  (virtual-time-counter) fair-share over 4 simulated users: without VTC, a single long-prompt
+  user starves the others; VTC equalizes service across users at the same total cost.
+</div>
+
+<footer><a href="../read.md">← back to chapter</a></footer>
+
+<script>
+const cvs = document.getElementById('plot');
+const ctx = cvs.getContext('2d');
+const vtcCv = document.getElementById('vtcCv');
+const vctx = vtcCv.getContext('2d');
+
+const RATES = [];
+for (let r = 1; r <= 128; r++) RATES.push(r);
+
+function serviceCurves() {
+  const ttftSLO = +document.getElementById('ttftSLO').value;
+  const tpotSLO = +document.getElementById('tpotSLO').value;
+  const adm = document.getElementById('adm').checked;
+
+  const SAT = 64; // server saturation point (req/s)
+
+  return RATES.map(r => {
+    // throughput: ramps to SAT then plateaus (a touch of degradation at extreme load)
+    const tput = r <= SAT ? r : SAT - 0.15 * (r - SAT);
+    // queueing: avg latency blows up near saturation (M/M/1-like 1/(1-rho))
+    const rho = Math.min(0.99, r / SAT);
+    const ttft = 200 / (1 - rho + 0.05);
+    const tpot = 15 / (1 - rho + 0.10);
+    // probability of meeting BOTH SLOs (rough)
+    const pMeet = Math.max(0, Math.min(1,
+      (ttftSLO / (ttft * 1.8)) * (tpotSLO / (tpot * 1.8))));
+    const goodNoAdm = tput * pMeet;
+    // admission control: only admit up to the rate that still meets SLO
+    // it caps the offered load so that pMeet remains ~0.95
+    let goodAdm = goodNoAdm;
+    if (adm) {
+      // find the max admit-rate that keeps pMeet >= 0.9
+      let bestGood = 0;
+      for (let a = 1; a <= r; a++) {
+        const rhoA = Math.min(0.99, a / SAT);
+        const tA = 200 / (1 - rhoA + 0.05);
+        const pA = 15 / (1 - rhoA + 0.10);
+        const pM = Math.max(0, Math.min(1,
+          (ttftSLO / (tA * 1.8)) * (tpotSLO / (pA * 1.8))));
+        const g = Math.min(a, SAT) * pM;
+        if (g > bestGood) bestGood = g;
+      }
+      goodAdm = bestGood;
+    }
+    return { r, tput: Math.max(0, tput), goodNoAdm, goodAdm };
+  });
+}
+
+function render() {
+  document.getElementById('ttftSLOLbl').textContent = document.getElementById('ttftSLO').value;
+  document.getElementById('tpotSLOLbl').textContent = document.getElementById('tpotSLO').value;
+
+  const data = serviceCurves();
+
+  ctx.clearRect(0, 0, cvs.width, cvs.height);
+  const pad = { l: 60, r: 20, t: 30, b: 40 };
+  const W = cvs.width - pad.l - pad.r;
+  const H = cvs.height - pad.t - pad.b;
+
+  const xMax = 128;
+  const yMax = Math.max(80, Math.max(...data.map(d => Math.max(d.tput, d.goodAdm, d.goodNoAdm))) * 1.1);
+  const xFor = r => pad.l + (r / xMax) * W;
+  const yFor = v => pad.t + H - (v / yMax) * H;
+
+  // grid
+  ctx.strokeStyle = '#eee';
+  for (let i = 0; i <= 5; i++) {
+    const y = pad.t + (H * i) / 5;
+    ctx.beginPath(); ctx.moveTo(pad.l, y); ctx.lineTo(pad.l + W, y); ctx.stroke();
+  }
+
+  // saturation line
+  ctx.strokeStyle = '#bbb';
+  ctx.setLineDash([4, 4]);
+  ctx.beginPath();
+  ctx.moveTo(xFor(64), pad.t);
+  ctx.lineTo(xFor(64), pad.t + H);
+  ctx.stroke();
+  ctx.setLineDash([]);
+  ctx.fillStyle = '#888';
+  ctx.font = '11px sans-serif';
+  ctx.textAlign = 'center';
+  ctx.fillText('saturation', xFor(64), pad.t - 6);
+
+  // axes labels
+  ctx.fillStyle = '#555';
+  ctx.textAlign = 'right';
+  for (let i = 0; i <= 5; i++) {
+    const v = yMax * (1 - i/5);
+    const y = pad.t + (H * i) / 5;
+    ctx.fillText(v.toFixed(0), pad.l - 6, y + 4);
+  }
+  ctx.textAlign = 'center';
+  for (let t = 0; t <= 8; t++) {
+    const r = Math.round((t / 8) * xMax);
+    ctx.fillText(r.toString(), xFor(r), pad.t + H + 16);
+  }
+  ctx.fillText('offered load (req/s)', pad.l + W / 2, pad.t + H + 32);
+  ctx.save();
+  ctx.translate(14, pad.t + H/2);
+  ctx.rotate(-Math.PI / 2);
+  ctx.fillText('req/s (completed or meeting SLO)', 0, 0);
+  ctx.restore();
+
+  function plot(seriesKey, color, width=2) {
+    ctx.strokeStyle = color;
+    ctx.lineWidth = width;
+    ctx.beginPath();
+    data.forEach((d, i) => {
+      const x = xFor(d.r), y = yFor(d[seriesKey]);
+      if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+    });
+    ctx.stroke();
+  }
+
+  plot('tput', '#1976d2', 2);
+  plot('goodNoAdm', '#388e3c', 2);
+  if (document.getElementById('adm').checked) plot('goodAdm', '#ef6c00', 2.5);
+
+  // ----- VTC panel -----
+  vctx.clearRect(0, 0, vtcCv.width, vtcCv.height);
+  vctx.fillStyle = '#333';
+  vctx.font = 'bold 12px sans-serif';
+  vctx.textAlign = 'left';
+  vctx.fillText('VTC fair-share — 4 simulated users, one with long prompts', 14, 18);
+
+  const useVTC = document.getElementById('vtc').checked;
+  const users = [
+    { name: 'user A (long prompts)', demand: 8 },
+    { name: 'user B', demand: 2 },
+    { name: 'user C', demand: 2 },
+    { name: 'user D', demand: 2 },
+  ];
+  const TOTAL = 10; // capacity in some abstract unit
+  let serv;
+  if (useVTC) {
+    // each user gets equal slice up to demand, then leftover redistributed
+    const fair = TOTAL / users.length;
+    serv = users.map(u => Math.min(u.demand, fair));
+    let left = TOTAL - serv.reduce((a,b)=>a+b,0);
+    // redistribute leftover to those with remaining demand
+    for (let i = 0; i < users.length && left > 0.001; i++) {
+      const room = users[i].demand - serv[i];
+      const take = Math.min(room, left);
+      serv[i] += take; left -= take;
+    }
+  } else {
+    // FIFO / no fairness — user A hogs proportional to demand
+    const total = users.reduce((a,b) => a + b.demand, 0);
+    serv = users.map(u => (u.demand / total) * TOTAL);
+  }
+
+  const baseY = 80;
+  const barW = 160, gap = 30;
+  users.forEach((u, i) => {
+    const x = 30 + i * (barW + gap);
+    // demand bar (light)
+    vctx.fillStyle = '#eee';
+    vctx.fillRect(x, baseY, barW, 20);
+    // served bar (color)
+    const w = (serv[i] / 10) * barW;
+    vctx.fillStyle = useVTC ? '#388e3c' : (i === 0 ? '#d32f2f' : '#bbb');
+    vctx.fillRect(x, baseY, w, 20);
+    vctx.fillStyle = '#333';
+    vctx.font = '11px sans-serif';
+    vctx.textAlign = 'left';
+    vctx.fillText(u.name, x, baseY - 6);
+    vctx.fillText(`served ${serv[i].toFixed(1)} / demand ${u.demand}`, x, baseY + 36);
+  });
+
+  vctx.fillStyle = '#555';
+  vctx.font = '11px sans-serif';
+  vctx.textAlign = 'left';
+  vctx.fillText(useVTC
+    ? 'VTC ON: capacity equalized — long-prompt user A is capped at its fair share.'
+    : 'VTC OFF: user A monopolizes capacity; B/C/D are starved despite low demand.',
+    14, 160);
+}
+
+['ttftSLO','tpotSLO','adm','vtc'].forEach(id => {
+  document.getElementById(id).addEventListener('input', render);
+  document.getElementById(id).addEventListener('change', render);
+});
+
+render();
+</script>
+
+</body>
+</html>
