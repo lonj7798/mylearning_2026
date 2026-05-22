@@ -1,0 +1,401 @@
+{
+  "kind": "draft",
+  "status": "approved-pending-chapter-generation",
+  "revision": 1,
+  "course_slug": "model-quantization",
+  "generated_at": "2026-05-21T23:10:00Z",
+  "source_library": "wiki/raw-data/model-quantization/",
+  "collection_plan": "wiki/raw-data/model-quantization/COLLECTION-PLAN.md",
+  "authoring_notes": {
+    "structure": "22 chapters across 7 phases. Reduced from a 30-chapter draft per learner request. Theory-first: ch-01..ch-04 are math foundations + numerical formats; no LLM-specific algorithm appears in deps until ch-05. The 2022 -> 2026 LLM quantization literature is sequenced chronologically across phases 3-6. Eval methodology (ch-20), lab (ch-21), capstone (ch-22) close the course.",
+    "reduction_rationale": "Original 30-chapter draft had several closely-related chapters that read as one topic in practice. Mergers applied: (1) Lloyd-Max + calibration objectives -> ch-03; (2) STE chapter + QAT survivors + AdaRound/BRECQ -> ch-04; (3) PTQ playbook + Hessian lineage -> ch-05; (4) GPTQ + ZeroQuant -> ch-08; (5) 2024 rotations + AQLM + HQQ -> ch-14 (single W4A4 + sub-2-bit chapter); (6) BitNet origins + b1.58 + a4.8 + microscaling formats -> ch-16; (7) FP8 native training + NVFP4/MXFP4 + Blackwell -> ch-17 (single low-precision-pretraining chapter); (8) data-oblivious KV trio + 2026 KV frontier -> ch-18.",
+    "theory_first_rule": "Per CLAUDE.md, the first 4 chapters MUST source only from `classics/` and `formats/` in the raw library. LLM papers (GPTQ, AWQ, SmoothQuant, etc.) do not appear in deps until ch-05.",
+    "year_progression": "Phase 3 = 2022 (LLM PTQ born). Phase 4 = 2023 (explosion). Phase 5 = 2024 (rotations, KV-cache, BitNet b1.58, microscaling). Phase 6 = 2025-2026 (FP8/FP4 native training, data-oblivious KV, production kernels).",
+    "per_chapter_format": "Each ch-XX/read.md (~200-250 lines) quotes the actual quantization rule / Hessian update / bit layout / kernel pseudocode from the raw-data source. ch-XX/excerpts/ contains 3-5 per-source extract files (~50-80 lines each) with verbatim equations + key quotes from the cited papers. ch-XX/figures/ is OPTIONAL: include only when a parameter explorer / bit-layout diagram / rate-distortion curve / outlier-distribution viz adds real understanding.",
+    "depth_target": "Math chapters (ch-01..ch-04) MUST include explicit equations and worked derivations. Algorithm chapters MUST include the verbatim quantization rule, the exact group/block size, the calibration objective, and at least one concrete model x bit-width perplexity/accuracy number from the source paper.",
+    "outdated_knowledge_policy": "For 2026 frontier chapters (ch-17..ch-20), claims should be anchored to the raw-data source's snapshot. When the source says 'as of Nov 2025' or similar, preserve that framing rather than asserting current truth.",
+    "intended_format": "Self-study program for a learner targeting production + research depth on LLM quantization. The first 6 chapters provide a one-week math/format foundation; the 2022-2026 algorithm chain runs 12 chapters; the lab + capstone close.",
+    "lab_paths": "Lab (ch-21) and capstone (ch-22) each offer two execution paths: full-budget (H100 + Llama-3-8B end-to-end) and resource-constrained (single consumer GPU + 1B-3B model). Memo / artifact requirement is the same in both paths -- only training scale differs."
+  },
+  "tracks": [
+    {
+      "phase": "math-foundations",
+      "title": "Math Foundations and Numerical Formats",
+      "chapters": "ch-01..ch-04",
+      "chapter_count": 4
+    },
+    {
+      "phase": "classical-bridge",
+      "title": "Classical PTQ and the Bridge to LLMs",
+      "chapters": "ch-05..ch-06",
+      "chapter_count": 2
+    },
+    {
+      "phase": "llm-ptq-2022",
+      "title": "LLM PTQ Era Begins (2022)",
+      "chapters": "ch-07..ch-09",
+      "chapter_count": 3
+    },
+    {
+      "phase": "2023-refinements",
+      "title": "2023 Refinements: Activation-Aware + Sub-4-bit",
+      "chapters": "ch-10..ch-13",
+      "chapter_count": 4
+    },
+    {
+      "phase": "2024-maturation",
+      "title": "2024 Maturation: Rotations, KV-Cache, BitNet b1.58",
+      "chapters": "ch-14..ch-16",
+      "chapter_count": 3
+    },
+    {
+      "phase": "frontier-2025-2026",
+      "title": "2025-2026 Frontier: Low-Precision Pretraining + Data-Oblivious KV + Production",
+      "chapters": "ch-17..ch-19",
+      "chapter_count": 3
+    },
+    {
+      "phase": "eval-lab-capstone",
+      "title": "Evaluation, Lab, Capstone",
+      "chapters": "ch-20..ch-22",
+      "chapter_count": 3
+    }
+  ],
+  "chapters": [
+    {
+      "id": "ch-01",
+      "title": "Rate-Distortion + Math Foundations of Quantization",
+      "phase": "math-foundations",
+      "deps": [],
+      "sources": ["rate-distortion-theory", "lloyd-max-quantizer", "uniform-quantization-noise", "information-theoretic-bounds", "stochastic-rounding"],
+      "concepts": [
+        "Shannon rate-distortion R(D); Gaussian closed form D = sigma^2 * 2^(-2R); the floor every quantizer fights",
+        "Bennett uniform-noise model: sigma_q^2 = Delta^2 / 12; high-resolution assumption + when it breaks",
+        "Gish-Pierce optimal density rho(x) proportional to p(x)^(1/3); why non-uniform spacing wins for LLM weights",
+        "Stochastic rounding vs round-to-nearest-even; preserving unbiasedness at low precision",
+        "Mapping these bounds onto observed LLM weight + activation distributions"
+      ],
+      "kind": "content",
+      "figures_optional": ["rate-distortion-curve.html"]
+    },
+    {
+      "id": "ch-02",
+      "title": "Numerical Formats Reference: FP / INT / Block-Scaled",
+      "phase": "math-foundations",
+      "deps": ["ch-01"],
+      "sources": ["ieee-754", "bf16", "fp16", "fp8-e4m3", "fp8-e5m2", "fp4-e2m1", "nf4", "mx-formats", "nvfp4", "int4", "int8", "bitnet-w158"],
+      "concepts": [
+        "IEEE-754 binary32/binary16 reference; exponent vs mantissa; subnormals; rounding modes",
+        "BF16 vs FP16 trade-off (same exponent as FP32 vs half the dynamic range); why BF16 dominated training",
+        "FP8 family: E4M3 (forward) vs E5M2 (backward); FP6 / FP4 (E2M1) progression",
+        "INT8 / INT4 with symmetric vs asymmetric scale; per-tensor / per-channel / per-group granularity",
+        "Block-scaled formats: OCP MX (32-element block + E8M0 shared exponent), NVFP4 (16-element block + E4M3 fractional scale + FP32 tensor scale), NF4 (quantile-based code), BitNet w1.58 (ternary)"
+      ],
+      "kind": "content",
+      "figures_optional": ["fp-bit-layouts.html"]
+    },
+    {
+      "id": "ch-03",
+      "title": "Quantizer Design: Uniform vs Non-Uniform + Calibration Objectives",
+      "phase": "math-foundations",
+      "deps": ["ch-02"],
+      "sources": ["lloyd-max-quantizer", "vector-quantization", "product-quantization", "companding-mu-law", "mse-vs-kl-calibration", "percentile-clipping", "quantization-error-propagation"],
+      "concepts": [
+        "Lloyd-Max iteration: centroid + nearest-neighbour conditions; convergence",
+        "K-means as scalar VQ; LBG algorithm; product quantization (PQ) groups dimensions and stores K-means codes",
+        "Companding (mu-law / A-law): the original 'log-scale' non-uniform quantizer; analog to NF4",
+        "Calibration objectives: MSE vs KL vs Hessian-weighted; when each one matters",
+        "Percentile clipping vs full-range vs MSE-optimal clip; outlier handling at calibration time"
+      ],
+      "kind": "content"
+    },
+    {
+      "id": "ch-04",
+      "title": "STE + QAT Lineage: BNN -> LSQ -> AdaRound",
+      "phase": "math-foundations",
+      "deps": ["ch-03"],
+      "sources": ["straight-through-estimator", "bnn", "xnor-net", "dorefa-net", "pact", "lsq", "lsq-plus", "adaround", "brecq"],
+      "concepts": [
+        "STE forward: q(x) = round(x/Delta)*Delta; backward: identity gradient; why this biased gradient still works",
+        "BNN / XNOR-Net: original 1-bit weight + activation; binary conv via XNOR + popcount",
+        "DoReFa / PACT: arbitrary-bit quantizer family + learned activation clipping threshold",
+        "LSQ (learned step size): scale s as a learnable parameter; gradient = -floor(x/s) + clamp(x/s); SOTA QAT baseline",
+        "AdaRound: per-weight learned rounding direction via rectified sigmoid; closed-form Hessian objective; the spiritual parent of GPTQ"
+      ],
+      "kind": "content",
+      "figures_optional": ["ste-backward.html"]
+    },
+    {
+      "id": "ch-05",
+      "title": "Classical PTQ Playbook + OBS -> GPTQ Lineage",
+      "phase": "classical-bridge",
+      "deps": ["ch-04"],
+      "sources": ["quantization-mapping", "data-free-quantization", "brecq", "obs-obd", "obc", "qdrop", "hawq"],
+      "concepts": [
+        "Krishnamoorthi 2018 taxonomy: PTQ vs QAT; symmetric vs asymmetric; per-tensor vs per-channel; min-max vs MSE calibration",
+        "Data-free quantization (DFQ): weight equalization + bias correction without calibration data",
+        "BRECQ: block-wise reconstruction objective; why per-block beats per-layer at low-bit PTQ",
+        "Optimal Brain Surgeon (Hassibi 1993): second-order weight removal with inverse-Hessian update",
+        "Optimal Brain Compression (Frantar 2022): unified pruning + quantization via shared OBS objective; the direct parent of GPTQ"
+      ],
+      "kind": "content"
+    },
+    {
+      "id": "ch-06",
+      "title": "Integer-Only Inference: Jacob 2018 + I-BERT",
+      "phase": "classical-bridge",
+      "deps": ["ch-05"],
+      "sources": ["integer-only-inference", "i-bert", "q8bert", "zeroq", "q-bert"],
+      "concepts": [
+        "Jacob 2018 INT8-only inference: requant pipeline M = S_w*S_x/S_y approximated as M_0 * 2^(-n); INT8 GEMM on ARM",
+        "I-BERT integer-only approximations: i-GELU polynomial, integer Softmax, integer LayerNorm",
+        "Q-BERT mixed-precision Hessian-aware quant for BERT; precursor to LLM mixed-precision",
+        "ZeroQ data-free calibration via BN statistics; the bridge from CNN PTQ to transformer PTQ",
+        "What integer-only gives you (zero FP fallback, mobile-CPU-only inference) and what it costs (more engineering for non-linearities)"
+      ],
+      "kind": "content"
+    },
+    {
+      "id": "ch-07",
+      "title": "LLM.int8() and the Outlier Discovery",
+      "phase": "llm-ptq-2022",
+      "deps": ["ch-05"],
+      "sources": ["llm-int8", "dettmers-llm-int8-blog", "bitsandbytes-int8"],
+      "concepts": [
+        "Emergent outlier features at 6.7B+: empirical discovery + theoretical interpretation",
+        "Mixed-precision decomposition: per-row INT8 GEMM + FP16 outlier columns (|x| > 6.0 threshold)",
+        "Vector-wise scale: per-token activation scale + per-channel weight scale",
+        "Practical recipe: bitsandbytes 'load_in_8bit' under the hood",
+        "What LLM.int8 left unsolved: weight-only PTQ at <= 4 bits, activation quant below 8 bits"
+      ],
+      "kind": "content"
+    },
+    {
+      "id": "ch-08",
+      "title": "GPTQ at Scale + ZeroQuant Family",
+      "phase": "llm-ptq-2022",
+      "deps": ["ch-05", "ch-07"],
+      "sources": ["gptq", "obc", "zeroquant", "zeroquant-v2", "zeroquant-fp", "nuqmm", "marlin-kernel"],
+      "concepts": [
+        "GPTQ Cholesky block update: process columns in blocks, update remaining via inverse-Hessian Cholesky factor",
+        "act_order trick: descending diag(H) ordering recovers ~0.1-0.3 PPL at 4-bit",
+        "percdamp + group_size: numerical stability damping + per-group scale; the standard W4A16 recipe",
+        "ZeroQuant: INT8 group-wise weight + token-wise activation + layer-wise KD recovery; ZeroQuant-V2 low-rank residual; ZeroQuant-FP shows FP4/FP8 can beat INT at low bits",
+        "From algorithm to kernel: Marlin's W4A16 GEMM as the production realisation of GPTQ"
+      ],
+      "kind": "content"
+    },
+    {
+      "id": "ch-09",
+      "title": "SmoothQuant + AWQ -- Activation-Aware Equivalent Transformations",
+      "phase": "llm-ptq-2022",
+      "deps": ["ch-07"],
+      "sources": ["smoothquant", "awq", "outlier-channel-splitting", "oscar", "autoawq"],
+      "concepts": [
+        "Activation-outlier problem: activations have channels 10-100x larger than typical; weights are well-behaved",
+        "SmoothQuant equivalent transformation: diag(s) * X with s_j = max(|X_j|)^alpha / max(|W_j|)^(1-alpha); migration parameter alpha",
+        "AWQ: per-channel scaling s_j driven by activation magnitude; grid-search over alpha; no backprop; the W4A16 default",
+        "Salient channels: empirical finding that ~1 % of weight columns dominate output error",
+        "Production: AWQ + Marlin/Machete is the canonical W4A16 deployment stack"
+      ],
+      "kind": "content"
+    },
+    {
+      "id": "ch-10",
+      "title": "OmniQuant + Learnable Equivalent Transformations",
+      "phase": "2023-refinements",
+      "deps": ["ch-09"],
+      "sources": ["omniquant", "rptq", "affinequant", "flatquant"],
+      "concepts": [
+        "Learnable Weight Clipping (LWC): per-channel learned clipping bounds trained via block-wise MSE",
+        "Learnable Equivalent Transformation (LET): make AWQ's per-channel scale learnable",
+        "Block-wise gradient-based PTQ: differentiate through STE, optimize the transformations, no full backprop through the whole model",
+        "AffineQuant and FlatQuant: affine transformations that flatten the activation distribution",
+        "RPTQ: reorder channels into similar-range clusters as a complementary trick"
+      ],
+      "kind": "content"
+    },
+    {
+      "id": "ch-11",
+      "title": "SqueezeLLM + SpQR -- Sensitivity-Aware + Sparse-and-Dense",
+      "phase": "2023-refinements",
+      "deps": ["ch-09"],
+      "sources": ["squeezellm", "spqr", "owq"],
+      "concepts": [
+        "Sensitivity-weighted k-means: cluster weights by Fisher-information importance; non-uniform code per channel",
+        "Dense-and-sparse decomposition: top 0.5 % outlier weights stay in FP16, rest quantized aggressively",
+        "SpQR bilevel grouping: FP16 outlier matrix as compact sparse format alongside group-wise quant",
+        "OWQ outlier-aware weight quantization: lighter-weight sparse-and-dense variant",
+        "The lesson: outliers are signal, not noise; preserve them precisely"
+      ],
+      "kind": "content"
+    },
+    {
+      "id": "ch-12",
+      "title": "QLoRA + NF4 -- 4-bit Fine-Tuning at Consumer Scale",
+      "phase": "2023-refinements",
+      "deps": ["ch-02", "ch-08"],
+      "sources": ["qlora", "nf4", "qa-lora", "loftq", "llm-qat", "lq-lora", "peqa", "bitsandbytes-nf4"],
+      "concepts": [
+        "NF4 (Normal Float 4-bit): quantile-based 16-level code for the Gaussian weight prior",
+        "Double quantization: quantize per-block scales themselves to FP8; saves ~ 0.5 bit/element",
+        "Paged optimizer: NVIDIA UVM for optimizer states; fine-tune 65B on a single 48 GB GPU",
+        "LoRA adapters in BF16 on top of the 4-bit frozen base; what is actually trained",
+        "QA-LoRA / LoftQ / LLM-QAT: alternatives that push the quant-aware-finetune frontier"
+      ],
+      "kind": "content"
+    },
+    {
+      "id": "ch-13",
+      "title": "QuIP + Incoherence Processing (Rotation Preview)",
+      "phase": "2023-refinements",
+      "deps": ["ch-08"],
+      "sources": ["quip", "quip-sharp", "quip-sharp-2024", "quik"],
+      "concepts": [
+        "Incoherence processing: random orthogonal U, V applied to W to spread the energy",
+        "LDLQ adaptive rounding: the optimal-rounding step QuIP runs after rotation",
+        "QuIP# E8 lattice codebook: 2-bit code per group with high packing efficiency",
+        "Randomized Hadamard transform: the practical realisation of the random orthogonal (O(d log d), structure-preserving)",
+        "Bridge: rotation idea is the seed that explodes into QuaRot / SpinQuant / DuQuant in 2024"
+      ],
+      "kind": "content"
+    },
+    {
+      "id": "ch-14",
+      "title": "2024 W4A4 + Sub-2-bit: Rotations + AQLM + HQQ",
+      "phase": "2024-maturation",
+      "deps": ["ch-13"],
+      "sources": ["quarot", "spinquant", "duquant", "rotation-and-quantization", "aqlm", "pv-tuning", "vptq", "gptvq", "hqq", "atom", "qserve"],
+      "concepts": [
+        "QuaRot: random Hadamard rotations folded into weights for W4A4 PTQ; orthogonal property preserves outputs",
+        "SpinQuant: learnable orthogonal rotations via Cayley-parametrized SGD on the Stiefel manifold",
+        "DuQuant: dual block-rotation + channel-permutation for outlier removal",
+        "AQLM additive quantization: w approx sum_m C_m[i_m]; M codebooks of K vectors; PQ-inspired sub-2-bit; PV-Tuning fine-tunes the discrete indices",
+        "HQQ Half-Quadratic Quantization: alternating closed-form steps; data-free, very fast; the 'iterate quickly' tool",
+        "Production: QServe (W4A8KV4) and Atom (W4A4KV4) show what these methods look like under a serving stack"
+      ],
+      "kind": "content"
+    },
+    {
+      "id": "ch-15",
+      "title": "KV-Cache Quantization: KIVI / KVQuant / GEAR",
+      "phase": "2024-maturation",
+      "deps": ["ch-03"],
+      "sources": ["kivi", "kvquant", "gear", "wkvquant", "skvq", "qaq", "coupling-kv-quant", "per-channel-vs-per-token-kv"],
+      "concepts": [
+        "Why KV-cache memory dominates long-context inference; bandwidth-bound decode",
+        "K vs V asymmetry: K has channel-aligned outliers (RoPE-induced); V is roughly Gaussian per token",
+        "KIVI: per-channel K + per-token V; INT2 viable; the canonical recipe",
+        "KVQuant: dense-and-sparse for K cache + non-uniform per-channel quant; sub-2-bit V",
+        "GEAR error compensation + WKVQuant joint calibration + SKVQ sliding-window; the design space of KV PTQ"
+      ],
+      "kind": "content",
+      "figures_optional": ["kv-asymmetry.html"]
+    },
+    {
+      "id": "ch-16",
+      "title": "BitNet Lineage + Microscaling Formats",
+      "phase": "2024-maturation",
+      "deps": ["ch-04"],
+      "sources": ["bitnet", "bitnet-b158", "bitnet-a48", "onebit", "era-of-1bit-llms", "microscaling-formats", "bitnet-models", "microsoft-bitnet"],
+      "concepts": [
+        "BitLinear layer: sign quantization with absmean scale; STE backward; replaces nn.Linear",
+        "BitNet b1.58: ternary {-1, 0, +1} per-tensor absmean rounding; log2(3) ~ 1.58 bits/weight; FP16 perplexity parity claimed at >= 3B scale",
+        "BitNet a4.8: 4-bit activations on top of 1.58-bit weights; absmean activation scaling",
+        "OneBit SVID decomposition: 1-bit weight via sign matrix + scaling vectors",
+        "Microscaling formats (OCP MX, 2023): shared 8-bit exponent block + low-bit element; the cross-vendor standard that NVFP4 sits alongside"
+      ],
+      "kind": "content"
+    },
+    {
+      "id": "ch-17",
+      "title": "Low-Precision Pretraining: FP8 DeepSeek V3 + NVFP4/MXFP4 + Blackwell",
+      "phase": "frontier-2025-2026",
+      "deps": ["ch-02", "ch-09"],
+      "sources": ["deepseek-v3-fp8", "fp8-formats-paper", "fp8-lm", "transformer-engine", "transformer-engine-fp8", "nvfp4-training", "mxfp4-pretraining", "mxfp4-native-hardware-2026", "quartet-ii", "nvfp4-qad", "blackwell-quantization"],
+      "concepts": [
+        "DeepSeek V3 FP8 native training: per-block scaling (1x128 activation tiles, 128x128 weight blocks); BF16 master weights; FP32 accumulation every 4 WGMMA",
+        "Transformer Engine FP8 recipe: per-tensor delayed scaling, amax history, E4M3 forward + E5M2 backward split",
+        "NVFP4 native pretraining (Blackwell): two-level scaling FP8 block-scale + FP32 tensor-scale; FP4 forward + FP8 backward",
+        "MXFP4 pretraining diagnostics: stochastic rounding requirement, gradient clipping at higher precision, native-hardware-vs-emulated gap",
+        "Why FP8 -> FP4 in training: 2-4x throughput on Blackwell; <= 1% downstream quality cost with quant-aware distillation (NVFP4-QAD)"
+      ],
+      "kind": "content"
+    },
+    {
+      "id": "ch-18",
+      "title": "Data-Oblivious KV + 2026 KV Frontier",
+      "phase": "frontier-2025-2026",
+      "deps": ["ch-15"],
+      "sources": ["qjl", "polarquant", "turboquant", "kvtc", "adaptive-kv-cache-quant", "kv-cache-survey", "kv-cache-compression-survey-2025"],
+      "concepts": [
+        "QJL: 1-bit Johnson-Lindenstrauss sketch with asymmetric inner-product estimator; zero per-block metadata overhead",
+        "PolarQuant: recursive pair-wise polar transform after random preconditioning; closed-form angle distribution; > 4.2x KV compression",
+        "TurboQuant: random rotation + per-coordinate scalar quant + 1-bit QJL residual; matches rate-distortion bound up to constant; 2.5-3.5 bit KV with no calibration",
+        "The data-oblivious thesis: eliminate calibration via high-dimensional measure concentration after rotation",
+        "KVTC and adaptive KV-cache precision: 2026 extensions that combine quant with per-token bit allocation"
+      ],
+      "kind": "content"
+    },
+    {
+      "id": "ch-19",
+      "title": "Production Quant Kernels + Deployment Stacks",
+      "phase": "frontier-2025-2026",
+      "deps": ["ch-08", "ch-09", "ch-12"],
+      "sources": ["marlin-kernel", "machete-kernel", "tinychat-and-tensorrt-llm-quant", "tensorrt-llm-quant", "vllm-quant", "llama-cpp-ggml", "gguf-k-quants", "llama-cpp-gguf-releases", "torchao", "hf-quanto", "qserve"],
+      "concepts": [
+        "Marlin W4A16 GEMM: async copies + warp-specialized dequant pipeline + double-buffered shared memory; near-FP16 throughput at low batch",
+        "Machete (Hopper TMA + WGMMA): vLLM-native W4A16; benchmark vs Marlin",
+        "TensorRT-LLM quant path: GPTQ/AWQ/FP8/SmoothQuant/NVFP4 integration; calibration -> engine build",
+        "vLLM QuantConfig: how AutoGPTQ / AutoAWQ models load; Marlin / Machete as runtime kernels",
+        "llama.cpp gguf k-quant ladder: q2_K through q8_0; super-block structure; community curators (bartowski)"
+      ],
+      "kind": "content"
+    },
+    {
+      "id": "ch-20",
+      "title": "Quantization Evaluation Methodology",
+      "phase": "eval-lab-capstone",
+      "deps": ["ch-08", "ch-15", "ch-17"],
+      "sources": ["statistically-lossless-quantization", "fp4-inference-diagnosis", "survey-gholami-2021", "survey-llm-quantization-2024", "survey-low-bit-llm-2024", "survey-efficient-llm-inference-2024"],
+      "concepts": [
+        "When perplexity lies: PPL is sensitive to layer-norm gain scales; small PPL changes can correspond to large MMLU shifts",
+        "Statistically-lossless quantization: defining 'no quality loss' rigorously via confidence intervals over a benchmark suite",
+        "Per-layer sensitivity diagnostics: FP4-inference-diagnosis-style approach to finding which layers tolerate which bit-widths",
+        "Long-context-specific evaluation: NIAH, RULER, LongBench under quant; KV-quant changes the failure modes",
+        "Calibration set design: size, source, distribution shift; why 128 sequences usually suffices for GPTQ but not for activation-aware methods"
+      ],
+      "kind": "content"
+    },
+    {
+      "id": "ch-21",
+      "title": "Lab -- Quantize an Open Model End-to-End",
+      "phase": "eval-lab-capstone",
+      "deps": ["ch-08", "ch-09", "ch-12", "ch-19"],
+      "sources": ["awq", "gptq", "qlora", "marlin-kernel", "vllm-quant"],
+      "concepts": [
+        "Full-budget path: Llama-3-8B + H100; AutoGPTQ-W4 + AutoAWQ-W4 + QLoRA-NF4 + bitsandbytes-INT8; perplexity + 5 task evals",
+        "Resource-constrained path: Qwen-1.8B + single 16 GB GPU; same quant methods at smaller scale; subset of evals",
+        "Memo deliverable: side-by-side table of perplexity / accuracy / latency / memory across the 4 quant methods + FP16 baseline",
+        "Required ablation: change group_size, alpha (AWQ), or LoRA rank and report the effect",
+        "Reflection: which method is on the Pareto frontier for which workload (latency-bound vs memory-bound vs fine-tune-required)"
+      ],
+      "kind": "lab"
+    },
+    {
+      "id": "ch-22",
+      "title": "Capstone -- Reproduce a Frontier Method on a Small LLM",
+      "phase": "eval-lab-capstone",
+      "deps": ["ch-15", "ch-17", "ch-18", "ch-20"],
+      "sources": ["turboquant", "kivi", "kvquant", "gear", "deepseek-v3-fp8", "nvfp4-training"],
+      "concepts": [
+        "Pick one of {KIVI, KVQuant, GEAR, TurboQuant, NVFP4 inference}; implement from the paper (no copy-paste from author repo)",
+        "Full-budget path: H100 + Llama-3-8B; long-context eval (LongBench, NIAH, RULER); 3-bit and 2-bit KV target",
+        "Resource-constrained path: single 24 GB GPU + TinyLlama-1.1B-chat; reduced context length but full method",
+        "Reproduction memo: did you match the paper's reported numbers within 2 %? If not, where is the gap and why",
+        "Optional stretch: combine KV-quant with W4A4 weight quant (QuaRot + KV method) and report the multiplicative compounding effect"
+      ],
+      "kind": "capstone"
+    }
+  ]
+}

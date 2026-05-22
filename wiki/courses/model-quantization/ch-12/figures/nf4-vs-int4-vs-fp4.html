@@ -1,0 +1,225 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>NF4 vs INT4 vs FP4 — 4-Bit Codebooks on a Standard Normal</title>
+<style>
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+         max-width: 980px; margin: 2em auto; padding: 0 1em; color: #222; }
+  h1 { font-size: 1.4em; margin-bottom: 0.2em; }
+  .subtitle { color: #666; margin-top: 0; }
+  .panel { border: 1px solid #ddd; border-radius: 6px; padding: 1em; margin: 1em 0;
+           background: #fafafa; }
+  .controls { display: flex; gap: 1em; flex-wrap: wrap; align-items: center; }
+  .control { display: flex; flex-direction: column; }
+  label { font-size: 0.85em; color: #555; margin-bottom: 0.2em; }
+  input[type="checkbox"] { transform: scale(1.2); margin-right: 6px; }
+  canvas { background: white; border: 1px solid #ccc; display: block; margin: 0.5em auto; }
+  .value { font-variant-numeric: tabular-nums; color: #333; font-weight: 600; }
+  .note { font-size: 0.88em; color: #555; line-height: 1.5; }
+  code { background: #eef; padding: 1px 4px; border-radius: 3px; font-size: 0.9em; }
+  table { font-size: 0.9em; border-collapse: collapse; margin: 0.5em auto; }
+  td, th { padding: 5px 14px; border: 1px solid #ddd; text-align: center; }
+  th { background: #f4f4f4; }
+  .swatch { display: inline-block; width: 14px; height: 14px;
+            vertical-align: middle; border-radius: 2px; margin-right: 4px; }
+  footer { text-align: center; margin-top: 2em; font-size: 0.9em; }
+  footer a { color: #1976d2; text-decoration: none; }
+</style>
+</head>
+<body>
+
+<h1>NF4 vs INT4 vs FP4 — 4-Bit Codebooks on N(0, 1)</h1>
+<p class="subtitle">
+  Three different ways to spend 16 code-words over a unit Gaussian, the dominant empirical
+  distribution of LLM weight columns after per-block normalization.
+</p>
+
+<div class="panel">
+  <div class="controls">
+    <label><input type="checkbox" id="showInt4" checked>
+      <span class="swatch" style="background:#1976d2"></span>INT4 (symmetric uniform)</label>
+    <label><input type="checkbox" id="showFp4" checked>
+      <span class="swatch" style="background:#388e3c"></span>FP4 E2M1 (log-spaced)</label>
+    <label><input type="checkbox" id="showNf4" checked>
+      <span class="swatch" style="background:#d32f2f"></span>NF4 (quantile-based, QLoRA)</label>
+  </div>
+</div>
+
+<canvas id="plot" width="900" height="340"></canvas>
+
+<table>
+  <tr><th>codebook</th><th>16 reconstruction levels (sorted)</th>
+      <th>MSE on 10k N(0,1) samples</th></tr>
+  <tr><td><span class="swatch" style="background:#1976d2"></span>INT4</td>
+      <td style="text-align:left; font-family:monospace; font-size:0.8em;" id="lvlInt4">—</td>
+      <td class="value" id="mseInt4">—</td></tr>
+  <tr><td><span class="swatch" style="background:#388e3c"></span>FP4 E2M1</td>
+      <td style="text-align:left; font-family:monospace; font-size:0.8em;" id="lvlFp4">—</td>
+      <td class="value" id="mseFp4">—</td></tr>
+  <tr><td><span class="swatch" style="background:#d32f2f"></span>NF4</td>
+      <td style="text-align:left; font-family:monospace; font-size:0.8em;" id="lvlNf4">—</td>
+      <td class="value" id="mseNf4">—</td></tr>
+</table>
+
+<div class="panel note">
+  <strong>Why NF4 wins for Gaussian weights.</strong>
+  INT4 spaces its 16 levels uniformly over [−1, 1] — half the bits get spent on the tails where the
+  Gaussian has almost no mass. FP4 (E2M1) is log-spaced; it concentrates levels near zero but its
+  largest values reach ±6, again wasting resolution on the tails. NF4 picks its 16 levels as the
+  <em>16-quantile points</em> of the standard normal — by construction, each level represents an
+  equal-probability bin of the input distribution, which is the MSE-optimal allocation for that
+  distribution. The win is ~0.3–0.5 PPL on Llama-class models for free: no hardware change, just a
+  different LUT.
+</div>
+
+<footer><a href="../read.md">← back to chapter</a></footer>
+
+<script>
+// --- exact codebooks ---
+// INT4 symmetric uniform on [-1, 1] with 16 levels: -1, -13/15, ..., +13/15, +1, plus 0
+function int4Levels() {
+  const lv = [];
+  for (let k = -7; k <= 8; k++) lv.push(k / 8);
+  return lv.sort((a, b) => a - b);
+}
+
+// FP4 E2M1 normalized: typical 16-value table from the standard scheme, max = 6, normalized to ±1
+function fp4Levels() {
+  const raw = [
+    0, 0.5, 1.0, 1.5, 2.0, 3.0, 4.0, 6.0,
+    -0.5, -1.0, -1.5, -2.0, -3.0, -4.0, -6.0,
+    -0.0
+  ];
+  const m = Math.max(...raw.map(Math.abs));
+  return raw.map(x => x / m).sort((a, b) => a - b);
+}
+
+// NF4 — the 16 reconstruction values from QLoRA paper (Dettmers et al. 2023, Table 14)
+function nf4Levels() {
+  return [
+    -1.0, -0.6961928009986877, -0.5250730514526367,
+    -0.39491748809814453, -0.28444138169288635, -0.18477343022823334,
+    -0.09105003625154495, 0.0,
+    0.07958029955625534, 0.16093020141124725, 0.24611230194568634,
+    0.33791524171829224, 0.44070982933044434, 0.5626170039176941,
+    0.7229568362236023, 1.0
+  ];
+}
+
+function pdfNorm(x) { return Math.exp(-x * x / 2) / Math.sqrt(2 * Math.PI); }
+
+// Generate samples once
+const rng = (() => { let s = 99; return () => (s = (s * 9301 + 49297) % 233280) / 233280; })();
+function randn() {
+  const u = rng(), v = rng();
+  return Math.sqrt(-2 * Math.log(u + 1e-12)) * Math.cos(2 * Math.PI * v);
+}
+const samples = [];
+for (let i = 0; i < 10000; i++) samples.push(randn());
+
+function nearest(x, lv) {
+  let bd = Infinity, b = lv[0];
+  for (const c of lv) {
+    const d = (x - c) * (x - c);
+    if (d < bd) { bd = d; b = c; }
+  }
+  return b;
+}
+function mseOn(samps, lv) {
+  let sse = 0;
+  for (const x of samps) {
+    // Important: NF4/INT4 expect inputs in the codebook's range. The PDF/sample
+    // scale is N(0,1); the codebook levels span [-1, 1]. We assume per-block
+    // normalization scales the column max to 1.0 — clip samples to [-3, 3]
+    // then divide by 3 so they live in [-1, 1] like a normalized weight block.
+    const xn = Math.max(-3, Math.min(3, x)) / 3;
+    const q = nearest(xn, lv);
+    const e = xn - q;
+    sse += e * e;
+  }
+  return sse / samps.length;
+}
+
+// --- render ---
+const ctx = document.getElementById('plot').getContext('2d');
+
+function render() {
+  const showI = document.getElementById('showInt4').checked;
+  const showF = document.getElementById('showFp4').checked;
+  const showN = document.getElementById('showNf4').checked;
+
+  const W = ctx.canvas.width, H = ctx.canvas.height;
+  ctx.clearRect(0, 0, W, H);
+  const pad = { l: 50, r: 20, t: 25, b: 45 };
+  const PW = W - pad.l - pad.r, PH = H - pad.t - pad.b;
+
+  // Domain: show codebook scale [-1.05, 1.05]; samples are scaled to [-1,1]
+  const xLo = -1.05, xHi = 1.05;
+  const yLo = 0, yHi = pdfNorm(0) * 3; // scaled (samples are /3, so density 3x)
+  const xFor = v => pad.l + ((v - xLo) / (xHi - xLo)) * PW;
+  const yFor = v => pad.t + PH - ((v - yLo) / (yHi - yLo)) * PH;
+
+  // axes
+  ctx.strokeStyle = '#888';
+  ctx.beginPath();
+  ctx.moveTo(pad.l, pad.t); ctx.lineTo(pad.l, pad.t + PH);
+  ctx.lineTo(pad.l + PW, pad.t + PH); ctx.stroke();
+  ctx.fillStyle = '#555'; ctx.font = '11px sans-serif';
+  ctx.textAlign = 'center';
+  for (let i = 0; i <= 4; i++) {
+    const t = xLo + (i / 4) * (xHi - xLo);
+    ctx.fillText(t.toFixed(2), xFor(t), pad.t + PH + 14);
+  }
+  ctx.fillText('normalized weight value (per-block scale)', pad.l + PW / 2, pad.t + PH + 32);
+
+  // N(0,1) curve (rescaled — input samples were divided by 3)
+  ctx.strokeStyle = '#666'; ctx.lineWidth = 1.5;
+  ctx.beginPath();
+  for (let i = 0; i <= 200; i++) {
+    const x = xLo + (i / 200) * (xHi - xLo);
+    // density in [-1,1] from underlying N(0,1) sample /3 is 3*pdfNorm(3x)
+    const y = 3 * pdfNorm(x * 3);
+    if (i === 0) ctx.moveTo(xFor(x), yFor(y)); else ctx.lineTo(xFor(x), yFor(y));
+  }
+  ctx.stroke();
+  ctx.fillStyle = '#444'; ctx.textAlign = 'right';
+  ctx.fillText('N(0,1) density (rescaled)', pad.l + PW - 8, pad.t + 14);
+
+  // codebook ticks at three different vertical rows
+  const drawLevels = (lv, color, rowY, label) => {
+    ctx.strokeStyle = color; ctx.lineWidth = 1.5;
+    ctx.fillStyle = color;
+    for (const c of lv) {
+      const x = xFor(c);
+      ctx.beginPath(); ctx.moveTo(x, rowY - 8); ctx.lineTo(x, rowY + 8); ctx.stroke();
+      ctx.beginPath(); ctx.arc(x, rowY, 2.5, 0, Math.PI * 2); ctx.fill();
+    }
+    ctx.textAlign = 'left'; ctx.font = 'bold 11px sans-serif';
+    ctx.fillText(label, pad.l + 4, rowY + 3);
+    ctx.font = '11px sans-serif';
+  };
+
+  let row = pad.t + 60;
+  const rowGap = 38;
+  if (showI) { drawLevels(int4Levels(), '#1976d2', row, 'INT4'); row += rowGap; }
+  if (showF) { drawLevels(fp4Levels(),  '#388e3c', row, 'FP4');  row += rowGap; }
+  if (showN) { drawLevels(nf4Levels(),  '#d32f2f', row, 'NF4');  row += rowGap; }
+
+  // MSE / table updates
+  const fmtLevels = lv => lv.map(x => x.toFixed(3)).join(', ');
+  const iLv = int4Levels(), fLv = fp4Levels(), nLv = nf4Levels();
+  document.getElementById('lvlInt4').textContent = fmtLevels(iLv);
+  document.getElementById('lvlFp4').textContent  = fmtLevels(fLv);
+  document.getElementById('lvlNf4').textContent  = fmtLevels(nLv);
+  document.getElementById('mseInt4').textContent = mseOn(samples, iLv).toExponential(3);
+  document.getElementById('mseFp4').textContent  = mseOn(samples, fLv).toExponential(3);
+  document.getElementById('mseNf4').textContent  = mseOn(samples, nLv).toExponential(3);
+}
+
+['showInt4', 'showFp4', 'showNf4'].forEach(id =>
+  document.getElementById(id).addEventListener('change', render));
+render();
+</script>
+</body>
+</html>

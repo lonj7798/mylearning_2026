@@ -49,8 +49,11 @@ Active libraries and courses:
 |------|--------------|----------------|-------|
 | `llm-arch` | `wiki/sources/llm-arch/` | `wiki/courses/llm-arch/outline.json` | Transformer architecture, attention variants, positional encoding, MoE, inference kernels |
 | `llm-training` | `wiki/raw-data/llm-training/` | `wiki/courses/llm-training/outline.json` | Classical training fundamentals + data curation + synthetic-data generation + SFT + RL; 60 chapters across 4 tracks (data / synthetic / sft / rl) |
+| `model-quantization` | `wiki/raw-data/model-quantization/` | `wiki/courses/model-quantization/outline.json` (pending) | Math foundations + numerical formats + classical PTQ/QAT + LLM quantization 2022-2026 (GPTQ / AWQ / SmoothQuant / QLoRA / rotation methods / AQLM / KV-cache / BitNet / FP8/FP4 training); theory-first sequencing |
 
 For `llm-training`, the outline groups chapters into four explicit tracks (see the `tracks` field in `outline.json`). Treat each track as a self-contained professional course — dependencies within a track are sequential, but different tracks can in principle be interleaved if the learner wants a different order.
+
+For `model-quantization`, the first ~5 chapters MUST come from `classics/` and `formats/` only (math foundations + numerical formats), per the theory-first rule in `wiki/raw-data/model-quantization/README.md`. LLM-specific algorithms enter after the foundation chapters.
 
 ---
 

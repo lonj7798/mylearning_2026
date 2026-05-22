@@ -1,0 +1,277 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>PPL vs MMLU — When Perplexity Lies</title>
+<style>
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+         max-width: 980px; margin: 2em auto; padding: 0 1em; color: #222; }
+  h1 { font-size: 1.4em; margin-bottom: 0.2em; }
+  .subtitle { color: #666; margin-top: 0; }
+  .panel { border: 1px solid #ddd; border-radius: 6px; padding: 1em; margin: 1em 0;
+           background: #fafafa; }
+  .controls { display: flex; gap: 1em; flex-wrap: wrap; align-items: center; }
+  button { font: inherit; padding: 6px 12px; border: 1px solid #888; background: #fff;
+           border-radius: 4px; cursor: pointer; }
+  button.active { background: #1976d2; color: #fff; border-color: #1976d2; }
+  canvas { background: white; border: 1px solid #ccc; display: block; margin: 1em auto;
+           cursor: crosshair; }
+  .legend { display: flex; gap: 1.5em; justify-content: center; font-size: 0.9em;
+            flex-wrap: wrap; }
+  .swatch { display: inline-block; width: 12px; height: 12px; margin-right: 4px;
+            vertical-align: middle; border-radius: 50%; }
+  .swatch.sq { border-radius: 2px; }
+  .note { font-size: 0.88em; color: #555; line-height: 1.55; }
+  code { background: #eef; padding: 1px 4px; border-radius: 3px; font-size: 0.9em; }
+  #tooltip { position: absolute; background: #222; color: #fff; padding: 6px 10px;
+             border-radius: 4px; font-size: 0.82em; pointer-events: none; display: none;
+             white-space: nowrap; }
+  table { border-collapse: collapse; width: 100%; font-size: 0.85em; margin-top: 0.5em; }
+  th, td { border: 1px solid #ccc; padding: 4px 8px; text-align: center; }
+  th { background: #eee; }
+  .footer { margin-top: 2em; font-size: 0.85em; color: #777; }
+  .footer a { color: #1976d2; }
+</style>
+</head>
+<body>
+
+<h1>PPL vs MMLU — When Perplexity Lies</h1>
+<p class="subtitle">
+  Each dot is one quantization config of Llama-3-8B.
+  Hover for method details. Click <b>Show divergences</b> to draw arrows between
+  PPL-vs-MMLU rank flips.
+</p>
+
+<div class="panel">
+  <div class="controls">
+    <button id="btnAll" class="active">Show all</button>
+    <button id="btnDiv">Show divergences</button>
+    <button id="btnReset">Reset</button>
+  </div>
+</div>
+
+<canvas id="plot" width="900" height="460"></canvas>
+<div id="tooltip"></div>
+
+<div class="legend">
+  <span><span class="swatch" style="background:#000"></span>FP16 baseline</span>
+  <span><span class="swatch" style="background:#1976d2"></span>GPTQ</span>
+  <span><span class="swatch" style="background:#d32f2f"></span>AWQ</span>
+  <span><span class="swatch" style="background:#388e3c"></span>QLoRA NF4</span>
+  <span><span class="swatch" style="background:#f57c00"></span>HQQ</span>
+  <span><span class="swatch" style="background:#7b1fa2"></span>QuaRot W4A4</span>
+  <span><span class="swatch sq" style="background:#555"></span>BitNet b1.58 (sep. model)</span>
+</div>
+
+<div class="panel note">
+  <b>PPL is a fast proxy but it's not the truth.</b> Always report at least 2–3 downstream
+  benchmarks alongside PPL. Some quant methods optimize PPL at the cost of MMLU — this is
+  invisible until you measure both. Look at the <b>GPTQ W3 vs AWQ W3</b> pair: nearly identical
+  PPL (6.8 vs 6.7), but AWQ holds a ~1.5pt MMLU lead. Or <b>HQQ W4 vs QuaRot W4A4</b>: identical
+  PPL (6.5), but the activation quantization in QuaRot costs MMLU.
+</div>
+
+<div class="panel">
+  <b>Data table</b>
+  <table id="dataTable"></table>
+</div>
+
+<div class="footer">
+  <a href="../read.md">&larr; back to chapter</a>
+</div>
+
+<script>
+const points = [
+  { name: 'FP16',         method: 'baseline',  wbits: 16, gs: '-',    ppl: 6.2, mmlu: 68.4, color: '#000',     shape: 'circle' },
+  { name: 'GPTQ W4 g128', method: 'GPTQ',      wbits: 4,  gs: '128',  ppl: 6.3, mmlu: 68.2, color: '#1976d2',  shape: 'circle' },
+  { name: 'AWQ W4 g128',  method: 'AWQ',       wbits: 4,  gs: '128',  ppl: 6.3, mmlu: 68.0, color: '#d32f2f',  shape: 'circle' },
+  { name: 'GPTQ W3 g128', method: 'GPTQ',      wbits: 3,  gs: '128',  ppl: 6.8, mmlu: 64.5, color: '#1976d2',  shape: 'circle' },
+  { name: 'AWQ W3 g128',  method: 'AWQ',       wbits: 3,  gs: '128',  ppl: 6.7, mmlu: 66.0, color: '#d32f2f',  shape: 'circle' },
+  { name: 'QLoRA NF4',    method: 'QLoRA',     wbits: 4,  gs: '-',    ppl: 6.4, mmlu: 67.5, color: '#388e3c',  shape: 'circle' },
+  { name: 'HQQ W4',       method: 'HQQ',       wbits: 4,  gs: '64',   ppl: 6.5, mmlu: 67.0, color: '#f57c00',  shape: 'circle' },
+  { name: 'QuaRot W4A4',  method: 'QuaRot',    wbits: 4,  gs: '-',    ppl: 6.5, mmlu: 66.8, color: '#7b1fa2',  shape: 'circle' },
+  { name: 'BitNet b1.58 2B', method: 'BitNet', wbits: 1.58, gs: '-',  ppl: 7.5, mmlu: 49.0, color: '#555',     shape: 'square' },
+];
+
+// "Divergence" = pair where PPL is near-identical (≤ 0.2 apart) but MMLU disagrees
+// meaningfully (≥ 1pt apart), OR pair where PPL ranks the configs opposite to MMLU.
+// Either case is "PPL didn't tell you what downstream did."
+const divergences = [];
+for (let i = 0; i < points.length; i++) {
+  for (let j = i + 1; j < points.length; j++) {
+    const a = points[i], b = points[j];
+    if (a.method === 'BitNet' || b.method === 'BitNet') continue; // different model
+    const pplDiff = a.ppl - b.ppl;       // a-b: positive => a worse PPL
+    const mmluDiff = a.mmlu - b.mmlu;    // a-b: positive => a better MMLU
+    // Case 1: rank flip — lower PPL but ALSO lower MMLU
+    // For a vs b: pplDiff > 0 (a worse PPL) AND mmluDiff > 0 (a better MMLU) → flip
+    //          OR pplDiff < 0 AND mmluDiff < 0
+    const rankFlip = (pplDiff > 0 && mmluDiff > 0) || (pplDiff < 0 && mmluDiff < 0);
+    // Case 2: near-identical PPL but meaningful MMLU spread
+    const ppl_close = Math.abs(pplDiff) <= 0.2;
+    const mmlu_spread = Math.abs(mmluDiff) >= 1.0;
+    if ((rankFlip && Math.abs(mmluDiff) >= 0.5) || (ppl_close && mmlu_spread)) {
+      divergences.push([i, j]);
+    }
+  }
+}
+
+const cvs = document.getElementById('plot');
+const ctx = cvs.getContext('2d');
+const tooltip = document.getElementById('tooltip');
+
+let mode = 'all'; // 'all' | 'div'
+
+const pad = { l: 70, r: 30, t: 30, b: 60 };
+const W = cvs.width - pad.l - pad.r;
+const H = cvs.height - pad.t - pad.b;
+
+const xMin = 6.0, xMax = 7.8;
+const yMin = 45,  yMax = 70;
+const xFor = ppl => pad.l + ((ppl - xMin) / (xMax - xMin)) * W;
+const yFor = mmlu => pad.t + H - ((mmlu - yMin) / (yMax - yMin)) * H;
+
+function drawAxes() {
+  ctx.strokeStyle = '#bbb';
+  ctx.lineWidth = 1;
+  ctx.strokeRect(pad.l, pad.t, W, H);
+
+  ctx.fillStyle = '#555';
+  ctx.font = '11px sans-serif';
+  ctx.textAlign = 'center';
+
+  // X ticks (PPL)
+  for (let p = 6.0; p <= 7.8; p += 0.3) {
+    const x = xFor(p);
+    ctx.strokeStyle = '#eee';
+    ctx.beginPath(); ctx.moveTo(x, pad.t); ctx.lineTo(x, pad.t + H); ctx.stroke();
+    ctx.fillStyle = '#555';
+    ctx.fillText(p.toFixed(1), x, pad.t + H + 14);
+  }
+  ctx.fillText('PPL on WikiText-2  (lower is better →)', pad.l + W / 2, pad.t + H + 38);
+
+  // Y ticks (MMLU)
+  ctx.textAlign = 'right';
+  for (let m = 45; m <= 70; m += 5) {
+    const y = yFor(m);
+    ctx.strokeStyle = '#eee';
+    ctx.beginPath(); ctx.moveTo(pad.l, y); ctx.lineTo(pad.l + W, y); ctx.stroke();
+    ctx.fillStyle = '#555';
+    ctx.fillText(m.toFixed(0), pad.l - 6, y + 4);
+  }
+  ctx.save();
+  ctx.translate(16, pad.t + H / 2);
+  ctx.rotate(-Math.PI / 2);
+  ctx.textAlign = 'center';
+  ctx.fillText('MMLU accuracy  (higher is better ↑)', 0, 0);
+  ctx.restore();
+}
+
+function drawDivergenceArrow(a, b) {
+  const x1 = xFor(a.ppl), y1 = yFor(a.mmlu);
+  const x2 = xFor(b.ppl), y2 = yFor(b.mmlu);
+  ctx.strokeStyle = '#e91e63';
+  ctx.lineWidth = 1.5;
+  ctx.setLineDash([4, 3]);
+  ctx.beginPath();
+  ctx.moveTo(x1, y1); ctx.lineTo(x2, y2);
+  ctx.stroke();
+  ctx.setLineDash([]);
+
+  // mid-label
+  const mx = (x1 + x2) / 2, my = (y1 + y2) / 2;
+  ctx.fillStyle = '#e91e63';
+  ctx.font = 'italic 10px sans-serif';
+  ctx.textAlign = 'left';
+  const dPPL = (b.ppl - a.ppl).toFixed(2);
+  const dMMLU = (b.mmlu - a.mmlu).toFixed(1);
+  ctx.fillText(`ΔPPL=${dPPL}, ΔMMLU=${dMMLU}`, mx + 4, my - 4);
+}
+
+function drawPoint(p, idx) {
+  const x = xFor(p.ppl), y = yFor(p.mmlu);
+  ctx.fillStyle = p.color;
+  ctx.strokeStyle = '#fff';
+  ctx.lineWidth = 1.5;
+  if (p.shape === 'square') {
+    ctx.fillRect(x - 6, y - 6, 12, 12);
+    ctx.strokeRect(x - 6, y - 6, 12, 12);
+  } else {
+    ctx.beginPath();
+    ctx.arc(x, y, 7, 0, 2 * Math.PI);
+    ctx.fill();
+    ctx.stroke();
+  }
+  // label
+  ctx.fillStyle = '#333';
+  ctx.font = '10px sans-serif';
+  ctx.textAlign = 'left';
+  ctx.fillText(p.name, x + 9, y + 3);
+}
+
+function render() {
+  ctx.clearRect(0, 0, cvs.width, cvs.height);
+  drawAxes();
+
+  if (mode === 'div') {
+    divergences.forEach(([i, j]) => drawDivergenceArrow(points[i], points[j]));
+  }
+
+  points.forEach(drawPoint);
+}
+
+function findHover(mx, my) {
+  for (const p of points) {
+    const x = xFor(p.ppl), y = yFor(p.mmlu);
+    if ((mx - x) ** 2 + (my - y) ** 2 <= 9 * 9) return p;
+  }
+  return null;
+}
+
+cvs.addEventListener('mousemove', (e) => {
+  const r = cvs.getBoundingClientRect();
+  const mx = e.clientX - r.left, my = e.clientY - r.top;
+  const p = findHover(mx, my);
+  if (p) {
+    tooltip.style.display = 'block';
+    tooltip.style.left = (e.pageX + 12) + 'px';
+    tooltip.style.top  = (e.pageY + 12) + 'px';
+    tooltip.innerHTML = `<b>${p.name}</b><br>method: ${p.method}<br>weight bits: ${p.wbits}, group_size: ${p.gs}<br>PPL: ${p.ppl} &nbsp; MMLU: ${p.mmlu}`;
+  } else {
+    tooltip.style.display = 'none';
+  }
+});
+cvs.addEventListener('mouseleave', () => { tooltip.style.display = 'none'; });
+
+document.getElementById('btnAll').addEventListener('click', () => {
+  mode = 'all';
+  document.getElementById('btnAll').classList.add('active');
+  document.getElementById('btnDiv').classList.remove('active');
+  render();
+});
+document.getElementById('btnDiv').addEventListener('click', () => {
+  mode = 'div';
+  document.getElementById('btnDiv').classList.add('active');
+  document.getElementById('btnAll').classList.remove('active');
+  render();
+});
+document.getElementById('btnReset').addEventListener('click', () => {
+  mode = 'all';
+  document.getElementById('btnAll').classList.add('active');
+  document.getElementById('btnDiv').classList.remove('active');
+  render();
+});
+
+// build data table
+const tbl = document.getElementById('dataTable');
+let html = '<tr><th>Config</th><th>Method</th><th>W-bits</th><th>group_size</th><th>PPL ↓</th><th>MMLU ↑</th></tr>';
+points.forEach(p => {
+  html += `<tr><td>${p.name}</td><td>${p.method}</td><td>${p.wbits}</td><td>${p.gs}</td><td>${p.ppl}</td><td>${p.mmlu}</td></tr>`;
+});
+tbl.innerHTML = html;
+
+render();
+</script>
+
+</body>
+</html>

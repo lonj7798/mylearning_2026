@@ -1,0 +1,263 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>SmoothQuant — Activation→Weight Difficulty Migration</title>
+<style>
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+         max-width: 980px; margin: 2em auto; padding: 0 1em; color: #222; }
+  h1 { font-size: 1.4em; margin-bottom: 0.2em; }
+  .subtitle { color: #666; margin-top: 0; }
+  .panel { border: 1px solid #ddd; border-radius: 6px; padding: 1em; margin: 1em 0;
+           background: #fafafa; }
+  .controls { display: flex; gap: 1em; flex-wrap: wrap; align-items: center; }
+  .control { display: flex; flex-direction: column; }
+  label { font-size: 0.85em; color: #555; margin-bottom: 0.2em; }
+  input[type="range"] { width: 320px; }
+  canvas { background: white; border: 1px solid #ccc; display: block; margin: 0.4em auto; }
+  .row { display: flex; gap: 1em; justify-content: center; flex-wrap: wrap; }
+  .col { display: flex; flex-direction: column; align-items: center; }
+  .col h3 { font-size: 0.95em; margin: 0.2em 0; color: #444; }
+  .value { font-variant-numeric: tabular-nums; color: #333; font-weight: 600; }
+  .note { font-size: 0.88em; color: #555; line-height: 1.5; }
+  code { background: #eef; padding: 1px 4px; border-radius: 3px; font-size: 0.9em; }
+  .badge { background: #fff3cd; border: 1px solid #ffe69c; padding: 2px 6px;
+           border-radius: 3px; font-size: 0.82em; }
+  footer { text-align: center; margin-top: 2em; font-size: 0.9em; }
+  footer a { color: #1976d2; text-decoration: none; }
+</style>
+</head>
+<body>
+
+<h1>SmoothQuant — Activation → Weight Difficulty Migration</h1>
+<p class="subtitle">
+  Per-channel rescale <code>s<sub>j</sub> = max(|X<sub>j</sub>|)<sup>α</sup> / max(|W<sub>j</sub>|)<sup>(1−α)</sup></code>
+  shifts quantization difficulty from outlier-rich activations into well-behaved weights.
+  <span class="badge">Y = (X · diag(s)<sup>−1</sup>) · (diag(s) · W) = X · W</span>
+</p>
+
+<div class="panel">
+  <div class="controls">
+    <div class="control">
+      <label>α (migration strength)  &nbsp; <span class="value" id="alphaLabel">0.50</span></label>
+      <input type="range" id="alpha" min="0" max="100" step="1" value="50">
+    </div>
+    <div class="control">
+      <label>SmoothQuant default α = 0.5</label>
+      <button id="reset">Reset α=0.5</button>
+    </div>
+  </div>
+</div>
+
+<div class="row">
+  <div class="col">
+    <h3>Activation X (heavy-tailed, outlier-rich)</h3>
+    <canvas id="actCanvas" width="430" height="180"></canvas>
+  </div>
+  <div class="col">
+    <h3>Weight W (Gaussian-ish)</h3>
+    <canvas id="wgtCanvas" width="430" height="180"></canvas>
+  </div>
+</div>
+<p style="text-align:center; font-size:0.85em; color:#777; margin:0.2em 0;">
+  blue = original &nbsp;|&nbsp; orange = after diag(s)<sup>−1</sup> / diag(s) transform
+</p>
+
+<div class="panel">
+  <h3 style="margin:0 0 0.4em 0; font-size:1em;">INT8 quantization error per channel</h3>
+  <canvas id="barCanvas" width="900" height="220"></canvas>
+  <p style="font-size:0.85em; color:#666; margin:0.3em 0 0 0;">
+    No-smooth bars = quantize X and W directly. α-smooth bars = quantize the transformed tensors.
+    Total error shown numerically below.
+  </p>
+  <p style="font-size:0.9em; margin:0.5em 0 0 0;">
+    no-smooth total error: <span class="value" id="errNoSmooth">—</span> &nbsp;|&nbsp;
+    α-smooth total error: <span class="value" id="errSmooth">—</span>
+  </p>
+</div>
+
+<div class="panel note">
+  <strong>Why it works.</strong>
+  Activations have a handful of outlier channels that blow up the INT8 step size; weights don't.
+  SmoothQuant divides X by a per-channel scale and multiplies W by the same scale — algebraically
+  identical (<code>Y = X · W</code>), but it pulls the outlier mass out of X and pushes a small,
+  even amount into W. There's <em>no extra compute</em> at inference (fuse s into the previous
+  LayerNorm); only a one-time weight rewrite. α = 0.5 is the empirical sweet spot — α=0 reverts to
+  vanilla quantization (catastrophic for X), α=1 over-migrates and explodes W.
+</div>
+
+<footer><a href="../read.md">← back to chapter</a></footer>
+
+<script>
+// --- synthetic data: 32 channels ---
+const C = 32;
+const rng = (() => { let s = 42; return () => (s = (s * 9301 + 49297) % 233280) / 233280; })();
+function randn() {
+  const u = rng(), v = rng();
+  return Math.sqrt(-2 * Math.log(u + 1e-12)) * Math.cos(2 * Math.PI * v);
+}
+// Activation: heavy-tailed per-channel max; pick a few outlier channels
+const actMax = [];
+for (let j = 0; j < C; j++) {
+  const isOutlier = (j === 5 || j === 12 || j === 23);
+  actMax.push(isOutlier ? 8 + rng() * 4 : 0.5 + rng() * 0.6);
+}
+// Weight: per-channel max ~ Gaussian magnitude
+const wgtMax = [];
+for (let j = 0; j < C; j++) wgtMax.push(0.4 + Math.abs(randn()) * 0.2);
+
+// Per-token samples (for histogram)
+const N = 2000;
+function sampleAct(j) {
+  // mixture: mostly small, plus a fat-tail term scaled by actMax
+  const base = randn() * 0.3;
+  const tail = (rng() < 0.05 ? randn() * actMax[j] : 0);
+  return base + tail;
+}
+function sampleWgt(j) { return randn() * wgtMax[j] / 2.5; }
+
+function quantErrInt8(maxAbs, samples) {
+  // symmetric per-tensor INT8: step = maxAbs/127
+  if (maxAbs < 1e-9) return 0;
+  const step = maxAbs / 127;
+  let sse = 0;
+  for (const x of samples) {
+    const q = Math.round(x / step) * step;
+    const e = x - q;
+    sse += e * e;
+  }
+  return Math.sqrt(sse / samples.length);
+}
+
+function histogram(samples, bins, lo, hi) {
+  const h = new Array(bins).fill(0);
+  for (const x of samples) {
+    if (x < lo || x > hi) continue;
+    const i = Math.min(bins - 1, Math.floor(((x - lo) / (hi - lo)) * bins));
+    h[i]++;
+  }
+  return h;
+}
+
+function drawHist(ctx, original, transformed, color1, color2) {
+  const W = ctx.canvas.width, H = ctx.canvas.height;
+  ctx.clearRect(0, 0, W, H);
+  const lo = -10, hi = 10, bins = 60;
+  const h1 = histogram(original, bins, lo, hi);
+  const h2 = histogram(transformed, bins, lo, hi);
+  const maxC = Math.max(...h1, ...h2, 1);
+  const bw = W / bins;
+  for (let i = 0; i < bins; i++) {
+    const y1 = H - (h1[i] / maxC) * (H - 20);
+    ctx.fillStyle = color1 + '88';
+    ctx.fillRect(i * bw, y1, bw - 0.5, H - y1);
+    const y2 = H - (h2[i] / maxC) * (H - 20);
+    ctx.fillStyle = color2 + 'bb';
+    ctx.fillRect(i * bw + bw * 0.25, y2, bw * 0.5, H - y2);
+  }
+  ctx.strokeStyle = '#aaa';
+  ctx.beginPath(); ctx.moveTo(0, H - 1); ctx.lineTo(W, H - 1); ctx.stroke();
+  ctx.fillStyle = '#666'; ctx.font = '10px sans-serif';
+  ctx.textAlign = 'center';
+  ctx.fillText('−10', 10, H - 4); ctx.fillText('0', W/2, H - 4); ctx.fillText('+10', W - 10, H - 4);
+}
+
+function drawBars(ctx, errsX, errsW, errsXs, errsWs) {
+  const W = ctx.canvas.width, H = ctx.canvas.height;
+  ctx.clearRect(0, 0, W, H);
+  const pad = { l: 40, r: 10, t: 10, b: 40 };
+  const PW = W - pad.l - pad.r, PH = H - pad.t - pad.b;
+  const all = [...errsX, ...errsW, ...errsXs, ...errsWs];
+  const ymax = Math.max(...all, 1e-6) * 1.1;
+  const groupW = PW / C;
+  for (let j = 0; j < C; j++) {
+    const x0 = pad.l + j * groupW;
+    const bw = groupW / 4 - 0.5;
+    const series = [
+      { v: errsX[j],  c: '#1976d2' }, // X no-smooth
+      { v: errsXs[j], c: '#ff9800' }, // X smooth
+      { v: errsW[j],  c: '#90caf9' }, // W no-smooth
+      { v: errsWs[j], c: '#ffcc80' }, // W smooth
+    ];
+    series.forEach((s, k) => {
+      const h = (s.v / ymax) * PH;
+      ctx.fillStyle = s.c;
+      ctx.fillRect(x0 + k * (bw + 0.5), pad.t + PH - h, bw, h);
+    });
+  }
+  // axes + legend
+  ctx.strokeStyle = '#888';
+  ctx.beginPath(); ctx.moveTo(pad.l, pad.t); ctx.lineTo(pad.l, pad.t + PH);
+  ctx.lineTo(pad.l + PW, pad.t + PH); ctx.stroke();
+  ctx.fillStyle = '#555'; ctx.font = '10px sans-serif';
+  ctx.textAlign = 'right';
+  for (let i = 0; i <= 4; i++) {
+    const y = pad.t + PH - (i / 4) * PH;
+    ctx.fillText(((i / 4) * ymax).toFixed(2), pad.l - 4, y + 3);
+  }
+  ctx.textAlign = 'center';
+  ctx.fillText('channel index j', pad.l + PW / 2, H - 22);
+  // legend
+  const lg = [
+    ['X (no smooth)', '#1976d2'], ['X (α-smooth)', '#ff9800'],
+    ['W (no smooth)', '#90caf9'], ['W (α-smooth)', '#ffcc80']
+  ];
+  let lx = pad.l;
+  lg.forEach(([t, c]) => {
+    ctx.fillStyle = c; ctx.fillRect(lx, H - 14, 10, 10);
+    ctx.fillStyle = '#444'; ctx.textAlign = 'left';
+    ctx.fillText(t, lx + 14, H - 5);
+    lx += 110;
+  });
+}
+
+const aCtx = document.getElementById('actCanvas').getContext('2d');
+const wCtx = document.getElementById('wgtCanvas').getContext('2d');
+const bCtx = document.getElementById('barCanvas').getContext('2d');
+
+function render() {
+  const alpha = +document.getElementById('alpha').value / 100;
+  document.getElementById('alphaLabel').textContent = alpha.toFixed(2);
+
+  // per-channel scale
+  const s = actMax.map((ax, j) =>
+    Math.pow(ax, alpha) / Math.pow(Math.max(wgtMax[j], 1e-6), 1 - alpha));
+
+  // samples
+  const origAct = [], origWgt = [], smAct = [], smWgt = [];
+  const errsX = [], errsW = [], errsXs = [], errsWs = [];
+  for (let j = 0; j < C; j++) {
+    const xs = [], ws = [], xst = [], wst = [];
+    for (let n = 0; n < N / C; n++) {
+      const x = sampleAct(j); xs.push(x); xst.push(x / s[j]);
+      origAct.push(x); smAct.push(x / s[j]);
+    }
+    for (let n = 0; n < N / C; n++) {
+      const w = sampleWgt(j); ws.push(w); wst.push(w * s[j]);
+      origWgt.push(w); smWgt.push(w * s[j]);
+    }
+    errsX.push(quantErrInt8(actMax[j], xs));
+    errsW.push(quantErrInt8(wgtMax[j], ws));
+    errsXs.push(quantErrInt8(actMax[j] / s[j], xst));
+    errsWs.push(quantErrInt8(wgtMax[j] * s[j], wst));
+  }
+
+  drawHist(aCtx, origAct, smAct, '#1976d2', '#ff9800');
+  drawHist(wCtx, origWgt, smWgt, '#1976d2', '#ff9800');
+  drawBars(bCtx, errsX, errsW, errsXs, errsWs);
+
+  const sum = a => a.reduce((p, c) => p + c, 0);
+  document.getElementById('errNoSmooth').textContent =
+    (sum(errsX) + sum(errsW)).toFixed(3);
+  document.getElementById('errSmooth').textContent =
+    (sum(errsXs) + sum(errsWs)).toFixed(3);
+}
+
+document.getElementById('alpha').addEventListener('input', render);
+document.getElementById('reset').addEventListener('click', () => {
+  document.getElementById('alpha').value = 50; render();
+});
+render();
+</script>
+</body>
+</html>

@@ -1,0 +1,292 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Quality vs Cost — Pareto Comparison Table</title>
+<style>
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+         max-width: 1100px; margin: 2em auto; padding: 0 1em; color: #222; }
+  h1 { font-size: 1.4em; margin-bottom: 0.2em; }
+  .subtitle { color: #666; margin-top: 0; }
+  .panel { border: 1px solid #ddd; border-radius: 6px; padding: 1em; margin: 1em 0;
+           background: #fafafa; }
+  table { border-collapse: collapse; width: 100%; font-size: 0.82em; }
+  th, td { border: 1px solid #ccc; padding: 4px 6px; text-align: center; }
+  th { background: #eee; position: sticky; top: 0; }
+  td input { width: 70px; font: inherit; text-align: right; border: 1px solid #ddd;
+             padding: 2px 4px; border-radius: 3px; }
+  td.method { font-weight: 600; text-align: left; background: #f5f5f5; }
+  tr.pareto td { background: #fff8dc; }
+  tr.pareto td.method { background: #ffe9a8; }
+  button { font: inherit; padding: 6px 12px; border: 1px solid #888; background: #fff;
+           border-radius: 4px; cursor: pointer; margin-right: 0.5em; }
+  button:hover { background: #eef; }
+  .canvas-row { display: flex; gap: 1em; flex-wrap: wrap; justify-content: center; }
+  canvas { background: white; border: 1px solid #ccc; display: block; }
+  .note { font-size: 0.88em; color: #555; line-height: 1.55; }
+  code { background: #eef; padding: 1px 4px; border-radius: 3px; font-size: 0.9em; }
+  .footer { margin-top: 2em; font-size: 0.85em; color: #777; }
+  .footer a { color: #1976d2; }
+</style>
+</head>
+<body>
+
+<h1>Quality vs Cost — Pareto Comparison Table</h1>
+<p class="subtitle">
+  Fill cells in for your model. The two plots and the Pareto-frontier highlight update live.
+  Leave a cell blank if you don't have an honest measurement.
+</p>
+
+<div class="panel">
+  <button id="btnPareto">Highlight Pareto frontier</button>
+  <button id="btnCSV">Export as CSV</button>
+  <button id="btnClear">Clear all cells</button>
+  <button id="btnDemo">Fill with demo numbers</button>
+</div>
+
+<div class="panel">
+  <table id="pareto">
+    <thead>
+      <tr>
+        <th>Method</th>
+        <th>Model size (GB)</th>
+        <th>VRAM peak (GB)</th>
+        <th>PPL ↓</th>
+        <th>MMLU ↑</th>
+        <th>GSM8K ↑</th>
+        <th>HumanEval ↑</th>
+        <th>Latency (ms/tok) ↓</th>
+        <th>Throughput (tok/s) ↑</th>
+      </tr>
+    </thead>
+    <tbody id="tbody"></tbody>
+  </table>
+</div>
+
+<div class="canvas-row">
+  <div>
+    <div style="text-align:center;font-size:0.85em;color:#555;">Latency vs MMLU</div>
+    <canvas id="plotLat" width="480" height="320"></canvas>
+  </div>
+  <div>
+    <div style="text-align:center;font-size:0.85em;color:#555;">VRAM vs MMLU</div>
+    <canvas id="plotMem" width="480" height="320"></canvas>
+  </div>
+</div>
+
+<div class="panel note">
+  <b>The lab deliverable is this table filled in for your chosen model.</b>
+  If you can't generate a row honestly, leave it blank — partial data is more useful than wrong data.
+  Pareto-frontier rule used here: a row is <i>dominated</i> if some other row is at least as good on
+  every cost metric (memory, latency) and at least as good on every quality metric (MMLU, GSM8K, HumanEval),
+  and strictly better on at least one. The frontier is everything not dominated.
+</div>
+
+<div class="footer">
+  <a href="../read.md">&larr; back to chapter</a>
+</div>
+
+<script>
+const cols = [
+  { key: 'size',   label: 'Model size (GB)',     dir: 'lower' },
+  { key: 'vram',   label: 'VRAM peak (GB)',      dir: 'lower' },
+  { key: 'ppl',    label: 'PPL',                 dir: 'lower' },
+  { key: 'mmlu',   label: 'MMLU',                dir: 'higher' },
+  { key: 'gsm8k',  label: 'GSM8K',               dir: 'higher' },
+  { key: 'he',     label: 'HumanEval',           dir: 'higher' },
+  { key: 'lat',    label: 'Latency (ms/tok)',    dir: 'lower' },
+  { key: 'tput',   label: 'Throughput (tok/s)',  dir: 'higher' },
+];
+
+const methods = [
+  'FP16',
+  'GPTQ W4 g128',
+  'AWQ W4 g128',
+  'QLoRA NF4',
+  'bitsandbytes INT8',
+  'custom',
+];
+
+// state: data[methodIdx][colKey] = number | null
+const data = methods.map(() => Object.fromEntries(cols.map(c => [c.key, null])));
+
+const demo = {
+  'FP16':              { size: 16.0, vram: 18.0, ppl: 6.2, mmlu: 68.4, gsm8k: 50.0, he: 35.0, lat: 22, tput: 45 },
+  'GPTQ W4 g128':      { size: 4.5,  vram: 6.5,  ppl: 6.3, mmlu: 68.2, gsm8k: 49.0, he: 34.0, lat: 14, tput: 70 },
+  'AWQ W4 g128':       { size: 4.5,  vram: 6.5,  ppl: 6.3, mmlu: 68.0, gsm8k: 49.5, he: 34.5, lat: 13, tput: 75 },
+  'QLoRA NF4':         { size: 4.7,  vram: 7.0,  ppl: 6.4, mmlu: 67.5, gsm8k: 48.0, he: 33.0, lat: 18, tput: 55 },
+  'bitsandbytes INT8': { size: 8.5,  vram: 11.0, ppl: 6.25,mmlu: 68.3, gsm8k: 49.5, he: 34.5, lat: 20, tput: 50 },
+  'custom':            { size: null, vram: null, ppl: null,mmlu: null, gsm8k: null, he: null, lat: null, tput: null },
+};
+
+let highlight = false;
+
+const tbody = document.getElementById('tbody');
+
+function buildTable() {
+  tbody.innerHTML = '';
+  methods.forEach((m, i) => {
+    const tr = document.createElement('tr');
+    tr.dataset.idx = i;
+    const tdM = document.createElement('td');
+    tdM.className = 'method';
+    tdM.textContent = m;
+    tr.appendChild(tdM);
+    cols.forEach(c => {
+      const td = document.createElement('td');
+      const inp = document.createElement('input');
+      inp.type = 'number';
+      inp.step = 'any';
+      inp.value = data[i][c.key] !== null ? data[i][c.key] : '';
+      inp.addEventListener('input', () => {
+        const v = inp.value.trim();
+        data[i][c.key] = v === '' ? null : Number(v);
+        render();
+      });
+      td.appendChild(inp);
+      tr.appendChild(td);
+    });
+    tbody.appendChild(tr);
+  });
+}
+
+function computePareto() {
+  // qualityKeys to maximize, costKeys to minimize
+  const qual = ['mmlu', 'gsm8k', 'he'];
+  const cost = ['vram', 'lat'];
+  const dominated = methods.map(() => false);
+  for (let i = 0; i < methods.length; i++) {
+    for (let j = 0; j < methods.length; j++) {
+      if (i === j) continue;
+      // j dominates i if j is >= i in all qualities AND <= i in all costs, strictly better in at least one
+      let allOk = true, strict = false;
+      const usable = (k) => data[i][k] !== null && data[j][k] !== null;
+      for (const k of qual) {
+        if (!usable(k)) { allOk = false; break; }
+        if (data[j][k] < data[i][k]) { allOk = false; break; }
+        if (data[j][k] > data[i][k]) strict = true;
+      }
+      if (!allOk) continue;
+      for (const k of cost) {
+        if (!usable(k)) { allOk = false; break; }
+        if (data[j][k] > data[i][k]) { allOk = false; break; }
+        if (data[j][k] < data[i][k]) strict = true;
+      }
+      if (allOk && strict) { dominated[i] = true; break; }
+    }
+  }
+  return dominated.map(d => !d);
+}
+
+function colorFor(i) {
+  const colors = ['#000', '#1976d2', '#d32f2f', '#388e3c', '#f57c00', '#7b1fa2'];
+  return colors[i % colors.length];
+}
+
+function drawScatter(canvasId, xKey, yKey, xLabel, yLabel) {
+  const cvs = document.getElementById(canvasId);
+  const ctx = cvs.getContext('2d');
+  ctx.clearRect(0, 0, cvs.width, cvs.height);
+  const pad = { l: 55, r: 15, t: 15, b: 40 };
+  const W = cvs.width - pad.l - pad.r;
+  const H = cvs.height - pad.t - pad.b;
+
+  // bounds
+  const xs = data.map(d => d[xKey]).filter(v => v !== null);
+  const ys = data.map(d => d[yKey]).filter(v => v !== null);
+  if (xs.length === 0 || ys.length === 0) {
+    ctx.fillStyle = '#999'; ctx.textAlign = 'center'; ctx.font = '12px sans-serif';
+    ctx.fillText('(fill in cells to plot)', cvs.width/2, cvs.height/2);
+    return;
+  }
+  const xMin = Math.min(...xs), xMax = Math.max(...xs);
+  const yMin = Math.min(...ys), yMax = Math.max(...ys);
+  const xR = xMax - xMin || 1, yR = yMax - yMin || 1;
+  const xFor = v => pad.l + ((v - xMin + xR * 0.05) / (xR * 1.1)) * W;
+  const yFor = v => pad.t + H - ((v - yMin + yR * 0.05) / (yR * 1.1)) * H;
+
+  // axes box
+  ctx.strokeStyle = '#bbb';
+  ctx.strokeRect(pad.l, pad.t, W, H);
+  ctx.fillStyle = '#555'; ctx.font = '10px sans-serif'; ctx.textAlign = 'center';
+  ctx.fillText(xLabel, pad.l + W/2, pad.t + H + 28);
+  ctx.save(); ctx.translate(14, pad.t + H/2); ctx.rotate(-Math.PI/2);
+  ctx.fillText(yLabel, 0, 0); ctx.restore();
+
+  // ticks
+  ctx.textAlign = 'right';
+  [0, 0.25, 0.5, 0.75, 1].forEach(f => {
+    const yv = yMin + f * yR;
+    const y = yFor(yv);
+    ctx.strokeStyle = '#eee'; ctx.beginPath(); ctx.moveTo(pad.l, y); ctx.lineTo(pad.l + W, y); ctx.stroke();
+    ctx.fillStyle = '#555'; ctx.fillText(yv.toFixed(1), pad.l - 4, y + 3);
+  });
+  ctx.textAlign = 'center';
+  [0, 0.5, 1].forEach(f => {
+    const xv = xMin + f * xR;
+    const x = xFor(xv);
+    ctx.fillStyle = '#555'; ctx.fillText(xv.toFixed(1), x, pad.t + H + 12);
+  });
+
+  const pareto = highlight ? computePareto() : null;
+
+  methods.forEach((m, i) => {
+    const xv = data[i][xKey], yv = data[i][yKey];
+    if (xv === null || yv === null) return;
+    const x = xFor(xv), y = yFor(yv);
+    ctx.fillStyle = colorFor(i);
+    ctx.strokeStyle = pareto && pareto[i] ? '#e91e63' : '#fff';
+    ctx.lineWidth = pareto && pareto[i] ? 2.5 : 1;
+    ctx.beginPath(); ctx.arc(x, y, 6, 0, 2*Math.PI); ctx.fill(); ctx.stroke();
+    ctx.fillStyle = '#333'; ctx.textAlign = 'left'; ctx.font = '10px sans-serif';
+    ctx.fillText(m, x + 8, y + 3);
+  });
+}
+
+function render() {
+  // row highlighting
+  let pareto = highlight ? computePareto() : methods.map(() => false);
+  Array.from(tbody.children).forEach((tr, i) => {
+    if (pareto[i]) tr.classList.add('pareto'); else tr.classList.remove('pareto');
+  });
+  drawScatter('plotLat', 'lat',  'mmlu', 'Latency (ms/tok) →', 'MMLU ↑');
+  drawScatter('plotMem', 'vram', 'mmlu', 'VRAM peak (GB) →',   'MMLU ↑');
+}
+
+document.getElementById('btnPareto').addEventListener('click', () => {
+  highlight = !highlight;
+  render();
+});
+
+document.getElementById('btnCSV').addEventListener('click', () => {
+  const header = ['method', ...cols.map(c => c.label)].join(',');
+  const rows = methods.map((m, i) => {
+    return [m, ...cols.map(c => data[i][c.key] === null ? '' : data[i][c.key])].join(',');
+  });
+  const csv = [header, ...rows].join('\n');
+  const blob = new Blob([csv], { type: 'text/csv' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = 'pareto-table.csv';
+  document.body.appendChild(a); a.click(); document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+});
+
+document.getElementById('btnClear').addEventListener('click', () => {
+  methods.forEach((_, i) => cols.forEach(c => data[i][c.key] = null));
+  buildTable(); render();
+});
+
+document.getElementById('btnDemo').addEventListener('click', () => {
+  methods.forEach((m, i) => {
+    cols.forEach(c => data[i][c.key] = demo[m][c.key]);
+  });
+  buildTable(); render();
+});
+
+buildTable();
+render();
+</script>
+
+</body>
+</html>

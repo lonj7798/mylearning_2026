@@ -1,0 +1,282 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>FP8 vs MXFP4 vs NVFP4 — Block Scaling Layouts</title>
+<style>
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+         max-width: 1100px; margin: 2em auto; padding: 0 1em; color: #222; }
+  h1 { font-size: 1.4em; margin-bottom: 0.2em; }
+  .subtitle { color: #666; margin-top: 0; }
+  .grid { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 1em; margin: 1em 0; }
+  .panel { border: 1px solid #ddd; border-radius: 6px; padding: 1em; background: #fafafa; }
+  .panel h3 { margin: 0 0 0.4em 0; font-size: 1.05em; }
+  .panel .tag { font-size: 0.8em; color: #777; }
+  .block-canvas { display: block; margin: 0.5em auto; background: white; border: 1px solid #ccc; }
+  .legend { display: flex; gap: 1em; justify-content: center; font-size: 0.8em; flex-wrap: wrap; margin-top: 0.5em; }
+  .swatch { display: inline-block; width: 10px; height: 10px; margin-right: 4px;
+            vertical-align: middle; border-radius: 2px; border: 1px solid #888; }
+  .controls { display: flex; gap: 1em; flex-wrap: wrap; align-items: center; }
+  .control { display: flex; flex-direction: column; }
+  label { font-size: 0.8em; color: #555; margin-bottom: 0.2em; }
+  input[type="range"] { width: 160px; }
+  .value { font-variant-numeric: tabular-nums; color: #333; font-weight: 600; }
+  .bpe-bar { height: 18px; background: #eef; border: 1px solid #aac; border-radius: 3px;
+             margin-top: 0.4em; position: relative; }
+  .bpe-fill { height: 100%; background: linear-gradient(90deg, #6a89cc, #b8e994); border-radius: 2px; }
+  .bpe-label { position: absolute; top: 1px; left: 6px; font-size: 0.78em; color: #222;
+               font-variant-numeric: tabular-nums; }
+  .note { font-size: 0.88em; color: #555; line-height: 1.5; }
+  code { background: #eef; padding: 1px 4px; border-radius: 3px; font-size: 0.9em; }
+  footer { margin-top: 2em; font-size: 0.85em; color: #888; text-align: center; }
+  a { color: #1976d2; }
+</style>
+</head>
+<body>
+
+<h1>FP8 vs MXFP4 vs NVFP4 — Block Scaling Layouts</h1>
+<p class="subtitle">
+  Three production block-scaled training formats. Element bit-width is shown by cell color;
+  the scale cell is rendered separately with its own bit-width. The bar below each diagram is
+  <strong>effective bits-per-element</strong>, including scale overhead.
+</p>
+
+<div class="panel">
+  <div class="controls">
+    <div class="control">
+      <label>DSV3 FP8 weight block (N×N)</label>
+      <input type="range" id="dsv3Block" min="32" max="256" step="32" value="128">
+      <span class="value"><span id="dsv3BlockLbl">128</span>×<span id="dsv3BlockLbl2">128</span></span>
+    </div>
+    <div class="control">
+      <label>MXFP4 block size</label>
+      <input type="range" id="mxBlock" min="16" max="64" step="16" value="32">
+      <span class="value" id="mxBlockLbl">32</span>
+    </div>
+    <div class="control">
+      <label>NVFP4 block size</label>
+      <input type="range" id="nvBlock" min="8" max="64" step="8" value="16">
+      <span class="value" id="nvBlockLbl">16</span>
+    </div>
+  </div>
+</div>
+
+<div class="grid">
+  <div class="panel">
+    <h3>DeepSeek V3 FP8 <span class="tag">conservative baseline</span></h3>
+    <div class="note">
+      1×128 <strong>activation tiles</strong>, 128×128 <strong>weight blocks</strong>.<br>
+      Element: <code>E4M3</code> (8 bit). Scale: <code>FP32</code> per block.
+    </div>
+    <canvas id="dsv3Canvas" class="block-canvas" width="320" height="220"></canvas>
+    <div class="legend">
+      <span><span class="swatch" style="background:#ffcc66"></span>E4M3 (8 bit)</span>
+      <span><span class="swatch" style="background:#d32f2f"></span>FP32 scale (32 bit)</span>
+    </div>
+    <div class="bpe-bar"><div class="bpe-fill" id="dsv3Bar"></div><div class="bpe-label" id="dsv3Lbl"></div></div>
+  </div>
+
+  <div class="panel">
+    <h3>MXFP4 <span class="tag">OCP, power-of-two scale</span></h3>
+    <div class="note">
+      32-element block. Element: <code>E2M1</code> (4 bit).<br>
+      Scale: <code>E8M0</code> (8 bit, <strong>power-of-two only</strong>).
+    </div>
+    <canvas id="mxCanvas" class="block-canvas" width="320" height="220"></canvas>
+    <div class="legend">
+      <span><span class="swatch" style="background:#7ec8e3"></span>E2M1 (4 bit)</span>
+      <span><span class="swatch" style="background:#ff8800"></span>E8M0 scale (8 bit)</span>
+    </div>
+    <div class="bpe-bar"><div class="bpe-fill" id="mxBar"></div><div class="bpe-label" id="mxLbl"></div></div>
+  </div>
+
+  <div class="panel">
+    <h3>NVFP4 <span class="tag">Blackwell production default</span></h3>
+    <div class="note">
+      16-element block. Element: <code>E2M1</code> (4 bit).<br>
+      Block scale: <code>E4M3</code> (8 bit, <strong>fractional</strong>) + per-tensor <code>FP32</code>.
+    </div>
+    <canvas id="nvCanvas" class="block-canvas" width="320" height="220"></canvas>
+    <div class="legend">
+      <span><span class="swatch" style="background:#7ec8e3"></span>E2M1 (4 bit)</span>
+      <span><span class="swatch" style="background:#388e3c"></span>E4M3 scale (8 bit)</span>
+      <span><span class="swatch" style="background:#d32f2f"></span>FP32 tensor (32 bit)</span>
+    </div>
+    <div class="bpe-bar"><div class="bpe-fill" id="nvBar"></div><div class="bpe-label" id="nvLbl"></div></div>
+  </div>
+</div>
+
+<div class="panel note">
+  <strong>Caption.</strong> Two-level scaling (NVFP4) buys ~½ bit MSE over MXFP4's power-of-two scale.
+  DSV3 FP8 is the conservative baseline; NVFP4 is the 2026 production default on Blackwell.
+  Drag the sliders to see how the per-block scale amortizes differently as block size changes:
+  larger blocks reduce overhead but spread the dynamic range over more elements (higher quantization
+  noise). A 1×128 tile in DSV3 keeps the scale "close" to outliers in activations; the small
+  16-element NVFP4 block does the same for FP4 weights.
+</div>
+
+<footer><a href="../read.md">&larr; back to chapter</a></footer>
+
+<script>
+function drawDSV3() {
+  const N = +document.getElementById('dsv3Block').value;
+  document.getElementById('dsv3BlockLbl').textContent = N;
+  document.getElementById('dsv3BlockLbl2').textContent = N;
+  const cvs = document.getElementById('dsv3Canvas');
+  const ctx = cvs.getContext('2d');
+  ctx.clearRect(0, 0, cvs.width, cvs.height);
+
+  // weight block: N x N elements (visualize as 8x8 grid representing the block)
+  const gridN = 8;
+  const cell = 18;
+  const ox = 20, oy = 20;
+  ctx.fillStyle = '#ffcc66';
+  ctx.strokeStyle = '#aa8800';
+  for (let i = 0; i < gridN; i++) {
+    for (let j = 0; j < gridN; j++) {
+      ctx.fillRect(ox + j * cell, oy + i * cell, cell - 1, cell - 1);
+      ctx.strokeRect(ox + j * cell, oy + i * cell, cell - 1, cell - 1);
+    }
+  }
+  ctx.fillStyle = '#333';
+  ctx.font = '10px sans-serif';
+  ctx.textAlign = 'center';
+  ctx.fillText(N + '×' + N + ' weight block', ox + (gridN * cell) / 2, oy + gridN * cell + 14);
+
+  // scale cell
+  const sx = ox + gridN * cell + 18;
+  const sy = oy;
+  ctx.fillStyle = '#d32f2f';
+  ctx.fillRect(sx, sy, 36, 36);
+  ctx.strokeStyle = '#7a0000';
+  ctx.strokeRect(sx, sy, 36, 36);
+  ctx.fillStyle = '#fff';
+  ctx.font = 'bold 10px sans-serif';
+  ctx.fillText('FP32', sx + 18, sy + 14);
+  ctx.fillText('scale', sx + 18, sy + 28);
+
+  // activation tile: 1xN strip
+  const ay = oy + gridN * cell + 32;
+  const stripCell = 16;
+  ctx.fillStyle = '#ffcc66';
+  ctx.strokeStyle = '#aa8800';
+  for (let j = 0; j < gridN; j++) {
+    ctx.fillRect(ox + j * stripCell, ay, stripCell - 1, stripCell - 1);
+    ctx.strokeRect(ox + j * stripCell, ay, stripCell - 1, stripCell - 1);
+  }
+  // act scale
+  ctx.fillStyle = '#d32f2f';
+  ctx.fillRect(ox + gridN * stripCell + 4, ay, 28, stripCell - 1);
+  ctx.fillStyle = '#fff';
+  ctx.font = '9px sans-serif';
+  ctx.fillText('FP32', ox + gridN * stripCell + 18, ay + 11);
+  ctx.fillStyle = '#333';
+  ctx.font = '10px sans-serif';
+  ctx.fillText('1×' + N + ' activation tile', ox + (gridN * stripCell) / 2, ay + 28);
+
+  // bpe = 8 + 32 / N^2 (weight) — show weight effective
+  const bpe = 8 + 32 / (N * N);
+  setBar('dsv3', bpe, 10);
+}
+
+function drawMX() {
+  const B = +document.getElementById('mxBlock').value;
+  document.getElementById('mxBlockLbl').textContent = B;
+  const cvs = document.getElementById('mxCanvas');
+  const ctx = cvs.getContext('2d');
+  ctx.clearRect(0, 0, cvs.width, cvs.height);
+
+  const cell = Math.min(20, Math.floor(280 / B));
+  const ox = 20, oy = 40;
+  ctx.fillStyle = '#7ec8e3';
+  ctx.strokeStyle = '#3a78a3';
+  for (let j = 0; j < B; j++) {
+    ctx.fillRect(ox + j * cell, oy, cell - 1, 30);
+    ctx.strokeRect(ox + j * cell, oy, cell - 1, 30);
+  }
+  // scale
+  const sx = ox + B * cell + 8;
+  ctx.fillStyle = '#ff8800';
+  ctx.fillRect(sx, oy, 34, 30);
+  ctx.strokeStyle = '#aa5500';
+  ctx.strokeRect(sx, oy, 34, 30);
+  ctx.fillStyle = '#fff';
+  ctx.font = 'bold 10px sans-serif';
+  ctx.textAlign = 'center';
+  ctx.fillText('E8M0', sx + 17, oy + 18);
+
+  ctx.fillStyle = '#333';
+  ctx.font = '10px sans-serif';
+  ctx.fillText(B + '-element block', ox + (B * cell) / 2, oy + 48);
+  ctx.fillText('Pow-of-2 only → coarse', ox + (B * cell) / 2, oy + 64);
+  ctx.fillText('(MSE ≈ 2× NVFP4)', ox + (B * cell) / 2, oy + 80);
+
+  // bpe = 4 + 8/B
+  const bpe = 4 + 8 / B;
+  setBar('mx', bpe, 10);
+}
+
+function drawNV() {
+  const B = +document.getElementById('nvBlock').value;
+  document.getElementById('nvBlockLbl').textContent = B;
+  const cvs = document.getElementById('nvCanvas');
+  const ctx = cvs.getContext('2d');
+  ctx.clearRect(0, 0, cvs.width, cvs.height);
+
+  const cell = Math.min(18, Math.floor(240 / B));
+  const ox = 20, oy = 30;
+  ctx.fillStyle = '#7ec8e3';
+  ctx.strokeStyle = '#3a78a3';
+  for (let j = 0; j < B; j++) {
+    ctx.fillRect(ox + j * cell, oy, cell - 1, 28);
+    ctx.strokeRect(ox + j * cell, oy, cell - 1, 28);
+  }
+  // block scale
+  const sx = ox + B * cell + 8;
+  ctx.fillStyle = '#388e3c';
+  ctx.fillRect(sx, oy, 32, 28);
+  ctx.fillStyle = '#fff';
+  ctx.font = 'bold 10px sans-serif';
+  ctx.textAlign = 'center';
+  ctx.fillText('E4M3', sx + 16, oy + 17);
+
+  // per-tensor scale (separate row)
+  const ty = oy + 60;
+  ctx.fillStyle = '#d32f2f';
+  ctx.fillRect(ox, ty, 50, 28);
+  ctx.fillStyle = '#fff';
+  ctx.fillText('FP32', ox + 25, ty + 12);
+  ctx.fillText('tensor', ox + 25, ty + 24);
+
+  ctx.fillStyle = '#333';
+  ctx.font = '10px sans-serif';
+  ctx.textAlign = 'left';
+  ctx.fillText('per-tensor scale absorbs', ox + 60, ty + 14);
+  ctx.fillText('global dynamic range', ox + 60, ty + 26);
+
+  ctx.textAlign = 'center';
+  ctx.fillText(B + '-element block + 2-level scaling', ox + 140, ty + 60);
+
+  // bpe = 4 + 8/B + 32/tensor (assume tensor = 16384 elements typical row)
+  const TENSOR = 16384;
+  const bpe = 4 + 8 / B + 32 / TENSOR;
+  setBar('nv', bpe, 10);
+}
+
+function setBar(prefix, bpe, max) {
+  const pct = Math.min(100, (bpe / max) * 100);
+  document.getElementById(prefix + 'Bar').style.width = pct + '%';
+  document.getElementById(prefix + 'Lbl').textContent =
+    bpe.toFixed(3) + ' bits/elem (vs 16 baseline)';
+}
+
+['dsv3Block', 'mxBlock', 'nvBlock'].forEach(id => {
+  document.getElementById(id).addEventListener('input', renderAll);
+});
+
+function renderAll() { drawDSV3(); drawMX(); drawNV(); }
+renderAll();
+</script>
+
+</body>
+</html>

@@ -1,0 +1,228 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Marlin W4A16 GEMM — Three-Stage Pipeline</title>
+<style>
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+         max-width: 1050px; margin: 2em auto; padding: 0 1em; color: #222; }
+  h1 { font-size: 1.4em; margin-bottom: 0.2em; }
+  .subtitle { color: #666; margin-top: 0; }
+  .panel { border: 1px solid #ddd; border-radius: 6px; padding: 1em; margin: 1em 0;
+           background: #fafafa; }
+  canvas { background: white; border: 1px solid #ccc; display: block; margin: 0.5em auto; }
+  button { padding: 0.5em 1.2em; font-size: 0.95em; border: 1px solid #1976d2;
+           background: #1976d2; color: white; border-radius: 4px; cursor: pointer;
+           margin-right: 0.5em; }
+  button:hover { background: #115fa0; }
+  button.alt { background: white; color: #1976d2; }
+  .legend { display: flex; gap: 1.2em; justify-content: center; font-size: 0.85em; flex-wrap: wrap; }
+  .swatch { display: inline-block; width: 14px; height: 14px; margin-right: 4px;
+            vertical-align: middle; border-radius: 3px; border: 1px solid #555; }
+  .stats { display: flex; justify-content: center; gap: 2em; font-size: 0.95em;
+           margin: 0.5em 0; }
+  .stat { background: white; border: 1px solid #ccc; padding: 0.4em 0.8em;
+          border-radius: 4px; font-variant-numeric: tabular-nums; }
+  .stat b { color: #d32f2f; font-size: 1.1em; }
+  .note { font-size: 0.88em; color: #555; line-height: 1.5; }
+  code { background: #eef; padding: 1px 4px; border-radius: 3px; font-size: 0.9em; }
+  footer { margin-top: 2em; font-size: 0.85em; color: #888; text-align: center; }
+  a { color: #1976d2; }
+</style>
+</head>
+<body>
+
+<h1>Marlin W4A16 GEMM — Three-Stage Pipeline</h1>
+<p class="subtitle">
+  Three warps execute a double-buffered pipeline. At iteration <em>k</em>, warp 0 issues an
+  <strong>async copy</strong> for tile <em>k+2</em>, warp 1 <strong>dequantizes</strong> tile
+  <em>k+1</em>, warp 2 runs the <strong>MMA</strong> for tile <em>k</em>. Tensor cores stay fed.
+</p>
+
+<div class="panel" style="text-align: center;">
+  <button id="playBtn">play</button>
+  <button id="pauseBtn" class="alt">pause</button>
+  <button id="resetBtn" class="alt">reset</button>
+  &nbsp;&nbsp;<span class="note">tick = one pipeline iteration (~1 µs at 300 TFLOPS)</span>
+</div>
+
+<canvas id="pipeline" width="980" height="240"></canvas>
+
+<div class="legend">
+  <span><span class="swatch" style="background:#e6b800"></span>cp.async (W4 + FP16)</span>
+  <span><span class="swatch" style="background:#00bcd4"></span>dequant W4 → FP16</span>
+  <span><span class="swatch" style="background:#d32f2f"></span>tensor-core MMA</span>
+  <span><span class="swatch" style="background:#eee; border-color:#bbb"></span>idle / warmup</span>
+</div>
+
+<div class="stats">
+  <div class="stat">iter: <span id="iterLbl">0</span></div>
+  <div class="stat">throughput: <b id="tflopsLbl">0</b> TFLOPS</div>
+  <div class="stat">pipeline fill: <span id="fillLbl">0</span>%</div>
+</div>
+
+<div class="panel note">
+  <strong>Caption.</strong> Marlin's three-stage pipeline + double-buffered shared memory + warp
+  specialization is what gets W4A16 GEMM to near-FP16 throughput at low batch sizes. This is the
+  bridge from GPTQ paper to production speedup. Watch the warmup: iterations 0–1 have idle stages
+  because the pipeline hasn't yet filled; from iteration 2 onward all three warps are busy every
+  tick and the throughput counter ramps to the steady-state ~300 TFLOPS on a single Hopper SM
+  partition (cluster-wide totals are higher).
+</div>
+
+<footer><a href="../read.md">&larr; back to chapter</a></footer>
+
+<script>
+const cvs = document.getElementById('pipeline');
+const ctx = cvs.getContext('2d');
+
+const WARPS = ['warp 0 — cp.async', 'warp 1 — dequant', 'warp 2 — MMA'];
+const STAGE_COLORS = { copy: '#e6b800', dq: '#00bcd4', mma: '#d32f2f', idle: '#eee' };
+const STAGE_BORDER = { copy: '#aa8800', dq: '#008394', mma: '#7a0000', idle: '#bbb' };
+const STAGE_LABEL = { copy: 'CP', dq: 'DQ', mma: 'MMA', idle: '·' };
+
+const ITERS_VISIBLE = 12;
+const TARGET_TFLOPS = 300;
+
+let currentIter = 0;
+let playing = false;
+let timer = null;
+
+// Schedule: at iteration k, the pipeline operates on
+//   warp0 (copy)     → tile k+2  (looks ahead 2)
+//   warp1 (dq)       → tile k+1  (looks ahead 1)
+//   warp2 (mma)      → tile k    (current)
+// Warmup: tiles with negative index are 'idle'.
+function stageForCell(warpIdx, col) {
+  // col is absolute iteration index (0-based)
+  if (col < 0) return { stage: 'idle', tile: null };
+  if (warpIdx === 0) {
+    return { stage: 'copy', tile: col + 2 };
+  } else if (warpIdx === 1) {
+    if (col < 1) return { stage: 'idle', tile: null };
+    return { stage: 'dq', tile: col + 1 };
+  } else {
+    if (col < 2) return { stage: 'idle', tile: null };
+    return { stage: 'mma', tile: col };
+  }
+}
+
+function draw() {
+  ctx.clearRect(0, 0, cvs.width, cvs.height);
+  const padL = 130, padT = 30, padR = 20, padB = 30;
+  const W = cvs.width - padL - padR;
+  const H = cvs.height - padT - padB;
+  const rowH = H / WARPS.length;
+  const cellW = W / ITERS_VISIBLE;
+
+  // header: iteration numbers
+  ctx.fillStyle = '#444';
+  ctx.font = '11px sans-serif';
+  ctx.textAlign = 'center';
+  for (let i = 0; i < ITERS_VISIBLE; i++) {
+    const abs = currentIter + i - 2;  // show 2 iterations of past + future
+    const x = padL + i * cellW + cellW / 2;
+    ctx.fillText('k=' + abs, x, padT - 8);
+  }
+
+  // rows
+  for (let w = 0; w < WARPS.length; w++) {
+    const rowY = padT + w * rowH;
+    ctx.fillStyle = '#333';
+    ctx.textAlign = 'right';
+    ctx.font = '12px sans-serif';
+    ctx.fillText(WARPS[w], padL - 8, rowY + rowH / 2 + 4);
+
+    for (let i = 0; i < ITERS_VISIBLE; i++) {
+      const abs = currentIter + i - 2;
+      const cell = stageForCell(w, abs);
+      const x = padL + i * cellW;
+      const y = rowY + 4;
+      const h = rowH - 8;
+      ctx.fillStyle = STAGE_COLORS[cell.stage];
+      ctx.strokeStyle = STAGE_BORDER[cell.stage];
+      ctx.lineWidth = 1;
+      ctx.fillRect(x + 1, y, cellW - 2, h);
+      ctx.strokeRect(x + 1, y, cellW - 2, h);
+
+      // highlight current iteration column
+      if (abs === currentIter && cell.stage !== 'idle') {
+        ctx.strokeStyle = '#000';
+        ctx.lineWidth = 2;
+        ctx.strokeRect(x + 1, y, cellW - 2, h);
+      }
+
+      // label
+      if (cell.tile !== null) {
+        ctx.fillStyle = '#fff';
+        ctx.font = 'bold 12px sans-serif';
+        ctx.textAlign = 'center';
+        ctx.fillText(STAGE_LABEL[cell.stage], x + cellW / 2, y + h / 2 - 2);
+        ctx.font = '10px sans-serif';
+        ctx.fillText('tile ' + cell.tile, x + cellW / 2, y + h / 2 + 12);
+      }
+    }
+  }
+
+  // border around current iteration column
+  const curIdx = 2; // currentIter is at index 2 in our visible window
+  const curX = padL + curIdx * cellW;
+  ctx.strokeStyle = '#1976d2';
+  ctx.lineWidth = 2;
+  ctx.setLineDash([4, 3]);
+  ctx.strokeRect(curX, padT - 18, cellW, H + 22);
+  ctx.setLineDash([]);
+
+  // x axis label
+  ctx.fillStyle = '#555';
+  ctx.font = '11px sans-serif';
+  ctx.textAlign = 'center';
+  ctx.fillText('time → (one tick per iteration)', padL + W / 2, padT + H + 20);
+
+  // stats: throughput ramps up as pipeline fills
+  // before iter 2: not fully filled
+  let fillPct;
+  if (currentIter < 2) {
+    fillPct = (currentIter + 1) / 3 * 100;
+  } else {
+    fillPct = 100;
+  }
+  // throughput: saturates after warmup with a small ramp for cache warmup feel
+  let throughput;
+  if (currentIter === 0) throughput = 0;
+  else if (currentIter === 1) throughput = TARGET_TFLOPS * 0.33;
+  else if (currentIter === 2) throughput = TARGET_TFLOPS * 0.78;
+  else throughput = TARGET_TFLOPS - 8 * Math.exp(-(currentIter - 2) / 6);
+
+  document.getElementById('iterLbl').textContent = currentIter;
+  document.getElementById('tflopsLbl').textContent = throughput.toFixed(0);
+  document.getElementById('fillLbl').textContent = fillPct.toFixed(0);
+}
+
+function tick() {
+  currentIter++;
+  if (currentIter > 30) currentIter = 0;  // loop
+  draw();
+}
+
+document.getElementById('playBtn').addEventListener('click', () => {
+  if (playing) return;
+  playing = true;
+  timer = setInterval(tick, 600);
+});
+document.getElementById('pauseBtn').addEventListener('click', () => {
+  playing = false;
+  if (timer) { clearInterval(timer); timer = null; }
+});
+document.getElementById('resetBtn').addEventListener('click', () => {
+  playing = false;
+  if (timer) { clearInterval(timer); timer = null; }
+  currentIter = 0;
+  draw();
+});
+
+draw();
+</script>
+
+</body>
+</html>

@@ -1,0 +1,286 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>SqueezeLLM — Sensitivity-Weighted k-Means vs Uniform k-Means</title>
+<style>
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+         max-width: 980px; margin: 2em auto; padding: 0 1em; color: #222; }
+  h1 { font-size: 1.4em; margin-bottom: 0.2em; }
+  .subtitle { color: #666; margin-top: 0; }
+  .panel { border: 1px solid #ddd; border-radius: 6px; padding: 1em; margin: 1em 0;
+           background: #fafafa; }
+  .controls { display: flex; gap: 1em; flex-wrap: wrap; align-items: center; }
+  .control { display: flex; flex-direction: column; }
+  label { font-size: 0.85em; color: #555; margin-bottom: 0.2em; }
+  input[type="range"] { width: 280px; }
+  canvas { background: white; border: 1px solid #ccc; display: block; margin: 0.5em auto; }
+  .value { font-variant-numeric: tabular-nums; color: #333; font-weight: 600; }
+  .note { font-size: 0.88em; color: #555; line-height: 1.5; }
+  code { background: #eef; padding: 1px 4px; border-radius: 3px; font-size: 0.9em; }
+  .row { display: flex; gap: 1em; justify-content: center; flex-wrap: wrap; }
+  .col { display: flex; flex-direction: column; align-items: center; }
+  .col h3 { font-size: 0.95em; margin: 0.2em 0; color: #444; }
+  footer { text-align: center; margin-top: 2em; font-size: 0.9em; }
+  footer a { color: #1976d2; text-decoration: none; }
+  table { font-size: 0.88em; border-collapse: collapse; margin: 0.5em auto; }
+  td, th { padding: 4px 10px; border: 1px solid #ddd; }
+  th { background: #f4f4f4; }
+</style>
+</head>
+<body>
+
+<h1>SqueezeLLM — Sensitivity-Weighted k-Means Centroids</h1>
+<p class="subtitle">
+  Standard k-means minimizes <code>Σ (w − c)²</code>; SqueezeLLM minimizes
+  <code>Σ F<sub>w</sub> · (w − c)²</code> where <code>F<sub>w</sub></code> is the Fisher information.
+  High-Fisher (high-sensitivity) values attract more centroids.
+</p>
+
+<div class="panel">
+  <div class="controls">
+    <div class="control">
+      <label>Sensitivity weight λ &nbsp; <span class="value" id="lamLabel">1.00</span>
+        &nbsp; <em>(0 = uniform, 1 = full SqueezeLLM)</em></label>
+      <input type="range" id="lam" min="0" max="100" step="1" value="100">
+    </div>
+    <div class="control">
+      <label>&nbsp;</label>
+      <button id="reset">Reset</button>
+    </div>
+  </div>
+</div>
+
+<div class="row">
+  <div class="col" style="flex:1; min-width:560px;">
+    <h3>Weight histogram with 16 reconstruction levels</h3>
+    <canvas id="hist" width="640" height="280"></canvas>
+    <p style="font-size:0.82em; color:#777; margin:0.2em 0;">
+      <span style="color:#1976d2; font-weight:600;">▲ blue</span> = standard k-means (Lloyd–Max) &nbsp;|&nbsp;
+      <span style="color:#d32f2f; font-weight:600;">▼ red</span> = sensitivity-weighted &nbsp;|&nbsp;
+      <span style="color:#c62828; font-weight:600;">● red dots</span> = top 0.5% outliers kept FP16 (dense+sparse)
+    </p>
+  </div>
+  <div class="col" style="flex:0 0 280px;">
+    <h3>Dense + Sparse decomposition</h3>
+    <canvas id="ds" width="240" height="280"></canvas>
+    <p style="font-size:0.82em; color:#777; margin:0; text-align:center;">
+      99.5% → 4-bit codebook<br>
+      0.5% → FP16 sparse matrix
+    </p>
+  </div>
+</div>
+
+<table>
+  <tr><th></th><th>plain MSE</th><th>Fisher-weighted MSE</th></tr>
+  <tr><td>uniform k-means</td>
+      <td class="value" id="mseU">—</td>
+      <td class="value" id="fmseU">—</td></tr>
+  <tr><td>sensitivity-weighted (λ = current)</td>
+      <td class="value" id="mseS">—</td>
+      <td class="value" id="fmseS">—</td></tr>
+</table>
+
+<div class="panel note">
+  <strong>The reframing.</strong>
+  Uniform k-means treats every weight as equally important — it shoves more centroids toward the
+  fat middle of the Gaussian where most mass lives. SqueezeLLM observes that the few outlier weights
+  carry disproportionate gradient signal (high Fisher), so wasting them by quantizing to the nearest
+  bulk centroid is catastrophic. Weighting the k-means objective by <code>F<sub>w</sub></code> pulls
+  centroids toward those rare-but-important weights. SpQR takes the extreme view: pull the top
+  ~0.5% out entirely, store them FP16 in a sparse matrix, and 4-bit the rest aggressively.
+  <strong>Outliers are signal, not noise.</strong>
+</div>
+
+<footer><a href="../read.md">← back to chapter</a></footer>
+
+<script>
+const rng = (() => { let s = 17; return () => (s = (s * 9301 + 49297) % 233280) / 233280; })();
+function randn() {
+  const u = rng(), v = rng();
+  return Math.sqrt(-2 * Math.log(u + 1e-12)) * Math.cos(2 * Math.PI * v);
+}
+
+// --- generate weight tensor with outliers ---
+const N = 5000;
+const weights = [], fisher = [];
+for (let i = 0; i < N; i++) {
+  let w, f;
+  if (rng() < 0.02) {  // outliers
+    w = randn() * 3.0;
+    f = 5 + Math.abs(randn()) * 5;     // high Fisher
+  } else {
+    w = randn() * 0.6;
+    f = 0.2 + Math.abs(randn()) * 0.4; // low Fisher
+  }
+  weights.push(w); fisher.push(f);
+}
+const wMin = Math.min(...weights), wMax = Math.max(...weights);
+
+// top 0.5% by |w| → sparse FP16
+const sortedIdx = weights.map((w, i) => [Math.abs(w), i]).sort((a, b) => b[0] - a[0]);
+const K_SPARSE = Math.floor(N * 0.005);
+const sparseSet = new Set(sortedIdx.slice(0, K_SPARSE).map(p => p[1]));
+
+// --- weighted k-means (1D) ---
+function kmeans(values, weights_, K) {
+  // init: evenly-spaced quantiles
+  const sorted = values.slice().sort((a, b) => a - b);
+  let centroids = [];
+  for (let k = 0; k < K; k++) {
+    const idx = Math.floor(((k + 0.5) / K) * sorted.length);
+    centroids.push(sorted[idx]);
+  }
+  for (let iter = 0; iter < 30; iter++) {
+    const num = new Array(K).fill(0), den = new Array(K).fill(0);
+    for (let i = 0; i < values.length; i++) {
+      const v = values[i], w_ = weights_[i];
+      let best = 0, bd = Infinity;
+      for (let k = 0; k < K; k++) {
+        const d = (v - centroids[k]) ** 2;
+        if (d < bd) { bd = d; best = k; }
+      }
+      num[best] += w_ * v;
+      den[best] += w_;
+    }
+    for (let k = 0; k < K; k++) {
+      if (den[k] > 1e-9) centroids[k] = num[k] / den[k];
+    }
+    centroids.sort((a, b) => a - b);
+  }
+  return centroids;
+}
+
+function nearest(v, cents) {
+  let bd = Infinity, b = cents[0];
+  for (const c of cents) { const d = (v - c) ** 2; if (d < bd) { bd = d; b = c; } }
+  return b;
+}
+
+function evalMSE(cents) {
+  let sse = 0, sseF = 0, sumF = 0;
+  for (let i = 0; i < N; i++) {
+    if (sparseSet.has(i)) continue;       // sparse → FP16, no error
+    const v = weights[i], f = fisher[i];
+    const q = nearest(v, cents);
+    const e = (v - q) ** 2;
+    sse += e; sseF += f * e; sumF += f;
+  }
+  return { mse: sse / (N - K_SPARSE), fmse: sseF / sumF };
+}
+
+// --- rendering ---
+const hCtx = document.getElementById('hist').getContext('2d');
+const dCtx = document.getElementById('ds').getContext('2d');
+
+function drawHist(centsU, centsS) {
+  const W = hCtx.canvas.width, H = hCtx.canvas.height;
+  hCtx.clearRect(0, 0, W, H);
+  const pad = { l: 40, r: 15, t: 15, b: 30 };
+  const PW = W - pad.l - pad.r, PH = H - pad.t - pad.b;
+  const xLo = wMin - 0.3, xHi = wMax + 0.3;
+  const bins = 90;
+  const h = new Array(bins).fill(0);
+  for (const w of weights) {
+    const i = Math.floor(((w - xLo) / (xHi - xLo)) * bins);
+    if (i >= 0 && i < bins) h[i]++;
+  }
+  const mh = Math.max(...h);
+  const bw = PW / bins;
+  for (let i = 0; i < bins; i++) {
+    const bh = (h[i] / mh) * PH;
+    hCtx.fillStyle = '#cfd8dc';
+    hCtx.fillRect(pad.l + i * bw, pad.t + PH - bh, bw - 0.3, bh);
+  }
+  // axis
+  hCtx.strokeStyle = '#888';
+  hCtx.beginPath();
+  hCtx.moveTo(pad.l, pad.t + PH); hCtx.lineTo(pad.l + PW, pad.t + PH); hCtx.stroke();
+  hCtx.fillStyle = '#555'; hCtx.font = '10px sans-serif';
+  hCtx.textAlign = 'center';
+  for (let i = 0; i <= 6; i++) {
+    const t = xLo + (i / 6) * (xHi - xLo);
+    const x = pad.l + (i / 6) * PW;
+    hCtx.fillText(t.toFixed(1), x, pad.t + PH + 14);
+  }
+  const xFor = v => pad.l + ((v - xLo) / (xHi - xLo)) * PW;
+  // sparse outlier dots
+  hCtx.fillStyle = '#c62828';
+  for (const idx of sparseSet) {
+    const x = xFor(weights[idx]);
+    hCtx.beginPath();
+    hCtx.arc(x, pad.t + 6, 2.5, 0, Math.PI * 2);
+    hCtx.fill();
+  }
+  // centroids — blue triangles (up) for uniform, red (down) for weighted
+  function tri(x, y, sz, up, color) {
+    hCtx.fillStyle = color;
+    hCtx.beginPath();
+    if (up) {
+      hCtx.moveTo(x, y - sz);
+      hCtx.lineTo(x - sz, y + sz); hCtx.lineTo(x + sz, y + sz);
+    } else {
+      hCtx.moveTo(x, y + sz);
+      hCtx.lineTo(x - sz, y - sz); hCtx.lineTo(x + sz, y - sz);
+    }
+    hCtx.closePath(); hCtx.fill();
+  }
+  for (const c of centsU) tri(xFor(c), pad.t + PH - 18, 5, true, '#1976d2');
+  for (const c of centsS) tri(xFor(c), pad.t + PH - 6, 5, false, '#d32f2f');
+}
+
+function drawDS() {
+  const W = dCtx.canvas.width, H = dCtx.canvas.height;
+  dCtx.clearRect(0, 0, W, H);
+  // 99.5% box
+  const total = H - 40;
+  const denseH = total * 0.995;
+  const sparseH = total * 0.005 + 6; // visually inflate so visible
+  dCtx.fillStyle = '#90caf9';
+  dCtx.fillRect(30, 20, W - 60, denseH);
+  dCtx.fillStyle = '#c62828';
+  dCtx.fillRect(30, 20 + denseH, W - 60, sparseH);
+  dCtx.fillStyle = '#0d47a1'; dCtx.font = 'bold 12px sans-serif';
+  dCtx.textAlign = 'center';
+  dCtx.fillText('Dense — 4-bit', W / 2, 20 + denseH / 2);
+  dCtx.fillText('(99.5%)', W / 2, 20 + denseH / 2 + 16);
+  dCtx.fillStyle = '#fff';
+  dCtx.fillText('Sparse FP16 (0.5%)', W / 2, 20 + denseH + sparseH / 2 + 4);
+  dCtx.fillStyle = '#555'; dCtx.font = '10px sans-serif';
+  dCtx.fillText('Total ≈ 4.5 bits/weight', W / 2, H - 6);
+}
+
+function render() {
+  const lam = +document.getElementById('lam').value / 100;
+  document.getElementById('lamLabel').textContent = lam.toFixed(2);
+
+  // build training set excluding sparse outliers
+  const valuesD = [], wU = [], wS = [];
+  for (let i = 0; i < N; i++) {
+    if (sparseSet.has(i)) continue;
+    valuesD.push(weights[i]);
+    wU.push(1);
+    wS.push(1 + lam * (fisher[i] - 1)); // λ-interpolated weighting
+  }
+  const centsU = kmeans(valuesD, wU, 16);
+  const centsS = kmeans(valuesD, wS, 16);
+
+  drawHist(centsU, centsS);
+  drawDS();
+
+  const eU = evalMSE(centsU);
+  const eS = evalMSE(centsS);
+  document.getElementById('mseU').textContent = eU.mse.toFixed(4);
+  document.getElementById('fmseU').textContent = eU.fmse.toFixed(4);
+  document.getElementById('mseS').textContent = eS.mse.toFixed(4);
+  document.getElementById('fmseS').textContent = eS.fmse.toFixed(4);
+}
+
+document.getElementById('lam').addEventListener('input', render);
+document.getElementById('reset').addEventListener('click', () => {
+  document.getElementById('lam').value = 100; render();
+});
+render();
+</script>
+</body>
+</html>

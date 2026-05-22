@@ -1,0 +1,228 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Floating-Point and Integer Bit Layouts</title>
+<style>
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+         max-width: 1100px; margin: 1.5em auto; padding: 0 1em; color: #222; }
+  h1 { font-size: 1.4em; margin-bottom: 0.2em; }
+  .subtitle { color: #666; margin-top: 0; }
+  .legend { display: flex; gap: 1.2em; justify-content: center;
+            font-size: 0.88em; margin: 1em 0; flex-wrap: wrap; }
+  .swatch { display: inline-block; width: 12px; height: 12px; margin-right: 4px;
+            vertical-align: middle; border-radius: 2px; }
+  table.fmt { border-collapse: collapse; width: 100%; margin-top: 1em;
+              font-size: 0.85em; }
+  table.fmt th, table.fmt td { padding: 6px 8px; text-align: left;
+                               border-bottom: 1px solid #eee; vertical-align: middle; }
+  table.fmt th { background: #f4f4f8; font-weight: 600; }
+  .bits { display: flex; gap: 2px; align-items: center; cursor: help; }
+  .bit { width: 14px; height: 22px; border-radius: 2px;
+         display: inline-flex; align-items: center; justify-content: center;
+         font-size: 0.65em; color: white; font-weight: 600; }
+  .bit.sign { background: #d32f2f; }
+  .bit.exp  { background: #1976d2; }
+  .bit.man  { background: #388e3c; }
+  .bit.scale{ background: #f57c00; }
+  .bit.tern { background: #8e24aa; }
+  .bit.skip { width: 6px; background: transparent; color: #aaa; }
+  .tag { display: inline-block; padding: 1px 6px; border-radius: 10px;
+         background: #eef; color: #345; font-size: 0.75em; margin-left: 4px; }
+  .note { font-size: 0.88em; color: #555; line-height: 1.5;
+          background: #fafafa; border: 1px solid #ddd; border-radius: 6px;
+          padding: 1em; margin-top: 1em; }
+  code { background: #eef; padding: 1px 4px; border-radius: 3px; font-size: 0.9em; }
+  #tooltip { position: absolute; background: #222; color: white;
+             padding: 6px 10px; border-radius: 4px; font-size: 0.8em;
+             pointer-events: none; opacity: 0; transition: opacity 0.15s;
+             max-width: 280px; line-height: 1.4; z-index: 10; }
+  footer { margin-top: 2em; font-size: 0.85em; color: #777; text-align: center; }
+  footer a { color: #1976d2; text-decoration: none; }
+</style>
+</head>
+<body>
+
+<h1>Bit Layouts for Modern Numeric Formats</h1>
+<p class="subtitle">
+  How every bit is spent across the formats LLM training and inference actually use.
+  Hover over a row to see what each format is used for.
+</p>
+
+<div class="legend">
+  <span><span class="swatch" style="background:#d32f2f"></span>sign</span>
+  <span><span class="swatch" style="background:#1976d2"></span>exponent</span>
+  <span><span class="swatch" style="background:#388e3c"></span>mantissa</span>
+  <span><span class="swatch" style="background:#f57c00"></span>shared scale</span>
+  <span><span class="swatch" style="background:#8e24aa"></span>ternary code</span>
+</div>
+
+<table class="fmt">
+  <thead>
+    <tr>
+      <th>Format</th>
+      <th>Bits</th>
+      <th>Layout (S | E | M)</th>
+      <th>S / E / M</th>
+      <th>Dynamic range</th>
+      <th>Smallest pos. (subnormal)</th>
+    </tr>
+  </thead>
+  <tbody id="rows"></tbody>
+</table>
+
+<div id="tooltip"></div>
+
+<div class="note">
+  <strong>How to read the rows.</strong>
+  Sign bits flip polarity. Exponent bits buy <em>dynamic range</em> — each extra bit
+  roughly doubles the addressable orders of magnitude. Mantissa bits buy
+  <em>precision within a range</em>. Block formats (MXFP4, NVFP4) move the exponent
+  budget out of the per-element word and into a shared scale, so each value carries
+  only sign + mantissa and the per-block scale absorbs dynamic range. BitNet 1.58
+  takes this to the extreme: no exponent, no mantissa, only a ternary code per weight.
+</div>
+
+<footer>
+  <a href="../read.md">← back to chapter</a>
+</footer>
+
+<script>
+const formats = [
+  { name: 'FP32',     bits: 32, s: 1, e: 8,  m: 23,
+    range: '~10⁻³⁸ to 10³⁸', subn: '~1.4×10⁻⁴⁵',
+    use: 'IEEE 754 single. Training master weights, optimizer state.' },
+  { name: 'BF16',     bits: 16, s: 1, e: 8,  m: 7,
+    range: '~10⁻³⁸ to 10³⁸', subn: '~10⁻³⁸',
+    use: 'Same range as FP32 with halved precision. Standard for LLM pretraining activations & gradients.' },
+  { name: 'FP16',     bits: 16, s: 1, e: 5,  m: 10,
+    range: '6×10⁻⁵ to 6.5×10⁴', subn: '~6×10⁻⁸',
+    use: 'IEEE 754 half. More precision, narrower range; needs loss-scaling to avoid underflow.' },
+  { name: 'FP8 E4M3', bits: 8,  s: 1, e: 4,  m: 3,
+    range: '~10⁻³ to 448', subn: '~2×10⁻³',
+    use: 'NVIDIA Hopper/Blackwell training. Higher precision for weights & forward activations.' },
+  { name: 'FP8 E5M2', bits: 8,  s: 1, e: 5,  m: 2,
+    range: '~6×10⁻⁵ to 5.7×10⁴', subn: '~1.5×10⁻⁵',
+    use: 'NVIDIA Hopper/Blackwell training. Higher range for gradients (FP16-like).' },
+  { name: 'FP6 E3M2', bits: 6,  s: 1, e: 3,  m: 2,
+    range: '~10⁻¹ to 28', subn: '~0.0625',
+    use: 'Research / mixed-precision inference. Compromise between FP8 and FP4.' },
+  { name: 'FP4 E2M1', bits: 4,  s: 1, e: 2,  m: 1,
+    range: '~0.5 to 6', subn: '~0.5',
+    use: 'Per-element representation inside block formats (NVFP4, MXFP4).' },
+  { name: 'INT8',     bits: 8,  s: 1, e: 0,  m: 7,
+    range: '−128 to 127 × Δ', subn: '— (uniform)',
+    use: 'PTQ / QAT default; symmetric or asymmetric with per-channel scale.' },
+  { name: 'INT4',     bits: 4,  s: 1, e: 0,  m: 3,
+    range: '−8 to 7 × Δ', subn: '— (uniform)',
+    use: 'Aggressive PTQ for inference; needs per-group scales to keep quality.' },
+  { name: 'NF4',      bits: 4,  s: 0, e: 0,  m: 4, tag: 'non-uniform',
+    range: '15 levels, normal-distributed', subn: '— (codebook)',
+    use: 'QLoRA. 16-entry codebook tuned for Gaussian weights; non-uniform spacing.' },
+  { name: 'NVFP4',    bits: 4,  s: 1, e: 2,  m: 1,
+    blockScale: { kind: 'E4M3', sizeBits: 8, group: 16, plusTensor: true },
+    range: 'wide (per-block FP8 scale + per-tensor FP32)',  subn: '~Δ_block',
+    use: 'Blackwell native FP4. 16-element block with E4M3 scale and a global FP32 scale.' },
+  { name: 'MXFP4',    bits: 4,  s: 1, e: 2,  m: 1,
+    blockScale: { kind: 'E8M0', sizeBits: 8, group: 32, plusTensor: false },
+    range: 'wide (per-block E8M0 power-of-two scale)', subn: '~Δ_block',
+    use: 'OCP Microscaling. 32-element block sharing one E8M0 power-of-two exponent.' },
+  { name: 'BitNet w1.58', bits: 1.58, s: 0, e: 0, m: 0, ternary: true,
+    range: '{−1, 0, +1} × per-tensor α', subn: '— (3 levels)',
+    use: 'Native 1.58-bit QAT. Each weight is a 2-bit code mapped to one of three levels.' },
+];
+
+function renderRow(f) {
+  const tr = document.createElement('tr');
+
+  const nameCell = document.createElement('td');
+  nameCell.innerHTML = '<strong>' + f.name + '</strong>' +
+    (f.tag ? ' <span class="tag">' + f.tag + '</span>' : '');
+  tr.appendChild(nameCell);
+
+  const bitsCell = document.createElement('td');
+  bitsCell.textContent = f.bits;
+  tr.appendChild(bitsCell);
+
+  // visual layout
+  const layoutCell = document.createElement('td');
+  const bitDiv = document.createElement('div');
+  bitDiv.className = 'bits';
+  bitDiv.title = f.use;
+
+  if (f.ternary) {
+    for (let i = 0; i < 2; i++) {
+      const b = document.createElement('span');
+      b.className = 'bit tern'; b.textContent = 't';
+      bitDiv.appendChild(b);
+    }
+  } else {
+    for (let i = 0; i < f.s; i++) {
+      const b = document.createElement('span');
+      b.className = 'bit sign'; b.textContent = 'S';
+      bitDiv.appendChild(b);
+    }
+    for (let i = 0; i < f.e; i++) {
+      const b = document.createElement('span');
+      b.className = 'bit exp'; b.textContent = 'E';
+      bitDiv.appendChild(b);
+    }
+    for (let i = 0; i < f.m; i++) {
+      const b = document.createElement('span');
+      b.className = 'bit man'; b.textContent = 'M';
+      bitDiv.appendChild(b);
+    }
+  }
+
+  if (f.blockScale) {
+    const sep = document.createElement('span');
+    sep.className = 'bit skip'; sep.textContent = '+';
+    bitDiv.appendChild(sep);
+    for (let i = 0; i < f.blockScale.sizeBits; i++) {
+      const b = document.createElement('span');
+      b.className = 'bit scale'; b.textContent = 'σ';
+      bitDiv.appendChild(b);
+    }
+    const lab = document.createElement('span');
+    lab.style.fontSize = '0.75em'; lab.style.color = '#666';
+    lab.style.marginLeft = '6px';
+    lab.textContent = '/ block of ' + f.blockScale.group +
+      ' (' + f.blockScale.kind + ')' +
+      (f.blockScale.plusTensor ? ' + FP32 tensor scale' : '');
+    bitDiv.appendChild(lab);
+  }
+
+  layoutCell.appendChild(bitDiv);
+  tr.appendChild(layoutCell);
+
+  const semCell = document.createElement('td');
+  semCell.textContent = f.ternary ? '— (ternary)' : (f.s + ' / ' + f.e + ' / ' + f.m);
+  tr.appendChild(semCell);
+
+  const rangeCell = document.createElement('td');
+  rangeCell.textContent = f.range;
+  tr.appendChild(rangeCell);
+
+  const subnCell = document.createElement('td');
+  subnCell.textContent = f.subn;
+  tr.appendChild(subnCell);
+
+  // tooltip
+  const tip = document.getElementById('tooltip');
+  tr.addEventListener('mousemove', (e) => {
+    tip.textContent = f.use;
+    tip.style.left = (e.pageX + 14) + 'px';
+    tip.style.top  = (e.pageY + 14) + 'px';
+    tip.style.opacity = '1';
+  });
+  tr.addEventListener('mouseleave', () => { tip.style.opacity = '0'; });
+
+  return tr;
+}
+
+const tbody = document.getElementById('rows');
+formats.forEach(f => tbody.appendChild(renderRow(f)));
+</script>
+
+</body>
+</html>

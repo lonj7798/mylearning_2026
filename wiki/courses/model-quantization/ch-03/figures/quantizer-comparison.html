@@ -1,0 +1,257 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Uniform vs Lloyd-Max vs Companding Quantizers</title>
+<style>
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+         max-width: 900px; margin: 2em auto; padding: 0 1em; color: #222; }
+  h1 { font-size: 1.4em; margin-bottom: 0.2em; }
+  .subtitle { color: #666; margin-top: 0; }
+  .panel { border: 1px solid #ddd; border-radius: 6px; padding: 1em; margin: 1em 0;
+           background: #fafafa; }
+  .controls { display: flex; gap: 1em; flex-wrap: wrap; align-items: center; }
+  .control { display: flex; flex-direction: column; }
+  label { font-size: 0.85em; color: #555; margin-bottom: 0.2em; }
+  input[type="range"] { width: 200px; }
+  canvas { background: white; border: 1px solid #ccc; display: block; margin: 1em auto; }
+  .legend { display: flex; gap: 1.5em; justify-content: center; font-size: 0.9em;
+            flex-wrap: wrap; }
+  .swatch { display: inline-block; width: 12px; height: 12px; margin-right: 4px;
+            vertical-align: middle; border-radius: 2px; }
+  .value { font-variant-numeric: tabular-nums; color: #333; font-weight: 600; }
+  .note { font-size: 0.88em; color: #555; line-height: 1.5; }
+  code { background: #eef; padding: 1px 4px; border-radius: 3px; font-size: 0.9em; }
+  .mse-table { width: 100%; border-collapse: collapse; margin-top: 0.5em; }
+  .mse-table th, .mse-table td { text-align: center; padding: 4px 8px;
+                                  font-size: 0.9em; border-bottom: 1px solid #eee; }
+  footer { margin-top: 2em; font-size: 0.85em; color: #777; text-align: center; }
+  footer a { color: #1976d2; text-decoration: none; }
+</style>
+</head>
+<body>
+
+<h1>Three Quantizers on a Gaussian Source</h1>
+<p class="subtitle">
+  Uniform spacing wastes levels in the tails. Lloyd-Max places levels by density.
+  Companding warps the input through a log-like map before uniform quantization —
+  cheap and close to optimal.
+</p>
+
+<div class="panel">
+  <div class="controls">
+    <div class="control">
+      <label>Number of levels K</label>
+      <input type="range" id="K" min="2" max="5" step="1" value="4">
+      <span class="value">K = <span id="Klabel">16</span></span>
+    </div>
+    <div class="control">
+      <label>µ (companding strength)</label>
+      <input type="range" id="mu" min="1" max="255" step="1" value="64">
+      <span class="value">µ = <span id="mulabel">64</span></span>
+    </div>
+  </div>
+</div>
+
+<canvas id="plot" width="860" height="380"></canvas>
+
+<div class="legend">
+  <span><span class="swatch" style="background:#666"></span>Gaussian PDF</span>
+  <span><span class="swatch" style="background:#1976d2"></span>Uniform</span>
+  <span><span class="swatch" style="background:#d32f2f"></span>Lloyd-Max</span>
+  <span><span class="swatch" style="background:#388e3c"></span>Companding (µ-law)</span>
+</div>
+
+<div class="panel">
+  <table class="mse-table">
+    <thead>
+      <tr><th>Quantizer</th><th>MSE</th><th>SQNR (dB)</th><th>Gap above bound</th></tr>
+    </thead>
+    <tbody id="mseBody"></tbody>
+  </table>
+</div>
+
+<div class="panel note">
+  <strong>What the gap means.</strong>
+  The Shannon bound for a Gaussian source is
+  <code>D(R) = σ²·2<sup>−2R</sup></code>, so <code>R = log₂K</code> gives
+  <code>D_min = σ²/K²</code>. Uniform sits well above the bound because it spends
+  bits on rare tail values. Lloyd-Max converges to the locally optimal codebook for
+  the source PDF — the centroids cluster near zero where the density is highest.
+  Companding gets ~90% of the way there with a fixed analytic map and no training.
+</div>
+
+<footer>
+  <a href="../read.md">← back to chapter</a>
+</footer>
+
+<script>
+const cvs = document.getElementById('plot');
+const ctx = cvs.getContext('2d');
+
+// K slider: values 2..5 -> 4, 8, 16, 32 levels
+const Klookup = { 2: 4, 3: 8, 4: 16, 5: 32 };
+
+function gauss(x) { return Math.exp(-0.5 * x * x) / Math.sqrt(2 * Math.PI); }
+
+// 4096-sample Gaussian quadrature on [-5, 5] for integrals
+const NQUAD = 4096;
+const xs = [], ws = [];
+for (let i = 0; i < NQUAD; i++) {
+  const x = -5 + 10 * (i + 0.5) / NQUAD;
+  xs.push(x); ws.push(gauss(x) * (10 / NQUAD));
+}
+
+function uniformQuantizer(K) {
+  const lo = -3, hi = 3;
+  const step = (hi - lo) / K;
+  const levels = [];
+  for (let i = 0; i < K; i++) levels.push(lo + step * (i + 0.5));
+  return levels;
+}
+
+function lloydMax(K, init) {
+  let levels = init.slice().sort((a, b) => a - b);
+  for (let iter = 0; iter < 60; iter++) {
+    // partition boundaries are midpoints
+    const bnd = [];
+    bnd.push(-Infinity);
+    for (let i = 0; i < K - 1; i++) bnd.push(0.5 * (levels[i] + levels[i + 1]));
+    bnd.push(Infinity);
+    // centroid of each cell
+    const newLevels = new Array(K).fill(0);
+    const mass     = new Array(K).fill(0);
+    for (let q = 0; q < NQUAD; q++) {
+      const x = xs[q], w = ws[q];
+      for (let i = 0; i < K; i++) {
+        if (x >= bnd[i] && x < bnd[i + 1]) {
+          mass[i] += w; newLevels[i] += w * x; break;
+        }
+      }
+    }
+    for (let i = 0; i < K; i++) if (mass[i] > 1e-9) newLevels[i] /= mass[i];
+    levels = newLevels;
+  }
+  return levels.sort((a, b) => a - b);
+}
+
+function compandingLevels(K, mu) {
+  // µ-law on [-1, 1], then mapped to ±3
+  const lo = -1, hi = 1;
+  const step = (hi - lo) / K;
+  const sign = v => v >= 0 ? 1 : -1;
+  const inv = y => sign(y) * (Math.pow(1 + mu, Math.abs(y)) - 1) / mu;
+  const lv = [];
+  for (let i = 0; i < K; i++) {
+    const y = lo + step * (i + 0.5);
+    lv.push(inv(y) * 3);
+  }
+  return lv;
+}
+
+function quantize(x, levels) {
+  let best = 0, bestD = Infinity;
+  for (let i = 0; i < levels.length; i++) {
+    const d = Math.abs(x - levels[i]);
+    if (d < bestD) { bestD = d; best = i; }
+  }
+  return levels[best];
+}
+
+function mse(levels) {
+  let s = 0;
+  for (let q = 0; q < NQUAD; q++) {
+    const x = xs[q], w = ws[q];
+    const r = quantize(x, levels);
+    s += w * (x - r) * (x - r);
+  }
+  return s;
+}
+
+function render() {
+  const Ksel = +document.getElementById('K').value;
+  const K = Klookup[Ksel];
+  const mu = +document.getElementById('mu').value;
+  document.getElementById('Klabel').textContent = K;
+  document.getElementById('mulabel').textContent = mu;
+
+  const uni = uniformQuantizer(K);
+  const llm = lloydMax(K, uni);
+  const cmp = compandingLevels(K, mu);
+
+  // plot
+  ctx.clearRect(0, 0, cvs.width, cvs.height);
+  const pad = { l: 50, r: 30, t: 20, b: 40 };
+  const W = cvs.width - pad.l - pad.r;
+  const H = cvs.height - pad.t - pad.b;
+  const xmin = -4, xmax = 4;
+  const ymax = 0.45;
+  const xFor = x => pad.l + ((x - xmin) / (xmax - xmin)) * W;
+  const yFor = y => pad.t + H - (y / ymax) * H;
+
+  // grid
+  ctx.strokeStyle = '#eee';
+  for (let g = xmin; g <= xmax; g++) {
+    ctx.beginPath(); ctx.moveTo(xFor(g), pad.t); ctx.lineTo(xFor(g), pad.t + H); ctx.stroke();
+  }
+  ctx.fillStyle = '#444'; ctx.font = '11px sans-serif'; ctx.textAlign = 'center';
+  for (let g = xmin; g <= xmax; g++) ctx.fillText(g.toString(), xFor(g), pad.t + H + 16);
+  ctx.fillText('x', pad.l + W / 2, pad.t + H + 32);
+
+  // PDF
+  ctx.strokeStyle = '#666'; ctx.lineWidth = 2;
+  ctx.beginPath();
+  for (let i = 0; i <= 400; i++) {
+    const x = xmin + (xmax - xmin) * (i / 400);
+    const y = gauss(x);
+    const px = xFor(x), py = yFor(y);
+    if (i === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
+  }
+  ctx.stroke();
+
+  // reconstruction lines
+  function drawLevels(levels, color, yOffset) {
+    ctx.strokeStyle = color; ctx.lineWidth = 1.5;
+    levels.forEach(L => {
+      const x = xFor(L);
+      ctx.beginPath();
+      ctx.moveTo(x, pad.t + yOffset);
+      ctx.lineTo(x, pad.t + H);
+      ctx.stroke();
+      ctx.fillStyle = color;
+      ctx.beginPath(); ctx.arc(x, pad.t + yOffset, 3, 0, Math.PI * 2); ctx.fill();
+    });
+  }
+  drawLevels(uni, '#1976d2', 10);
+  drawLevels(llm, '#d32f2f', 25);
+  drawLevels(cmp, '#388e3c', 40);
+
+  // MSE table
+  const tbody = document.getElementById('mseBody');
+  tbody.innerHTML = '';
+  const bound = 1.0 / (K * K); // σ² = 1
+  const rows = [
+    { name: 'Uniform',    color: '#1976d2', mse: mse(uni) },
+    { name: 'Lloyd-Max',  color: '#d32f2f', mse: mse(llm) },
+    { name: 'Companding', color: '#388e3c', mse: mse(cmp) },
+  ];
+  rows.forEach(r => {
+    const tr = document.createElement('tr');
+    const sqnr = 10 * Math.log10(1.0 / r.mse);
+    const gap = r.mse / bound;
+    tr.innerHTML = '<td style="color:' + r.color + '">' +
+      '<strong>' + r.name + '</strong></td>' +
+      '<td>' + r.mse.toFixed(5) + '</td>' +
+      '<td>' + sqnr.toFixed(2) + '</td>' +
+      '<td>' + gap.toFixed(2) + '×</td>';
+    tbody.appendChild(tr);
+  });
+}
+
+document.getElementById('K').addEventListener('input', render);
+document.getElementById('mu').addEventListener('input', render);
+render();
+</script>
+
+</body>
+</html>

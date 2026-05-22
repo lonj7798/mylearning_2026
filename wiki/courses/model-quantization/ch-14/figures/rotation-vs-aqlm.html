@@ -1,0 +1,303 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>QuaRot vs AQLM — Two Roads to Sub-4-Bit</title>
+<style>
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+         max-width: 1040px; margin: 2em auto; padding: 0 1em; color: #222; }
+  h1 { font-size: 1.4em; margin-bottom: 0.2em; }
+  .subtitle { color: #666; margin-top: 0; }
+  .panel { border: 1px solid #ddd; border-radius: 6px; padding: 1em; margin: 1em 0;
+           background: #fafafa; }
+  .row { display: flex; gap: 1em; flex-wrap: wrap; }
+  .col { flex: 1 1 460px; border: 1px solid #ddd; border-radius: 6px; padding: 0.8em;
+         background: white; }
+  .col h2 { font-size: 1.05em; margin: 0 0 0.4em 0; }
+  .col .tag { display: inline-block; padding: 2px 8px; border-radius: 3px; font-size: 0.78em;
+              font-weight: 600; margin-left: 0.4em; vertical-align: middle; }
+  .quarot { background: #e3f2fd; color: #0d47a1; }
+  .aqlm   { background: #f3e5f5; color: #4a148c; }
+  canvas { background: white; border: 1px solid #ccc; display: block; margin: 0.3em auto; }
+  .stat { font-variant-numeric: tabular-nums; color: #333; font-weight: 600; font-size: 0.88em;
+          text-align: center; }
+  .ctrl { display: flex; align-items: center; gap: 0.6em; margin: 0.5em 0; }
+  input[type="range"] { flex: 1; }
+  .note { font-size: 0.88em; color: #555; line-height: 1.5; }
+  code { background: #eef; padding: 1px 4px; border-radius: 3px; font-size: 0.9em; }
+  a { color: #1976d2; }
+  .ppl-bar { display: inline-block; height: 14px; background: #1976d2; vertical-align: middle;
+             border-radius: 2px; margin-right: 6px; }
+  table { border-collapse: collapse; margin: 0.5em auto; font-size: 0.9em; }
+  td, th { padding: 4px 10px; border-bottom: 1px solid #eee; text-align: right; }
+  th { color: #555; font-weight: 600; }
+</style>
+</head>
+<body>
+
+<h1>QuaRot vs AQLM — Two Roads to Sub-4-Bit</h1>
+<p class="subtitle">
+  Both methods break the per-tensor INT4 ceiling, but they attack the problem from opposite
+  ends. QuaRot makes activations and weights friendlier to round-to-nearest by rotation; AQLM
+  abandons round-to-nearest entirely and encodes weight blocks as sums of codebook entries.
+</p>
+
+<div class="panel">
+  <div class="ctrl">
+    <label style="min-width:160px">bit budget per weight</label>
+    <input type="range" id="bits" min="1.5" max="4.0" step="0.1" value="2.0">
+    <span class="stat" id="bitsLabel">2.0</span>
+  </div>
+</div>
+
+<div class="row">
+  <div class="col">
+    <h2>QuaRot <span class="tag quarot">W4A4 via rotation</span></h2>
+    <p class="note">Rotate W and the activations by a Hadamard H; the matmul is invariant
+    (<code>(xHᵀ)(HW) = xW</code>) but both operands become flat. Then plain INT4 round-to-nearest
+    works for <em>both</em> sides — W4A4.</p>
+    <div class="stat">W before rotation (heavy tails)</div>
+    <canvas id="qrBefore" width="430" height="80"></canvas>
+    <div class="stat">W after Hadamard rotation (Gaussian)</div>
+    <canvas id="qrAfter" width="430" height="80"></canvas>
+    <div class="stat">INT4 quant grid sees <span id="qrCover">—</span>% of bins used (post-rotation)</div>
+  </div>
+
+  <div class="col">
+    <h2>AQLM <span class="tag aqlm">additive codebooks, sub-2-bit</span></h2>
+    <p class="note">A weight vector w ∈ ℝᵈ is approximated as
+    <code>w ≈ C₁[i₁] + C₂[i₂] + … + C_M[i_M]</code>. With M=2 codebooks of 256 vectors each over
+    a group of d=8 weights, storage is <strong>2·8 = 16 bits per 8 weights = 2 bits/weight</strong>.</p>
+    <div class="stat">Codebooks C₁, C₂ (sketch: 8 of 256 vectors each)</div>
+    <canvas id="aqCB" width="430" height="120"></canvas>
+    <div class="stat">Reconstruct a target weight vector</div>
+    <canvas id="aqRecon" width="430" height="100"></canvas>
+    <div class="stat" id="aqStat">target ≈ C₁[i₁] + C₂[i₂] — squared err <span id="aqErr">—</span></div>
+  </div>
+</div>
+
+<div class="panel">
+  <h3 style="margin-top:0">Perplexity gap vs FP16 (LLaMA-2-7B, approx)</h3>
+  <table id="pplTable">
+    <thead><tr><th>method</th><th>bits</th><th>PPL gap</th><th></th></tr></thead>
+    <tbody></tbody>
+  </table>
+  <div class="note" style="text-align:center">drag the slider above to see how each method
+  scales as the bit budget tightens</div>
+</div>
+
+<div class="panel note">
+  <strong>Complementary, not competing.</strong> QuaRot fixes the <em>basis</em> so per-element
+  INT4 stops wasting bits on outliers — its sweet spot is W4A4 inference (both weights and
+  activations in 4 bits, kernels are dense INT4 matmul). AQLM fixes the <em>code</em> by giving
+  up scalar quantization entirely — its sweet spot is sub-2-bit weight-only storage where
+  scalar grids are too coarse to represent anything. Frontier post-training quantization stacks
+  (AQLM + Hadamard, QuIP#, QTIP) combine rotation with vector quantization to get both.
+</div>
+
+<p style="font-size:0.85em"><a href="../read.md">← back to chapter</a></p>
+
+<script>
+function rng(seed) {
+  let s = seed >>> 0;
+  return () => { s = (s * 1664525 + 1013904223) >>> 0; return s / 0x100000000; };
+}
+function gaussian(rand) {
+  let u = rand() || 1e-9, v = rand() || 1e-9;
+  return Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * v);
+}
+
+// ---------- QuaRot panel ----------
+function drawDist(canvasId, samples, color) {
+  const c = document.getElementById(canvasId);
+  const ctx = c.getContext('2d');
+  ctx.clearRect(0, 0, c.width, c.height);
+  const nb = 60;
+  const bins = new Array(nb).fill(0);
+  const mx = 8;
+  for (const x of samples) {
+    const idx = Math.floor((x + mx) / (2 * mx) * nb);
+    if (idx >= 0 && idx < nb) bins[idx]++;
+  }
+  const top = Math.max(...bins);
+  const pad = { l: 6, r: 6, t: 6, b: 18 };
+  const W = c.width - pad.l - pad.r;
+  const H = c.height - pad.t - pad.b;
+  ctx.fillStyle = color;
+  for (let i = 0; i < nb; i++) {
+    const h = (bins[i] / top) * H;
+    ctx.fillRect(pad.l + (i / nb) * W, pad.t + H - h, (W / nb) - 1, h);
+  }
+  ctx.strokeStyle = '#888';
+  ctx.beginPath();
+  ctx.moveTo(pad.l, pad.t + H); ctx.lineTo(pad.l + W, pad.t + H); ctx.stroke();
+  // INT4 grid marks
+  ctx.fillStyle = '#888';
+  ctx.font = '9px sans-serif';
+  for (let q = -7; q <= 7; q++) {
+    const x = pad.l + ((q + 8) / 16) * W;
+    ctx.fillRect(x, pad.t + H, 1, 4);
+  }
+  ctx.textAlign = 'center';
+  ctx.fillText('INT4 grid: -7 .. +7', pad.l + W / 2, c.height - 4);
+  // count occupied bins
+  let used = 0;
+  for (let q = -7; q <= 7; q++) {
+    const lo = q - 0.5, hi = q + 0.5;
+    let count = 0;
+    for (const x of samples) if (x >= lo && x < hi) { count++; break; }
+    if (count) used++;
+  }
+  return Math.round(100 * used / 15);
+}
+
+function renderQuaRot() {
+  const r = rng(42);
+  const n = 2000;
+  // "before": heavy tails — mixture of Gaussians with occasional spikes
+  const before = [];
+  for (let i = 0; i < n; i++) {
+    let v = 0.6 * gaussian(r);
+    if (r() < 0.04) v += (r() < 0.5 ? -1 : 1) * (3 + 3 * r());
+    before.push(v);
+  }
+  // "after": Hadamard rotation of a similar source → approx Gaussian by CLT
+  const after = [];
+  for (let i = 0; i < n; i++) {
+    // simulate: sum of many independent contributions
+    let s = 0;
+    for (let k = 0; k < 16; k++) s += (r() < 0.5 ? -1 : 1) * (0.6 + r() * 0.4);
+    after.push(s * 0.5);
+  }
+  drawDist('qrBefore', before, '#c62828');
+  const cov = drawDist('qrAfter', after, '#2e7d32');
+  document.getElementById('qrCover').textContent = cov;
+}
+
+// ---------- AQLM panel ----------
+function renderAQLM() {
+  const r = rng(11);
+  const D = 8;
+  // build two small "codebooks" of 8 vectors each (just for visualization)
+  const C1 = Array.from({length: 8}, () => Array.from({length: D}, () => gaussian(r)));
+  const C2 = Array.from({length: 8}, () => Array.from({length: D}, () => 0.5 * gaussian(r)));
+
+  const c = document.getElementById('aqCB');
+  const ctx = c.getContext('2d');
+  ctx.clearRect(0, 0, c.width, c.height);
+  const cellW = 22, cellH = 11, gap = 14;
+  // draw C1 row
+  ctx.fillStyle = '#333'; ctx.font = '10px sans-serif'; ctx.textAlign = 'right';
+  ctx.fillText('C₁:', 16, 14);
+  for (let i = 0; i < 8; i++) {
+    for (let d = 0; d < D; d++) {
+      const v = Math.max(-1, Math.min(1, C1[i][d] / 2));
+      const g = Math.round(255 - Math.abs(v) * 220);
+      const r2 = v > 0 ? 255 : g, b = v < 0 ? 255 : g;
+      ctx.fillStyle = `rgb(${r2},${g},${b})`;
+      ctx.fillRect(22 + i * (D * cellW + gap) + d * cellW, 4, cellW - 1, cellH - 1);
+    }
+  }
+  ctx.fillStyle = '#333'; ctx.textAlign = 'right';
+  ctx.fillText('C₂:', 16, 14 + cellH + 12);
+  for (let i = 0; i < 8; i++) {
+    for (let d = 0; d < D; d++) {
+      const v = Math.max(-1, Math.min(1, C2[i][d] / 2));
+      const g = Math.round(255 - Math.abs(v) * 220);
+      const r2 = v > 0 ? 255 : g, b = v < 0 ? 255 : g;
+      ctx.fillStyle = `rgb(${r2},${g},${b})`;
+      ctx.fillRect(22 + i * (D * cellW + gap) + d * cellW, 4 + cellH + 14, cellW - 1, cellH - 1);
+    }
+  }
+  // a sample target weight + reconstruction
+  const target = Array.from({length: D}, () => gaussian(r));
+  // brute-force best (i1, i2)
+  let best = { i1: 0, i2: 0, err: Infinity, recon: null };
+  for (let i1 = 0; i1 < 8; i1++) for (let i2 = 0; i2 < 8; i2++) {
+    let err = 0;
+    const recon = [];
+    for (let d = 0; d < D; d++) {
+      const v = C1[i1][d] + C2[i2][d];
+      recon.push(v);
+      const e = v - target[d]; err += e * e;
+    }
+    if (err < best.err) best = { i1, i2, err, recon };
+  }
+
+  const rc = document.getElementById('aqRecon');
+  const rctx = rc.getContext('2d');
+  rctx.clearRect(0, 0, rc.width, rc.height);
+  const mid = rc.height / 2;
+  const w = (rc.width - 40) / D;
+  rctx.font = '10px sans-serif';
+  rctx.fillStyle = '#666'; rctx.textAlign = 'right';
+  rctx.fillText('target', 36, 20);
+  rctx.fillText('recon', 36, mid + 28);
+  for (let d = 0; d < D; d++) {
+    const t = target[d], rv = best.recon[d];
+    // target bars
+    const th = Math.max(2, Math.abs(t) * 18);
+    rctx.fillStyle = t >= 0 ? '#1976d2' : '#c62828';
+    rctx.fillRect(40 + d * w + 4, 20 - (t >= 0 ? th : 0), w - 8, th);
+    // recon bars
+    const rh = Math.max(2, Math.abs(rv) * 18);
+    rctx.fillStyle = rv >= 0 ? '#7b1fa2' : '#c62828';
+    rctx.fillRect(40 + d * w + 4, mid + 28 - (rv >= 0 ? rh : 0), w - 8, rh);
+  }
+  document.getElementById('aqErr').textContent = best.err.toFixed(3) +
+    `  (i₁=${best.i1}, i₂=${best.i2})`;
+}
+
+// ---------- bit-budget table ----------
+function pplFor(method, bits) {
+  // approximate published shapes
+  if (method === 'GPTQ/AWQ (RTN family)') {
+    if (bits >= 4) return 0.10;
+    if (bits >= 3) return 0.55;
+    if (bits >= 2) return 4.5;
+    return 30;
+  }
+  if (method === 'QuaRot (W4A4)') {
+    if (bits >= 4) return 0.18;
+    if (bits >= 3) return 0.9;
+    if (bits >= 2) return 6.0;
+    return 30;
+  }
+  if (method === 'AQLM (additive codebooks)') {
+    if (bits >= 4) return 0.05;
+    if (bits >= 3) return 0.15;
+    if (bits >= 2) return 0.5;
+    if (bits >= 1.5) return 2.3;
+    return 12;
+  }
+  if (method === 'FP16') return 0;
+}
+
+function renderTable() {
+  const bits = +document.getElementById('bits').value;
+  document.getElementById('bitsLabel').textContent = bits.toFixed(1);
+  const methods = ['GPTQ/AWQ (RTN family)', 'QuaRot (W4A4)', 'AQLM (additive codebooks)', 'FP16'];
+  const tbody = document.querySelector('#pplTable tbody');
+  tbody.innerHTML = '';
+  const maxPpl = 6;
+  for (const m of methods) {
+    const useBits = m === 'FP16' ? 16 : bits;
+    const p = pplFor(m, useBits);
+    const row = document.createElement('tr');
+    const barW = Math.min(220, (p / maxPpl) * 220);
+    row.innerHTML = `<td style="text-align:left">${m}</td>
+                     <td>${useBits.toFixed(1)}</td>
+                     <td>+${p.toFixed(2)}</td>
+                     <td><span class="ppl-bar" style="width:${barW}px"></span></td>`;
+    tbody.appendChild(row);
+  }
+}
+
+document.getElementById('bits').addEventListener('input', renderTable);
+renderQuaRot();
+renderAQLM();
+renderTable();
+</script>
+
+</body>
+</html>

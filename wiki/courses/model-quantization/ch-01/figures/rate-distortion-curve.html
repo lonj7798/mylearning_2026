@@ -1,0 +1,198 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Rate-Distortion Bound for a Gaussian Source</title>
+<style>
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+         max-width: 900px; margin: 2em auto; padding: 0 1em; color: #222; }
+  h1 { font-size: 1.4em; margin-bottom: 0.2em; }
+  .subtitle { color: #666; margin-top: 0; }
+  .panel { border: 1px solid #ddd; border-radius: 6px; padding: 1em; margin: 1em 0;
+           background: #fafafa; }
+  .controls { display: flex; gap: 1em; flex-wrap: wrap; align-items: center; }
+  .control { display: flex; flex-direction: column; }
+  label { font-size: 0.85em; color: #555; margin-bottom: 0.2em; }
+  input[type="range"] { width: 220px; }
+  canvas { background: white; border: 1px solid #ccc; display: block; margin: 1em auto; }
+  .legend { display: flex; gap: 1.2em; justify-content: center; font-size: 0.88em;
+            flex-wrap: wrap; }
+  .swatch { display: inline-block; width: 12px; height: 12px; margin-right: 4px;
+            vertical-align: middle; border-radius: 2px; }
+  .value { font-variant-numeric: tabular-nums; color: #333; font-weight: 600; }
+  .note { font-size: 0.88em; color: #555; line-height: 1.5; }
+  code { background: #eef; padding: 1px 4px; border-radius: 3px; font-size: 0.9em; }
+  footer { margin-top: 2em; font-size: 0.85em; color: #777; text-align: center; }
+  footer a { color: #1976d2; text-decoration: none; }
+</style>
+</head>
+<body>
+
+<h1>Rate-Distortion Bound — Gaussian Source</h1>
+<p class="subtitle">
+  The Shannon lower bound <code>D(R) = σ²·2<sup>−2R</sup></code> is the floor every
+  quantizer must live above. Real LLM-weight schemes sit at fixed bit-widths along this
+  curve — the constant-factor gap above the line is what each method optimizes.
+</p>
+
+<div class="panel">
+  <div class="controls">
+    <div class="control">
+      <label>Source variance σ</label>
+      <input type="range" id="sigma" min="0.25" max="3.0" step="0.05" value="1.0">
+      <span class="value">σ = <span id="sigmaLabel">1.00</span></span>
+    </div>
+    <div class="control">
+      <label>Y-axis scale</label>
+      <select id="yScale">
+        <option value="log" selected>log</option>
+        <option value="linear">linear</option>
+      </select>
+    </div>
+  </div>
+</div>
+
+<canvas id="plot" width="860" height="420"></canvas>
+
+<div class="legend">
+  <span><span class="swatch" style="background:#222"></span>D(R) bound</span>
+  <span><span class="swatch" style="background:#d32f2f"></span>INT8</span>
+  <span><span class="swatch" style="background:#1976d2"></span>INT4</span>
+  <span><span class="swatch" style="background:#388e3c"></span>NF4</span>
+  <span><span class="swatch" style="background:#f57c00"></span>MX-INT4</span>
+  <span><span class="swatch" style="background:#8e24aa"></span>BitNet 1.58</span>
+</div>
+
+<div class="panel note">
+  <strong>How to read this.</strong>
+  The black line is the information-theoretic floor — no quantizer can achieve lower
+  normalized distortion <code>D/σ²</code> at a given bit budget. Each marker is plotted
+  at its bit-width on the bound, then nudged upward by an empirical loss-factor: NF4
+  beats INT4 because its non-uniform codebook is tuned for Gaussian-shaped weights;
+  BitNet 1.58 trades a large distortion gap for huge memory savings and recovers it
+  through quantization-aware training.
+</div>
+
+<footer>
+  <a href="../read.md">← back to chapter</a>
+</footer>
+
+<script>
+const cvs = document.getElementById('plot');
+const ctx = cvs.getContext('2d');
+
+// (bit width R, label, color, multiplicative gap above the bound)
+const markers = [
+  { R: 8.0,  name: 'INT8',       color: '#d32f2f', gap: 1.5 },
+  { R: 4.0,  name: 'INT4',       color: '#1976d2', gap: 2.4 },
+  { R: 4.0,  name: 'NF4',        color: '#388e3c', gap: 1.3 },
+  { R: 4.25, name: 'MX-INT4',    color: '#f57c00', gap: 1.6 },
+  { R: 1.58, name: 'BitNet 1.58',color: '#8e24aa', gap: 3.2 },
+];
+
+function render() {
+  const sigma = +document.getElementById('sigma').value;
+  const yScale = document.getElementById('yScale').value;
+  document.getElementById('sigmaLabel').textContent = sigma.toFixed(2);
+
+  ctx.clearRect(0, 0, cvs.width, cvs.height);
+  const pad = { l: 70, r: 30, t: 30, b: 50 };
+  const W = cvs.width - pad.l - pad.r;
+  const H = cvs.height - pad.t - pad.b;
+
+  const Rmin = 0, Rmax = 8;
+  // normalized distortion D/σ² so curve is independent of σ; we still draw σ-scaled axis
+  const Dnorm = R => Math.pow(2, -2 * R);
+  const Dabs  = R => sigma * sigma * Dnorm(R);
+
+  const Dmax = sigma * sigma * 1.05;
+  const Dmin = sigma * sigma * Math.pow(2, -2 * Rmax) * 0.5;
+
+  const xFor = R => pad.l + ((R - Rmin) / (Rmax - Rmin)) * W;
+  const yFor = (yScale === 'log')
+    ? D => pad.t + H - ((Math.log10(D) - Math.log10(Dmin)) /
+                        (Math.log10(Dmax) - Math.log10(Dmin))) * H
+    : D => pad.t + H - (D / Dmax) * H;
+
+  // grid
+  ctx.strokeStyle = '#eee'; ctx.lineWidth = 1;
+  for (let i = 0; i <= Rmax; i++) {
+    const x = xFor(i);
+    ctx.beginPath(); ctx.moveTo(x, pad.t); ctx.lineTo(x, pad.t + H); ctx.stroke();
+  }
+  for (let i = 0; i <= 5; i++) {
+    const y = pad.t + (H * i) / 5;
+    ctx.beginPath(); ctx.moveTo(pad.l, y); ctx.lineTo(pad.l + W, y); ctx.stroke();
+  }
+
+  // axis labels
+  ctx.fillStyle = '#444'; ctx.font = '11px sans-serif';
+  ctx.textAlign = 'center';
+  for (let i = 0; i <= Rmax; i++) {
+    ctx.fillText(i.toString(), xFor(i), pad.t + H + 16);
+  }
+  ctx.fillText('bits/sample R', pad.l + W / 2, pad.t + H + 36);
+
+  ctx.textAlign = 'right';
+  if (yScale === 'log') {
+    const logMin = Math.floor(Math.log10(Dmin));
+    const logMax = Math.ceil(Math.log10(Dmax));
+    for (let e = logMin; e <= logMax; e++) {
+      const v = Math.pow(10, e);
+      if (v < Dmin || v > Dmax) continue;
+      const y = yFor(v);
+      ctx.fillText('10^' + e, pad.l - 8, y + 4);
+    }
+  } else {
+    for (let i = 0; i <= 5; i++) {
+      const v = Dmax * (1 - i / 5);
+      const y = pad.t + (H * i) / 5;
+      ctx.fillText(v.toFixed(2), pad.l - 8, y + 4);
+    }
+  }
+
+  ctx.save();
+  ctx.translate(16, pad.t + H / 2);
+  ctx.rotate(-Math.PI / 2);
+  ctx.textAlign = 'center';
+  ctx.fillText('distortion D (MSE)', 0, 0);
+  ctx.restore();
+
+  // analytical curve
+  ctx.strokeStyle = '#222'; ctx.lineWidth = 2;
+  ctx.beginPath();
+  const N = 400;
+  for (let i = 0; i <= N; i++) {
+    const R = Rmin + (Rmax - Rmin) * (i / N);
+    const D = Dabs(R);
+    const x = xFor(R), y = yFor(D);
+    if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+  }
+  ctx.stroke();
+
+  // markers
+  markers.forEach(m => {
+    const D = Dabs(m.R) * m.gap;
+    const x = xFor(m.R), y = yFor(D);
+    ctx.fillStyle = m.color;
+    ctx.beginPath(); ctx.arc(x, y, 6, 0, Math.PI * 2); ctx.fill();
+    // dashed drop to the bound
+    ctx.strokeStyle = m.color; ctx.setLineDash([3, 3]); ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(x, y); ctx.lineTo(x, yFor(Dabs(m.R)));
+    ctx.stroke();
+    ctx.setLineDash([]);
+    // label
+    ctx.fillStyle = '#222'; ctx.font = 'bold 10px sans-serif';
+    ctx.textAlign = 'left';
+    ctx.fillText(m.name, x + 8, y - 2);
+  });
+}
+
+document.getElementById('sigma').addEventListener('input', render);
+document.getElementById('yScale').addEventListener('change', render);
+render();
+</script>
+
+</body>
+</html>

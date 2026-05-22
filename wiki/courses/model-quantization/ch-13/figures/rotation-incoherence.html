@@ -1,0 +1,309 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>QuIP Rotation — Making a Weight Matrix Incoherent</title>
+<style>
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+         max-width: 980px; margin: 2em auto; padding: 0 1em; color: #222; }
+  h1 { font-size: 1.4em; margin-bottom: 0.2em; }
+  .subtitle { color: #666; margin-top: 0; }
+  .panel { border: 1px solid #ddd; border-radius: 6px; padding: 1em; margin: 1em 0;
+           background: #fafafa; }
+  .row { display: flex; gap: 1em; flex-wrap: wrap; justify-content: center; }
+  .cell { text-align: center; }
+  .cell h3 { margin: 0.3em 0; font-size: 0.95em; color: #333; }
+  canvas { background: white; border: 1px solid #ccc; display: block; margin: 0.4em auto; }
+  button { font: inherit; padding: 0.4em 1em; margin: 0 0.3em; cursor: pointer;
+           border: 1px solid #888; border-radius: 4px; background: #f5f5f5; }
+  button:hover { background: #e8e8e8; }
+  .stat { font-variant-numeric: tabular-nums; color: #333; font-weight: 600; font-size: 0.9em; }
+  .note { font-size: 0.88em; color: #555; line-height: 1.5; }
+  code { background: #eef; padding: 1px 4px; border-radius: 3px; font-size: 0.9em; }
+  a { color: #1976d2; }
+</style>
+</head>
+<body>
+
+<h1>QuIP Rotation — Making a Weight Matrix Incoherent</h1>
+<p class="subtitle">
+  Start with a heavy-tailed weight matrix W (outlier rows and columns). Apply a random orthogonal
+  rotation <code>W' = U · W · V</code> built from randomized Hadamard transforms. Same matrix,
+  same information — but the energy is now spread uniformly, and per-weight INT4 quantization
+  becomes cheap.
+</p>
+
+<div class="panel" style="text-align:center">
+  <button id="rotate">rotate (resample U, V)</button>
+  <button id="reset">reset W</button>
+</div>
+
+<div class="panel">
+  <div class="row">
+    <div class="cell">
+      <h3>W (raw, heavy-tailed)</h3>
+      <canvas id="heatW" width="260" height="260"></canvas>
+      <div class="stat">max |w| = <span id="maxW">—</span> · kurt = <span id="kurtW">—</span></div>
+    </div>
+    <div class="cell">
+      <h3>W' = U · W · V (rotated)</h3>
+      <canvas id="heatWp" width="260" height="260"></canvas>
+      <div class="stat">max |w| = <span id="maxWp">—</span> · kurt = <span id="kurtWp">—</span></div>
+    </div>
+  </div>
+  <div class="row">
+    <div class="cell">
+      <h3>histogram of W</h3>
+      <canvas id="histW" width="380" height="160"></canvas>
+    </div>
+    <div class="cell">
+      <h3>histogram of W'</h3>
+      <canvas id="histWp" width="380" height="160"></canvas>
+    </div>
+  </div>
+</div>
+
+<div class="panel">
+  <h3 style="margin-top:0">INT4 round-to-nearest quantization error (Frobenius)</h3>
+  <canvas id="bars" width="700" height="120"></canvas>
+  <div class="stat" style="text-align:center">
+    ratio (W err / W' err) = <span id="ratio">—</span>×
+  </div>
+</div>
+
+<div class="panel note">
+  <strong>QuIP's incoherence processing.</strong>
+  A few outlier rows/columns make per-tensor INT4 useless: the global scale has to span the largest
+  weight, wasting bits on every "normal" weight. Rotating into a random orthogonal frame turns the
+  distribution Gaussian-like (CLT in action — every output is a sum of many independent
+  contributions), the max drops by 3–10×, kurtosis collapses, and INT4 round-to-nearest produces
+  an error roughly <strong>3–5× smaller</strong>. Same data, different basis, much cheaper
+  quantization. The rotation is undone after the matmul, so quality is preserved end-to-end.
+</div>
+
+<p style="font-size:0.85em"><a href="../read.md">← back to chapter</a></p>
+
+<script>
+const N = 64;
+let W = null;
+
+// pseudo-random with fixed seed for reproducible "reset"
+function rng(seed) {
+  let s = seed >>> 0;
+  return () => { s = (s * 1664525 + 1013904223) >>> 0; return s / 0x100000000; };
+}
+
+function gaussian(rand) {
+  let u = 0, v = 0;
+  while (u === 0) u = rand();
+  while (v === 0) v = rand();
+  return Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * v);
+}
+
+function makeBadW() {
+  const r = rng(7);
+  const w = Array.from({length: N}, () => Array.from({length: N}, () => 0.3 * gaussian(r)));
+  // inject outlier rows
+  [5, 22, 41].forEach(i => {
+    for (let j = 0; j < N; j++) w[i][j] += 4 * gaussian(r);
+  });
+  // inject outlier cols
+  [13, 30, 55].forEach(j => {
+    for (let i = 0; i < N; i++) w[i][j] += 4 * gaussian(r);
+  });
+  // a few isolated spikes
+  for (let k = 0; k < 12; k++) {
+    const i = Math.floor(r() * N), j = Math.floor(r() * N);
+    w[i][j] += (r() < 0.5 ? -1 : 1) * (5 + 5 * r());
+  }
+  return w;
+}
+
+// Hadamard-style random orthogonal: random ±1 sign flip · Hadamard · random permutation.
+// For N=64 we use the standard Hadamard matrix recursively.
+function hadamard(n) {
+  if (n === 1) return [[1]];
+  const h = hadamard(n / 2);
+  const m = n, out = Array.from({length: m}, () => new Array(m).fill(0));
+  const s = n / 2;
+  for (let i = 0; i < s; i++) for (let j = 0; j < s; j++) {
+    out[i][j] = h[i][j];
+    out[i][j + s] = h[i][j];
+    out[i + s][j] = h[i][j];
+    out[i + s][j + s] = -h[i][j];
+  }
+  return out;
+}
+const H = hadamard(N);
+const HSCALE = 1 / Math.sqrt(N);
+
+function randomOrtho(seedRand) {
+  // sign flip
+  const s = Array.from({length: N}, () => seedRand() < 0.5 ? -1 : 1);
+  // random permutation
+  const perm = Array.from({length: N}, (_, i) => i);
+  for (let i = N - 1; i > 0; i--) {
+    const j = Math.floor(seedRand() * (i + 1));
+    [perm[i], perm[j]] = [perm[j], perm[i]];
+  }
+  // returns operator U s.t. (U @ X)[i][j] = sum_k U[i,k] X[k,j]
+  // U[i,k] = HSCALE * H[perm[i], k] * s[k]
+  const U = Array.from({length: N}, (_, i) =>
+    Array.from({length: N}, (_, k) => HSCALE * H[perm[i]][k] * s[k]));
+  return U;
+}
+
+function matmul(A, B) {
+  const out = Array.from({length: N}, () => new Array(N).fill(0));
+  for (let i = 0; i < N; i++) {
+    for (let k = 0; k < N; k++) {
+      const a = A[i][k];
+      if (a === 0) continue;
+      const Bk = B[k];
+      const Oi = out[i];
+      for (let j = 0; j < N; j++) Oi[j] += a * Bk[j];
+    }
+  }
+  return out;
+}
+
+function flat(M) { const o = []; for (let i = 0; i < N; i++) for (let j = 0; j < N; j++) o.push(M[i][j]); return o; }
+
+function maxAbs(M) { let m = 0; for (let i = 0; i < N; i++) for (let j = 0; j < N; j++) { const v = Math.abs(M[i][j]); if (v > m) m = v; } return m; }
+
+function kurtosis(M) {
+  const xs = flat(M);
+  const mean = xs.reduce((a, b) => a + b, 0) / xs.length;
+  let m2 = 0, m4 = 0;
+  for (const x of xs) { const d = x - mean; m2 += d * d; m4 += d * d * d * d; }
+  m2 /= xs.length; m4 /= xs.length;
+  return m4 / (m2 * m2) - 3;
+}
+
+function quantINT4(M) {
+  const mx = maxAbs(M);
+  const s = mx / 7; // symmetric INT4 in [-7, 7]
+  let err2 = 0;
+  for (let i = 0; i < N; i++) for (let j = 0; j < N; j++) {
+    const q = Math.max(-7, Math.min(7, Math.round(M[i][j] / s)));
+    const d = M[i][j] - q * s;
+    err2 += d * d;
+  }
+  return Math.sqrt(err2);
+}
+
+function drawHeat(canvasId, M, sharedMax) {
+  const c = document.getElementById(canvasId);
+  const ctx = c.getContext('2d');
+  const cell = c.width / N;
+  ctx.clearRect(0, 0, c.width, c.height);
+  for (let i = 0; i < N; i++) for (let j = 0; j < N; j++) {
+    const v = M[i][j] / sharedMax; // -1..1
+    const t = Math.max(-1, Math.min(1, v));
+    // diverging colormap: blue (-) → white (0) → red (+)
+    const r = t > 0 ? 255 : Math.round(255 + t * 200);
+    const g = Math.round(255 - Math.abs(t) * 200);
+    const b = t < 0 ? 255 : Math.round(255 - t * 200);
+    ctx.fillStyle = `rgb(${r},${g},${b})`;
+    ctx.fillRect(j * cell, i * cell, cell + 0.5, cell + 0.5);
+  }
+  ctx.strokeStyle = '#888';
+  ctx.strokeRect(0, 0, c.width, c.height);
+}
+
+function drawHist(canvasId, M, sharedMax) {
+  const c = document.getElementById(canvasId);
+  const ctx = c.getContext('2d');
+  ctx.clearRect(0, 0, c.width, c.height);
+  const xs = flat(M);
+  const nb = 41;
+  const bins = new Array(nb).fill(0);
+  const lo = -sharedMax, hi = sharedMax;
+  for (const x of xs) {
+    const idx = Math.floor((x - lo) / (hi - lo) * nb);
+    if (idx >= 0 && idx < nb) bins[idx]++;
+  }
+  const mx = Math.max(...bins);
+  const pad = { l: 30, r: 10, t: 10, b: 24 };
+  const W = c.width - pad.l - pad.r;
+  const H = c.height - pad.t - pad.b;
+  ctx.fillStyle = '#4a7fb8';
+  for (let i = 0; i < nb; i++) {
+    const h = (bins[i] / mx) * H;
+    ctx.fillRect(pad.l + (i / nb) * W, pad.t + H - h, (W / nb) - 1, h);
+  }
+  ctx.strokeStyle = '#888';
+  ctx.beginPath();
+  ctx.moveTo(pad.l, pad.t + H); ctx.lineTo(pad.l + W, pad.t + H);
+  ctx.stroke();
+  ctx.fillStyle = '#555'; ctx.font = '10px sans-serif'; ctx.textAlign = 'center';
+  ctx.fillText((-sharedMax).toFixed(1), pad.l, pad.t + H + 14);
+  ctx.fillText('0', pad.l + W / 2, pad.t + H + 14);
+  ctx.fillText(sharedMax.toFixed(1), pad.l + W, pad.t + H + 14);
+}
+
+function drawBars(errW, errWp) {
+  const c = document.getElementById('bars');
+  const ctx = c.getContext('2d');
+  ctx.clearRect(0, 0, c.width, c.height);
+  const mx = Math.max(errW, errWp) * 1.15;
+  const pad = { l: 60, r: 20, t: 12, b: 24 };
+  const W = c.width - pad.l - pad.r;
+  const H = c.height - pad.t - pad.b;
+  const barH = 28, gap = 12;
+  // W bar
+  const wBar = (errW / mx) * W;
+  ctx.fillStyle = '#c62828';
+  ctx.fillRect(pad.l, pad.t, wBar, barH);
+  ctx.fillStyle = '#222'; ctx.font = '12px sans-serif';
+  ctx.textAlign = 'right'; ctx.fillText('W', pad.l - 8, pad.t + barH * 0.7);
+  ctx.textAlign = 'left'; ctx.fillText(errW.toFixed(2), pad.l + wBar + 6, pad.t + barH * 0.7);
+  // W' bar
+  const wpBar = (errWp / mx) * W;
+  ctx.fillStyle = '#2e7d32';
+  ctx.fillRect(pad.l, pad.t + barH + gap, wpBar, barH);
+  ctx.fillStyle = '#222';
+  ctx.textAlign = 'right'; ctx.fillText("W'", pad.l - 8, pad.t + barH + gap + barH * 0.7);
+  ctx.textAlign = 'left'; ctx.fillText(errWp.toFixed(2), pad.l + wpBar + 6, pad.t + barH + gap + barH * 0.7);
+}
+
+function render() {
+  const Wp = current.Wp;
+  const sharedMax = Math.max(maxAbs(W), maxAbs(Wp));
+  drawHeat('heatW', W, sharedMax);
+  drawHeat('heatWp', Wp, sharedMax);
+  drawHist('histW', W, sharedMax);
+  drawHist('histWp', Wp, sharedMax);
+  document.getElementById('maxW').textContent = maxAbs(W).toFixed(2);
+  document.getElementById('maxWp').textContent = maxAbs(Wp).toFixed(2);
+  document.getElementById('kurtW').textContent = kurtosis(W).toFixed(2);
+  document.getElementById('kurtWp').textContent = kurtosis(Wp).toFixed(2);
+  const eW = quantINT4(W), eWp = quantINT4(Wp);
+  drawBars(eW, eWp);
+  document.getElementById('ratio').textContent = (eW / eWp).toFixed(2);
+}
+
+let current = { Wp: null, seed: 1 };
+
+function rotate() {
+  const r = rng(current.seed++);
+  const U = randomOrtho(r);
+  const V = randomOrtho(r);
+  current.Wp = matmul(matmul(U, W), V);
+  render();
+}
+
+function reset() {
+  W = makeBadW();
+  current.seed = 1;
+  rotate();
+}
+
+document.getElementById('rotate').addEventListener('click', rotate);
+document.getElementById('reset').addEventListener('click', reset);
+
+reset();
+</script>
+
+</body>
+</html>

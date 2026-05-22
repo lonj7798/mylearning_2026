@@ -1,0 +1,284 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>OBS — Hessian-Aware Column-by-Column Weight Update</title>
+<style>
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+         max-width: 1000px; margin: 2em auto; padding: 0 1em; color: #222; }
+  h1 { font-size: 1.4em; margin-bottom: 0.2em; }
+  .subtitle { color: #666; margin-top: 0; }
+  .panel { border: 1px solid #ddd; border-radius: 6px; padding: 1em; margin: 1em 0;
+           background: #fafafa; }
+  .layout { display: grid; grid-template-columns: 2fr 1fr; gap: 1em; align-items: start; }
+  .controls { display: flex; gap: 0.6em; flex-wrap: wrap; align-items: center; margin: 0.6em 0; }
+  button { padding: 0.4em 0.9em; border: 1px solid #888; background: #fff;
+           border-radius: 4px; cursor: pointer; font-size: 0.9em; }
+  button:hover { background: #eef; }
+  button:disabled { opacity: 0.4; cursor: not-allowed; }
+  canvas { background: white; border: 1px solid #ccc; display: block; }
+  .eq-block { font-family: 'Menlo', monospace; font-size: 0.85em; line-height: 1.7;
+              background: #f3f3f3; padding: 0.7em; border-radius: 4px; }
+  .eq-line { padding: 2px 6px; border-radius: 3px; transition: background 0.3s; }
+  .eq-line.active { background: #ffe98c; font-weight: 600; }
+  .legend { display: flex; gap: 1.2em; font-size: 0.85em; margin-top: 0.5em; }
+  .swatch { display: inline-block; width: 12px; height: 12px; margin-right: 4px;
+            vertical-align: middle; border-radius: 2px; border: 1px solid #999; }
+  .note { font-size: 0.88em; color: #555; line-height: 1.5; }
+  code { background: #eef; padding: 1px 4px; border-radius: 3px; font-size: 0.9em; }
+  .status { font-family: monospace; font-size: 0.9em; color: #444; margin: 0.4em 0; }
+  footer { margin-top: 2em; font-size: 0.85em; color: #777; text-align: center; }
+  footer a { color: #1976d2; }
+</style>
+</head>
+<body>
+
+<h1>Optimal Brain Surgeon — Column-by-Column Weight Update</h1>
+<p class="subtitle">
+  Watch OBS quantize one column at a time, then compensate every remaining column using
+  the Hessian inverse. <strong>GPTQ scales this exact idea to 175B params.</strong>
+</p>
+
+<div class="layout">
+  <div>
+    <div class="panel">
+      <div class="controls">
+        <button id="play">▶ Play</button>
+        <button id="pause" disabled>⏸ Pause</button>
+        <button id="step">⏭ Step</button>
+        <button id="reset">↺ Reset</button>
+        <label style="margin-left: 1em; font-size: 0.85em; color: #555;">
+          Speed:
+          <input type="range" id="speed" min="200" max="1500" step="100" value="700"
+                 style="vertical-align: middle;">
+        </label>
+      </div>
+      <div class="status" id="status">Ready. Column 0 of 8.</div>
+      <canvas id="grid" width="640" height="240"></canvas>
+      <div class="legend">
+        <span><span class="swatch" style="background:#9bc8ff"></span>FP weight (low |w|)</span>
+        <span><span class="swatch" style="background:#0d47a1"></span>FP weight (high |w|)</span>
+        <span><span class="swatch" style="background:#ff9800"></span>Just quantized (discrete)</span>
+        <span><span class="swatch" style="background:#fbe9c4"></span>Compensation applied</span>
+      </div>
+    </div>
+  </div>
+
+  <div>
+    <div class="panel">
+      <strong style="font-size:0.95em;">OBS update rule</strong>
+      <div class="eq-block" style="margin-top: 0.5em;">
+        <div class="eq-line" id="eq1">for q in 0..N:</div>
+        <div class="eq-line" id="eq2">&nbsp;&nbsp;w_q = W[:, q]</div>
+        <div class="eq-line" id="eq3">&nbsp;&nbsp;ŵ_q = quant(w_q)</div>
+        <div class="eq-line" id="eq4">&nbsp;&nbsp;e = (w_q − ŵ_q) / [H⁻¹]_{q,q}</div>
+        <div class="eq-line" id="eq5">&nbsp;&nbsp;δ_F = − e · [H⁻¹]_{q,F}</div>
+        <div class="eq-line" id="eq6">&nbsp;&nbsp;W[:, F] += δ_F</div>
+      </div>
+      <p class="note" style="margin-top:0.7em;">
+        Quantizing column <code>q</code> creates error <code>e</code>. OBS spreads <code>−e</code>
+        across the remaining columns <code>F = {q+1, ..., N−1}</code>, weighted by the corresponding
+        row of <code>H⁻¹</code>. This minimizes <code>‖WX − ŴX‖²</code> in closed form.
+      </p>
+    </div>
+  </div>
+</div>
+
+<div class="panel note">
+  <strong>Why this matters.</strong> OBS (Hassibi &amp; Stork 1993) gives the optimal closed-form
+  weight update <em>given</em> the layer's Hessian. The catch: it's <em>O(N³)</em> per layer and
+  needs the full <code>H⁻¹</code> in memory, which is intractable for transformer columns of size
+  10k+. GPTQ's contribution is to process columns in <em>Cholesky blocks</em> so the algorithm becomes
+  compute-bound instead of memory-bound — see [[ch-08]] for the speedup.
+</div>
+
+<footer>
+  <a href="../read.md">← back to chapter</a>
+</footer>
+
+<script>
+const ROWS = 4, COLS = 8;
+const cvs = document.getElementById('grid');
+const ctx = cvs.getContext('2d');
+const cellW = 70, cellH = 50, padX = 40, padY = 20;
+
+let W = null;        // FP weights, ROWS x COLS
+let Wq = null;       // quantized values, null if not yet quantized
+let comp = null;     // compensation flag per cell (for highlight flash)
+let Hinv = null;     // mock inverse-hessian row (per current column)
+let currentCol = -1;
+let phase = 0;       // 0=idle, 1=quantize, 2=compensate
+let playing = false;
+let timer = null;
+
+function rand() { return (Math.random() - 0.5) * 2; }
+
+function initMatrix() {
+  W = Array.from({length: ROWS}, () =>
+    Array.from({length: COLS}, () => rand() * 1.0));
+  Wq = Array.from({length: ROWS}, () => Array(COLS).fill(null));
+  comp = Array.from({length: ROWS}, () => Array(COLS).fill(0));
+  currentCol = -1;
+  phase = 0;
+  updateStatus('Ready. Column 0 of ' + COLS + '.');
+  highlightEq(null);
+  draw();
+}
+
+function quantFn(w) {
+  // 4-level symmetric quant for visualization
+  const levels = [-0.8, -0.3, 0.3, 0.8];
+  let best = levels[0], bd = Math.abs(w - levels[0]);
+  for (const l of levels) {
+    const d = Math.abs(w - l);
+    if (d < bd) { bd = d; best = l; }
+  }
+  return best;
+}
+
+function colorForW(w) {
+  // map |w| in [0, 1.0] to blue scale
+  const mag = Math.min(1, Math.abs(w));
+  const t = mag;
+  // light blue -> deep blue
+  const r = Math.round(155 + (13 - 155) * t);
+  const g = Math.round(200 + (71 - 200) * t);
+  const b = Math.round(255 + (161 - 255) * t);
+  return `rgb(${r},${g},${b})`;
+}
+
+function colorForQuant(q) {
+  return '#ff9800'; // orange = discrete level marker
+}
+
+function draw() {
+  ctx.clearRect(0, 0, cvs.width, cvs.height);
+  ctx.font = '11px monospace';
+  for (let r = 0; r < ROWS; r++) {
+    for (let c = 0; c < COLS; c++) {
+      const x = padX + c * cellW;
+      const y = padY + r * cellH;
+
+      // compensation flash background
+      if (comp[r][c] > 0) {
+        ctx.fillStyle = `rgba(251, 233, 196, ${comp[r][c]})`;
+        ctx.fillRect(x - 2, y - 2, cellW + 4, cellH + 4);
+        comp[r][c] *= 0.85;
+        if (comp[r][c] < 0.05) comp[r][c] = 0;
+      }
+
+      // weight cell
+      if (Wq[r][c] !== null) {
+        ctx.fillStyle = colorForQuant(Wq[r][c]);
+      } else {
+        ctx.fillStyle = colorForW(W[r][c]);
+      }
+      ctx.fillRect(x, y, cellW - 4, cellH - 4);
+      ctx.strokeStyle = (c === currentCol) ? '#d32f2f' : '#888';
+      ctx.lineWidth = (c === currentCol) ? 2.5 : 1;
+      ctx.strokeRect(x, y, cellW - 4, cellH - 4);
+
+      // value label
+      ctx.fillStyle = Math.abs(Wq[r][c] !== null ? Wq[r][c] : W[r][c]) > 0.55 ? '#fff' : '#222';
+      ctx.textAlign = 'center';
+      const val = Wq[r][c] !== null ? Wq[r][c] : W[r][c];
+      ctx.fillText(val.toFixed(2), x + (cellW - 4)/2, y + (cellH - 4)/2 + 4);
+    }
+  }
+  // column labels
+  ctx.fillStyle = '#444';
+  ctx.font = '10px sans-serif';
+  ctx.textAlign = 'center';
+  for (let c = 0; c < COLS; c++) {
+    ctx.fillText('col ' + c, padX + c * cellW + (cellW - 4)/2, padY + ROWS * cellH + 12);
+  }
+}
+
+function highlightEq(id) {
+  ['eq1','eq2','eq3','eq4','eq5','eq6'].forEach(e =>
+    document.getElementById(e).classList.toggle('active', e === id));
+}
+
+function updateStatus(s) {
+  document.getElementById('status').textContent = s;
+}
+
+function step() {
+  if (phase === 0) {
+    currentCol++;
+    if (currentCol >= COLS) {
+      updateStatus('Done. All ' + COLS + ' columns quantized + compensated.');
+      highlightEq(null);
+      stopPlay();
+      draw();
+      return false;
+    }
+    phase = 1;
+    highlightEq('eq3');
+    // quantize current column
+    for (let r = 0; r < ROWS; r++) {
+      Wq[r][currentCol] = quantFn(W[r][currentCol]);
+    }
+    updateStatus('Column ' + currentCol + ': quantized w_q → ŵ_q.');
+    draw();
+    return true;
+  } else if (phase === 1) {
+    phase = 2;
+    highlightEq('eq5');
+    // apply OBS compensation to remaining columns
+    // mock H_inv off-diagonal row decaying with distance
+    const hqq = 1.0;
+    for (let r = 0; r < ROWS; r++) {
+      const e = (W[r][currentCol] - Wq[r][currentCol]) / hqq;
+      for (let c = currentCol + 1; c < COLS; c++) {
+        const hqf = 0.35 / (c - currentCol); // mock H⁻¹ row
+        const delta = -e * hqf;
+        W[r][c] += delta;
+        // clip for visualization
+        if (W[r][c] > 1) W[r][c] = 1;
+        if (W[r][c] < -1) W[r][c] = -1;
+        comp[r][c] = 1.0;
+      }
+    }
+    updateStatus('Column ' + currentCol + ': δ_F applied to ' +
+                 (COLS - 1 - currentCol) + ' remaining columns.');
+    draw();
+    return true;
+  } else {
+    phase = 0;
+    highlightEq(null);
+    return step();
+  }
+}
+
+function startPlay() {
+  playing = true;
+  document.getElementById('play').disabled = true;
+  document.getElementById('pause').disabled = false;
+  const tick = () => {
+    if (!playing) return;
+    if (!step()) return;
+    timer = setTimeout(tick, +document.getElementById('speed').value);
+  };
+  tick();
+}
+
+function stopPlay() {
+  playing = false;
+  clearTimeout(timer);
+  document.getElementById('play').disabled = false;
+  document.getElementById('pause').disabled = true;
+}
+
+document.getElementById('play').onclick = startPlay;
+document.getElementById('pause').onclick = stopPlay;
+document.getElementById('step').onclick = () => { stopPlay(); step(); };
+document.getElementById('reset').onclick = () => { stopPlay(); initMatrix(); };
+
+initMatrix();
+// animation tick to fade compensation flashes
+setInterval(draw, 80);
+</script>
+
+</body>
+</html>

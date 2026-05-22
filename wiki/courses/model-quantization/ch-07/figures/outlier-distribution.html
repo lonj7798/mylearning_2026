@@ -1,0 +1,262 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>LLM Activation Outliers — Why LLM.int8 Routes Them to FP16</title>
+<style>
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+         max-width: 1020px; margin: 2em auto; padding: 0 1em; color: #222; }
+  h1 { font-size: 1.4em; margin-bottom: 0.2em; }
+  .subtitle { color: #666; margin-top: 0; }
+  .panel { border: 1px solid #ddd; border-radius: 6px; padding: 1em; margin: 1em 0;
+           background: #fafafa; }
+  .controls { display: flex; gap: 1.5em; flex-wrap: wrap; align-items: center; }
+  .control { display: flex; flex-direction: column; min-width: 200px; }
+  label { font-size: 0.85em; color: #555; margin-bottom: 0.2em; }
+  input[type="range"] { width: 200px; }
+  .plots { display: grid; grid-template-columns: 1fr 1fr; gap: 1em; }
+  canvas { background: white; border: 1px solid #ccc; display: block; margin: 0 auto; }
+  .value { font-variant-numeric: tabular-nums; color: #333; font-weight: 600; }
+  .note { font-size: 0.88em; color: #555; line-height: 1.5; }
+  code { background: #eef; padding: 1px 4px; border-radius: 3px; font-size: 0.9em; }
+  .stats { display: grid; grid-template-columns: 1fr 1fr; gap: 0.4em 1.5em;
+           font-family: monospace; font-size: 0.9em; margin-top: 0.5em; }
+  .stat-key { color: #555; }
+  .stat-val { color: #c62828; font-weight: 600; text-align: right; }
+  .stat-val.ok { color: #2e7d32; }
+  footer { margin-top: 2em; font-size: 0.85em; color: #777; text-align: center; }
+  footer a { color: #1976d2; }
+</style>
+</head>
+<body>
+
+<h1>LLM Activation Outliers — The 0.1% That Breaks INT8</h1>
+<p class="subtitle">
+  Transformers at 6.7B+ params develop a handful of activation channels with magnitudes
+  10–100× larger than the bulk. Naïve per-tensor INT8 quantization loses 5+ PPL.
+  <strong>LLM.int8's fix: route those columns through FP16, keep the rest in INT8.</strong>
+</p>
+
+<div class="panel">
+  <div class="controls">
+    <div class="control">
+      <label>Outlier fraction (% of activations)</label>
+      <input type="range" id="frac" min="0.1" max="5" step="0.1" value="1.0">
+      <span class="value"><span id="fracLbl">1.0</span> %</span>
+    </div>
+    <div class="control">
+      <label>Outlier magnitude scale (× bulk σ)</label>
+      <input type="range" id="mag" min="1" max="100" step="1" value="30">
+      <span class="value"><span id="magLbl">30</span> ×</span>
+    </div>
+    <div class="control">
+      <label>LLM.int8 threshold |x|</label>
+      <input type="range" id="thr" min="2" max="20" step="0.5" value="6">
+      <span class="value">|x| &gt; <span id="thrLbl">6.0</span></span>
+    </div>
+  </div>
+</div>
+
+<div class="plots">
+  <div>
+    <div style="text-align:center; font-size:0.9em; color:#444; margin-bottom:4px;">
+      Linear-y histogram (bulk dominates visually)
+    </div>
+    <canvas id="lin" width="480" height="260"></canvas>
+  </div>
+  <div>
+    <div style="text-align:center; font-size:0.9em; color:#444; margin-bottom:4px;">
+      Log-y histogram (outliers visible)
+    </div>
+    <canvas id="log" width="480" height="260"></canvas>
+  </div>
+</div>
+
+<div class="panel">
+  <strong style="font-size:0.95em;">Where the magnitude lives</strong>
+  <div class="stats">
+    <span class="stat-key">Values above threshold</span>
+    <span class="stat-val" id="overCount">—</span>
+    <span class="stat-key">% of values above threshold</span>
+    <span class="stat-val" id="overPct">—</span>
+    <span class="stat-key">Σ|x| above threshold / Σ|x| total</span>
+    <span class="stat-val" id="overMag">—</span>
+    <span class="stat-key">Naïve INT8 range needed (max |x|)</span>
+    <span class="stat-val" id="rangeNaive">—</span>
+    <span class="stat-key">LLM.int8 INT8 range (bulk only)</span>
+    <span class="stat-val ok" id="rangeMixed">—</span>
+    <span class="stat-key">INT8 step size: naïve vs LLM.int8</span>
+    <span class="stat-val" id="stepRatio">—</span>
+  </div>
+</div>
+
+<div class="panel note">
+  <strong>The kill shot.</strong> When max |x| is set by an outlier of magnitude 60, the INT8 step
+  size becomes <code>60/127 ≈ 0.47</code>. The bulk of activations live in <code>[−3, 3]</code>, so
+  they get <em>only ~13 distinct INT8 levels</em> instead of 256 — catastrophic precision loss in the
+  region that carries 90% of the gradient signal. LLM.int8 (Dettmers 2022) splits the GEMM: outlier
+  columns go through FP16, bulk columns stay INT8 with a tight range. <code>~0.1%</code> of columns
+  are touched. Per-token / per-channel scaling (Q8BERT, SmoothQuant) attack the same problem from a
+  different angle — see [[ch-07]] body for the comparison.
+</div>
+
+<footer>
+  <a href="../read.md">← back to chapter</a>
+</footer>
+
+<script>
+const N = 8000;        // sample count
+const NBINS = 80;
+const X_MIN = -80, X_MAX = 80;
+let samples = [];
+
+function gauss() {
+  // Box-Muller
+  let u = 1 - Math.random(), v = Math.random();
+  return Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * v);
+}
+
+function regenerate() {
+  const frac = +document.getElementById('frac').value / 100;
+  const mag = +document.getElementById('mag').value;
+  samples = [];
+  for (let i = 0; i < N; i++) {
+    if (Math.random() < frac) {
+      // outlier: heavy-tailed (gauss × mag)
+      samples.push(gauss() * mag);
+    } else {
+      // bulk: N(0, 1)
+      samples.push(gauss());
+    }
+  }
+}
+
+function histogram(data, nbins, lo, hi) {
+  const bins = Array(nbins).fill(0);
+  const step = (hi - lo) / nbins;
+  for (const x of data) {
+    if (x < lo || x >= hi) continue;
+    const idx = Math.floor((x - lo) / step);
+    bins[idx]++;
+  }
+  return bins;
+}
+
+function drawHist(canvasId, bins, useLog, threshold) {
+  const cvs = document.getElementById(canvasId);
+  const ctx = cvs.getContext('2d');
+  const W = cvs.width, H = cvs.height;
+  ctx.clearRect(0, 0, W, H);
+  const pad = { l: 40, r: 10, t: 10, b: 30 };
+  const pw = W - pad.l - pad.r;
+  const ph = H - pad.t - pad.b;
+
+  const transform = useLog ? (v => v > 0 ? Math.log10(v) : 0) : (v => v);
+  const tvals = bins.map(transform);
+  let yMax = Math.max(...tvals);
+  if (yMax === 0) yMax = 1;
+
+  // axes
+  ctx.strokeStyle = '#ccc';
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(pad.l, pad.t); ctx.lineTo(pad.l, pad.t + ph);
+  ctx.lineTo(pad.l + pw, pad.t + ph);
+  ctx.stroke();
+
+  // bars
+  const bw = pw / bins.length;
+  for (let i = 0; i < bins.length; i++) {
+    const xCenter = X_MIN + (i + 0.5) * (X_MAX - X_MIN) / bins.length;
+    const v = tvals[i];
+    const h = (v / yMax) * ph;
+    const isOutlier = Math.abs(xCenter) > threshold;
+    ctx.fillStyle = isOutlier ? '#c62828' : '#1976d2';
+    ctx.fillRect(pad.l + i * bw, pad.t + ph - h, bw - 0.5, h);
+  }
+
+  // threshold lines
+  const tx1 = pad.l + ((threshold - X_MIN) / (X_MAX - X_MIN)) * pw;
+  const tx2 = pad.l + ((-threshold - X_MIN) / (X_MAX - X_MIN)) * pw;
+  ctx.strokeStyle = '#c62828';
+  ctx.setLineDash([4, 3]);
+  ctx.lineWidth = 1.5;
+  ctx.beginPath();
+  ctx.moveTo(tx1, pad.t); ctx.lineTo(tx1, pad.t + ph);
+  ctx.moveTo(tx2, pad.t); ctx.lineTo(tx2, pad.t + ph);
+  ctx.stroke();
+  ctx.setLineDash([]);
+
+  // x labels
+  ctx.fillStyle = '#444';
+  ctx.font = '10px sans-serif';
+  ctx.textAlign = 'center';
+  for (let i = 0; i <= 4; i++) {
+    const xv = X_MIN + (i / 4) * (X_MAX - X_MIN);
+    const xp = pad.l + (i / 4) * pw;
+    ctx.fillText(xv.toFixed(0), xp, pad.t + ph + 14);
+  }
+  ctx.fillText('activation value', pad.l + pw / 2, pad.t + ph + 26);
+
+  // y labels
+  ctx.textAlign = 'right';
+  ctx.fillStyle = '#777';
+  ctx.fillText(useLog ? '10^' + yMax.toFixed(1) : yMax.toFixed(0),
+               pad.l - 4, pad.t + 10);
+  ctx.fillText('0', pad.l - 4, pad.t + ph);
+}
+
+function update() {
+  const frac = +document.getElementById('frac').value;
+  const mag = +document.getElementById('mag').value;
+  const thr = +document.getElementById('thr').value;
+  document.getElementById('fracLbl').textContent = frac.toFixed(1);
+  document.getElementById('magLbl').textContent = mag;
+  document.getElementById('thrLbl').textContent = thr.toFixed(1);
+
+  regenerate();
+
+  const bins = histogram(samples, NBINS, X_MIN, X_MAX);
+  drawHist('lin', bins, false, thr);
+  drawHist('log', bins, true, thr);
+
+  // stats
+  let overCount = 0;
+  let totMag = 0, overMag = 0;
+  let maxAbs = 0, bulkMax = 0;
+  for (const x of samples) {
+    const ax = Math.abs(x);
+    totMag += ax;
+    if (ax > maxAbs) maxAbs = ax;
+    if (ax > thr) {
+      overCount++;
+      overMag += ax;
+    } else {
+      if (ax > bulkMax) bulkMax = ax;
+    }
+  }
+  const overPct = (overCount / samples.length) * 100;
+  const magFrac = totMag > 0 ? (overMag / totMag) * 100 : 0;
+  const stepNaive = maxAbs / 127;
+  const stepMixed = bulkMax / 127;
+
+  document.getElementById('overCount').textContent =
+    overCount + ' / ' + samples.length;
+  document.getElementById('overPct').textContent = overPct.toFixed(2) + ' %';
+  document.getElementById('overMag').textContent = magFrac.toFixed(1) + ' %';
+  document.getElementById('rangeNaive').textContent =
+    '±' + maxAbs.toFixed(2);
+  document.getElementById('rangeMixed').textContent =
+    '±' + bulkMax.toFixed(2);
+  document.getElementById('stepRatio').textContent =
+    stepNaive.toFixed(3) + '  vs  ' + stepMixed.toFixed(3) +
+    '   (' + (stepNaive / Math.max(stepMixed, 1e-6)).toFixed(1) + '× coarser)';
+}
+
+['frac', 'mag', 'thr'].forEach(id =>
+  document.getElementById(id).addEventListener('input', update));
+update();
+</script>
+
+</body>
+</html>

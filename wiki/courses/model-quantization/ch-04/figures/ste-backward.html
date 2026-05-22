@@ -1,0 +1,260 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Straight-Through Estimator — Forward vs Backward</title>
+<style>
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+         max-width: 900px; margin: 2em auto; padding: 0 1em; color: #222; }
+  h1 { font-size: 1.4em; margin-bottom: 0.2em; }
+  .subtitle { color: #666; margin-top: 0; }
+  .panel { border: 1px solid #ddd; border-radius: 6px; padding: 1em; margin: 1em 0;
+           background: #fafafa; }
+  .controls { display: flex; gap: 1em; flex-wrap: wrap; align-items: center; }
+  .control { display: flex; flex-direction: column; }
+  label { font-size: 0.85em; color: #555; margin-bottom: 0.2em; }
+  input[type="range"] { width: 200px; }
+  canvas { background: white; border: 1px solid #ccc; display: block; margin: 0 auto; }
+  .legend { display: flex; gap: 1.5em; justify-content: center; font-size: 0.9em;
+            flex-wrap: wrap; }
+  .swatch { display: inline-block; width: 14px; height: 4px; margin-right: 4px;
+            vertical-align: middle; border-radius: 2px; }
+  .value { font-variant-numeric: tabular-nums; color: #333; font-weight: 600; }
+  .note { font-size: 0.88em; color: #555; line-height: 1.5; }
+  code { background: #eef; padding: 1px 4px; border-radius: 3px; font-size: 0.9em; }
+  button { padding: 4px 12px; cursor: pointer; }
+  footer { margin-top: 2em; font-size: 0.85em; color: #777; text-align: center; }
+  footer a { color: #1976d2; text-decoration: none; }
+</style>
+</head>
+<body>
+
+<h1>Straight-Through Estimator (STE)</h1>
+<p class="subtitle">
+  Forward pass uses the true rounding <code>q(x) = round(x/Δ)·Δ</code>. The true
+  derivative is zero almost everywhere with infinite spikes at step boundaries —
+  useless for SGD. STE replaces it with the identity <code>1</code>, letting gradient
+  flow straight through the quantizer.
+</p>
+
+<div class="panel">
+  <div class="controls">
+    <div class="control">
+      <label>Step size Δ</label>
+      <input type="range" id="dStep" min="0" max="3" step="1" value="2">
+      <span class="value">Δ = <span id="dLabel">1.0</span></span>
+    </div>
+    <div class="control">
+      <label>Backward shown</label>
+      <select id="back">
+        <option value="ste" selected>STE (identity)</option>
+        <option value="true">True derivative</option>
+        <option value="both">Both</option>
+      </select>
+    </div>
+    <div class="control">
+      <label>Animate input x(t)</label>
+      <button id="animBtn">Start</button>
+    </div>
+  </div>
+</div>
+
+<canvas id="plot" width="860" height="460"></canvas>
+
+<div class="legend">
+  <span><span class="swatch" style="background:#1976d2; height:3px"></span>Forward q(x)</span>
+  <span><span class="swatch" style="background:#888; height:3px"></span>Identity y=x reference</span>
+  <span><span class="swatch" style="background:#d32f2f; height:3px"></span>STE backward (=1)</span>
+  <span><span class="swatch" style="background:#388e3c; height:3px"></span>True backward (δ-spikes)</span>
+</div>
+
+<div class="panel note">
+  <strong>The bias is bounded.</strong>
+  At step boundaries, true gradient is an infinite spike whose mass equals Δ; STE
+  replaces this with a constant 1. The per-step bias is at most Δ in expectation,
+  and over thousands of training steps these biases average toward zero while the
+  optimizer still receives a useful, non-zero signal. The whole reason QAT works is
+  this controlled lie.
+</div>
+
+<footer>
+  <a href="../read.md">← back to chapter</a>
+</footer>
+
+<script>
+const cvs = document.getElementById('plot');
+const ctx = cvs.getContext('2d');
+
+const dLookup = { 0: 0.25, 1: 0.5, 2: 1.0, 3: 2.0 };
+let animOn = false, animPhase = 0;
+
+function render() {
+  const dSel = +document.getElementById('dStep').value;
+  const D = dLookup[dSel];
+  const back = document.getElementById('back').value;
+  document.getElementById('dLabel').textContent = D.toFixed(2);
+
+  ctx.clearRect(0, 0, cvs.width, cvs.height);
+  const xmin = -4, xmax = 4;
+
+  // panel rectangles
+  const pad = { l: 60, r: 30, t: 20, b: 30 };
+  const fullW = cvs.width - pad.l - pad.r;
+  const panelH = (cvs.height - 80) / 2;
+
+  function panel(yTop, ymin, ymax, title) {
+    // border
+    ctx.strokeStyle = '#bbb'; ctx.lineWidth = 1;
+    ctx.strokeRect(pad.l, yTop, fullW, panelH);
+    // axes (zero lines)
+    ctx.strokeStyle = '#ddd';
+    const y0 = yTop + panelH - (-ymin / (ymax - ymin)) * panelH;
+    ctx.beginPath();
+    ctx.moveTo(pad.l, y0); ctx.lineTo(pad.l + fullW, y0); ctx.stroke();
+    const xMid = pad.l + ((0 - xmin) / (xmax - xmin)) * fullW;
+    ctx.beginPath();
+    ctx.moveTo(xMid, yTop); ctx.lineTo(xMid, yTop + panelH); ctx.stroke();
+    // tick labels
+    ctx.fillStyle = '#666'; ctx.font = '10px sans-serif'; ctx.textAlign = 'center';
+    for (let x = xmin; x <= xmax; x++) {
+      const px = pad.l + ((x - xmin) / (xmax - xmin)) * fullW;
+      ctx.fillText(x.toString(), px, yTop + panelH + 14);
+    }
+    ctx.textAlign = 'right';
+    for (let i = 0; i <= 4; i++) {
+      const v = ymin + (ymax - ymin) * (1 - i / 4);
+      const py = yTop + (panelH * i) / 4;
+      ctx.fillText(v.toFixed(1), pad.l - 6, py + 4);
+    }
+    // title
+    ctx.fillStyle = '#222'; ctx.font = 'bold 12px sans-serif'; ctx.textAlign = 'left';
+    ctx.fillText(title, pad.l + 8, yTop + 16);
+  }
+
+  // ===== Top panel: forward q(x) =====
+  const topTop = pad.t;
+  const fwdMin = -4, fwdMax = 4;
+  panel(topTop, fwdMin, fwdMax, 'Forward: q(x) = round(x/Δ)·Δ');
+  const xFor = x => pad.l + ((x - xmin) / (xmax - xmin)) * fullW;
+  const yForFwd = v => topTop + panelH - ((v - fwdMin) / (fwdMax - fwdMin)) * panelH;
+
+  // identity reference
+  ctx.strokeStyle = '#888'; ctx.lineWidth = 1; ctx.setLineDash([4, 4]);
+  ctx.beginPath();
+  ctx.moveTo(xFor(xmin), yForFwd(xmin));
+  ctx.lineTo(xFor(xmax), yForFwd(xmax));
+  ctx.stroke();
+  ctx.setLineDash([]);
+
+  // step function (sample densely; draw as flat segments)
+  ctx.strokeStyle = '#1976d2'; ctx.lineWidth = 2;
+  const N = 1200;
+  let prevQ = null;
+  ctx.beginPath();
+  for (let i = 0; i <= N; i++) {
+    const x = xmin + (xmax - xmin) * (i / N);
+    const q = Math.round(x / D) * D;
+    const px = xFor(x), py = yForFwd(q);
+    if (i === 0) ctx.moveTo(px, py);
+    else {
+      if (q !== prevQ) {
+        // vertical jump at the boundary
+        ctx.lineTo(px, yForFwd(prevQ));
+        ctx.lineTo(px, py);
+      } else {
+        ctx.lineTo(px, py);
+      }
+    }
+    prevQ = q;
+  }
+  ctx.stroke();
+
+  // ===== Bottom panel: backward derivative =====
+  const botTop = pad.t + panelH + 40;
+  const dmin = -0.5, dmax = 2.5;
+  panel(botTop, dmin, dmax, 'Backward: dq/dx');
+  const yForD = v => botTop + panelH - ((v - dmin) / (dmax - dmin)) * panelH;
+
+  // STE gradient = 1
+  if (back === 'ste' || back === 'both') {
+    ctx.strokeStyle = '#d32f2f'; ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(xFor(xmin), yForD(1));
+    ctx.lineTo(xFor(xmax), yForD(1));
+    ctx.stroke();
+    ctx.fillStyle = '#d32f2f'; ctx.font = '11px sans-serif';
+    ctx.textAlign = 'left';
+    ctx.fillText('STE: ∂q/∂x = 1', xFor(xmax) - 110, yForD(1) - 6);
+  }
+
+  // True gradient — 0 a.e., spikes at boundaries
+  if (back === 'true' || back === 'both') {
+    ctx.strokeStyle = '#388e3c'; ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(xFor(xmin), yForD(0));
+    ctx.lineTo(xFor(xmax), yForD(0));
+    ctx.stroke();
+    // δ-spikes at half-integer multiples of Δ
+    const kMin = Math.ceil((xmin / D) + 0.5);
+    const kMax = Math.floor((xmax / D) + 0.5);
+    for (let k = kMin; k <= kMax; k++) {
+      const xBnd = (k - 0.5) * D;
+      const px = xFor(xBnd);
+      ctx.strokeStyle = '#388e3c'; ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.moveTo(px, yForD(0));
+      ctx.lineTo(px, yForD(dmax * 0.95));
+      ctx.stroke();
+      // arrowhead
+      ctx.beginPath();
+      ctx.moveTo(px - 3, yForD(dmax * 0.85));
+      ctx.lineTo(px,     yForD(dmax * 0.95));
+      ctx.lineTo(px + 3, yForD(dmax * 0.85));
+      ctx.stroke();
+    }
+    ctx.fillStyle = '#388e3c'; ctx.font = '11px sans-serif'; ctx.textAlign = 'left';
+    ctx.fillText('True: δ-spikes at boundaries, 0 elsewhere',
+                 pad.l + 8, yForD(dmax * 0.95) + 4);
+  }
+
+  // animated indicator (a moving x and the value of q(x))
+  if (animOn) {
+    const xCur = xmin + (xmax - xmin) * (0.5 + 0.5 * Math.sin(animPhase));
+    const qCur = Math.round(xCur / D) * D;
+    // top: dot at (x, q(x))
+    ctx.fillStyle = '#222';
+    ctx.beginPath(); ctx.arc(xFor(xCur), yForFwd(qCur), 5, 0, Math.PI * 2); ctx.fill();
+    // bottom: dot at (x, STE=1) or true derivative
+    const dVal = (back === 'true')
+      ? 0
+      : 1; // STE or 'both' — pick STE
+    ctx.beginPath(); ctx.arc(xFor(xCur), yForD(dVal), 5, 0, Math.PI * 2); ctx.fill();
+    // x readout
+    ctx.fillStyle = '#222'; ctx.font = '11px sans-serif'; ctx.textAlign = 'left';
+    ctx.fillText('x = ' + xCur.toFixed(2) + '   q(x) = ' + qCur.toFixed(2),
+                 pad.l + 8, topTop + panelH - 8);
+  }
+}
+
+['dStep', 'back'].forEach(id => {
+  document.getElementById(id).addEventListener('input', render);
+  document.getElementById(id).addEventListener('change', render);
+});
+
+document.getElementById('animBtn').addEventListener('click', () => {
+  animOn = !animOn;
+  document.getElementById('animBtn').textContent = animOn ? 'Stop' : 'Start';
+  if (animOn) loop();
+});
+function loop() {
+  if (!animOn) return;
+  animPhase += 0.04;
+  render();
+  requestAnimationFrame(loop);
+}
+
+render();
+</script>
+
+</body>
+</html>

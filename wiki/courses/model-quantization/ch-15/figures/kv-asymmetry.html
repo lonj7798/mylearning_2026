@@ -1,0 +1,267 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>KV-Cache Asymmetry — K is Channel-Outlier, V is Token-Gaussian</title>
+<style>
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+         max-width: 1040px; margin: 2em auto; padding: 0 1em; color: #222; }
+  h1 { font-size: 1.4em; margin-bottom: 0.2em; }
+  .subtitle { color: #666; margin-top: 0; }
+  .panel { border: 1px solid #ddd; border-radius: 6px; padding: 1em; margin: 1em 0;
+           background: #fafafa; }
+  .row { display: flex; gap: 1em; flex-wrap: wrap; justify-content: center; }
+  .cell { text-align: center; }
+  .cell h3 { margin: 0.3em 0; font-size: 0.95em; }
+  canvas { background: white; border: 1px solid #ccc; display: block; margin: 0.3em auto; }
+  .stat { font-variant-numeric: tabular-nums; color: #333; font-weight: 600; font-size: 0.88em; }
+  .note { font-size: 0.88em; color: #555; line-height: 1.5; }
+  code { background: #eef; padding: 1px 4px; border-radius: 3px; font-size: 0.9em; }
+  a { color: #1976d2; }
+  .kvtag { display: inline-block; padding: 2px 8px; border-radius: 3px; font-weight: 600;
+           font-size: 0.78em; vertical-align: middle; margin-left: 6px; }
+  .kvtag.k { background: #ffebee; color: #b71c1c; }
+  .kvtag.v { background: #e8f5e9; color: #1b5e20; }
+  .legend { font-size: 0.83em; color: #666; }
+</style>
+</head>
+<body>
+
+<h1>KV-Cache Asymmetry — K is Channel-Outlier, V is Token-Gaussian</h1>
+<p class="subtitle">
+  Synthetic K and V matrices (T=256 tokens × D=64 channels). RoPE injects a position-dependent
+  sinusoidal scaling on a handful of channels of K — those channels become persistent outliers.
+  V has no such structure: it's just per-token mixtures with no preferred channels.
+  <strong>Opposite outlier geometry ⇒ opposite quantization axes.</strong>
+</p>
+
+<div class="panel">
+  <div class="row">
+    <div class="cell">
+      <h3>K cache <span class="kvtag k">channel-outlier</span></h3>
+      <canvas id="heatK" width="430" height="220"></canvas>
+      <div class="legend">rows = tokens (top → bottom), cols = channels</div>
+    </div>
+    <div class="cell">
+      <h3>V cache <span class="kvtag v">token-Gaussian</span></h3>
+      <canvas id="heatV" width="430" height="220"></canvas>
+      <div class="legend">rows = tokens (top → bottom), cols = channels</div>
+    </div>
+  </div>
+
+  <div class="row" style="margin-top:1em">
+    <div class="cell">
+      <h3>per-channel max |K|  (bars across 64 channels)</h3>
+      <canvas id="chK" width="430" height="120"></canvas>
+      <div class="stat">range = <span id="chKrange">—</span> · ratio max/median = <span id="chKratio">—</span>×</div>
+    </div>
+    <div class="cell">
+      <h3>per-token max |V|  (bars across 256 tokens)</h3>
+      <canvas id="tkV" width="430" height="120"></canvas>
+      <div class="stat">range = <span id="tkVrange">—</span> · ratio max/median = <span id="tkVratio">—</span>×</div>
+    </div>
+  </div>
+</div>
+
+<div class="panel">
+  <h3 style="margin-top:0">KIVI's recipe — match the quant axis to the outlier axis</h3>
+  <canvas id="recipe" width="900" height="180"></canvas>
+  <div class="legend" style="text-align:center">
+    K: 1 scale per <em>channel</em> (D scales, here D=64) — outliers contained inside their column.<br>
+    V: 1 scale per <em>token</em> (T scales, here T=256) — each row gets its own dynamic range.
+  </div>
+</div>
+
+<div class="panel note">
+  <strong>The asymmetry, made operational.</strong>
+  Quantizing the wrong axis destroys both caches: per-token K would bundle an outlier channel
+  with normal channels in the same scale, blowing the bit budget; per-channel V would estimate
+  D scales from data that doesn't actually have channel structure. KIVI inverts the choice for
+  each cache — per-channel K, per-token V — and that single asymmetry is what makes INT2 KV
+  cache viable with negligible quality loss.
+</div>
+
+<p style="font-size:0.85em"><a href="../read.md">← back to chapter</a></p>
+
+<script>
+const T = 256, D = 64;
+
+function rng(seed) {
+  let s = seed >>> 0;
+  return () => { s = (s * 1664525 + 1013904223) >>> 0; return s / 0x100000000; };
+}
+function gaussian(rand) {
+  let u = rand() || 1e-9, v = rand() || 1e-9;
+  return Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * v);
+}
+
+function makeK() {
+  const r = rng(3);
+  const K = Array.from({length: T}, () => new Array(D).fill(0));
+  // pick a few "outlier" channels (RoPE-style)
+  const outChans = [4, 5, 18, 19, 36, 37, 52, 53];
+  const baseAmp = Array.from({length: D}, (_, j) => outChans.includes(j) ? 15 : 0.6);
+  // sinusoidal position scaling on outlier channels
+  for (let t = 0; t < T; t++) {
+    for (let j = 0; j < D; j++) {
+      let v = baseAmp[j] * gaussian(r);
+      if (outChans.includes(j)) {
+        // RoPE-like channel: sinusoid in t modulates the outlier magnitude
+        const freq = 0.05 + 0.03 * (outChans.indexOf(j) % 4);
+        v *= 0.6 + 0.7 * Math.sin(freq * t + j);
+      }
+      K[t][j] = v;
+    }
+  }
+  return K;
+}
+function makeV() {
+  const r = rng(9);
+  const V = Array.from({length: T}, () => new Array(D).fill(0));
+  for (let t = 0; t < T; t++) {
+    // per-token scale varies modestly
+    const scale = 0.5 + 0.5 * Math.abs(gaussian(r));
+    for (let j = 0; j < D; j++) {
+      V[t][j] = scale * gaussian(r);
+    }
+  }
+  return V;
+}
+
+function maxAbsAll(M) {
+  let m = 0;
+  for (let i = 0; i < M.length; i++)
+    for (let j = 0; j < M[0].length; j++) {
+      const v = Math.abs(M[i][j]); if (v > m) m = v;
+    }
+  return m;
+}
+
+function drawHeat(canvasId, M) {
+  const c = document.getElementById(canvasId);
+  const ctx = c.getContext('2d');
+  ctx.clearRect(0, 0, c.width, c.height);
+  const rows = M.length, cols = M[0].length;
+  const cellW = c.width / cols, cellH = c.height / rows;
+  const mx = maxAbsAll(M);
+  for (let i = 0; i < rows; i++) for (let j = 0; j < cols; j++) {
+    const v = Math.max(-1, Math.min(1, M[i][j] / mx));
+    const r = v > 0 ? 255 : Math.round(255 + v * 200);
+    const g = Math.round(255 - Math.abs(v) * 200);
+    const b = v < 0 ? 255 : Math.round(255 - v * 200);
+    ctx.fillStyle = `rgb(${r},${g},${b})`;
+    ctx.fillRect(j * cellW, i * cellH, cellW + 0.5, cellH + 0.5);
+  }
+  ctx.strokeStyle = '#888'; ctx.strokeRect(0, 0, c.width, c.height);
+}
+
+function perChannelMax(M) {
+  const rows = M.length, cols = M[0].length;
+  const out = new Array(cols).fill(0);
+  for (let j = 0; j < cols; j++)
+    for (let i = 0; i < rows; i++) {
+      const v = Math.abs(M[i][j]); if (v > out[j]) out[j] = v;
+    }
+  return out;
+}
+function perTokenMax(M) {
+  return M.map(row => row.reduce((m, x) => Math.abs(x) > m ? Math.abs(x) : m, 0));
+}
+
+function drawBars(canvasId, arr, color, label) {
+  const c = document.getElementById(canvasId);
+  const ctx = c.getContext('2d');
+  ctx.clearRect(0, 0, c.width, c.height);
+  const pad = { l: 28, r: 8, t: 8, b: 22 };
+  const W = c.width - pad.l - pad.r;
+  const H = c.height - pad.t - pad.b;
+  const mx = Math.max(...arr) * 1.05;
+  const bw = W / arr.length;
+  ctx.fillStyle = color;
+  for (let i = 0; i < arr.length; i++) {
+    const h = (arr[i] / mx) * H;
+    ctx.fillRect(pad.l + i * bw, pad.t + H - h, Math.max(1, bw - 0.3), h);
+  }
+  ctx.strokeStyle = '#888';
+  ctx.beginPath();
+  ctx.moveTo(pad.l, pad.t + H); ctx.lineTo(pad.l + W, pad.t + H); ctx.stroke();
+  ctx.fillStyle = '#555'; ctx.font = '10px sans-serif';
+  ctx.textAlign = 'right';
+  ctx.fillText(mx.toFixed(1), pad.l - 2, pad.t + 8);
+  ctx.fillText('0', pad.l - 2, pad.t + H);
+  ctx.textAlign = 'center';
+  ctx.fillText(label, pad.l + W / 2, pad.t + H + 16);
+}
+
+function median(arr) {
+  const a = [...arr].sort((x, y) => x - y);
+  return a[Math.floor(a.length / 2)];
+}
+
+function drawRecipe() {
+  const c = document.getElementById('recipe');
+  const ctx = c.getContext('2d');
+  ctx.clearRect(0, 0, c.width, c.height);
+  // Left: K with per-channel grouping
+  const pad = 20, gap = 60;
+  const w = (c.width - pad * 2 - gap) / 2;
+  const h = c.height - pad * 2 - 20;
+
+  ctx.font = '12px sans-serif'; ctx.fillStyle = '#333'; ctx.textAlign = 'center';
+  ctx.fillText('K — per-CHANNEL quantization (D scales)', pad + w / 2, pad);
+  ctx.fillText('V — per-TOKEN quantization (T scales)', pad + w + gap + w / 2, pad);
+
+  // K block: D vertical stripes
+  const kx = pad, ky = pad + 12;
+  const D2 = 32, T2 = 24; // visual coarsening
+  const kw = w / D2, kh = h / T2;
+  for (let j = 0; j < D2; j++) {
+    const hue = 200 + (j % 5) * 30;
+    ctx.fillStyle = `hsl(${hue}, 35%, 75%)`;
+    ctx.fillRect(kx + j * kw, ky, kw - 0.5, T2 * kh);
+  }
+  // outlier stripe highlight
+  ctx.strokeStyle = '#c62828'; ctx.lineWidth = 2;
+  ctx.strokeRect(kx + 4 * kw, ky, kw, T2 * kh);
+  ctx.strokeRect(kx + 14 * kw, ky, kw, T2 * kh);
+  ctx.strokeRect(kx + 26 * kw, ky, kw, T2 * kh);
+  ctx.lineWidth = 1;
+  ctx.fillStyle = '#666'; ctx.font = '10px sans-serif'; ctx.textAlign = 'center';
+  ctx.fillText('each column = 1 scale (outliers stay inside)', kx + w / 2, ky + T2 * kh + 14);
+
+  // V block: T horizontal stripes
+  const vx = pad + w + gap, vy = ky;
+  const vw = w / D2, vh = h / T2;
+  for (let i = 0; i < T2; i++) {
+    const hue = 110 + (i % 5) * 12;
+    ctx.fillStyle = `hsl(${hue}, 35%, 75%)`;
+    ctx.fillRect(vx, vy + i * vh, D2 * vw, vh - 0.5);
+  }
+  ctx.fillStyle = '#666';
+  ctx.fillText('each row = 1 scale (token-wise dynamic range)', vx + w / 2, vy + T2 * vh + 14);
+}
+
+const K = makeK(), V = makeV();
+drawHeat('heatK', K);
+drawHeat('heatV', V);
+
+const chK = perChannelMax(K);
+const tkV = perTokenMax(V);
+drawBars('chK', chK, '#c62828', 'channel index 0 → 63');
+drawBars('tkV', tkV, '#2e7d32', 'token index 0 → 255');
+
+const fmt = (a, b) => `${a.toFixed(2)} – ${b.toFixed(2)}`;
+document.getElementById('chKrange').textContent =
+  fmt(Math.min(...chK), Math.max(...chK));
+document.getElementById('chKratio').textContent =
+  (Math.max(...chK) / median(chK)).toFixed(1);
+document.getElementById('tkVrange').textContent =
+  fmt(Math.min(...tkV), Math.max(...tkV));
+document.getElementById('tkVratio').textContent =
+  (Math.max(...tkV) / median(tkV)).toFixed(1);
+
+drawRecipe();
+</script>
+
+</body>
+</html>

@@ -1,0 +1,273 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Capstone Reproduction Memo Template</title>
+<style>
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+         max-width: 1050px; margin: 2em auto; padding: 0 1em; color: #222; }
+  h1 { font-size: 1.4em; margin-bottom: 0.2em; }
+  h2 { font-size: 1.05em; margin: 1.5em 0 0.4em; color: #333; }
+  .subtitle { color: #666; margin-top: 0; }
+  .panel { border: 1px solid #ddd; border-radius: 6px; padding: 1em; margin: 1em 0;
+           background: #fafafa; }
+  .row { display: flex; gap: 1em; flex-wrap: wrap; align-items: center; margin-bottom: 0.6em; }
+  .row label { min-width: 130px; font-weight: 600; color: #444; font-size: 0.9em; }
+  input[type="text"], select, textarea {
+    font: inherit; padding: 5px 8px; border: 1px solid #bbb; border-radius: 4px;
+    background: #fff;
+  }
+  input[type="text"] { flex: 1; min-width: 220px; }
+  textarea { width: 100%; min-height: 70px; box-sizing: border-box; font-family: inherit; }
+  table { border-collapse: collapse; width: 100%; font-size: 0.85em; }
+  th, td { border: 1px solid #ccc; padding: 4px 6px; text-align: center; }
+  th { background: #eee; }
+  td.metric { text-align: left; font-weight: 600; background: #f5f5f5; }
+  td input { width: 90%; font: inherit; text-align: right; border: 1px solid #ddd;
+             padding: 2px 4px; border-radius: 3px; }
+  td.gap { font-variant-numeric: tabular-nums; }
+  td.ok { background: #e7f7e7; font-weight: 600; color: #1b5e20; }
+  td.bad { background: #fdecea; font-weight: 600; color: #b71c1c; }
+  button { font: inherit; padding: 6px 12px; border: 1px solid #888; background: #fff;
+           border-radius: 4px; cursor: pointer; margin-right: 0.5em; }
+  button:hover { background: #eef; }
+  .note { font-size: 0.88em; color: #555; line-height: 1.55; }
+  code { background: #eef; padding: 1px 4px; border-radius: 3px; font-size: 0.9em; }
+  pre#preview { background: #1e1e1e; color: #eaeaea; padding: 1em; border-radius: 6px;
+                white-space: pre-wrap; word-wrap: break-word; font-size: 0.82em;
+                max-height: 360px; overflow: auto; }
+  .footer { margin-top: 2em; font-size: 0.85em; color: #777; }
+  .footer a { color: #1976d2; }
+</style>
+</head>
+<body>
+
+<h1>Capstone Reproduction Memo Template</h1>
+<p class="subtitle">
+  Fill in the paper, your reproduced numbers, and the gap analysis. Click <b>Export as Markdown</b>
+  to generate the memo for your repo.
+</p>
+
+<div class="panel">
+  <div class="row">
+    <label>Paper title + arXiv ID</label>
+    <input type="text" id="paperTitle" placeholder="e.g. KIVI: A Tuning-Free Asymmetric 2bit Quantization for KV Cache (arXiv:2402.02750)">
+  </div>
+  <div class="row">
+    <label>Method</label>
+    <select id="method">
+      <option>KIVI</option>
+      <option>KVQuant</option>
+      <option>GEAR</option>
+      <option>TurboQuant</option>
+      <option>NVFP4 inference</option>
+    </select>
+    <label style="min-width:110px;">Model</label>
+    <input type="text" id="model" placeholder="e.g. Llama-3-8B-Instruct">
+    <label style="min-width:80px;">Date</label>
+    <input type="text" id="date" placeholder="2026-MM-DD">
+  </div>
+</div>
+
+<h2>Metric-by-metric reproduction</h2>
+<div class="panel">
+  <table id="metrics">
+    <thead>
+      <tr>
+        <th>Metric</th>
+        <th>Paper reported</th>
+        <th>Your reproduced</th>
+        <th>Absolute gap</th>
+        <th>% gap</th>
+        <th>Within 2%?</th>
+      </tr>
+    </thead>
+    <tbody id="mbody"></tbody>
+  </table>
+  <button id="btnAddRow" style="margin-top:0.6em;">+ Add metric row</button>
+</div>
+
+<h2>Gap analysis</h2>
+<div class="panel">
+  <div class="row">
+    <label>Hyperparameter changes vs paper</label>
+    <textarea id="hp" placeholder="e.g. used batch_size=8 instead of paper's 16 (single-GPU memory limit); group_size=64 instead of 128"></textarea>
+  </div>
+  <div class="row">
+    <label>Infrastructure differences</label>
+    <textarea id="infra" placeholder="e.g. RTX 4090 (24GB) vs paper's A100-80GB; transformers 4.45 vs 4.36; wikitext-2-raw-v1 vs wikitext-2"></textarea>
+  </div>
+  <div class="row">
+    <label>Bug found?</label>
+    <textarea id="bug" placeholder="In your code or the paper's claim? Be specific. 'None' is a valid answer if you genuinely found none."></textarea>
+  </div>
+</div>
+
+<h2>Lessons learned</h2>
+<div class="panel">
+  <textarea id="lessons" rows="4" placeholder="What would you tell the next person who tries to reproduce this paper? What is the one thing you wish you knew before starting?"></textarea>
+</div>
+
+<div class="panel">
+  <button id="btnExport">Export as Markdown</button>
+  <button id="btnDownload">Download .md file</button>
+  <button id="btnReset">Reset all fields</button>
+</div>
+
+<div class="panel">
+  <div style="font-size:0.85em;color:#555;margin-bottom:0.4em;"><b>Markdown preview</b></div>
+  <pre id="preview">(click "Export as Markdown" to render)</pre>
+</div>
+
+<div class="panel note">
+  <b>The capstone deliverable is this memo.</b> The goal is honesty: did you reproduce within 2%?
+  If not, can you explain why? A well-documented 5% gap is worth more than an unexplained perfect
+  match. Reviewers should be able to read your memo and either accept the result or know exactly
+  which knob to investigate next.
+</div>
+
+<div class="footer">
+  <a href="../read.md">&larr; back to chapter</a>
+</div>
+
+<script>
+const defaultMetrics = [
+  { name: 'PPL (WikiText-2)',   paper: '', repro: '' },
+  { name: 'MMLU (5-shot)',      paper: '', repro: '' },
+  { name: 'NIAH-32k accuracy',  paper: '', repro: '' },
+  { name: 'LongBench (avg)',    paper: '', repro: '' },
+];
+
+let rows = defaultMetrics.map(m => ({ ...m }));
+
+const mbody = document.getElementById('mbody');
+
+function buildRows() {
+  mbody.innerHTML = '';
+  rows.forEach((r, i) => {
+    const tr = document.createElement('tr');
+
+    const tdName = document.createElement('td'); tdName.className = 'metric';
+    const inpName = document.createElement('input');
+    inpName.type = 'text'; inpName.value = r.name; inpName.style.width = '100%';
+    inpName.style.textAlign = 'left';
+    inpName.addEventListener('input', () => { r.name = inpName.value; });
+    tdName.appendChild(inpName);
+    tr.appendChild(tdName);
+
+    const tdP = document.createElement('td');
+    const inpP = document.createElement('input');
+    inpP.type = 'number'; inpP.step = 'any'; inpP.value = r.paper;
+    inpP.addEventListener('input', () => { r.paper = inpP.value; recompute(); });
+    tdP.appendChild(inpP); tr.appendChild(tdP);
+
+    const tdR = document.createElement('td');
+    const inpR = document.createElement('input');
+    inpR.type = 'number'; inpR.step = 'any'; inpR.value = r.repro;
+    inpR.addEventListener('input', () => { r.repro = inpR.value; recompute(); });
+    tdR.appendChild(inpR); tr.appendChild(tdR);
+
+    const tdAbs = document.createElement('td'); tdAbs.className = 'gap'; tdAbs.dataset.role = 'abs';
+    const tdPct = document.createElement('td'); tdPct.className = 'gap'; tdPct.dataset.role = 'pct';
+    const tdOk  = document.createElement('td'); tdOk.dataset.role = 'ok';
+    tr.appendChild(tdAbs); tr.appendChild(tdPct); tr.appendChild(tdOk);
+
+    mbody.appendChild(tr);
+  });
+  recompute();
+}
+
+function recompute() {
+  Array.from(mbody.children).forEach((tr, i) => {
+    const r = rows[i];
+    const p = parseFloat(r.paper), q = parseFloat(r.repro);
+    const tdAbs = tr.querySelector('[data-role="abs"]');
+    const tdPct = tr.querySelector('[data-role="pct"]');
+    const tdOk  = tr.querySelector('[data-role="ok"]');
+    if (isNaN(p) || isNaN(q)) {
+      tdAbs.textContent = ''; tdPct.textContent = '';
+      tdOk.textContent = ''; tdOk.className = '';
+      return;
+    }
+    const abs = q - p;
+    const pct = p === 0 ? 0 : Math.abs(abs / p) * 100;
+    tdAbs.textContent = abs.toFixed(3);
+    tdPct.textContent = pct.toFixed(2) + '%';
+    if (pct <= 2.0) { tdOk.textContent = '✓'; tdOk.className = 'ok'; }
+    else            { tdOk.textContent = '✗'; tdOk.className = 'bad'; }
+  });
+}
+
+document.getElementById('btnAddRow').addEventListener('click', () => {
+  rows.push({ name: 'new metric', paper: '', repro: '' });
+  buildRows();
+});
+
+function buildMarkdown() {
+  const title = document.getElementById('paperTitle').value || '(paper title)';
+  const method = document.getElementById('method').value;
+  const model = document.getElementById('model').value || '(model)';
+  const date = document.getElementById('date').value || '(date)';
+  const hp = document.getElementById('hp').value || '_(none documented)_';
+  const infra = document.getElementById('infra').value || '_(none documented)_';
+  const bug = document.getElementById('bug').value || '_(none documented)_';
+  const lessons = document.getElementById('lessons').value || '_(write your takeaway here)_';
+
+  let md = `# Reproduction memo: ${method} — ${model}\n\n`;
+  md += `**Paper:** ${title}\n`;
+  md += `**Date:** ${date}\n\n`;
+  md += `## Metric-by-metric reproduction\n\n`;
+  md += `| Metric | Paper | Reproduced | Abs gap | % gap | Within 2% |\n`;
+  md += `|---|---:|---:|---:|---:|:-:|\n`;
+  rows.forEach(r => {
+    const p = parseFloat(r.paper), q = parseFloat(r.repro);
+    if (isNaN(p) || isNaN(q)) {
+      md += `| ${r.name} | ${r.paper || '—'} | ${r.repro || '—'} | — | — | — |\n`;
+      return;
+    }
+    const abs = (q - p).toFixed(3);
+    const pct = (p === 0 ? 0 : Math.abs((q - p) / p) * 100).toFixed(2);
+    const ok = (parseFloat(pct) <= 2.0) ? '✓' : '✗';
+    md += `| ${r.name} | ${p} | ${q} | ${abs} | ${pct}% | ${ok} |\n`;
+  });
+  md += `\n## Gap analysis\n\n`;
+  md += `### Hyperparameter changes vs paper\n${hp}\n\n`;
+  md += `### Infrastructure differences\n${infra}\n\n`;
+  md += `### Bug found?\n${bug}\n\n`;
+  md += `## Lessons learned\n${lessons}\n`;
+  return md;
+}
+
+document.getElementById('btnExport').addEventListener('click', () => {
+  document.getElementById('preview').textContent = buildMarkdown();
+});
+
+document.getElementById('btnDownload').addEventListener('click', () => {
+  const md = buildMarkdown();
+  const blob = new Blob([md], { type: 'text/markdown' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  const method = document.getElementById('method').value.toLowerCase().replace(/\s+/g, '-');
+  a.href = url; a.download = `reproduction-${method}.md`;
+  document.body.appendChild(a); a.click(); document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+});
+
+document.getElementById('btnReset').addEventListener('click', () => {
+  document.getElementById('paperTitle').value = '';
+  document.getElementById('model').value = '';
+  document.getElementById('date').value = '';
+  document.getElementById('hp').value = '';
+  document.getElementById('infra').value = '';
+  document.getElementById('bug').value = '';
+  document.getElementById('lessons').value = '';
+  rows = defaultMetrics.map(m => ({ ...m }));
+  buildRows();
+  document.getElementById('preview').textContent = '(click "Export as Markdown" to render)';
+});
+
+buildRows();
+</script>
+
+</body>
+</html>

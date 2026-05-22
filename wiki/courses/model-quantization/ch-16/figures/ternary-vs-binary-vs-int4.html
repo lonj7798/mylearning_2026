@@ -1,0 +1,211 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>The 1-Bit Cliff — Binary, Ternary, INT4, FP16</title>
+<style>
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+         max-width: 980px; margin: 2em auto; padding: 0 1em; color: #222; }
+  h1 { font-size: 1.4em; margin-bottom: 0.2em; }
+  .subtitle { color: #666; margin-top: 0; }
+  .panel { border: 1px solid #ddd; border-radius: 6px; padding: 1em; margin: 1em 0;
+           background: #fafafa; }
+  canvas { background: white; border: 1px solid #ccc; display: block; margin: 0.5em auto; }
+  .ctrl { display: flex; gap: 1em; align-items: center; justify-content: center; margin: 0.5em 0; }
+  .toggle { display: inline-flex; border: 1px solid #888; border-radius: 4px; overflow: hidden; }
+  .toggle button { font: inherit; padding: 0.4em 1em; cursor: pointer; border: none;
+                   background: #f5f5f5; }
+  .toggle button.on { background: #1976d2; color: white; }
+  .note { font-size: 0.88em; color: #555; line-height: 1.5; }
+  code { background: #eef; padding: 1px 4px; border-radius: 3px; font-size: 0.9em; }
+  a { color: #1976d2; }
+  .legend { display: flex; gap: 1.2em; justify-content: center; font-size: 0.85em; flex-wrap: wrap; }
+  .swatch { display: inline-block; width: 12px; height: 12px; margin-right: 4px;
+            vertical-align: middle; border-radius: 2px; }
+</style>
+</head>
+<body>
+
+<h1>The 1-Bit Cliff — Binary, Ternary, INT4, FP16</h1>
+<p class="subtitle">
+  Perplexity gap vs FP16 at different bit budgets per weight, on a Llama-scale model (~3B
+  params, approximate published numbers). Toggle between <em>post-training quantization</em>
+  (squeeze a pretrained FP16 model) and <em>trained from scratch</em> (BitNet-style: the model
+  learns to live at this precision from step 0).
+</p>
+
+<div class="panel">
+  <div class="ctrl">
+    <span>training regime:</span>
+    <div class="toggle">
+      <button id="modePTQ" class="on">PTQ (post-training)</button>
+      <button id="modeQAT">trained from scratch</button>
+    </div>
+  </div>
+</div>
+
+<canvas id="plot" width="900" height="430"></canvas>
+
+<div class="legend">
+  <span><span class="swatch" style="background:#d32f2f"></span>1-bit (BitNet binary)</span>
+  <span><span class="swatch" style="background:#f57c00"></span>1.58-bit (BitNet b1.58 ternary)</span>
+  <span><span class="swatch" style="background:#7b1fa2"></span>2-bit (AQLM)</span>
+  <span><span class="swatch" style="background:#1976d2"></span>4-bit (GPTQ / AWQ)</span>
+  <span><span class="swatch" style="background:#2e7d32"></span>FP16 baseline</span>
+</div>
+
+<div class="panel note">
+  <strong>Why the cliff is at 1.5 bits.</strong> Going from binary {−1, +1} to ternary
+  {−1, 0, +1} adds only ~0.58 bits of capacity but unlocks a qualitatively new operation:
+  <em>the network can express "this weight should be inactive"</em>. With binary weights, every
+  connection is forced to contribute either positively or negatively — you cannot prune at the
+  weight level. Ternary brings sparsity back, and that single degree of freedom collapses
+  the perplexity gap to near zero at 3B+ scales.<br><br>
+  <strong>Why training regime matters.</strong> PTQ assumes you can find a discrete code close
+  to the pretrained FP16 weight. At 4-bit that's true (~16 levels). At 2-bit it gets tight but
+  AQLM's vector codebooks bail you out. At 1.58-bit PTQ <em>cannot</em> recover quality — the
+  pretrained weights live on a continuous manifold that {−1, 0, +1} simply cannot reach. The
+  fix is to train the model with the ternary quantizer in the forward pass from the start: the
+  optimizer routes information through the ternary basis natively, and at sufficient scale
+  matches FP16 perplexity. Pure 1-bit binary stays broken even with from-scratch training
+  unless you scale aggressively — zero is too useful a state to discard.
+</div>
+
+<p style="font-size:0.85em"><a href="../read.md">← back to chapter</a></p>
+
+<script>
+const data = {
+  PTQ: [
+    { name: '1-bit binary',   bits: 1.0,  ppl: 30,    err: 5,    color: '#d32f2f' },
+    { name: '1.58-bit tern.', bits: 1.58, ppl: 12,    err: 3,    color: '#f57c00' },
+    { name: '2-bit (AQLM)',   bits: 2.0,  ppl: 0.5,   err: 0.15, color: '#7b1fa2' },
+    { name: '4-bit (GPTQ)',   bits: 4.0,  ppl: 0.1,   err: 0.05, color: '#1976d2' },
+    { name: 'FP16',           bits: 16,   ppl: 0,     err: 0,    color: '#2e7d32' },
+  ],
+  QAT: [
+    { name: '1-bit binary',   bits: 1.0,  ppl: 2.0,   err: 0.5,  color: '#d32f2f' },
+    { name: '1.58-bit tern.', bits: 1.58, ppl: 0.05,  err: 0.05, color: '#f57c00' },
+    { name: '2-bit (AQLM)',   bits: 2.0,  ppl: 0.3,   err: 0.1,  color: '#7b1fa2' },
+    { name: '4-bit (GPTQ)',   bits: 4.0,  ppl: 0.05,  err: 0.03, color: '#1976d2' },
+    { name: 'FP16',           bits: 16,   ppl: 0,     err: 0,    color: '#2e7d32' },
+  ],
+};
+
+let mode = 'PTQ';
+const cvs = document.getElementById('plot');
+const ctx = cvs.getContext('2d');
+
+function logx(b) {
+  // log scale 0.5 .. 20
+  return Math.log(b) / Math.log(20 / 0.5);
+}
+
+function render() {
+  ctx.clearRect(0, 0, cvs.width, cvs.height);
+  const pad = { l: 70, r: 30, t: 30, b: 60 };
+  const W = cvs.width - pad.l - pad.r;
+  const H = cvs.height - pad.t - pad.b;
+
+  // y axis: 0 .. 32 PPL gap, log-ish so we can see both small and big
+  const yMax = 32;
+  function yFor(p) { return pad.t + H - (Math.log(p + 1) / Math.log(yMax + 1)) * H; }
+  function xFor(b) {
+    const lo = Math.log(0.5), hi = Math.log(20);
+    return pad.l + ((Math.log(b) - lo) / (hi - lo)) * W;
+  }
+
+  // grid
+  ctx.strokeStyle = '#eee';
+  [0, 0.1, 0.5, 1, 2, 5, 10, 20, 30].forEach(y => {
+    const yy = yFor(y);
+    ctx.beginPath(); ctx.moveTo(pad.l, yy); ctx.lineTo(pad.l + W, yy); ctx.stroke();
+    ctx.fillStyle = '#777'; ctx.font = '10px sans-serif'; ctx.textAlign = 'right';
+    ctx.fillText('+' + y, pad.l - 6, yy + 4);
+  });
+  [0.5, 1, 1.58, 2, 4, 8, 16].forEach(x => {
+    const xx = xFor(x);
+    ctx.strokeStyle = '#eee';
+    ctx.beginPath(); ctx.moveTo(xx, pad.t); ctx.lineTo(xx, pad.t + H); ctx.stroke();
+    ctx.fillStyle = '#777'; ctx.font = '10px sans-serif'; ctx.textAlign = 'center';
+    ctx.fillText(x.toString(), xx, pad.t + H + 14);
+  });
+
+  // axis labels
+  ctx.fillStyle = '#333'; ctx.font = '12px sans-serif'; ctx.textAlign = 'center';
+  ctx.fillText('bits per weight (log scale)', pad.l + W / 2, pad.t + H + 38);
+  ctx.save();
+  ctx.translate(18, pad.t + H / 2);
+  ctx.rotate(-Math.PI / 2);
+  ctx.fillText('Δ perplexity vs FP16 (lower is better)', 0, 0);
+  ctx.restore();
+
+  // 1-bit cliff annotation
+  const cliffX = xFor(1.5);
+  ctx.strokeStyle = '#888';
+  ctx.setLineDash([6, 4]);
+  ctx.beginPath();
+  ctx.moveTo(cliffX, pad.t); ctx.lineTo(cliffX, pad.t + H);
+  ctx.stroke();
+  ctx.setLineDash([]);
+  ctx.fillStyle = '#555'; ctx.font = '11px sans-serif'; ctx.textAlign = 'left';
+  ctx.fillText('← the 1-bit cliff', cliffX + 6, pad.t + 14);
+  ctx.fillText('  (below 1.5b: 0 is gone)', cliffX + 6, pad.t + 28);
+
+  // points + error bars
+  const pts = data[mode];
+  for (const p of pts) {
+    const x = xFor(p.bits), y = yFor(p.ppl);
+    // error bar
+    const yHi = yFor(p.ppl + p.err);
+    const yLo = yFor(Math.max(0, p.ppl - p.err));
+    ctx.strokeStyle = p.color; ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(x, yHi); ctx.lineTo(x, yLo);
+    ctx.moveTo(x - 5, yHi); ctx.lineTo(x + 5, yHi);
+    ctx.moveTo(x - 5, yLo); ctx.lineTo(x + 5, yLo);
+    ctx.stroke();
+    // point
+    ctx.fillStyle = p.color;
+    ctx.beginPath();
+    ctx.arc(x, y, 6, 0, 2 * Math.PI);
+    ctx.fill();
+    ctx.strokeStyle = 'white'; ctx.lineWidth = 1.5;
+    ctx.stroke();
+    // label
+    ctx.fillStyle = '#222'; ctx.font = '11px sans-serif';
+    const lx = p.bits >= 4 ? x - 8 : x + 10;
+    const align = p.bits >= 4 ? 'right' : 'left';
+    ctx.textAlign = align;
+    ctx.fillText(p.name, lx, y - 8);
+    ctx.fillStyle = '#666';
+    ctx.fillText('+' + p.ppl.toFixed(2), lx, y + 14);
+  }
+
+  // mode banner
+  ctx.fillStyle = mode === 'PTQ' ? '#c62828' : '#2e7d32';
+  ctx.font = '13px sans-serif'; ctx.textAlign = 'left';
+  ctx.fillText(
+    mode === 'PTQ'
+      ? 'PTQ: 1.58-bit collapses — pretrained weights cannot project onto {−1, 0, +1}'
+      : 'trained-from-scratch: 1.58-bit closes the gap; binary still degrades (no inactive state)',
+    pad.l, pad.t - 10);
+}
+
+document.getElementById('modePTQ').addEventListener('click', () => {
+  mode = 'PTQ';
+  document.getElementById('modePTQ').classList.add('on');
+  document.getElementById('modeQAT').classList.remove('on');
+  render();
+});
+document.getElementById('modeQAT').addEventListener('click', () => {
+  mode = 'QAT';
+  document.getElementById('modeQAT').classList.add('on');
+  document.getElementById('modePTQ').classList.remove('on');
+  render();
+});
+
+render();
+</script>
+
+</body>
+</html>

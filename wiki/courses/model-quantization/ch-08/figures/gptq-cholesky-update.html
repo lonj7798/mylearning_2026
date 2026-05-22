@@ -1,0 +1,369 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>GPTQ — Cholesky Block Update Over OBS</title>
+<style>
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+         max-width: 1040px; margin: 2em auto; padding: 0 1em; color: #222; }
+  h1 { font-size: 1.4em; margin-bottom: 0.2em; }
+  .subtitle { color: #666; margin-top: 0; }
+  .panel { border: 1px solid #ddd; border-radius: 6px; padding: 1em; margin: 1em 0;
+           background: #fafafa; }
+  .layout { display: grid; grid-template-columns: 2fr 1fr; gap: 1em; align-items: start; }
+  .controls { display: flex; gap: 1em; flex-wrap: wrap; align-items: center; margin: 0.5em 0; }
+  button { padding: 0.4em 0.9em; border: 1px solid #888; background: #fff;
+           border-radius: 4px; cursor: pointer; font-size: 0.9em; }
+  button:hover { background: #eef; }
+  button:disabled { opacity: 0.4; cursor: not-allowed; }
+  canvas { background: white; border: 1px solid #ccc; display: block; }
+  .control { display: flex; flex-direction: column; min-width: 160px; }
+  label { font-size: 0.82em; color: #555; margin-bottom: 0.2em; }
+  input[type="range"] { width: 160px; }
+  .value { font-variant-numeric: tabular-nums; color: #333; font-weight: 600; font-size: 0.85em; }
+  .note { font-size: 0.88em; color: #555; line-height: 1.5; }
+  code { background: #eef; padding: 1px 4px; border-radius: 3px; font-size: 0.9em; }
+  .status { font-family: monospace; font-size: 0.9em; color: #444; margin: 0.4em 0; }
+  .legend { display: flex; gap: 1.2em; font-size: 0.85em; margin-top: 0.5em; flex-wrap: wrap; }
+  .swatch { display: inline-block; width: 12px; height: 12px; margin-right: 4px;
+            vertical-align: middle; border-radius: 2px; border: 1px solid #999; }
+  .toggle { display: inline-flex; align-items: center; gap: 0.4em; }
+  footer { margin-top: 2em; font-size: 0.85em; color: #777; text-align: center; }
+  footer a { color: #1976d2; }
+</style>
+</head>
+<body>
+
+<h1>GPTQ — Cholesky Block Update Over OBS</h1>
+<p class="subtitle">
+  Same 8-column weight matrix as <a href="../../ch-05/figures/obs-hessian-update.html">OBS in ch-05</a>,
+  but processed in <strong>blocks of 4</strong>. Inside a block: per-column OBS. At the block
+  boundary: one dense GEMM correction to all remaining columns.
+  <strong>This is what makes 175B PTQ tractable.</strong>
+</p>
+
+<div class="layout">
+  <div>
+    <div class="panel">
+      <div class="controls">
+        <button id="play">▶ Play</button>
+        <button id="pause" disabled>⏸ Pause</button>
+        <button id="step">⏭ Step</button>
+        <button id="reset">↺ Reset</button>
+        <label style="font-size: 0.85em; color: #555;">
+          Speed:
+          <input type="range" id="speed" min="200" max="1500" step="100" value="600"
+                 style="vertical-align: middle;">
+        </label>
+      </div>
+      <div class="controls">
+        <div class="control">
+          <label>percdamp (Hessian diagonal damping)</label>
+          <input type="range" id="damp" min="0.001" max="0.1" step="0.001" value="0.01">
+          <span class="value">percdamp = <span id="dampLbl">0.010</span></span>
+        </div>
+        <div class="control toggle">
+          <label><input type="checkbox" id="actOrder"> act_order (descending by diag(H))</label>
+        </div>
+      </div>
+      <div class="status" id="status">Ready. Block 0 of 2 (cols 0–3).</div>
+      <canvas id="grid" width="640" height="240"></canvas>
+      <div class="legend">
+        <span><span class="swatch" style="background:#9bc8ff"></span>FP weight</span>
+        <span><span class="swatch" style="background:#ff9800"></span>Quantized (this step)</span>
+        <span><span class="swatch" style="background:#fbe9c4"></span>OBS in-block update</span>
+        <span><span class="swatch" style="background:#a5d6a7"></span>Cholesky block-flush GEMM</span>
+        <span><span class="swatch" style="background:#eeeeee; border-color: #d32f2f;"></span>active block</span>
+      </div>
+    </div>
+  </div>
+
+  <div>
+    <div class="panel">
+      <strong style="font-size:0.95em;">Cholesky factor R of H⁻¹</strong>
+      <canvas id="rcvs" width="280" height="180" style="margin-top:6px;"></canvas>
+      <div class="note" style="margin-top: 0.5em;">
+        Upper-triangular <code>R</code> precomputed once. Entry <code>R[q, F]</code> drives the
+        update for current column <code>q</code> on future columns <code>F</code>.
+      </div>
+      <div class="status" id="rstatus" style="margin-top:0.4em;">cond(H + δI) = —</div>
+    </div>
+  </div>
+</div>
+
+<div class="panel note">
+  <strong>What changes vs OBS.</strong> OBS in ch-05 touches all remaining columns on
+  <em>every</em> step — that's <code>O(N)</code> memory bandwidth per step, the bottleneck for
+  transformer rows of length 10k+. GPTQ amortizes this: <em>(1)</em> divide columns into blocks of
+  128; <em>(2)</em> inside a block, do per-column OBS but only update the columns within the block;
+  <em>(3)</em> at the block boundary, apply one dense GEMM that flushes all accumulated corrections
+  to every later block. This is compute-bound (fast GPU GEMM) instead of memory-bound, and reuses
+  the Cholesky factor <code>R</code> once instead of recomputing <code>H⁻¹</code> per column.
+  <code>percdamp</code> adds <code>δ · mean(diag(H))</code> to the diagonal — without it,
+  <code>H</code> from a few hundred calibration samples is often singular. <code>act_order=True</code>
+  processes high-importance columns first so their quant error has more remaining columns to absorb
+  it.
+</div>
+
+<footer>
+  <a href="../read.md">← back to chapter</a>
+</footer>
+
+<script>
+const ROWS = 4, COLS = 8, BLOCK = 4;
+const cvs = document.getElementById('grid');
+const ctx = cvs.getContext('2d');
+const rcvs = document.getElementById('rcvs');
+const rctx = rcvs.getContext('2d');
+const cellW = 70, cellH = 50, padX = 40, padY = 20;
+
+let W = null, Wq = null;
+let obsFlash = null, blockFlash = null;
+let order = [];      // permutation of column indices
+let cursor = 0;      // index into order
+let phase = 0;       // 0=quantize, 1=in-block update, 2=block-flush
+let playing = false;
+let timer = null;
+
+function rand() { return (Math.random() - 0.5) * 2; }
+
+function initMatrix() {
+  W = Array.from({length: ROWS}, () =>
+    Array.from({length: COLS}, () => rand() * 1.0));
+  Wq = Array.from({length: ROWS}, () => Array(COLS).fill(null));
+  obsFlash = Array.from({length: ROWS}, () => Array(COLS).fill(0));
+  blockFlash = Array.from({length: ROWS}, () => Array(COLS).fill(0));
+  cursor = 0;
+  phase = 0;
+  computeOrder();
+  updateStatus('Ready. Block 0 of ' + (COLS / BLOCK) + ' (cols ' + order.slice(0, BLOCK).join(',') + ').');
+  drawAll();
+}
+
+function computeOrder() {
+  // mock importance = column L2 norm
+  const norms = [];
+  for (let c = 0; c < COLS; c++) {
+    let n = 0;
+    for (let r = 0; r < ROWS; r++) n += W[r][c] * W[r][c];
+    norms.push({ c, n });
+  }
+  if (document.getElementById('actOrder').checked) {
+    norms.sort((a, b) => b.n - a.n);
+  }
+  order = norms.map(o => o.c);
+}
+
+function quantFn(w) {
+  const levels = [-0.8, -0.3, 0.3, 0.8];
+  let best = levels[0], bd = Math.abs(w - levels[0]);
+  for (const l of levels) {
+    const d = Math.abs(w - l);
+    if (d < bd) { bd = d; best = l; }
+  }
+  return best;
+}
+
+function colorForW(w) {
+  const mag = Math.min(1, Math.abs(w));
+  const r = Math.round(155 + (13 - 155) * mag);
+  const g = Math.round(200 + (71 - 200) * mag);
+  const b = Math.round(255 + (161 - 255) * mag);
+  return `rgb(${r},${g},${b})`;
+}
+
+function drawGrid() {
+  ctx.clearRect(0, 0, cvs.width, cvs.height);
+  ctx.font = '11px monospace';
+  const currentLogical = cursor;
+  const currentBlockStart = Math.floor(cursor / BLOCK) * BLOCK;
+  const currentBlockCols = order.slice(currentBlockStart, currentBlockStart + BLOCK);
+  for (let r = 0; r < ROWS; r++) {
+    for (let c = 0; c < COLS; c++) {
+      const x = padX + c * cellW;
+      const y = padY + r * cellH;
+
+      // backdrop for active block columns
+      if (currentBlockCols.includes(c)) {
+        ctx.fillStyle = '#fff3f0';
+        ctx.fillRect(x - 3, y - 3, cellW + 2, cellH + 2);
+      }
+      // OBS flash (yellow)
+      if (obsFlash[r][c] > 0) {
+        ctx.fillStyle = `rgba(251, 233, 196, ${obsFlash[r][c]})`;
+        ctx.fillRect(x - 2, y - 2, cellW + 4, cellH + 4);
+        obsFlash[r][c] *= 0.85;
+        if (obsFlash[r][c] < 0.05) obsFlash[r][c] = 0;
+      }
+      // Block flush (green)
+      if (blockFlash[r][c] > 0) {
+        ctx.fillStyle = `rgba(165, 214, 167, ${blockFlash[r][c]})`;
+        ctx.fillRect(x - 2, y - 2, cellW + 4, cellH + 4);
+        blockFlash[r][c] *= 0.88;
+        if (blockFlash[r][c] < 0.05) blockFlash[r][c] = 0;
+      }
+
+      if (Wq[r][c] !== null) {
+        ctx.fillStyle = '#ff9800';
+      } else {
+        ctx.fillStyle = colorForW(W[r][c]);
+      }
+      const colIsCurrent = (cursor < order.length && order[cursor] === c);
+      ctx.fillRect(x, y, cellW - 4, cellH - 4);
+      ctx.strokeStyle = colIsCurrent ? '#d32f2f' :
+        (currentBlockCols.includes(c) ? '#d32f2f' : '#888');
+      ctx.lineWidth = colIsCurrent ? 2.5 : (currentBlockCols.includes(c) ? 1.5 : 1);
+      ctx.strokeRect(x, y, cellW - 4, cellH - 4);
+
+      ctx.fillStyle = Math.abs(Wq[r][c] !== null ? Wq[r][c] : W[r][c]) > 0.55 ? '#fff' : '#222';
+      ctx.textAlign = 'center';
+      const val = Wq[r][c] !== null ? Wq[r][c] : W[r][c];
+      ctx.fillText(val.toFixed(2), x + (cellW - 4)/2, y + (cellH - 4)/2 + 4);
+    }
+  }
+  ctx.fillStyle = '#444';
+  ctx.font = '10px sans-serif';
+  ctx.textAlign = 'center';
+  for (let c = 0; c < COLS; c++) {
+    ctx.fillText('col ' + c, padX + c * cellW + (cellW - 4)/2, padY + ROWS * cellH + 12);
+  }
+}
+
+function drawR() {
+  rctx.clearRect(0, 0, rcvs.width, rcvs.height);
+  const N = COLS;
+  const sz = 28, p = 10;
+  const damp = +document.getElementById('damp').value;
+  // mock R[i][j]: upper triangular, decays with distance, magnified for visibility
+  const currentLogical = cursor;
+  for (let i = 0; i < N; i++) {
+    for (let j = 0; j < N; j++) {
+      const x = p + j * sz;
+      const y = p + i * sz;
+      if (j < i) continue; // upper-tri only
+      let v;
+      if (i === j) v = 1.0 + damp;
+      else v = 0.35 / Math.pow(j - i + 1, 0.8);
+      const t = Math.min(1, v);
+      const r = Math.round(245 - 100 * t);
+      const g = Math.round(245 - 60 * t);
+      const b = Math.round(245 - 20 * t);
+      rctx.fillStyle = `rgb(${r},${g},${b})`;
+      const highlight = (i === order[currentLogical] && j > i);
+      if (highlight) rctx.fillStyle = '#ffe98c';
+      rctx.fillRect(x, y, sz - 2, sz - 2);
+      rctx.strokeStyle = highlight ? '#d32f2f' : '#ccc';
+      rctx.strokeRect(x, y, sz - 2, sz - 2);
+    }
+  }
+  // labels
+  rctx.fillStyle = '#666';
+  rctx.font = '9px monospace';
+  rctx.textAlign = 'center';
+  for (let i = 0; i < N; i++) {
+    rctx.fillText(i, p + i * sz + (sz - 2) / 2, p + N * sz + 10);
+  }
+  // condition number proxy: 1 / damp (higher damp = better conditioning, but more bias)
+  const cond = (1 / damp).toFixed(1);
+  document.getElementById('rstatus').textContent =
+    'cond(H + δI) ≈ ' + cond + '   (lower is more stable)';
+}
+
+function drawAll() { drawGrid(); drawR(); }
+
+function updateStatus(s) { document.getElementById('status').textContent = s; }
+
+function stepOnce() {
+  if (cursor >= order.length) {
+    updateStatus('Done. All ' + COLS + ' columns quantized via ' + (COLS / BLOCK) +
+                 ' blocks.');
+    stopPlay();
+    drawAll();
+    return false;
+  }
+  const blockStart = Math.floor(cursor / BLOCK) * BLOCK;
+  const blockEnd = blockStart + BLOCK;
+  const c = order[cursor];
+
+  // quantize this column
+  for (let r = 0; r < ROWS; r++) {
+    Wq[r][c] = quantFn(W[r][c]);
+  }
+  // in-block OBS update: only later columns within current block
+  const hqq = 1.0;
+  for (let r = 0; r < ROWS; r++) {
+    const e = (W[r][c] - Wq[r][c]) / hqq;
+    for (let k = cursor + 1; k < blockEnd && k < order.length; k++) {
+      const cc = order[k];
+      const dist = k - cursor;
+      const rqf = 0.35 / Math.pow(dist + 1, 0.8);
+      const delta = -e * rqf;
+      W[r][cc] += delta;
+      if (W[r][cc] > 1) W[r][cc] = 1;
+      if (W[r][cc] < -1) W[r][cc] = -1;
+      obsFlash[r][cc] = 1.0;
+    }
+  }
+  cursor++;
+  let msg = 'Quantized col ' + c + '. OBS update to in-block cols.';
+
+  // Block boundary: flush accumulated correction to all remaining columns (dense GEMM)
+  if (cursor % BLOCK === 0 && cursor < order.length) {
+    // mock dense GEMM: a small shift applied to all later cols, highlight them all
+    for (let r = 0; r < ROWS; r++) {
+      for (let k = cursor; k < order.length; k++) {
+        const cc = order[k];
+        const dist = k - cursor + 1;
+        const shift = (Math.random() - 0.5) * 0.04 / dist;
+        W[r][cc] += shift;
+        if (W[r][cc] > 1) W[r][cc] = 1;
+        if (W[r][cc] < -1) W[r][cc] = -1;
+        blockFlash[r][cc] = 1.0;
+      }
+    }
+    msg += ' ▶ Block boundary: dense-GEMM flush to ' + (order.length - cursor) + ' remaining cols.';
+  }
+  updateStatus(msg);
+  drawAll();
+  return true;
+}
+
+function startPlay() {
+  playing = true;
+  document.getElementById('play').disabled = true;
+  document.getElementById('pause').disabled = false;
+  const tick = () => {
+    if (!playing) return;
+    if (!stepOnce()) return;
+    timer = setTimeout(tick, +document.getElementById('speed').value);
+  };
+  tick();
+}
+
+function stopPlay() {
+  playing = false;
+  clearTimeout(timer);
+  document.getElementById('play').disabled = false;
+  document.getElementById('pause').disabled = true;
+}
+
+document.getElementById('play').onclick = startPlay;
+document.getElementById('pause').onclick = stopPlay;
+document.getElementById('step').onclick = () => { stopPlay(); stepOnce(); };
+document.getElementById('reset').onclick = () => { stopPlay(); initMatrix(); };
+document.getElementById('damp').addEventListener('input', () => {
+  document.getElementById('dampLbl').textContent =
+    (+document.getElementById('damp').value).toFixed(3);
+  drawR();
+});
+document.getElementById('actOrder').addEventListener('change', () => {
+  stopPlay();
+  initMatrix();
+});
+
+initMatrix();
+setInterval(drawGrid, 80);
+</script>
+
+</body>
+</html>

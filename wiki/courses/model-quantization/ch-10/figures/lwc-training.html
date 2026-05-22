@@ -1,0 +1,281 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>OmniQuant — Learnable Weight Clipping</title>
+<style>
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+         max-width: 960px; margin: 2em auto; padding: 0 1em; color: #222; }
+  h1 { font-size: 1.4em; margin-bottom: 0.2em; }
+  .subtitle { color: #666; margin-top: 0; }
+  .panel { border: 1px solid #ddd; border-radius: 6px; padding: 1em; margin: 1em 0;
+           background: #fafafa; }
+  .controls { display: flex; gap: 1em; flex-wrap: wrap; align-items: center; }
+  .control { display: flex; flex-direction: column; }
+  label { font-size: 0.85em; color: #555; margin-bottom: 0.2em; }
+  input[type="range"] { width: 220px; }
+  button { padding: 4px 10px; font-size: 0.85em; }
+  canvas { background: white; border: 1px solid #ccc; display: block; margin: 0.5em auto; }
+  .value { font-variant-numeric: tabular-nums; color: #333; font-weight: 600; }
+  .note { font-size: 0.88em; color: #555; line-height: 1.5; }
+  code { background: #eef; padding: 1px 4px; border-radius: 3px; font-size: 0.9em; }
+  footer { text-align: center; margin-top: 2em; font-size: 0.9em; }
+  footer a { color: #1976d2; text-decoration: none; }
+</style>
+</head>
+<body>
+
+<h1>OmniQuant — Learnable Weight Clipping (LWC)</h1>
+<p class="subtitle">
+  Bounds <code>[α<sub>min</sub>, α<sub>max</sub>]</code> are <em>learned</em> by gradient descent
+  on a block-MSE objective. Watch them shrink inward toward the optimum as training progresses.
+</p>
+
+<div class="panel">
+  <div class="controls">
+    <div class="control">
+      <label>Learning rate &nbsp; <span class="value" id="lrLabel">1.0e-3</span></label>
+      <input type="range" id="lr" min="-4" max="-2" step="0.05" value="-3">
+    </div>
+    <div class="control">
+      <label>&nbsp;</label>
+      <button id="play">▶ Run training (200 steps)</button>
+    </div>
+    <div class="control">
+      <label>&nbsp;</label>
+      <button id="reset">Reset</button>
+    </div>
+    <div class="control">
+      <label>Step</label>
+      <span class="value" id="stepLabel">0 / 200</span>
+    </div>
+  </div>
+</div>
+
+<canvas id="histCanvas" width="900" height="230"></canvas>
+<p style="text-align:center; font-size:0.85em; color:#777; margin:0.2em 0;">
+  Histogram of one weight column &nbsp;|&nbsp; vertical lines = current
+  <code>α<sub>min</sub></code> / <code>α<sub>max</sub></code> clipping bounds
+</p>
+
+<canvas id="lossCanvas" width="900" height="180"></canvas>
+<p style="text-align:center; font-size:0.85em; color:#777; margin:0.2em 0;">
+  Block-MSE loss vs training step
+</p>
+
+<div class="panel note">
+  <strong>The grid-search → gradient leap.</strong>
+  AWQ picks a single clipping ratio per layer by sweeping a discrete grid (typically 20 candidates),
+  then locks it in. OmniQuant treats <code>α<sub>min</sub></code> and <code>α<sub>max</sub></code>
+  as continuous learnable parameters with a soft sigmoid parameterization and lets gradient descent
+  find the joint optimum across <em>every</em> weight column simultaneously. Same data, same
+  calibration set — but the search space is continuous and joint. Empirically: ~30% lower
+  perplexity at W3A16 over AWQ, ~1 hour calibration on a single A100 for Llama-7B.
+</div>
+
+<footer><a href="../read.md">← back to chapter</a></footer>
+
+<script>
+const rng = (() => { let s = 7; return () => (s = (s * 9301 + 49297) % 233280) / 233280; })();
+function randn() {
+  const u = rng(), v = rng();
+  return Math.sqrt(-2 * Math.log(u + 1e-12)) * Math.cos(2 * Math.PI * v);
+}
+
+// Weight column: Gaussian + a few outliers
+const N = 4000;
+const weights = [];
+for (let i = 0; i < N; i++) {
+  if (rng() < 0.01) weights.push(randn() * 2.5);   // outlier
+  else weights.push(randn() * 0.7);
+}
+const wMax = Math.max(...weights.map(Math.abs));
+
+// LWC state — parameterize bounds via sigmoid so they stay in (0, wMax)
+let state, lossHist;
+function resetState() {
+  // start very loose: bounds at ±wMax
+  state = { theta_min: 4, theta_max: 4, step: 0 };  // sigmoid(4) ≈ 0.98
+  lossHist = [];
+}
+resetState();
+
+function sigmoid(x) { return 1 / (1 + Math.exp(-x)); }
+function bounds() {
+  return { lo: -wMax * sigmoid(state.theta_min), hi: wMax * sigmoid(state.theta_max) };
+}
+
+// Quantize a value to INT4 within [lo, hi]
+function quantize(x, lo, hi) {
+  const clipped = Math.max(lo, Math.min(hi, x));
+  const step = (hi - lo) / 15;
+  if (step < 1e-9) return 0;
+  return lo + Math.round((clipped - lo) / step) * step;
+}
+
+function blockLoss(lo, hi) {
+  let sse = 0;
+  for (const w of weights) {
+    const q = quantize(w, lo, hi);
+    sse += (w - q) * (w - q);
+  }
+  return sse / weights.length;
+}
+
+function trainStep(lr) {
+  // numerical-gradient descent on theta_min, theta_max
+  const eps = 0.01;
+  const { lo, hi } = bounds();
+  const L0 = blockLoss(lo, hi);
+
+  state.theta_min += eps;
+  const b1 = bounds(); const L1 = blockLoss(b1.lo, b1.hi);
+  state.theta_min -= eps;
+
+  state.theta_max += eps;
+  const b2 = bounds(); const L2 = blockLoss(b2.lo, b2.hi);
+  state.theta_max -= eps;
+
+  const g_min = (L1 - L0) / eps;
+  const g_max = (L2 - L0) / eps;
+  state.theta_min -= lr * g_min * 10; // amplify since sigmoid is shallow at 4
+  state.theta_max -= lr * g_max * 10;
+
+  state.step++;
+  lossHist.push(L0);
+  return L0;
+}
+
+// --- rendering ---
+const hCtx = document.getElementById('histCanvas').getContext('2d');
+const lCtx = document.getElementById('lossCanvas').getContext('2d');
+
+function drawHist() {
+  const W = hCtx.canvas.width, H = hCtx.canvas.height;
+  hCtx.clearRect(0, 0, W, H);
+  const pad = { l: 40, r: 20, t: 15, b: 30 };
+  const PW = W - pad.l - pad.r, PH = H - pad.t - pad.b;
+  const xMin = -wMax * 1.05, xMax = wMax * 1.05;
+  const bins = 80;
+  const h = new Array(bins).fill(0);
+  for (const w of weights) {
+    const i = Math.floor(((w - xMin) / (xMax - xMin)) * bins);
+    if (i >= 0 && i < bins) h[i]++;
+  }
+  const mh = Math.max(...h);
+  const bw = PW / bins;
+  for (let i = 0; i < bins; i++) {
+    const bh = (h[i] / mh) * PH;
+    hCtx.fillStyle = '#90caf9';
+    hCtx.fillRect(pad.l + i * bw, pad.t + PH - bh, bw - 0.3, bh);
+  }
+  // axis
+  hCtx.strokeStyle = '#888';
+  hCtx.beginPath();
+  hCtx.moveTo(pad.l, pad.t + PH); hCtx.lineTo(pad.l + PW, pad.t + PH); hCtx.stroke();
+  hCtx.fillStyle = '#555'; hCtx.font = '11px sans-serif';
+  hCtx.textAlign = 'center';
+  for (let i = 0; i <= 4; i++) {
+    const t = xMin + (i / 4) * (xMax - xMin);
+    const x = pad.l + (i / 4) * PW;
+    hCtx.fillText(t.toFixed(2), x, pad.t + PH + 14);
+  }
+
+  // clipping lines
+  const { lo, hi } = bounds();
+  const xFor = v => pad.l + ((v - xMin) / (xMax - xMin)) * PW;
+  hCtx.strokeStyle = '#d32f2f'; hCtx.lineWidth = 2;
+  hCtx.beginPath(); hCtx.moveTo(xFor(lo), pad.t); hCtx.lineTo(xFor(lo), pad.t + PH); hCtx.stroke();
+  hCtx.beginPath(); hCtx.moveTo(xFor(hi), pad.t); hCtx.lineTo(xFor(hi), pad.t + PH); hCtx.stroke();
+  hCtx.fillStyle = '#d32f2f'; hCtx.textAlign = 'right';
+  hCtx.fillText('α_min = ' + lo.toFixed(3), xFor(lo) - 4, pad.t + 12);
+  hCtx.textAlign = 'left';
+  hCtx.fillText('α_max = ' + hi.toFixed(3), xFor(hi) + 4, pad.t + 12);
+
+  // INT4 grid (15 intervals)
+  hCtx.strokeStyle = '#ff9800'; hCtx.lineWidth = 0.6;
+  hCtx.setLineDash([2, 3]);
+  for (let k = 0; k <= 15; k++) {
+    const v = lo + (k / 15) * (hi - lo);
+    hCtx.beginPath();
+    hCtx.moveTo(xFor(v), pad.t + PH - 20); hCtx.lineTo(xFor(v), pad.t + PH); hCtx.stroke();
+  }
+  hCtx.setLineDash([]);
+}
+
+function drawLoss() {
+  const W = lCtx.canvas.width, H = lCtx.canvas.height;
+  lCtx.clearRect(0, 0, W, H);
+  const pad = { l: 50, r: 20, t: 15, b: 30 };
+  const PW = W - pad.l - pad.r, PH = H - pad.t - pad.b;
+  if (lossHist.length < 2) {
+    lCtx.fillStyle = '#999'; lCtx.font = '12px sans-serif';
+    lCtx.textAlign = 'center';
+    lCtx.fillText('(press Run to start training)', W / 2, H / 2);
+    return;
+  }
+  const lMax = Math.max(...lossHist), lMin = Math.min(...lossHist);
+  const rng_ = Math.max(lMax - lMin, 1e-6);
+  lCtx.strokeStyle = '#388e3c'; lCtx.lineWidth = 1.6;
+  lCtx.beginPath();
+  for (let i = 0; i < lossHist.length; i++) {
+    const x = pad.l + (i / 200) * PW;
+    const y = pad.t + PH - ((lossHist[i] - lMin) / rng_) * PH;
+    if (i === 0) lCtx.moveTo(x, y); else lCtx.lineTo(x, y);
+  }
+  lCtx.stroke();
+  lCtx.strokeStyle = '#888';
+  lCtx.beginPath();
+  lCtx.moveTo(pad.l, pad.t); lCtx.lineTo(pad.l, pad.t + PH);
+  lCtx.lineTo(pad.l + PW, pad.t + PH); lCtx.stroke();
+  lCtx.fillStyle = '#555'; lCtx.font = '11px sans-serif';
+  lCtx.textAlign = 'right';
+  lCtx.fillText(lMax.toFixed(4), pad.l - 4, pad.t + 6);
+  lCtx.fillText(lMin.toFixed(4), pad.l - 4, pad.t + PH);
+  lCtx.textAlign = 'center';
+  lCtx.fillText('step', pad.l + PW / 2, pad.t + PH + 18);
+  lCtx.save();
+  lCtx.translate(12, pad.t + PH / 2); lCtx.rotate(-Math.PI / 2);
+  lCtx.fillText('block MSE', 0, 0);
+  lCtx.restore();
+}
+
+function refresh() {
+  document.getElementById('stepLabel').textContent = state.step + ' / 200';
+  drawHist();
+  drawLoss();
+}
+
+let timer = null;
+document.getElementById('play').addEventListener('click', () => {
+  if (timer) { clearInterval(timer); timer = null;
+    document.getElementById('play').textContent = '▶ Run training (200 steps)';
+    return;
+  }
+  resetState();
+  document.getElementById('play').textContent = '⏸ Stop';
+  timer = setInterval(() => {
+    const lr = Math.pow(10, +document.getElementById('lr').value);
+    trainStep(lr);
+    refresh();
+    if (state.step >= 200) {
+      clearInterval(timer); timer = null;
+      document.getElementById('play').textContent = '▶ Run training (200 steps)';
+    }
+  }, 30);
+});
+document.getElementById('reset').addEventListener('click', () => {
+  if (timer) { clearInterval(timer); timer = null;
+    document.getElementById('play').textContent = '▶ Run training (200 steps)'; }
+  resetState(); refresh();
+});
+document.getElementById('lr').addEventListener('input', e => {
+  const lr = Math.pow(10, +e.target.value);
+  document.getElementById('lrLabel').textContent = lr.toExponential(1);
+});
+document.getElementById('lrLabel').textContent =
+  Math.pow(10, +document.getElementById('lr').value).toExponential(1);
+refresh();
+</script>
+</body>
+</html>
