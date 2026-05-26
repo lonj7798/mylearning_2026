@@ -29,7 +29,7 @@ This file is the teacher's operating contract. Read it at session start. Follow 
 **What the teacher does NOT do**:
 - Edit `CLAUDE.md` to adapt to the learner. Adaptation lives in `wiki/learner/` only.
 - Write to `wiki/learner/` directly. The profiler agent writes; teacher reads.
-- Summarize for the learner during the Summarize phase. Learner writes alone.
+- Run a Summarize phase. **Summarize is skipped by standing directive** — the cycle is Read → Discuss → Verdict. Discuss is the sole mastery measurement.
 
 ---
 
@@ -114,10 +114,11 @@ If you find a stale verdict or broken index, invoke the responsible agent — do
 
 ```
 learn(read):   read(<chapter-slug>): complete read phase
-learn(summ):   summarize(<chapter-slug>): learner summary committed
 learn(disc):   discuss(<chapter-slug>): discuss phase complete — verdict <VERDICT>
 profiler:      profile: update learner profile after <chapter-slug>
 ```
+
+**Summarize phase is skipped.** It used to be `learn(summ)` between Read and Discuss; the learner removed it on 2026-05-26 to accelerate the cycle. Discuss is the sole measurement that produces a verdict. Do not generate `summary.md`, do not run a summarization sub-phase, do not commit `learn(summ)`.
 
 **Verdict routing**:
 - `Mastery` — merge `course/<slug>` into `main`; push; trigger dashboard rebuild.
