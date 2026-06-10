@@ -1,0 +1,667 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AutomationBench — Episode Flow</title>
+<style>
+  :root {
+    --bg: #0f1117;
+    --surface: #1a1d27;
+    --surface2: #21253a;
+    --border: #2e3350;
+    --text: #e2e4f0;
+    --muted: #7b82a8;
+    --accent-blue: #4e8cff;
+    --accent-green: #3ecf8e;
+    --accent-orange: #f7a944;
+    --accent-purple: #a78bfa;
+    --accent-red: #f87171;
+    --accent-teal: #22d3ee;
+    --font: system-ui, -apple-system, "Segoe UI", sans-serif;
+    --mono: "JetBrains Mono", "Fira Code", "Cascadia Code", monospace;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--font);
+    min-height: 100vh;
+    padding: 2rem;
+  }
+  h1 {
+    font-size: 1.15rem;
+    font-weight: 600;
+    color: var(--text);
+    margin-bottom: 0.3rem;
+    letter-spacing: -0.02em;
+  }
+  .subtitle {
+    font-size: 0.8rem;
+    color: var(--muted);
+    margin-bottom: 2rem;
+  }
+
+  /* ── Legend ── */
+  .legend {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.9rem;
+    margin-bottom: 2rem;
+  }
+  .legend-item {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    font-size: 0.75rem;
+    color: var(--muted);
+  }
+  .legend-dot {
+    width: 10px;
+    height: 10px;
+    border-radius: 2px;
+    flex-shrink: 0;
+  }
+
+  /* ── Main pipeline ── */
+  .pipeline {
+    display: flex;
+    flex-direction: column;
+    gap: 0;
+    max-width: 820px;
+    margin: 0 auto;
+  }
+
+  /* Phase blocks */
+  .phase {
+    display: flex;
+    align-items: stretch;
+    gap: 0;
+  }
+  .phase-connector {
+    width: 2px;
+    background: var(--border);
+    margin: 0 auto;
+    flex-shrink: 0;
+    min-height: 24px;
+    align-self: stretch;
+  }
+  /* Centering wrapper for connector */
+  .connector-wrap {
+    display: flex;
+    justify-content: center;
+    padding: 0 1rem;
+  }
+  .connector-inner {
+    width: 2px;
+    min-height: 24px;
+    background: var(--border);
+  }
+
+  /* Each step card */
+  .step {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 1rem 1.2rem;
+    width: 100%;
+    position: relative;
+  }
+  .step-header {
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+    margin-bottom: 0.5rem;
+  }
+  .step-badge {
+    font-size: 0.65rem;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    padding: 0.2rem 0.5rem;
+    border-radius: 4px;
+    flex-shrink: 0;
+  }
+  .step-title {
+    font-size: 0.9rem;
+    font-weight: 600;
+  }
+  .step-body {
+    font-size: 0.78rem;
+    color: var(--muted);
+    line-height: 1.55;
+  }
+  .step-body code {
+    font-family: var(--mono);
+    font-size: 0.73rem;
+    color: var(--accent-blue);
+    background: rgba(78,140,255,0.1);
+    padding: 0.1rem 0.35rem;
+    border-radius: 3px;
+  }
+  .step-body .highlight {
+    color: var(--text);
+    font-weight: 500;
+  }
+  .detail-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.4rem;
+    margin-top: 0.5rem;
+  }
+  .tag {
+    font-size: 0.68rem;
+    font-family: var(--mono);
+    padding: 0.18rem 0.45rem;
+    border-radius: 4px;
+    border: 1px solid;
+  }
+
+  /* Color variants for badges */
+  .badge-dataset  { background: rgba(34,211,238,0.12); color: var(--accent-teal); }
+  .badge-setup    { background: rgba(167,139,250,0.12); color: var(--accent-purple); }
+  .badge-loop     { background: rgba(78,140,255,0.12);  color: var(--accent-blue); }
+  .badge-grade    { background: rgba(62,207,142,0.12);  color: var(--accent-green); }
+  .badge-export   { background: rgba(247,169,68,0.12);  color: var(--accent-orange); }
+
+  /* Tag colors */
+  .tag-blue   { color: var(--accent-blue);   border-color: rgba(78,140,255,0.3);   background: rgba(78,140,255,0.06); }
+  .tag-purple { color: var(--accent-purple); border-color: rgba(167,139,250,0.3);  background: rgba(167,139,250,0.06); }
+  .tag-green  { color: var(--accent-green);  border-color: rgba(62,207,142,0.3);   background: rgba(62,207,142,0.06); }
+  .tag-orange { color: var(--accent-orange); border-color: rgba(247,169,68,0.3);   background: rgba(247,169,68,0.06); }
+  .tag-teal   { color: var(--accent-teal);   border-color: rgba(34,211,238,0.3);   background: rgba(34,211,238,0.06); }
+
+  /* ── Agent loop inner details ── */
+  .loop-box {
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 0.8rem 1rem;
+    margin-top: 0.75rem;
+  }
+  .loop-box-title {
+    font-size: 0.7rem;
+    font-weight: 600;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+    color: var(--accent-blue);
+    margin-bottom: 0.6rem;
+  }
+  .loop-steps {
+    display: flex;
+    align-items: center;
+    gap: 0;
+    flex-wrap: nowrap;
+    overflow-x: auto;
+  }
+  .loop-step {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 0.25rem;
+    flex-shrink: 0;
+  }
+  .loop-step-box {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 0.35rem 0.65rem;
+    font-size: 0.7rem;
+    color: var(--text);
+    white-space: nowrap;
+    text-align: center;
+  }
+  .loop-arrow {
+    color: var(--muted);
+    font-size: 0.85rem;
+    padding: 0 0.3rem;
+    flex-shrink: 0;
+    align-self: center;
+  }
+  .loop-back {
+    font-size: 0.65rem;
+    color: var(--muted);
+    margin-top: 0.5rem;
+    font-style: italic;
+  }
+  .loop-end-note {
+    font-size: 0.68rem;
+    color: var(--muted);
+    margin-top: 0.5rem;
+  }
+  .loop-end-note code {
+    font-family: var(--mono);
+    font-size: 0.66rem;
+    color: var(--accent-orange);
+    background: rgba(247,169,68,0.1);
+    padding: 0.1rem 0.3rem;
+    border-radius: 3px;
+  }
+
+  /* ── Toolset mode panel ── */
+  .toolset-panel {
+    margin-top: 0.75rem;
+  }
+  .toolset-panel-title {
+    font-size: 0.7rem;
+    font-weight: 600;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+    color: var(--accent-purple);
+    margin-bottom: 0.5rem;
+  }
+  .toolset-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 0.6rem;
+  }
+  .toolset-card {
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 0.7rem 0.85rem;
+    cursor: pointer;
+    transition: border-color 0.15s, background 0.15s;
+    position: relative;
+  }
+  .toolset-card:hover {
+    border-color: var(--accent-blue);
+    background: rgba(78,140,255,0.05);
+  }
+  .toolset-card.active-zapier       { border-color: var(--accent-blue);   background: rgba(78,140,255,0.08); }
+  .toolset-card.active-limited      { border-color: var(--accent-purple); background: rgba(167,139,250,0.08); }
+  .toolset-card.active-api          { border-color: var(--accent-teal);   background: rgba(34,211,238,0.08); }
+  .toolset-name {
+    font-size: 0.78rem;
+    font-weight: 700;
+    font-family: var(--mono);
+    margin-bottom: 0.25rem;
+  }
+  .toolset-name-zapier   { color: var(--accent-blue); }
+  .toolset-name-limited  { color: var(--accent-purple); }
+  .toolset-name-api      { color: var(--accent-teal); }
+  .toolset-desc {
+    font-size: 0.68rem;
+    color: var(--muted);
+    line-height: 1.45;
+  }
+  .toolset-tools {
+    margin-top: 0.4rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.2rem;
+  }
+  .toolset-tool-item {
+    font-size: 0.66rem;
+    font-family: var(--mono);
+    color: var(--text);
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 3px;
+    padding: 0.15rem 0.4rem;
+  }
+  .toolset-ablation {
+    margin-top: 0.45rem;
+    font-size: 0.65rem;
+    color: var(--muted);
+    font-style: italic;
+  }
+
+  /* ── Expanded detail panel (shown on click) ── */
+  .detail-panel {
+    display: none;
+    margin-top: 0.5rem;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 0.6rem 0.8rem;
+    font-size: 0.68rem;
+    color: var(--muted);
+    line-height: 1.5;
+  }
+  .detail-panel.visible { display: block; }
+  .detail-panel code {
+    font-family: var(--mono);
+    font-size: 0.65rem;
+    color: var(--accent-green);
+    background: rgba(62,207,142,0.1);
+    padding: 0.1rem 0.3rem;
+    border-radius: 3px;
+  }
+
+  /* ── WorldState callout ── */
+  .world-callout {
+    background: var(--surface2);
+    border: 1px solid rgba(167,139,250,0.3);
+    border-radius: 8px;
+    padding: 0.75rem 1rem;
+    margin-top: 0.75rem;
+  }
+  .world-callout-title {
+    font-size: 0.7rem;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: var(--accent-purple);
+    margin-bottom: 0.4rem;
+  }
+  .world-apps {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.3rem;
+    margin-top: 0.4rem;
+  }
+  .world-app {
+    font-size: 0.63rem;
+    font-family: var(--mono);
+    color: var(--muted);
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 3px;
+    padding: 0.12rem 0.35rem;
+  }
+
+  /* ── Click hint ── */
+  .click-hint {
+    font-size: 0.68rem;
+    color: var(--muted);
+    margin-top: 1.5rem;
+    text-align: center;
+    font-style: italic;
+  }
+
+  @media (max-width: 600px) {
+    body { padding: 1rem; }
+    .toolset-grid { grid-template-columns: 1fr; }
+    .loop-steps { flex-direction: column; align-items: flex-start; }
+    .loop-arrow { transform: rotate(90deg); }
+  }
+</style>
+</head>
+<body>
+
+<h1>AutomationBench — Episode Pipeline</h1>
+<p class="subtitle">ch-02 · internals track · click a toolset mode card for details</p>
+
+<div class="legend">
+  <div class="legend-item"><div class="legend-dot" style="background:var(--accent-teal)"></div>Dataset</div>
+  <div class="legend-item"><div class="legend-dot" style="background:var(--accent-purple)"></div>setup_state</div>
+  <div class="legend-item"><div class="legend-dot" style="background:var(--accent-blue)"></div>Agent Loop</div>
+  <div class="legend-item"><div class="legend-dot" style="background:var(--accent-green)"></div>Rubric Grade</div>
+  <div class="legend-item"><div class="legend-dot" style="background:var(--accent-orange)"></div>export_results</div>
+</div>
+
+<div class="pipeline">
+
+  <!-- ①  Dataset row -->
+  <div class="step">
+    <div class="step-header">
+      <span class="step-badge badge-dataset">① Dataset</span>
+      <span class="step-title">Task row: prompt + info</span>
+    </div>
+    <div class="step-body">
+      Each HuggingFace row carries a <span class="highlight">trigger prompt</span> and an
+      <code>info</code> dict with three fields:
+      <code>initial_state</code>, <code>zapier_tools</code>, and <code>assertions</code>.
+      HuggingFace normalizes schemas across rows by padding missing keys with <code>None</code>;
+      <code>strip_none_values()</code> removes them before Pydantic sees the dict.
+    </div>
+    <div class="detail-row">
+      <span class="tag tag-teal">prompt: trigger message</span>
+      <span class="tag tag-teal">info.initial_state: {}</span>
+      <span class="tag tag-teal">info.zapier_tools: [...]</span>
+      <span class="tag tag-teal">info.assertions: [...]</span>
+    </div>
+  </div>
+
+  <div class="connector-wrap"><div class="connector-inner"></div></div>
+
+  <!-- ②  setup_state -->
+  <div class="step">
+    <div class="step-header">
+      <span class="step-badge badge-setup">② setup_state</span>
+      <span class="step-title">Build WorldState + filter tools</span>
+    </div>
+    <div class="step-body">
+      Called once per episode. Constructs <code>WorldState(**initial_state_dict)</code> with
+      <code>extra="forbid"</code> — any unknown key raises <em>immediately</em>.
+      Deep-copies <code>initial_state</code> as a baseline for free-assertion detection.
+      Narrows <code>state["tool_defs"]</code> to the per-task allowed set
+      (see toolset modes below). Validates unknown tool names loudly.
+    </div>
+
+    <!-- WorldState detail -->
+    <div class="world-callout">
+      <div class="world-callout-title">WorldState — 44 app sub-states (extra="forbid")</div>
+      <div style="font-size:0.7rem;color:var(--muted);">Each field has a typed sub-model and a <code style="color:var(--accent-purple)">default_factory</code>. Tools mutate <code style="color:var(--accent-purple)">world.&lt;app&gt;.&lt;collection&gt;</code> in memory — no HTTP, no DB.</div>
+      <div class="world-apps" id="worldApps"></div>
+    </div>
+
+    <!-- Toolset mode panel -->
+    <div class="toolset-panel">
+      <div class="toolset-panel-title">Three toolset modes — branch point at this step</div>
+      <div class="toolset-grid">
+
+        <div class="toolset-card active-zapier" id="card-zapier" onclick="selectMode('zapier')">
+          <div class="toolset-name toolset-name-zapier">zapier</div>
+          <div class="toolset-desc">Default mode. Tests both discovery and execution.</div>
+          <div class="toolset-tools">
+            <div class="toolset-tool-item">search_tools(query, top_k)</div>
+            <div class="toolset-tool-item">execute_tool(tool_name, arguments)</div>
+          </div>
+          <div class="toolset-ablation">Model must discover then call — joint score</div>
+          <div class="detail-panel visible" id="detail-zapier">
+            BM25 corpus over ~400 tools. <code>search_tools</code> returns
+            <code>{name, description, parameters}</code> for top-k matches.
+            <code>execute_tool</code> dispatches through the full registry.
+            After a call to <code>execute_tool</code>, previous-turn search results are
+            compressed to <code>[Previously found: ...]</code> by
+            <code>_compress_meta_messages</code> to save context tokens.
+            When the paper says "two tools" it means this mode.
+          </div>
+        </div>
+
+        <div class="toolset-card" id="card-limited" onclick="selectMode('limited')">
+          <div class="toolset-name toolset-name-limited">limited_zapier</div>
+          <div class="toolset-desc">Named tools filtered per task. No discovery step.</div>
+          <div class="toolset-tools">
+            <div class="toolset-tool-item">~N named functions</div>
+            <div class="toolset-tool-item">(from info.zapier_tools)</div>
+          </div>
+          <div class="toolset-ablation">Isolates execution from discovery</div>
+          <div class="detail-panel" id="detail-limited">
+            All ~400 tools are registered at env construction. <code>setup_state</code>
+            filters to exactly those in <code>info.zapier_tools</code>.
+            Model sees named functions with full typed schemas — no BM25 search required.
+            <code>zapier score − limited_zapier score ≈ cost of discovery</code>.
+          </div>
+        </div>
+
+        <div class="toolset-card" id="card-api" onclick="selectMode('api')">
+          <div class="toolset-name toolset-name-api">api</div>
+          <div class="toolset-desc">REST-shaped interface. Tests HTTP reasoning.</div>
+          <div class="toolset-tools">
+            <div class="toolset-tool-item">api_search(query)</div>
+            <div class="toolset-tool-item">api_fetch(method, url, …)</div>
+            <div class="toolset-tool-item">base64_encode(data)</div>
+          </div>
+          <div class="toolset-ablation">Ablates abstraction style</div>
+          <div class="detail-panel" id="detail-api">
+            <code>api_search</code> runs BM25 over a tab-separated endpoint index.
+            <code>api_fetch</code> routes the URL via <code>_url_to_internal_path()</code>
+            to the correct in-process world mutation. ~15 known model URL hallucinations
+            are normalized so a typo isn't scored as task failure.
+            Tests: can the model reason about HTTP methods, URL structure, and
+            request/response shapes?
+          </div>
+        </div>
+
+      </div>
+    </div>
+
+    <div style="margin-top:0.5rem;font-size:0.72rem;color:var(--muted);">
+      <strong style="color:var(--text);">world injection:</strong>
+      Tools declare <code>world: WorldState</code> in Python but
+      <code>tool_wrapper.py</code> strips it from the JSON schema via
+      <code>args_to_skip</code>. <code>update_tool_args</code> re-injects
+      <code>state["world"]</code> (by reference) at dispatch time — mutations are
+      immediately visible to subsequent tool calls.
+    </div>
+  </div>
+
+  <div class="connector-wrap"><div class="connector-inner"></div></div>
+
+  <!-- ③  Agent loop -->
+  <div class="step">
+    <div class="step-header">
+      <span class="step-badge badge-loop">③ Agent Loop</span>
+      <span class="step-title">Tool-calling turns (max_turns = 25)</span>
+    </div>
+    <div class="step-body">
+      <code>vf.StatefulToolEnv</code> drives the loop. On each turn the model receives the
+      full message history and <code>state["tool_defs"]</code>. The loop terminates on a
+      no-tool-call response or when <code>max_turns</code> is reached.
+      <strong style="color:var(--accent-orange);">Note:</strong> the system prompt says
+      "50 turns" — that is a soft hint. <code>max_turns=25</code> is the hard guard.
+    </div>
+
+    <div class="loop-box">
+      <div class="loop-box-title">Per-turn sequence</div>
+      <div class="loop-steps">
+        <div class="loop-step">
+          <div class="loop-step-box" style="border-color:rgba(78,140,255,0.4);color:var(--accent-blue)">
+            Model call<br><span style="font-size:0.6rem;color:var(--muted)">history + tool_defs</span>
+          </div>
+        </div>
+        <div class="loop-arrow">→</div>
+        <div class="loop-step">
+          <div class="loop-step-box">
+            env_response<br><span style="font-size:0.6rem;color:var(--muted)">extract usage/debug</span>
+          </div>
+        </div>
+        <div class="loop-arrow">→</div>
+        <div class="loop-step">
+          <div class="loop-step-box">
+            update_tool_args<br><span style="font-size:0.6rem;color:var(--muted)">inject world</span>
+          </div>
+        </div>
+        <div class="loop-arrow">→</div>
+        <div class="loop-step">
+          <div class="loop-step-box" style="border-color:rgba(167,139,250,0.4);color:var(--accent-purple)">
+            tool executes<br><span style="font-size:0.6rem;color:var(--muted)">world mutated</span>
+          </div>
+        </div>
+        <div class="loop-arrow">→</div>
+        <div class="loop-step">
+          <div class="loop-step-box">
+            ToolMessage(s)<br><span style="font-size:0.6rem;color:var(--muted)">appended to history</span>
+          </div>
+        </div>
+        <div class="loop-arrow">→</div>
+        <div class="loop-step">
+          <div class="loop-step-box" style="border-color:rgba(62,207,142,0.4);color:var(--accent-green)">
+            compress?<br><span style="font-size:0.6rem;color:var(--muted)">zapier mode only</span>
+          </div>
+        </div>
+      </div>
+      <div class="loop-back">↩ repeat until: no tool calls in response OR turns = max_turns</div>
+      <div class="loop-end-note">
+        Token usage accumulated per-turn into <code>state["_usage"]</code> via
+        <code>_extract_usage_and_debug</code>. Finish reasons and empty responses
+        tracked in <code>state["_debug"]</code>.
+      </div>
+    </div>
+  </div>
+
+  <div class="connector-wrap"><div class="connector-inner"></div></div>
+
+  <!-- ④  Rubric grading -->
+  <div class="step">
+    <div class="step-header">
+      <span class="step-badge badge-grade">④ Rubric Grade</span>
+      <span class="step-title">Evaluate assertions against final world state</span>
+    </div>
+    <div class="step-body">
+      After the loop terminates, the rubric reads <code>state["world"]</code> (the final
+      mutated state) and <code>state["initial_state"]</code> (the deep-copied baseline from
+      setup_state). Partial credit: a task with 5 assertions where 3 pass → score 0.6.
+      The baseline copy enables detection of <span class="highlight">free assertions</span>
+      — assertions already satisfied before the agent did anything, a potential
+      reward-hacking vector that is excluded from scoring.
+    </div>
+    <div class="detail-row">
+      <span class="tag tag-green">reward ∈ [0.0, 1.0]</span>
+      <span class="tag tag-green">partial credit supported</span>
+      <span class="tag tag-green">free-assertion exclusion</span>
+      <span class="tag tag-green">per-assertion results → _assertion_results</span>
+    </div>
+  </div>
+
+  <div class="connector-wrap"><div class="connector-inner"></div></div>
+
+  <!-- ⑤  export_results -->
+  <div class="step">
+    <div class="step-header">
+      <span class="step-badge badge-export">⑤ export_results</span>
+      <span class="step-title">JSON output for the visualizer</span>
+    </div>
+    <div class="step-body">
+      <code>export_results(outputs, usage, model, domains, output_path, ...)</code>
+      collects per-task scores, per-assertion results, full message histories, token counts,
+      and cost data. Token counts prefer <code>state["_usage"]</code> (accumulated per-turn)
+      over a fallback character-count estimate. <code>benchmark_version</code> is read from
+      <code>pyproject.toml</code> — single source of truth.
+    </div>
+    <div class="detail-row">
+      <span class="tag tag-orange">meta: model, toolset, domains, version</span>
+      <span class="tag tag-orange">summary: avg_score, pass_rate, total_cost</span>
+      <span class="tag tag-orange">tasks[]: score, messages, assertion_results</span>
+      <span class="tag tag-orange">usage_by_task[]: tokens, cost</span>
+    </div>
+  </div>
+
+</div><!-- /pipeline -->
+
+<p class="click-hint">Click a toolset mode card above to expand details.</p>
+
+<script>
+  // Populate world app chips
+  const apps = [
+    'gmail','google_calendar','google_sheets','google_drive',
+    'slack','zoom','twilio',
+    'salesforce','hubspot',
+    'notion','trello','asana','monday','jira','confluence','airtable','basecamp3',
+    'mailchimp','buffer','facebook_pages','facebook_lead_ads','facebook_conversions',
+    'linkedin','linkedin_ads','linkedin_conversions','linkedin_leadgen_forms',
+    'instagram','twitter','google_ads',
+    'zendesk','freshdesk','helpscout','gorgias','intercom','reamaze','zoho_desk','hiver','helpcrunch',
+    'bamboohr','recruitee',
+    'quickbooks','xero','wave',
+    'docusign','canva','chatgpt','calendly','pipefy',
+    'meta (WorldMeta)',
+  ];
+  const container = document.getElementById('worldApps');
+  apps.forEach(a => {
+    const chip = document.createElement('div');
+    chip.className = 'world-app';
+    chip.textContent = a;
+    container.appendChild(chip);
+  });
+
+  // Toolset mode selector
+  function selectMode(mode) {
+    ['zapier','limited','api'].forEach(m => {
+      const card = document.getElementById('card-' + m);
+      const detail = document.getElementById('detail-' + m);
+      const activeClass = 'active-' + m;
+      // Remove all active classes
+      card.classList.remove('active-zapier','active-limited','active-api');
+      detail.classList.remove('visible');
+    });
+    document.getElementById('card-' + mode).classList.add('active-' + mode);
+    document.getElementById('detail-' + mode).classList.add('visible');
+  }
+</script>
+
+</body>
+</html>

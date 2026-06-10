@@ -1,0 +1,530 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>BM25 Tool Search Explorer — ch-03</title>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, monospace;
+    background: #0f1117;
+    color: #e2e8f0;
+    min-height: 100vh;
+    padding: 2rem 1.5rem;
+  }
+
+  h1 {
+    font-size: 1.3rem;
+    font-weight: 600;
+    color: #f8fafc;
+    margin-bottom: 0.25rem;
+    letter-spacing: -0.01em;
+  }
+
+  .subtitle {
+    font-size: 0.82rem;
+    color: #64748b;
+    margin-bottom: 1.8rem;
+  }
+
+  .subtitle code {
+    background: #1e293b;
+    padding: 1px 5px;
+    border-radius: 3px;
+    font-size: 0.78rem;
+    color: #94a3b8;
+  }
+
+  .params-row {
+    display: flex;
+    gap: 1.5rem;
+    align-items: flex-end;
+    margin-bottom: 1.5rem;
+    flex-wrap: wrap;
+  }
+
+  .param-group {
+    display: flex;
+    flex-direction: column;
+    gap: 0.3rem;
+  }
+
+  label {
+    font-size: 0.75rem;
+    color: #64748b;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+  }
+
+  input[type="text"] {
+    background: #1e293b;
+    border: 1px solid #334155;
+    border-radius: 6px;
+    color: #f1f5f9;
+    font-size: 1rem;
+    padding: 0.5rem 0.75rem;
+    width: 28rem;
+    max-width: 100%;
+    outline: none;
+    transition: border-color 0.15s;
+  }
+
+  input[type="text"]:focus { border-color: #6366f1; }
+
+  input[type="range"] {
+    accent-color: #6366f1;
+    width: 120px;
+  }
+
+  .range-val {
+    font-size: 0.82rem;
+    color: #94a3b8;
+    min-width: 2.5ch;
+    display: inline-block;
+  }
+
+  .section-label {
+    font-size: 0.75rem;
+    color: #475569;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    margin-bottom: 0.6rem;
+  }
+
+  .results {
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+  }
+
+  .result-card {
+    background: #1e293b;
+    border: 1px solid #334155;
+    border-radius: 8px;
+    overflow: hidden;
+  }
+
+  .result-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0.65rem 1rem;
+    background: #162032;
+    border-bottom: 1px solid #1e3a5f30;
+  }
+
+  .rank-badge {
+    background: #6366f1;
+    color: #fff;
+    font-size: 0.72rem;
+    font-weight: 700;
+    border-radius: 4px;
+    padding: 1px 7px;
+    min-width: 1.8rem;
+    text-align: center;
+    margin-right: 0.6rem;
+    flex-shrink: 0;
+  }
+
+  .tool-name {
+    font-family: monospace;
+    font-size: 0.92rem;
+    color: #a5b4fc;
+    flex: 1;
+  }
+
+  .total-score {
+    font-size: 0.85rem;
+    color: #34d399;
+    font-weight: 600;
+    font-family: monospace;
+  }
+
+  .result-body {
+    padding: 0.75rem 1rem;
+  }
+
+  .doc-text {
+    font-size: 0.8rem;
+    color: #94a3b8;
+    margin-bottom: 0.6rem;
+    line-height: 1.5;
+  }
+
+  .term-contributions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.35rem;
+  }
+
+  .term-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.3rem;
+    background: #0f1f35;
+    border: 1px solid #1e3a5f;
+    border-radius: 4px;
+    padding: 2px 8px;
+    font-size: 0.75rem;
+  }
+
+  .term-chip .term { color: #93c5fd; font-family: monospace; }
+  .term-chip .contrib { color: #34d399; font-family: monospace; }
+  .term-chip .tf-info { color: #475569; font-size: 0.68rem; }
+
+  .no-results {
+    color: #475569;
+    font-size: 0.88rem;
+    padding: 1rem 0;
+  }
+
+  .empty-query {
+    color: #334155;
+    font-size: 0.85rem;
+    padding: 0.75rem 0;
+  }
+
+  .idf-table-section {
+    margin-top: 2rem;
+  }
+
+  .idf-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+    gap: 0.4rem;
+    margin-top: 0.5rem;
+  }
+
+  .idf-cell {
+    background: #1e293b;
+    border: 1px solid #293548;
+    border-radius: 5px;
+    padding: 0.35rem 0.6rem;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    font-size: 0.76rem;
+  }
+
+  .idf-cell .idf-term { color: #93c5fd; font-family: monospace; }
+  .idf-cell .idf-val { color: #fbbf24; font-family: monospace; }
+
+  .param-hint {
+    font-size: 0.72rem;
+    color: #475569;
+    margin-top: 0.2rem;
+  }
+
+  hr {
+    border: none;
+    border-top: 1px solid #1e293b;
+    margin: 1.8rem 0;
+  }
+
+  .corpus-section { margin-top: 2rem; }
+  .corpus-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+    gap: 0.4rem;
+    margin-top: 0.5rem;
+  }
+  .corpus-cell {
+    background: #1a2535;
+    border: 1px solid #293548;
+    border-radius: 5px;
+    padding: 0.4rem 0.7rem;
+    font-size: 0.73rem;
+    color: #64748b;
+  }
+  .corpus-cell strong {
+    color: #a5b4fc;
+    font-family: monospace;
+    display: block;
+    margin-bottom: 0.15rem;
+  }
+</style>
+</head>
+<body>
+
+<h1>BM25 Tool Search Explorer</h1>
+<p class="subtitle">
+  Live BM25 over a toy corpus of 12 tool docstrings &mdash;
+  same <code>k1=1.5, b=0.75</code> and underscore-splitting tokenizer as
+  <code>automationbench/utils/bm25.py</code>.
+  Per-term score contributions shown for each result.
+</p>
+
+<div class="params-row">
+  <div class="param-group">
+    <label for="query">Query</label>
+    <input type="text" id="query" placeholder='e.g. "send email"  "find records"  "post message"' autocomplete="off" />
+  </div>
+  <div class="param-group">
+    <label for="topk">top_k</label>
+    <div style="display:flex;align-items:center;gap:0.5rem">
+      <input type="range" id="topk" min="1" max="12" value="5" />
+      <span class="range-val" id="topk-val">5</span>
+    </div>
+    <div class="param-hint">max results returned</div>
+  </div>
+  <div class="param-group">
+    <label for="k1-slider">k1</label>
+    <div style="display:flex;align-items:center;gap:0.5rem">
+      <input type="range" id="k1-slider" min="0" max="3" step="0.05" value="1.5" />
+      <span class="range-val" id="k1-val">1.50</span>
+    </div>
+    <div class="param-hint">TF saturation</div>
+  </div>
+  <div class="param-group">
+    <label for="b-slider">b</label>
+    <div style="display:flex;align-items:center;gap:0.5rem">
+      <input type="range" id="b-slider" min="0" max="1" step="0.05" value="0.75" />
+      <span class="range-val" id="b-val">0.75</span>
+    </div>
+    <div class="param-hint">length norm</div>
+  </div>
+</div>
+
+<div class="section-label">Ranked results</div>
+<div class="results" id="results">
+  <div class="empty-query">Type a query above to see ranked tools.</div>
+</div>
+
+<hr>
+
+<div class="idf-table-section">
+  <div class="section-label">IDF table (all corpus terms)</div>
+  <div class="idf-grid" id="idf-grid"></div>
+</div>
+
+<hr>
+
+<div class="corpus-section">
+  <div class="section-label">Corpus (12 tool docstrings)</div>
+  <div class="corpus-grid" id="corpus-grid"></div>
+</div>
+
+<script>
+// ---------------------------------------------------------------------------
+// Toy corpus — 12 tool docstrings matching AutomationBench naming conventions
+// ---------------------------------------------------------------------------
+const CORPUS = [
+  {
+    name: "gmail_send_email",
+    doc: "gmail_send_email: Send an email message via Gmail. recipient email address subject body text attachments file list"
+  },
+  {
+    name: "gmail_list_messages",
+    doc: "gmail_list_messages: List email messages in the Gmail inbox. query filter label unread inbox messages"
+  },
+  {
+    name: "gmail_create_draft",
+    doc: "gmail_create_draft: Create a draft email in Gmail. recipient subject body save draft compose"
+  },
+  {
+    name: "slack_post_message",
+    doc: "slack_post_message: Post a message to a Slack channel. channel name text message content send"
+  },
+  {
+    name: "slack_list_channels",
+    doc: "slack_list_channels: List all Slack channels in the workspace. channel list name members"
+  },
+  {
+    name: "salesforce_find_records",
+    doc: "salesforce_find_records: Search for records in Salesforce. object type query filter field value SOQL contact lead opportunity"
+  },
+  {
+    name: "salesforce_create_record",
+    doc: "salesforce_create_record: Create a new record in Salesforce. object type fields values contact lead account opportunity"
+  },
+  {
+    name: "google_calendar_create_event",
+    doc: "google_calendar_create_event: Create a new event in Google Calendar. title start end time date attendees location invite"
+  },
+  {
+    name: "google_calendar_list_events",
+    doc: "google_calendar_list_events: List events on a Google Calendar. date range start end calendar id events"
+  },
+  {
+    name: "hubspot_create_contact",
+    doc: "hubspot_create_contact: Create a new contact in HubSpot CRM. name email phone company properties"
+  },
+  {
+    name: "hubspot_update_deal",
+    doc: "hubspot_update_deal: Update a deal record in HubSpot. deal id stage amount close date properties"
+  },
+  {
+    name: "trello_create_card",
+    doc: "trello_create_card: Create a card on a Trello board. board list name description due date labels"
+  }
+];
+
+// ---------------------------------------------------------------------------
+// BM25 — exact port of automationbench/utils/bm25.py
+// ---------------------------------------------------------------------------
+
+function tokenize(text) {
+  return text.toLowerCase().replace(/_/g, " ").match(/[a-z0-9]+/g) || [];
+}
+
+class BM25Scorer {
+  constructor(docs, k1 = 1.5, b = 0.75) {
+    this.k1 = k1;
+    this.b = b;
+    this._tokenized = docs.map(d => tokenize(d));
+    const n = this._tokenized.length;
+    this._avgdl = n ? this._tokenized.reduce((s, d) => s + d.length, 0) / n : 1.0;
+
+    const df = {};
+    for (const doc of this._tokenized) {
+      for (const term of new Set(doc)) {
+        df[term] = (df[term] || 0) + 1;
+      }
+    }
+
+    this._idf = {};
+    for (const [term, freq] of Object.entries(df)) {
+      this._idf[term] = Math.log((n - freq + 0.5) / (freq + 0.5) + 1);
+    }
+  }
+
+  // Returns [{score, termContribs: [{term, idf, tf, contrib}]}] for each doc
+  scoreDetailed(query) {
+    const terms = tokenize(query);
+    return this._tokenized.map(docTokens => {
+      const dl = docTokens.length;
+      let score = 0.0;
+      const termContribs = [];
+      for (const term of terms) {
+        const idf = this._idf[term] || 0.0;
+        if (idf === 0.0) continue;
+        const tf = docTokens.filter(t => t === term).length;
+        const contrib = idf * (tf * (this.k1 + 1)) /
+          (tf + this.k1 * (1 - this.b + this.b * dl / this._avgdl));
+        score += contrib;
+        // aggregate per unique query term
+        const existing = termContribs.find(c => c.term === term);
+        if (existing) {
+          existing.contrib += contrib;
+        } else {
+          termContribs.push({ term, idf, tf, contrib });
+        }
+      }
+      return { score, termContribs };
+    });
+  }
+
+  topK(query, k = 10) {
+    const scored = this.scoreDetailed(query);
+    const indexed = scored.map((s, i) => ({ ...s, i })).filter(s => s.score > 0);
+    indexed.sort((a, b) => b.score - a.score);
+    return indexed.slice(0, k);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Reactive UI
+// ---------------------------------------------------------------------------
+
+let scorer = new BM25Scorer(CORPUS.map(c => c.doc));
+
+function rebuildScorer() {
+  const k1 = parseFloat(document.getElementById("k1-slider").value);
+  const b = parseFloat(document.getElementById("b-slider").value);
+  scorer = new BM25Scorer(CORPUS.map(c => c.doc), k1, b);
+}
+
+function renderIDF() {
+  const grid = document.getElementById("idf-grid");
+  const entries = Object.entries(scorer._idf).sort((a, b) => b[1] - a[1]);
+  grid.innerHTML = entries.map(([term, val]) =>
+    `<div class="idf-cell">
+      <span class="idf-term">${term}</span>
+      <span class="idf-val">${val.toFixed(4)}</span>
+    </div>`
+  ).join("");
+}
+
+function renderCorpus() {
+  const grid = document.getElementById("corpus-grid");
+  grid.innerHTML = CORPUS.map(c =>
+    `<div class="corpus-cell"><strong>${c.name}</strong>${c.doc.replace(c.name + ": ", "")}</div>`
+  ).join("");
+}
+
+function renderResults() {
+  const query = document.getElementById("query").value.trim();
+  const topK = parseInt(document.getElementById("topk").value);
+  const container = document.getElementById("results");
+
+  if (!query) {
+    container.innerHTML = '<div class="empty-query">Type a query above to see ranked tools.</div>';
+    return;
+  }
+
+  const results = scorer.topK(query, topK);
+
+  if (results.length === 0) {
+    container.innerHTML = '<div class="no-results">No matching tools — try different keywords.</div>';
+    return;
+  }
+
+  container.innerHTML = results.map((r, rank) => {
+    const tool = CORPUS[r.i];
+    const contribsHtml = r.termContribs
+      .sort((a, b) => b.contrib - a.contrib)
+      .map(c =>
+        `<span class="term-chip">
+          <span class="term">${c.term}</span>
+          <span class="contrib">+${c.contrib.toFixed(4)}</span>
+          <span class="tf-info">tf=${c.tf} idf=${c.idf.toFixed(3)}</span>
+        </span>`
+      ).join("");
+
+    return `
+      <div class="result-card">
+        <div class="result-header">
+          <span class="rank-badge">#${rank + 1}</span>
+          <span class="tool-name">${tool.name}</span>
+          <span class="total-score">${r.score.toFixed(4)}</span>
+        </div>
+        <div class="result-body">
+          <div class="doc-text">${tool.doc}</div>
+          <div class="term-contributions">${contribsHtml}</div>
+        </div>
+      </div>`;
+  }).join("");
+}
+
+function update() {
+  rebuildScorer();
+  renderIDF();
+  renderResults();
+}
+
+// Wire controls
+document.getElementById("query").addEventListener("input", renderResults);
+
+document.getElementById("topk").addEventListener("input", function() {
+  document.getElementById("topk-val").textContent = this.value;
+  renderResults();
+});
+
+document.getElementById("k1-slider").addEventListener("input", function() {
+  document.getElementById("k1-val").textContent = parseFloat(this.value).toFixed(2);
+  update();
+});
+
+document.getElementById("b-slider").addEventListener("input", function() {
+  document.getElementById("b-val").textContent = parseFloat(this.value).toFixed(2);
+  update();
+});
+
+// Initial render
+renderCorpus();
+update();
+</script>
+</body>
+</html>
