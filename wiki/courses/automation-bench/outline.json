@@ -1,0 +1,197 @@
+{
+  "kind": "draft",
+  "status": "ready-for-review-v1",
+  "revision": 1,
+  "course_slug": "automation-bench",
+  "generated_at": "2026-06-10T00:00:00Z",
+  "source_library": "wiki/raw-data/automation-bench/",
+  "collection_plan": "wiki/raw-data/automation-bench/COLLECTION-PLAN.md",
+  "title": "Inside AutomationBench — How a Cross-App Tool-Call Benchmark Works (with a τ-bench comparison)",
+  "authoring_notes": {
+    "purpose": "Single-focus deep dive into Zapier's AutomationBench (github.com/zapier/AutomationBench, arXiv 2604.18934, CC BY 4.0): how the benchmark is built, how tasks are defined, how an agent is run against it, and how it is graded. Secondary thread throughout: a structural comparison with τ-bench / τ²-bench / τ³-bench so the learner can place AutomationBench in the agentic-eval landscape and reason about which benchmark measures what.",
+    "framing": "This is an EVALUATION/BENCHMARK-DESIGN course, not a model-training course. The unit of study is the harness and the task spec, not a model. Read pages should quote real code from the cloned repo (file:line) and real task/assertion JSON.",
+    "why_this_learner": "Learner is building a production sales-call agent (Lina TMR) and recently closed the llm-training synthetic track with two open weak links named explicitly: (1) sim-to-real transfer measurement and (2) end-model (trained-agent) evaluation. AutomationBench is a concrete, code-level case study of how a serious team builds a deterministic, reward-hackable-resistant agent benchmark with end-state grading and no LLM-judge — directly transferable to designing the learner's own agent eval. ch-10 makes that transfer explicit.",
+    "structure": "10 chapters in 4 phases. landscape (1) -> internals (2..8) -> comparison (9) -> lab (10). Internals follow the execution path of one episode: architecture -> tool discovery -> execute/world -> task spec -> grading -> hardening -> metrics. The τ-bench contrast is raised in-line in the internals chapters and then consolidated and sharpened in ch-09.",
+    "per_chapter_format": "Each read.md quotes real code/JSON from wiki/raw-data/automation-bench/ (the cloned repo) with file:line references, extracts the chapter's core insight + a practitioner guideline, and cites the library excerpts via [[wikilinks]]. Chapters may emit companion HTML under ch-XX/figures/ for the episode-flow diagram, the BM25 retrieval explorer, the assertion-grading flow, and an AutomationBench-vs-τ-bench side-by-side.",
+    "depth_target": "Source-rich. Every mechanism claim should be backed by a quoted function or task/assertion JSON, not paraphrase. Reconcile the public-doc numbers (README/blog/paper) against the code when they disagree — the code is authoritative (e.g. toolset modes, max_turns, partial_credit-vs-pass).",
+    "known_doc_vs_code_discrepancies": "Public docs say '2 tools' / 'max 50 steps' / '~47 apps, ~500 endpoints' / '600 public tasks'. Code shows three toolset modes (zapier=2 meta-tools, limited_zapier=named per-task, api=3 REST tools), max_turns default 25 (system prompt mentions a 50-turn budget), 44 app-states in world.py (~47 incl. subpackages), and 606 public task dicts + 200 'simple' sanity tasks. Flag and resolve these in ch-02/ch-03/ch-05/ch-08.",
+    "tau_bench_comparison_anchor": "ch-09 is the comparison centerpiece, but the contrast is seeded earlier: no-user vs user-simulator (ch-02/ch-05), generic discovery vs fixed tools (ch-03), end-state assertions vs DB-state hash (ch-06), pass-rate+cost vs pass^k reliability (ch-08)."
+  },
+  "tracks": [
+    {
+      "phase": "landscape",
+      "title": "Where AutomationBench Sits",
+      "chapters": "ch-01",
+      "chapter_count": 1
+    },
+    {
+      "phase": "internals",
+      "title": "AutomationBench Internals (one episode, end to end)",
+      "chapters": "ch-02..ch-08",
+      "chapter_count": 7
+    },
+    {
+      "phase": "comparison",
+      "title": "Comparison with the τ-bench Family",
+      "chapters": "ch-09",
+      "chapter_count": 1
+    },
+    {
+      "phase": "extension",
+      "title": "Running, Extending, Reusing",
+      "chapters": "ch-10",
+      "chapter_count": 1
+    }
+  ],
+  "chapters": [
+    {
+      "id": "ch-01",
+      "title": "The Agentic Tool-Call Benchmark Landscape",
+      "phase": "landscape",
+      "deps": [],
+      "concepts": [
+        "From single-turn function-calling (BFCL) to multi-step agentic eval: what 'tool-call benchmark' has come to mean and why the bar moved",
+        "The benchmark family map: BFCL, ToolBench / API-Bank, AppWorld, WebArena / Mind2Web, τ-bench / τ² / τ³ — what each holds fixed and what each measures",
+        "AutomationBench's three-part gap thesis: cross-application coordination + autonomous API discovery + policy adherence, combined in one task (paper Table 1)",
+        "'Outcomes, not output': end-state grading as a philosophy, and why a company with a 9,000-app catalog defines the benchmark this way",
+        "Why the field scores <20% here: difficulty by construction, and what a low ceiling tells you about a benchmark's headroom"
+      ],
+      "kind": "content"
+    },
+    {
+      "id": "ch-02",
+      "title": "Architecture Overview: WorldState, the Episode Loop, and Toolset Modes",
+      "phase": "internals",
+      "deps": ["ch-01"],
+      "concepts": [
+        "Built on the `verifiers` library: AutomationBenchEnv subclasses vf.StatefulToolEnv (runner.py) — what the framework gives you and what AutomationBench adds",
+        "WorldState as ONE in-process Pydantic root model (schema/world.py): no HTTP server, no database, no subprocess — fully deterministic given an initial_state",
+        "The episode lifecycle: dataset row (prompt + info) -> setup_state -> tool-calling agent loop -> rubric grading -> export_results",
+        "The three toolset modes and what each ablates: `zapier` (2 meta-tools, discovery required), `limited_zapier` (named tools listed per-task), `api` (3 REST-shaped tools)",
+        "The `world` injection trick: tools take `world` as a hidden first arg stripped from the model-facing JSON schema (tool_wrapper.py args_to_skip)",
+        "Reconciling docs vs code: 'two tools' and 'max 50 steps' vs the actual mode set and max_turns default"
+      ],
+      "kind": "content"
+    },
+    {
+      "id": "ch-03",
+      "title": "Tool Discovery: Search + a From-Scratch BM25",
+      "phase": "internals",
+      "deps": ["ch-02"],
+      "concepts": [
+        "search_tools(query, top_k) over a ToolRegistry of ~400 named tools — the agent must FIND the tool, not just call it (tools/zapier/meta.py)",
+        "A from-scratch BM25 (utils/bm25.py): k1=1.5, b=0.75, Robertson–Sparck-Jones IDF, a tokenizer that splits underscores so `gmail_send_email` -> [gmail, send, email]",
+        "What a search result exposes: name, docstring-minus-world, and the JSON parameter schema; top_k default 5 and the max_top_k cap",
+        "API mode discovery: api_search over a tab-separated endpoint index (tools/api/search.py), lazily rebuilt when schema files change",
+        "Token economy: _compress_meta_messages rewrites stale search results to '[Previously found: ...]' once execute is called — and why current-turn results are left intact",
+        "Why discovery is a first-class tested capability and how the limited_zapier mode isolates discovery cost from execution cost"
+      ],
+      "kind": "content"
+    },
+    {
+      "id": "ch-04",
+      "title": "Execute and the Simulated World",
+      "phase": "internals",
+      "deps": ["ch-03"],
+      "concepts": [
+        "execute_tool(tool_name, arguments) -> ToolRegistry.execute: JSON-parse args, re-inject `world`, dispatch the real Python function (tools/zapier/meta.py)",
+        "API mode: api_fetch(method, url, params, body) -> _url_to_internal_path routing tables -> route_<app> handlers (tools/api/fetch.py); 404 on unknown URL",
+        "URL-hallucination tolerance: ~15 known model mistakes (e.g. slack.googleapis.com) normalized to the right router — a deliberate eval-robustness choice",
+        "App state as Pydantic with extra='forbid'; to_display_dict() omits None fields so the agent sees sparse, realistic records (schema/<app>.py)",
+        "Real-API fidelity in the simulation: pagination, required fields, common 4xx codes — enough friction to be realistic, none of the flakiness of a live API",
+        "Why in-process simulation (vs a live sandbox) is the design choice that buys determinism and <1% run variance"
+      ],
+      "kind": "content"
+    },
+    {
+      "id": "ch-05",
+      "title": "Task Anatomy and the Six Business Domains",
+      "phase": "internals",
+      "deps": ["ch-04"],
+      "concepts": [
+        "On-disk layout: domains/<domain>/tasks.py constructor functions emit task dicts; example_id ranges per domain; 606 public tasks + a 200-task 'simple' sanity set",
+        "The task dict: prompt (system + user trigger), answer='' (unused), info.{zapier_tools allowlist, initial_state, assertions}",
+        "Annotated walkthrough of sales.multi_hop_lookup (example_id 501): one task that spans Salesforce + Google Drive + Google Sheets + Gmail",
+        "Cross-application coordination as the headline distinction: solving one task requires reading and writing across multiple independent app states",
+        "Policy-in-artifacts: the routing rules live inside a simulated inbox message / a spreadsheet row, NOT in the prompt — the agent must discover and apply them",
+        "Recency-based conflict resolution and other reasoning traps encoded directly in the seed data (vs τ-bench's separate policy wiki + user simulator)"
+      ],
+      "kind": "content"
+    },
+    {
+      "id": "ch-06",
+      "title": "The Grading Engine: End-State Assertions",
+      "phase": "internals",
+      "deps": ["ch-05"],
+      "concepts": [
+        "AssertionRegistry: decorator-registered, per-app checkers with signature (world, assertion_dict) -> bool (rubric/registry.py)",
+        "Must-pass (positive) vs must-not-occur (@negative_assertion) assertions, quoted from real task JSON — the anti-'shotgun' design",
+        "Two scores from one rubric: partial_credit = passed/total (the RL reward signal, weight 1.0) vs task_completed_correctly = 1.0 iff partial_credit==1.0 (the binary pass-rate metric)",
+        "Free-assertion exclusion: assertions already satisfied in the initial_world earn no credit, but BREAKING a pre-passing guard still counts as failure; the `excluded:false` escape hatch for do-nothing tasks",
+        "No LLM-as-judge: grading is pure Python field comparison on Pydantic models — the determinism/cost/repro consequences",
+        "Contrast: AutomationBench end-state assertion rubric vs τ-bench final-database-state hash — both end-state, but rubric gives partial signal and explicit negative guards"
+      ],
+      "kind": "content"
+    },
+    {
+      "id": "ch-07",
+      "title": "Hardening: Noise, Decoys, and Reward-Hacking Defenses",
+      "phase": "internals",
+      "deps": ["ch-06"],
+      "concepts": [
+        "Deterministic noise injection seeded by example_id (domains/<domain>/_noise.py): reproducible distractors added at dataset-construction time",
+        "ID-namespaced decoy pools (sales uses the 099 range, operations the 098 range) so noise can never collide with or contaminate task-critical records",
+        "Near-match entity traps quoted from the data: acme-corp.com vs acmecorp.com, Sara vs Sarah, same-initials/off-by-one-phone contacts",
+        "The compliance-hold trap: every noise contact carries a 'do not enroll — pending compliance review' description that punishes agents who act on all records",
+        "Scope-creep traps: the user instruction says 'also process severance' but the policy artifact says HR must NOT — instruction-following vs policy-following",
+        "Why hardening is the difference between measuring reasoning and measuring luck: anti-shotgun negative assertions + count-locks close the cheap exploits"
+      ],
+      "kind": "content"
+    },
+    {
+      "id": "ch-08",
+      "title": "Metrics, Cost, and Reproducibility",
+      "phase": "internals",
+      "deps": ["ch-07"],
+      "concepts": [
+        "The official metric is binary pass-rate (no partial credit in the score), with partial_credit retained only for analysis and as an RL reward",
+        "Cost-per-task as a first-class second axis: token accumulation (usage.py), a pricing DB with model-name normalization and a 24h cache (pricing.py), CLI cost overrides",
+        "Reproducibility: deterministic in-process world + seeded noise -> run-to-run variance typically <1% (contrast τ-bench's high variance at n=115 requiring 10+ repeats)",
+        "The 'simple' domain as a harness-validity control: even Haiku ~97% there, so low main-benchmark scores reflect real difficulty, not a broken harness",
+        "Reading a run: export_results JSON, per-assertion pass/fail, the visualizer; what 'false confidence in incorrect tool calls' looks like in the trace",
+        "pass-rate+cost vs τ-bench's pass^k: measuring capability-at-a-price vs measuring reliability-across-k-trials — two different deployment questions"
+      ],
+      "kind": "content"
+    },
+    {
+      "id": "ch-09",
+      "title": "AutomationBench vs the τ-bench Family: A Structural Comparison",
+      "phase": "comparison",
+      "deps": ["ch-08", "ch-05", "ch-06"],
+      "concepts": [
+        "The core axis: workflow automation from a single trigger (no user) vs tool-agent-USER interaction across multi-turn dialogue with an LLM user simulator",
+        "Tooling: generic Search+Execute discovery over ~400 tools vs a fixed per-domain tool set handed to the agent up front",
+        "Policy & state: policy hidden in seed artifacts + cross-app end-state rubric vs a policy wiki + single-app final-database-state check",
+        "Metrics: pass-rate + cost vs pass^k reliability; τ²-bench dual-control (Dec-POMDP, telecom) and τ³-bench's 75+ task fixes and voice/RAG additions",
+        "What each tests that the other cannot: AB = cross-app discovery + policy adherence under noise; τ = information elicitation, user coordination, consistency over a conversation",
+        "Shared blind spot: the sim2real gap (LLM user simulators and synthetic worlds both diverge from production) — and how to choose a benchmark for a given agent (e.g. the learner's Lina TMR)"
+      ],
+      "kind": "content"
+    },
+    {
+      "id": "ch-10",
+      "title": "Lab: Run It, Extend It, Reuse It as an RL Environment",
+      "phase": "extension",
+      "deps": ["ch-09"],
+      "concepts": [
+        "Run a real evaluation: `uv run` the CLI with --model/--toolset/--domain, watch an episode, open the visualizer, read the exported result",
+        "The extension surface: add a task (a tasks.py constructor + seeded initial_state), add an app (a Pydantic *State + tools + route handlers), add an assertion type (one registry-decorated function)",
+        "AutomationBench as a verifiers / Prime-Intellect Environments-Hub RL environment: partial_credit IS a dense reward — the eval doubles as a training environment",
+        "Designing your OWN agent benchmark from these principles: end-state assertions, negative guards, deterministic seeded noise, a sanity domain, cost-as-metric, no LLM-judge where a programmatic check exists",
+        "Transfer to the learner's project: turning the Lina TMR sim into a graded, reward-hackable-resistant environment (the parked sim-to-real / end-model-eval problem from llm-training ch-29)",
+        "Deliverable: a short design memo — either a new AutomationBench task+rubric, or a spec for an end-state-graded benchmark of the learner's own agent"
+      ],
+      "kind": "lab"
+    }
+  ]
+}
