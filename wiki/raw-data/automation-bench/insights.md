@@ -1,7 +1,8 @@
 <!-- scope: cross-source insight index for the automation-bench raw library
      deps: [[LIBRARY]], [[COLLECTION-PLAN]]
      see-also: [[automationbench-overview]], [[automationbench-harness]],
-               [[automationbench-tasks-grading]], [[taubench]], [[benchmark-comparison]]
+               [[automationbench-tasks-grading]], [[taubench]], [[benchmark-comparison]],
+               [[automationbench-results]]
 -->
 
 # AutomationBench — Insights Index
@@ -41,6 +42,12 @@ falls out of taking that seriously.
   runs) vs reliability-across-k-trials (recurring task). AutomationBench reports the former
   and *could* add the latter for free (it's deterministic); τ-bench *must* use pass^k
   because variance is built in. ([[benchmark-comparison]])
+- **The ablation says discovery is NOT the wall.** Measured ordering api < zapier <
+  limited_zapier (Gemini 3.1 Pro 9.6 / 12.8 / 14.3%; Haiku 4.5 1.5 / 2.0 / 3.8%). Removing
+  search entirely (zapier→limited) buys only ~1.5–2 pts, and even with tools handed over the
+  best is ~14% — so the dominant difficulty is *applying* tools under policy/noise, not
+  *finding* them. Pairs with the false-confidence failure mode (Opus 72 / GPT 84 / Gemini 91%
+  of failures = "declared success while actually failing"). ([[automationbench-results]])
 
 ## Landscape
 
