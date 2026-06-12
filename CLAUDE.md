@@ -130,6 +130,28 @@ Branch is never deleted after merge; it becomes a permanent record.
 
 ---
 
+## Learning state file (`.jaewon-learning/status.json`)
+
+This file is the teacher's cycle-state tracker — the at-a-glance answer to "which course, which chapter, which phase are we in." It is **teacher-editable** (not in the *What never to edit* table), but only the `course_state` block and `git.current_branch` are yours to hand-set. Keep it valid JSON.
+
+**When to update** — at every transition that changes the cycle pointer:
+
+| Event | Fields to set |
+|-------|---------------|
+| Start or switch a course | `current_course`, `current_chapter` (→ `ch-01`), `current_phase` (→ `read`), `cycle_count` (→ `1`), `git.current_branch`, `plan.phase`; **reset `verdict_history` to `[]`** (the prior course's history lives on its own branch) |
+| Enter Discuss for a chapter | `current_phase` → `discuss` |
+| After a verdict | append `{chapter, verdict, iteration, ...}` to `verdict_history` (optional `format`/`score`/`note`) |
+| `Mastery` → advance | `current_chapter` → next, `current_phase` → `read`, bump `cycle_count` |
+| `Partial` → loop back | `current_phase` → `read`, same `current_chapter`, bump the chapter's `iteration` on its next verdict |
+
+**How to update** — edit the JSON directly with the Edit tool, then validate (`python3 -c "import json,sys; json.load(open('.jaewon-learning/status.json'))"`). Use the optional `note` field on `course_state` to record anything a future session needs for orientation (e.g. bulk-authored read-only, not-yet-discussed).
+
+**Do not hand-set** these — they are auto-managed by hooks/plugin: `session.*` (timing, `total_sessions`), `hud.*`, `git.recent_commits` (under `auto_manage: true`), and `last_push_tactic_snapshot` (owned by tactic selection at SessionStart).
+
+**Not the source of truth.** `verdict_history` here is a convenience cycle-tracker; `wiki/courses/*/verdict.json` remains authoritative for mastery (see *What never to edit*). If the two disagree, the `verdict.json` files win.
+
+---
+
 ## Dashboard
 
 The `dashboard/` directory contains auto-generated static HTML. It is rebuilt by the `dashboard-builder` agent on every merge into `main`.
