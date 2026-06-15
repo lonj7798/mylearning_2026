@@ -1,0 +1,248 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Richardson Maturity Model — the REST ladder</title>
+<style>
+  :root {
+    --bg: #0f1419;
+    --panel: #1a2029;
+    --panel2: #232b36;
+    --ink: #e6edf3;
+    --muted: #9aa7b4;
+    --accent: #4fb6e0;
+    --good: #5fd38b;
+    --warn: #e8b14d;
+    --bad: #e06b6b;
+    --line: #2e3845;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--ink);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    line-height: 1.5;
+    padding: 24px;
+  }
+  h1 { font-size: 20px; margin: 0 0 4px; }
+  .sub { color: var(--muted); font-size: 13px; margin-bottom: 20px; max-width: 760px; }
+  .wrap { display: flex; gap: 24px; flex-wrap: wrap; align-items: flex-start; }
+  .ladder { display: flex; flex-direction: column-reverse; gap: 8px; min-width: 300px; flex: 1; }
+  .rung {
+    border: 1px solid var(--line);
+    background: var(--panel);
+    border-radius: 10px;
+    padding: 12px 14px;
+    cursor: pointer;
+    transition: border-color .15s, transform .08s, background .15s;
+    position: relative;
+  }
+  .rung:hover { border-color: var(--accent); transform: translateX(3px); }
+  .rung.active { border-color: var(--accent); background: var(--panel2); box-shadow: 0 0 0 1px var(--accent) inset; }
+  .rung .lvl { font-weight: 700; font-size: 14px; }
+  .rung .nm { color: var(--muted); font-size: 13px; }
+  .rung .tag {
+    position: absolute; top: 10px; right: 12px; font-size: 11px;
+    padding: 2px 8px; border-radius: 999px; border: 1px solid var(--line);
+  }
+  .tag.most { color: var(--warn); border-color: var(--warn); }
+  .tag.rest { color: var(--good); border-color: var(--good); }
+  .tag.swamp { color: var(--bad); border-color: var(--bad); }
+  .detail {
+    flex: 1.4; min-width: 320px; border: 1px solid var(--line);
+    background: var(--panel); border-radius: 10px; padding: 16px 18px;
+  }
+  .detail h2 { font-size: 16px; margin: 0 0 2px; }
+  .detail .what { color: var(--muted); font-size: 13px; margin-bottom: 14px; }
+  .col2 { display: grid; grid-template-columns: 1fr; gap: 14px; }
+  pre {
+    background: #0b0f14; border: 1px solid var(--line); border-radius: 8px;
+    padding: 10px 12px; overflow-x: auto; font-size: 12px; margin: 6px 0 0;
+    font-family: "SF Mono", Menlo, Consolas, monospace; color: #cdd9e5;
+  }
+  .label { font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: var(--accent); margin-top: 8px; }
+  .buys { margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--line); }
+  .buys .b { color: var(--good); font-size: 13px; margin: 4px 0; }
+  .buys .c { color: var(--bad); font-size: 13px; margin: 4px 0; }
+  .verb { color: var(--accent); }
+  .controls { margin: 14px 0 0; font-size: 13px; }
+  .controls label { color: var(--muted); cursor: pointer; user-select: none; }
+  .restbar {
+    margin-top: 18px; padding: 10px 12px; border-radius: 8px;
+    border: 1px dashed var(--good); font-size: 13px; color: var(--ink);
+    display: none;
+  }
+  .restbar.show { display: block; }
+  .note { font-size: 12px; color: var(--muted); margin-top: 16px; max-width: 760px; }
+  .fielding { color: var(--good); font-style: italic; }
+</style>
+</head>
+<body>
+  <h1>The Richardson Maturity Model — the ladder toward REST</h1>
+  <div class="sub">
+    Click a rung to see an example request/response and what that level actually buys you.
+    Each step up trades simplicity for web-scale properties (uniformity, caching, evolvability).
+    Toggle the box below to see where most "REST" APIs really sit — and where Fielding draws the line.
+  </div>
+
+  <div class="wrap">
+    <div class="ladder" id="ladder"></div>
+    <div class="detail" id="detail"></div>
+  </div>
+
+  <div class="controls">
+    <label><input type="checkbox" id="markReality" checked> Mark reality: most APIs stop at Level&nbsp;2; Fielding requires Level&nbsp;3 to call it REST</label>
+  </div>
+  <div class="restbar" id="restbar"></div>
+
+  <div class="note">
+    Source: Martin Fowler, "Richardson Maturity Model" (martinfowler.com/articles/richardsonMaturityModel.html),
+    after Leonard Richardson; constraint definitions from Roy Fielding's dissertation Ch.5 (roy.gbiv.com mirror).
+    The verbatim caveat: <span class="fielding">"Roy Fielding has made it clear that level 3 RMM is a pre-condition of REST."</span>
+  </div>
+
+<script>
+"use strict";
+
+// Each level. Note: any double-quote inside these JS string literals is escaped with a backslash.
+var LEVELS = [
+  {
+    lvl: "Level 0",
+    nm: "The Swamp of POX",
+    tag: "swamp", tagText: "anti-pattern",
+    what: "HTTP as a tunnel for Remote Procedure Invocation. One URI, one verb (usually POST), everything is in the body.",
+    reqLabel: "Request — one endpoint, RPC in the body",
+    req: "POST /appointmentService HTTP/1.1\nContent-Type: application/json\n\n{\n  \"method\": \"openSlotRequest\",\n  \"args\": { \"date\": \"2026-06-20\", \"doctor\": \"mjones\" }\n}",
+    resLabel: "Response — 200 even on \"no slots\"; meaning is in the body",
+    res: "HTTP/1.1 200 OK\nContent-Type: application/json\n\n{\n  \"method\": \"openSlotResponse\",\n  \"slots\": []\n}",
+    buys: ["Dead simple: one URL, the transport is HTTP but you ignore everything HTTP offers."],
+    costs: [
+      "HTTP is just a dumb pipe — no caching, no shared status semantics.",
+      "200-on-everything: a failure looks like a success unless you parse the body.",
+      "Quote (Fowler): HTTP is used “as a tunneling mechanism… based on Remote Procedure Invocation.”"
+    ]
+  },
+  {
+    lvl: "Level 1",
+    nm: "Resources",
+    tag: "", tagText: "",
+    what: "Stop talking to one god-endpoint; address individual resources by URI. Still mostly POST, but now nouns exist.",
+    reqLabel: "Request — talk to a specific resource",
+    req: "POST /doctors/mjones HTTP/1.1\nContent-Type: application/json\n\n{ \"date\": \"2026-06-20\" }",
+    resLabel: "Response — a resource representation with its own id",
+    res: "HTTP/1.1 200 OK\nContent-Type: application/json\n\n{\n  \"slotId\": 1234,\n  \"doctor\": \"mjones\",\n  \"start\": \"2026-06-20T14:00\"\n}",
+    buys: [
+      "Divide-and-conquer: many small addressable resources instead of one giant handler.",
+      "Quote (Fowler): “rather than making all our requests to a singular service endpoint, we… talk to individual resources.”"
+    ],
+    costs: [
+      "Still verb-poor: the action lives in the payload, not the method.",
+      "No standard caching or status contract yet."
+    ]
+  },
+  {
+    lvl: "Level 2",
+    nm: "HTTP Verbs",
+    tag: "most", tagText: "where most APIs sit",
+    what: "Use the HTTP methods as designed: GET (safe, cacheable), POST/PUT/DELETE, and real status codes. This is what the industry calls “REST.”",
+    reqLabel: "Request — GET is safe and cacheable",
+    req: "GET /doctors/mjones/slots?date=2026-06-20 HTTP/1.1\nHost: api.example.com",
+    resLabel: "Response — correct status code carries meaning",
+    res: "HTTP/1.1 200 OK\nContent-Type: application/json\nCache-Control: max-age=60\n\n[\n  { \"slotId\": 1234, \"start\": \"2026-06-20T14:00\" }\n]\n\n# booking a taken slot:\n# HTTP/1.1 409 Conflict",
+    buys: [
+      "GET is safe → intermediaries (CDNs, proxies, browsers) can cache freely.",
+      "Status codes are a shared vocabulary: 200 / 201 / 404 / 409 / 412 mean the same thing everywhere.",
+      "Quote (Fowler): “using the HTTP verbs as closely as possible to how they are used in HTTP itself.”"
+    ],
+    costs: [
+      "The client still hard-codes URI templates and the state machine of “what can I do next.”",
+      "Honest label: this is HTTP-RPC done well — not yet REST by Fielding’s definition."
+    ]
+  },
+  {
+    lvl: "Level 3",
+    nm: "Hypermedia (HATEOAS)",
+    tag: "rest", tagText: "Fielding: this is REST",
+    what: "Responses carry controls (links) that tell the client what it can do next and the URI to do it. Hypermedia is the engine of application state.",
+    reqLabel: "Request — same GET…",
+    req: "GET /doctors/mjones/slots?date=2026-06-20 HTTP/1.1\nHost: api.example.com",
+    resLabel: "Response — …but it ships the next moves as links",
+    res: "HTTP/1.1 200 OK\nContent-Type: application/json\n\n{\n  \"slots\": [\n    { \"slotId\": 1234, \"start\": \"2026-06-20T14:00\",\n      \"_links\": {\n        \"book\": { \"href\": \"/slots/1234/booking\", \"method\": \"POST\" }\n      }\n    }\n  ],\n  \"_links\": {\n    \"self\": { \"href\": \"/doctors/mjones/slots?date=2026-06-20\" }\n  }\n}",
+    buys: [
+      "The server owns the URI structure and the workflow; clients follow links instead of hard-coding paths → the server can evolve without breaking clients.",
+      "Discoverability: a client can navigate the API like a human navigates a website.",
+      "Quote (Fowler): hypermedia controls “tell us what we can do next, and the URI… to do it.”"
+    ],
+    costs: [
+      "Almost nobody builds clients that actually follow links — the ecosystem (SDKs, codegen) assumes fixed URIs.",
+      "Real cost: high upfront design + client sophistication for a payoff (independent URI evolution) most teams never collect."
+    ]
+  }
+];
+
+var ladder = document.getElementById("ladder");
+var detail = document.getElementById("detail");
+var restbar = document.getElementById("restbar");
+var markBox = document.getElementById("markReality");
+var current = 2; // open at Level 2 — the level most "REST" APIs occupy
+
+function renderLadder() {
+  ladder.innerHTML = "";
+  for (var i = 0; i < LEVELS.length; i++) {
+    (function(idx) {
+      var L = LEVELS[idx];
+      var div = document.createElement("div");
+      div.className = "rung" + (idx === current ? " active" : "");
+      var tagHtml = "";
+      if (markBox.checked && L.tag) {
+        tagHtml = "<span class=\"tag " + L.tag + "\">" + L.tagText + "</span>";
+      }
+      div.innerHTML = "<div class=\"lvl\">" + L.lvl + tagHtml + "</div>" +
+                      "<div class=\"nm\">" + L.nm + "</div>";
+      div.addEventListener("click", function() { current = idx; renderAll(); });
+      ladder.appendChild(div);
+    })(i);
+  }
+}
+
+function renderDetail() {
+  var L = LEVELS[current];
+  var buys = "";
+  for (var i = 0; i < L.buys.length; i++) { buys += "<div class=\"b\">+ " + L.buys[i] + "</div>"; }
+  var costs = "";
+  for (var j = 0; j < L.costs.length; j++) { costs += "<div class=\"c\">− " + L.costs[j] + "</div>"; }
+  detail.innerHTML =
+    "<h2>" + L.lvl + " — " + L.nm + "</h2>" +
+    "<div class=\"what\">" + L.what + "</div>" +
+    "<div class=\"col2\">" +
+      "<div><div class=\"label\">" + L.reqLabel + "</div><pre>" + escapeHtml(L.req) + "</pre></div>" +
+      "<div><div class=\"label\">" + L.resLabel + "</div><pre>" + escapeHtml(L.res) + "</pre></div>" +
+    "</div>" +
+    "<div class=\"buys\"><div class=\"label\">What this rung buys / costs</div>" + buys + costs + "</div>";
+}
+
+function renderRestBar() {
+  if (markBox.checked) {
+    restbar.className = "restbar show";
+    restbar.innerHTML =
+      "Reality check: Levels 1–2 are where the overwhelming majority of “REST” APIs live (Level&nbsp;2 = HTTP-RPC done well). " +
+      "Fielding draws the REST line at <strong>Level&nbsp;3</strong>: <span class=\"fielding\">hypermedia as the engine of application state</span> is a constraint, not a nicety. " +
+      "If your API has no hypermedia controls, it is a perfectly good Level-2 HTTP API — just don’t call it REST and expect Fielding to agree.";
+  } else {
+    restbar.className = "restbar";
+  }
+}
+
+function renderAll() { renderLadder(); renderDetail(); renderRestBar(); }
+
+function escapeHtml(s) {
+  return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+
+markBox.addEventListener("change", renderAll);
+renderAll();
+</script>
+</body>
+</html>

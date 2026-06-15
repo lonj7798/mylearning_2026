@@ -1,0 +1,354 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>The Dependency Rule — Hexagon / Ports &amp; Adapters Explorer</title>
+<style>
+  :root {
+    --bg: #0e1116;
+    --panel: #161b22;
+    --core: #1f6feb;
+    --core-dim: #133a78;
+    --port: #d29922;
+    --primary: #2ea043;
+    --secondary: #a371f7;
+    --line: #6e7681;
+    --line-hot: #f0883e;
+    --text: #e6edf3;
+    --muted: #8b949e;
+    --bad: #f85149;
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0; padding: 0; background: var(--bg); color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+  }
+  header { padding: 16px 20px 6px; }
+  h1 { font-size: 18px; margin: 0 0 4px; font-weight: 650; }
+  .sub { color: var(--muted); font-size: 13px; max-width: 760px; line-height: 1.45; }
+  .wrap { display: flex; flex-wrap: wrap; gap: 16px; padding: 12px 20px 28px; }
+  .stage { flex: 1 1 560px; min-width: 340px; background: var(--panel); border-radius: 10px; padding: 10px; }
+  .side { flex: 1 1 320px; min-width: 300px; }
+  svg { width: 100%; height: auto; display: block; }
+  .legend { display: flex; flex-wrap: wrap; gap: 10px 18px; padding: 8px 4px 2px; font-size: 12px; color: var(--muted); }
+  .legend span { display: inline-flex; align-items: center; gap: 6px; }
+  .dot { width: 11px; height: 11px; border-radius: 3px; display: inline-block; }
+  .panel { background: var(--panel); border-radius: 10px; padding: 14px 16px; }
+  .panel h2 { font-size: 14px; margin: 0 0 8px; letter-spacing: .3px; }
+  #detail { min-height: 230px; font-size: 13px; line-height: 1.5; }
+  #detail .tag { display:inline-block; font-size:11px; padding:2px 8px; border-radius: 20px; margin-bottom:8px; font-weight:600; }
+  #detail code { background:#0b0f14; padding:1px 5px; border-radius:4px; font-size:12px; color:#79c0ff; }
+  .swapline { margin-top: 10px; padding-top: 10px; border-top: 1px solid #21262d; }
+  .swapline b { color: var(--text); }
+  button.swap {
+    margin-top: 10px; background: var(--core); color: #fff; border: none;
+    padding: 8px 12px; border-radius: 6px; font-size: 13px; cursor: pointer; font-weight: 600;
+  }
+  button.swap:hover { filter: brightness(1.1); }
+  .toggles { margin-top: 14px; font-size: 13px; }
+  .toggles label { display: flex; align-items: center; gap: 8px; cursor: pointer; padding: 4px 0; color: var(--muted); }
+  .clickable { cursor: pointer; }
+  .clickable:hover .adapter-box { stroke-width: 3; filter: brightness(1.15); }
+  text { font-family: inherit; }
+  .hint { color: var(--port); font-size: 12px; margin-top: 6px; }
+  .pulse { animation: pulse 1.1s ease-out; }
+  @keyframes pulse { 0% { opacity:.2 } 100% { opacity:1 } }
+  .coreLabel { font-weight: 700; }
+</style>
+</head>
+<body>
+<header>
+  <h1>The Dependency Rule — a clickable hexagon</h1>
+  <div class="sub">
+    The blue core in the center is the technology-free domain. It owns the <b>ports</b> (the gold interfaces). Everything
+    on the outside is an <b>adapter</b> implementing a port. <b>Every arrow points inward</b> — detail depends on policy, never the reverse.
+    Click any adapter to see what it does and to prove it can be swapped without touching the core. Toggle the arrows to see why "inward only" is the whole architecture.
+  </div>
+</header>
+
+<div class="wrap">
+  <div class="stage">
+    <div id="diagram"></div>
+    <div class="legend">
+      <span><i class="dot" style="background:var(--core)"></i>Domain core (policy)</span>
+      <span><i class="dot" style="background:var(--port)"></i>Port (interface the core owns)</span>
+      <span><i class="dot" style="background:var(--primary)"></i>Primary / driving adapter</span>
+      <span><i class="dot" style="background:var(--secondary)"></i>Secondary / driven adapter</span>
+    </div>
+  </div>
+
+  <div class="side">
+    <div class="panel">
+      <h2>WHAT YOU'RE LOOKING AT</h2>
+      <div id="detail">
+        <div class="tag" style="background:var(--core-dim); color:#9ecbff;">CLICK AN ADAPTER</div>
+        <p>Cockburn's intent, verbatim: <i>"Allow an application to equally be driven by users, programs, automated test
+        or batch scripts, and to be developed and tested in isolation from its eventual run-time devices and databases."</i></p>
+        <p class="hint">Driving adapters (left) initiate calls into the core. Driven adapters (right) are called out to by the core through a port it owns. Try clicking the LLM API adapter.</p>
+      </div>
+      <div class="toggles">
+        <label><input type="checkbox" id="tgArrows" checked /> Show dependency arrows</label>
+        <label><input type="checkbox" id="tgViolation" /> Show a <span style="color:var(--bad);font-weight:600;">&nbsp;forbidden outward dependency</span></label>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+"use strict";
+
+// ---- Adapter model -------------------------------------------------
+// Each adapter: id, label, kind (primary|secondary), the port it plugs into,
+// what it currently is, and what it can be swapped to (proving the core is untouched).
+var ADAPTERS = {
+  ui: {
+    label: "Web UI / Console",
+    kind: "primary",
+    port: "ForDrivingConversations",
+    now: "React dashboard",
+    swap: "a CLI, a Slack bot, or a cron trigger",
+    blurb: "A human-facing driving adapter. It calls the core through the same port a test harness uses. The core has no idea a screen exists."
+  },
+  api: {
+    label: "Inbound API caller",
+    kind: "primary",
+    port: "ForDrivingConversations",
+    now: "HTTP webhook from a CRM",
+    swap: "a message-queue consumer or a batch script",
+    blurb: "A program-facing driving adapter. Cockburn's point is symmetry: a remote HTTP app and a human drive the core identically."
+  },
+  test: {
+    label: "Automated test suite",
+    kind: "primary",
+    port: "ForDrivingConversations",
+    now: "in-process unit + scenario tests",
+    swap: "nothing — it IS the in-isolation driver Cockburn names",
+    blurb: "The test suite is a first-class primary adapter. Because it drives the core through the same port as production, the core is testable with no UI and no DB. This is the testability motivation hexagonal exists for."
+  },
+  db: {
+    label: "Database",
+    kind: "secondary",
+    port: "ForStoringState",
+    now: "Postgres repository",
+    swap: "an in-memory fake (for tests) or DynamoDB",
+    blurb: "A driven adapter. The core calls OUT through ForStoringState, an interface it defines in its own language. Swap Postgres for an in-memory fake by swapping the adapter — never by touching the core."
+  },
+  llm: {
+    label: "LLM API (the model vendor)",
+    kind: "secondary",
+    port: "ForGeneratingReplies",
+    now: "Anthropic Messages API",
+    swap: "another vendor, a local model, or a stub that returns canned text",
+    blurb: "For Lina TMR this is the load-bearing swap. The model vendor is a DETAIL behind a port the domain owns. Domain policy (how a lead is qualified, when to escalate) does not import the SDK. When the model market shifts, you write a new adapter; the expensive-to-reverse policy is untouched."
+  },
+  saas: {
+    label: "Vendor SDKs (SaaS tool APIs)",
+    kind: "secondary",
+    port: "ForCallingTools",
+    now: "Salesforce + Gmail + Sheets SDKs",
+    swap: "a different CRM, a sandbox, or recorded fixtures",
+    blurb: "Each external SaaS sits behind ForCallingTools. Its responses enter as plain DTOs at the boundary, not as live SDK objects dragged into the core. This is also where 'outside data' (ch-06) gets normalized."
+  }
+};
+
+var DEFAULT_DETAIL = document.getElementById("detail").innerHTML;
+
+// ---- Geometry ------------------------------------------------------
+var W = 640, H = 460, CX = 320, CY = 230, R = 118;
+var NS = "http://www.w3.org/2000/svg";
+
+function el(name, attrs, text) {
+  var e = document.createElementNS(NS, name);
+  for (var k in attrs) { if (attrs.hasOwnProperty(k)) e.setAttribute(k, attrs[k]); }
+  if (text !== undefined) e.textContent = text;
+  return e;
+}
+
+// hexagon points
+function hexPoints(cx, cy, r) {
+  var pts = [];
+  for (var i = 0; i < 6; i++) {
+    var a = Math.PI / 180 * (60 * i - 90);
+    pts.push([cx + r * Math.cos(a), cy + r * Math.sin(a)]);
+  }
+  return pts;
+}
+
+// Adapter box positions: primary on left, secondary on right
+var LAYOUT = [
+  { id: "ui",   x: 40,  y: 70,  kind: "primary" },
+  { id: "api",  x: 40,  y: 200, kind: "primary" },
+  { id: "test", x: 40,  y: 330, kind: "primary" },
+  { id: "db",   x: 470, y: 70,  kind: "secondary" },
+  { id: "llm",  x: 470, y: 200, kind: "secondary" },
+  { id: "saas", x: 470, y: 330, kind: "secondary" }
+];
+var BW = 130, BH = 64;
+
+var svg = el("svg", { viewBox: "0 0 " + W + " " + H, role: "img", "aria-label": "Hexagonal architecture dependency-rule diagram" });
+
+// arrowhead defs
+var defs = el("defs", {});
+function marker(id, color) {
+  var m = el("marker", { id: id, viewBox: "0 0 10 10", refX: "9", refY: "5", markerWidth: "7", markerHeight: "7", orient: "auto-start-reverse" });
+  m.appendChild(el("path", { d: "M 0 0 L 10 5 L 0 10 z", fill: color }));
+  return m;
+}
+defs.appendChild(marker("arrIn", "#f0883e"));
+defs.appendChild(marker("arrBad", "#f85149"));
+svg.appendChild(defs);
+
+// ---- Core hexagon --------------------------------------------------
+var pts = hexPoints(CX, CY, R);
+var polyStr = pts.map(function (p) { return p[0].toFixed(1) + "," + p[1].toFixed(1); }).join(" ");
+svg.appendChild(el("polygon", { points: polyStr, fill: "#10254a", stroke: "#1f6feb", "stroke-width": "2.5" }));
+
+var coreT1 = el("text", { x: CX, y: CY - 16, "text-anchor": "middle", fill: "#9ecbff", "font-size": "15", class: "coreLabel" }, "DOMAIN CORE");
+var coreT2 = el("text", { x: CX, y: CY + 4, "text-anchor": "middle", fill: "#9ecbff", "font-size": "12" }, "entities + use cases");
+var coreT3 = el("text", { x: CX, y: CY + 22, "text-anchor": "middle", fill: "#5a86c9", "font-size": "11" }, "(no framework, no SDK,");
+var coreT4 = el("text", { x: CX, y: CY + 37, "text-anchor": "middle", fill: "#5a86c9", "font-size": "11" }, "no DB, no vendor type)");
+svg.appendChild(coreT1); svg.appendChild(coreT2); svg.appendChild(coreT3); svg.appendChild(coreT4);
+
+// ---- Ports: small gold notches on the hexagon edge near each adapter
+function portDot(px, py, label, labelDx) {
+  var g = el("g", {});
+  g.appendChild(el("circle", { cx: px, cy: py, r: "7", fill: "#d29922", stroke: "#0e1116", "stroke-width": "1.5" }));
+  var t = el("text", { x: px + labelDx, y: py + 3, "text-anchor": labelDx < 0 ? "end" : "start", fill: "#e3b341", "font-size": "9.5" }, label);
+  g.appendChild(t);
+  return g;
+}
+
+// port anchor points on hexagon roughly facing each adapter
+var PORTS = {
+  ui:   { x: CX - R * 0.72, y: CY - 78, label: "ForDrivingConversations", dx: 12 },
+  api:  { x: CX - R + 6,    y: CY,      label: "(same driving port)", dx: 12 },
+  test: { x: CX - R * 0.72, y: CY + 78, label: "ForDrivingConversations", dx: 12 },
+  db:   { x: CX + R * 0.72, y: CY - 78, label: "ForStoringState", dx: -12 },
+  llm:  { x: CX + R - 6,    y: CY,      label: "ForGeneratingReplies", dx: -12 },
+  saas: { x: CX + R * 0.72, y: CY + 78, label: "ForCallingTools", dx: -12 }
+};
+
+// ---- Dependency arrows + adapter boxes -----------------------------
+var arrowEls = [];
+var violationEls = [];
+
+LAYOUT.forEach(function (a) {
+  var meta = ADAPTERS[a.id];
+  var port = PORTS[a.id];
+  var boxCx = a.x + BW / 2, boxCy = a.y + BH / 2;
+
+  // line from adapter -> port (always inward)
+  var startX = a.kind === "primary" ? a.x + BW : a.x;
+  var startY = boxCy;
+  var line = el("line", {
+    x1: startX, y1: startY, x2: port.x, y2: port.y,
+    stroke: "#f0883e", "stroke-width": "2", "marker-end": "url(#arrIn)", opacity: "0.85"
+  });
+  arrowEls.push(line);
+  svg.appendChild(line);
+
+  // port dot
+  svg.appendChild(portDot(port.x, port.y, port.label, port.dx));
+
+  // a "forbidden" outward arrow (core -> adapter) shown only on toggle, for the db adapter as the example
+  if (a.id === "db") {
+    var bad = el("line", {
+      x1: port.x, y1: port.y + 2, x2: startX, y2: startY + 2,
+      stroke: "#f85149", "stroke-width": "2.5", "marker-end": "url(#arrBad)",
+      "stroke-dasharray": "6 4", opacity: "0"
+    });
+    violationEls.push(bad);
+    svg.appendChild(bad);
+    var badT = el("text", { x: (port.x + startX) / 2, y: startY - 8, "text-anchor": "middle", fill: "#f85149", "font-size": "10", opacity: "0" }, "core importing the DB driver = RULE BROKEN");
+    violationEls.push(badT);
+    svg.appendChild(badT);
+  }
+
+  // adapter group (clickable)
+  var g = el("g", { class: "clickable" });
+  g.setAttribute("data-id", a.id);
+  var color = a.kind === "primary" ? "#2ea043" : "#a371f7";
+  var box = el("rect", {
+    x: a.x, y: a.y, width: BW, height: BH, rx: "8",
+    fill: "#0c1f14", stroke: color, "stroke-width": "2", class: "adapter-box"
+  });
+  if (a.kind !== "primary") box.setAttribute("fill", "#190f24");
+  g.appendChild(box);
+
+  var kindTag = el("text", { x: boxCx, y: a.y + 17, "text-anchor": "middle", fill: color, "font-size": "9", "letter-spacing": "0.5" },
+    a.kind === "primary" ? "DRIVING" : "DRIVEN");
+  g.appendChild(kindTag);
+
+  // wrap label across two lines if needed
+  var words = meta.label.split(" ");
+  var l1 = meta.label, l2 = "";
+  if (meta.label.length > 16) {
+    var mid = Math.ceil(words.length / 2);
+    l1 = words.slice(0, mid).join(" ");
+    l2 = words.slice(mid).join(" ");
+  }
+  g.appendChild(el("text", { x: boxCx, y: a.y + 37, "text-anchor": "middle", fill: "#e6edf3", "font-size": "12", "font-weight": "600" }, l1));
+  if (l2) g.appendChild(el("text", { x: boxCx, y: a.y + 52, "text-anchor": "middle", fill: "#e6edf3", "font-size": "12", "font-weight": "600" }, l2));
+
+  g.addEventListener("click", function () { showAdapter(a.id); });
+  svg.appendChild(g);
+});
+
+document.getElementById("diagram").appendChild(svg);
+
+// ---- Interaction ---------------------------------------------------
+function showAdapter(id) {
+  var m = ADAPTERS[id];
+  var kindColor = m.kind === "primary" ? "#2ea043" : "#a371f7";
+  var kindLabel = m.kind === "primary" ? "PRIMARY / DRIVING ADAPTER" : "SECONDARY / DRIVEN ADAPTER";
+  var dir = m.kind === "primary"
+    ? "It calls <b>into</b> the core through the port."
+    : "The core calls <b>out</b> to it through the port it owns.";
+  var html = "";
+  html += "<div class=\"tag\" style=\"background:rgba(255,255,255,0.06); color:" + kindColor + ";\">" + kindLabel + "</div>";
+  html += "<p><b>" + m.label + "</b> &middot; plugs into port <code>" + m.port + "</code>. " + dir + "</p>";
+  html += "<p>" + m.blurb + "</p>";
+  html += "<div class=\"swapline\">Currently: <b>" + m.now + "</b>.<br/>";
+  html += "Swap for: <b>" + m.swap + "</b> &mdash; the core never changes.";
+  html += "<br/><button class=\"swap\" id=\"doSwap\">Swap this adapter &rarr;</button></div>";
+  var d = document.getElementById("detail");
+  d.innerHTML = html;
+  d.classList.remove("pulse"); void d.offsetWidth; d.classList.add("pulse");
+  var btn = document.getElementById("doSwap");
+  if (btn) btn.addEventListener("click", function () { doSwap(id); });
+}
+
+function doSwap(id) {
+  var m = ADAPTERS[id];
+  var d = document.getElementById("detail");
+  var msg = "<div class=\"tag\" style=\"background:rgba(46,160,67,0.15); color:#3fb950;\">SWAPPED &mdash; CORE UNTOUCHED</div>";
+  msg += "<p>You replaced <b>" + m.label + "</b> (" + m.now + ") with <b>" + m.swap + "</b>.</p>";
+  msg += "<p>Zero lines of domain code changed. The port <code>" + m.port + "</code> is the contract; the adapter is the only thing that moved. ";
+  msg += "That is the Dependency Rule paying off: <i>the expensive-to-reverse part (policy) is insulated from the cheap-to-swap part (this vendor).</i></p>";
+  d.innerHTML = msg;
+  d.classList.remove("pulse"); void d.offsetWidth; d.classList.add("pulse");
+}
+
+document.getElementById("tgArrows").addEventListener("change", function (e) {
+  var show = e.target.checked;
+  arrowEls.forEach(function (l) { l.setAttribute("opacity", show ? "0.85" : "0"); });
+});
+
+document.getElementById("tgViolation").addEventListener("change", function (e) {
+  var show = e.target.checked;
+  violationEls.forEach(function (l) { l.setAttribute("opacity", show ? "1" : "0"); });
+  if (show) {
+    var d = document.getElementById("detail");
+    d.innerHTML = "<div class=\"tag\" style=\"background:rgba(248,81,73,0.15); color:#f85149;\">FORBIDDEN DEPENDENCY</div>"
+      + "<p>The red dashed arrow shows the core importing the database driver directly &mdash; policy depending on detail. "
+      + "Now the domain can't compile without Postgres, can't be tested without a DB, and can't survive a vendor swap. "
+      + "<b>This is exactly the arrow the Dependency Rule forbids.</b> Untick to restore the legal design.</p>";
+    d.classList.remove("pulse"); void d.offsetWidth; d.classList.add("pulse");
+  } else {
+    document.getElementById("detail").innerHTML = DEFAULT_DETAIL;
+  }
+});
+</script>
+</body>
+</html>

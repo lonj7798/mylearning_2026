@@ -1,0 +1,350 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Granularity Balance — Disintegrators vs Integrators</title>
+<style>
+  :root {
+    --bg: #11151c;
+    --panel: #1a212c;
+    --panel2: #222c3a;
+    --ink: #e6edf3;
+    --muted: #93a1b3;
+    --split: #f0883e;
+    --keep: #4ec9b0;
+    --warn: #ff5c5c;
+    --line: #3a4658;
+    --good: #6fcf97;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--ink);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+    line-height: 1.45;
+    padding: 24px 16px 60px;
+  }
+  .wrap { max-width: 1040px; margin: 0 auto; }
+  h1 { font-size: 1.35rem; margin: 0 0 4px; }
+  .sub { color: var(--muted); font-size: 0.9rem; margin: 0 0 20px; }
+  .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }
+  @media (max-width: 760px) { .grid { grid-template-columns: 1fr; } }
+  .col {
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    padding: 14px 16px;
+  }
+  .col h2 { font-size: 1.02rem; margin: 0 0 2px; }
+  .col .hint { color: var(--muted); font-size: 0.78rem; margin: 0 0 12px; }
+  .col.split h2 { color: var(--split); }
+  .col.keep h2 { color: var(--keep); }
+  .force {
+    display: flex; align-items: flex-start; gap: 10px;
+    padding: 9px 10px; border-radius: 8px; cursor: pointer;
+    background: var(--panel2); margin-bottom: 8px;
+    border: 1px solid transparent; transition: border-color .12s, background .12s;
+    user-select: none;
+  }
+  .force:hover { border-color: var(--line); }
+  .force.on.split { border-color: var(--split); background: #2a2018; }
+  .force.on.keep { border-color: var(--keep); background: #16292a; }
+  .force input { margin-top: 3px; accent-color: var(--ink); flex: 0 0 auto; }
+  .force .label { font-size: 0.86rem; }
+  .force .weight {
+    margin-left: auto; flex: 0 0 auto; font-size: 0.7rem; color: var(--muted);
+    border: 1px solid var(--line); border-radius: 999px; padding: 1px 7px;
+  }
+  .force.on.split .weight { color: var(--split); border-color: var(--split); }
+  .force.on.keep .weight { color: var(--keep); border-color: var(--keep); }
+  .force .desc { display:block; color: var(--muted); font-size: 0.72rem; margin-top: 2px; }
+
+  /* scale */
+  .scaleWrap {
+    margin: 22px auto 6px; background: var(--panel); border: 1px solid var(--line);
+    border-radius: 10px; padding: 18px 16px 10px;
+  }
+  svg { width: 100%; height: 240px; display: block; }
+  .beam { stroke: var(--ink); stroke-width: 6; stroke-linecap: round; transition: transform .5s cubic-bezier(.4,1.2,.4,1); transform-origin: 300px 60px; }
+  .pan { transition: transform .5s cubic-bezier(.4,1.2,.4,1); }
+  .panPlate { fill: var(--panel2); stroke: var(--line); stroke-width: 2; }
+  .panLabel { fill: var(--ink); font-size: 13px; font-weight: 600; }
+  .panCount { font-size: 22px; font-weight: 700; }
+  .splitFill { fill: var(--split); }
+  .keepFill { fill: var(--keep); }
+  .post { stroke: var(--line); stroke-width: 8; stroke-linecap: round; }
+  .fulcrum { fill: var(--line); }
+
+  /* recommendation */
+  .verdict {
+    margin-top: 14px; border-radius: 10px; padding: 16px 18px;
+    border: 1px solid var(--line); background: var(--panel);
+    transition: background .2s, border-color .2s;
+  }
+  .verdict .tag {
+    display: inline-block; font-size: 0.72rem; letter-spacing: .06em; text-transform: uppercase;
+    padding: 3px 9px; border-radius: 999px; margin-bottom: 8px; font-weight: 700;
+  }
+  .verdict h3 { margin: 0 0 6px; font-size: 1.1rem; }
+  .verdict p { margin: 0; font-size: 0.88rem; color: var(--muted); }
+  .verdict.monolith { border-color: var(--keep); }
+  .verdict.monolith .tag { background: var(--keep); color: #06231e; }
+  .verdict.modular { border-color: var(--good); }
+  .verdict.modular .tag { background: var(--good); color: #07241a; }
+  .verdict.micro { border-color: var(--split); }
+  .verdict.micro .tag { background: var(--split); color: #2a1605; }
+  .verdict.distributed { border-color: var(--warn); background: #2a1414; }
+  .verdict.distributed .tag { background: var(--warn); color: #2a0606; }
+  .verdict.distributed h3 { color: var(--warn); }
+
+  .dbtoggle {
+    margin-top: 16px; display: flex; align-items: center; gap: 12px;
+    background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 12px 16px;
+  }
+  .dbtoggle.armed { border-color: var(--warn); background: #241313; }
+  .switch { position: relative; width: 46px; height: 26px; flex: 0 0 auto; }
+  .switch input { opacity: 0; width: 0; height: 0; }
+  .slider { position:absolute; inset:0; background: var(--line); border-radius: 999px; transition: .2s; cursor: pointer; }
+  .slider:before { content:""; position:absolute; height:20px; width:20px; left:3px; top:3px; background:#fff; border-radius:50%; transition:.2s; }
+  .switch input:checked + .slider { background: var(--warn); }
+  .switch input:checked + .slider:before { transform: translateX(20px); }
+  .dbtoggle .txt { font-size: 0.86rem; }
+  .dbtoggle .txt small { display:block; color: var(--muted); font-size: 0.74rem; }
+
+  .controls { margin-top: 16px; display:flex; gap: 10px; flex-wrap: wrap; }
+  button.reset {
+    background: var(--panel2); color: var(--ink); border: 1px solid var(--line);
+    border-radius: 8px; padding: 8px 14px; font-size: 0.82rem; cursor: pointer;
+  }
+  button.reset:hover { border-color: var(--ink); }
+  .legend { margin-top: 18px; color: var(--muted); font-size: 0.76rem; }
+  .legend b { color: var(--ink); }
+  code { background: var(--panel2); padding: 1px 5px; border-radius: 4px; font-size: 0.8rem; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Granularity Balance — Disintegrators vs Integrators</h1>
+  <p class="sub">Service size is the <em>output</em> of a trade-off analysis, not a rule of thumb. Toggle the forces on each pan; the scale tips and the recommendation moves across <b>monolith → modular monolith → microservice</b>. Then arm the shared-database switch to see the distributed-monolith trap fire.</p>
+
+  <div class="grid">
+    <div class="col split">
+      <h2>Disintegrators — forces to SPLIT</h2>
+      <p class="hint">Reasons a seam wants its own deployable service.</p>
+      <div id="splitForces"></div>
+    </div>
+    <div class="col keep">
+      <h2>Integrators — forces to KEEP TOGETHER</h2>
+      <p class="hint">Reasons a seam wants to stay in one quantum. A shared transaction is the strongest.</p>
+      <div id="keepForces"></div>
+    </div>
+  </div>
+
+  <div class="dbtoggle" id="dbBox">
+    <label class="switch">
+      <input type="checkbox" id="dbToggle">
+      <span class="slider"></span>
+    </label>
+    <div class="txt">
+      <span><b>Shared database across the split parts</b></span>
+      <small>Two boxes, one schema = one architecture quantum. If you also split, this is the distributed-monolith trap.</small>
+    </div>
+  </div>
+
+  <div class="scaleWrap">
+    <svg viewBox="0 0 600 240" role="img" aria-label="Balance scale of split forces versus keep-together forces">
+      <!-- base + post -->
+      <line class="post" x1="300" y1="60" x2="300" y2="200"></line>
+      <rect class="fulcrum" x="250" y="200" width="100" height="14" rx="6"></rect>
+      <!-- beam group rotates -->
+      <g id="beamGroup">
+        <line class="beam" id="beam" x1="80" y1="60" x2="520" y2="60"></line>
+        <!-- left pan (split) -->
+        <g class="pan" id="leftPan">
+          <line x1="80" y1="60" x2="80" y2="120" stroke="#3a4658" stroke-width="2"></line>
+          <path class="panPlate splitFill" d="M30 120 H130 L115 150 H45 Z" opacity="0.18"></path>
+          <path class="panPlate" d="M30 120 H130 L115 150 H45 Z" fill="none"></path>
+          <text class="panLabel splitFill" x="80" y="112" text-anchor="middle">SPLIT</text>
+          <text class="panCount splitFill" id="leftCount" x="80" y="142" text-anchor="middle">0</text>
+        </g>
+        <!-- right pan (keep) -->
+        <g class="pan" id="rightPan">
+          <line x1="520" y1="60" x2="520" y2="120" stroke="#3a4658" stroke-width="2"></line>
+          <path class="panPlate keepFill" d="M470 120 H570 L555 150 H485 Z" opacity="0.18"></path>
+          <path class="panPlate" d="M470 120 H570 L555 150 H485 Z" fill="none"></path>
+          <text class="panLabel keepFill" x="520" y="112" text-anchor="middle">KEEP</text>
+          <text class="panCount keepFill" id="rightCount" x="520" y="142" text-anchor="middle">0</text>
+        </g>
+      </g>
+    </svg>
+  </div>
+
+  <div class="verdict" id="verdict">
+    <span class="tag" id="vtag">recommendation</span>
+    <h3 id="vtitle"></h3>
+    <p id="vbody"></p>
+  </div>
+
+  <div class="controls">
+    <button class="reset" id="resetBtn">Reset all forces</button>
+  </div>
+
+  <p class="legend">
+    <b>How to read it:</b> the architecture-quantum test asks whether a unit is independently deployable <i>with its own data</i>. A shared DB collapses two boxes into one quantum, so splitting while sharing a database buys you no independence and all the distribution pain — the <b>distributed monolith</b>. Weights are illustrative; in real analysis you weigh the specific forces. Source: <i>Software Architecture: The Hard Parts</i> (granularity disintegrators vs integrators) and the distributed-monolith litmus test (<code>can you deploy A without B?</code>).
+  </p>
+</div>
+
+<script>
+  // Each force carries a weight. A shared transaction is the strongest integrator.
+  var splitForces = [
+    { id: "scale", label: "Divergent scalability / throughput", weight: 2, desc: "One part needs much more capacity than another." },
+    { id: "fault", label: "Fault isolation", weight: 2, desc: "One part failing must not take the other down." },
+    { id: "security", label: "Differing security / access", weight: 1, desc: "Different compliance or access boundaries." },
+    { id: "volatility", label: "Distinct code volatility", weight: 1, desc: "One part changes far more often." },
+    { id: "team", label: "Separate team ownership (Conway)", weight: 2, desc: "Different teams want independent release cadence." }
+  ];
+  var keepForces = [
+    { id: "txn", label: "A database transaction must span them", weight: 3, desc: "The strongest integrator — you would lose ACID across the split." },
+    { id: "data", label: "Tight data dependencies", weight: 2, desc: "They constantly read each other's data." },
+    { id: "chatty", label: "Heavy chatty workflow / orchestration", weight: 2, desc: "Network round-trips would dominate the work." },
+    { id: "sharedcode", label: "Shared code that changes together", weight: 1, desc: "A change in one always forces a change in the other." }
+  ];
+
+  var state = { split: {}, keep: {}, db: false };
+
+  function buildForces(list, container, side) {
+    list.forEach(function (f) {
+      state[side][f.id] = false;
+      var row = document.createElement("label");
+      row.className = "force " + side;
+      var cb = document.createElement("input");
+      cb.type = "checkbox";
+      cb.setAttribute("data-side", side);
+      cb.setAttribute("data-id", f.id);
+      var wrap = document.createElement("span");
+      wrap.className = "label";
+      // Inner double-quotes inside this string are escaped with a backslash to keep the script syntax-valid.
+      wrap.innerHTML = f.label + " <span class=\"desc\">" + f.desc + "</span>";
+      var w = document.createElement("span");
+      w.className = "weight";
+      w.textContent = "w " + f.weight;
+      row.appendChild(cb);
+      row.appendChild(wrap);
+      row.appendChild(w);
+      cb.addEventListener("change", function () {
+        state[side][f.id] = cb.checked;
+        row.classList.toggle("on", cb.checked);
+        render();
+      });
+      container.appendChild(row);
+    });
+  }
+
+  function sumSide(side, list) {
+    var total = 0;
+    list.forEach(function (f) { if (state[side][f.id]) total += f.weight; });
+    return total;
+  }
+
+  function anySplit() {
+    return splitForces.some(function (f) { return state.split[f.id]; });
+  }
+
+  function render() {
+    var s = sumSide("split", splitForces);
+    var k = sumSide("keep", keepForces);
+
+    document.getElementById("leftCount").textContent = s;
+    document.getElementById("rightCount").textContent = k;
+
+    // tip the beam: positive angle when split (left) is heavier -> left goes down
+    var diff = s - k;
+    var angle = Math.max(-14, Math.min(14, diff * 2.2));
+    document.getElementById("beam").style.transform = "rotate(" + angle + "deg)";
+    // pans drop/rise opposite to the beam end they hang from
+    var leftDrop = angle * 1.4;   // left end goes down as angle increases
+    var rightDrop = -angle * 1.4;
+    document.getElementById("leftPan").style.transform = "translateY(" + leftDrop + "px)";
+    document.getElementById("rightPan").style.transform = "translateY(" + rightDrop + "px)";
+
+    var v = document.getElementById("verdict");
+    var tag = document.getElementById("vtag");
+    var title = document.getElementById("vtitle");
+    var body = document.getElementById("vbody");
+    v.className = "verdict";
+
+    // Distributed-monolith trap: shared DB armed AND you are splitting.
+    if (state.db && anySplit()) {
+      v.classList.add("distributed");
+      tag.textContent = "WARNING";
+      title.textContent = "Distributed monolith — all the pain, none of the independence";
+      body.innerHTML = "You armed a <b>shared database</b> across parts you are splitting. Two boxes + one schema = one architecture quantum, so you canNOT deploy A without B. You are paying the full distribution tax (latency, partial failure, eventual consistency) and buying <b>zero</b> deploy-independence. Give each service its OWN data, or do not split. Litmus: <i>can you deploy A without B?</i> Right now, no.";
+      return;
+    }
+
+    if (state.db && !anySplit()) {
+      // shared DB but single unit -> that is just a monolith, which is fine
+      v.classList.add("monolith");
+      tag.textContent = "monolith";
+      title.textContent = "Monolith (single unit, shared data is fine here)";
+      body.innerHTML = "One deployable unit sharing one database is just a monolith — perfectly fine. The shared DB only becomes the trap when you ALSO split into separate services. No distribution tax paid.";
+      return;
+    }
+
+    if (diff <= 0) {
+      // integrators win or tie -> keep together
+      if (k === 0 && s === 0) {
+        v.classList.add("modular");
+        tag.textContent = "default";
+        title.textContent = "Modular monolith — the default when unsure";
+        body.innerHTML = "No decisive force yet. Default to a <b>modular monolith</b>: one deployable unit, strict internal module boundaries, one schema per module. A wrong boundary is a refactor, not a migration. Strictly dominates a distributed monolith.";
+      } else {
+        v.classList.add("monolith");
+        tag.textContent = "keep together";
+        title.textContent = "Keep together — integrators win";
+        body.innerHTML = "Integrators outweigh disintegrators (" + k + " vs " + s + "). Keep this seam inside one quantum. If a transaction must span the parts, that single integrator usually settles it — a saga is not a free transaction.";
+      }
+      return;
+    }
+
+    if (diff > 0 && diff < 4) {
+      v.classList.add("modular");
+      tag.textContent = "modular monolith";
+      title.textContent = "Modular monolith — split the MODULE, not the deployment";
+      body.innerHTML = "Disintegrators lead but not decisively (" + s + " vs " + k + "). Draw the seam as a clean in-process module first. Extract to a real service only when the disintegrators pull clearly ahead — and never while a shared transaction binds the parts.";
+      return;
+    }
+
+    // diff >= 4: disintegrators clearly win
+    v.classList.add("micro");
+    tag.textContent = "microservice";
+    title.textContent = "Extract a microservice — disintegrators clearly win";
+    body.innerHTML = "Disintegrators decisively outweigh integrators (" + s + " vs " + k + "). This seam is a strong extraction candidate. Pay the MicroservicePremium knowingly: give it its OWN data, an explicit contract, and resilience at the integration point. Verify the quantum: can you deploy it without the rest? It must be yes.";
+  }
+
+  buildForces(splitForces, document.getElementById("splitForces"), "split");
+  buildForces(keepForces, document.getElementById("keepForces"), "keep");
+
+  document.getElementById("dbToggle").addEventListener("change", function (e) {
+    state.db = e.target.checked;
+    document.getElementById("dbBox").classList.toggle("armed", state.db);
+    render();
+  });
+
+  document.getElementById("resetBtn").addEventListener("click", function () {
+    splitForces.forEach(function (f) { state.split[f.id] = false; });
+    keepForces.forEach(function (f) { state.keep[f.id] = false; });
+    state.db = false;
+    var boxes = document.querySelectorAll("input[type=checkbox]");
+    boxes.forEach(function (b) { b.checked = false; });
+    document.querySelectorAll(".force").forEach(function (r) { r.classList.remove("on"); });
+    document.getElementById("dbBox").classList.remove("armed");
+    render();
+  });
+
+  render();
+</script>
+</body>
+</html>

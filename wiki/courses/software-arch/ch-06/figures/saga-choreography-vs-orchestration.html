@@ -1,0 +1,391 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Saga: Choreography vs Orchestration</title>
+<style>
+  :root {
+    --bg: #0f1419;
+    --panel: #1a2129;
+    --ink: #e6edf3;
+    --muted: #8b98a5;
+    --ok: #3fb950;
+    --warn: #d29922;
+    --bad: #f85149;
+    --comp: #a371f7;
+    --line: #30363d;
+    --accent: #58a6ff;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--ink);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+    line-height: 1.5;
+    padding: 24px;
+  }
+  h1 { font-size: 20px; margin: 0 0 4px; }
+  .sub { color: var(--muted); font-size: 13px; margin-bottom: 18px; }
+  .controls {
+    display: flex; flex-wrap: wrap; gap: 12px; align-items: center;
+    background: var(--panel); border: 1px solid var(--line);
+    border-radius: 10px; padding: 14px 16px; margin-bottom: 18px;
+  }
+  .controls .group { display: flex; gap: 8px; align-items: center; }
+  .controls label { font-size: 13px; color: var(--muted); margin-right: 4px; }
+  button {
+    background: #21262d; color: var(--ink); border: 1px solid var(--line);
+    border-radius: 7px; padding: 8px 14px; font-size: 13px; cursor: pointer;
+    transition: background .15s, border-color .15s;
+  }
+  button:hover { background: #2d333b; border-color: var(--accent); }
+  button:disabled { opacity: .4; cursor: not-allowed; }
+  button.active { background: var(--accent); color: #06121f; border-color: var(--accent); font-weight: 600; }
+  button.danger { border-color: var(--bad); color: var(--bad); }
+  button.danger:hover { background: rgba(248,81,73,.12); }
+  button.danger.active { background: var(--bad); color: #1a0000; }
+  .stage {
+    background: var(--panel); border: 1px solid var(--line);
+    border-radius: 10px; padding: 22px; margin-bottom: 16px;
+    position: relative; min-height: 320px;
+  }
+  .row { display: flex; gap: 16px; justify-content: space-between; align-items: stretch; }
+  .svc {
+    flex: 1; background: #11171e; border: 2px solid var(--line);
+    border-radius: 10px; padding: 14px; transition: all .3s;
+    position: relative;
+  }
+  .svc.active { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(88,166,255,.18); }
+  .svc.done { border-color: var(--ok); }
+  .svc.compensated { border-color: var(--comp); }
+  .svc.failed { border-color: var(--bad); box-shadow: 0 0 0 3px rgba(248,81,73,.2); }
+  .svc h3 { margin: 0 0 6px; font-size: 14px; }
+  .svc .op { font-size: 12px; color: var(--muted); }
+  .svc .state {
+    margin-top: 10px; font-size: 12px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    padding: 6px 8px; border-radius: 6px; background: #0a0e13; border: 1px solid var(--line);
+    min-height: 38px; white-space: pre-wrap;
+  }
+  .badge {
+    position: absolute; top: 10px; right: 10px; font-size: 10px;
+    padding: 2px 7px; border-radius: 20px; text-transform: uppercase; letter-spacing: .5px;
+  }
+  .badge.ok { background: rgba(63,185,80,.18); color: var(--ok); }
+  .badge.run { background: rgba(88,166,255,.18); color: var(--accent); }
+  .badge.fail { background: rgba(248,81,73,.18); color: var(--bad); }
+  .badge.comp { background: rgba(163,113,247,.18); color: var(--comp); }
+  .coordinator {
+    margin: 0 auto 18px; max-width: 340px; text-align: center;
+    background: #161d26; border: 2px dashed var(--accent); border-radius: 10px;
+    padding: 12px; font-size: 13px; transition: opacity .3s;
+  }
+  .coordinator.hidden { display: none; }
+  .coordinator .label { color: var(--accent); font-weight: 600; font-size: 12px; }
+  .coordinator .msg { color: var(--muted); font-size: 12px; margin-top: 4px; min-height: 16px; }
+  .arrows { text-align: center; color: var(--muted); font-size: 11px; margin: 6px 0; min-height: 16px; }
+  .log {
+    background: #0a0e13; border: 1px solid var(--line); border-radius: 10px;
+    padding: 14px 16px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 12.5px; max-height: 230px; overflow-y: auto;
+  }
+  .log .entry { padding: 2px 0; border-bottom: 1px solid #161b22; }
+  .log .t-fwd { color: var(--ink); }
+  .log .t-evt { color: var(--accent); }
+  .log .t-cmd { color: var(--warn); }
+  .log .t-fail { color: var(--bad); }
+  .log .t-comp { color: var(--comp); }
+  .log .t-note { color: var(--muted); font-style: italic; }
+  .iso {
+    margin-top: 14px; background: rgba(210,153,34,.07);
+    border: 1px solid var(--warn); border-radius: 8px; padding: 10px 14px;
+    font-size: 12.5px; color: var(--warn); display: none;
+  }
+  .iso.show { display: block; }
+  .iso b { color: #f0c674; }
+  .legend { display: flex; flex-wrap: wrap; gap: 14px; font-size: 11.5px; color: var(--muted); margin-top: 12px; }
+  .legend span { display: inline-flex; align-items: center; gap: 5px; }
+  .dot { width: 10px; height: 10px; border-radius: 50%; display: inline-block; }
+</style>
+</head>
+<body>
+  <h1>Saga: 3-Step Order &mdash; Choreography vs Orchestration</h1>
+  <div class="sub">
+    A saga replaces one ACID transaction with three <b>local</b> transactions glued together. There is no rollback &mdash; failures run <b>compensating transactions</b> in reverse. Toggle the coordination style, then inject a failure and watch the lost-isolation window.
+  </div>
+
+  <div class="controls">
+    <div class="group">
+      <label>Style:</label>
+      <button id="btnChor" class="active" onclick="setStyle('chor')">Choreography (events)</button>
+      <button id="btnOrch" onclick="setStyle('orch')">Orchestration (commands)</button>
+    </div>
+    <div class="group">
+      <label>Inject failure at:</label>
+      <button id="failNone" class="active" onclick="setFail(0)">None</button>
+      <button id="fail2" class="danger" onclick="setFail(2)">Step 2 (Charge)</button>
+      <button id="fail3" class="danger" onclick="setFail(3)">Step 3 (Confirm)</button>
+    </div>
+    <div class="group">
+      <button id="runBtn" onclick="runSaga()">&#9654; Run saga</button>
+      <button onclick="resetSaga()">&#8634; Reset</button>
+    </div>
+  </div>
+
+  <div class="stage">
+    <div id="coordinator" class="coordinator hidden">
+      <div class="label">Order Orchestrator (central coordinator)</div>
+      <div id="coordMsg" class="msg">Idle &mdash; will issue commands and await replies.</div>
+    </div>
+    <div id="arrows" class="arrows"></div>
+    <div class="row">
+      <div class="svc" id="svc1">
+        <span class="badge" id="b1"></span>
+        <h3>1. Inventory</h3>
+        <div class="op">reserve(item) &nbsp;|&nbsp; compensate: release(item)</div>
+        <div class="state" id="s1">stock: 5 &mdash; reserved: 0</div>
+      </div>
+      <div class="svc" id="svc2">
+        <span class="badge" id="b2"></span>
+        <h3>2. Payment</h3>
+        <div class="op">charge(card) &nbsp;|&nbsp; compensate: refund(card)</div>
+        <div class="state" id="s2">balance: $0 &mdash; charged: $0</div>
+      </div>
+      <div class="svc" id="svc3">
+        <span class="badge" id="b3"></span>
+        <h3>3. Order</h3>
+        <div class="op">confirm(order) &nbsp;|&nbsp; compensate: cancel(order)</div>
+        <div class="state" id="s3">order: PENDING</div>
+      </div>
+    </div>
+    <div class="iso" id="isoNote"></div>
+    <div class="legend">
+      <span><span class="dot" style="background:var(--ok)"></span>committed local txn</span>
+      <span><span class="dot" style="background:var(--accent)"></span>running</span>
+      <span><span class="dot" style="background:var(--bad)"></span>failed step</span>
+      <span><span class="dot" style="background:var(--comp)"></span>compensated (semantically undone)</span>
+    </div>
+  </div>
+
+  <div class="log" id="log"></div>
+
+<script>
+  "use strict";
+
+  var style = "chor";   // "chor" or "orch"
+  var failAt = 0;       // 0 = none, 2, or 3
+  var running = false;
+
+  var svcEls = [null, document.getElementById("svc1"), document.getElementById("svc2"), document.getElementById("svc3")];
+  var stateEls = [null, document.getElementById("s1"), document.getElementById("s2"), document.getElementById("s3")];
+  var badgeEls = [null, document.getElementById("b1"), document.getElementById("b2"), document.getElementById("b3")];
+  var logEl = document.getElementById("log");
+  var coordEl = document.getElementById("coordinator");
+  var coordMsg = document.getElementById("coordMsg");
+  var arrowsEl = document.getElementById("arrows");
+  var isoNote = document.getElementById("isoNote");
+
+  function wait(ms) { return new Promise(function(res){ setTimeout(res, ms); }); }
+
+  function log(cls, text) {
+    var d = document.createElement("div");
+    d.className = "entry " + cls;
+    d.textContent = text;
+    logEl.appendChild(d);
+    logEl.scrollTop = logEl.scrollHeight;
+  }
+
+  function setBadge(i, cls, text) {
+    badgeEls[i].className = "badge " + cls;
+    badgeEls[i].textContent = text;
+  }
+
+  function setStyle(s) {
+    if (running) return;
+    style = s;
+    document.getElementById("btnChor").classList.toggle("active", s === "chor");
+    document.getElementById("btnOrch").classList.toggle("active", s === "orch");
+    coordEl.classList.toggle("hidden", s !== "orch");
+    resetSaga();
+  }
+
+  function setFail(n) {
+    if (running) return;
+    failAt = n;
+    document.getElementById("failNone").classList.toggle("active", n === 0);
+    document.getElementById("fail2").classList.toggle("active", n === 2);
+    document.getElementById("fail3").classList.toggle("active", n === 3);
+  }
+
+  function resetSaga() {
+    running = false;
+    logEl.innerHTML = "";
+    arrowsEl.textContent = "";
+    isoNote.className = "iso";
+    coordMsg.textContent = "Idle — will issue commands and await replies.";
+    var defaults = ["", "stock: 5 — reserved: 0", "balance: $0 — charged: $0", "order: PENDING"];
+    for (var i = 1; i <= 3; i++) {
+      svcEls[i].className = "svc";
+      stateEls[i].textContent = defaults[i];
+      setBadge(i, "", "");
+    }
+    document.getElementById("runBtn").disabled = false;
+  }
+
+  // Forward step: commits the local transaction for service i.
+  async function doForward(i) {
+    svcEls[i].classList.add("active");
+    setBadge(i, "run", "running");
+    if (style === "orch") {
+      coordMsg.textContent = "→ command: " + cmdName(i);
+      log("t-cmd", "ORCHESTRATOR → " + svcName(i) + ": command " + cmdName(i));
+    } else {
+      log("t-fwd", svcName(i) + ": begin local txn " + cmdName(i));
+    }
+    await wait(700);
+    svcEls[i].classList.remove("active");
+    svcEls[i].classList.add("done");
+    setBadge(i, "ok", "committed");
+    applyForward(i);
+    log("t-fwd", svcName(i) + ": COMMIT (local txn done)");
+    if (style === "chor") {
+      var ev = evtName(i);
+      arrowsEl.textContent = "event emitted: " + ev + "  →  next service reacts";
+      log("t-evt", svcName(i) + " emits event · " + ev + "  (outbox → broker, at-least-once)");
+    } else {
+      coordMsg.textContent = "← reply: " + cmdName(i) + " OK";
+      log("t-cmd", svcName(i) + " → ORCHESTRATOR: reply OK");
+    }
+  }
+
+  function applyForward(i) {
+    if (i === 1) stateEls[1].textContent = "stock: 4 — reserved: 1";
+    if (i === 2) stateEls[2].textContent = "balance: -$99 — charged: $99";
+    if (i === 3) stateEls[3].textContent = "order: CONFIRMED";
+  }
+
+  // Failure of step i.
+  async function doFail(i) {
+    svcEls[i].classList.add("active");
+    setBadge(i, "run", "running");
+    if (style === "orch") {
+      coordMsg.textContent = "→ command: " + cmdName(i);
+      log("t-cmd", "ORCHESTRATOR → " + svcName(i) + ": command " + cmdName(i));
+    } else {
+      log("t-fwd", svcName(i) + ": begin local txn " + cmdName(i));
+    }
+    await wait(700);
+    svcEls[i].classList.remove("active");
+    svcEls[i].classList.add("failed");
+    setBadge(i, "fail", "FAILED");
+    log("t-fail", svcName(i) + ": " + cmdName(i) + " FAILED — local txn rolled back (no global rollback exists)");
+    if (style === "orch") {
+      coordMsg.textContent = "← reply: " + cmdName(i) + " FAILED — starting compensation";
+      log("t-cmd", svcName(i) + " → ORCHESTRATOR: reply FAILED");
+    } else {
+      log("t-evt", svcName(i) + " emits event · " + evtName(i) + "_FAILED  (triggers compensations)");
+    }
+  }
+
+  // Compensate a previously-committed step i (run in reverse).
+  async function doCompensate(i) {
+    svcEls[i].classList.remove("done");
+    svcEls[i].classList.add("active");
+    setBadge(i, "run", "compensating");
+    if (style === "orch") {
+      coordMsg.textContent = "→ compensate: " + compName(i);
+      log("t-cmd", "ORCHESTRATOR → " + svcName(i) + ": command " + compName(i));
+    }
+    await wait(650);
+    svcEls[i].classList.remove("active");
+    svcEls[i].classList.add("compensated");
+    setBadge(i, "comp", "compensated");
+    applyCompensate(i);
+    if (style === "orch") {
+      log("t-comp", svcName(i) + ": " + compName(i) + " committed (semantic undo)");
+    } else {
+      log("t-comp", svcName(i) + " reacts to failure event → " + compName(i) + " (semantic undo)");
+    }
+  }
+
+  function applyCompensate(i) {
+    if (i === 1) stateEls[1].textContent = "stock: 5 — reserved: 0  (released)";
+    if (i === 2) stateEls[2].textContent = "balance: $0 — refunded $99";
+    if (i === 3) stateEls[3].textContent = "order: CANCELLED";
+  }
+
+  function svcName(i) { return ["", "Inventory", "Payment", "Order"][i]; }
+  function cmdName(i) { return ["", "reserve(item)", "charge(card)", "confirm(order)"][i]; }
+  function compName(i) { return ["", "release(item)", "refund(card)", "cancel(order)"][i]; }
+  function evtName(i) { return ["", "ItemReserved", "CardCharged", "OrderConfirmed"][i]; }
+
+  async function runSaga() {
+    if (running) return;
+    running = true;
+    resetSaga();
+    running = true; // resetSaga cleared it
+    document.getElementById("runBtn").disabled = true;
+
+    log("t-note", "--- saga start · style=" + (style === "chor" ? "choreography" : "orchestration") +
+        " · failAt=" + (failAt || "none") + " ---");
+
+    // Forward pass.
+    for (var i = 1; i <= 3; i++) {
+      if (failAt === i) {
+        await doFail(i);
+        break;
+      }
+      await doForward(i);
+      // After a step commits, that committed state is VISIBLE to other sagas
+      // before the whole saga ends => the lost-isolation window opens.
+      if (failAt !== 0 && i < failAt) {
+        showIsoWindow(i);
+      }
+      await wait(250);
+    }
+
+    if (failAt !== 0) {
+      // Compensate the committed prefix, in REVERSE order.
+      log("t-note", "no global rollback — running compensations in reverse for committed steps");
+      for (var j = failAt - 1; j >= 1; j--) {
+        await doCompensate(j);
+        await wait(250);
+      }
+      log("t-comp", "saga ended in compensated state: T1..T" + (failAt-1) +
+          " then C" + (failAt-1) + "..C1 (a clean prefix+undo, never a stuck partial)");
+      finalizeIsoWindow();
+    } else {
+      log("t-fwd", "saga committed: all three local txns succeeded");
+    }
+
+    document.getElementById("runBtn").disabled = false;
+    running = false;
+  }
+
+  function showIsoWindow(committedUpTo) {
+    isoNote.className = "iso show";
+    var what = committedUpTo === 1
+      ? "Inventory already shows <b>reserved: 1</b>"
+      : "Payment already shows <b>charged: $99</b> and Inventory <b>reserved: 1</b>";
+    isoNote.innerHTML =
+      "&#9888; <b>Lost-isolation window OPEN.</b> " + what +
+      " to every other transaction &mdash; <b>before</b> the saga has decided to commit or compensate. " +
+      "A concurrent saga can read this dirty intermediate state and act on it (a customer sees the item out of stock; " +
+      "a fraud check sees a charge that is about to be refunded). This is the &lsquo;I&rsquo; you traded away. " +
+      "Countermeasure: a <b>semantic lock</b> (mark the row PENDING) so others know it is in-flight.";
+  }
+
+  function finalizeIsoWindow() {
+    isoNote.className = "iso show";
+    isoNote.innerHTML =
+      "&#10003; <b>Lost-isolation window CLOSED.</b> Compensations ran in reverse and the state is consistent again " +
+      "&mdash; but for the duration above, other transactions could have observed the intermediate values. " +
+      "A saga gives you atomicity-of-outcome (all-or-compensated), <b>not</b> isolation. You must design for the window, not wish it away.";
+  }
+
+  // init
+  resetSaga();
+</script>
+</body>
+</html>

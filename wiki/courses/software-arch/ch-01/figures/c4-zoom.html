@@ -1,0 +1,321 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>C4 Zoom Explorer — Context → Container → Component → Code</title>
+<style>
+  :root {
+    --bg: #0f1419;
+    --panel: #1a2230;
+    --panel-2: #232f42;
+    --ink: #e6edf3;
+    --muted: #8b98a9;
+    --accent: #4aa3ff;
+    --accent-2: #ffb74a;
+    --line: #34425a;
+    --good: #5ad17a;
+    --warn: #ff7b6b;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--ink);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+    line-height: 1.5;
+    padding: 24px;
+  }
+  h1 { font-size: 20px; margin: 0 0 4px; }
+  .sub { color: var(--muted); font-size: 13px; margin-bottom: 18px; }
+  .bar {
+    display: flex; flex-wrap: wrap; gap: 8px; align-items: center;
+    margin-bottom: 16px;
+  }
+  .crumbs { display: flex; gap: 6px; flex-wrap: wrap; }
+  .crumb {
+    background: var(--panel); border: 1px solid var(--line); color: var(--muted);
+    padding: 6px 12px; border-radius: 20px; cursor: pointer; font-size: 13px;
+    transition: all .15s ease; user-select: none;
+  }
+  .crumb:hover { border-color: var(--accent); color: var(--ink); }
+  .crumb.active { background: var(--accent); color: #06121f; border-color: var(--accent); font-weight: 600; }
+  .crumb .lvl { opacity: .6; font-size: 11px; margin-right: 4px; }
+  .spacer { flex: 1; }
+  .toggle {
+    display: inline-flex; align-items: center; gap: 8px; font-size: 13px;
+    color: var(--muted); cursor: pointer; user-select: none;
+    border: 1px solid var(--line); padding: 6px 12px; border-radius: 8px;
+  }
+  .toggle input { accent-color: var(--accent-2); }
+  .stage {
+    background: var(--panel); border: 1px solid var(--line); border-radius: 12px;
+    padding: 22px; min-height: 360px; position: relative;
+  }
+  .stage-head { display: flex; align-items: baseline; gap: 10px; margin-bottom: 4px; }
+  .stage-head .name { font-size: 17px; font-weight: 700; }
+  .stage-head .tag { font-size: 11px; color: var(--accent); border: 1px solid var(--accent); padding: 1px 8px; border-radius: 12px; }
+  .stage-desc { color: var(--muted); font-size: 13px; margin-bottom: 18px; max-width: 720px; }
+  .grid { display: flex; flex-wrap: wrap; gap: 14px; }
+  .node {
+    background: var(--panel-2); border: 1.5px solid var(--line); border-radius: 10px;
+    padding: 14px 16px; min-width: 168px; max-width: 240px; position: relative;
+    transition: transform .12s ease, border-color .12s ease, box-shadow .12s ease;
+  }
+  .node.person { border-style: dashed; border-color: var(--muted); }
+  .node.external { opacity: .8; border-color: #55617a; }
+  .node.datastore { border-radius: 10px 10px 22px 22px; border-color: var(--good); }
+  .node.zoomable { cursor: zoom-in; }
+  .node.zoomable:hover { transform: translateY(-3px); border-color: var(--accent); box-shadow: 0 6px 18px rgba(74,163,255,.18); }
+  .node .ntype { font-size: 10px; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); }
+  .node .nname { font-size: 14px; font-weight: 650; margin: 3px 0; }
+  .node .ndesc { font-size: 12px; color: var(--muted); }
+  .node .zoomhint {
+    position: absolute; top: 8px; right: 10px; font-size: 10px; color: var(--accent);
+    opacity: 0; transition: opacity .12s ease;
+  }
+  .node.zoomable:hover .zoomhint { opacity: 1; }
+  .pin {
+    position: absolute; bottom: 8px; right: 10px; font-size: 16px;
+  }
+  .legend { display: flex; gap: 16px; flex-wrap: wrap; margin-top: 18px; font-size: 12px; color: var(--muted); }
+  .legend span { display: inline-flex; align-items: center; gap: 6px; }
+  .swatch { width: 14px; height: 14px; border-radius: 4px; border: 1.5px solid var(--line); display: inline-block; }
+  .swatch.person { border-style: dashed; border-color: var(--muted); background: var(--panel-2); }
+  .swatch.datastore { border-color: var(--good); border-radius: 3px 3px 7px 7px; background: var(--panel-2); }
+  .swatch.external { border-color: #55617a; background: var(--panel-2); }
+  .myth {
+    margin-top: 16px; border: 1px solid var(--accent-2); background: rgba(255,183,74,.07);
+    border-radius: 10px; padding: 14px 16px; font-size: 13px; display: none;
+  }
+  .myth.show { display: block; }
+  .myth b { color: var(--accent-2); }
+  .myth .false { color: var(--warn); font-weight: 700; }
+  .myth .true { color: var(--good); font-weight: 700; }
+  .nav { margin-top: 16px; display: flex; gap: 10px; }
+  .btn {
+    background: var(--panel-2); border: 1px solid var(--line); color: var(--ink);
+    padding: 8px 16px; border-radius: 8px; cursor: pointer; font-size: 13px;
+  }
+  .btn:hover { border-color: var(--accent); }
+  .btn:disabled { opacity: .35; cursor: not-allowed; }
+  .path { font-size: 12px; color: var(--muted); margin-top: 10px; font-style: italic; }
+  code { background: #0b0f15; padding: 1px 6px; border-radius: 4px; color: var(--accent-2); font-size: 12px; }
+</style>
+</head>
+<body>
+  <h1>C4 Zoom Explorer</h1>
+  <div class="sub">Click a box to zoom one level deeper: <b>Context → Container → Component → Code</b>. Each level is a map at one scale — never draw two at once.</div>
+
+  <div class="bar">
+    <div class="crumbs" id="crumbs"></div>
+    <div class="spacer"></div>
+    <label class="toggle">
+      <input type="checkbox" id="mythToggle"> Show the &ldquo;container&rdquo; myth overlay
+    </label>
+  </div>
+
+  <div class="stage">
+    <div class="stage-head">
+      <span class="name" id="stageName"></span>
+      <span class="tag" id="stageTag"></span>
+    </div>
+    <div class="stage-desc" id="stageDesc"></div>
+    <div class="grid" id="grid"></div>
+    <div class="legend" id="legend"></div>
+    <div class="myth" id="myth"></div>
+    <div class="nav">
+      <button class="btn" id="upBtn">&uarr; Zoom out</button>
+      <button class="btn" id="resetBtn">Reset to Context</button>
+    </div>
+    <div class="path" id="path"></div>
+  </div>
+
+<script>
+  // C4 levels modeling the learner's sales agent (Lina TMR) so the figure matches the chapter.
+  // A C4 "container" = any separately deployable app or data store, NOT a Docker container.
+  var LEVELS = [
+    {
+      key: "context",
+      name: "Level 1 — System Context",
+      tag: "audience: everyone",
+      desc: "The Lina TMR sales agent as a single box, surrounded by the people who use it and the external systems it talks to. Click the agent box to zoom into its containers.",
+      legend: ["person", "system", "external"],
+      nodes: [
+        { type: "Person", cls: "person", name: "Sales Rep", desc: "Configures and supervises the agent." },
+        { type: "Software System", cls: "zoomable", name: "Lina TMR (Sales Agent)", desc: "LLM agent that acts over many SaaS tools. Zoom in →", zoom: "container" },
+        { type: "External System", cls: "external", name: "CRM / Email / Calendar SaaS", desc: "Salesforce, Gmail, Google Calendar, Sheets — “outside” data sources." }
+      ]
+    },
+    {
+      key: "container",
+      name: "Level 2 — Containers",
+      tag: "audience: technical + ops",
+      desc: "Zoom into Lina TMR: the separately deployable apps and data stores that make it up. THIS is the level where a distributed monolith becomes visible — count the deploy-coupled boxes and shared data stores. A box here is a C4 container, not a Docker container.",
+      legend: ["app", "datastore", "external"],
+      nodes: [
+        { type: "Container: App", cls: "zoomable", name: "Agent Core (reasoning loop)", desc: "Owns domain policy; vendor-free. Zoom in →", zoom: "component" },
+        { type: "Container: App", cls: "", name: "Tool/Integration Layer", desc: "Adapters to each SaaS API; the contract the core depends on." },
+        { type: "Container: Data store", cls: "datastore", name: "Conversation + Pipeline DB", desc: "PostgreSQL. A C4 container — a data store that runs separately." },
+        { type: "Container: Data store", cls: "datastore", name: "Vector Index", desc: "Embeddings store. Also a C4 container, no Dockerfile required." },
+        { type: "External System", cls: "external", name: "CRM / Email / Calendar SaaS", desc: "Crossed via the integration layer." }
+      ]
+    },
+    {
+      key: "component",
+      name: "Level 3 — Components",
+      tag: "audience: developers of this container",
+      desc: "Zoom into the Agent Core container: its grouped responsibilities behind interfaces. Dependencies point inward toward domain policy (the dependency rule, ch-03). Click a code-bearing component to reach Level 4.",
+      legend: ["app"],
+      nodes: [
+        { type: "Component", cls: "zoomable", name: "Pipeline Policy (domain)", desc: "Lead/stage rules — the expensive-to-reverse core. Zoom in →", zoom: "code" },
+        { type: "Component", cls: "", name: "Planner / Step Controller", desc: "Sequences tool calls; depends on policy, not on vendors." },
+        { type: "Component", cls: "", name: "Tool Port (interface)", desc: "Interface the core OWNS; the integration layer implements it." },
+        { type: "Component", cls: "", name: "Outside-Data Mapper", desc: "Turns SaaS responses into immutable, versioned snapshots (ch-06)." }
+      ]
+    },
+    {
+      key: "code",
+      name: "Level 4 — Code",
+      tag: "optional — usually IDE-generated",
+      desc: "Zoom into the Pipeline Policy component: the classes/interfaces that implement it. C4 says reach this level only when it earns its keep; let the IDE generate it. This is the bottom of the zoom.",
+      legend: ["app"],
+      nodes: [
+        { type: "Class", cls: "", name: "Lead", desc: "Entity — identity + lifecycle." },
+        { type: "Value Object", cls: "", name: "Stage", desc: "Immutable; equality by value." },
+        { type: "Aggregate Root", cls: "", name: "Pipeline", desc: "Transactional consistency boundary (seed of ch-03)." },
+        { type: "Interface", cls: "", name: "StageTransitionPolicy", desc: "Pure domain rule, no I/O." }
+      ]
+    }
+  ];
+
+  var ZOOM_ORDER = ["context", "container", "component", "code"];
+  var current = "context";
+
+  var MYTH_HTML =
+    "<b>Myth, killed:</b> &ldquo;a C4 <code>container</code> is a Docker container.&rdquo; " +
+    "<span class=\"false\">False.</span> Per Simon Brown, a C4 container is <i>&ldquo;applications and data stores&rdquo;</i> — " +
+    "any separately runnable/deployable unit: a server-side app, a single-page app, a mobile app, a database, a file system, a message bus. " +
+    "<span class=\"true\">It predates and is broader than OCI/Docker.</span> " +
+    "On this Container level, the green data-store boxes (Postgres, Vector Index) are C4 containers with no Dockerfile in sight. " +
+    "Mislabel &ldquo;container&rdquo; and you lose the ability to read this exact diagram — the one place a distributed monolith shows up.";
+
+  function levelByKey(k) {
+    for (var i = 0; i < LEVELS.length; i++) {
+      if (LEVELS[i].key === k) return LEVELS[i];
+    }
+    return LEVELS[0];
+  }
+
+  function legendItem(kind) {
+    var map = {
+      person: ["person", "Person (a role/user)"],
+      system: ["", "Software System"],
+      app: ["", "Container: app (deployable)"],
+      datastore: ["datastore", "Container: data store"],
+      external: ["external", "External system"]
+    };
+    var m = map[kind] || ["", kind];
+    return "<span><span class=\"swatch " + m[0] + "\"></span>" + m[1] + "</span>";
+  }
+
+  function render() {
+    var lvl = levelByKey(current);
+
+    // breadcrumbs
+    var cr = "";
+    for (var i = 0; i < ZOOM_ORDER.length; i++) {
+      var k = ZOOM_ORDER[i];
+      var lv = levelByKey(k);
+      var active = (k === current) ? " active" : "";
+      var label = lv.name.split("—")[1] ? lv.name.split("—")[1].trim() : lv.name;
+      cr += "<div class=\"crumb" + active + "\" data-key=\"" + k + "\">" +
+            "<span class=\"lvl\">L" + (i + 1) + "</span>" + label + "</div>";
+    }
+    document.getElementById("crumbs").innerHTML = cr;
+
+    document.getElementById("stageName").textContent = lvl.name;
+    document.getElementById("stageTag").textContent = lvl.tag;
+    document.getElementById("stageDesc").textContent = lvl.desc;
+
+    // nodes
+    var g = "";
+    for (var n = 0; n < lvl.nodes.length; n++) {
+      var node = lvl.nodes[n];
+      var cls = "node " + (node.cls || "");
+      var hint = node.zoom ? "<div class=\"zoomhint\">click to zoom →</div>" : "";
+      var dataZoom = node.zoom ? (" data-zoom=\"" + node.zoom + "\"") : "";
+      g += "<div class=\"" + cls + "\"" + dataZoom + ">" + hint +
+           "<div class=\"ntype\">" + node.type + "</div>" +
+           "<div class=\"nname\">" + node.name + "</div>" +
+           "<div class=\"ndesc\">" + node.desc + "</div></div>";
+    }
+    document.getElementById("grid").innerHTML = g;
+
+    // legend
+    var lg = "";
+    for (var L = 0; L < lvl.legend.length; L++) {
+      lg += legendItem(lvl.legend[L]);
+    }
+    document.getElementById("legend").innerHTML = lg;
+
+    // myth overlay (only meaningful on container level, but show everywhere when toggled)
+    var mythOn = document.getElementById("mythToggle").checked;
+    var mythBox = document.getElementById("myth");
+    mythBox.innerHTML = MYTH_HTML;
+    mythBox.className = mythOn ? "myth show" : "myth";
+
+    // nav state
+    var idx = ZOOM_ORDER.indexOf(current);
+    document.getElementById("upBtn").disabled = (idx === 0);
+
+    // path label
+    var trail = [];
+    for (var p = 0; p <= idx; p++) {
+      var name = levelByKey(ZOOM_ORDER[p]).name.split("—")[1].trim();
+      trail.push(name);
+    }
+    document.getElementById("path").textContent = "You are here: " + trail.join("  ›  ");
+
+    wireNodes();
+  }
+
+  function wireNodes() {
+    var nodes = document.querySelectorAll(".node[data-zoom]");
+    for (var i = 0; i < nodes.length; i++) {
+      nodes[i].addEventListener("click", function () {
+        current = this.getAttribute("data-zoom");
+        render();
+      });
+    }
+  }
+
+  function zoomOut() {
+    var idx = ZOOM_ORDER.indexOf(current);
+    if (idx > 0) {
+      current = ZOOM_ORDER[idx - 1];
+      render();
+    }
+  }
+
+  document.getElementById("upBtn").addEventListener("click", zoomOut);
+  document.getElementById("resetBtn").addEventListener("click", function () {
+    current = "context";
+    render();
+  });
+  document.getElementById("mythToggle").addEventListener("change", render);
+
+  // breadcrumb clicks (delegated, re-bound each render via this listener on the container)
+  document.getElementById("crumbs").addEventListener("click", function (e) {
+    var t = e.target;
+    while (t && t !== this && !t.getAttribute("data-key")) { t = t.parentNode; }
+    if (t && t.getAttribute("data-key")) {
+      current = t.getAttribute("data-key");
+      render();
+    }
+  });
+
+  render();
+</script>
+</body>
+</html>

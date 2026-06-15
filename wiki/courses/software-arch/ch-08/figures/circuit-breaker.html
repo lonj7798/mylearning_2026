@@ -1,0 +1,344 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Circuit Breaker State Machine — ch-08</title>
+<style>
+  :root {
+    --bg: #0f1220;
+    --panel: #1a1f33;
+    --ink: #e7ecf5;
+    --muted: #9aa6c4;
+    --closed: #2ecc71;
+    --open: #e74c3c;
+    --half: #f39c12;
+    --wire: #44507a;
+    --accent: #5b8cff;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--ink);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    line-height: 1.45;
+    padding: 18px;
+  }
+  h1 { font-size: 19px; margin: 0 0 4px; }
+  .sub { color: var(--muted); font-size: 13px; margin: 0 0 16px; max-width: 760px; }
+  .wrap { display: flex; flex-wrap: wrap; gap: 18px; align-items: flex-start; }
+  .panel {
+    background: var(--panel);
+    border: 1px solid var(--wire);
+    border-radius: 10px;
+    padding: 16px;
+  }
+  .machine { flex: 1 1 420px; min-width: 360px; }
+  .side { flex: 1 1 300px; min-width: 280px; }
+  .states { display: flex; gap: 12px; justify-content: space-between; margin-bottom: 14px; }
+  .state {
+    flex: 1;
+    text-align: center;
+    padding: 14px 8px;
+    border-radius: 10px;
+    border: 2px solid var(--wire);
+    background: #141831;
+    transition: all .25s ease;
+    opacity: .45;
+  }
+  .state .name { font-weight: 700; font-size: 15px; letter-spacing: .3px; }
+  .state .desc { font-size: 11px; color: var(--muted); margin-top: 4px; min-height: 28px; }
+  .state.active { opacity: 1; transform: translateY(-2px); box-shadow: 0 6px 18px rgba(0,0,0,.4); }
+  .state.closed.active { border-color: var(--closed); box-shadow: 0 0 0 3px rgba(46,204,113,.22); }
+  .state.open.active   { border-color: var(--open);   box-shadow: 0 0 0 3px rgba(231,76,60,.22); }
+  .state.half.active   { border-color: var(--half);   box-shadow: 0 0 0 3px rgba(243,156,18,.22); }
+  .dot { display:inline-block; width:9px; height:9px; border-radius:50%; margin-right:6px; vertical-align: middle; }
+  .closed .dot { background: var(--closed); }
+  .open .dot { background: var(--open); }
+  .half .dot { background: var(--half); }
+  .arrows { font-size: 11px; color: var(--muted); display:flex; justify-content: space-around; margin: -6px 0 14px; }
+  .btns { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 14px; }
+  button {
+    font: inherit; font-size: 13px; cursor: pointer;
+    border: 1px solid var(--wire); background: #232a45; color: var(--ink);
+    padding: 9px 13px; border-radius: 8px; transition: background .15s;
+  }
+  button:hover { background: #2c3458; }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  button.primary:hover { background: #6f9bff; }
+  button.danger { border-color: var(--open); color: #ffb4ab; }
+  button.heal { border-color: var(--closed); color: #b7f5cf; }
+  .row { display:flex; align-items:center; gap:10px; margin: 8px 0; font-size: 13px; }
+  .row label { color: var(--muted); flex: 0 0 160px; }
+  input[type=range] { flex: 1; }
+  .pill { font-size: 12px; padding: 2px 8px; border-radius: 20px; border:1px solid var(--wire); }
+  .dep-up { color: var(--closed); border-color: var(--closed); }
+  .dep-down { color: var(--open); border-color: var(--open); }
+  .metrics { display:grid; grid-template-columns: 1fr 1fr; gap:10px; margin-top: 6px; }
+  .metric { background:#141831; border:1px solid var(--wire); border-radius:8px; padding:10px; }
+  .metric .k { font-size: 11px; color: var(--muted); }
+  .metric .v { font-size: 20px; font-weight: 700; }
+  .log {
+    background:#0b0e1a; border:1px solid var(--wire); border-radius:8px;
+    height: 220px; overflow-y: auto; padding: 8px 10px; font-family: ui-monospace, "SF Mono", Menlo, monospace;
+    font-size: 12px;
+  }
+  .log div { padding: 1px 0; border-bottom: 1px solid #161b30; }
+  .ok { color: var(--closed); }
+  .fail { color: var(--open); }
+  .blocked { color: var(--half); }
+  .info { color: var(--muted); }
+  .legend { font-size: 12px; color: var(--muted); margin-top: 10px; }
+  .legend b { color: var(--ink); }
+  code { background:#0b0e1a; padding: 1px 5px; border-radius: 4px; border:1px solid var(--wire); }
+</style>
+</head>
+<body>
+  <h1>Circuit Breaker — interactive state machine</h1>
+  <p class="sub">
+    You are the agent making calls to one flaky dependency. Click <b>Send request</b> to fire a call. Toggle the
+    dependency <b>down</b> to simulate a vendor outage, then keep sending and watch the breaker trip
+    <b>OPEN</b> and start failing fast (rejecting before the network even tries). Heal the dependency and let the
+    cooldown elapse to reach <b>HALF-OPEN</b>, where a single probe decides whether to close again. The whole point:
+    while OPEN, calls cost ~0ms and never touch the dead vendor.
+  </p>
+
+  <div class="wrap">
+    <div class="panel machine">
+      <div class="states">
+        <div id="st-closed" class="state closed">
+          <div class="name"><span class="dot"></span>CLOSED</div>
+          <div class="desc">calls pass through; count failures</div>
+        </div>
+        <div id="st-open" class="state open">
+          <div class="name"><span class="dot"></span>OPEN</div>
+          <div class="desc">fail fast, skip the call</div>
+        </div>
+        <div id="st-half" class="state half">
+          <div class="name"><span class="dot"></span>HALF-OPEN</div>
+          <div class="desc">let one probe through</div>
+        </div>
+      </div>
+      <div class="arrows">
+        <span>CLOSED &rarr; OPEN: failure rate &ge; threshold</span>
+        <span>OPEN &rarr; HALF-OPEN: cooldown elapsed</span>
+        <span>HALF-OPEN &rarr; CLOSED / OPEN: probe</span>
+      </div>
+
+      <div class="btns">
+        <button class="primary" id="send">Send request</button>
+        <button id="burst">Send 5 requests</button>
+        <button class="danger" id="break">Dependency: fail it</button>
+        <button class="heal" id="fix">Dependency: heal it</button>
+        <button id="reset">Reset breaker</button>
+      </div>
+
+      <div class="row">
+        <span>Dependency status:</span>
+        <span id="dep-pill" class="pill dep-up">UP</span>
+        <span id="state-pill" class="pill">CLOSED</span>
+      </div>
+
+      <div class="row">
+        <label for="thr">Trip threshold (consecutive fails)</label>
+        <input type="range" id="thr" min="2" max="8" value="4">
+        <span id="thr-val">4</span>
+      </div>
+      <div class="row">
+        <label for="cool">Cooldown (ms)</label>
+        <input type="range" id="cool" min="1000" max="8000" step="500" value="3000">
+        <span id="cool-val">3000</span>
+      </div>
+
+      <div class="metrics">
+        <div class="metric"><div class="k">Consecutive failures</div><div class="v" id="m-fails">0</div></div>
+        <div class="metric"><div class="k">Calls fast-failed (OPEN)</div><div class="v" id="m-blocked">0</div></div>
+        <div class="metric"><div class="k">Reached dependency</div><div class="v" id="m-reached">0</div></div>
+        <div class="metric"><div class="k">Latency last call</div><div class="v" id="m-lat">0ms</div></div>
+      </div>
+      <div class="legend">
+        <b>Read it as a bet:</b> the breaker keeps <i>caller latency &amp; thread pools cheap</i> during an outage
+        (fast-fail instead of piling blocked threads) at the cost of <i>some false rejections</i> while OPEN even if
+        the vendor has already recovered.
+      </div>
+    </div>
+
+    <div class="panel side">
+      <div style="font-size:13px;color:var(--muted);margin-bottom:6px;">Call log</div>
+      <div class="log" id="log"></div>
+    </div>
+  </div>
+
+<script>
+(function () {
+  "use strict";
+
+  var CLOSED = "CLOSED", OPEN = "OPEN", HALF = "HALF-OPEN";
+
+  var state = {
+    breaker: CLOSED,
+    depUp: true,
+    fails: 0,
+    blocked: 0,
+    reached: 0,
+    openedAt: 0
+  };
+
+  var cfg = {
+    threshold: 4,
+    cooldown: 3000,
+    upLatency: 40,    // ms when dependency is healthy
+    downLatency: 1200 // ms a real call would hang before timing out when the dep is down
+  };
+
+  var el = {
+    send: document.getElementById("send"),
+    burst: document.getElementById("burst"),
+    brk: document.getElementById("break"),
+    fix: document.getElementById("fix"),
+    reset: document.getElementById("reset"),
+    thr: document.getElementById("thr"),
+    thrVal: document.getElementById("thr-val"),
+    cool: document.getElementById("cool"),
+    coolVal: document.getElementById("cool-val"),
+    depPill: document.getElementById("dep-pill"),
+    statePill: document.getElementById("state-pill"),
+    mFails: document.getElementById("m-fails"),
+    mBlocked: document.getElementById("m-blocked"),
+    mReached: document.getElementById("m-reached"),
+    mLat: document.getElementById("m-lat"),
+    log: document.getElementById("log"),
+    stClosed: document.getElementById("st-closed"),
+    stOpen: document.getElementById("st-open"),
+    stHalf: document.getElementById("st-half")
+  };
+
+  function now() { return Date.now(); }
+
+  function log(kind, msg) {
+    var d = document.createElement("div");
+    d.className = kind;
+    var t = new Date().toLocaleTimeString();
+    // Lint rule: any inner double-quote inside a JS string literal must be backslash-escaped,
+    // e.g. "he said \"hi\"". This file deliberately uses no such literals, so none appear here.
+    d.textContent = "[" + t + "] " + msg;
+    el.log.insertBefore(d, el.log.firstChild);
+  }
+
+  function render() {
+    el.stClosed.classList.toggle("active", state.breaker === CLOSED);
+    el.stOpen.classList.toggle("active", state.breaker === OPEN);
+    el.stHalf.classList.toggle("active", state.breaker === HALF);
+
+    el.statePill.textContent = state.breaker;
+    el.statePill.className = "pill " +
+      (state.breaker === CLOSED ? "dep-up" : state.breaker === OPEN ? "dep-down" : "");
+    if (state.breaker === HALF) { el.statePill.style.color = "#ffd27a"; el.statePill.style.borderColor = "#f39c12"; }
+    else { el.statePill.style.color = ""; el.statePill.style.borderColor = ""; }
+
+    el.depPill.textContent = state.depUp ? "UP" : "DOWN";
+    el.depPill.className = "pill " + (state.depUp ? "dep-up" : "dep-down");
+
+    el.mFails.textContent = state.fails;
+    el.mBlocked.textContent = state.blocked;
+    el.mReached.textContent = state.reached;
+  }
+
+  // Move OPEN -> HALF-OPEN once the cooldown has elapsed.
+  function maybeHalfOpen() {
+    if (state.breaker === OPEN && now() - state.openedAt >= cfg.cooldown) {
+      state.breaker = HALF;
+      log("info", "Cooldown elapsed → HALF-OPEN (next call is a probe)");
+      render();
+    }
+  }
+
+  function trip() {
+    state.breaker = OPEN;
+    state.openedAt = now();
+    log("fail", "Failure threshold (" + cfg.threshold + ") reached → breaker OPEN. Calls now fail fast.");
+    render();
+  }
+
+  function sendOne() {
+    maybeHalfOpen();
+
+    // OPEN: fail fast, never touch the dependency.
+    if (state.breaker === OPEN) {
+      state.blocked++;
+      el.mLat.textContent = "0ms";
+      log("blocked", "OPEN → rejected immediately (fail-fast, ~0ms, dependency untouched)");
+      render();
+      return;
+    }
+
+    // CLOSED or HALF-OPEN: a real call is attempted.
+    var probing = state.breaker === HALF;
+    state.reached++;
+    var success = state.depUp;
+    var latency = success ? cfg.upLatency : cfg.downLatency;
+    el.mLat.textContent = latency + "ms";
+
+    if (success) {
+      state.fails = 0;
+      if (probing) {
+        state.breaker = CLOSED;
+        log("ok", "Probe SUCCEEDED → HALF-OPEN → CLOSED. Normal service resumed (" + latency + "ms).");
+      } else {
+        log("ok", "Call succeeded (" + latency + "ms).");
+      }
+    } else {
+      // The expensive case: a real call hung for ~downLatency before failing.
+      if (probing) {
+        state.breaker = OPEN;
+        state.openedAt = now();
+        log("fail", "Probe FAILED after " + latency + "ms → back to OPEN (cooldown restarts).");
+      } else {
+        state.fails++;
+        log("fail", "Call FAILED after " + latency + "ms (consecutive fails: " + state.fails + ").");
+        if (state.fails >= cfg.threshold) { trip(); render(); return; }
+      }
+    }
+    render();
+  }
+
+  el.send.addEventListener("click", sendOne);
+  el.burst.addEventListener("click", function () {
+    for (var i = 0; i < 5; i++) { sendOne(); }
+  });
+  el.brk.addEventListener("click", function () {
+    state.depUp = false;
+    log("info", "Dependency is now DOWN. Real calls will hang ~" + cfg.downLatency + "ms then fail.");
+    render();
+  });
+  el.fix.addEventListener("click", function () {
+    state.depUp = true;
+    log("info", "Dependency is now UP. (Breaker stays OPEN until the cooldown lets a probe through.)");
+    render();
+  });
+  el.reset.addEventListener("click", function () {
+    state.breaker = CLOSED; state.fails = 0; state.blocked = 0; state.reached = 0; state.openedAt = 0;
+    el.mLat.textContent = "0ms";
+    log("info", "Breaker reset to CLOSED. Counters cleared.");
+    render();
+  });
+
+  el.thr.addEventListener("input", function () {
+    cfg.threshold = parseInt(el.thr.value, 10);
+    el.thrVal.textContent = cfg.threshold;
+  });
+  el.cool.addEventListener("input", function () {
+    cfg.cooldown = parseInt(el.cool.value, 10);
+    el.coolVal.textContent = cfg.cooldown;
+  });
+
+  // Poll so an OPEN breaker can transition to HALF-OPEN even without a click.
+  setInterval(function () { maybeHalfOpen(); }, 250);
+
+  log("info", "Ready. Breaker CLOSED, dependency UP. Try: fail the dependency, then send a burst.");
+  render();
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,381 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Strangler-Fig Migration Timeline</title>
+<style>
+  :root {
+    --bg: #0f1117;
+    --panel: #171a23;
+    --panel2: #1d212c;
+    --ink: #e6e9ef;
+    --muted: #9aa3b2;
+    --legacy: #6b5e3a;
+    --legacy-edge: #c8a84b;
+    --new: #1f4d3a;
+    --new-edge: #3ddc97;
+    --facade: #243b6b;
+    --facade-edge: #6ea8ff;
+    --rollback: #5a2330;
+    --rollback-edge: #ff7a90;
+    --line: #2a2f3c;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--ink);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    line-height: 1.5;
+    padding: 24px;
+  }
+  h1 { font-size: 20px; margin: 0 0 4px; }
+  .sub { color: var(--muted); font-size: 13px; margin: 0 0 20px; max-width: 760px; }
+  .wrap { max-width: 980px; margin: 0 auto; }
+  .stage {
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    padding: 20px;
+    display: grid;
+    grid-template-columns: 150px 70px 1fr;
+    gap: 18px;
+    align-items: stretch;
+    min-height: 320px;
+  }
+  .col-label {
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    color: var(--muted);
+    margin-bottom: 8px;
+    text-align: center;
+  }
+  .callers, .facade-col, .systems { display: flex; flex-direction: column; }
+  .caller {
+    background: var(--panel2);
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    padding: 10px;
+    font-size: 12px;
+    text-align: center;
+    margin-bottom: 8px;
+    color: var(--muted);
+  }
+  .facade-box {
+    flex: 1;
+    background: var(--facade);
+    border: 2px solid var(--facade-edge);
+    border-radius: 10px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    text-align: center;
+    font-weight: 600;
+    font-size: 13px;
+    padding: 8px;
+    position: relative;
+  }
+  .facade-box .pin {
+    position: absolute;
+    bottom: 8px;
+    font-size: 10px;
+    font-weight: 400;
+    color: var(--facade-edge);
+    text-transform: uppercase;
+    letter-spacing: 1px;
+  }
+  .systems { gap: 14px; }
+  .monolith {
+    background: var(--legacy);
+    border: 2px solid var(--legacy-edge);
+    border-radius: 10px;
+    padding: 12px;
+    transition: opacity 0.3s ease;
+  }
+  .monolith-title { font-weight: 700; font-size: 13px; margin-bottom: 10px; }
+  .seams { display: flex; flex-direction: column; gap: 8px; }
+  .seam {
+    border-radius: 7px;
+    padding: 9px 11px;
+    font-size: 12.5px;
+    border: 1.5px solid;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    transition: all 0.35s ease;
+    cursor: default;
+  }
+  .seam .name { font-weight: 600; }
+  .seam .tag { font-size: 10px; text-transform: uppercase; letter-spacing: 0.5px; opacity: 0.85; }
+  .seam.in-legacy { background: rgba(200,168,75,0.14); border-color: var(--legacy-edge); color: #f0e2b0; }
+  .seam.migrating {
+    background: rgba(110,168,255,0.15);
+    border-color: var(--facade-edge);
+    color: #cfe0ff;
+    animation: pulse 1.2s infinite;
+  }
+  .seam.in-new { background: rgba(61,220,151,0.14); border-color: var(--new-edge); color: #bff5db; }
+  .seam.rolled-back { background: rgba(255,122,144,0.14); border-color: var(--rollback-edge); color: #ffc9d2; }
+  @keyframes pulse { 0%,100% { box-shadow: 0 0 0 0 rgba(110,168,255,0.5);} 50% { box-shadow: 0 0 0 5px rgba(110,168,255,0);} }
+  .newhost {
+    background: var(--new);
+    border: 2px solid var(--new-edge);
+    border-radius: 10px;
+    padding: 12px;
+    flex: 1;
+  }
+  .newhost-title { font-weight: 700; font-size: 13px; margin-bottom: 10px; }
+  .empty-note { color: var(--muted); font-size: 11px; font-style: italic; }
+  .controls {
+    margin-top: 22px;
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    padding: 18px 20px;
+  }
+  .slider-row { display: flex; align-items: center; gap: 16px; }
+  input[type=range] { flex: 1; accent-color: var(--facade-edge); height: 6px; }
+  .phase-label { font-weight: 700; font-size: 15px; min-width: 150px; }
+  .phase-desc { color: var(--muted); font-size: 13px; margin: 12px 0 0; min-height: 38px; }
+  .btnrow { margin-top: 14px; display: flex; gap: 10px; flex-wrap: wrap; }
+  button {
+    background: var(--panel2);
+    color: var(--ink);
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    padding: 8px 14px;
+    font-size: 12.5px;
+    cursor: pointer;
+    transition: all 0.15s;
+  }
+  button:hover { border-color: var(--facade-edge); }
+  button.danger:hover { border-color: var(--rollback-edge); color: var(--rollback-edge); }
+  button:disabled { opacity: 0.35; cursor: not-allowed; }
+  .legend { margin-top: 16px; display: flex; gap: 18px; flex-wrap: wrap; font-size: 11.5px; color: var(--muted); }
+  .legend span { display: inline-flex; align-items: center; gap: 6px; }
+  .dot { width: 11px; height: 11px; border-radius: 3px; display: inline-block; border: 1.5px solid; }
+  .dot.l { background: rgba(200,168,75,0.2); border-color: var(--legacy-edge); }
+  .dot.m { background: rgba(110,168,255,0.2); border-color: var(--facade-edge); }
+  .dot.n { background: rgba(61,220,151,0.2); border-color: var(--new-edge); }
+  .dot.r { background: rgba(255,122,144,0.2); border-color: var(--rollback-edge); }
+  .kicker { font-size: 11px; color: var(--new-edge); font-weight: 600; letter-spacing: 0.5px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="kicker">CH-09 &middot; EVOLUTION</div>
+  <h1>Strangler-Fig Migration Timeline</h1>
+  <p class="sub">A f&aacute;cade stays fixed in front of a legacy monolith. Drag the slider to migrate one capability seam at a time from legacy to new services until the monolith retires. Each step is small, visible, and reversible &mdash; use <b>Roll back</b> on the in-flight seam to undo it without touching anything else. Callers never notice: they only ever talk to the f&aacute;cade.</p>
+
+  <div class="stage">
+    <div class="callers">
+      <div class="col-label">Callers</div>
+      <div class="caller">Web UI</div>
+      <div class="caller">Mobile app</div>
+      <div class="caller">Partner API</div>
+      <div class="caller">Internal jobs</div>
+    </div>
+
+    <div class="facade-col">
+      <div class="col-label">F&aacute;cade</div>
+      <div class="facade-box">
+        Routing<br>Proxy
+        <span class="pin">fixed</span>
+      </div>
+    </div>
+
+    <div class="systems">
+      <div>
+        <div class="col-label">Legacy monolith &nbsp;/&nbsp; New services</div>
+        <div class="monolith" id="monolith">
+          <div class="monolith-title" id="monoTitle">Legacy Monolith</div>
+          <div class="seams" id="legacySeams"></div>
+        </div>
+        <div class="newhost" style="margin-top:14px;">
+          <div class="newhost-title">New Services (behavior + data extracted together)</div>
+          <div class="seams" id="newSeams"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="controls">
+    <div class="slider-row">
+      <span class="phase-label" id="phaseLabel">Day 0</span>
+      <input type="range" id="slider" min="0" max="5" step="1" value="0">
+    </div>
+    <p class="phase-desc" id="phaseDesc"></p>
+    <div class="btnrow">
+      <button id="prevBtn">&#8592; Step back</button>
+      <button id="nextBtn">Step forward &#8594;</button>
+      <button id="rollbackBtn" class="danger">Roll back in-flight seam</button>
+      <button id="resetBtn">Reset to Day 0</button>
+    </div>
+    <div class="legend">
+      <span><i class="dot l"></i> in legacy</span>
+      <span><i class="dot m"></i> migrating (in-flight)</span>
+      <span><i class="dot n"></i> in new service</span>
+      <span><i class="dot r"></i> rolled back</span>
+    </div>
+  </div>
+</div>
+
+<script>
+  // Capability seams, in the order the strangler peels them off the monolith.
+  var seams = [
+    { id: "crm",      name: "CRM-sync",      hint: "most coupled to SaaS APIs — strangle first" },
+    { id: "sched",    name: "Scheduling",    hint: "clean boundary, independent scaling" },
+    { id: "convo",    name: "Conversation",  hint: "stateful core — extract behavior + data together" },
+    { id: "pipeline", name: "Lead/Pipeline", hint: "last seam — then the monolith retires" }
+  ];
+
+  // Phase descriptions keyed by slider value (0..5).
+  // status per seam: "legacy" | "migrating" | "new"
+  var phases = [
+    {
+      label: "Day 0",
+      desc: "Everything lives in the legacy monolith. The fácade is placed in front but routes 100% of traffic to legacy. Placing the fácade is the one move that makes every later step reversible.",
+      status: ["legacy", "legacy", "legacy", "legacy"]
+    },
+    {
+      label: "Step 1 — CRM-sync",
+      desc: "Reimplement CRM-sync as a new service and route only its traffic through the fácade. Its data moves with it (Newman's rule) so the new service owns its store — no shared DB, no distributed monolith.",
+      status: ["migrating", "legacy", "legacy", "legacy"]
+    },
+    {
+      label: "Step 1 verified",
+      desc: "CRM-sync runs in parallel, outputs compared, the strangled legacy path deleted. The monolith is genuinely smaller. Investment and returns occurred gradually and visibly.",
+      status: ["new", "legacy", "legacy", "legacy"]
+    },
+    {
+      label: "Step 2 — Scheduling",
+      desc: "Next clean seam in flight. A wrong move here costs one capability's rework, not the whole rewrite — the reversibility the slider lets you test with Roll back.",
+      status: ["new", "migrating", "legacy", "legacy"]
+    },
+    {
+      label: "Step 3 — Conversation",
+      desc: "The stateful core. Extract behavior AND its data as one atomic capability move; the half-migration that keeps reaching into the monolith's DB would be a distributed monolith, strictly worse than where we started.",
+      status: ["new", "new", "migrating", "legacy"]
+    },
+    {
+      label: "Retired",
+      desc: "Lead/Pipeline migrated; the legacy core is gone or small enough to keep. The fácade stayed fixed the entire time — callers never knew the implementation behind it moved one seam at a time.",
+      status: ["new", "new", "new", "migrating"]
+    }
+  ];
+
+  var rolledBack = {}; // seamId -> true when the user rolls an in-flight seam back
+
+  var slider = document.getElementById("slider");
+  var phaseLabel = document.getElementById("phaseLabel");
+  var phaseDesc = document.getElementById("phaseDesc");
+  var legacyEl = document.getElementById("legacySeams");
+  var newEl = document.getElementById("newSeams");
+  var monolith = document.getElementById("monolith");
+  var monoTitle = document.getElementById("monoTitle");
+  var prevBtn = document.getElementById("prevBtn");
+  var nextBtn = document.getElementById("nextBtn");
+  var rollbackBtn = document.getElementById("rollbackBtn");
+  var resetBtn = document.getElementById("resetBtn");
+
+  function effectiveStatus(p) {
+    // Apply any rollback overrides: a "migrating" seam the user rolled back becomes "legacy".
+    var s = phases[p].status.slice();
+    for (var i = 0; i < seams.length; i++) {
+      if (s[i] === "migrating" && rolledBack[seams[i].id]) {
+        s[i] = "legacy";
+      }
+    }
+    return s;
+  }
+
+  function render() {
+    var p = parseInt(slider.value, 10);
+    var status = effectiveStatus(p);
+
+    phaseLabel.textContent = phases[p].label;
+    phaseDesc.textContent = phases[p].desc;
+
+    legacyEl.innerHTML = "";
+    newEl.innerHTML = "";
+
+    var remainingInLegacy = 0;
+    var hasMigrating = false;
+
+    for (var i = 0; i < seams.length; i++) {
+      var seam = seams[i];
+      var st = status[i];
+      var rb = (phases[p].status[i] === "migrating" && rolledBack[seam.id]);
+
+      var div = document.createElement("div");
+      div.className = "seam";
+      var tagText = "";
+
+      if (st === "legacy") {
+        div.className += rb ? " rolled-back" : " in-legacy";
+        tagText = rb ? "rolled back" : "in legacy";
+        legacyEl.appendChild(div);
+        remainingInLegacy++;
+      } else if (st === "migrating") {
+        div.className += " migrating";
+        tagText = "in flight";
+        hasMigrating = true;
+        // show in-flight seam at the boundary: keep in legacy column visually until verified
+        legacyEl.appendChild(div);
+      } else { // new
+        div.className += " in-new";
+        tagText = "in new service";
+        newEl.appendChild(div);
+      }
+
+      div.innerHTML = "<span class=\"name\">" + seam.name + "</span><span class=\"tag\">" + tagText + "</span>";
+    }
+
+    if (remainingInLegacy === 0 && !hasMigrating) {
+      monoTitle.textContent = "Legacy Monolith — RETIRED";
+      monolith.style.opacity = "0.4";
+      legacyEl.innerHTML = "<div class=\"empty-note\">Nothing left to strangle. The monolith is gone.</div>";
+    } else {
+      monoTitle.textContent = "Legacy Monolith (" + (remainingInLegacy + (hasMigrating ? 1 : 0)) + " capabilities left)";
+      monolith.style.opacity = "1";
+    }
+
+    if (newEl.innerHTML === "") {
+      newEl.innerHTML = "<div class=\"empty-note\">No capability extracted yet.</div>";
+    }
+
+    prevBtn.disabled = (p === 0);
+    nextBtn.disabled = (p === phases.length - 1);
+    rollbackBtn.disabled = !hasMigrating;
+  }
+
+  slider.addEventListener("input", render);
+  prevBtn.addEventListener("click", function () {
+    slider.value = Math.max(0, parseInt(slider.value, 10) - 1);
+    render();
+  });
+  nextBtn.addEventListener("click", function () {
+    slider.value = Math.min(phases.length - 1, parseInt(slider.value, 10) + 1);
+    render();
+  });
+  rollbackBtn.addEventListener("click", function () {
+    var p = parseInt(slider.value, 10);
+    for (var i = 0; i < seams.length; i++) {
+      if (phases[p].status[i] === "migrating") {
+        rolledBack[seams[i].id] = !rolledBack[seams[i].id];
+      }
+    }
+    render();
+  });
+  resetBtn.addEventListener("click", function () {
+    rolledBack = {};
+    slider.value = 0;
+    render();
+  });
+
+  render();
+</script>
+</body>
+</html>
