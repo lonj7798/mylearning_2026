@@ -50,6 +50,7 @@ Active libraries and courses:
 | `llm-arch` | `wiki/sources/llm-arch/` | `wiki/courses/llm-arch/outline.json` | Transformer architecture, attention variants, positional encoding, MoE, inference kernels |
 | `llm-training` | `wiki/raw-data/llm-training/` | `wiki/courses/llm-training/outline.json` | Classical training fundamentals + data curation + synthetic-data generation + SFT + RL; 60 chapters across 4 tracks (data / synthetic / sft / rl) |
 | `automation-bench` | `wiki/raw-data/automation-bench/` | `wiki/courses/automation-bench/outline.json` | How Zapier's AutomationBench (cross-app tool-call benchmark) is built and graded, with a structural comparison to τ-bench; 10 chapters, single deep-dive. Library = the cloned repo (git-ignored, local-only) + curated `excerpts/`. |
+| `software-arch` | `wiki/raw-data/software-arch/` | `wiki/courses/software-arch/outline.json` | Application/codebase-design-altitude software architecture taught as trade-offs: monolith vs modular-monolith vs microservices, DDD, hexagonal/clean, decomposition & topology, API contracts, data/consistency & events, resilience, evolution; 10 chapters ending in a capstone lab that designs the learner's sales-agent architecture. Library = crawl-assembled excerpts (no clone). |
 
 For `llm-training`, the outline groups chapters into four explicit tracks (see the `tracks` field in `outline.json`). Treat each track as a self-contained professional course — dependencies within a track are sequential, but different tracks can in principle be interleaved if the learner wants a different order.
 
