@@ -1,0 +1,122 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Soft Targets &amp; Temperature — Hinton Distillation</title>
+<style>
+  :root{--bg:#0f1420;--panel:#171e2e;--ink:#e7ecf5;--dim:#93a1bd;--line:#2c3852;
+        --tgt:#4ade80;--dark:#f2c14e;--rest:#41506e;--hard:#e07a5f}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);padding:20px;
+    font:15px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif}
+  h1{font-size:19px;margin:0 0 4px}
+  .sub{color:var(--dim);font-size:13px;margin-bottom:18px;max-width:680px}
+  .panel{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:18px;max-width:720px}
+  .row{display:flex;align-items:center;gap:14px;margin-bottom:14px;flex-wrap:wrap}
+  .row label{font-size:13px;color:var(--dim);min-width:120px}
+  input[type=range]{flex:1;min-width:220px;accent-color:#5aa9e6}
+  .tval{font-variant-numeric:tabular-nums;font-weight:600;min-width:64px;text-align:right}
+  .chart{display:flex;align-items:flex-end;gap:10px;height:240px;padding:10px 4px 0;border-bottom:1px solid var(--line)}
+  .bar{flex:1;display:flex;flex-direction:column;justify-content:flex-end;align-items:center;height:100%}
+  .bar .fill{width:100%;border-radius:5px 5px 0 0;transition:height .12s ease, background .2s}
+  .bar .pct{font-size:11px;color:var(--dim);margin-bottom:4px;font-variant-numeric:tabular-nums}
+  .bar .lab{font-size:13px;margin-top:6px;color:var(--dim)}
+  .bar.tgt .lab{color:var(--tgt);font-weight:700}
+  .bar.dark .lab{color:var(--dark);font-weight:600}
+  .readout{display:flex;gap:26px;margin-top:16px;flex-wrap:wrap}
+  .metric{background:#101725;border:1px solid var(--line);border-radius:10px;padding:10px 14px;min-width:150px}
+  .metric .k{font-size:12px;color:var(--dim);text-transform:uppercase;letter-spacing:.03em}
+  .metric .v{font-size:22px;font-weight:700;font-variant-numeric:tabular-nums;margin-top:2px}
+  .note{margin-top:16px;font-size:13px;color:var(--dim);max-width:680px}
+  .note b{color:var(--ink)}
+  .legend{display:flex;gap:16px;margin-top:10px;font-size:12px;color:var(--dim);flex-wrap:wrap}
+  .legend i{width:11px;height:11px;border-radius:3px;display:inline-block;margin-right:5px;vertical-align:-1px}
+</style>
+</head>
+<body>
+  <h1>Soft Targets &amp; Temperature — the "dark knowledge" in a teacher</h1>
+  <div class="sub">A teacher classifies a handwritten <b>2</b>. At temperature T=1 it is nearly one-hot — almost a hard label. Raise T and the teacher's belief that a 2 <i>looks a bit like</i> a 3 or 7 (and nothing like an 8) emerges. That similarity structure over the <i>wrong</i> classes is the extra signal a hard label throws away.</div>
+
+  <div class="panel">
+    <div class="row">
+      <label>Temperature&nbsp;T</label>
+      <input id="temp" type="range" min="1" max="20" step="0.5" value="1">
+      <span class="tval" id="tval">T = 1.0</span>
+    </div>
+
+    <div class="chart" id="chart"></div>
+    <div class="legend">
+      <span><i style="background:var(--tgt)"></i>target class (the label)</span>
+      <span><i style="background:var(--dark)"></i>dark knowledge (plausible wrong classes)</span>
+      <span><i style="background:var(--rest)"></i>other classes</span>
+    </div>
+
+    <div class="readout">
+      <div class="metric"><div class="k">Info per example</div><div class="v"><span id="bits">0.00</span> bits</div></div>
+      <div class="metric"><div class="k">Target prob (class 2)</div><div class="v" id="tp">0%</div></div>
+      <div class="metric"><div class="k">Hard label would give</div><div class="v">0.00 bits</div></div>
+    </div>
+
+    <div class="note" id="note"></div>
+  </div>
+
+<script>
+(function(){
+  // teacher logits for digits 0-9; "2" is the target, "3"/"7" are the plausible neighbours
+  var logits=[0.5,1.2,8.0,4.5,0.8,1.0,0.6,3.8,0.4,1.5];
+  var TARGET=2, DARK=[3,7];
+  var chart=document.getElementById('chart');
+  var bars=[];
+  for(var i=0;i<10;i++){
+    var b=document.createElement('div');
+    b.className='bar'+(i===TARGET?' tgt':(DARK.indexOf(i)>=0?' dark':''));
+    var pct=document.createElement('div');pct.className='pct';
+    var fill=document.createElement('div');fill.className='fill';
+    var lab=document.createElement('div');lab.className='lab';lab.textContent=i;
+    b.appendChild(pct);b.appendChild(fill);b.appendChild(lab);
+    chart.appendChild(b);
+    bars.push({pct:pct,fill:fill});
+  }
+  function color(i){return i===TARGET?'var(--tgt)':(DARK.indexOf(i)>=0?'var(--dark)':'var(--rest)');}
+
+  function softmax(T){
+    var z=logits.map(function(v){return v/T;});
+    var m=Math.max.apply(null,z);
+    var ex=z.map(function(v){return Math.exp(v-m);});
+    var s=ex.reduce(function(a,b){return a+b;},0);
+    return ex.map(function(v){return v/s;});
+  }
+  function entropyBits(p){
+    var h=0;p.forEach(function(v){if(v>1e-12)h-=v*Math.log2(v);});return h;
+  }
+
+  function render(){
+    var T=parseFloat(document.getElementById('temp').value);
+    document.getElementById('tval').textContent='T = '+T.toFixed(1);
+    var p=softmax(T);
+    var maxp=Math.max.apply(null,p);
+    p.forEach(function(v,i){
+      var h=Math.max(2, (v/maxp)*210);
+      bars[i].fill.style.height=h+'px';
+      bars[i].fill.style.background=color(i);
+      bars[i].pct.textContent=(v*100>=0.5? (v*100).toFixed(0):(v*100).toFixed(1))+'%';
+    });
+    var bits=entropyBits(p);
+    document.getElementById('bits').textContent=bits.toFixed(2);
+    document.getElementById('tp').textContent=(p[TARGET]*100).toFixed(0)+'%';
+    var note=document.getElementById('note');
+    if(T<=1.5){
+      note.innerHTML='<b>Near T=1:</b> the distribution is almost one-hot — the teacher looks like it is just handing over the hard label "2". Barely more than 0 bits of extra structure; the "3"/"7" similarity is invisible.';
+    } else if(T<8){
+      note.innerHTML='<b>Rising T:</b> the soft target now assigns visible mass to <span style="color:var(--dark)">3</span> and <span style="color:var(--dark)">7</span> — the teacher is saying "this 2 resembles a 3 or a 7, not an 8." Higher entropy = more information per training case, which is why a student needs far fewer examples. (Hinton: soft targets "provide much more information per training case than hard targets.")';
+    } else {
+      note.innerHTML='<b>High T:</b> maximum dark knowledge — full similarity structure exposed. In Hinton\'s MNIST run, matching soft targets at <b>T=20</b> alone cut a small net from 146 to <b>74</b> errors, and even let it classify 3s it had <i>never seen</i> in training. (Too-high T eventually flattens everything toward uniform.)';
+    }
+  }
+  document.getElementById('temp').addEventListener('input',render);
+  render();
+})();
+</script>
+</body>
+</html>
