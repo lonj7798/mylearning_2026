@@ -96,3 +96,23 @@ Index rebuilt.
 ## [2026-06-15] Session #21
 - course: automation-bench | chapter: ch-07 | phase: read
 - session ended: 2026-06-15T17:08:07.730Z
+
+## [2026-06-15] Session #24
+- course: software-arch | chapter: ch-01 | phase: read
+- session ended: 2026-06-15T22:10:38.048Z
+
+## [2026-06-15] Session #25
+- course: software-arch | chapter: ch-01 | phase: read
+- session ended: 2026-06-15T22:10:43.591Z
+
+## [2026-06-22] Session #27
+- course: software-arch | chapter: ch-02 | phase: read
+- session ended: 2026-06-22T07:59:56.523Z
+
+## [2026-06-22] Session #27
+- course: software-arch | chapter: ch-02 | phase: read
+- session ended: 2026-06-22T07:59:58.921Z
+
+## [2026-06-23] Session #29
+- course: software-arch | chapter: ch-02 | phase: read
+- session ended: 2026-06-23T23:50:36.427Z
