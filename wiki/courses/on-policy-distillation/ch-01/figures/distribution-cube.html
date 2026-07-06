@@ -14,6 +14,7 @@
     font:15px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;padding:20px}
   h1{font-size:19px;margin:0 0 4px}
   .sub{color:var(--dim);font-size:13px;margin-bottom:16px}
+  .sub.dim{margin-top:-10px;font-style:italic;opacity:.85}
   .wrap{display:flex;flex-wrap:wrap;gap:22px;align-items:flex-start}
   .stage{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:10px}
   .controls{display:flex;flex-direction:column;gap:14px;min-width:250px;max-width:340px}
@@ -37,11 +38,17 @@
   text{font-family:inherit}
   .nodeLabel{font-size:11px;fill:var(--dim)}
   .quote{margin-top:14px;font-size:12.5px;color:var(--dim);border-top:1px solid var(--line);padding-top:10px;max-width:360px}
+  .members{margin-top:12px;font-size:12.5px;color:var(--dim);border-top:1px solid var(--line);padding-top:10px;max-width:360px}
+  .members .mh{font-size:11px;letter-spacing:.03em;text-transform:uppercase;color:var(--dim);margin-bottom:6px}
+  .members ul{list-style:none;padding:0;margin:0}
+  .members li{margin:4px 0}
+  .members b{color:var(--ink);font-weight:600}
 </style>
 </head>
 <body>
   <h1>The Post-Training Distribution Cube</h1>
   <div class="sub">Every method reshapes the model's sequence distribution. Pick a value on each of the three axes — the highlighted corner is the method you get.</div>
+  <div class="sub dim">Several named methods share a corner — they differ on axes this cube doesn't draw (advantage estimator; hard vs soft targets).</div>
 
   <div class="wrap">
     <div class="stage">
@@ -87,6 +94,7 @@
         <li><b>Density:</b> <span id="fDen"></span></li>
         <li><b>Geometry:</b> <span id="fGeo"></span></li>
       </ul>
+      <div class="members" id="cMembers"></div>
       <div class="quote" id="cQuote"></div>
     </div>
   </div>
@@ -105,12 +113,22 @@
     "1,1,1":{n:"On-policy distillation",c:"var(--opd)",star:true,
       d:"The target corner. The student samples its OWN trajectories and a fixed teacher grades every token by reverse KL — on-policy data, dense signal, mode-seeking geometry all at once.",
       q:"“You want something with the density of distillation, the unbiasedness of RL, and the on-policy property of both.” — nrehiew"},
-    "0,1,0":{n:"SFT / Off-policy KD",c:"var(--sft)",
+    "0,1,0":{n:"SFT / Off-policy KD",c:"var(--sft)",label:"Pretrain · SFT · KD",
       d:"Cross-entropy pull toward a fixed target — human data (SFT) or a teacher's generations (Hinton / Kim & Rush KD). Dense but off-policy, and forward KL means no brake against forgetting prior capabilities.",
-      q:"“SFT via Cross Entropy on a fixed dataset is equivalent to minimizing forward KL divergence, up to constants.” — nrehiew"},
-    "1,0,1":{n:"Reinforcement Learning",c:"var(--rl)",
+      q:"“SFT via Cross Entropy on a fixed dataset is equivalent to minimizing forward KL divergence, up to constants.” — nrehiew",
+      members:[
+        {name:"Pretrain",note:"hard next-token targets on a raw web corpus"},
+        {name:"SFT",note:"hard targets on curated / instruction data"},
+        {name:"Off-policy KD",note:"soft teacher-distribution targets (Hinton / Kim & Rush)"}
+      ]},
+    "1,0,1":{n:"Reinforcement Learning",c:"var(--rl)",label:"RL · PPO · GRPO",
       d:"On-policy and mode-seeking, but the reward is a sparse scalar at the end of the rollout — O(1) bits per episode however long the sequence.",
-      q:"“RL only teaches O(1) bits per episode. In contrast, distillation teaches O(N) bits per episode.” — Thinking Machines"},
+      q:"“RL only teaches O(1) bits per episode. In contrast, distillation teaches O(N) bits per episode.” — Thinking Machines",
+      members:[
+        {name:"RL",note:"generic policy-gradient"},
+        {name:"PPO",note:"clipped update; learned value-function critic as baseline"},
+        {name:"GRPO",note:"group-relative baseline — mean/std over G samples, no critic"}
+      ]},
     "1,1,0":{n:"On-policy GKD (β→0)",c:"var(--other)",
       d:"On-policy student samples graded densely, but with a forward-KL (mode-covering) objective — the β→0 end of GKD's generalized JSD. Useful when the student CAN mimic the full teacher distribution.",
       q:"GKD's β knob interpolates forward↔reverse KL; β→0 recovers forward KL. — Agarwal et al."},
@@ -187,7 +205,7 @@
         t.setAttribute("x",P[0]+(p[0]?12:-12));t.setAttribute("y",P[1]-12);
         t.setAttribute("text-anchor",p[0]?"start":"end");
         t.setAttribute("class","nodeLabel");t.setAttribute("fill","#c7d2e6");
-        t.textContent=m.n.replace(" (β→0)","");
+        t.textContent=m.label||m.n.replace(" (β→0)","");
         g.appendChild(t);
       }
       svg.appendChild(g);
@@ -204,6 +222,19 @@
     document.getElementById("fSrc").textContent=SRC[state.src];
     document.getElementById("fDen").textContent=DEN[state.den];
     document.getElementById("fGeo").textContent=GEO[state.geo];
+    var mem=document.getElementById("cMembers");
+    if(m.members&&m.members.length){
+      var html='<div class="mh">Also this corner (differ off-cube):</div><ul>';
+      m.members.forEach(function(x){
+        html+='<li><b>'+x.name+'</b> — '+x.note+'</li>';
+      });
+      html+='</ul>';
+      mem.innerHTML=html;
+      mem.style.display="block";
+    } else {
+      mem.innerHTML="";
+      mem.style.display="none";
+    }
     document.getElementById("cQuote").textContent=m.q||"";
     document.getElementById("cQuote").style.display=m.q?"block":"none";
   }
