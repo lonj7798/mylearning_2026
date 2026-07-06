@@ -1,0 +1,112 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Economics &amp; Failure Modes — On-Policy Distillation</title>
+<style>
+  :root{--bg:#0f1420;--panel:#171e2e;--ink:#e7ecf5;--dim:#93a1bd;--line:#2c3852;
+        --sft:#93a1bd;--rl:#5aa9e6;--opd:#4ade80;--rew:#4ade80;--ent:#e07a5f}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);padding:20px;
+    font:15px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif}
+  h1{font-size:19px;margin:0 0 4px}
+  .sub{color:var(--dim);font-size:13px;margin-bottom:14px;max-width:700px}
+  .tabs{display:flex;gap:8px;margin-bottom:14px}
+  .tabs button{background:#101725;border:1px solid var(--line);color:var(--ink);padding:8px 16px;border-radius:8px;cursor:pointer;font-size:14px}
+  .tabs button.on{background:#22304a;border-color:#4d6a9e;font-weight:600}
+  .panel{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:18px;max-width:720px}
+  .bars{display:flex;gap:30px;align-items:flex-end;height:280px;padding:20px 10px 0}
+  .bcol{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:flex-end;height:100%}
+  .bcol .fill{width:78%;border-radius:6px 6px 0 0;position:relative;transition:.3s}
+  .bcol .score{position:absolute;top:-24px;left:0;right:0;text-align:center;font-weight:700;font-size:16px}
+  .bcol .name{margin-top:8px;font-size:13px;text-align:center}
+  .bcol .gpu{margin-top:4px;font-size:12px;color:var(--dim);text-align:center;font-variant-numeric:tabular-nums}
+  .callout{margin-top:16px;background:#101725;border:1px solid var(--line);border-left:4px solid var(--opd);border-radius:10px;padding:12px 16px;font-size:14px}
+  .callout b{color:var(--opd)}
+  .note{margin-top:14px;font-size:13px;color:var(--dim);max-width:700px}
+  .note b{color:var(--ink)}
+  .legend{display:flex;gap:18px;font-size:12.5px;color:var(--dim);margin:6px 0}
+  .legend i{width:14px;height:3px;display:inline-block;margin-right:6px;vertical-align:3px;border-radius:2px}
+  text{font-family:inherit}
+  .hidden{display:none}
+</style>
+</head>
+<body>
+  <h1>On-Policy Distillation: what it buys and how it breaks</h1>
+  <div class="sub">Qwen3-8B-Base, AIME'24, distilled from Qwen3-32B (Qwen3 Technical Report, Table 21). On-policy distillation reaches a higher score than RL at ~1/10 the GPU-hours — but it has characteristic failure modes.</div>
+
+  <div class="tabs">
+    <button id="tabC" class="on" onclick="show('C')">Compute</button>
+    <button id="tabF" onclick="show('F')">Failure modes</button>
+  </div>
+
+  <div class="panel" id="panelC">
+    <div class="bars" id="bars"></div>
+    <div class="callout">On-policy distillation: <b>74.4%</b> at <b>1,800 GPU-hours</b> vs RL's 67.6% at 17,920 — <b>+6.8 points for ~10× less compute</b>. (And 9–30× cheaper than scaling SFT data to match; 50–100× for self-distillation.)</div>
+    <div class="note">Height = AIME'24 score; the chip under each bar is GPU-hours. The win comes from density (O(N) teacher bits/token vs RL's O(1) scalar) plus shorter contexts and smaller batches — not from a better final objective.</div>
+  </div>
+
+  <div class="panel hidden" id="panelF">
+    <div class="legend"><span><i style="background:var(--rew)"></i>reward (teacher agreement)</span><span><i style="background:var(--ent)"></i>policy entropy</span></div>
+    <svg id="collapse" width="660" height="280" viewBox="0 0 660 280" role="img" aria-label="entropy collapse"></svg>
+    <div class="note"><b>Entropy collapse:</b> unlike RL's gradual climb, on-policy distillation often shows a <i>sudden</i> reward jump that "corresponds with a drastic collapse in entropy" (nrehiew) — the student snaps onto a narrow mode. Compounding it, <b>style tokens</b> ("wait", "alright") carry far higher per-token KL than task tokens, so the loss can be hijacked by discourse phrasing. <b>Per-token clipping</b> caps any single token's contribution, keeping the update on task-relevant signal and slowing the collapse. Watch entropy as your early-warning gauge.</div>
+  </div>
+
+<script>
+  function show(t){
+    document.getElementById('panelC').classList.toggle('hidden',t!=='C');
+    document.getElementById('panelF').classList.toggle('hidden',t!=='F');
+    document.getElementById('tabC').classList.toggle('on',t==='C');
+    document.getElementById('tabF').classList.toggle('on',t==='F');
+    if(t==='F')drawCollapse();
+  }
+
+  // compute bars
+  (function(){
+    var data=[
+      {name:"SFT-400K",score:60.0,gpu:"baseline",col:"var(--sft)"},
+      {name:"+ RL",score:67.6,gpu:"17,920 GPU-hr",col:"var(--rl)"},
+      {name:"+ On-policy distill",score:74.4,gpu:"1,800 GPU-hr",col:"var(--opd)"}
+    ];
+    var bars=document.getElementById('bars');
+    var lo=50, hi=80; // score axis
+    data.forEach(function(d){
+      var col=document.createElement('div');col.className='bcol';
+      var fill=document.createElement('div');fill.className='fill';
+      fill.style.background=d.col;
+      fill.style.height=((d.score-lo)/(hi-lo)*230)+'px';
+      var sc=document.createElement('div');sc.className='score';sc.textContent=d.score.toFixed(1)+'%';sc.style.color=d.col;
+      fill.appendChild(sc);
+      var nm=document.createElement('div');nm.className='name';nm.textContent=d.name;
+      var gp=document.createElement('div');gp.className='gpu';gp.textContent=d.gpu;
+      col.appendChild(fill);col.appendChild(nm);col.appendChild(gp);
+      bars.appendChild(col);
+    });
+  })();
+
+  function drawCollapse(){
+    var NS="http://www.w3.org/2000/svg";
+    var svg=document.getElementById('collapse'); svg.innerHTML="";
+    var ml=44,mt=14,pw=580,ph=220;
+    function el(t,a){var e=document.createElementNS(NS,t);for(var k in a)e.setAttribute(k,a[k]);return e;}
+    svg.appendChild(el("line",{x1:ml,y1:mt,x2:ml,y2:mt+ph,stroke:"#2c3852","stroke-width":1.4}));
+    svg.appendChild(el("line",{x1:ml,y1:mt+ph,x2:ml+pw,y2:mt+ph,stroke:"#2c3852","stroke-width":1.4}));
+    var xl=el("text",{x:ml+pw/2,y:mt+ph+30,"text-anchor":"middle",fill:"#93a1bd","font-size":12});xl.textContent="training steps";svg.appendChild(xl);
+    var sx=function(s){return ml+s/100*pw;}, sy=function(v){return mt+ph-v*ph;};
+    // reward: sigmoid jump at ~40
+    var rew="",ent="";
+    for(var s=0;s<=100;s++){
+      var r=1/(1+Math.exp(-(s-40)/4));          // sudden jump
+      var e=0.9 - 0.72/(1+Math.exp(-(s-40)/3)); // entropy cliff aligned to jump
+      rew+=(s===0?"M":"L")+sx(s)+" "+sy(0.15+0.8*r)+" ";
+      ent+=(s===0?"M":"L")+sx(s)+" "+sy(e)+" ";
+    }
+    svg.appendChild(el("path",{d:rew,fill:"none",stroke:"var(--rew)","stroke-width":2.6}));
+    svg.appendChild(el("path",{d:ent,fill:"none",stroke:"var(--ent)","stroke-width":2.6}));
+    svg.appendChild(el("line",{x1:sx(40),y1:mt,x2:sx(40),y2:mt+ph,stroke:"#f2c14e","stroke-width":1,"stroke-dasharray":"4 4"}));
+    var t=el("text",{x:sx(40)+6,y:mt+16,fill:"#f2c14e","font-size":11});t.textContent="reward jump = entropy cliff";svg.appendChild(t);
+  }
+</script>
+</body>
+</html>
