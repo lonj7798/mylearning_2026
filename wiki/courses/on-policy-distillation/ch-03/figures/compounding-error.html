@@ -109,20 +109,35 @@
     document.getElementById('mon').textContent=onv.toFixed(1);
     document.getElementById('mratio').textContent=(onv>0?(bcv/onv).toFixed(0):"—")+"×";
 
-    // drift schematic
+    // drift schematic — trajectory of length T; BOTH the divergence point and the
+    // drift into ungraded space now scale with the horizon T (fix: was static in T).
     var d=document.getElementById('drift'); d.innerHTML="";
-    var baseY=60, startX=40, endX=640, divAt=0.28; // divergence fraction
-    // teacher straight path
+    var baseY=42, startX=40, endX=640, W=endX-startX, maxDrift=50;
+    // expected first-mistake turn ~ 1/eps (earlier when the per-step error is higher)
+    var tDiv=Math.min(T, Math.max(1, Math.round(1/eps)));
+    var post=Math.max(0, T-tDiv);                 // turns spent drifting through ungraded states
+    var divX=startX + W*(tDiv/T);                 // as T grows, divergence sits at an ever-smaller fraction (moves left)
+    var drift=maxDrift*Math.pow(post/Tmax,1.4)*(0.55+0.45*(eps/0.20));
+
+    // teacher path spans the whole horizon (turn 1 .. turn T)
     d.appendChild(el("line",{x1:startX,y1:baseY,x2:endX,y2:baseY,stroke:"var(--teacher)","stroke-width":2}));
-    for(var i=0;i<=10;i++){var x=startX+(endX-startX)*i/10; d.appendChild(el("circle",{cx:x,cy:baseY,r:3.5,fill:"var(--teacher)"}));}
-    // student path: follows until divergence, then bends away with slope ~ eps*scale
-    var dx=startX+(endX-startX)*divAt;
-    var drift=eps*900; // visual drift magnitude
-    var path="M"+startX+" "+baseY+" L"+dx+" "+baseY+" L"+endX+" "+(baseY+drift);
-    d.appendChild(el("path",{d:path,fill:"none",stroke:"var(--bc)","stroke-width":2,"stroke-dasharray":"1 0"}));
-    d.appendChild(el("circle",{cx:dx,cy:baseY,r:4,fill:"#f2c14e"}));
-    var dl=el("text",{x:dx,y:baseY-10,"text-anchor":"middle",fill:"#f2c14e","font-size":11}); dl.textContent="first novel state"; d.appendChild(dl);
-    var el2=el("text",{x:endX-4,y:baseY+drift+16,"text-anchor":"end",fill:"var(--bc)","font-size":11}); el2.textContent="ungraded — student never trained here"; d.appendChild(el2);
+    for(var i=0;i<=10;i++){var x=startX+W*i/10; d.appendChild(el("circle",{cx:x,cy:baseY,r:3,fill:"var(--teacher)"}));}
+    var t1=el("text",{x:startX,y:baseY+18,"text-anchor":"middle",fill:"#93a1bd","font-size":10}); t1.textContent="turn 1"; d.appendChild(t1);
+    var tT=el("text",{x:endX,y:baseY+18,"text-anchor":"middle",fill:"#93a1bd","font-size":10}); tT.textContent="turn "+T; d.appendChild(tT);
+
+    // student path: aligned to the teacher until divergence, then bends into ungraded space
+    var path="M"+startX+" "+baseY+" L"+divX+" "+baseY+" Q"+((divX+endX)/2)+" "+baseY+" "+endX+" "+(baseY+drift);
+    d.appendChild(el("path",{d:path,fill:"none",stroke:"var(--bc)","stroke-width":2}));
+
+    if(post>0){
+      // dashed bracket under the ungraded tail — visibly lengthens as T grows
+      d.appendChild(el("line",{x1:divX,y1:baseY+drift+9,x2:endX,y2:baseY+drift+9,stroke:"var(--bc)","stroke-width":1,"stroke-dasharray":"3 3",opacity:0.75}));
+      d.appendChild(el("circle",{cx:divX,cy:baseY,r:4,fill:"#f2c14e"}));
+      var dl=el("text",{x:divX,y:baseY-9,"text-anchor":"middle",fill:"#f2c14e","font-size":11}); dl.textContent="first novel state (turn ~"+tDiv+")"; d.appendChild(dl);
+      var el2=el("text",{x:endX-4,y:baseY+drift+23,"text-anchor":"end",fill:"var(--bc)","font-size":11}); el2.textContent="ungraded — never trained here ("+post+" turns)"; d.appendChild(el2);
+    } else {
+      var el3=el("text",{x:(startX+endX)/2,y:baseY-9,"text-anchor":"middle",fill:"#93a1bd","font-size":11}); el3.textContent="still on the teacher's path — horizon T ≤ expected first-mistake turn (~"+Math.round(1/eps)+")"; d.appendChild(el3);
+    }
 
     var note=document.getElementById('note');
     note.innerHTML='At <b>ε='+eps.toFixed(2)+'</b>, <b>T='+T+'</b>: off-policy expected cost is <b style="color:var(--bc)">'+bcv.toFixed(1)+'</b> vs on-policy <b style="color:var(--on)">'+onv.toFixed(1)+'</b> — <b style="color:#f2c14e">'+(bcv/onv).toFixed(0)+'× worse</b>. The ratio equals T, so the penalty grows with every extra turn. A 20–50-turn sales call sits deep in the regime where off-policy imitation spirals — which is why the boson seller needs to be graded on <i>its own</i> sampled turns.';
