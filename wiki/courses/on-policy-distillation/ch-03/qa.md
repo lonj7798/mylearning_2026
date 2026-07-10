@@ -171,3 +171,15 @@ total = [T steps] × [ε/step] × [cost/mistake O(1): trained to recover]  = O(�
 **Crux:** the difference is whether the *second* T (cost-per-mistake) exists. off-policy: mistake→off-distribution→unrecoverable→costs ~T. on-policy: trained on its own drift-states→recoverable→costs O(1). Root cause = *which distribution ε is driven low on*: expert-states only (off, so ε≈1 in drift-states → spiral) vs the states the policy actually visits (on → no spiral).
 
 **One line:** O(εT²) = [T steps]×[ε]×[per-mistake cost ~T because unrecoverable off-distribution]; O(εT) = same but per-mistake cost O(1) because on-policy trains on its own drift-states (recoverable) → the second T vanishes. See read.md, [[ross-dagger-exposure-bias]], [[ch-01]] P2.
+
+---
+
+### Q10 — (notation) is the T in O(εT²) the temperature T from ch-02?
+
+No — **notation collision.** Two different `T`s in this course:
+- **ch-02 (Hinton):** `T` = **temperature** (softmax softening, `exp(z/T)`).
+- **ch-01 P2 / ch-03 / compounding-error figure:** `T` = **Horizon** = sequence length = # of steps/turns/tokens (the "지평선"). This is the `T` in `O(εT²)`/`O(εT)`.
+
+Longer conversation ⇒ larger horizon `T` ⇒ deeper in the compounding-error regime (why 20–50-turn calls are the danger zone). Nothing to do with temperature.
+
+**One line:** in exposure-bias `O(εT²)`, `T` = horizon (sequence length), NOT the ch-02 softmax temperature — same letter, different quantity. See [[ch-01]] P2, read.md, figures/compounding-error.html.
