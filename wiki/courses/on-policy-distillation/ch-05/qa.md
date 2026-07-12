@@ -73,3 +73,16 @@ So longer sequences → distillation's signal grows (O(N)↑) while RL's stays f
 **Note:** this N is the **same quantity as ch-03's horizon T** (sequence length / token count) — literature just uses N or T; still unrelated to the ch-02 temperature-T.
 
 **One line:** N = total tokens in the episode; O(N) = signal count scales with tokens (per-token dense) vs O(1) = one scalar regardless of length; same quantity as horizon T. See read.md §2, [[ch-01]] §3, [[ch-03]] qa Q10.
+
+---
+
+### Q6 — so can you decrease/increase the number of tokens each time?
+
+Yes — **N is variable and controllable**, but "increase N for more signal" doesn't work.
+
+- **Varies naturally:** each student rollout has a different length; **controllable** via `max_new_tokens` / truncation.
+- **N is a compute lever, not free signal:** N↑ → more per-token signals (O(N)) **and** more compute — teacher-logprob queries scale with N (the ch-05 §5 serving bottleneck, $$). Usually the **task determines N** (you don't truncate a 30-turn call to save compute).
+- **Length normalization (MiniLLM, ch-04 Q7):** summing per-token KL over N tokens makes long sequences dominate the gradient, so the loss is **normalized by length** — which cancels the "more tokens = more signal" effect. So you can't game N.
+- **Why large N helps OPD** = the **exposure-bias regime** (long horizon, ch-05 §3), NOT harvesting more signal from more tokens.
+
+**One line:** N varies per rollout and is capped by `max_new_tokens`, but increasing it costs compute/teacher-serving and is length-normalized away — task sets N; large-N favors OPD via the exposure-bias regime, not signal harvesting. See read.md §3, §5, [[ch-04]] qa Q7.
