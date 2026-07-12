@@ -61,3 +61,15 @@ Yes (fixed point: reverse KL → 0 at student=teacher, ch-04 §2) — with three
 **Ceiling (capstone Fork 2):** still bounded by what the teacher **knows** — a wrong teacher belief (e.g. a wrong tool call) gets faithfully copied. §4's "beats the teacher" is *overall performance*; it can't acquire knowledge the teacher lacks → for verifiable-correctness dimensions, add a verifier/reward.
 
 **One line:** yes, resembles the teacher (reverse KL→0), but in its OWN states (on-policy), SELECTIVELY (mode-seeking on reproducible modes), and can even EXCEED the teacher (on-policy data > teacher quality, §4) — while still bounded by what the teacher knows (Fork 2). See read.md §4, [[ch-01]] qa Q7, [[ch-03]] qa Q7.
+
+---
+
+### Q5 — so N in O(N) = the total number of tokens?
+
+Yes. **N = the number of tokens in the rollout/episode** (= the sequence length). `O(N)` bits/episode = the learning signal scales with the token count, because a per-token signal (teacher grade) lands at each of the N tokens. 500 tokens → ~500 signals; 5000 → ~5000 (10×). Contrast **O(1)** (RL): one scalar reward regardless of length ("a fixed number of bits regardless of the number of tokens used").
+
+So longer sequences → distillation's signal grows (O(N)↑) while RL's stays flat (O(1)) — the ch-01 density axis, and why OPD especially favors long sequences (ch-05 §3).
+
+**Note:** this N is the **same quantity as ch-03's horizon T** (sequence length / token count) — literature just uses N or T; still unrelated to the ch-02 temperature-T.
+
+**One line:** N = total tokens in the episode; O(N) = signal count scales with tokens (per-token dense) vs O(1) = one scalar regardless of length; same quantity as horizon T. See read.md §2, [[ch-01]] §3, [[ch-03]] qa Q10.
