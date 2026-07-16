@@ -116,3 +116,7 @@ Index rebuilt.
 ## [2026-06-23] Session #29
 - course: software-arch | chapter: ch-02 | phase: read
 - session ended: 2026-06-23T23:50:36.427Z
+
+## [2026-07-14] Session #31
+- course: on-policy-distillation | chapter: ch-06 | phase: read
+- session ended: 2026-07-14T22:12:02.420Z

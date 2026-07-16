@@ -1,0 +1,140 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Per-Token Teacher Grading — On-Policy Distillation</title>
+<style>
+  :root{--bg:#0f1420;--panel:#171e2e;--ink:#e7ecf5;--dim:#93a1bd;--line:#2c3852;
+        --s:#5aa9e6;--t:#4ade80}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);padding:20px;
+    font:15px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif}
+  h1{font-size:19px;margin:0 0 4px}
+  .sub{color:var(--dim);font-size:13px;margin-bottom:16px;max-width:720px}
+  .panel{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:18px;max-width:760px}
+  .seq{font-size:20px;line-height:2.1;margin:6px 0 8px}
+  .tok{padding:3px 6px;border-radius:6px;cursor:pointer;border:2px solid transparent;transition:.12s;white-space:pre}
+  .tok:hover{border-color:#fff}
+  .tok.sel{border-color:#fff;box-shadow:0 0 0 2px rgba(255,255,255,.15)}
+  .scale{display:flex;align-items:center;gap:8px;font-size:12px;color:var(--dim);margin:8px 0 4px}
+  .scalebar{height:10px;width:180px;border-radius:5px;background:linear-gradient(90deg,#4ade80,#a3e635,#f2c14e,#e07a5f)}
+  .detail{display:flex;gap:26px;flex-wrap:wrap;margin-top:14px;border-top:1px solid var(--line);padding-top:14px}
+  .dcol{min-width:220px}
+  .dcol h3{margin:0 0 8px;font-size:13px;color:var(--dim);text-transform:uppercase;letter-spacing:.03em}
+  .drow{display:flex;align-items:center;gap:8px;margin:5px 0;font-size:13px}
+  .drow .cand{min-width:56px;font-variant-numeric:tabular-nums;color:#d3dcec}
+  .barwrap{flex:1;background:#101725;border-radius:4px;height:16px;overflow:hidden}
+  .barwrap .b{height:100%;border-radius:4px}
+  .drow .pv{min-width:40px;text-align:right;font-size:12px;color:var(--dim);font-variant-numeric:tabular-nums}
+  .kl{margin-top:12px;background:#101725;border:1px solid var(--line);border-radius:10px;padding:12px 14px;min-width:220px}
+  .kl .k{font-size:12px;color:var(--dim);text-transform:uppercase}
+  .kl .v{font-size:24px;font-weight:700;font-variant-numeric:tabular-nums}
+  .kl .adv{color:#f2c14e;font-size:14px;margin-top:4px}
+  .summary{margin-top:16px;font-size:13px;color:var(--dim);max-width:720px}
+  .summary b{color:var(--ink)}
+</style>
+</head>
+<body>
+  <h1>Per-Token Teacher Grading — the dense signal of on-policy distillation</h1>
+  <div class="sub">This sentence was <b>sampled by the student</b>. The teacher scores <i>every</i> token by the reverse KL between the student's and the teacher's next-token distribution. Redder = higher disagreement. Click a token to see both distributions and the resulting per-token advantage (= −KL). That is O(N) bits of signal in one rollout — not RL's single end-of-episode scalar.</div>
+
+  <div class="panel">
+    <div class="scale"><span>per-token reverse KL:</span><span>low</span><div class="scalebar"></div><span>high</span></div>
+    <div class="seq" id="seq"></div>
+
+    <div class="detail" id="detail" style="display:none">
+      <div class="dcol">
+        <h3>Student π<sub>θ</sub> (next token)</h3>
+        <div id="sdist"></div>
+      </div>
+      <div class="dcol">
+        <h3>Teacher π<sub>teacher</sub></h3>
+        <div id="tdist"></div>
+      </div>
+      <div class="kl">
+        <div class="k">reverse KL @ this token</div>
+        <div class="v" id="klv">0.000</div>
+        <div class="adv" id="advv">advantage = −0.000</div>
+      </div>
+    </div>
+
+    <div class="summary" id="summary"></div>
+  </div>
+
+<script>
+(function(){
+  // each token: chosen token text + student/teacher dists over a shared candidate set
+  var D=[
+    {tok:"To",     s:{To:.80,In:.12,We:.08}, t:{To:.82,In:.10,We:.08}},
+    {tok:" solve", s:{solve:.70,find:.20,get:.10}, t:{solve:.75,find:.18,get:.07}},
+    {tok:" this",  s:{this:.60,the:.25,it:.15}, t:{this:.62,the:.24,it:.14}},
+    {tok:" problem",s:{problem:.70,one:.20,task:.10}, t:{problem:.72,one:.19,task:.09}},
+    {tok:",",      s:{",":.50,":":.30,"—":.20}, t:{",":.55,":":.28,"—":.17}},
+    {tok:" wait",  s:{wait:.50,so:.30,now:.20}, t:{wait:.20,so:.45,now:.35}},
+    {tok:" let",   s:{let:.55,I:.30,we:.15}, t:{let:.35,I:.40,we:.25}},
+    {tok:" me",    s:{me:.70,us:.20,it:.10}, t:{me:.50,us:.35,it:.15}},
+    {tok:" compute",s:{compute:.60,calculate:.30,do:.10}, t:{compute:.50,calculate:.42,do:.08}},
+    {tok:" 12",    s:{"12":.90,"21":.06,"2":.04}, t:{"12":.93,"21":.04,"2":.03}},
+    {tok:" ×",     s:{"×":.85,"*":.10,times:.05}, t:{"×":.88,"*":.08,times:.04}},
+    {tok:" 7",     s:{"7":.92,"1":.05,"9":.03}, t:{"7":.95,"1":.03,"9":.02}},
+    {tok:" =",     s:{"=":.90,is:.07,equals:.03}, t:{"=":.92,is:.06,equals:.02}},
+    {tok:" 84",    s:{"84":.88,"83":.07,"48":.05}, t:{"84":.94,"83":.04,"48":.02}}
+  ];
+  function kl(s,t){var k=0;for(var c in s){var ps=s[c],pt=t[c]||1e-6;if(ps>0)k+=ps*Math.log(ps/pt);}return k;}
+  function color(k){
+    if(k<0.02)return"#183a2a"; if(k<0.05)return"#2f5233";
+    if(k<0.10)return"#5a5a24"; if(k<0.18)return"#7a5a1f"; return"#7a2f24";
+  }
+  function textColor(k){return k<0.10?"#bfe9cf":"#f6d9c8";}
+
+  var seq=document.getElementById('seq');
+  var total=0, selIdx=null;
+  D.forEach(function(d,i){
+    d.k=kl(d.s,d.t); total+=d.k;
+    var sp=document.createElement('span');
+    sp.className='tok'; sp.textContent=d.tok;
+    sp.style.background=color(d.k); sp.style.color=textColor(d.k);
+    sp.addEventListener('click',function(){select(i,sp);});
+    seq.appendChild(sp);
+    d._el=sp;
+  });
+
+  function distRows(container,dist,cls){
+    container.innerHTML="";
+    var entries=Object.keys(dist).map(function(c){return [c,dist[c]];}).sort(function(a,b){return b[1]-a[1];});
+    var mx=Math.max.apply(null,entries.map(function(e){return e[1];}));
+    entries.forEach(function(e){
+      var row=document.createElement('div');row.className='drow';
+      var cand=document.createElement('span');cand.className='cand';cand.textContent='“'+e[0]+'”';
+      var bw=document.createElement('div');bw.className='barwrap';
+      var b=document.createElement('div');b.className='b';b.style.width=(e[1]/mx*100)+'%';
+      b.style.background=cls==='s'?'var(--s)':'var(--t)';
+      bw.appendChild(b);
+      var pv=document.createElement('span');pv.className='pv';pv.textContent=(e[1]*100).toFixed(0)+'%';
+      row.appendChild(cand);row.appendChild(bw);row.appendChild(pv);
+      container.appendChild(row);
+    });
+  }
+
+  function select(i,sp){
+    if(selIdx!=null&&D[selIdx]._el)D[selIdx]._el.classList.remove('sel');
+    selIdx=i; sp.classList.add('sel');
+    var d=D[i];
+    document.getElementById('detail').style.display='flex';
+    distRows(document.getElementById('sdist'),d.s,'s');
+    distRows(document.getElementById('tdist'),d.t,'t');
+    document.getElementById('klv').textContent=d.k.toFixed(3);
+    document.getElementById('advv').textContent='advantage = −'+d.k.toFixed(3);
+  }
+
+  var styleKL=D[5].k+D[6].k+D[7].k;
+  document.getElementById('summary').innerHTML=
+    'Total sequence reverse KL = <b>'+total.toFixed(3)+'</b> across <b>'+D.length+'</b> tokens — a grade at every position. '+
+    'Notice the shape: the three <b style="color:#f2c14e">style/discourse tokens</b> ("wait", "let", "me") alone contribute <b>'+styleKL.toFixed(3)+'</b> (~'+(100*styleKL/total).toFixed(0)+'% of the total), while the <b style="color:var(--t)">task-critical numbers</b> ("12", "7", "84") are already well-matched (near-zero KL). This is nrehiew\'s observation that "style tokens have significantly higher per-token KL divergence" — and why <b>per-token clipping</b> (ch-05) stops the loss from being dominated by, and collapsing toward, those high-KL style tokens.';
+
+  select(5, D[5]._el); // open on "wait" to make the point
+})();
+</script>
+</body>
+</html>

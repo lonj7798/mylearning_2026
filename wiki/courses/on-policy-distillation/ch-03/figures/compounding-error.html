@@ -1,0 +1,151 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Compounding Error — O(εT²) vs O(εT)</title>
+<style>
+  :root{--bg:#0f1420;--panel:#171e2e;--ink:#e7ecf5;--dim:#93a1bd;--line:#2c3852;
+        --bc:#e07a5f;--on:#4ade80;--teacher:#5aa9e6}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);padding:20px;
+    font:15px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif}
+  h1{font-size:19px;margin:0 0 4px}
+  .sub{color:var(--dim);font-size:13px;margin-bottom:16px;max-width:700px}
+  .panel{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:18px;max-width:720px}
+  .row{display:flex;align-items:center;gap:14px;margin-bottom:12px;flex-wrap:wrap}
+  .row label{font-size:13px;color:var(--dim);min-width:150px}
+  input[type=range]{flex:1;min-width:200px}
+  #eps{accent-color:#5aa9e6}#hor{accent-color:#f2c14e}
+  .tval{font-variant-numeric:tabular-nums;font-weight:600;min-width:70px;text-align:right}
+  .legend{display:flex;gap:18px;margin:6px 0 4px;font-size:12.5px;color:var(--dim);flex-wrap:wrap}
+  .legend i{width:14px;height:3px;display:inline-block;margin-right:6px;vertical-align:3px;border-radius:2px}
+  .readout{display:flex;gap:18px;margin-top:14px;flex-wrap:wrap}
+  .metric{background:#101725;border:1px solid var(--line);border-radius:10px;padding:10px 14px;min-width:130px}
+  .metric .k{font-size:12px;color:var(--dim);text-transform:uppercase;letter-spacing:.03em}
+  .metric .v{font-size:20px;font-weight:700;font-variant-numeric:tabular-nums;margin-top:2px}
+  .metric.ratio .v{color:#f2c14e}
+  .note{margin-top:14px;font-size:13px;color:var(--dim);max-width:700px}
+  .note b{color:var(--ink)}
+  text{font-family:inherit}
+</style>
+</head>
+<body>
+  <h1>Compounding Error: why off-policy training punishes long sequences</h1>
+  <div class="sub">Behavioral cloning (off-policy imitation) accrues error that grows as <b>O(ε·T²)</b> in the horizon T — each early mistake drifts the model into states it was never trained on. On-policy data collection makes it <b>O(ε·T)</b>. Set the per-step error ε and slide the horizon T; the ratio of the two is exactly T.</div>
+
+  <div class="panel">
+    <div class="row">
+      <label>Per-step error&nbsp;ε</label>
+      <input id="eps" type="range" min="0.01" max="0.20" step="0.01" value="0.06">
+      <span class="tval" id="epsv">0.06</span>
+    </div>
+    <div class="row">
+      <label>Horizon&nbsp;T (turns/tokens)</label>
+      <input id="hor" type="range" min="1" max="50" step="1" value="50">
+      <span class="tval" id="horv">50</span>
+    </div>
+
+    <div class="legend">
+      <span><i style="background:var(--bc)"></i>behavioral cloning (off-policy) · ε·T²</span>
+      <span><i style="background:var(--on)"></i>on-policy · ε·T</span>
+    </div>
+    <svg id="plot" width="680" height="300" viewBox="0 0 680 300" role="img" aria-label="error vs horizon"></svg>
+
+    <div class="readout">
+      <div class="metric"><div class="k">Off-policy cost @T</div><div class="v" id="mbc">0</div></div>
+      <div class="metric"><div class="k">On-policy cost @T</div><div class="v" id="mon">0</div></div>
+      <div class="metric ratio"><div class="k">Off / On ratio</div><div class="v" id="mratio">0×</div></div>
+    </div>
+
+    <div style="margin-top:18px">
+      <div class="legend"><span><i style="background:var(--teacher)"></i>teacher-visited states</span><span><i style="background:var(--bc)"></i>student drift into ungraded states</span></div>
+      <svg id="drift" width="680" height="120" viewBox="0 0 680 120" role="img" aria-label="trajectory drift schematic"></svg>
+    </div>
+
+    <div class="note" id="note"></div>
+  </div>
+
+<script>
+(function(){
+  var NS="http://www.w3.org/2000/svg", Tmax=50;
+  var ml=54, mt=16, pw=600, ph=250; // plot geometry
+
+  function el(tag,attrs){var e=document.createElementNS(NS,tag);for(var k in attrs)e.setAttribute(k,attrs[k]);return e;}
+
+  function render(){
+    var eps=parseFloat(document.getElementById('eps').value);
+    var T=parseInt(document.getElementById('hor').value,10);
+    document.getElementById('epsv').textContent=eps.toFixed(2);
+    document.getElementById('horv').textContent=T;
+
+    var yMax=eps*Tmax*Tmax;
+    var sx=function(t){return ml + (t/Tmax)*pw;};
+    var sy=function(v){return mt + ph - (v/yMax)*ph;};
+
+    var svg=document.getElementById('plot'); svg.innerHTML="";
+    // axes
+    svg.appendChild(el("line",{x1:ml,y1:mt,x2:ml,y2:mt+ph,stroke:"#2c3852","stroke-width":1.4}));
+    svg.appendChild(el("line",{x1:ml,y1:mt+ph,x2:ml+pw,y2:mt+ph,stroke:"#2c3852","stroke-width":1.4}));
+    var xl=el("text",{x:ml+pw/2,y:mt+ph+34,"text-anchor":"middle",fill:"#93a1bd","font-size":12}); xl.textContent="horizon T  (sequence length / turns)"; svg.appendChild(xl);
+    var yl=el("text",{x:16,y:mt+ph/2,"text-anchor":"middle",fill:"#93a1bd","font-size":12,transform:"rotate(-90 16 "+(mt+ph/2)+")"}); yl.textContent="expected cost"; svg.appendChild(yl);
+
+    // curves
+    var bc="", on="";
+    for(var t=0;t<=Tmax;t++){
+      bc+=(t===0?"M":"L")+sx(t)+" "+sy(eps*t*t)+" ";
+      on+=(t===0?"M":"L")+sx(t)+" "+sy(eps*t)+" ";
+    }
+    svg.appendChild(el("path",{d:on,fill:"none",stroke:"var(--on)","stroke-width":2.6}));
+    svg.appendChild(el("path",{d:bc,fill:"none",stroke:"var(--bc)","stroke-width":2.6}));
+
+    // T marker
+    svg.appendChild(el("line",{x1:sx(T),y1:mt,x2:sx(T),y2:mt+ph,stroke:"#f2c14e","stroke-width":1.2,"stroke-dasharray":"4 4"}));
+    svg.appendChild(el("circle",{cx:sx(T),cy:sy(eps*T*T),r:5,fill:"var(--bc)",stroke:"#0f1420","stroke-width":1.5}));
+    svg.appendChild(el("circle",{cx:sx(T),cy:sy(eps*T),r:5,fill:"var(--on)",stroke:"#0f1420","stroke-width":1.5}));
+
+    var bcv=eps*T*T, onv=eps*T;
+    document.getElementById('mbc').textContent=bcv.toFixed(1);
+    document.getElementById('mon').textContent=onv.toFixed(1);
+    document.getElementById('mratio').textContent=(onv>0?(bcv/onv).toFixed(0):"—")+"×";
+
+    // drift schematic — trajectory of length T; BOTH the divergence point and the
+    // drift into ungraded space now scale with the horizon T (fix: was static in T).
+    var d=document.getElementById('drift'); d.innerHTML="";
+    var baseY=42, startX=40, endX=640, W=endX-startX, maxDrift=50;
+    // expected first-mistake turn ~ 1/eps (earlier when the per-step error is higher)
+    var tDiv=Math.min(T, Math.max(1, Math.round(1/eps)));
+    var post=Math.max(0, T-tDiv);                 // turns spent drifting through ungraded states
+    var divX=startX + W*(tDiv/T);                 // as T grows, divergence sits at an ever-smaller fraction (moves left)
+    var drift=maxDrift*Math.pow(post/Tmax,1.4)*(0.55+0.45*(eps/0.20));
+
+    // teacher path spans the whole horizon (turn 1 .. turn T)
+    d.appendChild(el("line",{x1:startX,y1:baseY,x2:endX,y2:baseY,stroke:"var(--teacher)","stroke-width":2}));
+    for(var i=0;i<=10;i++){var x=startX+W*i/10; d.appendChild(el("circle",{cx:x,cy:baseY,r:3,fill:"var(--teacher)"}));}
+    var t1=el("text",{x:startX,y:baseY+18,"text-anchor":"middle",fill:"#93a1bd","font-size":10}); t1.textContent="turn 1"; d.appendChild(t1);
+    var tT=el("text",{x:endX,y:baseY+18,"text-anchor":"middle",fill:"#93a1bd","font-size":10}); tT.textContent="turn "+T; d.appendChild(tT);
+
+    // student path: aligned to the teacher until divergence, then bends into ungraded space
+    var path="M"+startX+" "+baseY+" L"+divX+" "+baseY+" Q"+((divX+endX)/2)+" "+baseY+" "+endX+" "+(baseY+drift);
+    d.appendChild(el("path",{d:path,fill:"none",stroke:"var(--bc)","stroke-width":2}));
+
+    if(post>0){
+      // dashed bracket under the ungraded tail — visibly lengthens as T grows
+      d.appendChild(el("line",{x1:divX,y1:baseY+drift+9,x2:endX,y2:baseY+drift+9,stroke:"var(--bc)","stroke-width":1,"stroke-dasharray":"3 3",opacity:0.75}));
+      d.appendChild(el("circle",{cx:divX,cy:baseY,r:4,fill:"#f2c14e"}));
+      var dl=el("text",{x:divX,y:baseY-9,"text-anchor":"middle",fill:"#f2c14e","font-size":11}); dl.textContent="first novel state (turn ~"+tDiv+")"; d.appendChild(dl);
+      var el2=el("text",{x:endX-4,y:baseY+drift+23,"text-anchor":"end",fill:"var(--bc)","font-size":11}); el2.textContent="ungraded — never trained here ("+post+" turns)"; d.appendChild(el2);
+    } else {
+      var el3=el("text",{x:(startX+endX)/2,y:baseY-9,"text-anchor":"middle",fill:"#93a1bd","font-size":11}); el3.textContent="still on the teacher's path — horizon T ≤ expected first-mistake turn (~"+Math.round(1/eps)+")"; d.appendChild(el3);
+    }
+
+    var note=document.getElementById('note');
+    note.innerHTML='At <b>ε='+eps.toFixed(2)+'</b>, <b>T='+T+'</b>: off-policy expected cost is <b style="color:var(--bc)">'+bcv.toFixed(1)+'</b> vs on-policy <b style="color:var(--on)">'+onv.toFixed(1)+'</b> — <b style="color:#f2c14e">'+(bcv/onv).toFixed(0)+'× worse</b>. The ratio equals T, so the penalty grows with every extra turn. A 20–50-turn sales call sits deep in the regime where off-policy imitation spirals — which is why the boson seller needs to be graded on <i>its own</i> sampled turns.';
+  }
+  document.getElementById('eps').addEventListener('input',render);
+  document.getElementById('hor').addEventListener('input',render);
+  render();
+})();
+</script>
+</body>
+</html>

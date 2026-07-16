@@ -1,0 +1,133 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>GKD Knobs — lmbda × beta</title>
+<style>
+  :root{--bg:#0f1420;--panel:#171e2e;--ink:#e7ecf5;--dim:#93a1bd;--line:#2c3852;--hi:#4ade80}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);padding:20px;
+    font:15px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif}
+  h1{font-size:19px;margin:0 0 4px}
+  .sub{color:var(--dim);font-size:13px;margin-bottom:16px;max-width:700px}
+  .wrap{display:flex;gap:24px;flex-wrap:wrap;align-items:flex-start}
+  .panel{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:18px}
+  .row{display:flex;align-items:center;gap:12px;margin-bottom:12px}
+  .row label{font-size:13px;color:var(--dim);min-width:150px}
+  input[type=range]{flex:1;min-width:180px}
+  #lmb{accent-color:#5aa9e6}#bet{accent-color:#f2c14e}
+  .tval{font-variant-numeric:tabular-nums;font-weight:600;min-width:44px;text-align:right}
+  .card{max-width:340px}
+  .tag{font-size:12px;color:var(--dim);text-transform:uppercase;letter-spacing:.04em}
+  .rname{font-size:19px;font-weight:700;margin:4px 0 8px}
+  .rdesc{font-size:14px;color:#d3dcec}
+  pre{background:#0b111c;border:1px solid var(--line);border-radius:8px;padding:12px;font-size:13px;color:#cfe3ff;overflow:auto;margin-top:14px}
+  .kw{color:#f2c14e}.num{color:#8be9a3}
+  text{font-family:inherit}
+</style>
+</head>
+<body>
+  <h1>GKD Knobs: <code>lmbda</code> × <code>beta</code></h1>
+  <div class="sub">The whole method family lives in two TRL <code>GKDConfig</code> dials. <b>lmbda</b> = on-policy fraction (0 = train on fixed teacher data, 1 = train on the student's own samples). <b>beta</b> = divergence geometry (0 ≈ forward KL / mode-covering, 1 ≈ reverse KL / mode-seeking). Move the dials and read off which named method you get.</div>
+
+  <div class="wrap">
+    <div class="panel">
+      <svg id="map" width="300" height="300" viewBox="0 0 300 300" role="img" aria-label="lmbda beta map"></svg>
+      <div class="row" style="margin-top:14px"><label>lmbda&nbsp;(on-policy fraction)</label><input id="lmb" type="range" min="0" max="1" step="0.01" value="1"><span class="tval" id="lmbv">1.00</span></div>
+      <div class="row"><label>beta&nbsp;(forward→reverse KL)</label><input id="bet" type="range" min="0" max="1" step="0.01" value="0.9"><span class="tval" id="betv">0.90</span></div>
+    </div>
+
+    <div class="panel card">
+      <div class="tag">selected regime</div>
+      <div class="rname" id="rname">—</div>
+      <div class="rdesc" id="rdesc">—</div>
+      <pre id="code"></pre>
+    </div>
+  </div>
+
+<script>
+(function(){
+  var NS="http://www.w3.org/2000/svg";
+  var lmb=1, bet=0.9;
+  var corners=[
+    {x:0,y:0,t:"Supervised KD (forward KL)"},
+    {x:0,y:1,t:"Supervised reverse-KL KD"},
+    {x:1,y:0,t:"On-policy GKD (forward KL)"},
+    {x:1,y:1,t:"On-policy distillation ★"}
+  ];
+
+  function drawMap(){
+    var svg=document.getElementById('map'); svg.innerHTML="";
+    var m=34, S=232; // inner square
+    function px(x){return m+x*S;}
+    function py(y){return m+(1-y)*S;}
+    function el(t,a){var e=document.createElementNS(NS,t);for(var k in a)e.setAttribute(k,a[k]);return e;}
+    // gradient-ish quadrant fill
+    svg.appendChild(el("rect",{x:m,y:m,width:S,height:S,fill:"#101725",stroke:"#2c3852","stroke-width":1.4,rx:8}));
+    // grid mid lines
+    svg.appendChild(el("line",{x1:px(0.5),y1:m,x2:px(0.5),y2:m+S,stroke:"#22304a","stroke-width":1}));
+    svg.appendChild(el("line",{x1:m,y1:py(0.5),x2:m+S,y2:py(0.5),stroke:"#22304a","stroke-width":1}));
+    // axis labels
+    svg.appendChild(txt(m+S/2,m+S+22,"lmbda  (off-policy → on-policy)","middle","#93a1bd"));
+    var yl=el("text",{x:14,y:m+S/2,"text-anchor":"middle",fill:"#93a1bd","font-size":11,transform:"rotate(-90 14 "+(m+S/2)+")"});yl.textContent="beta (forward → reverse KL)";svg.appendChild(yl);
+    // corner dots
+    corners.forEach(function(c){
+      var star=(c.x===1&&c.y===1);
+      svg.appendChild(el("circle",{cx:px(c.x),cy:py(c.y),r:star?6:4,fill:star?"var(--hi)":"#5b6b88"}));
+    });
+    // selected point
+    svg.appendChild(el("line",{x1:px(lmb),y1:m,x2:px(lmb),y2:m+S,stroke:"#f2c14e","stroke-width":.8,"stroke-dasharray":"3 3"}));
+    svg.appendChild(el("line",{x1:m,y1:py(bet),x2:m+S,y2:py(bet),stroke:"#f2c14e","stroke-width":.8,"stroke-dasharray":"3 3"}));
+    svg.appendChild(el("circle",{cx:px(lmb),cy:py(bet),r:9,fill:"#f2c14e",stroke:"#0f1420","stroke-width":2}));
+    function txt(x,y,s,a,f){var e=el("text",{x:x,y:y,"text-anchor":a||"start",fill:f||"#c7d2e6","font-size":11});e.textContent=s;return e;}
+  }
+
+  function regime(){
+    var dataWord = lmb>0.85?"on-policy": lmb<0.15?"off-policy (supervised)":"mixed on/off-policy";
+    var geoWord  = bet>0.8?"reverse KL (mode-seeking)": bet<0.2?"forward KL (mode-covering)":"generalized JSD";
+    var name, desc;
+    if(lmb>0.85 && bet>0.8){
+      name="On-policy distillation ★";
+      desc="The Thinking Machines recipe: the student generates every sequence and the teacher grades each token by reverse KL. The corner this course is about — on-policy data + dense signal + mode-seeking geometry.";
+    } else if(lmb<0.15 && bet<0.2){
+      name="Supervised KD";
+      desc="Fixed teacher data, forward KL — classical off-policy knowledge distillation (Hinton / Kim & Rush). The exposure-bias-prone baseline.";
+    } else if(lmb>0.85){
+      name="On-policy GKD (forward-KL end)";
+      desc="On-policy student samples, but mode-covering forward KL — useful when the student CAN mimic the full teacher distribution.";
+    } else if(lmb<0.15){
+      name="Supervised reverse-KL KD";
+      desc="Off-policy data but mode-seeking geometry — reverse KL on teacher-fixed sequences; still graded in teacher-visited contexts.";
+    } else {
+      name="Mixed GKD";
+      desc="A blend: with probability lmbda the batch is student-generated (on-policy), otherwise fixed data — interpolating between supervised KD and on-policy distillation.";
+    }
+    return {name:name, desc:desc+" ["+dataWord+" · "+geoWord+"]"};
+  }
+
+  function render(){
+    document.getElementById('lmbv').textContent=lmb.toFixed(2);
+    document.getElementById('betv').textContent=bet.toFixed(2);
+    var r=regime();
+    document.getElementById('rname').textContent=r.name;
+    document.getElementById('rdesc').textContent=r.desc;
+    document.getElementById('code').innerHTML=
+      '<span class="kw">from</span> trl <span class="kw">import</span> GKDTrainer, GKDConfig\n\n'+
+      'cfg = GKDConfig(\n'+
+      '    lmbda=<span class="num">'+lmb.toFixed(2)+'</span>,        <span style="color:#5b6b88"># on-policy fraction</span>\n'+
+      '    beta=<span class="num">'+bet.toFixed(2)+'</span>,         <span style="color:#5b6b88"># fwd(0)→rev(1) KL</span>\n'+
+      '    temperature=<span class="num">0.9</span>,\n'+
+      ')\n'+
+      'GKDTrainer(model=student, teacher_model=teacher,\n'+
+      '           args=cfg, processing_class=tok,\n'+
+      '           train_dataset=ds).train()';
+    drawMap();
+  }
+  document.getElementById('lmb').addEventListener('input',function(e){lmb=+e.target.value;render();});
+  document.getElementById('bet').addEventListener('input',function(e){bet=+e.target.value;render();});
+  render();
+})();
+</script>
+</body>
+</html>
