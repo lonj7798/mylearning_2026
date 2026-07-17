@@ -1,0 +1,514 @@
+<!--
+  Figure: memory-ledger.html — "The Memory Ledger: What Fills a GPU"
+  Chapter: ch-01 (track: ledger)
+  Back to: ../read.md  (see §1 The Six-Item Ledger, §3 Full-FT vs LoRA, §4 Per-GPU vs Total)
+
+  Interactive per-GPU memory calculator. Fully self-contained:
+  inline CSS + vanilla JS only. No external CDNs, no network calls.
+  Renders offline by opening this file directly in a browser.
+
+  Teaching point made visible:
+    Increasing world_size W (ZeRO-3) SHRINKS the Full-FT bar (weights +
+    gradients + Adam states are sharded across ranks) but does NOT shrink
+    the LoRA bar — the frozen base model (2P) stays resident on every GPU,
+    so the LoRA per-GPU floor is node-invariant.
+-->
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>The Memory Ledger — What Fills a GPU (ch-01)</title>
+<style>
+  :root{
+    --bg:#0e1117; --panel:#161b22; --panel2:#1c2230; --edge:#2b3242;
+    --ink:#e6edf3; --ink-dim:#9aa7b4; --ink-faint:#6b7686;
+    --accent:#58a6ff; --accent2:#3fb950; --danger:#f85149; --warn:#d29922;
+    /* ledger colors (kept distinct + dark-friendly) */
+    --c-weights:#58a6ff;  /* blue   */
+    --c-grads:#bc8cff;    /* purple */
+    --c-adam:#f778ba;     /* pink   */
+    --c-act:#3fb950;      /* green  */
+    --c-over:#8b949e;     /* grey   */
+  }
+  *{box-sizing:border-box;}
+  html,body{margin:0;padding:0;}
+  body{
+    background:var(--bg); color:var(--ink);
+    font:14px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+    padding:22px; max-width:1180px; margin:0 auto;
+  }
+  h1{font-size:20px; margin:0 0 2px; letter-spacing:.2px;}
+  .sub{color:var(--ink-dim); font-size:13px; margin:0 0 18px;}
+  .sub code{color:var(--accent);}
+  .wrap{display:grid; grid-template-columns:340px 1fr; gap:20px; align-items:start;}
+  @media (max-width:900px){ .wrap{grid-template-columns:1fr;} }
+
+  .panel{background:var(--panel); border:1px solid var(--edge); border-radius:10px; padding:16px;}
+  .panel h2{font-size:13px; text-transform:uppercase; letter-spacing:.8px; color:var(--ink-dim);
+    margin:0 0 12px; font-weight:600;}
+
+  /* ---- controls ---- */
+  .ctrl{margin-bottom:16px;}
+  .ctrl:last-child{margin-bottom:0;}
+  .ctrl label{display:flex; justify-content:space-between; align-items:baseline; margin-bottom:6px;}
+  .ctrl .name{font-weight:600; color:var(--ink);}
+  .ctrl .val{font-variant-numeric:tabular-nums; color:var(--accent); font-weight:600;}
+  .ctrl .val small{color:var(--ink-faint); font-weight:400;}
+  input[type=range]{ -webkit-appearance:none; appearance:none; width:100%; height:5px; border-radius:5px;
+    background:var(--edge); outline:none; margin:4px 0;}
+  input[type=range]::-webkit-slider-thumb{ -webkit-appearance:none; appearance:none; width:16px; height:16px;
+    border-radius:50%; background:var(--accent); border:2px solid #0b1622; cursor:pointer;}
+  input[type=range]::-moz-range-thumb{ width:16px; height:16px; border-radius:50%; background:var(--accent);
+    border:2px solid #0b1622; cursor:pointer;}
+
+  .seg{display:flex; border:1px solid var(--edge); border-radius:8px; overflow:hidden;}
+  .seg button{flex:1; background:var(--panel2); color:var(--ink-dim); border:none; padding:9px 6px;
+    font-size:13px; font-weight:600; cursor:pointer; transition:.12s;}
+  .seg button + button{border-left:1px solid var(--edge);}
+  .seg button.on{background:var(--accent); color:#04121f;}
+  .seg button:hover:not(.on){background:#222a38; color:var(--ink);}
+
+  .presetrow{display:flex; gap:8px; flex-wrap:wrap; margin-top:4px;}
+  .presetrow button{flex:1 1 auto; background:var(--panel2); color:var(--ink-dim); border:1px solid var(--edge);
+    border-radius:7px; padding:7px 8px; font-size:12px; cursor:pointer; white-space:nowrap;}
+  .presetrow button:hover{background:#222a38; color:var(--ink); border-color:var(--accent);}
+
+  .hint{font-size:11.5px; color:var(--ink-faint); margin-top:6px; line-height:1.45;}
+
+  /* ---- chart ---- */
+  .chartcard{position:relative;}
+  .capnote{display:flex; gap:16px; align-items:center; margin-bottom:10px; font-size:12px; color:var(--ink-dim);
+    flex-wrap:wrap;}
+  .capnote b{color:var(--ink); font-variant-numeric:tabular-nums;}
+  .badge{padding:2px 9px; border-radius:999px; font-size:12px; font-weight:700; letter-spacing:.3px;}
+  .badge.ok{background:rgba(63,185,80,.16); color:var(--accent2); border:1px solid rgba(63,185,80,.4);}
+  .badge.bad{background:rgba(248,81,73,.16); color:var(--danger); border:1px solid rgba(248,81,73,.45);}
+
+  .barbox{position:relative; height:120px; margin:8px 0 4px; background:var(--panel2);
+    border:1px solid var(--edge); border-radius:8px; overflow:hidden;}
+  .bar{position:absolute; left:0; top:26px; height:56px; display:flex; border-radius:5px; overflow:hidden;
+    box-shadow:0 1px 0 rgba(0,0,0,.3); transition:box-shadow .15s;}
+  .bar.over{box-shadow:0 0 0 2px var(--danger), 0 0 18px rgba(248,81,73,.55);}
+  .seg-fill{height:100%; position:relative; transition:width .18s ease, background .18s;}
+  .seg-fill span{position:absolute; inset:0; display:flex; align-items:center; justify-content:center;
+    font-size:11px; font-weight:700; color:#08131f; text-shadow:0 1px 1px rgba(255,255,255,.25);
+    white-space:nowrap; overflow:hidden;}
+  .bar.over .seg-fill{filter:saturate(.55) brightness(.82);}
+  .totaltag{position:absolute; top:4px; font-size:11px; font-weight:700; color:var(--ink);
+    background:#0b111a; border:1px solid var(--edge); border-radius:5px; padding:1px 6px; transform:translateX(-50%);
+    white-space:nowrap; transition:left .18s;}
+
+  /* capacity lines */
+  .capline{position:absolute; top:18px; height:72px; width:0; border-left:2px dashed; }
+  .capline .lbl{position:absolute; top:-15px; left:4px; font-size:10.5px; font-weight:700; white-space:nowrap;}
+  .capline.c40{border-color:var(--warn); color:var(--warn);}
+  .capline.c80{border-color:var(--accent2); color:var(--accent2);}
+  .axis{position:absolute; bottom:4px; left:0; right:0; display:flex; justify-content:space-between;
+    padding:0 2px; font-size:10px; color:var(--ink-faint); font-variant-numeric:tabular-nums;}
+
+  /* legend + table */
+  .legend{display:flex; flex-wrap:wrap; gap:6px 14px; margin:12px 0 4px;}
+  .legend .item{display:flex; align-items:center; gap:6px; font-size:12px; color:var(--ink-dim);}
+  .legend .sw{width:12px; height:12px; border-radius:3px; flex:none;}
+
+  table{width:100%; border-collapse:collapse; margin-top:8px; font-size:12.5px;}
+  th,td{text-align:right; padding:6px 8px; border-bottom:1px solid var(--edge); font-variant-numeric:tabular-nums;}
+  th:first-child,td:first-child{text-align:left;}
+  th{color:var(--ink-faint); font-weight:600; text-transform:uppercase; font-size:10.5px; letter-spacing:.6px;}
+  td.dim{color:var(--ink-faint);}
+  td .dot{display:inline-block; width:9px; height:9px; border-radius:2px; margin-right:7px; vertical-align:middle;}
+  tr.tot td{font-weight:700; color:var(--ink); border-top:2px solid var(--edge); border-bottom:none;}
+  tr.tot td.red{color:var(--danger);}
+
+  .callout{margin-top:14px; background:var(--panel2); border:1px solid var(--edge);
+    border-left:3px solid var(--accent); border-radius:8px; padding:11px 13px; font-size:12.5px; color:var(--ink-dim);}
+  .callout b{color:var(--ink);}
+  .callout .flip{color:var(--c-adam); font-weight:700;}
+  .foot{color:var(--ink-faint); font-size:11px; margin-top:14px; line-height:1.5;}
+  .foot code{color:var(--ink-dim);}
+  .kbd{font-family:ui-monospace,SFMono-Regular,Menlo,monospace; background:#0b111a; border:1px solid var(--edge);
+    border-radius:4px; padding:0 5px; color:var(--ink-dim);}
+</style>
+</head>
+<body>
+  <h1>The Memory Ledger — What Fills a GPU</h1>
+  <p class="sub">Per-GPU training memory (GB). Six residents: weights <code>2P</code> + gradients + Adam states <code>12P</code> + activations + overhead. Drag to see what fills — and overflows — a single accelerator. <span style="color:var(--ink-faint)">ch-01 · <a href="../read.md" style="color:var(--accent)">read.md</a></span></p>
+
+  <div class="wrap">
+    <!-- ================= CONTROLS ================= -->
+    <div class="panel">
+      <h2>Controls</h2>
+
+      <div class="ctrl">
+        <label><span class="name">Parameters P</span><span class="val" id="vP">7.0 <small>B</small></span></label>
+        <input type="range" id="P" min="1" max="70" step="0.5" value="7">
+        <div class="hint">Total model parameters. Weights = <b>2P</b> GB (bf16) either mode.</div>
+      </div>
+
+      <div class="ctrl">
+        <label><span class="name">Training mode</span><span class="val" id="vMode" style="text-transform:none">Full fine-tune</span></label>
+        <div class="seg" id="modeSeg">
+          <button data-mode="full" class="on">Full FT</button>
+          <button data-mode="lora">LoRA</button>
+        </div>
+        <div class="hint">LoRA freezes the base model: gradients &amp; Adam states drop to ≈0, but the base <b>2P</b> stays resident.</div>
+      </div>
+
+      <div class="ctrl">
+        <label><span class="name">world_size W <small>(ZeRO-3)</small></span><span class="val" id="vW">8 <small>GPUs</small></span></label>
+        <input type="range" id="W" min="1" max="64" step="1" value="8">
+        <div class="hint">ZeRO-3 shards weights+grads+Adam across W ranks. Watch: it shrinks Full-FT, <b>not</b> LoRA.</div>
+      </div>
+
+      <div class="ctrl">
+        <label><span class="name">Sequence length</span><span class="val" id="vS">16,384 <small>tokens</small></span></label>
+        <input type="range" id="S" min="512" max="131072" step="512" value="16384">
+        <div class="hint">Activations grow with seq — the attention term is <b>quadratic</b> (≈ s²). Micro-batch b = 1.</div>
+      </div>
+
+      <div class="ctrl">
+        <label><span class="name">GPU capacity</span><span class="val" id="vCap">80 <small>GB</small></span></label>
+        <div class="seg" id="capSeg">
+          <button data-cap="40">A100 · 40 GB</button>
+          <button data-cap="80" class="on">A100/H100 · 80 GB</button>
+        </div>
+        <div class="hint">Both 40 &amp; 80 GB lines are always drawn; this picks the OOM threshold for the badge.</div>
+      </div>
+
+      <div class="ctrl">
+        <label><span class="name">Presets</span></label>
+        <div class="presetrow">
+          <button data-preset="7bfull">7B Full-FT</button>
+          <button data-preset="27bfull">27B Full-FT ×8</button>
+          <button data-preset="70blora">70B LoRA ×1</button>
+          <button data-preset="longctx">8B @ 128k</button>
+        </div>
+        <div class="hint">Jump to canonical cases from <a href="../read.md" style="color:var(--accent)">read.md §2–§4</a>.</div>
+      </div>
+    </div>
+
+    <!-- ================= CHART ================= -->
+    <div class="panel chartcard">
+      <h2>Per-GPU memory ledger</h2>
+      <div class="capnote">
+        <span>Total / GPU: <b id="totGiB">–</b> GB</span>
+        <span>on <b id="capLbl">80</b> GB</span>
+        <span id="badge" class="badge ok">FITS</span>
+        <span style="margin-left:auto; color:var(--ink-faint)">chart scale → <b id="scaleMax">96</b> GB</span>
+      </div>
+
+      <div class="barbox" id="barbox">
+        <!-- capacity lines -->
+        <div class="capline c40" id="line40"><span class="lbl">40 GB</span></div>
+        <div class="capline c80" id="line80"><span class="lbl">80 GB</span></div>
+        <!-- stacked bar -->
+        <div class="totaltag" id="totaltag">–</div>
+        <div class="bar" id="bar"></div>
+        <div class="axis" id="axis"></div>
+      </div>
+
+      <div class="legend" id="legend"></div>
+
+      <table>
+        <thead>
+          <tr><th>Resident</th><th>Per-GPU formula</th><th>GB / GPU</th></tr>
+        </thead>
+        <tbody id="rows"></tbody>
+      </table>
+
+      <div class="callout" id="callout"></div>
+
+      <p class="foot">
+        Model: bf16 weights = 2 B/param, bf16 gradients = 2 B/param, AdamW states = 12 B/param (fp32 master + m + v).
+        Under <b>ZeRO-3</b> the sharded states (weights+grads+Adam for Full-FT) are divided by W; activations &amp; overhead stay per-GPU (node-invariant).
+        LoRA: gradients/Adam only over the &lt;0.5% trainable adapter params (≈0 GB here); base <b>2P</b> weights stay resident on every rank regardless of W.
+        Units are decimal GB so weights/Adam reproduce the chapter's round <code>2P</code>/<code>12P</code> figures (27B → 54 / 324 GB, Rule-of-16 = 432 GB).
+        Activations use the illustrative form <code>L·b·h·(34 + 5·a·s/h)·s</code> bytes (fixed ~8B-class shape L=32, h=4096, a=32, b=1), scaled to the read.md anchor Llama-3-8B @ seq=32,768 ≈ 240 GB; values are teaching-scale, not a specific run.
+        Overhead ≈ 9 GB (CUDA context + NCCL + ZeRO gather buffers). Bandwidth reference: A100 ≈ 2.0 TB/s, H100 ≈ 3.35 TB/s HBM.
+        Tip: set mode → LoRA and sweep <span class="kbd">W</span> — the bar length does not move.
+      </p>
+    </div>
+  </div>
+
+<script>
+(function(){
+  "use strict";
+
+  // ---------- state ----------
+  var st = { P:7, mode:"full", W:8, S:16384, cap:80 };
+
+  // fixed illustrative model shape (~8B-class) for the activation formula.
+  var SHAPE = { L:32, h:4096, a:32, b:1 };
+
+  var GB = 1e9;  // decimal GB, to reproduce the chapter's round 2P / 12P numbers exactly
+
+  // ledger colors (must mirror CSS vars)
+  var COL = {
+    weights:"#58a6ff", grads:"#bc8cff", adam:"#f778ba", act:"#3fb950", over:"#8b949e"
+  };
+  var OVERHEAD_GB = 9.0;
+
+  // Illustrative activation scale factor. Calibrated so the raw formula
+  // L·b·h·(34+5as/h)·s lands on the read.md anchor: Llama-3-8B, b=1, seq=32,768
+  // ≈ 240 GB without checkpointing (see read.md §1.4). Activations are teaching-scale.
+  var ACT_K = 0.0425;
+
+  // ---------- byte model (returns per-GPU GB per resident) ----------
+  function compute(){
+    var P = st.P, W = Math.max(1, st.W);
+
+    // bytes/param
+    var wB = 2, gB = 2, aB = 12;
+
+    // full-model totals in GB (P is in billions -> P * 1e9 params) => 2P / 2P / 12P GB
+    var params = P * 1e9;
+    var weightsTotal = params * wB / GB;      // = 2P GB
+    var gradsTotal   = params * gB / GB;      // = 2P GB (full-FT)
+    var adamTotal    = params * aB / GB;      // = 12P GB (full-FT)
+
+    var weights, grads, adam;
+
+    if(st.mode === "full"){
+      // ZeRO-3: shard weights + grads + Adam across W ranks
+      weights = weightsTotal / W;
+      grads   = gradsTotal   / W;
+      adam    = adamTotal    / W;
+    } else {
+      // LoRA: frozen base 2P resident on EVERY gpu -> NOT sharded (node-invariant floor).
+      // adapter grads + Adam over <0.5% params -> negligible at this scale.
+      weights = weightsTotal;      // full base, per gpu, independent of W
+      grads   = 0;                 // ~0 GB
+      adam    = 0;                 // ~0 GB
+    }
+
+    // activations: illustrative, per-GPU (scales with seq, quadratic attn term).
+    // m_act = L * b * h * (34 + 5*a*s/h) * s  bytes, scaled by ACT_K to the 240 GB anchor.
+    var s = st.S;
+    var actBytes = SHAPE.L * SHAPE.b * SHAPE.h * (34 + 5*SHAPE.a*s/SHAPE.h) * s;
+    var act = actBytes * ACT_K / GB;
+
+    var over = OVERHEAD_GB;
+
+    var total = weights + grads + adam + act + over;
+    return {
+      weights:weights, grads:grads, adam:adam, act:act, over:over, total:total,
+      weightsTotal:weightsTotal, gradsTotal:gradsTotal, adamTotal:adamTotal
+    };
+  }
+
+  // ---------- helpers ----------
+  function fmtGiB(x){
+    if(x >= 100) return x.toFixed(0);
+    if(x >= 10)  return x.toFixed(1);
+    if(x >= 1)   return x.toFixed(2);
+    if(x > 0)    return x.toFixed(2);
+    return "0";
+  }
+  function commas(n){ return Math.round(n).toString().replace(/\B(?=(\d{3})+(?!\d))/g, ","); }
+
+  // ---------- render ----------
+  var els = {
+    P:document.getElementById("P"), W:document.getElementById("W"), S:document.getElementById("S"),
+    vP:document.getElementById("vP"), vW:document.getElementById("vW"), vS:document.getElementById("vS"),
+    vMode:document.getElementById("vMode"), vCap:document.getElementById("vCap"),
+    bar:document.getElementById("bar"), barbox:document.getElementById("barbox"),
+    line40:document.getElementById("line40"), line80:document.getElementById("line80"),
+    totaltag:document.getElementById("totaltag"), axis:document.getElementById("axis"),
+    legend:document.getElementById("legend"), rows:document.getElementById("rows"),
+    badge:document.getElementById("badge"), totGiB:document.getElementById("totGiB"),
+    capLbl:document.getElementById("capLbl"), scaleMax:document.getElementById("scaleMax"),
+    callout:document.getElementById("callout")
+  };
+
+  var LEDGER = [
+    {key:"weights", name:"Weights",     col:COL.weights},
+    {key:"grads",   name:"Gradients",   col:COL.grads},
+    {key:"adam",    name:"Adam states", col:COL.adam},
+    {key:"act",     name:"Activations", col:COL.act},
+    {key:"over",    name:"Overhead",    col:COL.over}
+  ];
+
+  function formulaText(key){
+    var W = st.W;
+    if(st.mode === "full"){
+      switch(key){
+        case "weights": return W>1 ? "2P / W" : "2P";
+        case "grads":   return W>1 ? "2P / W" : "2P";
+        case "adam":    return W>1 ? "12P / W" : "12P";
+        case "act":     return "L·b·h·(34+5as/h)·s";
+        case "over":    return "CUDA+NCCL+ZeRO";
+      }
+    } else {
+      switch(key){
+        case "weights": return "2P (frozen, per GPU)";
+        case "grads":   return "2P·(adapter) ≈ 0";
+        case "adam":    return "12P·(adapter) ≈ 0";
+        case "act":     return "L·b·h·(34+5as/h)·s";
+        case "over":    return "CUDA+NCCL+ZeRO";
+      }
+    }
+  }
+
+  function render(){
+    // labels
+    els.vP.innerHTML = st.P.toFixed(1) + ' <small>B</small>';
+    els.vW.innerHTML = st.W + ' <small>GPU' + (st.W>1?'s':'') + '</small>';
+    els.vS.innerHTML = commas(st.S) + ' <small>tokens</small>';
+    els.vMode.textContent = st.mode === "full" ? "Full fine-tune" : "LoRA (frozen base)";
+    els.vCap.innerHTML = st.cap + ' <small>GB</small>';
+    els.capLbl.textContent = st.cap;
+
+    var m = compute();
+    var overCap = m.total > st.cap;
+
+    // chart scale: at least a bit above 80 GB line and above the total, rounded up.
+    var scaleMax = Math.max(96, st.cap * 1.15, m.total * 1.08);
+    scaleMax = Math.ceil(scaleMax/8)*8;
+    els.scaleMax.textContent = scaleMax;
+
+    // build stacked bar
+    els.bar.innerHTML = "";
+    var barTotalPct = Math.min(100, (m.total/scaleMax)*100);
+    els.bar.style.width = barTotalPct + "%";
+    els.bar.classList.toggle("over", overCap);
+
+    LEDGER.forEach(function(item){
+      var v = m[item.key];
+      if(v <= 0) return;
+      var seg = document.createElement("div");
+      seg.className = "seg-fill";
+      // width as fraction of the TOTAL bar (bar itself already scaled to total)
+      seg.style.width = (v/m.total*100) + "%";
+      seg.style.background = item.col;
+      var lbl = document.createElement("span");
+      // only show label if segment wide enough
+      if(v/scaleMax*100 > 6){ lbl.textContent = fmtGiB(v); }
+      seg.appendChild(lbl);
+      seg.title = item.name + ": " + fmtGiB(v) + " GB";
+      els.bar.appendChild(seg);
+    });
+
+    // total tag positioned at end of bar
+    els.totaltag.textContent = fmtGiB(m.total) + " GB";
+    els.totaltag.style.left = Math.min(96, Math.max(6, barTotalPct)) + "%";
+    els.totaltag.style.color = overCap ? "var(--danger)" : "var(--ink)";
+    els.totaltag.style.borderColor = overCap ? "var(--danger)" : "var(--edge)";
+
+    // capacity lines
+    var p40 = (40/scaleMax)*100, p80 = (80/scaleMax)*100;
+    els.line40.style.left = p40 + "%";
+    els.line80.style.left = p80 + "%";
+    els.line40.style.display = p40 <= 100 ? "block" : "none";
+    els.line80.style.display = p80 <= 100 ? "block" : "none";
+
+    // axis ticks (0 .. scaleMax in quarters)
+    els.axis.innerHTML = "";
+    for(var t=0; t<=4; t++){
+      var span = document.createElement("span");
+      span.textContent = Math.round(scaleMax*t/4) + (t===4?" GB":"");
+      els.axis.appendChild(span);
+    }
+
+    // legend
+    els.legend.innerHTML = "";
+    LEDGER.forEach(function(item){
+      var d = document.createElement("div"); d.className="item";
+      var sw = document.createElement("span"); sw.className="sw"; sw.style.background=item.col;
+      d.appendChild(sw);
+      d.appendChild(document.createTextNode(item.name));
+      els.legend.appendChild(d);
+    });
+
+    // table rows
+    els.rows.innerHTML = "";
+    LEDGER.forEach(function(item){
+      var v = m[item.key];
+      var tr = document.createElement("tr");
+      var isZero = v <= 0.0005;
+      tr.innerHTML =
+        '<td><span class="dot" style="background:'+item.col+'"></span>'+item.name+'</td>'+
+        '<td class="dim">'+formulaText(item.key)+'</td>'+
+        '<td'+(isZero?' class="dim"':'')+'>'+(isZero?'≈ 0':fmtGiB(v))+'</td>';
+      els.rows.appendChild(tr);
+    });
+    var trT = document.createElement("tr");
+    trT.className = "tot";
+    trT.innerHTML =
+      '<td>Total / GPU</td>'+
+      '<td class="dim">'+(st.mode==="full" ? (st.W>1?"(16P/W)+act+oh":"16P+act+oh") : "2P+act+oh")+'</td>'+
+      '<td'+(overCap?' class="red"':'')+'>'+fmtGiB(m.total)+'</td>';
+    els.rows.appendChild(trT);
+
+    // badge
+    if(overCap){
+      els.badge.className = "badge bad";
+      els.badge.textContent = "OOM · " + fmtGiB(m.total - st.cap) + " GB OVER " + st.cap + " GB";
+    } else {
+      els.badge.className = "badge ok";
+      els.badge.textContent = "FITS · " + fmtGiB(st.cap - m.total) + " GB free on " + st.cap + " GB";
+    }
+    els.totGiB.textContent = fmtGiB(m.total);
+
+    // teaching callout — contrast the two modes at current P & W
+    var full = { W:st.W }; // recompute both modes for the message
+    var wt = m.weightsTotal, gt = m.gradsTotal, at = m.adamTotal;
+    var fullPerGpu = (wt+gt+at)/Math.max(1,st.W) + m.act + m.over;
+    var loraPerGpu = wt + m.act + m.over; // base resident, grads/adam ~0
+    var co;
+    if(st.mode === "full"){
+      co = '<b>Full-FT under ZeRO-3.</b> States <b>16P = '+fmtGiB(wt+gt+at)+' GB</b> total are sharded across W='+st.W+
+           ' → <b>'+fmtGiB((wt+gt+at)/Math.max(1,st.W))+' GB/GPU</b>. '+
+           'Raise <span class="flip">W</span> and the blue+purple+pink block shrinks. '+
+           'Switch to LoRA to see the floor that does <b>not</b> move.';
+    } else {
+      co = '<b>LoRA — node-invariant floor.</b> Gradients &amp; Adam are ≈0, but the frozen base <b>2P = '+fmtGiB(wt)+' GB</b> '+
+           'is resident on <b>every</b> GPU. Sweeping <span class="flip">W</span> from 1→64 leaves this bar length unchanged — '+
+           'sharding cannot help what is replicated. Compare: an equivalent Full-FT at W='+st.W+
+           ' would be <b>'+fmtGiB(fullPerGpu)+' GB/GPU</b> vs LoRA <b>'+fmtGiB(loraPerGpu)+' GB/GPU</b>.';
+    }
+    els.callout.innerHTML = co;
+  }
+
+  // ---------- wiring ----------
+  els.P.addEventListener("input", function(){ st.P = parseFloat(this.value); render(); });
+  els.W.addEventListener("input", function(){ st.W = parseInt(this.value,10); render(); });
+  els.S.addEventListener("input", function(){ st.S = parseInt(this.value,10); render(); });
+
+  document.getElementById("modeSeg").addEventListener("click", function(e){
+    var b = e.target.closest("button"); if(!b) return;
+    st.mode = b.getAttribute("data-mode");
+    this.querySelectorAll("button").forEach(function(x){ x.classList.toggle("on", x===b); });
+    render();
+  });
+  document.getElementById("capSeg").addEventListener("click", function(e){
+    var b = e.target.closest("button"); if(!b) return;
+    st.cap = parseInt(b.getAttribute("data-cap"),10);
+    this.querySelectorAll("button").forEach(function(x){ x.classList.toggle("on", x===b); });
+    render();
+  });
+
+  // presets
+  var PRESETS = {
+    "7bfull":  {P:7,  mode:"full", W:1,  S:8192,   cap:80},
+    "27bfull": {P:27, mode:"full", W:8,  S:8192,   cap:80},
+    "70blora": {P:70, mode:"lora", W:1,  S:8192,   cap:80},
+    "longctx": {P:8,  mode:"full", W:1,  S:131072, cap:80}
+  };
+  document.querySelectorAll("[data-preset]").forEach(function(btn){
+    btn.addEventListener("click", function(){
+      var p = PRESETS[this.getAttribute("data-preset")]; if(!p) return;
+      st.P=p.P; st.mode=p.mode; st.W=p.W; st.S=p.S; st.cap=p.cap;
+      // sync widgets
+      els.P.value=st.P; els.W.value=st.W; els.S.value=st.S;
+      document.querySelectorAll("#modeSeg button").forEach(function(x){ x.classList.toggle("on", x.getAttribute("data-mode")===st.mode); });
+      document.querySelectorAll("#capSeg button").forEach(function(x){ x.classList.toggle("on", parseInt(x.getAttribute("data-cap"),10)===st.cap); });
+      render();
+    });
+  });
+
+  render();
+})();
+</script>
+</body>
+</html>

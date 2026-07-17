@@ -1,0 +1,463 @@
+<!--
+  figure: kernel-memory.html — Attention Kernel Zoo: activation memory vs. sequence length
+  chapter: ch-06 — "The Attention Kernel Zoo: SDPA, xFormers, SageAttention, Ring, Paged"
+  back to: ../read.md  (linked from read.md §1 "Interactive companion")
+
+  Interactive explorer: per-layer attention activation memory (GiB, log) as a function of
+  sequence length (tokens, log), for the naive/MATH O(N^2) backend vs. the O(N) family
+  (FlashAttention / xFormers memory-efficient / cuDNN) vs. SageAttention (O(N) INT8, ~half the
+  bytes on the QK^T path). Controls: batch size, num heads, head_dim, dtype (bf16 vs int8).
+  Crossover markers show where the naive O(N^2) curve blows past a 40 GB and an 80 GB GPU.
+  Fully self-contained: inline CSS + vanilla JS, no CDNs, renders offline.
+-->
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Ch-06 — Attention Kernel Zoo: Activation Memory vs. Sequence Length</title>
+<style>
+  :root {
+    --bg: #0f1115; --panel: #171a21; --panel2: #1c2029; --text: #e6e8eb;
+    --muted: #8a95a4; --accent: #5ec8ff; --warn: #ffb86b;
+    --good: #7dd87d; --bad: #ff6b6b; --violet: #c69bff; --grid: #262b36;
+    --naive: #ff6b6b; --oflash: #7dd87d; --sage: #c69bff;
+    --l40: #ffb86b; --l80: #ff8fa3;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 20px; background: var(--bg); color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    font-size: 13px; line-height: 1.45;
+  }
+  h1 { font-size: 17px; margin: 0 0 4px 0; }
+  p.sub { color: var(--muted); margin: 0 0 16px 0; font-size: 12px; max-width: 980px; }
+  code { background: #232833; padding: 1px 5px; border-radius: 3px; font-size: 11px; color: var(--accent); }
+  .controls {
+    background: var(--panel); padding: 12px 16px; border-radius: 8px;
+    margin-bottom: 16px; display: flex; flex-wrap: wrap; gap: 20px; align-items: flex-end;
+  }
+  .control { display: flex; flex-direction: column; gap: 5px; min-width: 190px; }
+  .control label { font-size: 11px; color: var(--muted); display: flex; justify-content: space-between; gap: 10px; }
+  .control .val { font-variant-numeric: tabular-nums; color: var(--accent); font-weight: 600; }
+  input[type=range] { width: 100%; accent-color: var(--accent); }
+  .toggle { display: flex; gap: 4px; }
+  .toggle button {
+    background: #232833; border: 1px solid #2a2f3a; color: var(--text);
+    padding: 5px 11px; border-radius: 4px; cursor: pointer; font-size: 11px;
+  }
+  .toggle button.active { background: var(--accent); color: #0f1115; border-color: var(--accent); font-weight: 600; }
+  .plotwrap { background: var(--panel); padding: 14px 16px 10px; border-radius: 8px; }
+  canvas#plot { width: 100%; height: 440px; background: #0b0d11; border-radius: 6px; display: block; }
+  .legend { display: flex; flex-wrap: wrap; gap: 16px; font-size: 11px; color: var(--muted); margin-top: 10px; align-items: center; }
+  .legend .item { display: flex; align-items: center; gap: 5px; }
+  .legend .sw { display: inline-block; width: 14px; height: 3px; border-radius: 2px; }
+  .legend .sw.dash { height: 0; border-top: 2px dashed; width: 16px; }
+  .readout {
+    display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
+    gap: 12px; margin: 14px 0 4px;
+  }
+  .card { background: var(--panel2); border-radius: 6px; padding: 10px 12px; border-left: 3px solid var(--grid); }
+  .card.naive { border-left-color: var(--naive); }
+  .card.oflash { border-left-color: var(--oflash); }
+  .card.sage { border-left-color: var(--sage); }
+  .card.cross { border-left-color: var(--warn); }
+  .card h3 { margin: 0 0 6px; font-size: 12px; font-weight: 600; }
+  .card .big { font-size: 18px; font-variant-numeric: tabular-nums; }
+  .card .lbl { color: var(--muted); font-size: 10.5px; }
+  table { border-collapse: collapse; width: 100%; margin-top: 14px; font-size: 11.5px; }
+  th, td { text-align: left; padding: 7px 9px; border-bottom: 1px solid var(--grid); vertical-align: top; }
+  thead th { color: var(--accent); font-weight: 600; border-bottom: 1px solid #33404f; position: sticky; top: 0; background: var(--panel); }
+  tbody tr:hover { background: #1a1e27; }
+  .pill { display: inline-block; padding: 1px 7px; border-radius: 10px; font-size: 10px; font-weight: 600; }
+  .pill.exact { background: rgba(125,216,125,0.16); color: var(--good); }
+  .pill.quant { background: rgba(198,155,255,0.18); color: var(--violet); }
+  .pill.na { background: rgba(138,149,164,0.16); color: var(--muted); }
+  .pill.yes { background: rgba(125,216,125,0.16); color: var(--good); }
+  .pill.no { background: rgba(255,107,107,0.16); color: var(--bad); }
+  .mem { font-variant-numeric: tabular-nums; }
+  .mem.n2 { color: var(--naive); }
+  .mem.n { color: var(--oflash); }
+  .mem.shard { color: var(--accent); }
+  .foot { color: var(--muted); font-size: 11px; margin-top: 14px; line-height: 1.6; max-width: 980px; }
+  .tag { color: var(--warn); }
+  a { color: var(--accent); }
+</style>
+</head>
+<body>
+
+<h1>Chapter 6 — The Attention Kernel Zoo · Activation memory vs. sequence length</h1>
+<p class="sub">
+  Per-layer attention <b>activation memory</b> (GiB, log axis) against <b>sequence length</b> (tokens, log axis).
+  The naive/<code>MATH</code> backend materializes the full N&times;N score matrix &rarr; <b>O(N&sup2;)</b>. FlashAttention /
+  xFormers <code>memory_efficient_attention</code> / cuDNN stream it &rarr; <b>O(N)</b>. SageAttention is also O(N) but stores the
+  QK&#7488; path in <b>INT8</b> (~half the bytes). Move the sliders — every curve, crossover marker, and the readout below update live.
+</p>
+
+<div class="controls">
+  <div class="control">
+    <label>Batch size <span id="bsVal" class="val">8</span></label>
+    <input id="bs" type="range" min="1" max="64" value="8" step="1" title="sequences per micro-batch" />
+  </div>
+  <div class="control">
+    <label>Num heads <span id="hVal" class="val">32</span></label>
+    <input id="h" type="range" min="4" max="128" value="32" step="1" title="attention heads per layer" />
+  </div>
+  <div class="control">
+    <label>head_dim <span id="hdVal" class="val">128</span></label>
+    <input id="hd" type="range" min="32" max="256" value="128" step="8" title="per-head dimension; FA2 backend requires <= 128" />
+  </div>
+  <div class="control">
+    <label>Score-matrix dtype</label>
+    <div class="toggle" id="dtype">
+      <button data-dt="bf16" class="active">bf16 (2 B)</button>
+      <button data-dt="int8">int8 (1 B)</button>
+    </div>
+  </div>
+  <div class="control">
+    <label>GPU HBM lines</label>
+    <div class="toggle" id="gpuToggle">
+      <button data-gpu="on" class="active">40 &amp; 80 GB</button>
+      <button data-gpu="off">hide</button>
+    </div>
+  </div>
+</div>
+
+<div class="plotwrap">
+  <canvas id="plot" width="1120" height="440"></canvas>
+  <div class="legend">
+    <span class="item"><span class="sw" style="background:var(--naive)"></span>naive / <code>MATH</code> &nbsp;O(N&sup2;)</span>
+    <span class="item"><span class="sw" style="background:var(--oflash)"></span>FlashAttn / xFormers / cuDNN &nbsp;O(N)</span>
+    <span class="item"><span class="sw" style="background:var(--sage)"></span>SageAttention INT8 &nbsp;O(N), ~&frac12; bytes</span>
+    <span class="item"><span class="sw dash" style="border-color:var(--l40)"></span>40 GB GPU (A100-40G)</span>
+    <span class="item"><span class="sw dash" style="border-color:var(--l80)"></span>80 GB GPU (A100/H100-80G)</span>
+  </div>
+</div>
+
+<div class="readout">
+  <div class="card naive">
+    <h3 style="color:var(--naive)">naive / MATH — O(N&sup2;)</h3>
+    <div class="big" id="rNaive">— GiB</div>
+    <div class="lbl">score-matrix activation @ current N (<span id="rNaiveN">—</span> tok)</div>
+  </div>
+  <div class="card oflash">
+    <h3 style="color:var(--oflash)">FlashAttn / xFormers — O(N)</h3>
+    <div class="big" id="rFlash">— GiB</div>
+    <div class="lbl">retained O(N) working set @ current N &nbsp;·&nbsp; <span id="rRatio">—</span> smaller than MATH</div>
+  </div>
+  <div class="card sage">
+    <h3 style="color:var(--sage)">SageAttention — O(N) INT8</h3>
+    <div class="big" id="rSage">— GiB</div>
+    <div class="lbl">inference only (no backward) — for contrast</div>
+  </div>
+  <div class="card cross">
+    <h3 style="color:var(--warn)">O(N&sup2;) crossover</h3>
+    <div class="big" id="rCross40">— tok</div>
+    <div class="lbl">naive exceeds <b>40 GB</b> · exceeds <b>80 GB</b> at <span id="rCross80">—</span> tok</div>
+  </div>
+</div>
+
+<table id="cmp">
+  <thead>
+    <tr>
+      <th>Kernel</th>
+      <th>Exact vs. approx / quant</th>
+      <th>Trainable?</th>
+      <th>Activation memory</th>
+      <th>Needs</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><b>SDPA / MATH</b></td>
+      <td><span class="pill exact">exact</span></td>
+      <td><span class="pill yes">yes</span></td>
+      <td><span class="mem n2">O(N&sup2;)</span> — full N&times;N score matrix in HBM</td>
+      <td>nothing (always available; the silent-fallback OOM trap)</td>
+    </tr>
+    <tr>
+      <td><b>SDPA / FLASH_ATTENTION</b> (FA2)</td>
+      <td><span class="pill exact">exact</span></td>
+      <td><span class="pill yes">yes</span></td>
+      <td><span class="mem n">O(N)</span> — scores recomputed on backward (store logsumexp)</td>
+      <td>CUDA, fp16/bf16, head_dim &le; 128, no arbitrary bias</td>
+    </tr>
+    <tr>
+      <td><b>SDPA / EFFICIENT</b> (xFormers FMHA)</td>
+      <td><span class="pill exact">exact</span></td>
+      <td><span class="pill yes">yes</span></td>
+      <td><span class="mem n">O(N)</span> — Rabe &amp; Staats streaming (O(&radic;N) tile variant)</td>
+      <td>broader: custom bias, larger head_dim; CUTLASS FMHA</td>
+    </tr>
+    <tr>
+      <td><b>SDPA / CUDNN_ATTENTION</b></td>
+      <td><span class="pill exact">exact</span></td>
+      <td><span class="pill yes">yes</span></td>
+      <td><span class="mem n">O(N)</span> — cuDNN SDPA graph, autograd-compatible</td>
+      <td>supported cuDNN + CUDA versions</td>
+    </tr>
+    <tr>
+      <td><b>SageAttention</b> (INT8 QK&#7488;)</td>
+      <td><span class="pill quant">quantized</span> INT8, ~2% L1 error</td>
+      <td><span class="pill no">no</span></td>
+      <td><span class="mem n">O(N)</span> fwd — INT8 QK&#7488;, FP16 P&middot;V; no backward storage</td>
+      <td>inference only; K per-channel smoothing (subtract mean)</td>
+    </tr>
+    <tr>
+      <td><b>Ring Attention / CP</b></td>
+      <td><span class="pill exact">exact</span></td>
+      <td><span class="pill yes">yes</span></td>
+      <td><span class="mem shard">O(L/D)</span> per device — blockwise, D ring rounds</td>
+      <td>multi-device ring (NVLink/IB); Megatron <code>--context-parallel-size</code></td>
+    </tr>
+    <tr>
+      <td><b>PagedAttention</b></td>
+      <td><span class="pill na">n/a</span> (serving KV mgmt)</td>
+      <td><span class="pill no">no</span></td>
+      <td>paged KV cache — &le;4% fragmentation (vs 60&ndash;80% waste)</td>
+      <td>inference serving only; grows across decode steps (no training analog)</td>
+    </tr>
+  </tbody>
+</table>
+
+<p class="foot">
+  <span class="tag">Model.</span> The plotted <b>naive</b> curve is the dominant O(N&sup2;) term
+  <code>batch &times; heads &times; N&sup2; &times; bytes</code> (the score-matrix activation, per layer). The <b>O(N)</b> curve is the retained
+  working set <code>batch &times; heads &times; N &times; head_dim &times; bytes + logsumexp</code> — what FlashAttention keeps after
+  discarding the N&times;N matrix (read.md &sect;2 pins this at ~200&nbsp;MB where the same-config N&times;N matrix is ~40&times; larger).
+  <b>SageAttention</b> stores the QK&#7488; path in INT8 (1&nbsp;B) rather than bf16 (2&nbsp;B), so it tracks the O(N) family at ~half the bytes on
+  that path. The <b>int8 dtype toggle</b> halves the per-element bytes (2&nbsp;B&rarr;1&nbsp;B) for every curve — it rescales the whole plot and
+  moves the O(N&sup2;) crossovers right by ~&radic;2&times; in N. <b>Ring Attention / CP</b> and <b>PagedAttention</b> are in the table but not
+  plotted: Ring is O(L/D)-per-device (a horizontal shift by device count, not a curve shape), and Paged manages a <i>serving</i> KV cache that
+  does not exist during training. Numbers follow read.md &sect;2/&sect;7. Back to <a href="../read.md">read.md</a>.
+</p>
+
+<script>
+(function () {
+  "use strict";
+
+  // ---- config / state ----
+  var GiB = 1024 * 1024 * 1024;
+  var N_MIN = 512, N_MAX = 131072;          // sequence-length axis (tokens), log scale
+  var MEM_MIN = 0.01, MEM_MAX = 4096;       // memory axis (GiB), log scale
+  var GPU40 = 40 * (1000*1000*1000) / GiB;  // 40 GB marketed  -> GiB   (~37.25 GiB)
+  var GPU80 = 80 * (1000*1000*1000) / GiB;  // 80 GB marketed  -> GiB   (~74.51 GiB)
+
+  var state = { bs: 8, heads: 32, hd: 128, dt: "bf16", gpu: true };
+
+  var els = {
+    bs: document.getElementById("bs"), h: document.getElementById("h"), hd: document.getElementById("hd"),
+    bsVal: document.getElementById("bsVal"), hVal: document.getElementById("hVal"), hdVal: document.getElementById("hdVal"),
+    rNaive: document.getElementById("rNaive"), rNaiveN: document.getElementById("rNaiveN"),
+    rFlash: document.getElementById("rFlash"), rRatio: document.getElementById("rRatio"),
+    rSage: document.getElementById("rSage"),
+    rCross40: document.getElementById("rCross40"), rCross80: document.getElementById("rCross80")
+  };
+
+  var cv = document.getElementById("plot");
+  var ctx = cv.getContext("2d");
+
+  // ---- memory model (bytes -> GiB), per attention layer ----
+  function bytesPerElem() { return state.dt === "int8" ? 1 : 2; }
+
+  // naive / MATH: full N x N score matrix, all heads, all sequences in the batch
+  function naiveGiB(N) {
+    return state.bs * state.heads * N * N * bytesPerElem() / GiB;
+  }
+  // O(N) family (FlashAttn / xFormers / cuDNN): after discarding the N x N matrix, the retained
+  // per-layer attention activation is the O(seq) working set — Q/K/V/O tiles + logsumexp. read.md §2
+  // pins this at ~200 MB where the same config's N x N matrix is ~40x larger, so the retained
+  // activation is ~2 * (seq*head_dim) bytes/head + fp32 logsumexp (not the full 5x layer-I/O tensors).
+  function flashGiB(N) {
+    var linear = state.bs * state.heads * N * state.hd * bytesPerElem();  // retained O(seq) working set (bf16/int8)
+    var lse = state.bs * state.heads * N * 4;                             // logsumexp, fp32
+    return (linear + lse) / GiB;
+  }
+  // SageAttention: same O(N) shape as the flash family but the QK^T path is stored INT8 (1 B) instead of
+  // the flash-family bf16 (2 B) -> ~half the bytes on the dominant quant path. Always INT8 QK^T regardless
+  // of the score-matrix toggle. Inference only (no backward) — plotted for contrast, not for training use.
+  function sageGiB(N) {
+    var qk = state.bs * state.heads * N * state.hd * 1;  // QK^T path: INT8 (1 B) = half of bf16 flash
+    var lse = state.bs * state.heads * N * 4;            // logsumexp, fp32
+    return (qk + lse) / GiB;
+  }
+
+  // solve naive(N) = capGiB  ->  N = sqrt( cap*GiB / (bs*heads*bytes) )
+  function crossoverN(capGiB) {
+    var denom = state.bs * state.heads * bytesPerElem();
+    var n = Math.sqrt(capGiB * GiB / denom);
+    return n;
+  }
+
+  // ---- plot geometry ----
+  var PAD = { l: 62, r: 18, t: 16, b: 40 };
+  function plotW() { return cv.width - PAD.l - PAD.r; }
+  function plotH() { return cv.height - PAD.t - PAD.b; }
+  function xOf(N) {
+    var t = (Math.log(N) - Math.log(N_MIN)) / (Math.log(N_MAX) - Math.log(N_MIN));
+    return PAD.l + t * plotW();
+  }
+  function yOf(mem) {
+    var m = Math.min(Math.max(mem, MEM_MIN), MEM_MAX);
+    var t = (Math.log(m) - Math.log(MEM_MIN)) / (Math.log(MEM_MAX) - Math.log(MEM_MIN));
+    return PAD.t + (1 - t) * plotH();
+  }
+
+  function fmtTok(n) {
+    if (n >= 1024) { var k = n / 1024; return (k >= 100 ? Math.round(k) : k.toFixed(k < 10 ? 1 : 0)) + "K"; }
+    return Math.round(n).toString();
+  }
+  function fmtGiB(g) {
+    if (g >= 1000) return (g / 1024).toFixed(2) + " TiB";
+    if (g >= 10) return g.toFixed(0) + " GiB";
+    if (g >= 1) return g.toFixed(1) + " GiB";
+    if (g >= 0.01) return (g * 1024).toFixed(0) + " MiB";
+    return (g * 1024).toFixed(1) + " MiB";
+  }
+
+  function drawCurve(fn, color, width, dashed) {
+    ctx.beginPath();
+    ctx.lineWidth = width;
+    ctx.strokeStyle = color;
+    ctx.setLineDash(dashed ? [6, 5] : []);
+    var first = true, steps = 200;
+    for (var i = 0; i <= steps; i++) {
+      var t = i / steps;
+      var N = Math.exp(Math.log(N_MIN) + t * (Math.log(N_MAX) - Math.log(N_MIN)));
+      var mem = fn(N);
+      // clip drawing to the visible memory band so the O(N^2) line doesn't run off wildly
+      var y = yOf(mem);
+      var x = xOf(N);
+      if (first) { ctx.moveTo(x, y); first = false; } else { ctx.lineTo(x, y); }
+    }
+    ctx.stroke();
+    ctx.setLineDash([]);
+  }
+
+  function drawGpuLine(capGiB, color, label) {
+    var y = yOf(capGiB);
+    ctx.strokeStyle = color; ctx.lineWidth = 1.5; ctx.setLineDash([7, 5]);
+    ctx.beginPath(); ctx.moveTo(PAD.l, y); ctx.lineTo(cv.width - PAD.r, y); ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.fillStyle = color; ctx.font = "11px -apple-system, sans-serif"; ctx.textAlign = "right";
+    ctx.fillText(label, cv.width - PAD.r - 4, y - 4);
+    ctx.textAlign = "left";
+  }
+
+  function drawCrossoverMarker(N, capGiB, color) {
+    if (N < N_MIN || N > N_MAX) return;
+    var x = xOf(N), y = yOf(capGiB);
+    ctx.fillStyle = color;
+    ctx.beginPath(); ctx.arc(x, y, 4.5, 0, Math.PI * 2); ctx.fill();
+    ctx.strokeStyle = color; ctx.lineWidth = 1; ctx.setLineDash([3, 3]);
+    ctx.beginPath(); ctx.moveTo(x, y); ctx.lineTo(x, cv.height - PAD.b); ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.font = "10px -apple-system, sans-serif"; ctx.textAlign = "center";
+    ctx.fillText(fmtTok(N) + " tok", x, cv.height - PAD.b + 26);
+    ctx.textAlign = "left";
+  }
+
+  function drawAxes() {
+    ctx.fillStyle = "#0b0d11"; ctx.fillRect(0, 0, cv.width, cv.height);
+    ctx.strokeStyle = "var(--grid)";
+    // gridlines: X at powers of two we care about, Y at powers of ten-ish (GiB)
+    var xticks = [512, 1024, 2048, 4096, 8192, 16384, 32768, 65536, 131072];
+    ctx.font = "10px -apple-system, sans-serif";
+    for (var i = 0; i < xticks.length; i++) {
+      var x = xOf(xticks[i]);
+      ctx.strokeStyle = "#1c212b"; ctx.lineWidth = 1;
+      ctx.beginPath(); ctx.moveTo(x, PAD.t); ctx.lineTo(x, cv.height - PAD.b); ctx.stroke();
+      ctx.fillStyle = "#7f8a99"; ctx.textAlign = "center";
+      ctx.fillText(fmtTok(xticks[i]), x, cv.height - PAD.b + 14);
+    }
+    var yticks = [0.01, 0.1, 1, 10, 40, 80, 100, 1000, 4096];
+    for (var j = 0; j < yticks.length; j++) {
+      var yv = yticks[j];
+      if (yv < MEM_MIN || yv > MEM_MAX) continue;
+      var y = yOf(yv);
+      ctx.strokeStyle = "#1c212b"; ctx.lineWidth = 1;
+      ctx.beginPath(); ctx.moveTo(PAD.l, y); ctx.lineTo(cv.width - PAD.r, y); ctx.stroke();
+      ctx.fillStyle = "#7f8a99"; ctx.textAlign = "right";
+      ctx.fillText(fmtGiB(yv), PAD.l - 6, y + 3);
+    }
+    ctx.textAlign = "left";
+    // axis titles
+    ctx.fillStyle = "#aeb8c6"; ctx.font = "11px -apple-system, sans-serif";
+    ctx.textAlign = "center";
+    ctx.fillText("sequence length  N  (tokens, log scale)", PAD.l + plotW() / 2, cv.height - 6);
+    ctx.save();
+    ctx.translate(14, PAD.t + plotH() / 2); ctx.rotate(-Math.PI / 2);
+    ctx.fillText("attention activation memory / layer  (GiB, log scale)", 0, 0);
+    ctx.restore();
+    ctx.textAlign = "left";
+  }
+
+  function render() {
+    // pull control values
+    state.bs = parseInt(els.bs.value, 10);
+    state.heads = parseInt(els.h.value, 10);
+    state.hd = parseInt(els.hd.value, 10);
+    els.bsVal.textContent = state.bs;
+    els.hVal.textContent = state.heads;
+    els.hdVal.textContent = state.hd + (state.hd > 128 ? "  (> FA2 limit)" : "");
+
+    drawAxes();
+
+    // GPU HBM budget lines
+    if (state.gpu) {
+      drawGpuLine(GPU80, "var(--l80)", "80 GB HBM");
+      drawGpuLine(GPU40, "var(--l40)", "40 GB HBM");
+    }
+
+    // curves
+    drawCurve(flashGiB, getComputedStyle(document.documentElement).getPropertyValue("--oflash").trim(), 2.4, false);
+    drawCurve(sageGiB,  getComputedStyle(document.documentElement).getPropertyValue("--sage").trim(),  2.0, false);
+    drawCurve(naiveGiB, getComputedStyle(document.documentElement).getPropertyValue("--naive").trim(), 2.6, false);
+
+    // crossover markers on the naive curve
+    var n40 = crossoverN(GPU40), n80 = crossoverN(GPU80);
+    drawCrossoverMarker(n40, GPU40, getComputedStyle(document.documentElement).getPropertyValue("--l40").trim());
+    drawCrossoverMarker(n80, GPU80, getComputedStyle(document.documentElement).getPropertyValue("--l80").trim());
+
+    // ---- numeric readout: evaluate at a representative "current N" = the 40 GB crossover,
+    // clamped into the visible axis, so the cards track the same regime the markers show ----
+    var Ncur = Math.min(Math.max(n40, N_MIN), N_MAX);
+    Ncur = Math.pow(2, Math.round(Math.log2(Ncur)));  // snap to a clean power of two
+    var mNaive = naiveGiB(Ncur), mFlash = flashGiB(Ncur), mSage = sageGiB(Ncur);
+
+    els.rNaive.textContent = fmtGiB(mNaive);
+    els.rNaiveN.textContent = fmtTok(Ncur);
+    els.rFlash.textContent = fmtGiB(mFlash);
+    els.rRatio.textContent = (mNaive / mFlash >= 10 ? Math.round(mNaive / mFlash) : (mNaive / mFlash).toFixed(1)) + "×";
+    els.rSage.textContent = fmtGiB(mSage);
+    els.rCross40.textContent = fmtTok(n40);
+    els.rCross80.textContent = fmtTok(n80);
+  }
+
+  // ---- wire controls (live) ----
+  ["bs", "h", "hd"].forEach(function (id) {
+    els[id].addEventListener("input", render);
+  });
+  document.querySelectorAll("#dtype button").forEach(function (btn) {
+    btn.addEventListener("click", function () {
+      document.querySelectorAll("#dtype button").forEach(function (b) { b.classList.remove("active"); });
+      btn.classList.add("active");
+      state.dt = btn.dataset.dt;
+      render();
+    });
+  });
+  document.querySelectorAll("#gpuToggle button").forEach(function (btn) {
+    btn.addEventListener("click", function () {
+      document.querySelectorAll("#gpuToggle button").forEach(function (b) { b.classList.remove("active"); });
+      btn.classList.add("active");
+      state.gpu = btn.dataset.gpu === "on";
+      render();
+    });
+  });
+
+  render();
+})();
+</script>
+
+</body>
+</html>

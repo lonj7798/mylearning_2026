@@ -1,0 +1,635 @@
+<!--
+  figure: flash-tiling.html — FlashAttention tiling + online-softmax animation
+  chapter: ch-05 — "FlashAttention (1/2/3): IO-Aware Exact Attention"
+  back to: ../read.md  (referenced at read.md Section 1, "Interactive companion")
+  Self-contained: inline CSS + vanilla JS only. No external CDNs, no network calls.
+  Open directly in any browser to run offline.
+-->
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>FlashAttention Tiling — Online Softmax &amp; the O(N) Memory Win</title>
+<style>
+  :root {
+    --bg:        #0e1117;
+    --panel:     #161b22;
+    --panel2:    #1c2230;
+    --edge:      #2a3140;
+    --ink:       #e6edf3;
+    --dim:       #8b98a8;
+    --mono:      'SF Mono', 'JetBrains Mono', Menlo, Consolas, monospace;
+    --q:         #4c8bf5;  /* Q blocks / current row     */
+    --kv:        #f0a04b;  /* K/V blocks                 */
+    --done:      #2f8a4a;  /* processed tile             */
+    --active:    #e5484d;  /* tile currently in SRAM     */
+    --sram:      #56d364;  /* fast on-chip               */
+    --hbm:       #d29922;  /* slow off-chip              */
+    --naive:     #e5484d;  /* the N^2 cost we avoid      */
+    --flash:     #56d364;  /* the O(N) cost we pay       */
+  }
+  * { box-sizing: border-box; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    background: var(--bg); color: var(--ink);
+    max-width: 1240px; margin: 1.4em auto; padding: 0 1.1em; line-height: 1.5;
+  }
+  h1 { font-size: 1.35em; margin: 0 0 0.15em; }
+  h1 .fa { color: var(--kv); }
+  .subtitle { color: var(--dim); margin: 0 0 1em; font-size: 0.9em; max-width: 90ch; }
+  .subtitle code { color: var(--ink); background: var(--panel2);
+    padding: 1px 5px; border-radius: 3px; font-family: var(--mono); font-size: 0.9em; }
+  .layout { display: grid; grid-template-columns: 360px 1fr; gap: 1.1em; align-items: start; }
+  @media (max-width: 900px) { .layout { grid-template-columns: 1fr; } }
+  .panel { background: var(--panel); border: 1px solid var(--edge);
+    border-radius: 8px; padding: 0.85em 1em; }
+  .panel + .panel { margin-top: 1.1em; }
+  h2 { font-size: 0.82em; text-transform: uppercase; letter-spacing: 0.06em;
+    color: var(--dim); margin: 0 0 0.7em; border-bottom: 1px solid var(--edge);
+    padding-bottom: 0.35em; font-weight: 600; }
+
+  /* ---- controls ---- */
+  .ctl { margin-bottom: 0.85em; }
+  .ctl label { display:flex; justify-content:space-between; font-family: var(--mono);
+    font-size: 0.8em; color: var(--dim); margin-bottom: 0.25em; }
+  .ctl label .val { color: var(--q); font-weight: 600; }
+  input[type=range] { width: 100%; accent-color: var(--q); cursor: pointer; }
+  .btns { display: flex; gap: 0.5em; flex-wrap: wrap; margin-bottom: 0.4em; }
+  button { font-family: var(--mono); font-size: 0.82em; cursor: pointer;
+    background: var(--panel2); color: var(--ink); border: 1px solid var(--edge);
+    border-radius: 6px; padding: 0.5em 0.85em; transition: background .12s, border-color .12s; }
+  button:hover { background: #263041; border-color: #3a4560; }
+  button.primary { background: var(--q); border-color: var(--q); color: #06122b; font-weight: 700; }
+  button.primary:hover { background: #6ba0ff; }
+  button:disabled { opacity: 0.4; cursor: not-allowed; }
+  .speed { display:flex; align-items:center; gap:0.5em; font-family:var(--mono); font-size:0.78em; color:var(--dim); }
+  .speed input { flex:1; }
+
+  /* ---- memory ledger ---- */
+  .ledger .row { display:flex; justify-content:space-between; align-items:baseline;
+    font-family: var(--mono); font-size: 0.82em; padding: 0.28em 0; border-bottom: 1px dashed #232a36; }
+  .ledger .row:last-child { border-bottom: none; }
+  .ledger .k { color: var(--dim); }
+  .ledger .v { font-weight: 700; }
+  .bignum { font-family: var(--mono); font-size: 1.45em; font-weight: 800; }
+  .bar-wrap { margin-top: 0.5em; }
+  .bar-wrap .lab { font-family: var(--mono); font-size: 0.72em; color: var(--dim);
+    display:flex; justify-content:space-between; margin-bottom: 2px; }
+  .bar-bg { height: 15px; background: var(--panel2); border-radius: 4px; overflow:hidden;
+    border: 1px solid var(--edge); }
+  .bar-fill { height: 100%; transition: width .3s ease; }
+  .bar-fill.naive { background: linear-gradient(90deg,#8a2b2e,var(--naive)); }
+  .bar-fill.flash { background: linear-gradient(90deg,#2f8a4a,var(--flash)); }
+
+  /* ---- stage / memory boxes ---- */
+  svg { display:block; width:100%; height:auto; }
+  .memlabel { font-family: var(--mono); font-weight:700; }
+  .memsub   { font-family: var(--mono); }
+  .txt { font-family: var(--mono); fill: var(--ink); }
+  .txt.dim { fill: var(--dim); }
+
+  /* ---- online-softmax state readout ---- */
+  .state-grid { display:grid; grid-template-columns: auto 1fr; gap:0.35em 0.8em;
+    font-family: var(--mono); font-size: 0.84em; align-items:center; }
+  .state-grid .sym { color: var(--kv); font-weight:700; }
+  .state-grid .desc { color: var(--dim); font-size: 0.82em; }
+  .state-grid .num { color: var(--ink); }
+  .formula { font-family: var(--mono); font-size: 0.76em; color: var(--dim);
+    background: var(--panel2); border-radius: 6px; padding: 0.6em 0.7em; margin-top: 0.7em;
+    line-height: 1.7; border-left: 3px solid var(--kv); white-space: pre-wrap; }
+  .formula b { color: var(--ink); font-weight:700; }
+  .status { font-family: var(--mono); font-size: 0.82em; color: var(--sram);
+    background: rgba(86,211,100,0.08); border:1px solid rgba(86,211,100,0.25);
+    border-radius:6px; padding:0.5em 0.7em; margin-bottom:0.8em; min-height: 2.4em; }
+  .status .hi { color: var(--kv); }
+  .legend { display:flex; gap:1.1em; flex-wrap:wrap; font-family:var(--mono);
+    font-size:0.74em; color:var(--dim); margin-top:0.6em; }
+  .legend span { display:inline-flex; align-items:center; gap:0.35em; }
+  .swatch { width:12px; height:12px; border-radius:3px; display:inline-block; }
+  .keypoint { margin-top: 1.1em; font-size: 0.86em; color: var(--ink);
+    background: linear-gradient(90deg, rgba(76,139,245,0.10), rgba(86,211,100,0.06));
+    border: 1px solid var(--edge); border-left: 3px solid var(--flash);
+    border-radius:8px; padding: 0.8em 1em; }
+  .keypoint b { color: var(--flash); }
+  .keypoint code { font-family: var(--mono); background: var(--panel2);
+    padding: 1px 5px; border-radius: 3px; }
+</style>
+</head>
+<body>
+
+<h1><span class="fa">Flash</span>Attention Tiling &mdash; Online Softmax &amp; the O(N) Memory Win</h1>
+<p class="subtitle">
+  Naive attention writes the full <b>N&times;N</b> score matrix to HBM and reads it back three times
+  (Q&middot;K&#7488; &rarr; softmax &rarr; &middot;V). FlashAttention tiles Q into rows and K/V into columns, streams
+  each K/V tile into <b>SRAM</b>, and keeps a numerically-exact <b>online-softmax</b> running state
+  (max&nbsp;<code>m</code>, sum&nbsp;<code>l</code>, output&nbsp;<code>O</code>) entirely on-chip &mdash; so the N&times;N matrix is
+  <b>never materialized</b> in HBM. Only the O(N) row statistics are kept. Step through the loop below.
+</p>
+
+<div class="layout">
+
+  <!-- ============ LEFT: CONTROLS + LEDGER + STATE ============ -->
+  <div>
+    <div class="panel">
+      <h2>Controls</h2>
+      <div class="btns">
+        <button id="playBtn" class="primary">&#9654; Play</button>
+        <button id="stepBtn">Step &#8594;</button>
+        <button id="resetBtn">&#8635; Reset</button>
+      </div>
+      <div class="speed">
+        <span>slow</span>
+        <input type="range" id="speed" min="120" max="1400" value="620" step="20">
+        <span>fast</span>
+      </div>
+
+      <div class="ctl" style="margin-top:0.9em">
+        <label>Sequence length&nbsp; N <span class="val" id="lblN">2048 tokens</span></label>
+        <input type="range" id="N" min="512" max="16384" value="2048" step="512">
+      </div>
+      <div class="ctl">
+        <label>Q tile rows&nbsp; B<sub>r</sub> <span class="val" id="lblBr">512 tokens</span></label>
+        <input type="range" id="Br" min="64" max="1024" value="512" step="64">
+      </div>
+      <div class="ctl">
+        <label>K/V tile cols&nbsp; B<sub>c</sub> <span class="val" id="lblBc">512 tokens</span></label>
+        <input type="range" id="Bc" min="64" max="1024" value="512" step="64">
+      </div>
+      <div class="ctl" style="margin-bottom:0.2em">
+        <label>Head dim&nbsp; d &nbsp;&middot;&nbsp; heads&times;batch <span class="val" id="lblHd">64 &middot; 32&times;32</span></label>
+        <input type="range" id="d" min="32" max="128" value="64" step="32">
+      </div>
+      <div class="legend">
+        <span><i class="swatch" style="background:var(--q)"></i>Q tile (row)</span>
+        <span><i class="swatch" style="background:var(--kv)"></i>K/V tile (col)</span>
+        <span><i class="swatch" style="background:var(--active)"></i>in SRAM now</span>
+        <span><i class="swatch" style="background:var(--done)"></i>processed</span>
+      </div>
+    </div>
+
+    <div class="panel ledger">
+      <h2>HBM Byte Ledger &mdash; per layer, per forward</h2>
+      <div class="row"><span class="k">tile step</span><span class="v" id="stepCount" style="color:var(--q)">0 / 0</span></div>
+      <div class="row"><span class="k">score matrix S (N&times;N)</span><span class="v" id="scoreBytes" style="color:var(--naive)">&mdash;</span></div>
+
+      <div class="bar-wrap">
+        <div class="lab"><span style="color:var(--naive)">Naive: writes S to HBM &times;3</span><span id="naiveTot" style="color:var(--naive)">&mdash;</span></div>
+        <div class="bar-bg"><div class="bar-fill naive" id="naiveBar" style="width:100%"></div></div>
+      </div>
+      <div class="bar-wrap">
+        <div class="lab"><span style="color:var(--flash)">Flash: only O(N) stats (m,l)</span><span id="flashTot" style="color:var(--flash)">&mdash;</span></div>
+        <div class="bar-bg"><div class="bar-fill flash" id="flashBar" style="width:2%"></div></div>
+      </div>
+
+      <div class="row" style="margin-top:0.7em"><span class="k">HBM written so far</span>
+        <span class="v bignum" id="hbmWritten" style="color:var(--flash)">0 GiB</span></div>
+      <div class="row"><span class="k">N&times;N traffic avoided</span>
+        <span class="v" id="avoided" style="color:var(--naive)">&mdash;</span></div>
+      <div class="row"><span class="k">memory saving</span>
+        <span class="v" id="saving" style="color:var(--sram)">&mdash;&times;</span></div>
+    </div>
+
+    <div class="panel">
+      <h2>Online-Softmax Running State &mdash; row of Q tile</h2>
+      <div class="state-grid">
+        <span class="sym">m</span><span class="desc">running row-max (log-sum-exp shift)</span>
+        <span class="sym"></span><span class="num" id="stM">&minus;&infin;</span>
+        <span class="sym">l</span><span class="desc">running denominator &Sigma; exp(x&minus;m)</span>
+        <span class="sym"></span><span class="num" id="stL">0.00</span>
+        <span class="sym">O</span><span class="desc">accumulated output &Sigma; p&middot;V (d-vector)</span>
+        <span class="sym"></span><span class="num" id="stO">[ 0.00 ]</span>
+      </div>
+      <div class="formula" id="recur">Load a K/V tile &rarr; watch the recurrence fire.</div>
+    </div>
+  </div>
+
+  <!-- ============ RIGHT: STAGE ============ -->
+  <div>
+    <div class="panel">
+      <h2>Tiling Loop &mdash; Q rows &times; K/V columns</h2>
+      <div class="status" id="statusMsg">Press <b>Play</b> or <b>Step</b>. Each outer iteration fixes a Q row-tile; the inner loop streams every K/V column-tile through SRAM.</div>
+      <svg id="grid" viewBox="0 0 640 380" preserveAspectRatio="xMidYMid meet"></svg>
+    </div>
+
+    <div class="panel">
+      <h2>Memory Hierarchy &mdash; where the bytes live</h2>
+      <svg id="mem" viewBox="0 0 640 250" preserveAspectRatio="xMidYMid meet"></svg>
+    </div>
+
+    <div class="keypoint">
+      <b>The core point:</b> the full <code>N&times;N</code> score matrix is <b>never written to HBM</b>.
+      As you raise <b>N</b>, the red "naive" cost grows as <code>N&sup2;</code> (quadratic) while the green
+      "flash" cost &mdash; the O(N) <code>m</code> and <code>l</code> row-stats plus the O(N&middot;d) output &mdash; stays
+      essentially flat. That is why FlashAttention turns a terabyte-scale attention activation footprint
+      into gigabytes, making long-context training possible at all (read.md &sect;5).
+    </div>
+  </div>
+</div>
+
+<script>
+"use strict";
+(function () {
+  // ---------- constants from read.md ----------
+  const HBM_BW   = 2.0;    // TB/s  (off-chip, ~1.5-2)
+  const SRAM_BW  = 19.0;   // TB/s  (on-chip)
+  const BYTES_FP16 = 2;    // score matrix stored fp16
+  const BYTES_FP32 = 4;    // m, l stats stored fp32
+  const HEADS = 32, BATCH = 32; // fixed multiplier for the ledger (read.md example)
+  const GiB = 1024 ** 3;
+
+  // ---------- DOM ----------
+  const $ = id => document.getElementById(id);
+  const gridSvg = $("grid"), memSvg = $("mem");
+  const SVGNS = "http://www.w3.org/2000/svg";
+
+  // ---------- state ----------
+  let N = 2048, Br = 512, Bc = 512, d = 64;
+  let nRow = 0, nCol = 0;          // grid dims (tiles)
+  let ptr = -1;                    // linear index of current tile (-1 = not started)
+  let playing = false, timer = null;
+  // online-softmax running state (illustrative scalar row demo)
+  let m = -Infinity, l = 0, O = 0;
+  // deterministic pseudo-scores so the demo is reproducible per (N,Br,Bc)
+  function seedScore(r, c) {
+    const x = Math.sin((r + 1) * 12.9898 + (c + 1) * 78.233) * 43758.5453;
+    return (x - Math.floor(x)) * 6 - 3;   // in [-3, 3]
+  }
+
+  // ---------- helpers ----------
+  function el(tag, attrs, parent) {
+    const n = document.createElementNS(SVGNS, tag);
+    for (const k in attrs) n.setAttribute(k, attrs[k]);
+    if (parent) parent.appendChild(n);
+    return n;
+  }
+  function fmtBytes(b) {
+    if (b >= GiB)        return (b / GiB).toFixed(b / GiB < 10 ? 2 : 1) + " GiB";
+    if (b >= 1024 ** 2)  return (b / 1024 ** 2).toFixed(1) + " MiB";
+    if (b >= 1024)       return (b / 1024).toFixed(1) + " KiB";
+    return b.toFixed(0) + " B";
+  }
+  // total processed tiles (fully-done rows + tiles into current row)
+  function tilesDone() {
+    if (ptr < 0) return 0;
+    return ptr + 1;
+  }
+  const totalTiles = () => nRow * nCol;
+
+  // ---------- ledger math ----------
+  // full score matrix, all heads/batch, fp16 (this is the per-layer S buffer)
+  function scoreMatrixBytes() { return BATCH * HEADS * N * N * BYTES_FP16; }
+  // naive writes+reads S three times across the pass (Q.K^T write, softmax r/w, P.V read)
+  function naiveHBMBytes()    { return scoreMatrixBytes() * 3; }
+  // flash keeps only m and l (each N per head/batch, fp32) + the O(N*d) output tile
+  function flashHBMBytes() {
+    const stats  = BATCH * HEADS * N * 2 * BYTES_FP32;   // m and l
+    const output = BATCH * HEADS * N * d * BYTES_FP16;   // O written once
+    return stats + output;
+  }
+
+  // ---------- build the tile grid ----------
+  function rebuildGrid() {
+    nRow = Math.max(1, Math.ceil(N / Br));
+    nCol = Math.max(1, Math.ceil(N / Bc));
+    gridSvg.innerHTML = "";
+
+    const W = 640, H = 380;
+    const padL = 74, padT = 46, padR = 18, padB = 30;
+    const gw = W - padL - padR, gh = H - padT - padB;
+    const cellW = gw / nCol, cellH = gh / nRow;
+
+    // axis captions
+    el("text", { x: padL + gw / 2, y: 22, "text-anchor": "middle",
+      class: "txt", "font-size": 13, "font-weight": 700, fill: "#f0a04b" },
+      gridSvg).textContent = "K / V tiles  (columns, streamed through SRAM)  →";
+    const yl = el("text", { x: 18, y: padT + gh / 2, class: "txt",
+      "font-size": 13, "font-weight": 700, fill: "#4c8bf5",
+      transform: `rotate(-90 18 ${padT + gh / 2})`, "text-anchor": "middle" }, gridSvg);
+    yl.textContent = "Q tiles (rows) ↓";
+
+    // tick labels (token ranges)
+    for (let c = 0; c < nCol; c++) {
+      const t0 = c * Bc, t1 = Math.min((c + 1) * Bc, N);
+      el("text", { x: padL + c * cellW + cellW / 2, y: padT - 6,
+        "text-anchor": "middle", class: "txt dim", "font-size": 8 },
+        gridSvg).textContent = t0 + "–" + t1;
+    }
+    for (let r = 0; r < nRow; r++) {
+      const t0 = r * Br, t1 = Math.min((r + 1) * Br, N);
+      el("text", { x: padL - 6, y: padT + r * cellH + cellH / 2 + 3,
+        "text-anchor": "end", class: "txt dim", "font-size": 8 },
+        gridSvg).textContent = t0 + "–" + t1;
+    }
+
+    // cells
+    for (let r = 0; r < nRow; r++) {
+      for (let c = 0; c < nCol; c++) {
+        el("rect", {
+          x: padL + c * cellW + 1.5, y: padT + r * cellH + 1.5,
+          width: cellW - 3, height: cellH - 3, rx: 3,
+          fill: "#1c2230", stroke: "#2a3140", "stroke-width": 1,
+          "data-r": r, "data-c": c, class: "tile"
+        }, gridSvg);
+      }
+    }
+    // stash geometry for paint()
+    gridSvg._geo = { padL, padT, cellW, cellH, gw, gh };
+    paintGrid();
+  }
+
+  function paintGrid() {
+    const cells = gridSvg.querySelectorAll(".tile");
+    const curRow = ptr < 0 ? -1 : Math.floor(ptr / nCol);
+    const curCol = ptr < 0 ? -1 : ptr % nCol;
+    cells.forEach(cell => {
+      const r = +cell.getAttribute("data-r"), c = +cell.getAttribute("data-c");
+      const lin = r * nCol + c;
+      let fill = "#1c2230", stroke = "#2a3140", sw = 1, op = 1;
+      if (r === curRow && c === curCol) {           // active tile in SRAM
+        fill = "#e5484d"; stroke = "#ff6b6f"; sw = 2.4;
+      } else if (lin < ptr && r === curRow) {        // processed within current row
+        fill = "#2f8a4a"; stroke = "#3fbf63"; sw = 1;
+      } else if (lin < ptr) {                         // rows fully done
+        fill = "#1e3a29"; stroke = "#2f5a3d"; sw = 1; op = 0.9;
+      } else if (r === curRow) {                      // pending in current row
+        fill = "#243247"; stroke = "#365a8a"; sw = 1;
+      }
+      cell.setAttribute("fill", fill);
+      cell.setAttribute("stroke", stroke);
+      cell.setAttribute("stroke-width", sw);
+      cell.setAttribute("opacity", op);
+    });
+    // highlight the active Q row band on the left edge
+    const old = gridSvg.querySelector(".qband"); if (old) old.remove();
+    if (curRow >= 0) {
+      const g = gridSvg._geo;
+      el("rect", { class: "qband", x: g.padL - 3, y: g.padT + curRow * g.cellH + 1,
+        width: 3, height: g.cellH - 2, fill: "#4c8bf5" }, gridSvg);
+    }
+  }
+
+  // ---------- build the memory hierarchy diagram ----------
+  function buildMem() {
+    memSvg.innerHTML = "";
+    // HBM box (large, slow)
+    el("rect", { x: 20, y: 40, width: 250, height: 180, rx: 10,
+      fill: "#1a1408", stroke: "var(--hbm)", "stroke-width": 2 }, memSvg);
+    el("text", { x: 145, y: 66, "text-anchor": "middle", class: "memlabel",
+      fill: "var(--hbm)", "font-size": 15 }, memSvg).textContent = "HBM  (off-chip)";
+    el("text", { x: 145, y: 84, "text-anchor": "middle", class: "memsub",
+      fill: "#c99a3a", "font-size": 10.5 }, memSvg).textContent = "large · slow · ~2 TB/s";
+    el("text", { x: 145, y: 104, "text-anchor": "middle", class: "memsub",
+      fill: "#8b7b4a", "font-size": 9.5 }, memSvg).textContent = "40–80 GiB capacity";
+    // Q,K,V resident in HBM
+    ["Q", "K", "V"].forEach((t, i) => {
+      el("rect", { x: 46 + i * 66, y: 128, width: 52, height: 34, rx: 5,
+        fill: "#2a2110", stroke: "#5a4a20" }, memSvg);
+      el("text", { x: 72 + i * 66, y: 150, "text-anchor": "middle", class: "txt",
+        fill: "#e6c877", "font-size": 13, "font-weight": 700 }, memSvg).textContent = t;
+    });
+    const noS = el("text", { x: 145, y: 196, "text-anchor": "middle",
+      "font-size": 10.5, "font-weight": 700, fill: "#e5484d", class: "memsub" }, memSvg);
+    noS.textContent = "✗ N×N score matrix  (never written)";
+
+    // SRAM box (tiny, fast)
+    el("rect", { x: 400, y: 62, width: 220, height: 130, rx: 10,
+      fill: "#0c1c10", stroke: "var(--sram)", "stroke-width": 2 }, memSvg);
+    el("text", { x: 510, y: 88, "text-anchor": "middle", class: "memlabel",
+      fill: "var(--sram)", "font-size": 15 }, memSvg).textContent = "SRAM  (on-chip)";
+    el("text", { x: 510, y: 106, "text-anchor": "middle", class: "memsub",
+      fill: "#7fd48c", "font-size": 10.5 }, memSvg).textContent = "tiny · fast · ~19 TB/s";
+    el("text", { x: 510, y: 122, "text-anchor": "middle", class: "memsub",
+      fill: "#5a9a63", "font-size": 9.5 }, memSvg).textContent = "~20 MiB · 10× HBM bandwidth";
+    // resident tile slots + running stats
+    el("rect", { id: "sramQ", x: 418, y: 138, width: 56, height: 34, rx: 5,
+      fill: "#123", stroke: "#456" }, memSvg);
+    el("text", { x: 446, y: 160, "text-anchor": "middle", class: "txt",
+      "font-size": 11, fill: "#8fb0ff" }, memSvg).textContent = "Q₁";
+    el("rect", { id: "sramKV", x: 482, y: 138, width: 66, height: 34, rx: 5,
+      fill: "#2a1f10", stroke: "#5a4a20" }, memSvg);
+    el("text", { id: "sramKVtxt", x: 515, y: 160, "text-anchor": "middle", class: "txt",
+      "font-size": 11, fill: "#f0a04b" }, memSvg).textContent = "K/Vⱼ";
+    el("rect", { x: 556, y: 138, width: 52, height: 34, rx: 5,
+      fill: "#0f2417", stroke: "#2f5a3d" }, memSvg);
+    el("text", { x: 582, y: 154, "text-anchor": "middle", class: "txt",
+      "font-size": 9, fill: "#7fd48c" }, memSvg).textContent = "m,l";
+    el("text", { x: 582, y: 165, "text-anchor": "middle", class: "txt",
+      "font-size": 9, fill: "#7fd48c" }, memSvg).textContent = "O";
+
+    // the transfer arrow (SRAM <- HBM tile load) + label
+    el("defs", {}, memSvg).innerHTML =
+      '<marker id="ah" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto">' +
+      '<path d="M0,0 L7,3 L0,6 Z" fill="#56d364"/></marker>' +
+      '<marker id="ah2" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto">' +
+      '<path d="M0,0 L7,3 L0,6 Z" fill="#d29922"/></marker>';
+    el("line", { id: "loadArrow", x1: 272, y1: 130, x2: 398, y2: 130,
+      stroke: "#56d364", "stroke-width": 2.5, "marker-end": "url(#ah)",
+      "stroke-dasharray": "6 4" }, memSvg);
+    el("text", { id: "loadLabel", x: 335, y: 122, "text-anchor": "middle",
+      class: "txt", "font-size": 9.5, fill: "#7fd48c" }, memSvg).textContent = "load tile →";
+    // write-back O arrow (small, O(N))
+    el("line", { x1: 398, y1: 210, x2: 272, y2: 210,
+      stroke: "#d29922", "stroke-width": 1.6, "marker-end": "url(#ah2)" }, memSvg);
+    el("text", { x: 335, y: 226, "text-anchor": "middle", class: "txt",
+      "font-size": 9, fill: "#c99a3a" }, memSvg).textContent = "← write O + (m,l) only  [O(N)]";
+
+    // moving packet (animated on each load)
+    el("circle", { id: "packet", cx: 272, cy: 130, r: 6, fill: "#56d364",
+      opacity: 0 }, memSvg);
+  }
+
+  // animate a tile-load packet HBM -> SRAM
+  function flyPacket() {
+    const p = $("packet"); if (!p) return;
+    const x0 = 272, x1 = 398, y = 130;
+    const dur = Math.max(160, Math.min(520, +$("speed").value * 0.7));
+    const start = performance.now();
+    p.setAttribute("opacity", 1);
+    function frame(now) {
+      const t = Math.min(1, (now - start) / dur);
+      p.setAttribute("cx", x0 + (x1 - x0) * t);
+      if (t < 1) requestAnimationFrame(frame);
+      else p.setAttribute("opacity", 0);
+    }
+    requestAnimationFrame(frame);
+  }
+
+  // ---------- online softmax update for one tile ----------
+  function applyTile(r, c) {
+    // representative score for this (row-tile, col-tile) demo: mean over a few probes
+    const cols = Math.min(Bc, N - c * Bc);
+    let xmax = -Infinity, contrib = 0, vAgg = 0, nprobe = 0;
+    const probes = Math.min(cols, 8);
+    for (let k = 0; k < probes; k++) {
+      const x = seedScore(r, c * 100 + k);
+      xmax = Math.max(xmax, x);
+      nprobe++;
+    }
+    // online-softmax recurrence (scalar row illustration)
+    const mNew = Math.max(m, xmax);
+    let lTerm = 0, oTerm = 0;
+    for (let k = 0; k < probes; k++) {
+      const x = seedScore(r, c * 100 + k);
+      const p = Math.exp(x - mNew);
+      const v = seedScore(r + 7, c * 100 + k);   // pseudo V value
+      lTerm += p; oTerm += p * v;
+    }
+    const scale = (m === -Infinity) ? 0 : Math.exp(m - mNew);
+    const lNew = scale * l + lTerm;
+    const oNew = scale * O + oTerm;
+    m = mNew; l = lNew; O = oNew;
+    return { xmax, scale, mNew, lNew, oNew };
+  }
+
+  // ---------- advance one tile ----------
+  function step() {
+    const total = totalTiles();
+    if (ptr + 1 >= total) { stop(); flashStatus("All tiles processed — O is exact, N×N never touched HBM."); return; }
+    ptr++;
+    const r = Math.floor(ptr / nCol), c = ptr % nCol;
+    // reset row state when we begin a new Q row-tile
+    if (c === 0) { m = -Infinity; l = 0; O = 0; }
+    const res = applyTile(r, c);
+    flyPacket();
+    paintGrid();
+    updateState(r, c, res);
+    updateLedger();
+    updateSramLabels(r, c);
+  }
+
+  function updateSramLabels(r, c) {
+    const kv = $("sramKVtxt");
+    if (kv) kv.textContent = "K/V" + subscript(c + 1);
+    const q = memSvg.querySelector("#sramQ + text");
+  }
+  function subscript(n) {
+    const map = { 0:"₀",1:"₁",2:"₂",3:"₃",4:"₄",
+      5:"₅",6:"₆",7:"₇",8:"₈",9:"₉" };
+    return String(n).split("").map(ch => map[ch] || ch).join("");
+  }
+
+  // ---------- update online-softmax readout ----------
+  function updateState(r, c, res) {
+    $("stM").textContent = res.mNew.toFixed(3);
+    $("stL").textContent = res.lNew.toFixed(3);
+    $("stO").textContent = "[ " + (res.oNew / (res.lNew || 1)).toFixed(3) + " ]";
+    const recur = $("recur");
+    recur.innerHTML =
+      "K/V tile " + subscript(c + 1) + " → Q row " + subscript(r + 1) + ":\n" +
+      "  m_new = max(m_old, max x) = <b>" + res.mNew.toFixed(2) + "</b>\n" +
+      "  scale = exp(m_old − m_new) = <b>" + res.scale.toFixed(3) + "</b>\n" +
+      "  l_new = scale·l_old + Σ exp(x−m) = <b>" + res.lNew.toFixed(2) + "</b>\n" +
+      "  O_new = scale·O_old + Σ p·V         (in SRAM, no HBM)";
+    const cur = ptr + 1, total = totalTiles();
+    const rr = r + 1, cc = c + 1;
+    $("statusMsg").innerHTML =
+      "Q row-tile <span class='hi'>" + rr + "/" + nRow + "</span> · loading K/V col-tile " +
+      "<span class='hi'>" + cc + "/" + nCol + "</span> into SRAM. " +
+      (cc === nCol
+        ? "Row complete → O is the exact softmax output for these Q rows; write O + (m,l), discard scores."
+        : "Update running (m, l, O) on-chip, then evict this K/V tile — its scores are never stored.");
+  }
+
+  // ---------- update HBM ledger ----------
+  function updateLedger() {
+    const naive = naiveHBMBytes();
+    const flash = flashHBMBytes();
+    const scoreOne = scoreMatrixBytes();
+    const done = tilesDone(), total = totalTiles();
+
+    $("stepCount").textContent = done + " / " + total;
+    $("scoreBytes").textContent = fmtBytes(scoreOne) + "  (fp16)";
+    $("naiveTot").textContent   = fmtBytes(naive);
+    $("flashTot").textContent   = fmtBytes(flash);
+
+    // HBM written "so far" under Flash = fraction of the O(N) output + stats streamed out.
+    // It scales with completed Q-row tiles (each finished row flushes its O + stats).
+    const rowsDone = Math.min(nRow, Math.floor(done / nCol));
+    const frac = total ? done / total : 0;
+    const flashSoFar = flash * frac;
+    $("hbmWritten").textContent = fmtBytes(flashSoFar);
+    $("avoided").textContent    = fmtBytes(naive * frac) + " (≈ N²×3)";
+
+    const saving = naive / flash;
+    $("saving").textContent = saving.toFixed(saving < 100 ? 1 : 0) + "×";
+
+    // bars: log-scaled so the huge naive/flash gap is legible; naive pinned at 100%
+    const logN = Math.log10(naive), logF = Math.log10(Math.max(flash, 1));
+    const logFloor = Math.log10(1024 * 1024); // 1 MiB floor
+    const span = logN - logFloor || 1;
+    const flashPct = Math.max(2, ((logF - logFloor) / span) * 100);
+    $("naiveBar").style.width = "100%";
+    $("flashBar").style.width = flashPct.toFixed(1) + "%";
+  }
+
+  // ---------- run loop ----------
+  function play() {
+    if (playing) return;
+    if (ptr + 1 >= totalTiles()) reset(false);
+    playing = true;
+    $("playBtn").innerHTML = "❚❚ Pause";
+    $("playBtn").classList.remove("primary");
+    tick();
+  }
+  function tick() {
+    if (!playing) return;
+    step();
+    if (ptr + 1 >= totalTiles()) { stop(); return; }
+    timer = setTimeout(tick, +$("speed").value);
+  }
+  function stop() {
+    playing = false;
+    if (timer) clearTimeout(timer);
+    $("playBtn").innerHTML = "▶ Play";
+    $("playBtn").classList.add("primary");
+  }
+  function flashStatus(msg) { $("statusMsg").innerHTML = "<b>" + msg + "</b>"; }
+
+  // ---------- reset ----------
+  function reset(repaint = true) {
+    stop();
+    ptr = -1; m = -Infinity; l = 0; O = 0;
+    if (repaint) {
+      paintGrid();
+      $("stM").textContent = "−∞"; $("stL").textContent = "0.00";
+      $("stO").textContent = "[ 0.00 ]";
+      $("recur").textContent = "Load a K/V tile → watch the recurrence fire.";
+      $("statusMsg").innerHTML = "Press <b>Play</b> or <b>Step</b>. Each outer iteration fixes a Q row-tile; the inner loop streams every K/V column-tile through SRAM.";
+    }
+    updateLedger();
+  }
+
+  // ---------- read controls ----------
+  function syncLabels() {
+    $("lblN").textContent  = N.toLocaleString() + " tokens";
+    $("lblBr").textContent = Br + " tokens";
+    $("lblBc").textContent = Bc + " tokens";
+    $("lblHd").textContent = d + " · " + HEADS + "×" + BATCH;
+  }
+  function onDim() {
+    N  = +$("N").value; Br = +$("Br").value; Bc = +$("Bc").value; d = +$("d").value;
+    // keep tile sizes <= N
+    if (Br > N) { Br = N; $("Br").value = N; }
+    if (Bc > N) { Bc = N; $("Bc").value = N; }
+    syncLabels();
+    rebuildGrid();
+    reset();          // dims changed → restart loop, live-update ledger
+  }
+
+  // ---------- wire up ----------
+  ["N", "Br", "Bc", "d"].forEach(id => $(id).addEventListener("input", onDim));
+  $("playBtn").addEventListener("click", () => playing ? stop() : play());
+  $("stepBtn").addEventListener("click", () => { stop(); step(); });
+  $("resetBtn").addEventListener("click", () => reset());
+  $("speed").addEventListener("input", () => { /* live: next tick uses new value */ });
+
+  // ---------- init ----------
+  syncLabels();
+  buildMem();
+  rebuildGrid();
+  updateLedger();
+})();
+</script>
+</body>
+</html>
