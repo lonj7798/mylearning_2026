@@ -1,0 +1,1014 @@
+<!--
+  Figure: checkpointing.html — "checkpoint은 도대체 뭘 저장하는가"
+  Chapter: ch-03 (track: ledger)
+  Back to: ../read.md  (§1 What the Backward Pass Must Keep, §2 Gradient Checkpointing — O(√n))
+  Companion Q&A: ../qa.md  (Q1 "segments of size √n"이 무슨 뜻인가, Q2 왜 n개 segment는 아닌가)
+
+  Gradient-checkpointing explorer. Fully self-contained: inline CSS + vanilla JS
+  only. No external CDN, no network calls, no web fonts, no images. Renders
+  offline by opening this file directly (file://) in a browser.
+
+  Config used throughout (verified, do not drift):
+    B=1, T=4096, h=4096, n_heads=32, bf16 = 2 B/elem, 80 blocks
+      hidden state   [B, T, h]      = 1*4096*4096*2      =    33,554,432 B =   33.55 MB
+      attention prob [B, a, T, T]   = 1*32*4096*4096*2   = 1,073,741,824 B =    1.07 GB
+      MLP interm.    [B, T, 4h]     = 1*4096*16384*2     =   134,217,728 B =  134.22 MB
+      per-block discarded (14 of the 16 listed tensors)  = 1,644,232,704 B =    1.64 GB
+      ratio discarded / checkpoint  = 49.0x
+      80 blocks: 134.22 GB no-checkpointing -> 2.68 GB (= 2*s*b*h*L, read.md L110)
+
+  Teaching points made visible:
+    1. A checkpoint is ONE activation tensor — the hidden state entering a
+       segment, shape [B, T, h] = 33.55 MB. Not weights, not gradients, not
+       "a layer". The other ~16 tensors of that block (1.64 GB, dominated by
+       the [B, a, T, T] attention matrix) are thrown away and rebuilt.
+    2. Forward stores only segment boundaries; backward resurrects one
+       segment's interior at a time. Live memory never exceeds ~2√n, while
+       the no-checkpoint baseline holds all n at the forward/backward turn.
+    3. memory(k) = k + n/k has a minimum at k = √n, and BOTH edges (k=1 and
+       k=n) cost ~n. "checkpoint every layer" is the useless right edge.
+    4. Practice's "per transformer block" is NOT k = n, because n counts
+       activation TENSORS (~20 per block). An 80-block model has n = 1600:
+       optimum 40x40 -> 80 units, per-block 80x20 -> 100 units — 25% off
+       optimal for code that is one wrapper call.
+    5. torch.utils.checkpoint runs the segment forward under no_grad (nothing
+       retained), saves only the inputs, and re-runs the forward with grad
+       enabled during backward. Every segment recomputed exactly once =>
+       one extra forward pass total => (1+2+1)/(1+2) = 4/3 = +33% compute.
+-->
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Gradient Checkpointing — checkpoint은 뭘 저장하는가 (ch-03)</title>
+<style>
+  :root{
+    --bg:#0e1117; --panel:#161b22; --panel2:#1c2230; --edge:#2b3242;
+    --ink:#e6edf3; --ink-dim:#9aa7b4; --ink-faint:#6b7686;
+    --accent:#58a6ff; --accent2:#3fb950; --danger:#f85149; --warn:#d29922;
+    --c-ckpt:#3fb950;   /* 저장되는 checkpoint tensor */
+    --c-drop:#f85149;   /* 버려지고 재계산되는 tensor */
+    --c-mon:#f778ba;    /* attention [B,a,T,T] — 괴물 tensor */
+    --c-recomp:#d29922; /* backward에서 되살아난 tensor */
+    --c-grad:#bc8cff;   /* backprop 진행 중 */
+    --c-base:#8b949e;   /* no-checkpoint baseline */
+  }
+  *{box-sizing:border-box;}
+  html,body{margin:0;padding:0;max-width:100%;overflow-x:hidden;}
+  body{
+    background:var(--bg); color:var(--ink);
+    font:14px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Apple SD Gothic Neo",
+         "Noto Sans KR",Helvetica,Arial,sans-serif;
+    padding:22px; max-width:1180px; margin:0 auto;
+  }
+  h1{font-size:21px; margin:0 0 3px; letter-spacing:.2px;}
+  .sub{color:var(--ink-dim); font-size:13px; margin:0 0 20px;}
+  .sub code{color:var(--accent);}
+  .panel{background:var(--panel); border:1px solid var(--edge); border-radius:10px;
+    padding:16px; margin-bottom:18px;}
+  .panel h2{font-size:12px; text-transform:uppercase; letter-spacing:.9px; color:var(--ink-dim);
+    margin:0 0 14px; font-weight:600;}
+  .panel h2 .q{color:var(--ink); text-transform:none; letter-spacing:0; font-size:13.5px;}
+  .mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+    font-variant-numeric:tabular-nums;}
+  .dimmed{color:var(--ink-faint);}
+  b.ok{color:var(--accent2);} b.bad{color:var(--danger);} b.wn{color:var(--warn);}
+
+  .callout{border-left:3px solid var(--warn); background:rgba(210,153,34,.07);
+    padding:11px 14px; border-radius:0 7px 7px 0; font-size:13px; color:var(--ink-dim);
+    margin-top:14px;}
+  .callout b{color:var(--ink);}
+  .callout.ok{border-left-color:var(--accent2); background:rgba(63,185,80,.07);}
+  .callout.no{border-left-color:var(--danger); background:rgba(248,81,73,.07);}
+
+  /* ---------- panel 1: tensor ledger of one block ---------- */
+  .cfg{display:flex; gap:7px; flex-wrap:wrap; margin-bottom:14px;}
+  .cfg span{border:1px solid var(--edge); background:var(--panel2); border-radius:6px;
+    padding:4px 9px; font-size:11.5px; color:var(--ink-dim);
+    font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;}
+  .cfg span b{color:var(--accent);}
+
+  .tl{display:flex; flex-direction:column; gap:3px;}
+  .tr{display:grid; grid-template-columns:26px minmax(140px,1.5fr) minmax(110px,1fr) 78px 1fr;
+    gap:9px; align-items:center; padding:5px 8px; border-radius:6px;
+    border:1px solid transparent; font-size:12.5px;}
+  @media (max-width:760px){
+    .tr{grid-template-columns:22px 1fr 74px; gap:6px;}
+    .tr .shp{display:none;}
+    .tr .barw{grid-column:1 / -1;}
+  }
+  .tr .ix{color:var(--ink-faint); font-size:11px; text-align:right;
+    font-family:ui-monospace,monospace;}
+  .tr .shp{color:var(--ink-dim); font-size:11.5px;
+    font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;}
+  .tr .sz{text-align:right; font-size:12px; font-variant-numeric:tabular-nums;
+    font-family:ui-monospace,monospace; color:var(--ink-dim);}
+  .tr .barw{background:#10151d; border-radius:4px; height:14px; position:relative;
+    border:1px solid var(--edge); overflow:hidden;}
+  .tr .bar{position:absolute; left:0; top:0; bottom:0; background:var(--c-drop);
+    opacity:.75; border-radius:3px 0 0 3px; transition:width .35s;}
+  .tr.ckpt{background:rgba(63,185,80,.10); border-color:var(--c-ckpt);}
+  .tr.ckpt .nm{color:var(--ink); font-weight:700;}
+  .tr.ckpt .bar{background:var(--c-ckpt); opacity:1;}
+  .tr.mon .nm{color:var(--c-mon); font-weight:600;}
+  .tr.mon .bar{background:var(--c-mon);}
+  .tr.next{background:rgba(63,185,80,.05); border-color:rgba(63,185,80,.35);
+    border-style:dashed;}
+  .tr.next .bar{background:var(--c-ckpt); opacity:.55;}
+  .tr .tag{font-size:10px; border:1px solid currentColor; border-radius:4px;
+    padding:0 5px; margin-left:6px; vertical-align:1px; white-space:nowrap;}
+  .tr.ckpt .tag{color:var(--c-ckpt);}
+  .tr.next .tag{color:var(--c-ckpt); opacity:.75;}
+  .tr.mon .tag{color:var(--c-mon);}
+  .sumrow{display:flex; gap:10px; flex-wrap:wrap; margin-top:14px;}
+  .card{flex:1 1 200px; background:var(--panel2); border:1px solid var(--edge);
+    border-radius:8px; padding:11px 13px;}
+  .card .k{font-size:10.5px; text-transform:uppercase; letter-spacing:.7px;
+    color:var(--ink-faint); margin-bottom:3px;}
+  .card .v{font-size:21px; font-weight:700; font-variant-numeric:tabular-nums;
+    font-family:ui-monospace,monospace;}
+  .card .n{font-size:11.5px; color:var(--ink-faint); margin-top:2px;}
+  .card.ck{border-color:var(--c-ckpt);} .card.ck .v{color:var(--c-ckpt);}
+  .card.dp{border-color:var(--c-drop);} .card.dp .v{color:var(--c-drop);}
+  .card.rt .v{color:var(--accent);}
+
+  /* ---------- panel 2: animation ---------- */
+  .runbar{display:flex; gap:7px; flex-wrap:wrap; margin-bottom:14px;}
+  .rb{background:var(--panel2); border:1px solid var(--edge); color:var(--ink);
+    border-radius:7px; padding:9px 14px; cursor:pointer; font-size:12.5px; font-weight:600;
+    transition:.13s;}
+  .rb:hover{border-color:var(--accent);}
+  .rb.primary{background:#1d3a5f; border-color:var(--accent); color:#cfe6ff;}
+  .phase{margin-left:auto; align-self:center; font-size:12.5px; color:var(--ink-dim);}
+  .phase b{color:var(--ink);}
+
+  .segs{display:flex; gap:8px; flex-wrap:wrap;}
+  .seg{flex:1 1 190px; border:1px solid var(--edge); border-radius:8px; padding:9px 8px 8px;
+    background:#10151d; transition:.2s;}
+  .seg.act{border-color:var(--c-recomp); background:rgba(210,153,34,.06);}
+  .seg .sh{font-size:10.5px; letter-spacing:.6px; text-transform:uppercase;
+    color:var(--ink-faint); margin-bottom:7px;}
+  .seg.act .sh{color:var(--c-recomp);}
+  .cells{display:flex; gap:4px; flex-wrap:wrap;}
+  .cell{flex:1 1 34px; min-width:34px; border:1px solid var(--edge); border-radius:5px;
+    padding:5px 2px; text-align:center; font-size:11px; color:var(--ink-faint);
+    font-family:ui-monospace,monospace; background:#141a24; transition:.2s;}
+  .cell .lay{display:block; font-size:9px; color:var(--ink-faint); opacity:.7;}
+  .cell.none{border-style:dashed; opacity:.42;}
+  .cell.freed{border-style:dashed; opacity:.28; text-decoration:line-through;}
+  .cell.live{border-color:var(--accent); color:var(--accent); background:rgba(88,166,255,.12);}
+  .cell.ckpt{border-color:var(--c-ckpt); color:#b7f0c2; background:rgba(63,185,80,.16);
+    font-weight:700; box-shadow:0 0 0 1px rgba(63,185,80,.35);}
+  .cell.recomp{border-color:var(--c-recomp); color:#f0d79a; background:rgba(210,153,34,.15);}
+  .cell.grad{border-color:var(--c-grad); color:#dcc6ff; background:rgba(188,140,255,.16);}
+  .bnd{position:relative;}
+  .bnd::after{content:"●"; position:absolute; top:-9px; left:50%; transform:translateX(-50%);
+    font-size:9px; color:var(--c-ckpt);}
+  .legend{display:flex; gap:14px; font-size:11.5px; color:var(--ink-dim); margin-top:12px;
+    flex-wrap:wrap;}
+  .legend i{display:inline-block; width:11px; height:11px; border-radius:3px;
+    vertical-align:-1px; margin-right:5px; border:1px solid var(--edge);}
+
+  .gauge{margin-top:15px;}
+  .gauge .top{display:flex; justify-content:space-between; align-items:baseline;
+    font-size:12.5px; margin-bottom:6px; flex-wrap:wrap; gap:8px;}
+  .gauge .now{font-size:19px; font-weight:700; color:var(--accent);
+    font-family:ui-monospace,monospace; font-variant-numeric:tabular-nums;}
+  .track{position:relative; height:26px; background:#10151d; border:1px solid var(--edge);
+    border-radius:6px; overflow:hidden;}
+  .fill{position:absolute; left:0; top:0; bottom:0; background:linear-gradient(90deg,#1f6feb,#58a6ff);
+    transition:width .25s;}
+  .mark{position:absolute; top:0; bottom:0; width:2px; background:var(--c-ckpt);}
+  .mark.base{background:var(--c-base);}
+  .mklab{font-size:10.5px; color:var(--ink-faint); margin-top:4px; display:flex;
+    justify-content:space-between;}
+
+  /* height는 JS 상수(CV_MEM_H / CV_K_H)와 반드시 같은 값 — DPR 되읽기 금지 */
+  canvas{width:100%; display:block; border-radius:8px; background:#10151d;
+    border:1px solid var(--edge);}
+  #cvMem{height:210px;}
+  #cvK{height:280px;}
+
+  /* ---------- panel 3: slider ---------- */
+  .wrap{display:grid; grid-template-columns:290px 1fr; gap:18px; align-items:start;}
+  @media (max-width:940px){ .wrap{grid-template-columns:1fr;} }
+  .ctrl{margin-bottom:15px;}
+  .ctrl label{display:flex; justify-content:space-between; align-items:baseline; margin-bottom:4px;}
+  .ctrl .name{font-weight:600; font-size:12.5px;}
+  .ctrl .val{color:var(--accent); font-weight:700; font-size:13px;
+    font-family:ui-monospace,monospace;}
+  input[type=range]{-webkit-appearance:none; appearance:none; width:100%; height:5px;
+    border-radius:5px; background:var(--edge); outline:none; margin:6px 0;}
+  input[type=range]::-webkit-slider-thumb{-webkit-appearance:none; appearance:none;
+    width:16px; height:16px; border-radius:50%; background:var(--accent); cursor:pointer;}
+  input[type=range]::-moz-range-thumb{width:16px; height:16px; border:0; border-radius:50%;
+    background:var(--accent); cursor:pointer;}
+  .nsel{display:grid; grid-template-columns:1fr 1fr; gap:6px;}
+  .pbtn{background:var(--panel2); border:1px solid var(--edge); color:var(--ink-dim);
+    border-radius:7px; padding:8px 6px; cursor:pointer; font-size:11.5px; transition:.13s;
+    line-height:1.3; font-family:ui-monospace,monospace;}
+  .pbtn:hover{border-color:var(--ink-faint); color:var(--ink);}
+  .pbtn.on{background:#1d2b3f; border-color:var(--accent); color:var(--ink);}
+  .pbtn small{display:block; color:var(--ink-faint); font-size:10px;
+    font-family:-apple-system,"Noto Sans KR",sans-serif;}
+  .pbtn.on small{color:var(--accent);}
+  .eqrow{display:flex; gap:9px; flex-wrap:wrap; margin-bottom:12px;}
+  .eqrow .card{flex:1 1 120px;}
+
+  /* ---------- tables ---------- */
+  .tblwrap{overflow-x:auto;}
+  table{width:100%; border-collapse:collapse; font-size:12.5px; margin-top:6px;
+    min-width:400px;}
+  th,td{padding:6px 8px; text-align:right; border-bottom:1px solid var(--edge);
+    font-variant-numeric:tabular-nums; white-space:nowrap;}
+  th{color:var(--ink-faint); font-weight:600; font-size:10.5px; text-transform:uppercase;
+    letter-spacing:.5px;}
+  th:first-child,td:first-child{text-align:left;}
+  tr.min td{background:rgba(63,185,80,.10); color:var(--ink); font-weight:700;}
+  tr.edge td{background:rgba(248,81,73,.08); color:#ffb3ae;}
+  tr.cur td{outline:1px solid var(--accent); outline-offset:-1px;}
+  td.g{color:var(--accent2);} td.r{color:var(--danger);}
+
+  pre{background:#10151d; border:1px solid var(--edge); border-radius:8px; padding:14px;
+    overflow-x:auto; font-size:12.5px; line-height:1.75; margin:0;
+    font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;}
+  pre .cm{color:var(--ink-faint);}
+  pre .kw{color:var(--c-grad);}
+  pre .st{color:var(--accent2);}
+  pre .fn{color:var(--accent);}
+  .grid2{display:grid; grid-template-columns:1fr 1fr; gap:18px;}
+  @media (max-width:940px){ .grid2{grid-template-columns:1fr;} }
+  .foot{color:var(--ink-faint); font-size:12px; margin-top:26px; line-height:1.8;}
+  .foot a{color:var(--accent); text-decoration:none;}
+</style>
+</head>
+<body>
+
+<h1>Gradient Checkpointing — <span style="color:var(--c-ckpt)">checkpoint</span>은 정확히 <b>뭘</b> 저장하는가</h1>
+<p class="sub">
+  ch-03 §1–§2 companion · <a href="../qa.md" style="color:var(--accent);text-decoration:none">qa.md</a> Q1/Q2 시각화 ·
+  한 줄 답: <b>checkpoint = activation tensor 딱 하나</b>, segment로 들어가는 hidden state <code>[B, T, h]</code>.
+  weight도 gradient도 "layer"도 아니다.
+</p>
+
+<!-- ==================== 1. checkpoint이 정확히 뭔가 ==================== -->
+<div class="panel">
+  <h2>1 · <span class="q">checkpoint이 정확히 뭔가 — transformer block 하나를 열어보면</span></h2>
+
+  <div class="cfg">
+    <span>B = <b>1</b></span><span>T = <b>4096</b></span><span>h = <b>4096</b></span>
+    <span>n_heads = <b>32</b></span><span>dtype = <b>bf16</b> (2 B)</span><span>blocks = <b>80</b></span>
+  </div>
+
+  <p style="font-size:13px;color:var(--ink-dim);margin:0 0 12px">
+    backward가 chain rule을 돌리려면 forward가 아래 tensor들을 전부 붙들고 있어야 한다
+    (read.md §1). 여기 나열한 게 <b style="color:var(--ink)">16개</b>인데,
+    checkpointing은 그중 <b class="ok">1번 하나</b>만 남기고
+    <b class="bad">14개를 버린다</b> (마지막 16번은 다음 block의 checkpoint이라 어차피 남는다).
+    막대 길이는 실제 byte 비율 그대로다 — 초록 막대가 안 보일 만큼 짧은 게 이 패널의 전부다.
+    <span class="dimmed">(dropout mask·RoPE 캐시까지 세면 block당 ~20개 —
+    qa.md Q2와 아래 §4가 쓰는 그 숫자다. 자릿수는 같다.)</span>
+  </p>
+
+  <div class="tl" id="p1list"></div>
+
+  <div class="sumrow">
+    <div class="card ck">
+      <div class="k">저장 — checkpoint 1개</div>
+      <div class="v" id="p1ck">—</div>
+      <div class="n">x_in <span class="mono">[B, T, h]</span> = 1×4096×4096×2 B</div>
+    </div>
+    <div class="card dp">
+      <div class="k">버림 — 나머지 14개</div>
+      <div class="v" id="p1dp">—</div>
+      <div class="n">backward 때 forward를 다시 돌려 되살린다</div>
+    </div>
+    <div class="card rt">
+      <div class="k">비율</div>
+      <div class="v" id="p1rt">—</div>
+      <div class="n">checkpoint 1 : 버리는 양</div>
+    </div>
+    <div class="card">
+      <div class="k">80 blocks 전체</div>
+      <div class="v" id="p1tot">—</div>
+      <div class="n" id="p1totn">—</div>
+    </div>
+  </div>
+
+  <div class="callout no">
+    <b>헷갈리기 쉬운 것 세 가지.</b>
+    ① checkpoint은 <b>weight가 아니다</b> — weight는 어차피 항상 메모리에 있고 recompute 대상이 아니다.
+    ② <b>gradient도 아니다</b> — gradient는 backward가 만들어내는 출력이지 저장해 둔 입력이 아니다.
+    ③ <b>"layer를 저장한다"가 아니다</b> — 저장되는 건 layer(module 객체)가 아니라 그 layer로
+    <b>흘러들어가는 숫자 덩어리 하나</b>, 즉 <code>[B, T, h]</code> shape의 tensor 한 개다.
+    이 값 하나만 있으면 그 아래 14개는 forward를 다시 돌려 <b>전부 복원</b>된다 — 그래서 버릴 수 있다.
+  </div>
+
+  <div class="callout">
+    <b>진짜 괴물은 attention이다.</b> <code>[B, a, T, T]</code>는 T에 <b>제곱</b>으로 커진다 —
+    T=4096에서 1.07 GB, T=8192면 4.29 GB. 그런데 이걸 다시 만드는 비용은 matmul 한 번 + softmax 한 번뿐이다.
+    <b>저장 비용은 최악, 재계산 비용은 최선</b> — §3 selective recomputation이 정확히 이 비대칭을 노린다.
+    <br><br>
+    <span class="dimmed">주: 위 목록은 dropout = 0 (요즘 LLM pretraining의 기본)에 head 하나짜리 s×s tensor
+    한 개만 센 <b>보수적</b> 집계다. read.md §1의 Korthikanti 공식
+    <code>s·b·h·(10 + 24/t + 5·a·s/(h·t))</code>은 softmax의 입력·출력·dropout mask까지 세서
+    같은 config에서 block당 <b>3.25 GB</b>가 나온다. 어느 쪽으로 세든 결론은 같다:
+    checkpoint 33.55 MB는 그 안에서 반올림 오차 수준이다.</span>
+  </div>
+</div>
+
+<!-- ==================== 2. forward / backward 애니메이션 ==================== -->
+<div class="panel">
+  <h2>2 · <span class="q">forward / backward를 한 step씩 — 저장·폐기·부활</span></h2>
+
+  <div class="runbar">
+    <button class="rb primary" id="bStep">▶ 다음 step</button>
+    <button class="rb" id="bPlay">▶▶ 자동</button>
+    <button class="rb" id="bReset">↺ 리셋</button>
+    <span class="phase" id="phase"></span>
+  </div>
+
+  <p style="font-size:13px;color:var(--ink-dim);margin:0 0 14px">
+    <code>n = 16</code> layers, <code>√16 = 4</code> → <b>4 segments × 4 layers</b>
+    (qa.md Q1의 그 그림). 칸 하나 = activation tensor 하나 =
+    <span class="mono">x<sub>i</sub></span>, 즉 layer <span class="mono">i+1</span>로 들어가는 hidden state
+    <span class="mono">[B, T, h]</span> = 33.55 MB.
+    ● 는 segment 경계 = <b class="ok">checkpoint으로 저장되는 자리</b>.
+  </p>
+
+  <div class="segs" id="diagram"></div>
+
+  <div class="legend">
+    <span><i style="background:rgba(63,185,80,.5);border-color:#3fb950"></i>checkpoint — 저장됨</span>
+    <span><i style="background:rgba(88,166,255,.4);border-color:#58a6ff"></i>방금 계산됨 (transient)</span>
+    <span><i style="background:rgba(210,153,34,.4);border-color:#d29922"></i>backward에서 재계산됨</span>
+    <span><i style="background:rgba(188,140,255,.4);border-color:#bc8cff"></i>backprop 진행 중</span>
+    <span><i style="border-style:dashed;opacity:.4"></i>해제됨 / 아직 없음</span>
+  </div>
+
+  <div class="gauge">
+    <div class="top">
+      <span>지금 붙들고 있는 activation memory</span>
+      <span><span class="now" id="gNow">0</span>
+        <span class="dimmed mono" id="gNowMB">0 MB</span></span>
+    </div>
+    <div class="track">
+      <div class="fill" id="gFill" style="width:0%"></div>
+      <div class="mark" id="gMark2sq"></div>
+      <div class="mark base" id="gMarkBase"></div>
+    </div>
+    <div class="mklab">
+      <span>0</span>
+      <span style="color:var(--c-ckpt)">2√n = 8 (268 MB) — 여길 절대 안 넘는다</span>
+      <span style="color:var(--c-base)">17 (570 MB) — checkpointing 없을 때</span>
+    </div>
+  </div>
+
+  <div style="margin-top:15px">
+    <canvas id="cvMem"></canvas>
+    <div class="legend">
+      <span><i style="background:#58a6ff;border:0"></i>checkpointing 적용</span>
+      <span><i style="background:#8b949e;border:0"></i>checkpointing 없음 (전부 보유)</span>
+      <span><i style="background:#3fb950;border:0"></i>2√n = 8 상한</span>
+    </div>
+  </div>
+
+  <div class="callout" id="stepNote"></div>
+</div>
+
+<!-- ==================== 3. k 슬라이더 ==================== -->
+<div class="panel">
+  <h2>3 · <span class="q">왜 하필 √n — <code>memory = k + n/k</code>를 직접 밀어보기</span></h2>
+  <div class="wrap">
+    <div>
+      <div class="ctrl">
+        <label><span class="name">n <span class="dimmed">(activation tensor 개수)</span></span></label>
+        <div class="nsel" id="nsel"></div>
+      </div>
+      <div class="ctrl">
+        <label><span class="name">k <span class="dimmed">(segment 개수)</span></span>
+               <span class="val" id="kVal">—</span></label>
+        <input type="range" id="kSlider" min="0" max="1" step="1" value="0">
+        <div class="dimmed" style="font-size:11.5px">
+          왼쪽 끝 = <code>k = 1</code> (segment 하나) · 오른쪽 끝 = <code>k = n</code> (tensor마다 저장)
+        </div>
+      </div>
+      <div class="eqrow">
+        <div class="card ck"><div class="k">boundaries = k</div><div class="v" id="kB">—</div>
+          <div class="n">저장해 둔 checkpoint 수</div></div>
+        <div class="card"><div class="k">live = n/k</div><div class="v" id="kL">—</div>
+          <div class="n">한 segment 재계산 window</div></div>
+      </div>
+      <div class="card rt" style="text-align:center">
+        <div class="k">memory = k + n/k</div>
+        <div class="v" id="kT" style="font-size:27px">—</div>
+        <div class="n" id="kVs">—</div>
+      </div>
+      <div class="callout ok" id="kNote"></div>
+    </div>
+
+    <div>
+      <canvas id="cvK"></canvas>
+      <div class="legend">
+        <span><i style="background:#58a6ff;border:0"></i>k + n/k</span>
+        <span><i style="background:#3fb950;border:0"></i>최소점 k = √n</span>
+        <span><i style="background:#f85149;border:0"></i>양 끝 (k=1, k=n) ≈ n</span>
+      </div>
+      <div class="tblwrap"><table id="kTable"></table></div>
+      <div class="callout no">
+        <b>양쪽 끝이 똑같이 나쁘다 (qa.md Q2).</b>
+        <code>k = 1</code> → boundary는 1개인데 live window가 <b>전부</b>다.
+        <code>k = n</code> → live는 1인데 boundary가 <b>전부</b>다 —
+        <b>전부 저장한다는 건 아무것도 안 버렸다는 뜻</b>인데 +33% recompute는 그대로 낸다. 순수 손해.
+        <code>k + n/k</code>는 <b>양방향으로</b> 벌을 준다.
+        <br><br>
+        <span class="dimmed">미분: <code>d/dk (k + n/k) = 1 − n/k² = 0 → k = √n</code>.
+        두 항이 <b>정확히 같아지는 지점</b>이라 최소가 된다 — 임의로 고른 숫자가 아니다.</span>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ==================== 4. 실무: transformer block마다 ==================== -->
+<div class="panel">
+  <h2>4 · <span class="q">실무: transformer block마다 — 이건 <code>k = n</code>이 아니다</span></h2>
+
+  <p style="font-size:13px;color:var(--ink-dim);margin:0 0 14px">
+    "layer마다 checkpoint"는 방금 본 <b class="bad">쓸모없는 오른쪽 끝</b>인데,
+    실제 framework는 전부 block마다 checkpoint을 건다. 모순처럼 보이는데 아니다 —
+    <b style="color:var(--ink)"><code>n</code>이 세는 건 block이 아니라 activation tensor</b>이기 때문이다.
+    §1에서 봤듯이 block 하나에 tensor가 <b>~20개</b> 들어 있으므로,
+    block 단위 checkpointing = <b>크기 20짜리 segment</b>다.
+  </p>
+
+  <div class="grid2">
+    <div>
+      <div class="card" style="border-color:var(--c-ckpt)">
+        <div class="k">80-block model의 실제 n</div>
+        <div class="v mono" style="font-size:17px">n = 80 blocks × 20 tensors = <b class="ok">1600</b></div>
+        <div class="n">block이 아니라 tensor를 세야 <code>k + n/k</code>가 성립한다</div>
+      </div>
+      <div class="tblwrap"><table>
+        <thead><tr><th>scheme</th><th>k (segments)</th><th>segment 크기</th><th>k + n/k</th></tr></thead>
+        <tbody>
+          <tr class="edge"><td>segment 하나</td><td>1</td><td>1600</td><td>1601</td></tr>
+          <tr class="min"><td>이론 최적 k = √1600</td><td>40</td><td>40</td><td>80</td></tr>
+          <tr class="cur"><td><b>block마다 (실무)</b></td><td>80</td><td>20</td><td><b>100</b></td></tr>
+          <tr class="edge"><td>tensor마다 (k = n)</td><td>1600</td><td>1</td><td>1601</td></tr>
+        </tbody>
+      </table></div>
+    </div>
+    <div>
+      <div class="callout ok">
+        <b>100 vs 80 — 최적 대비 25%밖에 안 나쁘다.</b>
+        그 대가로 얻는 건 <code>torch.utils.checkpoint(block, x)</code> 한 줄짜리 구현이다.
+        √n 최적 분할은 tensor 경계를 block 중간에서 끊어야 해서
+        module 구조를 부수고 재계산 로직을 손으로 짜야 한다.
+        <br><br>
+        <b>우연도 아니다.</b> block 하나의 tensor 수(~20)가 전형적인 모델 크기에서
+        √n(~40)과 <b>같은 자릿수</b>에 떨어진다. 자연스러운 module 경계가 구조적으로
+        최적점 근처에 놓여 있어서, 게으른 선택이 거의 최적이 된 것 — 그래서 이게 default가 됐다.
+      </div>
+      <div class="callout">
+        <b>실제 절감량으로 환산하면</b> (§1의 config, 80 blocks):<br>
+        checkpointing 없음 = <b class="bad">134.2 GB</b> · block마다 checkpointing =
+        <b class="ok">2.68 GB</b> — <b>50×</b>.<br>
+        <span class="dimmed">뒤 숫자는 read.md L110의 <code>2·s·b·h·L</code> 공식과 정확히 일치한다:
+        2×4096×1×4096×80 = 2.68 GB. 그 공식의 정체가 바로 <b>"block 입력 tensor 80개"</b>다 —
+        §1 목록의 1번 항목 × 80.</span>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ==================== 5. 코드와 실제 동작 ==================== -->
+<div class="panel">
+  <h2>5 · <span class="q">코드 — 그리고 PyTorch가 실제로 하는 일</span></h2>
+  <div class="grid2">
+    <div>
+<pre><span class="cm"># 실무 형태: transformer block 하나를 통째로 감싼다</span>
+<span class="kw">from</span> torch.utils.checkpoint <span class="kw">import</span> checkpoint
+
+<span class="kw">class</span> <span class="fn">Model</span>(nn.Module):
+    <span class="kw">def</span> <span class="fn">forward</span>(self, x):
+        <span class="cm"># x: [B, T, h]  &lt;- 이 tensor가 checkpoint 된다</span>
+        <span class="kw">for</span> blk <span class="kw">in</span> self.blocks:
+            <span class="kw">if</span> self.grad_ckpt <span class="kw">and</span> self.training:
+                x = <span class="fn">checkpoint</span>(blk, x,
+                               use_reentrant=<span class="st">False</span>)
+            <span class="kw">else</span>:
+                x = <span class="fn">blk</span>(x)
+        <span class="kw">return</span> x
+
+<span class="cm"># HuggingFace는 같은 걸 한 줄로</span>
+model.<span class="fn">gradient_checkpointing_enable</span>()</pre>
+      <div class="callout">
+        <b>인자로 넘긴 <code>x</code>가 곧 checkpoint이다.</b> 이 함수가 "저장"하는 건
+        <code>blk</code>도 아니고 <code>blk</code>의 weight도 아니고, 넘긴 <b>입력 tensor</b>다 —
+        §1 목록의 1번, 33.55 MB짜리 <code>[B, T, h]</code> 딱 하나.
+        (<code>use_reentrant=False</code>가 요즘 권장값 — 재진입 방식이 아니라
+        autograd graph에 정식으로 붙어서 <code>.grad</code> 전파와 nested 사용이 정상 동작한다.)
+      </div>
+    </div>
+
+    <div>
+<pre><span class="cm"># PyTorch 내부에서 벌어지는 일 (개념 코드)</span>
+<span class="cm"># -------- forward --------</span>
+save_for_backward(x)          <span class="cm"># 입력 tensor 1개만</span>
+save(rng_state)               <span class="cm"># dropout 재현용</span>
+<span class="kw">with</span> torch.<span class="fn">no_grad</span>():        <span class="cm"># ← 핵심</span>
+    y = <span class="fn">blk</span>(x)                <span class="cm"># 내부 ~20개 tensor가</span>
+                              <span class="cm"># 아예 retain되지 않는다</span>
+<span class="kw">return</span> y
+
+<span class="cm"># -------- backward --------</span>
+x = saved_tensors[<span class="st">0</span>]
+<span class="fn">restore</span>(rng_state)
+<span class="kw">with</span> torch.<span class="fn">enable_grad</span>():
+    y = <span class="fn">blk</span>(x)                <span class="cm"># 다시 forward — 이번엔 graph 有</span>
+                              <span class="cm"># ~20개 tensor 부활 (§2 노란 칸)</span>
+torch.autograd.<span class="fn">backward</span>(y, grad_y)
+<span class="cm"># 지역 변수 소멸 → 20개 즉시 해제</span></pre>
+      <div class="callout ok">
+        <b>왜 +33%인가.</b> 재계산은 <b>layer마다</b>가 아니라 <b>segment마다 정확히 한 번</b>이다.
+        √n개 segment × 크기 √n = <b>n</b> = forward pass 딱 한 번 분량 (read.md L92).<br>
+        transformer의 forward : backward ≈ <b>1 : 2</b>이므로<br>
+        <code style="font-size:14px;color:var(--ink)">(1 + 2 + <b class="wn">1</b>) / (1 + 2) = 4/3 = <b class="ok">+33%</b></code><br>
+        <span class="dimmed">Chen 2016의 1,000-layer ResNet 실측: 48 GB → 7 GB (6.8×), runtime +30%
+        (read.md L96–99). 이론값 +33%와 거의 일치한다.</span>
+      </div>
+    </div>
+  </div>
+</div>
+
+<p class="foot">
+  ← 돌아가기: <a href="../read.md">ch-03 read.md</a> §1 (backward가 뭘 붙들고 있어야 하나) / §2 (√n scheme) ·
+  <a href="../qa.md">qa.md</a> Q1 (segment of size √n), Q2 (왜 k = n은 안 되나)<br>
+  출처: Chen et al. 2016, <i>Training Deep Nets with Sublinear Memory Cost</i> ·
+  Korthikanti et al. 2022, <i>Reducing Activation Recomputation in Large Transformer Models</i> ·
+  <code>torch.utils.checkpoint</code>
+</p>
+
+<script>
+"use strict";
+const $ = id => document.getElementById(id);
+
+/* ==================================================================
+   0. 공통 상수 — 전부 검증된 수치 (파일 상단 헤더 주석 참조)
+   ================================================================== */
+const CFG = { B:1, T:4096, h:4096, heads:32, bytes:2, blocks:80 };
+const HID   = CFG.B * CFG.T * CFG.h * CFG.bytes;              // 33,554,432 B
+const ATTN  = CFG.B * CFG.heads * CFG.T * CFG.T * CFG.bytes;  // 1,073,741,824 B
+const MLP   = CFG.B * CFG.T * 4 * CFG.h * CFG.bytes;          // 134,217,728 B
+const LNST  = CFG.B * CFG.T * 4 * 2;                          // mean+rstd, fp32
+
+const MBu = 1e6, GBu = 1e9;
+function fmtB(b){
+  if (b === 0) return "0 B";
+  if (b >= GBu) return (b/GBu).toFixed(2) + " GB";
+  if (b >= MBu) return (b/MBu).toFixed(2) + " MB";
+  return (b/1e3).toFixed(1) + " KB";
+}
+
+/* ==================================================================
+   1. transformer block 하나가 backward를 위해 붙들고 있는 tensor 목록
+      role: ckpt = 유일하게 저장 / next = 다음 block의 checkpoint /
+            mon  = s² 괴물 / drop = 버리고 재계산
+   ================================================================== */
+const TENSORS = [
+  { nm:"x_in — block 입력 hidden state", shp:"[B, T, h]",      b:HID,  role:"ckpt",
+    tag:"이게 checkpoint" },
+  { nm:"LayerNorm 1 저장 통계 (mean, rstd)", shp:"[B, T] × 2 fp32", b:LNST, role:"drop" },
+  { nm:"LayerNorm 1 출력",              shp:"[B, T, h]",      b:HID,  role:"drop" },
+  { nm:"Q projection",                  shp:"[B, T, h]",      b:HID,  role:"drop" },
+  { nm:"K projection",                  shp:"[B, T, h]",      b:HID,  role:"drop" },
+  { nm:"V projection",                  shp:"[B, T, h]",      b:HID,  role:"drop" },
+  { nm:"attention probs — softmax(QKᵀ/√d)", shp:"[B, a, T, T]", b:ATTN, role:"mon",
+    tag:"T에 제곱" },
+  { nm:"context — P · V",               shp:"[B, a, T, d]",   b:HID,  role:"drop" },
+  { nm:"attention 출력 (W_O 통과 후)",   shp:"[B, T, h]",      b:HID,  role:"drop" },
+  { nm:"residual 1 합",                 shp:"[B, T, h]",      b:HID,  role:"drop" },
+  { nm:"LayerNorm 2 저장 통계",          shp:"[B, T] × 2 fp32", b:LNST, role:"drop" },
+  { nm:"LayerNorm 2 출력",              shp:"[B, T, h]",      b:HID,  role:"drop" },
+  { nm:"MLP up-projection 출력",        shp:"[B, T, 4h]",     b:MLP,  role:"drop",
+    tag:"4배 폭" },
+  { nm:"activation fn (GELU) 출력",     shp:"[B, T, 4h]",     b:MLP,  role:"drop",
+    tag:"4배 폭" },
+  { nm:"MLP down-projection 출력",      shp:"[B, T, h]",      b:HID,  role:"drop" },
+  { nm:"residual 2 합 = block 출력",     shp:"[B, T, h]",      b:HID,  role:"next",
+    tag:"다음 block의 checkpoint" },
+];
+
+function renderP1(){
+  const max = Math.max.apply(null, TENSORS.map(t => t.b));
+  $("p1list").innerHTML = TENSORS.map((t,i) =>
+    `<div class="tr ${t.role}">
+       <span class="ix">${i+1}</span>
+       <span class="nm">${t.nm}${t.tag?`<span class="tag">${t.tag}</span>`:""}</span>
+       <span class="shp">${t.shp}</span>
+       <span class="sz">${fmtB(t.b)}</span>
+       <span class="barw"><span class="bar" style="width:${(t.b/max*100).toFixed(3)}%"></span></span>
+     </div>`).join("");
+
+  /* 버려지는 양 = ckpt(1번)과 next(마지막, 다음 block이 소유)를 뺀 전부 */
+  const drop = TENSORS.filter(t => t.role === "drop" || t.role === "mon")
+                      .reduce((a,t) => a + t.b, 0);
+  $("p1ck").textContent = fmtB(HID);
+  $("p1dp").textContent = fmtB(drop);
+  $("p1rt").textContent = "1 : " + (drop/HID).toFixed(1);
+  const blockTot = drop + HID;
+  $("p1tot").textContent = fmtB(blockTot * CFG.blocks);
+  $("p1totn").innerHTML =
+    `checkpointing 하면 <b class="ok">${fmtB(HID*CFG.blocks)}</b> ` +
+    `(${(blockTot/HID).toFixed(0)}× 절감)`;
+}
+
+/* ==================================================================
+   2. forward / backward 애니메이션
+      n = 16 layers, SEG = 4 segments, SZ = 4 layers/segment
+      tensor slot: x0 .. x16  (x_i = layer i+1 의 입력 hidden state)
+   ================================================================== */
+const N = 16, SZ = 4, SEG = N / SZ, NSLOT = N + 1;
+
+const STEPS = [];
+for (let i = 1; i <= N; i++) STEPS.push({ t:"fwd", i:i });
+for (let sg = SEG - 1; sg >= 0; sg--){
+  STEPS.push({ t:"recomp", sg:sg });
+  STEPS.push({ t:"grad",   sg:sg });
+  STEPS.push({ t:"free",   sg:sg });
+}
+
+/* s개 step을 수행한 뒤의 slot 상태. noCkpt=true 면 forward에서 아무것도 안 버린다. */
+function stateAt(s, noCkpt){
+  const st = new Array(NSLOT).fill("none");
+  st[0] = noCkpt ? "live" : "ckpt";
+  for (let j = 0; j < s; j++){
+    const S = STEPS[j];
+    if (S.t === "fwd"){
+      const i = S.i;
+      if (!noCkpt && st[i-1] === "live") st[i-1] = "freed";
+      if (!noCkpt && i % SZ === 0 && i < N) st[i] = "ckpt";
+      else st[i] = "live";
+    } else if (S.t === "recomp" || S.t === "grad"){
+      const a = S.sg * SZ;
+      const mark = (S.t === "recomp") ? "recomp" : "grad";
+      for (let k = a + 1; k <= a + SZ; k++){
+        if (noCkpt) { if (S.t === "grad") st[k] = "grad"; }
+        else st[k] = mark;
+      }
+    } else if (S.t === "free"){
+      const a = S.sg * SZ;
+      for (let k = a + 1; k <= a + SZ; k++) st[k] = "freed";
+      st[a] = "freed";
+    }
+  }
+  return st;
+}
+const HELD = { ckpt:1, live:1, recomp:1, grad:1, none:0, freed:0 };
+function heldCount(st){ return st.reduce((a,v) => a + HELD[v], 0); }
+
+let cur = 0, playing = null;
+
+function phaseOf(s){
+  if (s === 0) return { ph:"대기", d:"▶ 다음 step 을 눌러 forward부터 시작." };
+  const S = STEPS[s-1];
+  if (S.t === "fwd"){
+    const i = S.i;
+    const isB    = (i % SZ === 0 && i < N);            // 지금 만든 게 segment 경계인가
+    const prevIsB = ((i-1) % SZ === 0 && (i-1) < N);   // 직전 것이 checkpoint인가
+    let d;
+    if (isB){
+      d = `layer ${i} 실행 → <span class="mono">x${i}</span> 생성. 여긴 <b>segment 경계</b>라 ` +
+          `이 tensor를 <b class="ok">checkpoint으로 저장</b>한다 — 33.55 MB 하나가 디스크가 아니라 ` +
+          `HBM에 그대로 남는다. 저장되는 건 layer가 아니라 <b>이 값 하나</b>다.`;
+    } else if (i === N){
+      d = `마지막 layer 출력. 이제 loss를 계산하고 backward로 넘어간다. ` +
+          `지금 붙들고 있는 건 <b class="ok">checkpoint ${SEG}개 + 마지막 출력 1개 = ${SEG+1}개</b>뿐이다 — ` +
+          `checkpointing이 없었다면 ${NSLOT}개 전부였다.`;
+    } else if (prevIsB){
+      d = `layer ${i} 실행 → <span class="mono">x${i}</span> 생성. 직전 ` +
+          `<span class="mono">x${i-1}</span> 은 이 segment의 <b class="ok">checkpoint이라 그대로 유지</b>된다 — ` +
+          `backward에서 여기로 되돌아와 재출발할 거니까. 해제되는 건 segment <b>내부</b> tensor뿐이다.`;
+    } else {
+      d = `layer ${i} 실행 → <span class="mono">x${i}</span> 생성. 동시에 ` +
+          `<span class="mono">x${i-1}</span> <b class="bad">해제</b>. ` +
+          `segment 내부는 <code>no_grad</code>로 도니까 애초에 retain되지도 않는다.`;
+    }
+    return { ph:`FORWARD — layer ${i}`, d:d };
+  }
+  const lo = S.sg*SZ + 1, hi = S.sg*SZ + SZ;
+  if (S.t === "recomp"){
+    const held = heldCount(stateAt(s, false));
+    const first = (S.sg === SEG - 1);
+    return { ph:`BACKWARD — segment ${S.sg+1} 재계산`,
+      d:`저장해 둔 <span class="mono">x${S.sg*SZ}</span> <b>하나</b>에서 출발해 forward를 다시 돌려 ` +
+        `<span class="mono">x${lo}…x${hi}</span>를 <b class="wn">부활</b>시켰다. ` +
+        `지금 보유량 = 남은 checkpoint ${held-SZ}개 + live ${SZ}개 = <b>${held}개</b>. ` +
+        (first
+          ? `이게 <b class="ok">전 구간 최대치 ${SEG+SZ} = 2√n</b>이다 — 절대 이 위로 안 올라간다.`
+          : `앞 segment들을 끝내며 checkpoint을 해제해 왔으니 최대치 ${SEG+SZ} = 2√n보다 낮다.`) };
+  }
+  if (S.t === "grad") return { ph:`BACKWARD — segment ${S.sg+1} backprop`,
+    d:`되살린 activation들을 곱셈 인자로 써서 layer ${hi}→${lo}의 gradient를 계산한다. ` +
+      `이 4개를 만들려고 낸 비용이 <b>segment당 forward 1회</b>이고, ` +
+      `segment가 ${SEG}개니까 총 추가 비용은 <b>forward pass 딱 한 번</b>.` };
+  return { ph:`BACKWARD — segment ${S.sg+1} 해제`,
+    d:`gradient를 다 뽑았으니 되살린 ${SZ}개도, 더 이상 필요 없어진 checkpoint ` +
+      `<span class="mono">x${S.sg*SZ}</span>도 <b class="bad">해제</b>. ` +
+      `메모리가 다시 내려간다 — 그래서 곡선이 톱니 모양이다.` };
+}
+
+function renderDiagram(){
+  const st = stateAt(cur, false);
+  const S  = cur > 0 ? STEPS[cur-1] : null;
+  const actSeg = (S && S.t !== "fwd") ? S.sg : -1;
+  let html = "";
+  for (let sg = 0; sg < SEG; sg++){
+    let cells = "";
+    for (let k = sg*SZ; k < sg*SZ + SZ; k++){
+      const bnd = (k % SZ === 0) ? " bnd" : "";
+      cells += `<div class="cell ${st[k]}${bnd}">x${k}<span class="lay">→L${k+1}</span></div>`;
+    }
+    if (sg === SEG - 1){
+      cells += `<div class="cell ${st[N]}">x${N}<span class="lay">→loss</span></div>`;
+    }
+    html += `<div class="seg ${sg===actSeg?"act":""}">
+        <div class="sh">segment ${sg+1} · layer ${sg*SZ+1}–${sg*SZ+SZ}</div>
+        <div class="cells">${cells}</div></div>`;
+  }
+  $("diagram").innerHTML = html;
+}
+
+function renderGauge(){
+  const held = heldCount(stateAt(cur, false));
+  const MAXS = NSLOT;                       // 게이지 눈금 최대 = 17
+  $("gNow").textContent   = held + "개";
+  $("gNowMB").textContent = fmtB(held * HID);
+  $("gFill").style.width  = (held / MAXS * 100).toFixed(2) + "%";
+  $("gMark2sq").style.left  = (2*Math.sqrt(N) / MAXS * 100).toFixed(2) + "%";
+  $("gMarkBase").style.left = "calc(100% - 2px)";
+  const p = phaseOf(cur);
+  $("phase").innerHTML = `step <b>${cur} / ${STEPS.length}</b> · <b>${p.ph}</b>`;
+  $("stepNote").innerHTML = p.d;
+}
+
+/* ---- canvas: held-tensor 곡선 ----
+   주의: 논리 높이는 CV_MEM_H 상수에서만 읽는다. cv.getAttribute("height")를
+   되읽으면 직전에 써 넣은 h*devicePixelRatio를 다시 h로 삼아 redraw마다
+   캔버스가 배로 커진다. CSS의 #cvMem{height:210px}와 값이 같아야 한다. */
+const CV_MEM_H = 210, CV_K_H = 280;
+function setupCanvas(cv, H){
+  const r = window.devicePixelRatio || 1;
+  const w = Math.max(cv.clientWidth, 240), h = H;
+  if (cv.width !== Math.round(w*r) || cv.height !== Math.round(h*r)){
+    cv.width  = Math.round(w*r);
+    cv.height = Math.round(h*r);
+  }
+  cv.style.height = h + "px";
+  const c = cv.getContext("2d");
+  c.setTransform(r,0,0,r,0,0);
+  c.clearRect(0,0,w,h);
+  return { c:c, w:w, h:h };
+}
+
+function drawMem(){
+  const cv = $("cvMem"); const o = setupCanvas(cv, CV_MEM_H);
+  const c = o.c, w = o.w, h = o.h;
+  const L = 52, R = 12, T = 14, BM = 30, PW = w-L-R, PH = h-T-BM;
+  const YMAX = NSLOT + 1;
+  const X = s => L + PW * (s / STEPS.length);
+  const Y = v => T + PH * (1 - v / YMAX);
+
+  c.font = "10px ui-monospace,monospace"; c.lineWidth = 1;
+  c.strokeStyle = "#2b3242"; c.fillStyle = "#6b7686";
+  for (let v = 0; v <= YMAX; v += 3){
+    const y = Y(v);
+    c.beginPath(); c.moveTo(L,y); c.lineTo(w-R,y); c.stroke();
+    c.textAlign = "right"; c.fillText(String(v), L-16, y+3);
+    c.fillText(fmtB(v*HID).replace(" MB","").replace(" GB","g"), L-6, y+3);
+  }
+  c.textAlign = "center";
+  c.fillText("forward 끝", X(N), h-16);
+  c.fillText("step", L+PW/2, h-4);
+
+  /* forward / backward 구역 음영 */
+  c.fillStyle = "rgba(88,166,255,.05)"; c.fillRect(L, T, X(N)-L, PH);
+  c.fillStyle = "rgba(210,153,34,.05)"; c.fillRect(X(N), T, (w-R)-X(N), PH);
+
+  const series = noC => {
+    const a = [];
+    for (let s = 0; s <= STEPS.length; s++) a.push(heldCount(stateAt(s, noC)));
+    return a;
+  };
+  const line = (arr, col, wd) => {
+    c.strokeStyle = col; c.lineWidth = wd; c.beginPath();
+    arr.forEach((v,s) => { const x = X(s), y = Y(v); s ? c.lineTo(x,y) : c.moveTo(x,y); });
+    c.stroke();
+  };
+  line(series(true),  "#8b949e", 1.7);
+  line(series(false), "#58a6ff", 2.3);
+
+  /* 2√n 상한선 */
+  c.strokeStyle = "#3fb950"; c.setLineDash([4,4]); c.lineWidth = 1.6;
+  c.beginPath(); c.moveTo(L, Y(2*Math.sqrt(N))); c.lineTo(w-R, Y(2*Math.sqrt(N))); c.stroke();
+  c.setLineDash([]);
+  c.fillStyle = "#3fb950"; c.textAlign = "left"; c.font = "10.5px ui-monospace,monospace";
+  c.fillText("2√n = 8", L+5, Y(2*Math.sqrt(N))-4);
+
+  /* 현재 위치 */
+  const held = heldCount(stateAt(cur, false));
+  c.strokeStyle = "#58a6ff"; c.lineWidth = 1; c.setLineDash([3,3]);
+  c.beginPath(); c.moveTo(X(cur), T); c.lineTo(X(cur), T+PH); c.stroke(); c.setLineDash([]);
+  c.fillStyle = "#58a6ff"; c.beginPath(); c.arc(X(cur), Y(held), 4, 0, 7); c.fill();
+}
+
+function renderP2(){ renderDiagram(); renderGauge(); drawMem(); }
+
+function stepOnce(){ if (cur >= STEPS.length) return false; cur++; return true; }
+function stopPlay(){ if (playing){ clearInterval(playing); playing = null; $("bPlay").textContent = "▶▶ 자동"; } }
+$("bStep").onclick  = () => { stopPlay(); if (stepOnce()) renderP2(); };
+$("bReset").onclick = () => { stopPlay(); cur = 0; renderP2(); };
+$("bPlay").onclick  = () => {
+  if (playing){ stopPlay(); return; }
+  if (cur >= STEPS.length) cur = 0;
+  $("bPlay").textContent = "⏸ 정지";
+  playing = setInterval(() => {
+    if (!stepOnce()){ stopPlay(); return; }
+    renderP2();
+  }, 620);
+};
+
+/* ==================================================================
+   3. memory = k + n/k 슬라이더
+   ================================================================== */
+const NOPTS = [
+  { n:16,    lbl:"n = 16",    sub:"§2 애니메이션" },
+  { n:100,   lbl:"n = 100",   sub:"작은 예" },
+  { n:1600,  lbl:"n = 1600",  sub:"80-block model" },
+  { n:10000, lbl:"n = 10000", sub:"qa.md Q1/Q2 표" },
+];
+let nIx = 2, KLIST = [], kIx = 0;
+
+function buildKList(n){
+  const set = {};
+  for (let i = 0; i <= 240; i++){
+    const k = Math.max(1, Math.min(n, Math.round(Math.pow(n, i/240))));
+    set[k] = 1;
+  }
+  set[1] = 1; set[n] = 1; set[Math.round(Math.sqrt(n))] = 1;
+  return Object.keys(set).map(Number).sort((a,b) => a-b);
+}
+const memOf = (k,n) => k + n/k;
+
+function renderNsel(){
+  $("nsel").innerHTML = NOPTS.map((o,i) =>
+    `<button class="pbtn ${i===nIx?"on":""}" data-i="${i}">${o.lbl}<small>${o.sub}</small></button>`
+  ).join("");
+  Array.prototype.forEach.call($("nsel").children, b => {
+    b.onclick = () => { nIx = +b.dataset.i; setupK(); };
+  });
+}
+function setupK(){
+  const n = NOPTS[nIx].n;
+  KLIST = buildKList(n);
+  const sq = Math.round(Math.sqrt(n));
+  let best = 0, bd = Infinity;
+  KLIST.forEach((k,i) => { const d = Math.abs(k - sq); if (d < bd){ bd = d; best = i; } });
+  kIx = best;
+  const sl = $("kSlider");
+  sl.min = 0; sl.max = KLIST.length - 1; sl.value = kIx;
+  renderNsel(); renderK();
+}
+function renderK(){
+  const n = NOPTS[nIx].n, k = KLIST[kIx];
+  const sq = Math.sqrt(n), opt = 2*sq, tot = memOf(k,n);
+  $("kVal").textContent = k;
+  $("kB").textContent = k;
+  $("kL").textContent = Math.ceil(n/k);
+  $("kT").textContent = Math.round(tot);
+  $("kVs").innerHTML =
+    `n = ${n} 대비 <b>${(tot/n*100).toFixed(1)}%</b> · 최소값 ${Math.round(opt)} 대비 ` +
+    `<b>${(tot/opt).toFixed(2)}×</b>`;
+
+  const near = Math.abs(k - Math.round(sq)) <= Math.max(1, sq*0.06);
+  let note;
+  if (near){
+    note = `<b class="ok">여기가 최소점 k = √${n} ≈ ${Math.round(sq)}.</b> ` +
+      `boundary ${k}개와 live window ${Math.ceil(n/k)}개가 <b>거의 같아졌다</b> — ` +
+      `<code>1 − n/k² = 0</code>이 되는 자리. n개를 ${Math.round(opt)}개로 줄인다.`;
+  } else if (k <= Math.max(2, n*0.02)){
+    note = `<b class="bad">왼쪽 끝 근처.</b> checkpoint은 ${k}개뿐이지만 backward에서 ` +
+      `<b>${Math.ceil(n/k)}개를 한꺼번에</b> 되살려야 한다 — 되살린 게 곧 전부다. ` +
+      `<code>k=1</code>이면 checkpointing을 안 한 것과 같은 메모리에 recompute 비용만 추가.`;
+  } else if (k >= n*0.5){
+    note = `<b class="bad">오른쪽 끝 근처 — qa.md Q2의 그 함정.</b> live window는 ` +
+      `${Math.ceil(n/k)}개로 줄었는데 checkpoint을 <b>${k}개</b> 들고 있다. ` +
+      `<code>k = n</code>은 <b>전부 저장</b> = 아무것도 안 버림인데 +33% recompute는 그대로 낸다.`;
+  } else {
+    note = `최소점(k = ${Math.round(sq)})에서 벗어났다 — 총합 ${Math.round(tot)}는 ` +
+      `최소 ${Math.round(opt)}의 <b>${(tot/opt).toFixed(2)}배</b>. ` +
+      `${k < sq ? "boundary는 적은데 live window가 크다" : "live window는 작은데 boundary가 많다"}.`;
+  }
+  $("kNote").innerHTML = note;
+  renderKTable();
+  drawK();
+}
+function renderKTable(){
+  const n = NOPTS[nIx].n, sq = Math.round(Math.sqrt(n)), k = KLIST[kIx];
+  const rows = {};
+  [1, Math.max(2,Math.round(sq/10)), sq, Math.min(n,sq*10), n].forEach(v => {
+    rows[Math.max(1, Math.min(n, Math.round(v)))] = 1;
+  });
+  rows[k] = 1;
+  const list = Object.keys(rows).map(Number).sort((a,b)=>a-b);
+  $("kTable").innerHTML =
+    `<thead><tr><th>k (segments)</th><th>boundaries</th><th>live window</th><th>k + n/k</th></tr></thead>` +
+    `<tbody>` + list.map(v => {
+      const t = memOf(v,n);
+      const cls = (v === sq) ? "min" : (v === 1 || v === n) ? "edge" : "";
+      return `<tr class="${cls} ${v===k?"cur":""}"><td>${v}${v===sq?" = √n":""}${v===n?" = n":""}</td>` +
+             `<td>${v}</td><td>${Math.ceil(n/v)}</td><td>${Math.round(t)}</td></tr>`;
+    }).join("") + `</tbody>`;
+}
+function drawK(){
+  const cv = $("cvK"); const o = setupCanvas(cv, CV_K_H);
+  const c = o.c, w = o.w, h = o.h;
+  const n = NOPTS[nIx].n, k = KLIST[kIx], sq = Math.sqrt(n);
+  const L = 50, R = 14, T = 16, BM = 32, PW = w-L-R, PH = h-T-BM;
+  const yLo = Math.log10(2*sq * 0.85), yHi = Math.log10(memOf(1,n) * 1.15);
+  const X = kk => L + PW * (Math.log10(Math.max(kk,1)) / Math.log10(n));
+  const Y = v  => T + PH * (1 - (Math.log10(Math.max(v,1)) - yLo) / (yHi - yLo));
+
+  c.font = "10px ui-monospace,monospace"; c.lineWidth = 1;
+  c.strokeStyle = "#2b3242"; c.fillStyle = "#6b7686";
+  for (let e = Math.ceil(yLo); e <= yHi; e++){
+    const y = Y(Math.pow(10,e));
+    c.beginPath(); c.moveTo(L,y); c.lineTo(w-R,y); c.stroke();
+    c.textAlign = "right"; c.fillText("1e"+e, L-6, y+3);
+  }
+  c.textAlign = "center";
+  [1, 10, 100, 1000, 10000].filter(v => v <= n).forEach(v => c.fillText("k="+v, X(v), h-16));
+  c.fillText("k (segment 개수) — log scale", L+PW/2, h-3);
+  c.save(); c.translate(13, T+PH/2); c.rotate(-Math.PI/2);
+  c.textAlign = "center"; c.fillText("memory (tensor 수)", 0, 0); c.restore();
+
+  /* 곡선 */
+  c.strokeStyle = "#58a6ff"; c.lineWidth = 2.3; c.beginPath();
+  for (let i = 0; i <= 400; i++){
+    const kk = Math.pow(n, i/400);
+    const x = X(kk), y = Y(memOf(kk,n));
+    i ? c.lineTo(x,y) : c.moveTo(x,y);
+  }
+  c.stroke();
+
+  /* 두 성분 */
+  const comp = (fn, col) => {
+    c.strokeStyle = col; c.lineWidth = 1.2; c.setLineDash([3,3]); c.beginPath();
+    for (let i = 0; i <= 200; i++){
+      const kk = Math.pow(n, i/200);
+      const x = X(kk), y = Y(fn(kk));
+      i ? c.lineTo(x,y) : c.moveTo(x,y);
+    }
+    c.stroke(); c.setLineDash([]);
+  };
+  comp(kk => kk,   "#3fb950");   // boundaries = k
+  comp(kk => n/kk, "#d29922");   // live = n/k
+  c.textAlign = "left"; c.font = "10.5px ui-monospace,monospace";
+  c.fillStyle = "#3fb950"; c.fillText("k (boundaries)", X(Math.pow(n,0.86)), Y(Math.pow(n,0.86))-6);
+  c.fillStyle = "#d29922"; c.fillText("n/k (live)",     X(Math.pow(n,0.14))+4, Y(n/Math.pow(n,0.14))-6);
+
+  /* 양 끝 = n */
+  c.fillStyle = "#f85149";
+  [1, n].forEach(v => { c.beginPath(); c.arc(X(v), Y(memOf(v,n)), 4, 0, 7); c.fill(); });
+  c.textAlign = "left";  c.fillText("k=1 → n+1", X(1)+7, Y(memOf(1,n))+4);
+  c.textAlign = "right"; c.fillText("k=n → n+1", X(n)-7, Y(memOf(n,n))+4);
+
+  /* 최소점 */
+  c.strokeStyle = "#3fb950"; c.lineWidth = 1.4; c.setLineDash([4,4]);
+  c.beginPath(); c.moveTo(X(sq), T); c.lineTo(X(sq), T+PH); c.stroke(); c.setLineDash([]);
+  c.fillStyle = "#3fb950"; c.beginPath(); c.arc(X(sq), Y(2*sq), 5, 0, 7); c.fill();
+  c.textAlign = "center"; c.font = "11px ui-monospace,monospace";
+  c.fillText(`√n = ${Math.round(sq)} → ${Math.round(2*sq)}`, X(sq), Y(2*sq)-11);
+
+  /* 현재 k */
+  const tv = memOf(k,n);
+  c.fillStyle = "#58a6ff"; c.beginPath(); c.arc(X(k), Y(tv), 5.5, 0, 7); c.fill();
+  const lbl = `k=${k} → ${Math.round(tv)}`;
+  const tw = c.measureText(lbl).width;
+  const flip = X(k) + tw/2 + 8 > w - R;
+  c.textAlign = flip ? "right" : "center";
+  c.fillText(lbl, X(k) + (flip ? -8 : 0), Math.min(T+PH-6, Y(tv)+18));
+}
+$("kSlider").oninput = e => { kIx = +e.target.value; renderK(); };
+
+/* ==================================================================
+   구동
+   ================================================================== */
+renderP1();
+renderP2();
+setupK();
+window.addEventListener("resize", () => { drawMem(); drawK(); });
+</script>
+</body>
+</html>

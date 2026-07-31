@@ -70,6 +70,9 @@ Static floor가 약 7B * 18 = 126 GB인 것과 비교하면 s=4096의 activation
 
 [[gradient-checkpointing-chen]](Chen et al., 2016)은 activation memory와 recompute를 맞바꾸는 기반 algorithm이다. 핵심 관찰은 *모든* intermediate activation을 저장할 필요가 없다는 것이다. 전략적으로 선택한 일부인 **checkpoint**만 저장하고, 그 사이의 activation은 backward pass에서 필요한 순간 처음부터 recompute할 수 있다.
 
+> **▶ 인터랙티브 companion — [`figures/checkpointing.html`](figures/checkpointing.html)**
+> *checkpoint이 물리적으로 무엇이고, 나머지는 어떻게 되는가.* 패널 1은 transformer block 하나를 개별 저장 tensor로 펼쳐서 실제 shape과 바이트 비례 막대로 보여준다 — checkpoint은 **hidden state tensor `[B, T, h]` 하나 = 33.55 MB**이고, 그 대가로 버리는 내부 tensor 약 **1.64 GB** 안에는 `[B, heads, T, T]` attention probability 괴물 **1.07 GB**가 들어있다 (비율 49×). 패널 2는 forward 저장 / backward 재계산을 step별로 애니메이션하며 memory gauge가 `2√n`을 넘지 않는 걸 보여주고, 패널 3은 `k`를 직접 끌어 `k + n/k` 곡선에서 양 끝이 모두 `n`이고 `√n`에서만 최소가 되는 걸 확인하게 한다. 패널 4는 실무의 "block마다 checkpoint"가 왜 `k = n`이 **아닌지**, 패널 5는 그것이 `torch.utils.checkpoint`의 `no_grad` forward / 재forward 동작에 어떻게 대응되는지를 보여준다.
+
 ### √n 방식
 
 n-layer network를 크기가 √n인 segment로 나눈다. Segment 경계마다 activation tensor 하나만 저장한다(총 √n개 tensor). Backward pass가 한 segment에 도달하면 저장된 경계부터 그 segment의 내부 activation을 forward 방향으로 recompute한 뒤 local gradient 계산에 사용한다.

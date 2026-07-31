@@ -70,6 +70,9 @@ Against a static floor of ~7B * 18 = 126 GB, activations at s=4096 already rival
 
 [[gradient-checkpointing-chen]] (Chen et al., 2016) is the foundational algorithm for trading activation memory for recompute. The key observation: it is not necessary to store *all* intermediate activations. You can store a strategic subset — **checkpoints** — and recompute the in-between activations from scratch during the backward pass, at the moment they are needed.
 
+> **▶ Interactive companion — [`figures/checkpointing.html`](figures/checkpointing.html)**
+> *What a checkpoint physically is, and what happens to everything else.* Panel 1 expands one transformer block into its individual saved tensors with real shapes and byte-proportional bars — the checkpoint is **one hidden-state tensor `[B, T, h]` = 33.55 MB**, while the ~1.64 GB of interior tensors it lets you discard includes the `[B, heads, T, T]` attention-probability monster at **1.07 GB** (a 49× ratio). Panel 2 animates forward-store / backward-recompute step by step with a live memory gauge that never exceeds `2√n`. Panel 3 lets you drag `k` across the `k + n/k` curve to see both edges cost `n` and only `√n` minimizes it. Panel 4 shows why "per-block checkpointing" is *not* `k = n`, and Panel 5 maps it onto `torch.utils.checkpoint`'s actual `no_grad`-forward / re-forward mechanics.
+
 ### The √n scheme
 
 Divide an n-layer network into segments of size √n. Store exactly one activation tensor per segment boundary (√n tensors total). When the backward pass reaches a segment, recompute that segment's internal activations forward from its stored boundary, then use them for the local gradient computation:
