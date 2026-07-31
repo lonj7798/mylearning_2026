@@ -49,6 +49,9 @@ AdamW maintains three fp32 tensors per trainable parameter:
 
 The fp32 master copy is mandatory even when training in bf16, because the optimizer update rule (`weight -= lr * m / sqrt(v + eps)`) can produce updates whose magnitude is smaller than bf16's quantization step, causing silent gradient underflow. The fp32 copy absorbs small updates without precision loss; only the resulting fp32 value is then downcast to bf16 for the working copy. (See [[ch-02]] for the full precision story from [[mixed-precision-training]].)
 
+> **▶ Interactive companion — [`figures/adamw-derivation.html`](figures/adamw-derivation.html)**
+> *Why exactly three tensors, and why the third is not the optimizer's.* Steps through SGD → +momentum (`m`) → +second moment (`v`) → +bias correction → AdamW, one term at a time, with live number substitution and a running step-multiplier plot. The memory point it makes visible: **only terms that carry state cost bytes** — `m` and `v` are 4 B/param each (so Adam's own cost is 8 B/param), while bias correction and decoupled weight decay lengthen the formula at **0 B**. The remaining 4 B — the fp32 master — is billed to mixed precision, not to Adam. Confirms the identity `4+4+4+4 = 16` (pure fp32) `= 2+2+12` (bf16 mixed): the Rule of 16 in §2 is an *optimizer* floor, not a precision artifact.
+
 The 12 B/param figure comes from the standard AdamW formulation. [[ml-engineering-memory]] itemizes the alternatives:
 
 - BF16 AdamW: 4 B (quantized moments)

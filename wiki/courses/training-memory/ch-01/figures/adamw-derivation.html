@@ -1,0 +1,784 @@
+<!--
+  Figure: adamw-derivation.html — "SGD에서 AdamW까지: 항을 하나씩 붙이며"
+  Chapter: ch-01 (track: ledger)
+  Back to: ../read.md  (see §1.3 Adam Optimizer States — 12 B/param, §2 The Rule of 16)
+  Companion Q&A: ../qa-deep.md (Q5 why 3 tensors, Q6 the derivation)
+
+  Step-by-step derivation animator. Fully self-contained:
+  inline CSS + vanilla JS only. No external CDNs, no network calls, no MathJax
+  (formulas are hand-rendered with HTML/CSS). Renders offline by opening
+  this file directly in a browser.
+
+  Teaching points made visible:
+    1. Each stage fixes ONE named defect of the previous stage, and each new
+       term that carries STATE costs exactly 4 B/param. Bias correction and
+       decoupled decay cost 0 B — they are arithmetic on t and w.
+    2. m/sqrt(v) is a signal-to-noise ratio: the step multiplier is ~1.0 for a
+       consistent gradient, ~0 for an oscillating one, and ~1.0 again for a
+       gradient 100x smaller. SGD's multiplier is just |g| — it tracks scale.
+    3. Without bias correction the early step is oversized by up to ~6.6x
+       (peak near t=12 for b2=0.999) and takes thousands of steps to settle.
+       This is why the correction exists and why warmup is standard.
+    4. Coupled L2 inside Adam divides the decay term by sqrt(v_hat) too, so
+       effective decay = lambda/sqrt(v_hat) varies per parameter. AdamW's "W"
+       is the fix, at zero memory cost.
+-->
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SGD → AdamW 단계별 조립 (ch-01)</title>
+<style>
+  :root{
+    --bg:#0e1117; --panel:#161b22; --panel2:#1c2230; --edge:#2b3242;
+    --ink:#e6edf3; --ink-dim:#9aa7b4; --ink-faint:#6b7686;
+    --accent:#58a6ff; --accent2:#3fb950; --danger:#f85149; --warn:#d29922;
+    --c-m:#bc8cff;      /* momentum / first moment */
+    --c-v:#f778ba;      /* second moment          */
+    --c-bias:#d29922;   /* bias correction        */
+    --c-wd:#3fb950;     /* weight decay           */
+    --c-sgd:#8b949e;    /* sgd baseline           */
+  }
+  *{box-sizing:border-box;}
+  html,body{margin:0;padding:0;}
+  body{
+    background:var(--bg); color:var(--ink);
+    font:14px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Apple SD Gothic Neo",
+         "Noto Sans KR",Helvetica,Arial,sans-serif;
+    padding:22px; max-width:1180px; margin:0 auto;
+  }
+  h1{font-size:21px; margin:0 0 3px; letter-spacing:.2px;}
+  .sub{color:var(--ink-dim); font-size:13px; margin:0 0 20px;}
+  .sub code{color:var(--accent);}
+  .panel{background:var(--panel); border:1px solid var(--edge); border-radius:10px;
+    padding:16px; margin-bottom:18px;}
+  .panel h2{font-size:12px; text-transform:uppercase; letter-spacing:.9px; color:var(--ink-dim);
+    margin:0 0 14px; font-weight:600;}
+  .mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+    font-variant-numeric:tabular-nums;}
+
+  /* ---------- stage tabs ---------- */
+  .tabs{display:flex; gap:6px; flex-wrap:wrap; margin-bottom:16px;}
+  .tab{flex:1 1 150px; background:var(--panel2); border:1px solid var(--edge); color:var(--ink-dim);
+    border-radius:8px; padding:9px 10px; cursor:pointer; text-align:left; font-size:12.5px;
+    transition:.13s; line-height:1.35;}
+  .tab:hover{border-color:var(--ink-faint); color:var(--ink);}
+  .tab .tn{display:block; font-size:10.5px; letter-spacing:.7px; text-transform:uppercase;
+    color:var(--ink-faint); margin-bottom:2px;}
+  .tab.on{background:#1d2b3f; border-color:var(--accent); color:var(--ink);}
+  .tab.on .tn{color:var(--accent);}
+  .tab .cost{float:right; font-size:10.5px; color:var(--ink-faint);}
+  .tab.on .cost{color:var(--accent2);}
+
+  /* ---------- formula rendering ---------- */
+  .formula{background:var(--panel2); border:1px solid var(--edge); border-radius:8px;
+    padding:18px 16px; font-size:17px; line-height:2.5; text-align:center; overflow-x:auto;}
+  .formula .line{white-space:nowrap; display:block;}
+  .fr{display:inline-flex; flex-direction:column; vertical-align:-0.62em;
+    text-align:center; margin:0 .18em;}
+  .fr>.n{border-bottom:1.5px solid currentColor; padding:0 .38em .12em;}
+  .fr>.d{padding:.12em .38em 0;}
+  .sq{white-space:nowrap;}
+  .sq::before{content:"√"; margin-right:0px;}
+  .sq>span{border-top:1.5px solid currentColor; padding:0 .12em;}
+  .new{color:var(--warn); font-weight:700;
+    animation:pop .55s ease-out;}
+  @keyframes pop{0%{background:rgba(210,153,34,.32); border-radius:4px;}100%{background:transparent;}}
+  .c-m{color:var(--c-m);} .c-v{color:var(--c-v);}
+  .c-bias{color:var(--c-bias);} .c-wd{color:var(--c-wd);}
+  .dimmed{color:var(--ink-faint);}
+
+  .defect{display:grid; grid-template-columns:76px 1fr; gap:10px 12px; margin-top:16px;
+    font-size:13.5px;}
+  .defect .k{color:var(--ink-faint); font-size:11px; letter-spacing:.6px; text-transform:uppercase;
+    padding-top:3px;}
+  .defect .bad{color:var(--danger);} .defect .fix{color:var(--accent2);}
+
+  /* ---------- ledger strip ---------- */
+  .ledger{display:flex; gap:8px; margin-top:16px; flex-wrap:wrap;}
+  .chip{border:1px solid var(--edge); border-radius:7px; padding:7px 11px; font-size:12px;
+    background:var(--panel2); color:var(--ink-faint); min-width:118px;}
+  .chip b{display:block; font-size:13px; color:var(--ink-faint); margin-bottom:1px;}
+  .chip.live{border-color:var(--accent2); color:var(--ink);}
+  .chip.live b{color:var(--accent2);}
+  .chip.free{border-style:dashed;}
+  .chip.free b{color:var(--ink-dim);}
+  .total{margin-left:auto; align-self:center; font-size:13px; color:var(--ink-dim);}
+  .total b{color:var(--accent); font-size:17px;}
+
+  /* ---------- controls ---------- */
+  .wrap{display:grid; grid-template-columns:300px 1fr; gap:18px; align-items:start;}
+  @media (max-width:940px){ .wrap{grid-template-columns:1fr;} }
+  .ctrl{margin-bottom:15px;}
+  .ctrl:last-child{margin-bottom:0;}
+  .ctrl label{display:flex; justify-content:space-between; align-items:baseline; margin-bottom:4px;}
+  .ctrl .name{font-weight:600; font-size:12.5px;}
+  .ctrl .val{color:var(--accent); font-weight:600; font-size:12.5px;}
+  input[type=range]{-webkit-appearance:none; appearance:none; width:100%; height:5px;
+    border-radius:5px; background:var(--edge); outline:none; margin:3px 0;}
+  input[type=range]::-webkit-slider-thumb{-webkit-appearance:none; appearance:none;
+    width:15px; height:15px; border-radius:50%; background:var(--accent); cursor:pointer;}
+  input[type=range]::-moz-range-thumb{width:15px; height:15px; border:0; border-radius:50%;
+    background:var(--accent); cursor:pointer;}
+  .presets{display:grid; grid-template-columns:1fr 1fr; gap:6px;}
+  .pbtn{background:var(--panel2); border:1px solid var(--edge); color:var(--ink-dim);
+    border-radius:7px; padding:8px 6px; cursor:pointer; font-size:11.5px; transition:.13s;
+    line-height:1.3;}
+  .pbtn:hover{border-color:var(--ink-faint); color:var(--ink);}
+  .pbtn.on{background:#1d2b3f; border-color:var(--accent); color:var(--ink);}
+  .pbtn small{display:block; color:var(--ink-faint); font-size:10px;}
+  .pbtn.on small{color:var(--accent);}
+  .runbar{display:flex; gap:7px; margin-top:14px;}
+  .rb{flex:1; background:var(--panel2); border:1px solid var(--edge); color:var(--ink);
+    border-radius:7px; padding:9px 4px; cursor:pointer; font-size:12.5px; font-weight:600;
+    transition:.13s;}
+  .rb:hover{border-color:var(--accent);}
+  .rb.primary{background:#1d3a5f; border-color:var(--accent); color:#cfe6ff;}
+
+  /* ---------- substitution ---------- */
+  .subst{background:#10151d; border:1px solid var(--edge); border-radius:8px; padding:14px;
+    font-size:13px; line-height:2.1; overflow-x:auto;}
+  .subst .row{white-space:nowrap; display:flex; align-items:baseline; gap:8px;}
+  .subst .lbl{color:var(--ink-faint); width:172px; flex:none; font-size:12px;}
+  .subst .eq{color:var(--ink-dim);}
+  .subst .out{color:var(--ink); font-weight:600;}
+  .subst .row.off{opacity:.32;}
+  .subst .tag{font-size:10px; color:var(--ink-faint); border:1px solid var(--edge);
+    border-radius:4px; padding:0 5px; margin-left:4px;}
+
+  .bigstep{display:flex; align-items:baseline; gap:14px; margin-top:14px; padding:13px 15px;
+    background:var(--panel2); border:1px solid var(--edge); border-radius:8px; flex-wrap:wrap;}
+  .bigstep .k{color:var(--ink-faint); font-size:11.5px; text-transform:uppercase; letter-spacing:.7px;}
+  .bigstep .m{font-size:25px; font-weight:700;}
+  .bigstep .note{font-size:12.5px; color:var(--ink-dim); flex:1; min-width:200px; text-align:right;}
+
+  /* ---------- table ---------- */
+  table{width:100%; border-collapse:collapse; font-size:12px; margin-top:6px;}
+  th,td{padding:5px 7px; text-align:right; border-bottom:1px solid var(--edge);
+    font-variant-numeric:tabular-nums;}
+  th{color:var(--ink-faint); font-weight:600; font-size:10.5px; text-transform:uppercase;
+    letter-spacing:.5px; text-align:right;}
+  th:first-child,td:first-child{text-align:left;}
+  tbody tr:last-child td{background:#182231;}
+  td.off{color:var(--ink-faint); opacity:.45;}
+  .scroll{max-height:236px; overflow-y:auto;}
+
+  /* height는 JS(CANVAS_H)와 반드시 같은 값으로 고정 — 레이아웃 점프 방지 */
+  canvas{width:100%; height:250px; display:block; border-radius:8px; background:#10151d;
+    border:1px solid var(--edge);}
+  .legend{display:flex; gap:16px; font-size:12px; color:var(--ink-dim); margin-top:9px;
+    flex-wrap:wrap;}
+  .legend i{display:inline-block; width:20px; height:3px; border-radius:2px;
+    vertical-align:middle; margin-right:6px;}
+
+  .grid2{display:grid; grid-template-columns:1fr 1fr; gap:18px;}
+  @media (max-width:940px){ .grid2{grid-template-columns:1fr;} }
+  .callout{border-left:3px solid var(--warn); background:rgba(210,153,34,.07);
+    padding:11px 14px; border-radius:0 7px 7px 0; font-size:13px; color:var(--ink-dim);
+    margin-top:14px;}
+  .callout b{color:var(--ink);}
+  .callout.ok{border-left-color:var(--accent2); background:rgba(63,185,80,.07);}
+  pre{background:#10151d; border:1px solid var(--edge); border-radius:8px; padding:14px;
+    overflow-x:auto; font-size:12.5px; line-height:1.75; margin:0;
+    font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;}
+  pre .cm{color:var(--ink-faint);}
+  pre .by{color:var(--accent2); font-weight:600;}
+  pre .z{color:var(--ink-faint);}
+  pre .kw{color:var(--c-m);}
+  .foot{color:var(--ink-faint); font-size:12px; margin-top:26px; line-height:1.8;}
+  .foot a{color:var(--accent); text-decoration:none;}
+</style>
+</head>
+<body>
+
+<h1>SGD → AdamW: 항을 하나씩 붙이며 조립하기</h1>
+<p class="sub">
+  ch-01 §1.3 companion · 각 stage는 <b>직전 stage의 결함 하나</b>를 고친다.
+  그리고 <b>state를 들고 있는 항만</b> memory를 먹는다 — <code>4 B/param</code>씩.
+</p>
+
+<!-- ============================ STAGE BUILDER ============================ -->
+<div class="panel">
+  <h2>1 · Stage builder — 무엇이 왜 추가되는가</h2>
+  <div class="tabs" id="tabs"></div>
+
+  <div class="formula" id="formula"></div>
+
+  <div class="defect">
+    <div class="k">고치는 것</div><div class="fix" id="dFix"></div>
+    <div class="k">남는 결함</div><div class="bad" id="dBad"></div>
+  </div>
+
+  <div class="ledger" id="ledger"></div>
+</div>
+
+<!-- ============================ LIVE STEPPER ============================ -->
+<div class="panel">
+  <h2>2 · Step-by-step — 숫자를 직접 대입하며</h2>
+  <div class="wrap">
+    <div>
+      <div class="ctrl">
+        <label><span class="name">gradient 시퀀스</span></label>
+        <div class="presets" id="presets"></div>
+      </div>
+      <div class="ctrl">
+        <label><span class="name">β₁ <span class="dimmed">(momentum)</span></span>
+               <span class="val mono" id="vB1">0.9</span></label>
+        <input type="range" id="b1" min="0" max="0.99" step="0.01" value="0.9">
+      </div>
+      <div class="ctrl">
+        <label><span class="name">β₂ <span class="dimmed">(second moment)</span></span>
+               <span class="val mono" id="vB2">0.999</span></label>
+        <input type="range" id="b2" min="0.9" max="0.9999" step="0.0001" value="0.999">
+      </div>
+      <div class="ctrl">
+        <label><span class="name">λ <span class="dimmed">(weight decay)</span></span>
+               <span class="val mono" id="vWd">0.01</span></label>
+        <input type="range" id="wd" min="0" max="0.2" step="0.005" value="0.01">
+      </div>
+      <div class="runbar">
+        <button class="rb primary" id="bStep">▶ 다음 step</button>
+        <button class="rb" id="bPlay">▶▶ 자동</button>
+        <button class="rb" id="bReset">↺ 리셋</button>
+      </div>
+      <div class="callout" id="presetNote"></div>
+    </div>
+
+    <div>
+      <div class="subst" id="subst"></div>
+      <div class="bigstep">
+        <span class="k">step multiplier<br><span class="dimmed">|Δw| / η</span></span>
+        <span class="m mono" id="mult">—</span>
+        <span class="note" id="multNote"></span>
+      </div>
+      <div class="scroll">
+        <table>
+          <thead><tr>
+            <th>t</th><th>g<sub>t</sub></th><th>m<sub>t</sub></th><th>v<sub>t</sub></th>
+            <th>m̂<sub>t</sub></th><th>√v̂<sub>t</sub></th><th>Δw/η</th><th>w<sub>t</sub></th>
+          </tr></thead>
+          <tbody id="tbody"></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ============================ PLOTS ============================ -->
+<div class="grid2">
+  <div class="panel">
+    <h2>3 · step multiplier: 이 stage vs SGD</h2>
+    <canvas id="cvMult" height="250"></canvas>
+    <div class="legend">
+      <span><i style="background:#58a6ff"></i>현재 stage</span>
+      <span><i style="background:#8b949e"></i>SGD (= |g<sub>t</sub>|)</span>
+      <span><i style="background:#3fb950"></i>기준선 1.0</span>
+    </div>
+    <div class="callout ok">
+      <b>scale invariance.</b> SGD의 multiplier는 곧 <code>|g|</code> — gradient가 100배 작으면
+      step도 100배 작다. Adam은 <code>m̂/√v̂</code>가 <b>무차원(dimensionless)</b>이라
+      gradient 크기와 무관하게 ≈ 1.0에 붙는다. "미세" preset으로 확인해봐.
+    </div>
+  </div>
+
+  <div class="panel">
+    <h2>4 · bias correction이 없으면 — step 부풀림 배수</h2>
+    <canvas id="cvBias" height="250"></canvas>
+    <div class="legend">
+      <span><i style="background:#d29922"></i>부풀림 배수 <span class="mono">(1−β₁ᵗ)/√(1−β₂ᵗ)</span></span>
+      <span><i style="background:#58a6ff"></i>현재 run 실측 · 현재 t</span>
+      <span><i style="background:#3fb950"></i>보정 있음 = 1.0</span>
+    </div>
+    <div class="callout" id="biasNote"></div>
+  </div>
+</div>
+
+<!-- ============================ LEDGER MAP ============================ -->
+<div class="panel">
+  <h2>5 · 공식 → ledger 매핑 (bf16 mixed precision, 1 step)</h2>
+<pre><span class="cm"># parameter tensor 하나 기준. 오른쪽은 ch-01 ledger의 어느 줄인지.</span>
+g_bf16 = backward()                      <span class="cm">→</span> <span class="by">item 2  gradients   2 B/param</span> <span class="z">(transient)</span>
+g      = g_bf16.float()                  <span class="cm">→</span> <span class="z">fp32 임시 버퍼</span>
+
+<span class="kw">m</span>  = β₁*<span class="kw">m</span> + (1-β₁)*g                 <span class="cm">→</span> <span class="by">item 3a first moment  4 B/param</span> <span class="z">(persistent)</span>
+<span class="kw">v</span>  = β₂*<span class="kw">v</span> + (1-β₂)*g*g               <span class="cm">→</span> <span class="by">item 3b second moment 4 B/param</span> <span class="z">(persistent)</span>
+
+m̂  = <span class="kw">m</span> / (1 - β₁**t)                 <span class="cm">→</span> <span class="z">0 B — t는 scalar</span>
+v̂  = <span class="kw">v</span> / (1 - β₂**t)                 <span class="cm">→</span> <span class="z">0 B — t는 scalar</span>
+
+<span class="kw">w32</span> -= η * ( m̂/(√v̂ + ε) + λ*<span class="kw">w32</span> )   <span class="cm">→</span> <span class="by">item 3c fp32 master   4 B/param</span> <span class="z">(precision 소유)</span>
+                                              <span class="z">λ*w32 는 0 B — w32를 재사용</span>
+<span class="kw">w_bf16</span> = <span class="kw">w32</span>.to(bf16)                 <span class="cm">→</span> <span class="by">item 1  weights     2 B/param</span> <span class="z">(persistent)</span>
+g_bf16 = <span class="z">None</span>  <span class="cm"># zero_grad</span>              <span class="cm">→</span> <span class="z">gradient 해제</span>
+</pre>
+  <div class="callout">
+    <b>돈을 내는 건 EMA 두 줄뿐이다.</b> bias correction(<code>1-β^t</code>)과 decoupled decay
+    (<code>λ·w</code>)는 공식은 늘렸지만 <b>0 B</b>다 — 각각 scalar와 이미 있는 weight만 쓰니까.
+    "state를 새로 들고 있느냐"가 memory를 가르는 유일한 기준이야.
+    <br><br>
+    그래서 optimizer 고유 비용은 <b>m + v = 8 B/param</b>이고, 나머지 4 B(master)는
+    mixed precision의 청구서다. 순수 fp32였다면 master = weight 그 자체라 별도 줄이 없다
+    → <code>4+4+4+4 = 16 B/param</code>, bf16 mixed의 <code>2+2+12 = 16</code>과 <b>같은 총액</b>.
+    Rule of 16(§2)은 precision이 아니라 <b>optimizer가 만드는 바닥</b>이라는 뜻.
+  </div>
+</div>
+
+<p class="foot">
+  ← 돌아가기: <a href="../read.md">ch-01 read.md</a> §1.3 / §2 ·
+  깊은 Q&amp;A: <a href="../qa-deep.md">qa-deep.md</a> (Q5, Q6) ·
+  다른 figure: <a href="./memory-ledger.html">memory-ledger.html</a><br>
+  출처: Kingma &amp; Ba 2014 (Adam) · Loshchilov &amp; Hutter 2017 (Decoupled Weight Decay) ·
+  Micikevicius et al. 2017 (Mixed Precision Training)
+</p>
+
+<script>
+"use strict";
+/* ==================================================================
+   상수 · 유틸
+   ================================================================== */
+const LR = 1e-3, EPS = 1e-8, W0 = 0.7000, NSTEP = 60;
+
+const f = (x, d) => {
+  if (x === null || x === undefined) return "—";
+  if (x === 0) return "0";
+  const a = Math.abs(x);
+  if (a < 1e-4 || a >= 1e5) return x.toExponential(2).replace("e", "e");
+  return x.toFixed(d !== undefined ? d : (a < 0.01 ? 6 : a < 1 ? 4 : 4));
+};
+const $ = id => document.getElementById(id);
+
+/* ==================================================================
+   Stage 정의 — 각 stage는 직전 결함 하나를 고친다
+   ================================================================== */
+const STAGES = [
+  {
+    tag:"Stage 0", name:"SGD",
+    usesM:false, usesV:false, bias:false, decay:false, cost:0,
+    fix:"— (출발점)",
+    bad:"① g<sub>t</sub>는 minibatch 하나에서 나온 <b>noisy estimate</b>다. 한 배치가 튀면 그대로 얻어맞는다.<br>" +
+        "② step이 <b>|g|에 비례</b>한다 → embedding처럼 gradient 큰 층과 LayerNorm처럼 작은 층에 같은 η를 못 쓴다.",
+    lines: () => `w<sub>t</sub> = w<sub>t−1</sub> − η · <span class="new">g<sub>t</sub></span>`
+  },
+  {
+    tag:"Stage 1", name:"+ Momentum (m)",
+    usesM:true, usesV:false, bias:false, decay:false, cost:4,
+    fix:"① noise. 과거 gradient의 <b>EMA</b>로 평균 내면 batch noise가 상쇄된다. " +
+        "과거를 전부 저장하면 memory가 t에 비례해 터지지만, EMA는 <b>누산기 하나</b>에 접힌다 " +
+        "(유효 window ≈ 1/(1−β₁) = 10 step).",
+    bad:"② 여전히 step이 |g|에 비례한다. m은 <b>방향</b>만 알지 <b>크기가 큰지 작은지</b>는 모른다.",
+    lines: () => `<span class="new c-m">m<sub>t</sub> = β₁·m<sub>t−1</sub> + (1−β₁)·g<sub>t</sub></span>` +
+                 `<br>w<sub>t</sub> = w<sub>t−1</sub> − η · <span class="c-m">m<sub>t</sub></span>`
+  },
+  {
+    tag:"Stage 2", name:"+ Second moment (v)",
+    usesM:true, usesV:true, bias:false, decay:false, cost:8,
+    fix:"② scale. √v ≈ gradient의 RMS — <b>g와 단위가 같다</b>. 그래서 m/√v는 <b>무차원</b>이 되고 " +
+        "step 크기가 |g|와 무관해진다. β₂=0.999(window 1000)로 β₁보다 훨씬 길게 잡는 이유: " +
+        "v는 <b>천천히 변하는 크기</b>를 재는 값이라 저분산 추정이 필요하고, m은 방향 전환에 빨라야 하니까.",
+    bad:"③ m,v를 0으로 초기화했다 → 초기 몇 step에서 둘 다 <b>0쪽으로 편향(bias)</b>된다. " +
+        "v가 훨씬 심하게 과소추정돼 step이 <b>과하게 커진다</b>. 오른쪽 패널 4 참고.",
+    lines: () => `<span class="c-m">m<sub>t</sub> = β₁·m<sub>t−1</sub> + (1−β₁)·g<sub>t</sub></span>` +
+                 `<br><span class="new c-v">v<sub>t</sub> = β₂·v<sub>t−1</sub> + (1−β₂)·g<sub>t</sub>²</span>` +
+                 `<br>w<sub>t</sub> = w<sub>t−1</sub> − η · ` + frac(`<span class="c-m">m<sub>t</sub></span>`,
+                    `<span class="new">${sqrt('<span class="c-v">v<sub>t</sub></span>')} + ε</span>`)
+  },
+  {
+    tag:"Stage 3", name:"+ Bias correction",
+    usesM:true, usesV:true, bias:true, decay:false, cost:8,
+    fix:"③ 초기 편향. E[m<sub>t</sub>] = E[g]·(1−β₁<sup>t</sup>) 이므로 <b>(1−β<sup>t</sup>)로 나누면</b> " +
+        "정확히 상쇄된다. t=1에서 m̂ = g₁, √v̂ = |g₁| → 첫 step은 정확히 <b>±η</b> (sign-SGD). " +
+        "<b>추가 memory 0 B</b> — t는 scalar다.",
+    bad:"④ regularization이 없다. L2를 g에 더하면(coupled) 그 항까지 √v̂로 나뉘어 " +
+        "<b>parameter마다 decay 세기가 달라진다</b>.",
+    lines: () => `<span class="new c-bias">m̂<sub>t</sub> = ` + frac('<span class="c-m">m<sub>t</sub></span>','1 − β₁<sup>t</sup>') +
+                 `&nbsp;&nbsp; v̂<sub>t</sub> = ` + frac('<span class="c-v">v<sub>t</sub></span>','1 − β₂<sup>t</sup>') + `</span>` +
+                 `<br>w<sub>t</sub> = w<sub>t−1</sub> − η · ` +
+                 frac('<span class="c-bias">m̂<sub>t</sub></span>', sqrt('<span class="c-bias">v̂<sub>t</sub></span>') + ' + ε')
+  },
+  {
+    tag:"Stage 4", name:"AdamW",
+    usesM:true, usesV:true, bias:true, decay:true, cost:8,
+    fix:"④ coupled decay. weight decay를 gradient에 섞지 <b>않고</b> update에 직접 더한다 " +
+        "(<b>decoupled</b>). 그래야 실효 decay가 √v̂에 휘둘리지 않고 λ 그대로 유지된다. " +
+        "이게 이름의 <b>W</b>. <b>추가 memory 0 B</b> — 이미 있는 w를 쓴다.",
+    bad:"없음. 이게 오늘의 표준 optimizer다. 남은 건 <b>메모리를 줄이는</b> 방향의 변형뿐 " +
+        "(Adafactor / Lion / 8-bit Adam → §1.3 표).",
+    lines: () => `w<sub>t</sub> = w<sub>t−1</sub> − η · ( ` +
+                 frac('<span class="c-bias">m̂<sub>t</sub></span>', sqrt('<span class="c-bias">v̂<sub>t</sub></span>') + ' + ε') +
+                 ` <span class="new c-wd">+ λ·w<sub>t−1</sub></span> )`
+  },
+];
+function frac(n, d){ return `<span class="fr"><span class="n">${n}</span><span class="d">${d}</span></span>`; }
+function sqrt(x){ return `<span class="sq"><span>${x}</span></span>`; }
+
+/* ==================================================================
+   gradient preset
+   ================================================================== */
+const PRESETS = [
+  { key:"const", name:"일관", sub:"+0.10 고정",
+    g:t => 0.10,
+    note:"방향이 확실한 경우. <b>m은 0.1로 수렴</b>하고 <b>m̂/√v̂ ≈ 1.0</b> — full step. " +
+         "Adam은 '확신이 있으면 η만큼 간다'가 기본 동작이다." },
+  { key:"osc", name:"진동", sub:"+0.10 / −0.10",
+    g:t => (t % 2 === 1 ? 0.10 : -0.10),
+    note:"신호가 모순되는 경우. <b>m은 부호가 상쇄돼 ≈0</b>이지만 <b>v는 제곱이라 상쇄되지 않는다</b>. " +
+         "→ multiplier ≈ 0, 거의 안 움직인다. 이게 m/√v가 <b>signal-to-noise ratio</b>인 이유." },
+  { key:"tiny", name:"미세", sub:"+0.001 고정",
+    g:t => 0.001,
+    note:"'일관'보다 gradient가 <b>100배 작다</b>. 그런데 multiplier는 <b>똑같이 ≈1.0</b>. " +
+         "SGD였다면 step도 100배 작았을 것 — 회색 선과 비교해봐. 이게 <b>scale invariance</b>다." },
+  { key:"noisy", name:"실제형", sub:"평균 +0.05 + noise",
+    g:t => 0.05 + 0.13*Math.sin(t*2.4) + 0.07*Math.sin(t*7.7) - 0.04*Math.cos(t*1.1),
+    note:"실제 minibatch에 가까운 경우 — 부호가 가끔 뒤집힌다. m이 noise를 평균 내주고, " +
+         "v가 크기를 정규화해서 multiplier가 <b>0.3~1.0 사이에서 안정</b>된다." },
+];
+
+/* ==================================================================
+   상태
+   ================================================================== */
+let stageIx = 0, presetIx = 0, playing = null;
+let B1 = 0.9, B2 = 0.999, WD = 0.01;
+let hist = [];   // {t,g,m,v,mh,vh,mult,w}
+
+function gradAt(t){ return PRESETS[presetIx].g(t); }
+
+/* 한 step 계산: stage 규칙에 따라 update를 만든다 */
+function stepOnce(){
+  const S = STAGES[stageIx];
+  const prev = hist.length ? hist[hist.length-1] : {mRaw:0, vRaw:0, w:W0};
+  const t = hist.length + 1;
+  if (t > NSTEP) return false;
+  const g = gradAt(t);
+
+  /* EMA는 stage와 무관하게 항상 계산해 둔다 — 패널 4의 실측 곡선이
+     stage 0/1에서도 그려지도록. stage는 "쓰느냐"만 결정한다. */
+  const mRaw = B1*prev.mRaw + (1-B1)*g;
+  const vRaw = B2*prev.vRaw + (1-B2)*g*g;
+
+  const m = S.usesM ? mRaw : 0;
+  const v = S.usesV ? vRaw : 0;
+  const mh = S.bias ? mRaw/(1 - Math.pow(B1,t)) : m;
+  const vh = S.bias ? vRaw/(1 - Math.pow(B2,t)) : v;
+
+  let adaptive;
+  if (!S.usesM && !S.usesV)      adaptive = g;                        // SGD
+  else if (S.usesM && !S.usesV)  adaptive = m;                        // + momentum
+  else                           adaptive = mh/(Math.sqrt(vh) + EPS); // + v (bias 유무는 위에서)
+
+  const decayTerm = S.decay ? WD*prev.w : 0;
+  const upd  = LR*(adaptive + decayTerm);
+  const w    = prev.w - upd;
+  const mult = Math.abs(upd)/LR;
+
+  /* 패널 4용 실측: 같은 gradient에 대해 보정 없이 / 있게 계산한 비율.
+     둘의 비는 대수적으로 (1-β₁ᵗ)/√(1-β₂ᵗ) 와 정확히 같아진다. */
+  const rawRatio  = Math.abs(mRaw)/(Math.sqrt(vRaw) + EPS);
+  const corrRatio = Math.abs(mRaw/(1-Math.pow(B1,t)))
+                  / (Math.sqrt(vRaw/(1-Math.pow(B2,t))) + EPS);
+  const blowup = corrRatio > 1e-12 ? rawRatio/corrRatio : null;
+
+  hist.push({t, g, mRaw, vRaw, m, v, mh, vh, adaptive, decayTerm, upd, w, mult,
+             sgdMult: Math.abs(g), blowup});
+  return true;
+}
+
+function reset(){
+  stopPlay();
+  hist = [];
+  render();
+}
+
+/* ==================================================================
+   렌더링
+   ================================================================== */
+function renderTabs(){
+  $("tabs").innerHTML = STAGES.map((S,i) =>
+    `<button class="tab ${i===stageIx?'on':''}" data-i="${i}">
+       <span class="tn">${S.tag}<span class="cost">${S.cost} B/param</span></span>
+       ${S.name}
+     </button>`).join("");
+  [...$("tabs").children].forEach(b => b.onclick = () => {
+    stageIx = +b.dataset.i; reset(); });
+}
+
+function renderStage(){
+  const S = STAGES[stageIx];
+  $("formula").innerHTML = `<span class="line">${S.lines()}</span>`;
+  $("dFix").innerHTML = S.fix;
+  $("dBad").innerHTML = S.bad;
+
+  const chips = [
+    {k:"m — first moment",  live:S.usesM,  b:S.usesM ? "4 B/param" : "0 B"},
+    {k:"v — second moment", live:S.usesV,  b:S.usesV ? "4 B/param" : "0 B"},
+    {k:"bias correction",   live:false, free:S.bias,   b:"0 B", extra:S.bias ? "scalar t" : "미사용"},
+    {k:"decoupled decay",   live:false, free:S.decay,  b:"0 B", extra:S.decay ? "w 재사용" : "미사용"},
+  ];
+  $("ledger").innerHTML = chips.map(c =>
+    `<div class="chip ${c.live?'live':''} ${c.free?'free':''}">
+       <b>${c.b}</b>${c.k}${c.extra?` <span class="dimmed">· ${c.extra}</span>`:""}
+     </div>`).join("") +
+    `<div class="total">optimizer state 합계 &nbsp;<b>${S.cost} B/param</b>
+       <span class="dimmed">&nbsp;+ fp32 master 4 B (precision 소유)</span></div>`;
+}
+
+function renderPresets(){
+  $("presets").innerHTML = PRESETS.map((p,i) =>
+    `<button class="pbtn ${i===presetIx?'on':''}" data-i="${i}">${p.name}<small>${p.sub}</small></button>`).join("");
+  [...$("presets").children].forEach(b => b.onclick = () => {
+    presetIx = +b.dataset.i; reset(); });
+  $("presetNote").innerHTML = PRESETS[presetIx].note;
+}
+
+function renderSubst(){
+  const S = STAGES[stageIx];
+  const h = hist.length ? hist[hist.length-1] : null;
+  if (!h){
+    $("subst").innerHTML = `<div class="row"><span class="lbl">대기 중</span>
+      <span class="eq">▶ 다음 step 을 눌러 t = 1 부터 시작</span></div>
+      <div class="row"><span class="lbl">초기값</span>
+      <span class="eq mono">w₀ = ${W0.toFixed(4)} · m₀ = 0 · v₀ = 0 · η = 1e−3 · ε = 1e−8</span></div>`;
+    $("mult").textContent = "—"; $("mult").style.color = "var(--ink-faint)";
+    $("multNote").innerHTML = "";
+    return;
+  }
+  const p = hist.length > 1 ? hist[hist.length-2] : {m:0, v:0, w:W0};
+  const R = [];
+  R.push(row(true, `t = ${h.t}, gradient`, `g<sub>${h.t}</sub>`, `= ${f(h.g)}`, ""));
+  R.push(row(S.usesM, "first moment", `m = β₁·m + (1−β₁)·g`,
+        `= ${f(B1,2)}·${f(p.m)} + ${f(1-B1,2)}·${f(h.g)} = <span class="out">${f(h.m)}</span>`,
+        S.usesM ? "4 B" : "미사용"));
+  R.push(row(S.usesV, "second moment", `v = β₂·v + (1−β₂)·g²`,
+        `= ${f(B2,3)}·${f(p.v)} + ${f(1-B2,4)}·${f(h.g*h.g)} = <span class="out">${f(h.v)}</span>`,
+        S.usesV ? "4 B" : "미사용"));
+  R.push(row(S.bias, "bias correction m̂", `m̂ = m / (1−β₁<sup>t</sup>)`,
+        `= ${f(h.m)} / ${f(1-Math.pow(B1,h.t))} = <span class="out">${f(h.mh)}</span>`, "0 B"));
+  R.push(row(S.bias, "bias correction v̂", `v̂ = v / (1−β₂<sup>t</sup>)`,
+        `= ${f(h.v)} / ${f(1-Math.pow(B2,h.t))} = <span class="out">${f(h.vh)}</span>`, "0 B"));
+  R.push(row(S.usesV, "adaptive 항", `m̂ / (√v̂ + ε)`,
+        `= ${f(h.mh)} / ${f(Math.sqrt(h.vh))} = <span class="out">${f(h.adaptive,4)}</span>`, ""));
+  R.push(row(S.decay, "decoupled decay", `λ · w<sub>t−1</sub>`,
+        `= ${f(WD,3)} · ${f(p.w)} = <span class="out">${f(h.decayTerm)}</span>`, "0 B"));
+  R.push(row(true, "update", `Δw = η · (…)`,
+        `= 1e−3 · ${f(h.adaptive + h.decayTerm,4)} = <span class="out">${h.upd.toExponential(3)}</span>`, ""));
+  R.push(row(true, "새 weight", `w<sub>${h.t}</sub> = w<sub>${h.t-1}</sub> − Δw`,
+        `= ${f(p.w)} − ${h.upd.toExponential(3)} = <span class="out">${f(h.w)}</span>`, ""));
+  $("subst").innerHTML = R.join("");
+
+  $("mult").textContent = h.mult.toFixed(3) + "×";
+  const col = h.mult > 2 ? "var(--danger)" : h.mult < 0.15 ? "var(--c-v)" : "var(--accent2)";
+  $("mult").style.color = col;
+
+  let note;
+  if (!STAGES[stageIx].usesV) {
+    note = `정규화가 없어 multiplier = |${S.usesM ? "m" : "g"}| = <b>${f(Math.abs(h.adaptive),4)}</b> — ` +
+           `gradient 크기를 그대로 따라간다.`;
+  } else if (h.mult > 2) {
+    note = `<b style="color:var(--danger)">과대 step.</b> bias correction이 없어 v가 과소추정됐다 — 패널 4를 봐.`;
+  } else if (h.mult < 0.15) {
+    note = `<b style="color:var(--c-v)">신호 상쇄.</b> m은 상쇄됐는데 v는 남았다 → 움직이지 않는다.`;
+  } else {
+    note = `<b style="color:var(--accent2)">≈ η 크기의 step.</b> gradient 절대크기와 무관하게 정규화된 결과.`;
+  }
+  $("multNote").innerHTML = note;
+}
+function row(on, lbl, eq, out, tag){
+  return `<div class="row ${on?'':'off'}"><span class="lbl">${lbl}</span>
+    <span class="eq mono">${eq}</span> <span class="mono">${out}</span>
+    ${tag?`<span class="tag">${tag}</span>`:""}</div>`;
+}
+
+function renderTable(){
+  const S = STAGES[stageIx];
+  const rows = hist.slice(-40).map(h =>
+    `<tr>
+      <td>${h.t}</td>
+      <td>${f(h.g)}</td>
+      <td class="${S.usesM?'':'off'}">${S.usesM?f(h.m):"—"}</td>
+      <td class="${S.usesV?'':'off'}">${S.usesV?f(h.v):"—"}</td>
+      <td class="${S.bias?'':'off'}">${S.bias?f(h.mh):"—"}</td>
+      <td class="${S.usesV?'':'off'}">${S.usesV?f(Math.sqrt(h.vh)):"—"}</td>
+      <td>${h.mult.toFixed(3)}</td>
+      <td>${f(h.w)}</td>
+    </tr>`).join("");
+  $("tbody").innerHTML = rows || `<tr><td colspan="8" style="color:var(--ink-faint);text-align:center">
+    아직 step 없음</td></tr>`;
+  const sc = document.querySelector(".scroll");
+  if (sc) sc.scrollTop = sc.scrollHeight;
+}
+
+/* ---------------- canvas 공통 ----------------
+   주의: 논리 높이는 CANVAS_H 상수에서만 읽는다. cv.getAttribute("height")를
+   되읽으면 직전 호출이 써 넣은 h*devicePixelRatio 값을 다시 h로 삼아
+   redraw 때마다 캔버스가 배로 커진다(그리고 결국 터진다).            */
+const CANVAS_H = 250;
+function setupCanvas(cv){
+  const r = window.devicePixelRatio || 1;
+  const w = Math.max(cv.clientWidth, 200), h = CANVAS_H;
+  if (cv.width !== Math.round(w*r) || cv.height !== Math.round(h*r)){
+    cv.width  = Math.round(w*r);
+    cv.height = Math.round(h*r);
+  }
+  cv.style.height = h + "px";          // 레이아웃 높이를 논리 높이에 고정
+  const c = cv.getContext("2d");
+  c.setTransform(r,0,0,r,0,0);
+  c.clearRect(0,0,w,h);
+  return {c, w, h};
+}
+function drawMult(){
+  const cv = $("cvMult"); const {c,w,h} = setupCanvas(cv);
+  const L=46, R=10, T=12, BM=26, PW=w-L-R, PH=h-T-BM;
+  const lo=-4, hi=1;                                 // log10 범위 1e-4 .. 1e1
+  const Y = val => { const v = Math.max(val, 1e-4);
+    return T + PH*(1 - (Math.log10(v)-lo)/(hi-lo)); };
+  const X = t => L + PW*((t-1)/(NSTEP-1));
+
+  c.strokeStyle="#2b3242"; c.fillStyle="#6b7686"; c.font="10px ui-monospace,monospace";
+  c.lineWidth=1;
+  for(let e=lo; e<=hi; e++){
+    const y=Y(Math.pow(10,e));
+    c.beginPath(); c.moveTo(L,y); c.lineTo(w-R,y); c.stroke();
+    c.textAlign="right"; c.fillText("1e"+e, L-6, y+3);
+  }
+  c.textAlign="center";
+  for(let t=10;t<=NSTEP;t+=10){ c.fillText(String(t), X(t), h-8); }
+  c.fillText("t", L+PW/2, h-8+0);
+
+  // 기준선 1.0
+  c.strokeStyle="#3fb950"; c.setLineDash([4,4]); c.lineWidth=1.5;
+  c.beginPath(); c.moveTo(L,Y(1)); c.lineTo(w-R,Y(1)); c.stroke(); c.setLineDash([]);
+
+  if(!hist.length){
+    c.fillStyle="#6b7686"; c.textAlign="center";
+    c.fillText("▶ 다음 step 또는 ▶▶ 자동 을 눌러봐", L+PW/2, T+PH/2);
+    return;
+  }
+  const line=(key,color,wd)=>{
+    c.strokeStyle=color; c.lineWidth=wd; c.beginPath();
+    hist.forEach((p,i)=>{ const x=X(p.t), y=Y(p[key]);
+      i?c.lineTo(x,y):c.moveTo(x,y); });
+    c.stroke();
+  };
+  line("sgdMult","#8b949e",1.6);
+  line("mult","#58a6ff",2.2);
+  const last=hist[hist.length-1];
+  c.fillStyle="#58a6ff"; c.beginPath(); c.arc(X(last.t),Y(last.mult),3.5,0,7); c.fill();
+}
+
+/* ---------------- canvas: bias-correction overshoot ----------------
+   노란 곡선 (1-β₁ᵗ)/√(1-β₂ᵗ) 는 "보정 없을 때 step이 몇 배로 부풀는가"이며
+   gradient 시퀀스와 무관한 순수 t·β의 함수다 (uncorrected/corrected 를
+   대수적으로 정리하면 g가 통째로 소거된다). 파란 점은 현재 run에서 실제로
+   측정한 rawRatio/corrRatio — 곡선 위에 정확히 얹히는지가 그 증명이다.   */
+function drawBias(){
+  const cv = $("cvBias"); const {c,w,h} = setupCanvas(cv);
+  const L=40, R=14, T=14, BM=26, PW=w-L-R, PH=h-T-BM;
+  const TMAX=3000;
+  const X = t => L + PW*(Math.log10(Math.max(t,1))/Math.log10(TMAX));
+  const factor = t => (1-Math.pow(B1,t))/Math.sqrt(1-Math.pow(B2,t));
+  let peak=0, peakT=1;
+  for(let t=1;t<=TMAX;t++){ const m=factor(t); if(m>peak){peak=m;peakT=t;} }
+  const hiY = Math.max(2, Math.ceil(peak*1.15));
+  const Y = v => T + PH*(1 - Math.min(Math.max(v,0),hiY)/hiY);
+
+  c.strokeStyle="#2b3242"; c.fillStyle="#6b7686"; c.font="10px ui-monospace,monospace";
+  c.lineWidth=1;
+  const stepY = hiY<=4?1:hiY<=8?2:2;
+  for(let v=0; v<=hiY; v+=stepY){
+    const y=Y(v); c.beginPath(); c.moveTo(L,y); c.lineTo(w-R,y); c.stroke();
+    c.textAlign="right"; c.fillText(v+"×", L-5, y+3);
+  }
+  c.textAlign="center";
+  [1,10,100,1000,3000].forEach(t=>c.fillText(String(t), X(t), h-8));
+
+  // 보정 있음 = 항상 1.0
+  c.strokeStyle="#3fb950"; c.lineWidth=2; c.beginPath();
+  c.moveTo(L,Y(1)); c.lineTo(w-R,Y(1)); c.stroke();
+
+  // 실행 구간(t ≤ NSTEP) 음영 — "지금 보고 있는 구간은 여기"
+  c.fillStyle="rgba(88,166,255,.07)";
+  c.fillRect(L, T, X(NSTEP)-L, PH);
+
+  // 부풀림 배수 곡선
+  c.strokeStyle="#d29922"; c.lineWidth=2.2; c.beginPath();
+  for(let i=0;i<=400;i++){
+    const tt = Math.max(1, Math.pow(10, (i/400)*Math.log10(TMAX)));
+    const x=X(tt), y=Y(factor(tt));
+    i?c.lineTo(x,y):c.moveTo(x,y);
+  }
+  c.stroke();
+  c.fillStyle="#d29922"; c.beginPath(); c.arc(X(peakT),Y(peak),4,0,7); c.fill();
+  c.textAlign="left"; c.font="11px ui-monospace,monospace";
+  c.fillText(`peak ${peak.toFixed(2)}× @ t=${peakT}`, X(peakT)+8, Y(peak)+4);
+
+  // ---- 여기서부터 step마다 갱신되는 부분 ----
+  const cur = hist.length ? hist[hist.length-1] : null;
+  if (cur){
+    // 현재 run 실측 점들
+    c.fillStyle="#58a6ff";
+    hist.forEach(p => { if(p.blowup==null) return;
+      c.beginPath(); c.arc(X(p.t), Y(p.blowup), 2.2, 0, 7); c.fill(); });
+    // 현재 t 세로선 + 마커
+    const xc = X(cur.t);
+    c.strokeStyle="#58a6ff"; c.lineWidth=1; c.setLineDash([3,3]);
+    c.beginPath(); c.moveTo(xc,T); c.lineTo(xc,T+PH); c.stroke(); c.setLineDash([]);
+    const fv = factor(cur.t);
+    c.fillStyle="#58a6ff"; c.beginPath(); c.arc(xc, Y(fv), 4.5, 0, 7); c.fill();
+    c.font="11px ui-monospace,monospace";
+    const lbl = `t=${cur.t} · ${fv.toFixed(2)}×`;
+    const tw = c.measureText(lbl).width;
+    const flip = xc + 10 + tw > w-R;
+    c.textAlign = flip ? "right" : "left";
+    c.fillText(lbl, xc + (flip ? -9 : 9), Math.max(T+12, Y(fv)-9));
+  }
+
+  // 정상화 지점
+  let settle=TMAX; for(let t=peakT;t<=TMAX;t++){ if(factor(t)<1.05){settle=t;break;} }
+  const live = cur
+    ? `<br><b style="color:var(--accent)">지금 t=${cur.t}</b> — 보정이 없었다면 이 step은 ` +
+      `<b>${factor(cur.t).toFixed(2)}배</b> 크게 갔다. 파란 점은 <b>현재 시퀀스에서 실제로 측정한</b> ` +
+      `rawRatio/corrRatio인데, 노란 곡선에 정확히 얹힌다 — 이 배수가 <b>gradient와 무관</b>하다는 증거야 ` +
+      `(uncorrected/corrected를 정리하면 g가 소거된다). 파란 음영이 stepper의 전체 구간(t≤${NSTEP})인데, ` +
+      `보다시피 <b>아직 편향 구간을 벗어나지도 못했다.</b>`
+    : `<br><span class="dimmed">▶ 다음 step 을 누르면 현재 t 마커와 실측 점이 이 위에 찍힌다.</span>`;
+  $("biasNote").innerHTML =
+    `β₁=${B1.toFixed(2)}, β₂=${B2.toFixed(4)} 기준 — 보정이 없으면 step이 최대 ` +
+    `<b>${peak.toFixed(2)}배</b>로 부풀고(t≈${peakT}), 1.05배 아래로 내려오는 데 ` +
+    `<b>${settle>=TMAX?"3000+":settle} step</b>이 걸린다. ` +
+    `m은 window 1/(1−β₁)=${Math.round(1/(1-B1))}로 금방 차는데 v는 1/(1−β₂)=` +
+    `${Math.round(1/(1-B2))}라 훨씬 느리게 차기 때문 — <b>v의 과소추정이 분모를 작게 만들어</b> ` +
+    `step을 키운다. 이래서 보정이 필요하고, 실전에서 <b>warmup</b>이 표준인 이유도 같은 계열의 문제다. ` +
+    `β₂ 슬라이더를 0.9로 내려보면 peak이 사라지는 걸 볼 수 있어.` + live;
+}
+
+/* ==================================================================
+   구동
+   ================================================================== */
+function render(){ renderTabs(); renderStage(); renderPresets();
+                   renderSubst(); renderTable(); drawMult(); drawBias(); }
+
+function stopPlay(){ if(playing){ clearInterval(playing); playing=null; $("bPlay").textContent="▶▶ 자동"; } }
+
+/* step 후 갱신되는 것: 대입식 · 표 · 두 그래프 모두 */
+function afterStep(){ renderSubst(); renderTable(); drawMult(); drawBias(); }
+
+$("bStep").onclick = () => { stopPlay(); if(stepOnce()) afterStep(); };
+$("bPlay").onclick = () => {
+  if(playing){ stopPlay(); return; }
+  $("bPlay").textContent="⏸ 정지";
+  playing = setInterval(() => {
+    if(!stepOnce()){ stopPlay(); return; }
+    afterStep();
+  }, 260);
+};
+$("bReset").onclick = reset;
+
+$("b1").oninput = e => { B1=+e.target.value; $("vB1").textContent=B1.toFixed(2); reset(); };
+$("b2").oninput = e => { B2=+e.target.value; $("vB2").textContent=B2.toFixed(4); reset(); };
+$("wd").oninput = e => { WD=+e.target.value; $("vWd").textContent=WD.toFixed(3); reset(); };
+
+window.addEventListener("resize", () => { drawMult(); drawBias(); });
+render();
+</script>
+</body>
+</html>
