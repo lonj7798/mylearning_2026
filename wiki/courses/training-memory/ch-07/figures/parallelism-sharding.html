@@ -1,0 +1,714 @@
+<!--
+  Figure: parallelism-sharding.html — "Parallelism Taxonomy: DP / ZeRO / FSDP / TP / SP / PP / EP / CP"
+  Chapter: ch-07 (track: scaling)
+  Back to: ../read.md  (see §1 Taxonomy table, §3 ZeRO 1/2/3, §5 TP, §7 PP, §8 EP, §9 CP, §10 world_size = TP x PP x CP x DP)
+
+  Interactive per-GPU memory explorer. Turn parallelism axes and watch a single
+  accelerator's ledger (weights / gradients / optimizer / activations) shrink as
+  each axis DIVIDES the item it shards. Fully self-contained: inline CSS +
+  vanilla JS only. No external CDNs, no network calls. Renders offline by
+  opening this file directly in a browser.
+
+  Sharding contract made visible (each axis divides only what it owns):
+    ZeRO-1  -> optimizer / DP
+    ZeRO-2  -> optimizer + gradients / DP
+    ZeRO-3  -> optimizer + gradients + weights / DP   (= FSDP FULL_SHARD)
+    TP      -> weights + activations / TP              (NVLink node, TP <= 8)
+    PP      -> weights / PP                            (stage holds 1/p layers)
+    EP      -> expert weights / EP                     (MoE only, EP <= DP)
+    CP      -> activations / CP                        (sequence sharded)
+  Identity:  world_size = TP x PP x CP x DP   (EP subdivides DP)
+
+  Warnings: TP>8 leaves the NVLink node (red); world_size product invalid / EP>DP.
+  Numbers are teaching-scale, calibrated to the read.md anchors (16-Psi ledger).
+-->
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Parallelism Taxonomy — Per-GPU Sharding (ch-07)</title>
+<style>
+  :root{
+    --bg:#0e1117; --panel:#161b22; --panel2:#1c2230; --edge:#2b3242;
+    --ink:#e6edf3; --ink-dim:#9aa7b4; --ink-faint:#6b7686;
+    --accent:#58a6ff; --accent2:#3fb950; --danger:#f85149; --warn:#d29922;
+    /* ledger colors (distinct, dark-friendly) */
+    --c-weights:#58a6ff;   /* blue    dense weights   */
+    --c-experts:#39c5cf;   /* teal    expert weights  */
+    --c-grads:#bc8cff;     /* purple  gradients       */
+    --c-opt:#f778ba;       /* pink    optimizer states*/
+    --c-act:#3fb950;       /* green   activations     */
+    /* axis accents */
+    --a-dp:#f0a35e; --a-tp:#58a6ff; --a-pp:#bc8cff; --a-cp:#3fb950; --a-ep:#39c5cf; --a-zero:#f778ba;
+  }
+  *{box-sizing:border-box;}
+  html,body{margin:0;padding:0;}
+  body{
+    background:var(--bg); color:var(--ink);
+    font:14px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+    padding:22px; max-width:1240px; margin:0 auto;
+  }
+  h1{font-size:20px; margin:0 0 2px; letter-spacing:.2px;}
+  .sub{color:var(--ink-dim); font-size:13px; margin:0 0 18px;}
+  .sub code{color:var(--accent);} .sub a{color:var(--accent); text-decoration:none;}
+  .wrap{display:grid; grid-template-columns:370px 1fr; gap:20px; align-items:start;}
+  @media (max-width:940px){ .wrap{grid-template-columns:1fr;} }
+
+  .panel{background:var(--panel); border:1px solid var(--edge); border-radius:10px; padding:16px;}
+  .panel h2{font-size:13px; text-transform:uppercase; letter-spacing:.8px; color:var(--ink-dim);
+    margin:0 0 12px; font-weight:600;}
+
+  /* ---- controls ---- */
+  .ctrl{margin-bottom:15px;}
+  .ctrl:last-child{margin-bottom:0;}
+  .ctrl label{display:flex; justify-content:space-between; align-items:baseline; margin-bottom:6px;}
+  .ctrl .name{font-weight:600; color:var(--ink);}
+  .ctrl .name .tag{font-size:10px; font-weight:700; padding:1px 6px; border-radius:999px;
+    margin-left:6px; vertical-align:middle; letter-spacing:.4px;}
+  .ctrl .val{font-variant-numeric:tabular-nums; color:var(--accent); font-weight:600;}
+  .ctrl .val small{color:var(--ink-faint); font-weight:400;}
+  input[type=range]{ -webkit-appearance:none; appearance:none; width:100%; height:5px; border-radius:5px;
+    background:var(--edge); outline:none; margin:4px 0;}
+  input[type=range]::-webkit-slider-thumb{ -webkit-appearance:none; appearance:none; width:16px; height:16px;
+    border-radius:50%; background:var(--accent); border:2px solid #0b1622; cursor:pointer;}
+  input[type=range]::-moz-range-thumb{ width:16px; height:16px; border-radius:50%; background:var(--accent);
+    border:2px solid #0b1622; cursor:pointer;}
+  input[type=range].warnthumb::-webkit-slider-thumb{ background:var(--danger); }
+  input[type=range].warnthumb::-moz-range-thumb{ background:var(--danger); }
+  input[type=range]:disabled{ opacity:.4; }
+
+  .seg{display:flex; border:1px solid var(--edge); border-radius:8px; overflow:hidden;}
+  .seg button{flex:1; background:var(--panel2); color:var(--ink-dim); border:none; padding:9px 6px;
+    font-size:13px; font-weight:600; cursor:pointer; transition:.12s;}
+  .seg button + button{border-left:1px solid var(--edge);}
+  .seg button.on{background:var(--accent); color:#04121f;}
+  .seg button:hover:not(.on){background:#222a38; color:var(--ink);}
+
+  .presetrow{display:flex; gap:8px; flex-wrap:wrap; margin-top:4px;}
+  .presetrow button{flex:1 1 auto; background:var(--panel2); color:var(--ink-dim); border:1px solid var(--edge);
+    border-radius:7px; padding:7px 8px; font-size:12px; cursor:pointer; white-space:nowrap;}
+  .presetrow button:hover{background:#222a38; color:var(--ink); border-color:var(--accent);}
+
+  .hint{font-size:11.5px; color:var(--ink-faint); margin-top:6px; line-height:1.45;}
+  .hint b{color:var(--ink-dim);}
+  .disabledNote{color:var(--ink-faint); font-size:11px; margin-top:4px; font-style:italic;}
+
+  /* ---- world-size identity strip ---- */
+  .world{background:var(--panel2); border:1px solid var(--edge); border-radius:9px; padding:12px 14px;
+    margin-bottom:16px;}
+  .world .eq{font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:14px; display:flex;
+    align-items:center; flex-wrap:wrap; gap:2px 4px;}
+  .world .eq .k{color:var(--ink-dim);}
+  .world .eq .f{font-weight:800; padding:1px 7px; border-radius:6px; color:#04121f; font-variant-numeric:tabular-nums;}
+  .world .eq .op{color:var(--ink-faint); font-weight:700; padding:0 2px;}
+  .world .eq .res{margin-left:auto; font-weight:800; font-size:16px; color:var(--ink);}
+  .world .eq .res.bad{color:var(--danger);}
+  .world .note{font-size:11.5px; color:var(--ink-faint); margin-top:8px; line-height:1.5;}
+  .world .note b{color:var(--ink-dim);}
+  .fk.dp{background:var(--a-dp);} .fk.tp{background:var(--a-tp);} .fk.pp{background:var(--a-pp);}
+  .fk.cp{background:var(--a-cp);} .fk.ep{background:var(--a-ep);}
+
+  /* ---- chart ---- */
+  .chartcard{position:relative;}
+  .capnote{display:flex; gap:16px; align-items:center; margin-bottom:10px; font-size:12px; color:var(--ink-dim);
+    flex-wrap:wrap;}
+  .capnote b{color:var(--ink); font-variant-numeric:tabular-nums;}
+  .badge{padding:2px 9px; border-radius:999px; font-size:12px; font-weight:700; letter-spacing:.3px;}
+  .badge.ok{background:rgba(63,185,80,.16); color:var(--accent2); border:1px solid rgba(63,185,80,.4);}
+  .badge.bad{background:rgba(248,81,73,.16); color:var(--danger); border:1px solid rgba(248,81,73,.45);}
+
+  .barbox{position:relative; height:120px; margin:8px 0 4px; background:var(--panel2);
+    border:1px solid var(--edge); border-radius:8px; overflow:hidden;}
+  .bar{position:absolute; left:0; top:30px; height:52px; display:flex; border-radius:5px; overflow:hidden;
+    box-shadow:0 1px 0 rgba(0,0,0,.3); transition:box-shadow .15s, width .18s ease;}
+  .bar.over{box-shadow:0 0 0 2px var(--danger), 0 0 18px rgba(248,81,73,.55);}
+  .seg-fill{height:100%; position:relative; transition:width .18s ease, background .18s;}
+  .seg-fill span{position:absolute; inset:0; display:flex; align-items:center; justify-content:center;
+    font-size:11px; font-weight:700; color:#08131f; text-shadow:0 1px 1px rgba(255,255,255,.25);
+    white-space:nowrap; overflow:hidden;}
+  .bar.over .seg-fill{filter:saturate(.55) brightness(.82);}
+  .totaltag{position:absolute; top:6px; font-size:11px; font-weight:700; color:var(--ink);
+    background:#0b111a; border:1px solid var(--edge); border-radius:5px; padding:1px 6px; transform:translateX(-50%);
+    white-space:nowrap; transition:left .18s;}
+
+  /* capacity lines */
+  .capline{position:absolute; top:22px; height:68px; width:0; border-left:2px dashed;}
+  .capline .lbl{position:absolute; top:-16px; left:4px; font-size:10.5px; font-weight:700; white-space:nowrap;}
+  .capline.c40{border-color:var(--warn); color:var(--warn);}
+  .capline.c80{border-color:var(--accent2); color:var(--accent2);}
+  .axis{position:absolute; bottom:4px; left:0; right:0; display:flex; justify-content:space-between;
+    padding:0 2px; font-size:10px; color:var(--ink-faint); font-variant-numeric:tabular-nums;}
+
+  /* legend + table */
+  .legend{display:flex; flex-wrap:wrap; gap:6px 14px; margin:12px 0 4px;}
+  .legend .item{display:flex; align-items:center; gap:6px; font-size:12px; color:var(--ink-dim);}
+  .legend .sw{width:12px; height:12px; border-radius:3px; flex:none;}
+
+  table{width:100%; border-collapse:collapse; margin-top:8px; font-size:12.5px;}
+  th,td{text-align:right; padding:6px 8px; border-bottom:1px solid var(--edge); font-variant-numeric:tabular-nums;}
+  th:first-child,td:first-child{text-align:left;} th:nth-child(2),td:nth-child(2){text-align:left;}
+  th{color:var(--ink-faint); font-weight:600; text-transform:uppercase; font-size:10.5px; letter-spacing:.6px;}
+  td.dim{color:var(--ink-faint);}
+  td .dot{display:inline-block; width:9px; height:9px; border-radius:2px; margin-right:7px; vertical-align:middle;}
+  td .shardby{font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:11px;}
+  tr.tot td{font-weight:700; color:var(--ink); border-top:2px solid var(--edge); border-bottom:none;}
+  tr.tot td.red{color:var(--danger);}
+
+  .callout{margin-top:14px; background:var(--panel2); border:1px solid var(--edge);
+    border-left:3px solid var(--accent); border-radius:8px; padding:11px 13px; font-size:12.5px; color:var(--ink-dim);}
+  .callout.warn{border-left-color:var(--danger);}
+  .callout b{color:var(--ink);} .callout .hl{color:var(--c-opt); font-weight:700;}
+  .foot{color:var(--ink-faint); font-size:11px; margin-top:14px; line-height:1.5;}
+  .foot code{color:var(--ink-dim);}
+  .kbd{font-family:ui-monospace,SFMono-Regular,Menlo,monospace; background:#0b111a; border:1px solid var(--edge);
+    border-radius:4px; padding:0 5px; color:var(--ink-dim);}
+</style>
+</head>
+<body>
+  <h1>Parallelism Taxonomy — Per-GPU Sharding</h1>
+  <p class="sub">Turn each axis and watch what it divides on a single GPU. Every primitive shards <b>exactly one</b> item: ZeRO the optimizer/grad/weights, TP weights+activations, PP weights, EP experts, CP activations. Identity: <code>world_size = TP&times;PP&times;CP&times;DP</code>. <span style="color:var(--ink-faint)">ch-07 &middot; <a href="../read.md">read.md</a></span></p>
+
+  <div class="wrap">
+    <!-- ================= CONTROLS ================= -->
+    <div class="panel">
+      <h2>Controls</h2>
+
+      <div class="ctrl">
+        <label><span class="name">Model</span><span class="val" id="vModel" style="text-transform:none">27B MoE</span></label>
+        <div class="seg" id="modelSeg">
+          <button data-model="27b" class="on">27B &middot; 256-expert MoE</button>
+          <button data-model="70b">70B &middot; dense</button>
+        </div>
+        <div class="hint" id="modelHint"></div>
+      </div>
+
+      <div class="ctrl">
+        <label><span class="name">ZeRO stage <span class="tag" style="background:var(--a-zero);color:#1a0512">/ DP</span></span><span class="val" id="vZero">3</span></label>
+        <div class="seg" id="zeroSeg">
+          <button data-z="0">0</button>
+          <button data-z="1">1</button>
+          <button data-z="2">2</button>
+          <button data-z="3" class="on">3</button>
+        </div>
+        <div class="hint" id="zeroHint"></div>
+      </div>
+
+      <div class="ctrl">
+        <label><span class="name">DP replicas <span class="tag" style="background:var(--a-dp);color:#1a0d02">data</span></span><span class="val" id="vDP">8 <small>ranks</small></span></label>
+        <input type="range" id="DP" min="1" max="64" step="1" value="8">
+        <div class="hint">ZeRO shards weights/grads/opt across these <b>DP</b> ranks (the sharding denominator). Also the divisor for EP.</div>
+      </div>
+
+      <div class="ctrl">
+        <label><span class="name">TP <span class="tag" style="background:var(--a-tp);color:#04121f">weights + act</span></span><span class="val" id="vTP">1 <small>&times;</small></span></label>
+        <input type="range" id="TP" min="1" max="16" step="1" value="1">
+        <div class="hint">Splits weight matrices &amp; linear-op activations by <b>1/TP</b>. Needs NVLink; <b>TP &le; 8</b> = one node. TP&gt;8 crosses the node &rarr; slow inter-node AllReduce on the critical path.</div>
+      </div>
+
+      <div class="ctrl">
+        <label><span class="name">PP <span class="tag" style="background:var(--a-pp);color:#12061a">weights</span></span><span class="val" id="vPP">1 <small>stages</small></span></label>
+        <input type="range" id="PP" min="1" max="8" step="1" value="1">
+        <div class="hint">Each stage holds <b>1/PP</b> of the layers &rarr; weights &amp; their grads/opt divide by PP. Activations: only the local stage (1F1B caps in-flight at PP microbatches).</div>
+      </div>
+
+      <div class="ctrl">
+        <label><span class="name">CP <span class="tag" style="background:var(--a-cp);color:#04140a">activations</span></span><span class="val" id="vCP">1 <small>&times;</small></span></label>
+        <input type="range" id="CP" min="1" max="8" step="1" value="1">
+        <div class="hint">Context parallel shards the <b>sequence</b> across CP ranks (Ring attention) &rarr; activations divide by <b>1/CP</b>. Orthogonal to TP.</div>
+      </div>
+
+      <div class="ctrl" id="epCtrl">
+        <label><span class="name">EP <span class="tag" style="background:var(--a-ep);color:#03181a">experts</span></span><span class="val" id="vEP">8 <small>&times;</small></span></label>
+        <input type="range" id="EP" min="1" max="64" step="1" value="8">
+        <div class="hint">MoE only. Places <b>E/EP</b> experts per GPU &rarr; expert weights divide by <b>1/EP</b>. Must satisfy <b>EP &le; DP</b>.</div>
+        <div class="disabledNote" id="epDisabled" style="display:none">Dense model has no experts — EP is inactive.</div>
+      </div>
+
+      <div class="ctrl">
+        <label><span class="name">Sequence length</span><span class="val" id="vS">8,192 <small>tokens</small></span></label>
+        <input type="range" id="S" min="1024" max="131072" step="1024" value="8192">
+        <div class="hint">Activations grow with seq (attention term &asymp; s&sup2;). Micro-batch b = 1. Gradient checkpointing is <b>off</b> here.</div>
+      </div>
+
+      <div class="ctrl">
+        <label><span class="name">GPU capacity</span><span class="val" id="vCap">80 <small>GiB</small></span></label>
+        <div class="seg" id="capSeg">
+          <button data-cap="40">A100 &middot; 40 GiB</button>
+          <button data-cap="80" class="on">A100/H100 &middot; 80 GiB</button>
+        </div>
+        <div class="hint">Both 40 &amp; 80 GiB lines are drawn; this picks the OOM threshold. NVLink node = 8 GPUs @ ~0.9 TB/s (A100) / 0.45 TB/s inter-node.</div>
+      </div>
+
+      <div class="ctrl">
+        <label><span class="name">Presets</span></label>
+        <div class="presetrow">
+          <button data-preset="ddp">DDP baseline</button>
+          <button data-preset="z1">ZeRO-1 &times;8</button>
+          <button data-preset="fsdp">ZeRO-3/FSDP</button>
+          <button data-preset="moe64">MoE 64-GPU</button>
+          <button data-preset="crossnode">TP=16 (bad)</button>
+        </div>
+        <div class="hint">Canonical points from <a href="../read.md" style="color:var(--accent)">read.md &sect;3, &sect;8, &sect;10</a>.</div>
+      </div>
+    </div>
+
+    <!-- ================= CHART ================= -->
+    <div class="panel chartcard">
+      <h2>world_size identity &amp; per-GPU ledger</h2>
+
+      <div class="world">
+        <div class="eq">
+          <span class="k">world_size =</span>
+          <span class="f fk tp" id="fTP">1</span><span class="op">&times;</span>
+          <span class="f fk pp" id="fPP">1</span><span class="op">&times;</span>
+          <span class="f fk cp" id="fCP">1</span><span class="op">&times;</span>
+          <span class="f fk dp" id="fDP">8</span>
+          <span class="res" id="fRes">= 8 GPUs</span>
+        </div>
+        <div class="note" id="worldNote"></div>
+      </div>
+
+      <div class="capnote">
+        <span>Total / GPU: <b id="totGiB">&ndash;</b> GiB</span>
+        <span>on <b id="capLbl">80</b> GiB</span>
+        <span id="badge" class="badge ok">FITS</span>
+        <span style="margin-left:auto; color:var(--ink-faint)">chart scale &rarr; <b id="scaleMax">96</b> GiB</span>
+      </div>
+
+      <div class="barbox" id="barbox">
+        <div class="capline c40" id="line40"><span class="lbl">40 GiB</span></div>
+        <div class="capline c80" id="line80"><span class="lbl">80 GiB</span></div>
+        <div class="totaltag" id="totaltag">&ndash;</div>
+        <div class="bar" id="bar"></div>
+        <div class="axis" id="axis"></div>
+      </div>
+
+      <div class="legend" id="legend"></div>
+
+      <table>
+        <thead>
+          <tr><th>Resident</th><th>Sharded by</th><th>Full model</th><th>GiB / GPU</th></tr>
+        </thead>
+        <tbody id="rows"></tbody>
+      </table>
+
+      <div class="callout" id="callout"></div>
+
+      <p class="foot">
+        Ledger (bf16 + AdamW, the 16-&Psi; decomposition from <a href="../read.md" style="color:var(--accent)">read.md &sect;3</a>): weights = 2 B/param, gradients = 2 B/param, optimizer = 12 B/param (fp32 master + m + v).
+        <b>Sharding denominators</b> (each axis divides only what it owns): ZeRO-1 opt&divide;DP; ZeRO-2 +grad&divide;DP; ZeRO-3 +weights&divide;DP; TP weights &amp; activations&divide;TP; PP weights&divide;PP; EP expert-weights&divide;EP; CP activations&divide;CP.
+        For the MoE model, weights split into <b>dense</b> (attention/embedding/router — sharded by DP&middot;TP&middot;PP) and <b>expert</b> FFN (sharded by EP&middot;PP). EP&nbsp;&le;&nbsp;DP is enforced.
+        Activations use the illustrative form <code>L&middot;b&middot;h&middot;(34 + 5&middot;a&middot;s/h)&middot;s</code> then &divide;(TP&middot;CP); teaching-scale, not a specific run. Values in <b>GiB</b>; bandwidth reference: A100 &asymp; 2.0 TB/s HBM, NVLink &asymp; 0.9 TB/s intra-node.
+        <br>Tip: set ZeRO=3, then sweep <span class="kbd">DP</span> — the blue/purple/pink block collapses as <code>16&Psi;/DP</code>; push <span class="kbd">TP</span> past 8 and the config turns red (left the NVLink node).
+      </p>
+    </div>
+  </div>
+
+<script>
+(function(){
+  "use strict";
+
+  // ---------- model catalog (teaching-scale, anchored to read.md capstone: 27B 256-expert MoE) ----------
+  // Params in billions. For MoE we split total params into dense (attn/embed/router) vs expert (FFN).
+  var MODELS = {
+    "27b": {
+      label:"27B · 256-expert MoE", moe:true,
+      P:27,            // total params (B)
+      Pdense:5.4,      // dense params: attention + embeddings + router (~20% of total)  (B)
+      Pexpert:21.6,    // expert FFN params (~80% of total)                              (B)
+      E:256,           // total experts
+      // activation shape (illustrative ~27B-class)
+      L:48, h:5120, a:40, b:1,
+      hint:"Capstone model. 256 experts; ~80% of params live in expert FFNs → EP is the lever that keeps a 40 GiB A100 alive."
+    },
+    "70b": {
+      label:"70B · dense", moe:false,
+      P:70, Pdense:70, Pexpert:0, E:0,
+      L:80, h:8192, a:64, b:1,
+      hint:"Dense: all 70B params are weights sharded by DP·TP·PP. No experts → EP inactive; TP=8 + PP spans the layers."
+    }
+  };
+
+  var GiB = 1024*1024*1024;
+
+  // ledger colors (mirror CSS vars)
+  var COL = {
+    weights:"#58a6ff", experts:"#39c5cf", grads:"#bc8cff", opt:"#f778ba", act:"#3fb950"
+  };
+
+  // activation calibration: L*b*h*(34+5as/h)*s bytes, scaled so 70B @ 8k lands in a teaching-plausible range.
+  var ACT_K = 0.011;
+
+  // ---------- state ----------
+  var st = { model:"27b", zero:3, DP:8, TP:1, PP:1, CP:1, EP:8, S:8192, cap:80 };
+
+  // ---------- byte model ----------
+  function compute(){
+    var M = MODELS[st.model];
+    var DP = Math.max(1, st.DP), TP = Math.max(1, st.TP), PP = Math.max(1, st.PP),
+        CP = Math.max(1, st.CP), EP = Math.max(1, st.EP);
+    var world = TP*PP*CP*DP;
+
+    // effective EP is clamped to DP (EP subdivides DP)
+    var epEff = M.moe ? Math.min(EP, DP) : 1;
+
+    // ZeRO denominators: which items get / DP.
+    // z0: none; z1: opt; z2: opt+grad; z3: opt+grad+weights.
+    var zw = (st.zero>=3) ? DP : 1;   // weights   / DP under ZeRO-3
+    var zg = (st.zero>=2) ? DP : 1;   // gradients / DP under ZeRO-2+
+    var zo = (st.zero>=1) ? DP : 1;   // optimizer / DP under ZeRO-1+
+
+    // ---- WEIGHTS (2 B/param) ----
+    // dense weights sharded by TP (matrix split) and PP (layer split) and ZeRO-w.
+    // expert weights sharded by EP (expert split) and PP (layer split) and ZeRO-w.
+    // NOTE: ZeRO and model-parallel (TP/PP/EP) compose multiplicatively on the item they own.
+    var wDenseFull = M.Pdense * 1e9 * 2;                 // bytes, full model
+    var wExpFull   = M.Pexpert * 1e9 * 2;
+    var wDense = wDenseFull / (TP*PP*zw);
+    var wExp   = wExpFull   / (epEff*PP*zw);
+    var weightsFull = wDenseFull + wExpFull;
+
+    // ---- GRADIENTS (2 B/param, trainable = all params here; full-FT) ----
+    // follow the same model-parallel split as their weights, plus ZeRO-g.
+    var gDense = (M.Pdense*1e9*2) / (TP*PP*zg);
+    var gExp   = (M.Pexpert*1e9*2) / (epEff*PP*zg);
+    var gradsFull = weightsFull;   // 2 B/param same as weights
+
+    // ---- OPTIMIZER (12 B/param) ----
+    var oDense = (M.Pdense*1e9*12) / (TP*PP*zo);
+    var oExp   = (M.Pexpert*1e9*12) / (epEff*PP*zo);
+    var optFull = M.P*1e9*12;
+
+    // ---- ACTIVATIONS ----
+    // illustrative: L*b*h*(34 + 5 a s / h) * s bytes, then / (TP * CP).
+    // PP: only the local stage's activations resident, and 1F1B caps in-flight at PP microbatches
+    // -> approximate local activation share as (1/PP) of full-depth store (layers per stage).
+    var s = st.S;
+    var actBytesFull = M.L * M.b * M.h * (34 + 5*M.a*s/M.h) * s * ACT_K;
+    var actFullDepth = actBytesFull;                    // store-everything, full depth
+    var act = actFullDepth / (TP * CP * PP);            // TP+CP shard the tensor; PP holds 1/PP of layers
+
+    // ---- to GiB ----
+    function g(x){ return x / GiB; }
+    var weights = g(wDense);            // dense weights (blue)
+    var experts = g(wExp);              // expert weights (teal)
+    var grads   = g(gDense + gExp);
+    var opt     = g(oDense + oExp);
+    var acts    = g(act);
+
+    var total = weights + experts + grads + opt + acts;
+
+    return {
+      world:world, epEff:epEff,
+      weights:weights, experts:experts, grads:grads, opt:opt, act:acts, total:total,
+      full:{
+        weights:g(weightsFull), grads:g(gradsFull), opt:g(optFull),
+        act:g(actFullDepth), experts:g(wExpFull), dense:g(wDenseFull)
+      },
+      denom:{ zw:zw, zg:zg, zo:zo, TP:TP, PP:PP, CP:CP, EP:epEff, DP:DP }
+    };
+  }
+
+  // ---------- validity ----------
+  function validity(){
+    var M = MODELS[st.model];
+    var msgs = [];
+    var tpBad = st.TP > 8;                              // left the NVLink node
+    var epBad = M.moe && (st.EP > st.DP);              // EP must be <= DP
+    if(tpBad) msgs.push("TP="+st.TP+" &gt; 8 leaves the NVLink node — AllReduce now crosses inter-node links (≈ half the bandwidth) on the critical path.");
+    if(epBad) msgs.push("EP="+st.EP+" &gt; DP="+st.DP+" is invalid — EP subdivides DP, so EP ≤ DP. Clamped to "+Math.min(st.EP,st.DP)+".");
+    return { tpBad:tpBad, epBad:epBad, invalid:(tpBad||epBad), msgs:msgs };
+  }
+
+  // ---------- helpers ----------
+  function fmtGiB(x){
+    if(x >= 100) return x.toFixed(0);
+    if(x >= 10)  return x.toFixed(1);
+    if(x >= 1)   return x.toFixed(2);
+    if(x > 0.005) return x.toFixed(3);
+    return "0";
+  }
+  function commas(n){ return Math.round(n).toString().replace(/\B(?=(\d{3})+(?!\d))/g, ","); }
+
+  // ---------- element refs ----------
+  var els = {
+    DP:document.getElementById("DP"), TP:document.getElementById("TP"), PP:document.getElementById("PP"),
+    CP:document.getElementById("CP"), EP:document.getElementById("EP"), S:document.getElementById("S"),
+    vDP:document.getElementById("vDP"), vTP:document.getElementById("vTP"), vPP:document.getElementById("vPP"),
+    vCP:document.getElementById("vCP"), vEP:document.getElementById("vEP"), vS:document.getElementById("vS"),
+    vZero:document.getElementById("vZero"), vModel:document.getElementById("vModel"), vCap:document.getElementById("vCap"),
+    modelHint:document.getElementById("modelHint"), zeroHint:document.getElementById("zeroHint"),
+    epCtrl:document.getElementById("epCtrl"), epDisabled:document.getElementById("epDisabled"),
+    bar:document.getElementById("bar"), barbox:document.getElementById("barbox"),
+    line40:document.getElementById("line40"), line80:document.getElementById("line80"),
+    totaltag:document.getElementById("totaltag"), axis:document.getElementById("axis"),
+    legend:document.getElementById("legend"), rows:document.getElementById("rows"),
+    badge:document.getElementById("badge"), totGiB:document.getElementById("totGiB"),
+    capLbl:document.getElementById("capLbl"), scaleMax:document.getElementById("scaleMax"),
+    callout:document.getElementById("callout"),
+    fTP:document.getElementById("fTP"), fPP:document.getElementById("fPP"),
+    fCP:document.getElementById("fCP"), fDP:document.getElementById("fDP"),
+    fRes:document.getElementById("fRes"), worldNote:document.getElementById("worldNote")
+  };
+
+  var LEDGER = [
+    {key:"weights", name:"Weights (dense)", col:COL.weights},
+    {key:"experts", name:"Weights (expert)", col:COL.experts},
+    {key:"grads",   name:"Gradients",        col:COL.grads},
+    {key:"opt",     name:"Optimizer (Adam)", col:COL.opt},
+    {key:"act",     name:"Activations",      col:COL.act}
+  ];
+
+  // "sharded by" descriptor per item, given current ZeRO stage & model.
+  function shardBy(key){
+    var z = st.zero, moe = MODELS[st.model].moe;
+    switch(key){
+      case "weights": {
+        var d = ["TP","PP"]; if(z>=3) d.push("DP"); return d.join("·");
+      }
+      case "experts": {
+        if(!moe) return "—";
+        var d = ["EP","PP"]; if(z>=3) d.push("DP"); return d.join("·");
+      }
+      case "grads": {
+        var d = moe ? ["TP·PP | EP·PP"] : ["TP","PP"];
+        if(z>=2) return (moe?"(TP·PP|EP·PP)":"TP·PP")+"·DP";
+        return d.join("·");
+      }
+      case "opt": {
+        if(z>=1) return (moe?"(TP·PP|EP·PP)":"TP·PP")+"·DP";
+        return moe ? "TP·PP|EP·PP" : "TP·PP";
+      }
+      case "act": return "TP·CP·PP";
+    }
+    return "—";
+  }
+
+  function render(){
+    var M = MODELS[st.model];
+
+    // --- control labels ---
+    els.vDP.innerHTML = st.DP + ' <small>rank'+(st.DP>1?'s':'')+'</small>';
+    els.vTP.innerHTML = st.TP + ' <small>&times;</small>';
+    els.vPP.innerHTML = st.PP + ' <small>stage'+(st.PP>1?'s':'')+'</small>';
+    els.vCP.innerHTML = st.CP + ' <small>&times;</small>';
+    els.vEP.innerHTML = st.EP + ' <small>&times;</small>';
+    els.vS.innerHTML  = commas(st.S) + ' <small>tokens</small>';
+    els.vZero.textContent = st.zero;
+    els.vModel.textContent = M.moe ? "27B MoE" : "70B dense";
+    els.vCap.innerHTML = st.cap + ' <small>GiB</small>';
+    els.capLbl.textContent = st.cap;
+    els.modelHint.textContent = M.hint;
+
+    var zeroTxt = {
+      0:"ZeRO-0 = plain DDP. Nothing sharded across DP; full 16Ψ replicated on every rank.",
+      1:"ZeRO-1 (Pos): optimizer states ÷ DP. Free win — same 2Ψ all-reduce as DDP. Always enable at ≥4 ranks.",
+      2:"ZeRO-2 (Pos+g): + gradients ÷ DP (reduce-scatter). Still 2Ψ comm.",
+      3:"ZeRO-3 / FSDP (Pos+g+p): + weights ÷ DP → 16Ψ/DP. Costs 3Ψ (1.5× DDP): 2 all-gathers + reduce-scatter."
+    };
+    els.zeroHint.textContent = zeroTxt[st.zero];
+
+    // EP control availability
+    els.EP.disabled = !M.moe;
+    els.epDisabled.style.display = M.moe ? "none" : "block";
+    els.epCtrl.style.opacity = M.moe ? "1" : ".62";
+
+    var m = compute();
+    var val = validity();
+    var overCap = m.total > st.cap;
+
+    // --- world-size identity strip ---
+    els.fTP.textContent = st.TP; els.fPP.textContent = st.PP;
+    els.fCP.textContent = st.CP; els.fDP.textContent = st.DP;
+    els.fRes.textContent = "= " + commas(m.world) + " GPUs";
+    els.fRes.classList.toggle("bad", val.invalid);
+
+    var wn = 'EP subdivides DP: <b>EP='+m.epEff+'</b>'+(M.moe?'':' (dense — n/a)')+
+             ' &nbsp;|&nbsp; NVLink node = 8 GPUs, so TP ≤ 8. &nbsp;|&nbsp; This job spans <b>'+
+             Math.max(1,Math.ceil(m.world/8))+'</b> node'+(Math.ceil(m.world/8)>1?'s':'')+' (8 GPUs/node).';
+    if(val.msgs.length) wn += '<br><span style="color:var(--danger)">⚠ '+val.msgs.join(' &nbsp; ')+'</span>';
+    els.worldNote.innerHTML = wn;
+
+    // warn thumb coloring
+    els.TP.classList.toggle("warnthumb", val.tpBad);
+    els.EP.classList.toggle("warnthumb", val.epBad);
+
+    // --- chart scale ---
+    var scaleMax = Math.max(96, st.cap*1.15, m.total*1.08);
+    scaleMax = Math.ceil(scaleMax/8)*8;
+    els.scaleMax.textContent = scaleMax;
+
+    // --- stacked bar ---
+    els.bar.innerHTML = "";
+    var barTotalPct = Math.min(100, (m.total/scaleMax)*100);
+    els.bar.style.width = barTotalPct + "%";
+    els.bar.classList.toggle("over", overCap);
+
+    LEDGER.forEach(function(item){
+      var v = m[item.key];
+      if(v <= 0) return;
+      var seg = document.createElement("div");
+      seg.className = "seg-fill";
+      seg.style.width = (v/m.total*100) + "%";
+      seg.style.background = item.col;
+      var lbl = document.createElement("span");
+      if(v/scaleMax*100 > 6){ lbl.textContent = fmtGiB(v); }
+      seg.appendChild(lbl);
+      seg.title = item.name + ": " + fmtGiB(v) + " GiB";
+      els.bar.appendChild(seg);
+    });
+
+    els.totaltag.textContent = fmtGiB(m.total) + " GiB";
+    els.totaltag.style.left = Math.min(96, Math.max(6, barTotalPct)) + "%";
+    els.totaltag.style.color = overCap ? "var(--danger)" : "var(--ink)";
+    els.totaltag.style.borderColor = overCap ? "var(--danger)" : "var(--edge)";
+
+    // --- capacity lines ---
+    var p40 = (40/scaleMax)*100, p80 = (80/scaleMax)*100;
+    els.line40.style.left = p40 + "%"; els.line80.style.left = p80 + "%";
+    els.line40.style.display = p40 <= 100 ? "block" : "none";
+    els.line80.style.display = p80 <= 100 ? "block" : "none";
+
+    // --- axis ---
+    els.axis.innerHTML = "";
+    for(var t=0; t<=4; t++){
+      var span = document.createElement("span");
+      span.textContent = Math.round(scaleMax*t/4) + (t===4?" GiB":"");
+      els.axis.appendChild(span);
+    }
+
+    // --- legend ---
+    els.legend.innerHTML = "";
+    LEDGER.forEach(function(item){
+      if(item.key==="experts" && !M.moe) return;
+      var d = document.createElement("div"); d.className="item";
+      var sw = document.createElement("span"); sw.className="sw"; sw.style.background=item.col;
+      d.appendChild(sw); d.appendChild(document.createTextNode(item.name));
+      els.legend.appendChild(d);
+    });
+
+    // --- table ---
+    els.rows.innerHTML = "";
+    LEDGER.forEach(function(item){
+      if(item.key==="experts" && !M.moe) return;
+      var v = m[item.key];
+      var full = (item.key==="experts") ? m.full.experts
+               : (item.key==="weights") ? m.full.dense
+               : m.full[item.key];
+      var isZero = v <= 0.0005;
+      var tr = document.createElement("tr");
+      tr.innerHTML =
+        '<td><span class="dot" style="background:'+item.col+'"></span>'+item.name+'</td>'+
+        '<td class="dim shardby">'+shardBy(item.key)+'</td>'+
+        '<td class="dim">'+(full>0?fmtGiB(full):"—")+'</td>'+
+        '<td'+(isZero?' class="dim"':'')+'>'+(isZero?'≈ 0':fmtGiB(v))+'</td>';
+      els.rows.appendChild(tr);
+    });
+    var trT = document.createElement("tr");
+    trT.className = "tot";
+    trT.innerHTML =
+      '<td>Total / GPU</td>'+
+      '<td class="dim">on '+commas(m.world)+' GPUs</td>'+
+      '<td class="dim">'+fmtGiB(m.full.weights + m.full.grads + m.full.opt)+' + act</td>'+
+      '<td'+(overCap?' class="red"':'')+'>'+fmtGiB(m.total)+'</td>';
+    els.rows.appendChild(trT);
+
+    // --- badge ---
+    if(overCap){
+      els.badge.className = "badge bad";
+      els.badge.textContent = "OOM · " + fmtGiB(m.total - st.cap) + " GiB OVER " + st.cap;
+    } else {
+      els.badge.className = "badge ok";
+      els.badge.textContent = "FITS · " + fmtGiB(st.cap - m.total) + " GiB free on " + st.cap;
+    }
+    els.totGiB.textContent = fmtGiB(m.total);
+
+    // --- teaching callout ---
+    var co, warn=false;
+    if(val.invalid){
+      warn = true;
+      co = '<b>Invalid / degraded config.</b> '+val.msgs.join(' ')+
+           ' The bar still reflects the clamped/penalized layout, but this is not a config you would ship.';
+    } else if(st.zero===0 && st.TP===1 && st.PP===1 && st.CP===1){
+      co = '<b>DDP baseline.</b> Nothing is sharded — every GPU holds the full <b>16Ψ = '+
+           fmtGiB(m.full.weights+m.full.grads+m.full.opt)+' GiB</b> of states'+
+           (M.moe?' (dense + all '+MODELS[st.model].E+' experts)':'')+'. This is the wall every other axis breaks. '+
+           'Turn ZeRO to 3 and watch <span class="hl">16Ψ/DP</span> take over.';
+    } else {
+      var parts = [];
+      if(st.zero>0) parts.push('ZeRO-'+st.zero+' &divide;DP='+st.DP+' on '+(st.zero>=3?'weights+grad+opt':st.zero>=2?'grad+opt':'opt'));
+      if(st.TP>1) parts.push('TP='+st.TP+' &divide; weights &amp; activations');
+      if(st.PP>1) parts.push('PP='+st.PP+' &divide; weights (1/'+st.PP+' layers/stage)');
+      if(st.CP>1) parts.push('CP='+st.CP+' &divide; activations');
+      if(M.moe && m.epEff>1) parts.push('EP='+m.epEff+' &divide; '+MODELS[st.model].E+' experts → '+(MODELS[st.model].E/m.epEff)+'/GPU');
+      co = '<b>Active shards:</b> '+ (parts.length?parts.join(' &nbsp;·&nbsp; '):'none') +
+           '. Per-GPU total <b'+(overCap?' style="color:var(--danger)"':'')+'>'+fmtGiB(m.total)+' GiB</b> on '+commas(m.world)+' GPUs. '+
+           (M.moe && m.epEff<=1 && st.zero>=3
+             ? '<span style="color:var(--warn)">Note: ZeRO-3 all-gathers all '+MODELS[st.model].E+' experts per layer — raise EP so experts stay resident instead.</span>'
+             : 'Activations (green) are untouched by ZeRO — only TP/CP/PP move them.');
+    }
+    els.callout.className = "callout" + (warn?" warn":"");
+    els.callout.innerHTML = co;
+  }
+
+  // ---------- wiring: sliders (LIVE on input) ----------
+  function bindRange(el, key, isFloat){
+    el.addEventListener("input", function(){
+      st[key] = isFloat ? parseFloat(this.value) : parseInt(this.value,10);
+      render();
+    });
+  }
+  bindRange(els.DP,"DP"); bindRange(els.TP,"TP"); bindRange(els.PP,"PP");
+  bindRange(els.CP,"CP"); bindRange(els.EP,"EP"); bindRange(els.S,"S");
+
+  // ---------- wiring: segmented buttons ----------
+  document.getElementById("modelSeg").addEventListener("click", function(e){
+    var b = e.target.closest("button"); if(!b) return;
+    st.model = b.getAttribute("data-model");
+    this.querySelectorAll("button").forEach(function(x){ x.classList.toggle("on", x===b); });
+    render();
+  });
+  document.getElementById("zeroSeg").addEventListener("click", function(e){
+    var b = e.target.closest("button"); if(!b) return;
+    st.zero = parseInt(b.getAttribute("data-z"),10);
+    this.querySelectorAll("button").forEach(function(x){ x.classList.toggle("on", x===b); });
+    render();
+  });
+  document.getElementById("capSeg").addEventListener("click", function(e){
+    var b = e.target.closest("button"); if(!b) return;
+    st.cap = parseInt(b.getAttribute("data-cap"),10);
+    this.querySelectorAll("button").forEach(function(x){ x.classList.toggle("on", x===b); });
+    render();
+  });
+
+  // ---------- presets ----------
+  var PRESETS = {
+    // DDP baseline: nothing sharded
+    "ddp":       {model:"70b", zero:0, DP:8,  TP:1,  PP:1, CP:1, EP:1,  S:8192, cap:80},
+    "z1":        {model:"70b", zero:1, DP:8,  TP:1,  PP:1, CP:1, EP:1,  S:8192, cap:80},
+    "fsdp":      {model:"70b", zero:3, DP:8,  TP:8,  PP:2, CP:1, EP:1,  S:8192, cap:80},
+    // MoE 64-GPU: TP=8, PP=4, DP=2, EP=2 -> world 64  (read.md §10)
+    "moe64":     {model:"27b", zero:3, DP:2,  TP:8,  PP:4, CP:1, EP:2,  S:8192, cap:40},
+    "crossnode": {model:"70b", zero:3, DP:4,  TP:16, PP:1, CP:1, EP:1,  S:8192, cap:80}
+  };
+  document.querySelectorAll("[data-preset]").forEach(function(btn){
+    btn.addEventListener("click", function(){
+      var p = PRESETS[this.getAttribute("data-preset")]; if(!p) return;
+      st.model=p.model; st.zero=p.zero; st.DP=p.DP; st.TP=p.TP; st.PP=p.PP;
+      st.CP=p.CP; st.EP=p.EP; st.S=p.S; st.cap=p.cap;
+      // sync widgets
+      els.DP.value=st.DP; els.TP.value=st.TP; els.PP.value=st.PP;
+      els.CP.value=st.CP; els.EP.value=st.EP; els.S.value=st.S;
+      document.querySelectorAll("#modelSeg button").forEach(function(x){ x.classList.toggle("on", x.getAttribute("data-model")===st.model); });
+      document.querySelectorAll("#zeroSeg button").forEach(function(x){ x.classList.toggle("on", parseInt(x.getAttribute("data-z"),10)===st.zero); });
+      document.querySelectorAll("#capSeg button").forEach(function(x){ x.classList.toggle("on", parseInt(x.getAttribute("data-cap"),10)===st.cap); });
+      render();
+    });
+  });
+
+  render();
+})();
+</script>
+</body>
+</html>

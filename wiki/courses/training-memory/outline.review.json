@@ -1,0 +1,22 @@
+{
+  "verdict": "APPROVE",
+  "notes": [
+    "Scope: all nine required items are covered. Six-item ledger + Rule of 16 (ch-01), precision bf16-master/fp8/fused-CE (ch-02), activations & gradient checkpointing (ch-03), attention-kernel family split across ch-04 foundation / ch-05 FA1-2-3 / ch-06 SDPA-xFormers-Sage-Ring-Paged, per-kernel TRAINING-memory behavior stated explicitly in ch-05 and ch-06, full DP/ZeRO/FSDP/TP/SP/PP/EP/CP taxonomy with world_size = TP x PP x CP x DP (ch-07), per-GPU formulas + OOM debugging loop (ch-08), and a concrete 27B 256-expert MoE on A100-40GB capstone (ch-09). No scope gap found.",
+    "Dependency order is a clean DAG with no cycles or forward references: ch-01 is the sole root; ch-02/ch-03 depend only on the ledger; ch-04 correctly hangs attention off activations (ch-03); ch-05->ch-06 is a linear kernel progression; ch-07 depends only on ch-01 (does not spuriously require the attention chain); ch-08 pulls ledger+precision+activations+parallelism; ch-09 depends on all prior. Topologically sound.",
+    "Cross-link watch, not a blocker: context-parallel appears in BOTH ch-06 (Ring attention as the kernel mechanism) and ch-07 (CP as a parallelism primitive in the world_size accounting). This is the correct two-altitude split, but the author should wikilink the two so ch-07 references ch-06's kernel math rather than re-deriving it, to prevent duplicated CP exposition.",
+    "Granularity watch, not a blocker: ch-06 is the densest chapter (five distinct kernels: SDPA backends, xFormers, SageAttention, Ring/CP, Paged). It stays coherent as a deliberate 'kernel zoo' survey once the FA family is carried separately by ch-05, but it is the first candidate to split if the read.md exceeds the 120-line-per-page norm during authoring.",
+    "Depth floor met: every chapter summary lists >=3 concrete concepts; no chapter is too thin. ch-07 enumerates eight primitives, which is legitimate for a taxonomy chapter rather than an overload.",
+    "Out-of-scope for structural review but noted for the researcher: all COLLECTION-PLAN source slugs are still TODO and insights.md does not yet exist. Every source slug referenced in the outline maps 1:1 to a planned artifact (cluster A->ch01-03, B->ch04-06, C->ch07-09), so references are structurally valid; the library just needs building before authoring."
+  ],
+  "perChapter": [
+    { "id": "ch-01", "ok": true, "note": "Foundation. Six-item ledger + Rule of 16 (2+2+12) + full-FT vs LoRA + per-GPU vs total. deps [] correct. Right depth and granularity." },
+    { "id": "ch-02", "ok": true, "note": "Precision + loss-head spike. bf16 master / fp16 loss scaling / fp8 (Hopper) / fused-CE all present. deps [ch-01] correct." },
+    { "id": "ch-03", "ok": true, "note": "Activation scaling + gradient/activation checkpointing (sqrt-memory, ~33% recompute) + selective recompute. deps [ch-01] correct." },
+    { "id": "ch-04", "ok": true, "note": "Attention-as-memory foundation: N x N materialization, no-O(N^2) result, online softmax. Correctly precedes the kernels; deps [ch-03] ties it to activations." },
+    { "id": "ch-05", "ok": true, "note": "FA 1/2/3 with tiling, logsumexp backward recompute, and explicit training-memory profile. deps [ch-04] correct." },
+    { "id": "ch-06", "ok": true, "note": "Kernel zoo: SDPA/xFormers/Sage/Ring/Paged, each with training-memory cost; Paged flagged inference-only. Densest chapter but coherent as a survey. CP overlap with ch-07 should be cross-linked. First split candidate if it grows." },
+    { "id": "ch-07", "ok": true, "note": "Full parallelism taxonomy DP/ZeRO/FSDP/TP/SP/PP/EP/CP + world_size formula. Eight primitives is fine for a taxonomy chapter. deps [ch-01] correct (no spurious attention dep)." },
+    { "id": "ch-08", "ok": true, "note": "Formulas + calculator + allocator phase-peak + estimate->smoke->read-OOM->lever loop + MFU + offload. Dense but a legitimate synthesis chapter. deps [ch-01,ch-02,ch-03,ch-07] correct." },
+    { "id": "ch-09", "ok": true, "note": "Concrete capstone: 27B 256-expert MoE, CP=1 hard-assert, A100-40GB, 32k/248k, EP-required + ZeRO-3-gather-OOM + LoRA node-invariance + calculator-as-oracle. Exercises the whole course. deps = all prior, correct." }
+  ]
+}

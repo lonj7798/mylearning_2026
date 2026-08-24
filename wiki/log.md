@@ -120,3 +120,15 @@ Index rebuilt.
 ## [2026-07-14] Session #31
 - course: on-policy-distillation | chapter: ch-06 | phase: read
 - session ended: 2026-07-14T22:12:02.420Z
+
+## [2026-07-19] Session #34
+- course: training-memory | chapter: ch-01 | phase: read
+- session ended: 2026-07-19T16:46:41.487Z
+
+## [2026-07-19] Session #34
+- course: training-memory | chapter: ch-01 | phase: read
+- session ended: 2026-07-19T16:46:42.079Z
+
+## [2026-08-03] Session #36
+- course: training-memory | chapter: ch-04 | phase: read
+- session ended: 2026-08-03T21:52:39.915Z

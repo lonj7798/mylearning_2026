@@ -1,0 +1,107 @@
+{
+  "slug": "training-memory",
+  "title": "GPU Memory in LLM Training: The Ledger, Attention Kernels, and Parallelism",
+  "kind": "draft",
+  "created": "2026-07-16",
+  "scope": "A focused systems course on where every byte of GPU memory goes during LLM training, why jobs OOM, and which lever fixes it. Covers the six-item memory ledger (weights, gradients, Adam optimizer states, activations, the loss-head logit spike, and CUDA/NCCL overheads), the Rule of 16, full-FT vs LoRA, precision (bf16 master / fp8 / fused-CE), activations & gradient checkpointing, the attention-kernel family and its training-memory behavior (naive O(N^2) vs FlashAttention 1/2/3, SDPA backends, xFormers memory-efficient, SageAttention quantized, Ring/context-parallel, and the inference-only PagedAttention), the parallelism taxonomy (DP / ZeRO / FSDP / TP / SP / PP / EP / CP and world_size = TP x PP x CP x DP), the per-GPU memory formulas and calculator, and the OOM debugging loop. Ends in a capstone modeling a 27B 256-expert MoE budget on A100-40GB.",
+  "tactic_blind": true,
+  "phases": [
+    { "id": "ledger", "title": "The Memory Ledger", "chapters": ["ch-01", "ch-02", "ch-03"] },
+    { "id": "prerequisite", "title": "Prerequisite: The Mechanism", "chapters": ["ch-extra"] },
+    { "id": "attention", "title": "Attention and Memory", "chapters": ["ch-04", "ch-05", "ch-06"] },
+    { "id": "scaling", "title": "Scaling the Ledger", "chapters": ["ch-07", "ch-08"] },
+    { "id": "capstone", "title": "Capstone", "chapters": ["ch-09"] }
+  ],
+  "chapters": [
+    {
+      "id": "ch-01",
+      "title": "The Memory Ledger: What Fills a GPU",
+      "phase": "ledger",
+      "summary": "The six items that occupy every training GPU (weights 2B, gradients 2B trainable, Adam optimizer 12B, activations, loss-head logit spike, overheads), the Rule of 16 (2+2+12 = 16 bytes/param of states before activations), full fine-tuning vs LoRA, and per-GPU vs total accounting.",
+      "deps": [],
+      "sources": ["transformer-math-101", "ultrascale-playbook", "ml-engineering-memory"],
+      "figure": "figures/memory-ledger.html"
+    },
+    {
+      "id": "ch-02",
+      "title": "Optimizer States, Precision, and the Loss-Head Spike",
+      "phase": "ledger",
+      "summary": "Why Adam costs 12 bytes/param (fp32 master + momentum + variance), bf16 mixed precision and the fp32 master copy, fp16 loss scaling, fp8 on Hopper (Transformer Engine), and the batch x seq x vocab x 4B fp32 logit spike removed by fused/chunked cross-entropy (Liger).",
+      "deps": ["ch-01"],
+      "sources": ["mixed-precision-training", "fp8-training", "liger-fused-ce"],
+      "figure": null
+    },
+    {
+      "id": "ch-03",
+      "title": "Activations and Gradient Checkpointing",
+      "phase": "ledger",
+      "summary": "How activation memory scales (batch x seq x hidden x layers), what must be stored for the backward pass, gradient/activation checkpointing (recompute instead of store: sqrt-memory for ~33% extra compute), and selective recomputation.",
+      "deps": ["ch-01"],
+      "sources": ["gradient-checkpointing-chen", "selective-recompute-korthikanti"],
+      "figure": null
+    },
+    {
+      "id": "ch-extra",
+      "title": "Attention and the Transformer, From Scratch",
+      "phase": "prerequisite",
+      "summary": "The mechanism behind every memory number in this course, built from tokens up: QKV projections and scaled dot-product attention, the sqrt(d_k) variance argument, causal masking, the multi-head split/concat/W_O round trip, permutation equivariance and why position must be injected (sinusoidal vs RoPE), the full transformer-block tensor ledger (pre-LN vs post-LN, the residual stream, the 4h MLP), and the KV cache with GQA/MQA/MLA as the train-vs-infer boundary. Reconstructs Korthikanti's 34 s b h + 5 a s^2 b coefficient from first principles so each term maps to a lever.",
+      "deps": ["ch-03"],
+      "sources": ["qkv-scaled-dot-product", "sqrt-dk-scaling-variance", "causal-mask-neg-inf", "multi-head-split-concat-wo", "attention-permutation-equivariance", "sinusoidal-absolute-encoding", "rope-rotary-position-embedding", "transformer-block-tensor-ledger", "pre-ln-vs-post-ln", "residual-stream-memory-backbone", "kv-cache-mechanism", "kv-cache-memory-formula", "gqa-mqa-mla-kv-heads", "train-vs-infer-kv-boundary"],
+      "figure": "figures/attention-step-by-step.html"
+    },
+    {
+      "id": "ch-04",
+      "title": "Attention Is a Memory Problem: O(N^2) and Why the Kernel Decides",
+      "phase": "attention",
+      "summary": "The N x N attention-score matrix materialization that dominates activation memory at long sequence, why naive attention OOMs at 32k, the result that self-attention does not need O(N^2) memory, and online softmax as the enabling math for streaming attention.",
+      "deps": ["ch-03", "ch-extra"],
+      "sources": ["self-attention-no-n2-memory", "online-softmax"],
+      "figure": null
+    },
+    {
+      "id": "ch-05",
+      "title": "FlashAttention (1/2/3): IO-Aware Exact Attention",
+      "phase": "attention",
+      "summary": "FlashAttention's IO-awareness (HBM vs SRAM), tiling with online softmax so the N x N matrix is never materialized (O(N) memory, exact), backward recomputation from stored logsumexp, and the FA1 to FA2 to FA3 (Hopper, FP8) progression and their training-memory profile.",
+      "deps": ["ch-04"],
+      "sources": ["flash-attention-1", "flash-attention-2", "flash-attention-3"],
+      "figure": "figures/flash-tiling.html"
+    },
+    {
+      "id": "ch-06",
+      "title": "The Attention Kernel Zoo: SDPA, xFormers, SageAttention, Ring, Paged",
+      "phase": "attention",
+      "summary": "PyTorch SDPA backends (math / memory-efficient / flash / cuDNN), xFormers memory-efficient attention, SageAttention (INT8/quantized), Ring/context-parallel attention (sequence sharded across devices), and PagedAttention (inference-only KV-cache paging) - how each differs and its training-memory cost.",
+      "deps": ["ch-05"],
+      "sources": ["pytorch-sdpa", "xformers-mem-efficient", "sage-attention", "ring-attention", "paged-attention"],
+      "figure": "figures/kernel-memory.html"
+    },
+    {
+      "id": "ch-07",
+      "title": "Parallelism Taxonomy: DP / ZeRO / FSDP / TP / SP / PP / EP / CP",
+      "phase": "scaling",
+      "summary": "What each parallelism primitive shards and its cost: DP (replica + grad all-reduce), ZeRO-1/2/3 = FSDP (optimizer/+grad/+weights), tensor parallel (split weight matrices, NVLink, TP<=8), sequence parallel, pipeline parallel (stages, bubbles, 1F1B), expert parallel (MoE all-to-all), context parallel (sequence), and world_size = TP x PP x CP x DP.",
+      "deps": ["ch-01"],
+      "sources": ["zero-memory-optimization", "megatron-tp-sp", "pipeline-parallelism-1f1b", "pytorch-fsdp", "deepspeed-moe-ep"],
+      "figure": "figures/parallelism-sharding.html"
+    },
+    {
+      "id": "ch-08",
+      "title": "Memory Formulas, the Calculator, and the OOM Debugging Loop",
+      "phase": "scaling",
+      "summary": "Assembling the per-GPU formulas (full-FT ZeRO-3 vs LoRA node-invariance), activation formula with checkpointing, safety margins, the allocator peak at phase boundaries (Adam states materialize at end of step 1), the debugging loop (estimate to smoke-run to read-OOM to lever), MFU/throughput sanity (6PD FLOPs/token), and offload as last resort.",
+      "deps": ["ch-01", "ch-02", "ch-03", "ch-07"],
+      "sources": ["memory-calculator-notes", "training-oom-failure-modes"],
+      "figure": "figures/memory-calculator.html"
+    },
+    {
+      "id": "ch-09",
+      "title": "Capstone: Modeling a 27B MoE Memory Budget End-to-End",
+      "phase": "capstone",
+      "summary": "A worked end-to-end budget for a 27B, 256-expert MoE with GDN linear attention (CP=1 hard-assert) on A100-40GB at 32k seq / 248k vocab: walk the full ledger, choose the parallelism plan (EP required, ZeRO-3 expert gather OOMs), explain LoRA node-invariance vs full-FT world-size scaling, and diagnose a real OOM using the calculator as an oracle.",
+      "deps": ["ch-01", "ch-02", "ch-03", "ch-04", "ch-05", "ch-06", "ch-07", "ch-08"],
+      "sources": [],
+      "figure": null
+    }
+  ]
+}

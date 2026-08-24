@@ -1,0 +1,1461 @@
+<!--
+  Figure: transformer-block-dataflow.html — "pre-LN transformer block 하나를 tensor 단위로 통과시키기"
+  Chapter: ch-extra (bridge / prerequisite chapter of the training-memory course)
+  Back to: ../read.md    ·    Companion Q&A: ../qa.md
+
+  이 course의 다리(bridge) figure. transformer block 한 개를
+      x → LayerNorm → Multi-Head Attention → (+residual) → LayerNorm → MLP(4h) → (+residual) → out
+  으로 한 step씩 통과시키면서, 각 지점의 SHAPE와 그 shape이 차지하는 BYTE를 동시에 보여준다.
+
+  Fully self-contained: inline CSS + vanilla JS only. No CDN, no web font, no image,
+  no fetch/XHR. file:// 로 열면 오프라인에서 그대로 렌더된다.
+
+  단위 규약: 이 파일은 전부 10진 단위(1 MB = 10^6 B, 1 GB = 10^9 B)를 쓴다 — ch-03 figure와 동일.
+
+  Reference config (ch-03/figures/checkpointing.html 과 동일 — 절대 어긋나면 안 됨):
+    B=1, s=4096, h=4096, a=32, d_head=128, 4h=16384, bf16=2 B/elem, L=80
+      hidden state    [B,s,h]     = 1*4096*4096*2      =    33,554,432 B =   33.55 MB
+      attention probs [B,a,s,s]   = 1*32*4096*4096*2   = 1,073,741,824 B =    1.07 GB
+      MLP interm.     [B,s,4h]    = 1*4096*16384*2     =   134,217,728 B =  134.22 MB
+      LN saved stats  [B,s]x2 fp32                     =        32,768 B
+      block 합계(1~15번)                                = 1,677,787,136 B =    1.68 GB
+      checkpointing 시 버리는 2~15번                      = 1,644,232,704 B =    1.64 GB  (49.0x)
+      L=80: 134.22 GB  ->  2*s*b*h*L = 2,684,354,560 B = 2.68 GB  (50x)
+      Korthikanti: 34*sbh = 570,425,344 B, 5as^2b = 2,684,354,560 B,
+                   per layer (34+5as/h)*sbh = 3,254,779,904 B = 3.25 GB, x80 = 260.38 GB
+      inference KV (MHA): 2*B*s*a*d_head*2 = 67,108,864 B = 67.11 MB/block, x80 = 5.37 GB
+                  (GQA-8): 16,777,216 B = 16.78 MB/block, x80 = 1.34 GB — 정확히 4x
+
+  Teaching points made visible:
+    1. block 안의 모든 tensor는 [B,s,h] / [B,a,s,s] / [B,s,4h] 딱 세 가지 shape의 변주다.
+       그 중 [B,a,s,s] 하나가 block byte의 64%를 먹는다 (1.07 GB / 1.68 GB).
+    2. "어떤 tensor를 붙들고 있어야 하는가"는 취향이 아니라 연산마다 정해진 규칙이다:
+       matmul→입력, GELU→입력, softmax→출력, dropout→1 B mask, LayerNorm→입력+(mean,rstd),
+       residual add→아무것도 안 함. 이 규칙의 합이 곧 Korthikanti의 계수 34 = 11+19+4 다.
+    3. training과 inference는 같은 tensor를 만들지만 남기는 게 완전히 다르다.
+       training: 전부 (backward가 곱셈 인자로 쓴다) = 1.68 GB/block, optimizer step 후 해제.
+       inference: K, V 두 개만 (KV cache) = 67.11 MB/block, request 끝날 때까지 상주.
+       나머지는 전부 즉시 해제 — 그래서 inference에는 gradient checkpointing이라는 개념이 없다.
+    4. residual stream은 block을 관통하는 하나의 [B,s,h] 고속도로다. pre-LN이 normalize하는
+       것은 이 고속도로가 아니라 '가지(branch)로 들어가는 복사본'이다 — 고속도로 위에
+       LayerNorm을 얹으면 backward가 L개의 LN Jacobian을 직렬로 통과하게 되기 때문.
+       그리고 pre-LN/post-LN의 activation byte는 정확히 같다 (둘 다 LN 입력 2*sbh를 저장).
+    5-a. 회계 규칙: 16번(block 출력)은 block 합계에서 뺀다 — 그건 곧 다음 block의 1번이라
+       L개 block에 걸쳐 정확히 한 번씩 이중 계산되기 때문. ch-03 figure의 role:"next"와 같은 규칙이고,
+       이래야 1.68 GB / 49.0x / 134.22 GB / 50x 가 ch-03과 정확히 일치한다.
+    5-b. 함정 경고 내장: 기본 config에서 5as = 2hL (655,360)이라 한 layer의 5as²b와
+       L개 block 전체의 2·s·b·h·L이 둘 다 2,684,354,560 B로 찍힌다. 아무 관계 없는 양이므로
+       표 아래에 명시적 경고 배너를 띄운다(조건부, 5as === 2hL 일 때만).
+    5. 이 16개 tensor는 전부 ch-01 ledger의 item 4(activations) 한 줄로 들어간다.
+       weight/gradient/optimizer(item 1~3)는 block당 12h^2 param에 붙는 별개의 정적 비용이고,
+       KV cache는 ledger에 아예 없다 (training 전용 ledger이므로).
+-->
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Transformer Block Dataflow — shape과 byte를 동시에 (ch-extra)</title>
+<style>
+  :root{
+    --bg:#0e1117; --panel:#161b22; --panel2:#1c2230; --edge:#2b3242;
+    --ink:#e6edf3; --ink-dim:#9aa7b4; --ink-faint:#6b7686;
+    --accent:#58a6ff; --accent2:#3fb950; --danger:#f85149; --warn:#d29922;
+    --c-stream:#58a6ff;  /* residual stream [B,s,h] */
+    --c-mon:#f778ba;     /* [B,a,s,s] 괴물 tensor   */
+    --c-mlp:#d29922;     /* [B,s,4h] MLP 중간       */
+    --c-keep:#3fb950;    /* backward용으로 보존됨    */
+    --c-kv:#bc8cff;      /* KV cache로 상주         */
+    --c-free:#6b7686;    /* 즉시 해제               */
+    --c-ln:#8b949e;      /* LayerNorm 통계          */
+  }
+  *{box-sizing:border-box;}
+  html,body{margin:0;padding:0;max-width:100%;overflow-x:hidden;}
+  body{
+    background:var(--bg); color:var(--ink);
+    font:14px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Apple SD Gothic Neo",
+         "Noto Sans KR",Helvetica,Arial,sans-serif;
+    padding:22px; max-width:1180px; margin:0 auto;
+  }
+  h1{font-size:21px; margin:0 0 3px; letter-spacing:.2px;}
+  .sub{color:var(--ink-dim); font-size:13px; margin:0 0 20px;}
+  .sub code{color:var(--accent);}
+  .panel{background:var(--panel); border:1px solid var(--edge); border-radius:10px;
+    padding:16px; margin-bottom:18px;}
+  .panel h2{font-size:12px; text-transform:uppercase; letter-spacing:.9px; color:var(--ink-dim);
+    margin:0 0 14px; font-weight:600;}
+  .panel h2 .q{color:var(--ink); text-transform:none; letter-spacing:0; font-size:13.5px;}
+  .mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+    font-variant-numeric:tabular-nums;}
+  .dimmed{color:var(--ink-faint);}
+  b.ok{color:var(--accent2);} b.bad{color:var(--danger);} b.wn{color:var(--warn);}
+  b.kv{color:var(--c-kv);} b.mon{color:var(--c-mon);}
+
+  .callout{border-left:3px solid var(--warn); background:rgba(210,153,34,.07);
+    padding:11px 14px; border-radius:0 7px 7px 0; font-size:13px; color:var(--ink-dim);
+    margin-top:14px;}
+  .callout b{color:var(--ink);}
+  .callout.ok{border-left-color:var(--accent2); background:rgba(63,185,80,.07);}
+  .callout.no{border-left-color:var(--danger); background:rgba(248,81,73,.07);}
+  .callout.kv{border-left-color:var(--c-kv); background:rgba(188,140,255,.07);}
+  .callout code{color:var(--accent);}
+
+  /* ---------------- config ---------------- */
+  .cfgwrap{display:grid; grid-template-columns:repeat(auto-fit,minmax(168px,1fr)); gap:12px 16px;}
+  .ctrl label{display:flex; justify-content:space-between; align-items:baseline; margin-bottom:2px;}
+  .ctrl .name{font-weight:600; font-size:12px;}
+  .ctrl .val{color:var(--accent); font-weight:700; font-size:12.5px;
+    font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;}
+  input[type=range]{-webkit-appearance:none; appearance:none; width:100%; height:5px;
+    border-radius:5px; background:var(--edge); outline:none; margin:5px 0 0;}
+  input[type=range]::-webkit-slider-thumb{-webkit-appearance:none; appearance:none;
+    width:15px; height:15px; border-radius:50%; background:var(--accent); cursor:pointer;}
+  input[type=range]::-moz-range-thumb{width:15px; height:15px; border:0; border-radius:50%;
+    background:var(--accent); cursor:pointer;}
+  .btnrow{display:flex; gap:6px; flex-wrap:wrap;}
+  .tb{background:var(--panel2); border:1px solid var(--edge); color:var(--ink-dim);
+    border-radius:7px; padding:7px 11px; cursor:pointer; font-size:12px; transition:.13s;
+    font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;}
+  .tb:hover{border-color:var(--ink-faint); color:var(--ink);}
+  .tb.on{background:#1d2b3f; border-color:var(--accent); color:var(--ink); font-weight:700;}
+  .derived{display:flex; gap:7px; flex-wrap:wrap; margin-top:14px;}
+  .derived span{border:1px solid var(--edge); background:var(--panel2); border-radius:6px;
+    padding:4px 9px; font-size:11.5px; color:var(--ink-dim);
+    font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;}
+  .derived span b{color:var(--accent);}
+  .derived span.warnc{border-color:var(--warn);} .derived span.warnc b{color:var(--warn);}
+
+  /* ---------------- mode toggle ---------------- */
+  .modes{display:flex; gap:9px; flex-wrap:wrap; margin-bottom:4px;}
+  .mode{flex:1 1 240px; background:var(--panel2); border:1px solid var(--edge); color:var(--ink-dim);
+    border-radius:9px; padding:11px 13px; cursor:pointer; text-align:left; font-size:13px;
+    transition:.13s; line-height:1.4;}
+  .mode:hover{border-color:var(--ink-faint); color:var(--ink);}
+  .mode .mt{display:block; font-size:10.5px; letter-spacing:.8px; text-transform:uppercase;
+    color:var(--ink-faint); margin-bottom:3px;}
+  .mode small{display:block; font-size:11.5px; color:var(--ink-faint); margin-top:3px;}
+  .mode.on{background:#12261b; border-color:var(--c-keep); color:var(--ink);}
+  .mode.on .mt{color:var(--c-keep);}
+  .mode.on small{color:var(--ink-dim);}
+  .mode.on.inf{background:#1e1830; border-color:var(--c-kv);}
+  .mode.on.inf .mt{color:var(--c-kv);}
+  .ckline{display:flex; align-items:center; gap:8px; margin-top:11px; font-size:12.5px;
+    color:var(--ink-dim);}
+  .ckline input{accent-color:var(--c-keep); width:15px; height:15px; cursor:pointer;}
+  .ckline label{cursor:pointer;}
+
+  /* ---------------- flow ---------------- */
+  .runbar{display:flex; gap:7px; flex-wrap:wrap; margin-bottom:13px; align-items:center;}
+  .rb{background:var(--panel2); border:1px solid var(--edge); color:var(--ink);
+    border-radius:7px; padding:9px 14px; cursor:pointer; font-size:12.5px; font-weight:600;
+    transition:.13s;}
+  .rb:hover{border-color:var(--accent);}
+  .rb.primary{background:#1d3a5f; border-color:var(--accent); color:#cfe6ff;}
+  .phase{margin-left:auto; font-size:12.5px; color:var(--ink-dim);}
+  .phase b{color:var(--ink);}
+
+  .flow{display:grid; grid-template-columns:150px 1fr; gap:14px; align-items:start;}
+  @media (max-width:820px){ .flow{grid-template-columns:1fr;} }
+  .rail{background:#10151d; border:1px solid var(--edge); border-radius:9px; padding:11px 9px;}
+  .rail .rt{font-size:10px; letter-spacing:.7px; text-transform:uppercase; color:var(--ink-faint);
+    margin-bottom:9px; text-align:center;}
+  .rnode{border:1px solid var(--edge); border-radius:7px; padding:7px 8px; text-align:center;
+    font-size:11.5px; background:#141a24; color:var(--ink-dim); transition:.2s;}
+  .rnode b{display:block; color:var(--ink); font-size:12px;
+    font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;}
+  .rnode .rb2{font-size:10.5px; color:var(--ink-faint);
+    font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;}
+  .rnode.act{border-color:var(--c-stream); background:rgba(88,166,255,.14);
+    box-shadow:0 0 0 1px rgba(88,166,255,.3);}
+  .rnode.act b{color:var(--c-stream);}
+  .rarrow{text-align:center; color:var(--ink-faint); font-size:11px; padding:5px 0 4px;
+    line-height:1.35;}
+  .rarrow span{color:var(--ink-faint);}
+  .rarrow.act{color:var(--warn);}
+
+  .nodes{display:flex; flex-direction:column; gap:3px;}
+  .nd{display:grid; grid-template-columns:24px 1fr 122px 84px 88px 74px;
+    gap:8px; align-items:center; padding:5px 8px; border-radius:6px;
+    border:1px solid transparent; font-size:12.5px; transition:.18s; opacity:.42;}
+  @media (max-width:900px){
+    .nd{grid-template-columns:22px 1fr 82px 74px; gap:6px;}
+    .nd .shp, .nd .barw{display:none;}
+  }
+  .nd.seen{opacity:1;}
+  .nd.cur{border-color:var(--accent); background:rgba(88,166,255,.09);}
+  .nd .ix{color:var(--ink-faint); font-size:11px; text-align:right;
+    font-family:ui-monospace,monospace;}
+  .nd .nm{line-height:1.35;}
+  .nd .nm em{font-style:normal; color:var(--ink-faint); font-size:11px;}
+  .nd .shp{color:var(--ink-dim); font-size:11px;
+    font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;}
+  .nd .sz{text-align:right; font-size:11.5px; font-variant-numeric:tabular-nums;
+    font-family:ui-monospace,monospace; color:var(--ink-dim);}
+  .nd .barw{background:#10151d; border-radius:4px; height:13px; position:relative;
+    border:1px solid var(--edge); overflow:hidden;}
+  .nd .bar{position:absolute; left:0; top:0; bottom:0; background:var(--c-free);
+    opacity:.8; border-radius:3px 0 0 3px; transition:width .3s;}
+  .nd .fate{font-size:10px; text-align:center; border:1px solid currentColor;
+    border-radius:5px; padding:2px 0; white-space:nowrap;}
+  .nd.branch .nm{padding-left:13px; border-left:2px solid var(--edge); margin-left:1px;}
+  .nd.k-keep .fate{color:var(--c-keep);}  .nd.k-keep .bar{background:var(--c-keep);}
+  .nd.k-kv   .fate{color:var(--c-kv);}    .nd.k-kv   .bar{background:var(--c-kv);}
+  .nd.k-free .fate{color:var(--c-free);}  .nd.k-free .bar{background:var(--c-free); opacity:.35;}
+  .nd.k-free .sz{color:var(--ink-faint);}
+  .nd.k-free .nm{color:var(--ink-faint);}
+  .nd.mon .nm b{color:var(--c-mon);}
+  .nd.mlpw .nm b{color:var(--c-mlp);}
+  .nd.stream{background:rgba(88,166,255,.05);}
+  .nd.stream .nm b{color:var(--c-stream);}
+  .nd .tag{font-size:9.5px; border:1px solid currentColor; border-radius:4px;
+    padding:0 4px; margin-left:5px; vertical-align:1px; white-space:nowrap; color:var(--ink-faint);}
+
+  .totrow{display:flex; gap:10px; flex-wrap:wrap; margin-top:14px;}
+  .card{flex:1 1 190px; background:var(--panel2); border:1px solid var(--edge);
+    border-radius:8px; padding:10px 12px;}
+  .card .k{font-size:10.5px; text-transform:uppercase; letter-spacing:.7px;
+    color:var(--ink-faint); margin-bottom:3px;}
+  .card .v{font-size:20px; font-weight:700; font-variant-numeric:tabular-nums;
+    font-family:ui-monospace,monospace;}
+  .card .n{font-size:11.5px; color:var(--ink-faint); margin-top:2px; line-height:1.5;}
+  .card.ck{border-color:var(--c-keep);} .card.ck .v{color:var(--c-keep);}
+  .card.kvc{border-color:var(--c-kv);}  .card.kvc .v{color:var(--c-kv);}
+  .card.rt .v{color:var(--accent);}
+  .card.mo{border-color:var(--c-mon);}  .card.mo .v{color:var(--c-mon);}
+
+  .legend{display:flex; gap:14px; font-size:11.5px; color:var(--ink-dim); margin-top:11px;
+    flex-wrap:wrap;}
+  .legend i{display:inline-block; width:11px; height:11px; border-radius:3px;
+    vertical-align:-1px; margin-right:5px; border:1px solid var(--edge);}
+
+  /* height는 JS 상수(CV_H)와 반드시 같은 값 — DPR 되읽기 금지 */
+  canvas{width:100%; display:block; border-radius:8px; background:#10151d;
+    border:1px solid var(--edge);}
+  #cvFlow{height:230px;}
+
+  /* ---------------- toy matrices ---------------- */
+  .toywrap{display:grid; grid-template-columns:1fr 1fr; gap:16px; align-items:start;}
+  @media (max-width:900px){ .toywrap{grid-template-columns:1fr;} }
+  /* 넓은 행렬은 페이지가 아니라 이 컨테이너 안에서만 가로 스크롤된다 */
+  #toyMat{overflow-x:auto; padding-bottom:4px;}
+  .mat{display:inline-block; vertical-align:top; margin:0 10px 10px 0;}
+  .mat .cap{font-size:11px; color:var(--ink-faint); margin-bottom:3px;
+    font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;}
+  .mat .cap b{color:var(--ink-dim);}
+  .mat table{border-collapse:collapse; font-size:11.5px;
+    font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;}
+  .mat td{border:1px solid var(--edge); padding:3px 6px; text-align:right;
+    color:var(--ink-dim); background:#10151d; font-variant-numeric:tabular-nums;
+    min-width:52px;}
+  .mat td.hi{background:rgba(88,166,255,.2); color:#cfe6ff; border-color:var(--accent);
+    font-weight:700;}
+  .mat td.msk{color:var(--ink-faint); background:#0c1017; opacity:.55;}
+  .mat td.hd0{border-left:2px solid var(--c-stream);}
+  .mat td.hd1{border-left:2px solid var(--c-mon);}
+  .mat .rowsum{font-size:10.5px; color:var(--accent2); padding-left:6px;}
+  .work{background:#10151d; border:1px solid var(--edge); border-radius:8px; padding:12px 13px;
+    font-size:12.5px; line-height:1.95; overflow-x:auto;}
+  .work .wq{color:var(--ink-faint); font-size:11.5px; text-transform:uppercase;
+    letter-spacing:.6px; margin-bottom:6px;}
+  .work .eq{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; white-space:nowrap;}
+  .work .res{color:var(--accent2); font-weight:700;}
+  .work .hl{color:var(--accent);}
+
+  /* ---------------- tables ---------------- */
+  .tblwrap{overflow-x:auto;}
+  table.dt{width:100%; border-collapse:collapse; font-size:12.5px; margin-top:6px; min-width:520px;}
+  table.dt th, table.dt td{padding:6px 8px; text-align:right; border-bottom:1px solid var(--edge);
+    font-variant-numeric:tabular-nums; white-space:nowrap;}
+  table.dt th{color:var(--ink-faint); font-weight:600; font-size:10.5px; text-transform:uppercase;
+    letter-spacing:.5px;}
+  table.dt th:first-child, table.dt td:first-child{text-align:left; white-space:normal;}
+  table.dt td.g{color:var(--accent2);} table.dt td.r{color:var(--danger);}
+  table.dt tr.hi td{background:rgba(88,166,255,.09);}
+  table.dt tr.mo td{background:rgba(247,120,186,.09);}
+
+  .grid2{display:grid; grid-template-columns:1fr 1fr; gap:18px;}
+  @media (max-width:900px){ .grid2{grid-template-columns:1fr;} }
+  .lnbox{background:#10151d; border:1px solid var(--edge); border-radius:9px; padding:13px;}
+  .lnbox h3{margin:0 0 10px; font-size:13px; color:var(--ink);}
+  .lnbox h3 span{font-size:11px; color:var(--ink-faint); font-weight:400;}
+  .lnstack{display:flex; flex-direction:column; gap:0;}
+  .lnrow{display:flex; align-items:center; gap:8px; font-size:11.5px;
+    font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;}
+  .lnbox .hw{width:9px; flex:none; align-self:stretch; min-height:26px;
+    background:linear-gradient(180deg,rgba(88,166,255,.55),rgba(88,166,255,.55));
+    border-radius:2px;}
+  .lnbox .hw.cut{background:repeating-linear-gradient(180deg,#f85149 0 5px,#3a1c1c 5px 10px);}
+  .lnbox .bx{flex:1; border:1px solid var(--edge); border-radius:6px; padding:5px 8px;
+    background:#141a24; color:var(--ink-dim);}
+  .lnbox .bx.ln{border-color:var(--c-ln); color:var(--ink);}
+  .lnbox .bx.on-hw{border-color:var(--danger); color:#ffb3ae;}
+  pre{background:#10151d; border:1px solid var(--edge); border-radius:8px; padding:13px;
+    overflow-x:auto; font-size:12.5px; line-height:1.75; margin:0;
+    font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;}
+  pre .cm{color:var(--ink-faint);} pre .kw{color:var(--c-kv);}
+  pre .st{color:var(--accent2);} pre .fn{color:var(--accent);}
+
+  .foot{color:var(--ink-faint); font-size:12px; margin-top:26px; line-height:1.8;}
+  .foot a{color:var(--accent); text-decoration:none;}
+</style>
+</head>
+<body>
+
+<h1>Transformer Block Dataflow — <span style="color:var(--c-stream)">shape</span>과 <span style="color:var(--c-keep)">byte</span>를 동시에 보기</h1>
+<p class="sub">
+  ch-extra bridge figure · pre-LN block 하나를 tensor 단위로 통과시킨다.
+  한 줄 요약: <b>block 안의 tensor는 <code>[B,s,h]</code> / <code>[B,a,s,s]</code> / <code>[B,s,4h]</code> 세 shape의 변주뿐</b>이고,
+  <b>training은 그 16개를 전부 붙들고 inference는 K·V 두 개만 남긴다</b>.
+  <span class="dimmed">(단위 규약: 1 MB = 10⁶ B, ch-03 figure와 동일)</span>
+</p>
+
+<!-- ==================== 0. config ==================== -->
+<div class="panel">
+  <h2>0 · <span class="q">config — 모든 숫자는 여기서 나온다</span></h2>
+  <div class="cfgwrap">
+    <div class="ctrl">
+      <label><span class="name">B <span class="dimmed">micro-batch</span></span><span class="val" id="vB">1</span></label>
+      <input type="range" id="sB" min="1" max="8" step="1" value="1">
+    </div>
+    <div class="ctrl">
+      <label><span class="name">s <span class="dimmed">seq len</span></span><span class="val" id="vS">4096</span></label>
+      <input type="range" id="sS" min="0" max="6" step="1" value="3">
+    </div>
+    <div class="ctrl">
+      <label><span class="name">h <span class="dimmed">d_model</span></span><span class="val" id="vH">4096</span></label>
+      <input type="range" id="sH" min="0" max="5" step="1" value="3">
+    </div>
+    <div class="ctrl">
+      <label><span class="name">a <span class="dimmed">n_heads</span></span><span class="val" id="vA">32</span></label>
+      <input type="range" id="sA" min="0" max="3" step="1" value="2">
+    </div>
+    <div class="ctrl">
+      <label><span class="name">L <span class="dimmed">blocks</span></span><span class="val" id="vL">80</span></label>
+      <input type="range" id="sL" min="1" max="126" step="1" value="80">
+    </div>
+    <div class="ctrl">
+      <label><span class="name">dtype</span><span class="val" id="vD">bf16</span></label>
+      <div class="btnrow" id="dtypeBtns"></div>
+    </div>
+  </div>
+  <div class="derived" id="derived"></div>
+  <div class="callout" id="cfgNote"></div>
+</div>
+
+<!-- ==================== 1. mode ==================== -->
+<div class="panel">
+  <h2>1 · <span class="q">mode — 같은 tensor를 만들고, 남기는 것만 다르다</span></h2>
+  <div class="modes">
+    <button class="mode" id="mTrain">
+      <span class="mt">training</span>
+      <b>forward는 backward를 위한 준비다</b>
+      <small>chain rule이 곱셈 인자로 쓸 tensor를 전부 붙들고 있어야 한다.
+             optimizer step이 끝나면 한꺼번에 해제. KV cache는 <b>없다</b>.</small>
+    </button>
+    <button class="mode inf" id="mInfer">
+      <span class="mt">inference (decode)</span>
+      <b>forward는 그 자체가 목적이다</b>
+      <small>backward가 없으니 붙들 이유가 없다. 다음 token이 다시 읽어야 하는
+             <b>K와 V만</b> 살아남아 KV cache가 된다.</small>
+    </button>
+  </div>
+  <div class="ckline" id="ckLine">
+    <input type="checkbox" id="ckBox">
+    <label for="ckBox">gradient checkpointing 켜기 —
+      <span class="dimmed">block 입력 1개만 남기고 2~15번을 버린다 (ch-03 figure의 그 동작)</span></label>
+  </div>
+</div>
+
+<!-- ==================== 2. dataflow ==================== -->
+<div class="panel">
+  <h2>2 · <span class="q">한 step씩 — tensor가 생길 때마다 shape과 byte를 같이 본다</span></h2>
+
+  <div class="runbar">
+    <button class="rb primary" id="bStep">▶ 다음 step</button>
+    <button class="rb" id="bPlay">▶▶ 자동</button>
+    <button class="rb" id="bReset">↺ 리셋</button>
+    <span class="phase" id="phase"></span>
+  </div>
+
+  <div class="flow">
+    <div class="rail">
+      <div class="rt">residual stream</div>
+      <div id="railBody"></div>
+    </div>
+    <div class="nodes" id="nodes"></div>
+  </div>
+
+  <div class="legend">
+    <span><i style="background:rgba(63,185,80,.55);border-color:#3fb950"></i>backward용으로 보존</span>
+    <span><i style="background:rgba(188,140,255,.55);border-color:#bc8cff"></i>KV cache로 상주</span>
+    <span><i style="background:rgba(107,118,134,.35)"></i>즉시 해제 (transient)</span>
+    <span><i style="background:rgba(247,120,186,.55);border-color:#f778ba"></i>[B,a,s,s] — s에 제곱</span>
+    <span><i style="background:rgba(210,153,34,.55);border-color:#d29922"></i>[B,s,4h] — 4배 폭</span>
+  </div>
+
+  <div class="totrow" id="totrow"></div>
+  <div class="callout" id="stepNote"></div>
+
+  <div style="margin-top:15px">
+    <canvas id="cvFlow"></canvas>
+    <div class="legend">
+      <span><i style="background:#3fb950;border:0"></i>training — 누적 보존량</span>
+      <span><i style="background:#bc8cff;border:0"></i>inference — 상주량 (K·V만)</span>
+      <span><i style="background:#58a6ff;border:0"></i>그 step에서 새로 만들어진 tensor 크기</span>
+    </div>
+  </div>
+</div>
+
+<!-- ==================== 3. toy arithmetic ==================== -->
+<div class="panel">
+  <h2>3 · <span class="q">같은 step을 <b>진짜 숫자</b>로 — s=3, h=4, a=2, d_head=2</span></h2>
+  <p style="font-size:13px;color:var(--ink-dim);margin:0 0 13px">
+    위 패널은 <code>s=4096</code>이라 숫자를 볼 수 없다. 그래서 <b>완전히 같은 연산</b>을
+    손으로 검산 가능한 크기로 줄여서 나란히 돌린다 — token 3개, hidden 4차원, head 2개(각 2차원),
+    MLP 폭 8. weight는 0 / ±1 / ±0.5만 써서 곱셈이 전부 암산 가능하다.
+    <span class="dimmed">(<code>W_V = I</code>로 잡아 V가 곧 LN1 출력이 되게 했다 —
+    그래야 context가 <b>LN1 행들의 가중평균</b>이라는 게 눈으로 보인다. causal mask 적용, ε=1e-5.)</span>
+  </p>
+  <div class="toywrap">
+    <div id="toyMat"></div>
+    <div>
+      <div class="work" id="toyWork"></div>
+      <div class="callout ok" id="toyNote"></div>
+    </div>
+  </div>
+</div>
+
+<!-- ==================== 4. Korthikanti 대조 ==================== -->
+<div class="panel">
+  <h2>4 · <span class="q">위 16개의 합 = ch-03의 <code>s·b·h·(34 + 5as/h)</code> 인가?</span></h2>
+  <div class="grid2">
+    <div>
+      <div class="tblwrap"><table class="dt" id="korTable"></table></div>
+      <div id="coinWarn"></div>
+      <div class="callout no" id="korNote"></div>
+    </div>
+    <div>
+      <div class="callout">
+        <b>backward가 뭘 요구하는지는 연산마다 정해져 있다.</b> 취향이 아니다 —
+        각 연산의 VJP(vector-Jacobian product) 식에 뭐가 등장하는지가 전부다.
+        <div class="tblwrap" style="margin-top:9px"><table class="dt" style="min-width:0">
+          <thead><tr><th>연산</th><th>저장하는 것</th><th>이유</th></tr></thead>
+          <tbody>
+            <tr><td>matmul <code>Y = XW</code></td><td class="g">입력 X</td><td>dW = Xᵀ·dY</td></tr>
+            <tr><td>GELU</td><td class="g">입력</td><td>미분이 입력의 함수</td></tr>
+            <tr class="mo"><td>softmax</td><td class="g">출력 P</td><td>dS = P ⊙ (dP − rowsum(dP⊙P))</td></tr>
+            <tr><td>dropout</td><td class="g">mask (1 B)</td><td>같은 mask 재사용</td></tr>
+            <tr><td>LayerNorm</td><td class="g">입력 + (mean, rstd)</td><td>정규화 Jacobian 재구성</td></tr>
+            <tr><td>residual add <code>x + f(x)</code></td><td class="r">아무것도 안 함</td><td>∂(x+f)/∂x = I</td></tr>
+          </tbody>
+        </table></div>
+        <br>
+        여기서 바로 따라오는 결론 하나: <b>Q·K·V 세 projection은 입력을 <u>공유</u>한다</b>(LN1 출력 하나).
+        그래서 Korthikanti가 <code>6·sbh</code>가 아니라 <code>2·sbh</code>만 세는 것이다.
+      </div>
+      <div class="callout ok" id="crossNote"></div>
+    </div>
+  </div>
+</div>
+
+<!-- ==================== 5. pre-LN ==================== -->
+<div class="panel">
+  <h2>5 · <span class="q">왜 pre-LN은 <b>고속도로</b>가 아니라 <b>가지로 들어가는 복사본</b>을 normalize하나</span></h2>
+  <div class="grid2">
+    <div class="lnbox">
+      <h3>Post-LN <span>— 2017 Transformer, GPT-1</span></h3>
+      <div class="lnstack">
+        <div class="lnrow"><div class="hw"></div><div class="bx">x</div></div>
+        <div class="lnrow"><div class="hw"></div><div class="bx">x + Attn(x)</div></div>
+        <div class="lnrow"><div class="hw cut"></div><div class="bx on-hw">LayerNorm ← <b>고속도로 위에 있다</b></div></div>
+        <div class="lnrow"><div class="hw"></div><div class="bx">h′ = LayerNorm(x + Attn(x))</div></div>
+        <div class="lnrow"><div class="hw cut"></div><div class="bx on-hw">LayerNorm</div></div>
+        <div class="lnrow"><div class="hw"></div><div class="bx">h″ = LayerNorm(h′ + FFN(h′))</div></div>
+      </div>
+      <div class="callout no" style="margin-top:11px">
+        backward가 입력까지 가려면 <b>L개의 LayerNorm Jacobian을 직렬로</b> 통과한다.
+        Xiong et al. 2020: gradient norm이 <code>O(1/√ℓ)</code>로 줄어들고,
+        초기화 시점의 first-vs-last layer 불균형이 <code>O(L)</code>까지 벌어진다.
+        원 논문이 <b>warmup 4,000 step</b>을 쓴 이유다.
+      </div>
+    </div>
+    <div class="lnbox">
+      <h3>Pre-LN <span>— GPT-2 이후 전부</span></h3>
+      <div class="lnstack">
+        <div class="lnrow"><div class="hw"></div><div class="bx">x <span class="dimmed">← 고속도로는 손대지 않는다</span></div></div>
+        <div class="lnrow"><div class="hw"></div><div class="bx ln">┗ 복사본에만 LayerNorm → Attn</div></div>
+        <div class="lnrow"><div class="hw"></div><div class="bx">h′ = x + Attn(LayerNorm(x))</div></div>
+        <div class="lnrow"><div class="hw"></div><div class="bx ln">┗ 복사본에만 LayerNorm → FFN</div></div>
+        <div class="lnrow"><div class="hw"></div><div class="bx">h″ = h′ + FFN(LayerNorm(h′))</div></div>
+      </div>
+      <div class="callout ok" style="margin-top:11px">
+        고속도로에 남는 것은 <b>순수한 identity</b>다:
+        <code>∂x<sub>ℓ+1</sub>/∂x<sub>ℓ</sub> = I + ∂Sub(LN(x<sub>ℓ</sub>))/∂x<sub>ℓ</sub></code>.
+        <b>I</b>가 항상 붙어 있으므로 gradient는 <code>O(1)</code>로 유지되고 warmup이 선택사항이 된다.
+        곱셈이 아니라 <b>덧셈</b>이 backward의 기본 경로라는 게 핵심.
+      </div>
+    </div>
+  </div>
+  <div class="callout" id="lnByteNote"></div>
+</div>
+
+<!-- ==================== 6. ledger 매핑 ==================== -->
+<div class="panel">
+  <h2>6 · <span class="q">요약 — 이 16개가 ch-01 ledger의 어느 줄로 들어가는가</span></h2>
+  <div class="tblwrap"><table class="dt" id="ledgerTable"></table></div>
+  <div class="callout kv" id="ledgerNote"></div>
+</div>
+
+<p class="foot">
+  ← 돌아가기: <a href="../read.md">ch-extra read.md</a> ·
+  <a href="../qa.md">qa.md</a><br>
+  이어지는 곳: <a href="../../ch-01/figures/adamw-derivation.html">ch-01 adamw-derivation.html</a> (item 1–3 정적 비용) ·
+  <a href="../../ch-03/figures/checkpointing.html">ch-03 checkpointing.html</a> (이 16개 중 1개만 남기기)<br>
+  출처: Vaswani et al. 2017 §3.2 · Xiong et al. 2020 (<i>On Layer Normalization in the Transformer Architecture</i>) ·
+  Korthikanti et al. 2022 (<i>Reducing Activation Recomputation in Large Transformer Models</i>, §4.1) ·
+  Zhang &amp; Sennrich 2019 (RMSNorm)
+</p>
+
+<script>
+"use strict";
+const $ = id => document.getElementById(id);
+
+/* ==================================================================
+   0. config — 모든 byte는 이 5개 값에서만 나온다
+   ================================================================== */
+const S_OPT = [512, 1024, 2048, 4096, 8192, 16384, 32768];
+const H_OPT = [1024, 2048, 3072, 4096, 6144, 8192];
+const A_OPT = [8, 16, 32, 64];
+const D_OPT = [ {b:1, nm:"fp8"}, {b:2, nm:"bf16"}, {b:4, nm:"fp32"} ];
+
+const CFG = { B:1, sIx:3, hIx:3, aIx:2, L:80, dIx:1 };
+const getS = () => S_OPT[CFG.sIx];
+const getH = () => H_OPT[CFG.hIx];
+const getA = () => A_OPT[CFG.aIx];
+const getBpe = () => D_OPT[CFG.dIx].b;
+
+/* 단위 tensor 4종. 이게 block 안 모든 tensor의 전부다. */
+function units(){
+  const B = CFG.B, s = getS(), h = getH(), a = getA(), e = getBpe();
+  return {
+    HID : B * s * h * e,          // [B,s,h]      residual stream 폭
+    ATTN: B * a * s * s * e,      // [B,a,s,s]    attention 확률
+    MLP : B * s * 4 * h * e,      // [B,s,4h]     MLP 중간
+    LNST: B * s * 4 * 2           // [B,s]x2 fp32 — dtype과 무관하게 fp32
+  };
+}
+const MBu = 1e6, GBu = 1e9;
+function fmtB(b){
+  if (b === 0) return "0 B";
+  if (b >= GBu) return (b/GBu).toFixed(2) + " GB";
+  if (b >= MBu) return (b/MBu).toFixed(2) + " MB";
+  if (b >= 1e3) return (b/1e3).toFixed(1) + " KB";
+  return b + " B";
+}
+const withCommas = n => n.toLocaleString("en-US");
+
+/* ==================================================================
+   1. block이 만드는 16개 tensor — dataflow 순서 그대로
+      u   : 단위 tensor 종류
+      lane: stream(고속도로) | branch(가지 안)
+      keepT/whyT : training에서 남는가 / 왜
+      keepI/whyI : inference에서 남는가 / 왜
+      ledger     : ch-01 ledger 매핑
+   ================================================================== */
+const NODES = [
+  { n:1, nm:"x_in — block 입력 hidden state", eng:"residual stream 진입점",
+    shp:"[B, s, h]", u:"HID", lane:"stream", cls:"",
+    keepT:true,  whyT:"LayerNorm-1이 <b>입력</b>을 저장한다 (LN 규칙: 입력 + (mean, rstd)). 동시에 이 tensor가 ch-03이 말하는 <b>checkpoint</b> 그 자체다.",
+    keepI:"free",whyI:"다음 block으로 넘어가면 해제. 한 번에 한 block 분량의 stream만 살아 있으면 된다.",
+    ledger:"item 4 · activations",
+    narr:"block에 들어온 hidden state. 앞으로 나올 15개는 전부 이 tensor의 변형이고, <b>block을 나갈 때도 shape은 똑같이 [B,s,h]</b>다 — transformer가 폭이 일정한 고속도로인 이유." },
+
+  { n:2, nm:"LayerNorm-1 저장 통계 (mean, rstd)", eng:"per-token scalar 2개",
+    shp:"[B, s] × 2 fp32", u:"LNST", lane:"branch", cls:"",
+    keepT:true,  whyT:"backward에서 정규화 Jacobian을 재구성하려면 μ와 1/σ가 필요하다. <b>다시 계산하지 않고 저장</b>하는 이유는 재계산이 reduction(전체 h를 훑는 합)이라 비싸기 때문.",
+    keepI:"free",whyI:"backward가 없으니 통계도 필요 없다. 계산 즉시 소멸.",
+    ledger:"item 4 · activations",
+    narr:"token마다 스칼라 2개뿐이라 <b>h가 통째로 빠진</b> 유일한 tensor다 — 그래서 다른 것들보다 1000배쯤 작다. 막대가 안 보이는 게 정상." },
+
+  { n:3, nm:"LayerNorm-1 출력", eng:"Q·K·V 세 matmul의 <b>공유</b> 입력",
+    shp:"[B, s, h]", u:"HID", lane:"branch", cls:"",
+    keepT:true,  whyT:"matmul은 <b>입력</b>을 저장한다 (dW = Xᵀ·dY). Q, K, V가 <b>같은</b> tensor를 입력으로 쓰므로 <b>한 번만</b> 센다 — Korthikanti가 6·sbh가 아니라 <b>2·sbh</b>를 쓰는 정확한 이유.",
+    keepI:"free",whyI:"Q/K/V를 뽑고 나면 쓸모가 없다. 즉시 해제.",
+    ledger:"item 4 · activations",
+    narr:"고속도로에서 <b>복사본</b>을 떠서 normalize한 결과다. 고속도로 자체(1번)는 손대지 않았다는 게 pre-LN의 정의 — §5 참조." },
+
+  { n:4, nm:"Q = LN₁ · W_Q", eng:"query — '나는 뭘 찾는가'",
+    shp:"[B, s, h] → [B, a, s, d_head]", u:"HID", lane:"branch", cls:"",
+    keepT:true,  whyT:"QKᵀ의 backward에서 <b>dK = dSᵀ · Q</b>. Q가 없으면 K의 gradient를 못 만든다.",
+    keepI:"free",whyI:"decode에서는 이번 token 1개의 query만 있으면 되고, 쓰고 나면 버린다. <b>Q는 cache되지 않는다</b> — 과거 query를 다시 볼 일이 없기 때문.",
+    ledger:"item 4 · activations",
+    narr:"shape은 <code>[B,s,h]</code> 그대로지만 <b>view + transpose</b>로 <code>[B,a,s,d_head]</code>가 된다 — 복사가 아니라 같은 buffer를 다르게 읽는 것이라 <b>추가 byte는 0</b>이다." },
+
+  { n:5, nm:"K = LN₁ · W_K", eng:"key — '나는 뭘 광고하는가'",
+    shp:"[B, s, h] → [B, a, s, d_head]", u:"HID", lane:"branch", cls:"",
+    keepT:true,  whyT:"QKᵀ의 backward에서 <b>dQ = dS · K</b>.",
+    keepI:"kv",  whyI:"<b>KV cache의 절반.</b> causal mask 때문에 k_j는 token j에만 의존하고 <b>이후 token이 와도 절대 안 바뀐다</b> → 다시 계산하는 건 순수 낭비. 그래서 request가 끝날 때까지 상주한다.",
+    ledger:"item 4 (training) / <b>ledger 밖</b> (inference KV pool)",
+    narr:"training과 inference가 <b>처음으로 갈라지는 지점</b>이다. 같은 tensor인데 training에서는 backward용 activation, inference에서는 영구 cache가 된다 — 바이트 수식은 글자 그대로 똑같고 <b>수명만</b> 다르다." },
+
+  { n:6, nm:"V = LN₁ · W_V", eng:"value — '나는 뭘 실어 보내는가'",
+    shp:"[B, s, h] → [B, a, s, d_head]", u:"HID", lane:"branch", cls:"",
+    keepT:true,  whyT:"P·V의 backward에서 <b>dP = dO · Vᵀ</b>.",
+    keepI:"kv",  whyI:"<b>KV cache의 나머지 절반.</b> K와 같은 이유 — v_j도 token j만의 함수다.",
+    ledger:"item 4 (training) / <b>ledger 밖</b> (inference KV pool)",
+    narr:"K+V 두 개가 곧 KV cache다. 그래서 그 유명한 공식 앞의 <b>2</b>는 '2 바이트'도 안전계수도 아니고 <b>K 한 개 + V 한 개</b>라는 뜻이다:<br><code>KV bytes = 2 · B · s · L · n_kv_heads · d_head · bytes</code>." },
+
+  { n:7, nm:"P = softmax((QKᵀ + M)/√d_head)", eng:"attention 확률 — <b>괴물</b>",
+    shp:"[B, a, s, s]", u:"ATTN", lane:"branch", cls:"mon",
+    keepT:true,  whyT:"softmax는 유일하게 <b>출력</b>을 저장하는 연산이다: <b>dS = P ⊙ (dP − rowsum(dP⊙P))</b>. 게다가 <b>dV = Pᵀ·dO</b>에도 P가 다시 등장한다.",
+    keepI:"free",whyI:"FlashAttention은 이 tensor를 <b>HBM에 아예 만들지 않는다</b> — SRAM 타일 안에서 만들고 소비하고 버린다. inference에서 이 줄이 0이 되는 건 그래서다.",
+    ledger:"item 4 · activations",
+    narr:"s에 <b>제곱</b>으로 커지는 유일한 tensor. 동시에 <b>재계산이 가장 싼</b> tensor이기도 하다(matmul 한 번 + softmax 한 번). 저장비용 최악 / 재계산비용 최선 — 이 비대칭이 selective recomputation과 FlashAttention의 존재 이유다." },
+
+  { n:8, nm:"context = P · V", eng:"각 token이 받아 든 가중평균",
+    shp:"[B, a, s, d_head]", u:"HID", lane:"branch", cls:"",
+    keepT:true,  whyT:"바로 뒤 <b>W_O matmul의 입력</b>이다 → dW_O = contextᵀ·dY.",
+    keepI:"free",whyI:"W_O를 통과시키고 나면 끝. 즉시 해제.",
+    ledger:"item 4 · activations",
+    narr:"<code>a × d_head = h</code>이므로 byte는 <b>다시 [B,s,h]와 정확히 같다</b>. 괴물 <code>[B,a,s,s]</code>는 <b>이 한 줄을 만들기 위한 중간 계산</b>일 뿐이라는 게 눈에 보이는 지점." },
+
+  { n:9, nm:"attention 출력 = concat(heads) · W_O", eng:"head들이 섞이는 유일한 곳",
+    shp:"[B, s, h]", u:"HID", lane:"branch", cls:"",
+    keepT:true,  whyT:"엄밀히 말하면 <b>backward가 이 값을 요구하지는 않는다</b> — 다음 연산이 residual add이고 add는 아무것도 저장하지 않으니까. 살아 있는 이유는 <b>다음 연산의 입력</b>이기 때문. (Korthikanti가 '저장된 입력'만 세서 34·sbh가 나오고, ch-03의 16개 나열은 '만들어진 출력'을 세서 조금 더 나오는 차이가 여기서 생긴다.)",
+    keepI:"free",whyI:"residual에 더하고 나면 끝.",
+    ledger:"item 4 · activations",
+    narr:"concat은 <b>복사가 아니다</b> — <code>transpose(1,2).contiguous().view(B,s,h)</code>, 즉 하나의 연속 buffer를 다시 읽는 것. 그리고 여기가 <b>head들이 처음이자 유일하게 섞이는</b> 지점이다." },
+
+  { n:10, nm:"residual-1 합 = x_in + attn 출력", eng:"고속도로 복귀",
+    shp:"[B, s, h]", u:"HID", lane:"stream", cls:"",
+    keepT:true,  whyT:"add 자체는 아무것도 저장하지 않는다(∂(x+f)/∂x = I). 그런데 이 값은 <b>LayerNorm-2의 입력</b>이라 LN 규칙에 걸려 저장된다.",
+    keepI:"free",whyI:"다음 sub-layer가 읽고 나면 갱신되어 사라진다.",
+    ledger:"item 4 · activations",
+    narr:"gradient 입장에서 이 <b>+</b> 기호가 전부다. 덧셈의 미분은 <b>I</b>라서 gradient가 attention 가지와 고속도로로 <b>손실 없이 갈라져 흐른다</b>. 100층을 쌓아도 학습되는 이유." },
+
+  { n:11, nm:"LayerNorm-2 저장 통계", eng:"두 번째 norm의 (mean, rstd)",
+    shp:"[B, s] × 2 fp32", u:"LNST", lane:"branch", cls:"",
+    keepT:true,  whyT:"LN-1과 같은 이유.",
+    keepI:"free",whyI:"backward 없음 → 필요 없음.",
+    ledger:"item 4 · activations",
+    narr:"LN이 block당 2개이므로 Korthikanti의 LayerNorm 항은 <code>2·sbh × 2개 = 4·sbh</code>다. RMSNorm으로 바꾸면 mean이 사라져 이 tensor가 <b>정확히 절반</b>이 된다 — 그게 RMSNorm이 아끼는 byte의 전부다." },
+
+  { n:12, nm:"LayerNorm-2 출력", eng:"MLP up-projection의 입력",
+    shp:"[B, s, h]", u:"HID", lane:"branch", cls:"",
+    keepT:true,  whyT:"matmul 입력 → dW_up = LN₂ᵀ·dY.",
+    keepI:"free",whyI:"up-projection 통과 후 해제.",
+    ledger:"item 4 · activations",
+    narr:"여기서도 고속도로가 아니라 <b>복사본</b>을 normalize한다. attention 쪽과 완전히 대칭." },
+
+  { n:13, nm:"MLP up-projection 출력", eng:"폭이 4배로 벌어진다",
+    shp:"[B, s, 4h]", u:"MLP", lane:"branch", cls:"mlpw",
+    keepT:true,  whyT:"<b>GELU의 입력</b>이다. GELU 미분은 입력의 함수라 입력을 저장해야 한다.",
+    keepI:"free",whyI:"GELU 통과 후 해제.",
+    ledger:"item 4 · activations",
+    narr:"<code>d_ff = 4h</code>는 GPT 계열이 글자 그대로 지켜 온 비율이다 — GPT-1 768→3072, GPT-2 1600→6400, GPT-3 12288→49152, 전부 정확히 4배. 그래서 이 tensor 하나가 hidden state의 <b>4배</b>다." },
+
+  { n:14, nm:"GELU 출력", eng:"4h 폭짜리 두 번째 tensor",
+    shp:"[B, s, 4h]", u:"MLP", lane:"branch", cls:"mlpw",
+    keepT:true,  whyT:"<b>down-projection matmul의 입력</b> → dW_down = GELUᵀ·dY.",
+    keepI:"free",whyI:"down-projection 통과 후 해제.",
+    ledger:"item 4 · activations",
+    narr:"MLP는 <b>4h 폭 tensor를 두 개</b> 저장한다 (13번과 14번). 이 둘만 합쳐도 hidden state의 <b>8배</b> — MLP block 비용(19·sbh)의 대부분(16·sbh)이 여기서 나온다." },
+
+  { n:15, nm:"MLP down-projection 출력", eng:"다시 h 폭으로",
+    shp:"[B, s, h]", u:"HID", lane:"branch", cls:"",
+    keepT:true,  whyT:"9번과 같다 — backward가 요구하지는 않지만 다음 add의 입력으로 살아 있다.",
+    keepI:"free",whyI:"residual에 더하고 나면 끝.",
+    ledger:"item 4 · activations",
+    narr:"폭이 <code>4h → h</code>로 돌아왔다. MLP는 <b>넓혔다가 다시 좁히는</b> 구조이고, 고속도로 폭은 언제나 h로 고정이다." },
+
+  { n:16, nm:"residual-2 합 = block 출력", eng:"= 다음 block의 x_in",
+    shp:"[B, s, h]", u:"HID", lane:"stream", cls:"", own:"next",
+    keepT:true,  whyT:"다음 block의 LayerNorm-1 입력이자, checkpointing을 켰을 때 <b>다음 block의 checkpoint</b>.",
+    keepI:"free",whyI:"다음 block으로 넘어가면 갱신된다.",
+    ledger:"item 4 · activations",
+    narr:"들어올 때와 <b>완전히 같은 shape</b>으로 나간다. 그래서 block을 L개 쌓을 수 있고, checkpointing 공식 <code>2·s·b·h·L</code>이 성립한다 — 저건 그냥 <b>'이 tensor의 스냅샷 L장'</b>이다." }
+];
+
+/* 상태 */
+let mode = "train", ckpt = false, cur = 0, playing = null;
+
+/* 각 node의 운명: "keep" | "kv" | "free" */
+function fateOf(nd){
+  if (mode === "infer") return nd.keepI === "kv" ? "kv" : "free";
+  if (ckpt) return nd.n === 1 ? "keep" : "free";
+  return "keep";
+}
+function bytesOf(nd){ return units()[nd.u]; }
+
+/* ==================================================================
+   2. config UI
+   ================================================================== */
+function renderDtype(){
+  $("dtypeBtns").innerHTML = D_OPT.map((d,i) =>
+    `<button class="tb ${i===CFG.dIx?"on":""}" data-i="${i}">${d.nm}<br><span class="dimmed">${d.b} B</span></button>`
+  ).join("");
+  Array.prototype.forEach.call($("dtypeBtns").children, b => {
+    b.onclick = () => { CFG.dIx = +b.dataset.i; renderAll(); };
+  });
+}
+function renderDerived(){
+  const B = CFG.B, s = getS(), h = getH(), a = getA(), e = getBpe(), L = CFG.L;
+  const dh = h / a, U = units();
+  const cross = 34 * h / (5 * a);
+  $("vB").textContent = B; $("vS").textContent = s; $("vH").textContent = h;
+  $("vA").textContent = a; $("vL").textContent = L; $("vD").textContent = D_OPT[CFG.dIx].nm;
+  $("derived").innerHTML =
+    `<span>d_head = h/a = <b>${dh}</b></span>` +
+    `<span>4h = <b>${4*h}</b></span>` +
+    `<span>[B,s,h] = <b>${fmtB(U.HID)}</b></span>` +
+    `<span>[B,a,s,s] = <b>${fmtB(U.ATTN)}</b></span>` +
+    `<span>[B,s,4h] = <b>${fmtB(U.MLP)}</b></span>` +
+    `<span>[B,s]×2 fp32 = <b>${fmtB(U.LNST)}</b></span>` +
+    `<span class="warnc">attention이 나머지를 이기는 s = 34h/5a = <b>${cross.toFixed(1)}</b></span>`;
+  $("cfgNote").innerHTML =
+    `<b>세 개의 곱셈만 하면 끝이다.</b> ` +
+    `<code>[B,s,h] = ${B}·${s}·${h}·${e} = ${withCommas(U.HID)} B</code>, ` +
+    `<code>[B,a,s,s] = ${B}·${a}·${s}·${s}·${e} = ${withCommas(U.ATTN)} B</code>, ` +
+    `<code>[B,s,4h] = ${B}·${s}·${4*h}·${e} = ${withCommas(U.MLP)} B</code>. ` +
+    `block 안 16개 tensor는 <b>전부 이 셋 중 하나</b>다(+ 아주 작은 LN 통계). ` +
+    `<br><br>` +
+    `주목할 것: <code>[B,a,s,s]</code>만 <b>s에 제곱</b>이고, ` +
+    `<b>a에 선형</b>인데 <b>FLOP은 a와 무관</b>하다 — head를 늘리면 계산량은 그대로인데 ` +
+    `이 tensor만 커진다. multi-head는 <b>FLOP 중립 / memory 비쌈</b>이다. ` +
+    `지금 config에서 s가 <b>${cross.toFixed(0)}</b>을 넘으면 attention 항 하나가 ` +
+    `<b>나머지 activation 전부를 합친 것보다 크다</b>.`;
+}
+
+/* ==================================================================
+   3. dataflow 렌더
+   ================================================================== */
+function renderModes(){
+  $("mTrain").className = "mode" + (mode === "train" ? " on" : "");
+  $("mInfer").className = "mode inf" + (mode === "infer" ? " on" : "");
+  $("ckLine").style.display = (mode === "train") ? "flex" : "none";
+  $("ckBox").checked = ckpt;
+}
+
+function renderRail(){
+  const U = units();
+  const seen = n => cur >= n;
+  const act  = n => cur === n;
+  const box = (n, ttl, sz) =>
+    `<div class="rnode ${act(n)?"act":""}" style="opacity:${seen(n)?1:.4}">
+       ${ttl}<b>[B, s, h]</b><span class="rb2">${sz}</span></div>`;
+  const arrow = (lo, hi, txt) =>
+    `<div class="rarrow ${(cur>=lo&&cur<hi)?"act":""}">↓<br><span>${txt}</span></div>`;
+  $("railBody").innerHTML =
+    box(1, "x<sub>in</sub>", fmtB(U.HID)) +
+    arrow(2, 10, "복사본을 떠서<br>LN → Attention") +
+    box(10, "+ Δ<sub>attn</sub>", fmtB(U.HID)) +
+    arrow(11, 16, "복사본을 떠서<br>LN → MLP") +
+    box(16, "+ Δ<sub>mlp</sub>", fmtB(U.HID)) +
+    `<div class="rarrow">↓<br><span>다음 block</span></div>` +
+    `<div class="rnode" style="opacity:.75;border-style:dashed">
+       <b>폭 불변</b><span class="rb2">L = ${CFG.L}개 통과</span></div>`;
+}
+
+function renderNodes(){
+  const U = units();
+  const max = Math.max(U.HID, U.ATTN, U.MLP);
+  $("nodes").innerHTML = NODES.map(nd => {
+    const seen = cur >= nd.n, f = fateOf(nd), b = bytesOf(nd);
+    const fateTxt = !seen ? "—"
+      : (nd.own === "next" && mode === "train") ? "다음 block"
+      : f === "keep" ? "보존"
+      : f === "kv"   ? "KV cache" : "해제";
+    return `<div class="nd ${nd.lane} ${nd.cls} ${seen?"seen":""} ${cur===nd.n?"cur":""} ${seen?("k-"+f):"k-free"}">
+      <span class="ix">${nd.n}</span>
+      <span class="nm"><b>${nd.nm}</b><br><em>${nd.eng}</em></span>
+      <span class="shp">${nd.shp}</span>
+      <span class="sz">${fmtB(b)}</span>
+      <span class="barw"><span class="bar" style="width:${seen?(b/max*100).toFixed(3):0}%"></span></span>
+      <span class="fate">${fateTxt}</span>
+    </div>`;
+  }).join("");
+}
+
+/* 지금까지(step<=cur) 확정된 보존 바이트.
+   주의 — 16번은 합계에서 뺀다. 16번은 곧 '다음 block의 1번'이라서, block마다
+   세면 L개 block에 걸쳐 정확히 한 번씩 이중 계산된다. ch-03 figure가 이 tensor를
+   role:"next"로 빼는 것과 같은 규칙이고, 그래야 block 합계 1.68 GB / L배 134.22 GB /
+   checkpoint 대비 49.0x 라는 ch-03의 숫자와 정확히 일치한다. */
+function retainedAt(step, m, ck){
+  let keep = 0, kv = 0, made = 0;
+  NODES.forEach(nd => {
+    if (nd.n > step) return;
+    const b = units()[nd.u];
+    made += b;
+    if (nd.own === "next") return;              // 다음 block 소유 — 이 block에 청구하지 않는다
+    let f;
+    if (m === "infer") f = (nd.keepI === "kv") ? "kv" : "free";
+    else f = ck ? (nd.n === 1 ? "keep" : "free") : "keep";
+    if (f === "keep") keep += b; else if (f === "kv") kv += b;
+  });
+  return { keep:keep, kv:kv, made:made };
+}
+
+function renderTotals(){
+  const U = units(), L = CFG.L, a = getA(), s = getS(), h = getH(), B = CFG.B, e = getBpe();
+  const R = retainedAt(cur, mode, ckpt), full = retainedAt(16, mode, ckpt);
+  const allMade = retainedAt(16, "train", false).keep;   // 16개 전부 만들었을 때의 합
+  const cards = [];
+
+  if (mode === "train"){
+    const held = R.keep;
+    cards.push(`<div class="card ck"><div class="k">지금 붙들고 있는 양 (block 1개)</div>
+      <div class="v">${fmtB(held)}</div>
+      <div class="n">${withCommas(held)} B · step ${cur}/16 까지</div></div>`);
+    if (ckpt){
+      const dropped = allMade - U.HID;
+      cards.push(`<div class="card dp" style="border-color:var(--danger)">
+        <div class="k">버리고 재계산할 양 (2~15번)</div>
+        <div class="v" style="color:var(--danger)">${fmtB(dropped)}</div>
+        <div class="n">checkpoint 1개당 <b>${(dropped/U.HID).toFixed(1)}×</b></div></div>`);
+      cards.push(`<div class="card rt"><div class="k">L = ${L} block 전체</div>
+        <div class="v">${fmtB(U.HID*L)}</div>
+        <div class="n">= 2·s·b·h·L — checkpointing 없으면 ${fmtB(allMade*L)}
+          (<b>${(allMade/U.HID).toFixed(0)}×</b>)</div></div>`);
+    } else {
+      cards.push(`<div class="card mo"><div class="k">그 중 [B,a,s,s] 하나</div>
+        <div class="v">${fmtB(U.ATTN)}</div>
+        <div class="n">block 전체의 <b>${(U.ATTN/allMade*100).toFixed(0)}%</b></div></div>`);
+      cards.push(`<div class="card rt"><div class="k">L = ${L} block 전체</div>
+        <div class="v">${fmtB(allMade*L)}</div>
+        <div class="n">checkpointing을 켜면 ${fmtB(U.HID*L)}로 (<b>${(allMade/U.HID).toFixed(0)}×</b>)</div></div>`);
+    }
+    cards.push(`<div class="card"><div class="k">optimizer step 후</div>
+      <div class="v" style="color:var(--ink-faint)">0 B</div>
+      <div class="n">activation은 <b>한 step만</b> 산다 — 전부 해제되고 다음 micro-batch가 다시 채운다</div></div>`);
+  } else {
+    const kvBlock = R.kv, kvFull = full.kv;
+    const gqa = 2 * B * s * 8 * (h/a) * e;
+    cards.push(`<div class="card kvc"><div class="k">KV cache로 상주 (block 1개)</div>
+      <div class="v">${fmtB(kvBlock)}</div>
+      <div class="n">${withCommas(kvBlock)} B · K + V 두 개뿐</div></div>`);
+    cards.push(`<div class="card"><div class="k">backward용 보존</div>
+      <div class="v" style="color:var(--ink-faint)">0 B</div>
+      <div class="n">backward가 없다 → 붙들 이유가 없다</div></div>`);
+    cards.push(`<div class="card kvc"><div class="k">L = ${L} block 전체 KV</div>
+      <div class="v">${fmtB(kvFull*L)}</div>
+      <div class="n">MHA 기준. GQA-8이면 ${fmtB(gqa*L)}
+        (<b>${(kvFull/gqa).toFixed(0)}×</b> 감소)</div></div>`);
+    cards.push(`<div class="card mo"><div class="k">사라진 괴물 [B,a,s,s]</div>
+      <div class="v">0 B</div>
+      <div class="n">원래 ${fmtB(U.ATTN)} — FlashAttention은 HBM에 만들지 않는다</div></div>`);
+  }
+  $("totrow").innerHTML = cards.join("");
+}
+
+function renderNote(){
+  if (cur === 0){
+    $("phase").innerHTML = `step <b>0 / 16</b> · <b>대기</b>`;
+    $("stepNote").innerHTML =
+      `<b>▶ 다음 step</b> 을 눌러 tensor 하나씩 따라가 보자. ` +
+      `각 step에서 확인할 것은 세 가지다 — <b>① 무슨 shape이 새로 생겼나 ② 몇 byte인가 ` +
+      `③ 지금 mode에서 이게 남는가, 남는다면 <u>왜</u> 남는가.</b> ` +
+      `mode를 바꿔서 같은 step을 다시 보면 ③만 통째로 달라진다.`;
+    return;
+  }
+  const nd = NODES[cur-1], f = fateOf(nd), b = bytesOf(nd);
+  const U = units();
+  const pct = (b / retainedAt(16,"train",false).keep * 100);
+  const share = (nd.own === "next")
+    ? `이 block의 합계에는 <b>넣지 않는다</b> — 이건 곧 다음 block의 1번이라서, block마다 세면 이중 계산이 된다`
+    : `block 전체의 ${pct.toFixed(1)}%`;
+  const fateLine =
+    (nd.own === "next" && mode === "train")
+      ? `<b class="ok">보존된다 — 단, 장부는 다음 block이 진다.</b> ${nd.whyT}`
+  : f === "keep" ? `<b class="ok">보존된다.</b> ${nd.whyT}`
+  : f === "kv"   ? `<b class="kv">KV cache로 상주한다.</b> ${nd.whyI}`
+  : (mode === "infer")
+      ? `<b class="dimmed">즉시 해제된다.</b> ${nd.whyI}`
+      : `<b class="bad">버려진다 (checkpointing ON).</b> backward 때 1번 checkpoint에서 forward를 다시 돌려 되살린다. ` +
+        `원래 이유는 그대로 유효하다 — ${nd.whyT}`;
+  $("phase").innerHTML = `step <b>${cur} / 16</b> · <b>${nd.nm.split(" —")[0].split(" =")[0]}</b>`;
+  $("stepNote").innerHTML =
+    `<b>${nd.n}. ${nd.nm}</b> · <code>${nd.shp}</code> · ` +
+    `<b>${fmtB(b)}</b> <span class="dimmed">(${withCommas(b)} B, ${share})</span><br>` +
+    nd.narr + `<br><br>` + fateLine;
+}
+
+/* ---- canvas: step에 따른 보존량 ----
+   주의: 논리 높이는 CV_H 상수에서만 읽는다. cv.getAttribute("height")를 되읽으면
+   직전에 써 넣은 h*devicePixelRatio를 다시 h로 삼아 redraw마다 캔버스가 배로
+   커진다. CSS의 #cvFlow{height:230px}와 값이 같아야 한다. */
+const CV_H = 230;
+function setupCanvas(cv, H){
+  const r = window.devicePixelRatio || 1;
+  const w = Math.max(cv.clientWidth, 240), h = H;
+  if (cv.width !== Math.round(w*r) || cv.height !== Math.round(h*r)){
+    cv.width  = Math.round(w*r);
+    cv.height = Math.round(h*r);
+  }
+  cv.style.height = h + "px";
+  const c = cv.getContext("2d");
+  c.setTransform(r,0,0,r,0,0);
+  c.clearRect(0,0,w,h);
+  return { c:c, w:w, h:h };
+}
+function drawFlow(){
+  const cv = $("cvFlow"); const o = setupCanvas(cv, CV_H);
+  const c = o.c, w = o.w, h = o.h;
+  const L = 62, R = 12, T = 14, BM = 30, PW = w-L-R, PH = h-T-BM;
+  const U = units();
+  const trainMax = retainedAt(16, "train", false).keep;
+  const YMAX = trainMax * 1.08;
+  const X = st => L + PW * (st / 16);
+  const Y = v  => T + PH * (1 - Math.min(v, YMAX) / YMAX);
+
+  c.font = "10px ui-monospace,monospace"; c.lineWidth = 1;
+  c.strokeStyle = "#2b3242"; c.fillStyle = "#6b7686";
+  for (let i = 0; i <= 4; i++){
+    const v = YMAX * i / 4, y = Y(v);
+    c.beginPath(); c.moveTo(L,y); c.lineTo(w-R,y); c.stroke();
+    c.textAlign = "right"; c.fillText(fmtB(v), L-6, y+3);
+  }
+  c.textAlign = "center";
+  [1,4,7,10,13,16].forEach(t => c.fillText(String(t), X(t), h-16));
+  c.fillText("step (tensor 번호)", L+PW/2, h-3);
+
+  /* 구역 음영: attention 가지 / MLP 가지 */
+  c.fillStyle = "rgba(247,120,186,.05)"; c.fillRect(X(2), T, X(9)-X(2), PH);
+  c.fillStyle = "rgba(210,153,34,.05)";  c.fillRect(X(11), T, X(15)-X(11), PH);
+  c.fillStyle = "#6b7686"; c.textAlign = "left"; c.font = "10px ui-monospace,monospace";
+  c.fillText("attention 가지", X(2)+4, T+11);
+  c.fillText("MLP 가지",      X(11)+4, T+11);
+
+  const series = (m, ck, key) => {
+    const arr = [];
+    for (let st = 0; st <= 16; st++){
+      const r = retainedAt(st, m, ck);
+      arr.push(key === "kv" ? r.kv : r.keep);
+    }
+    return arr;
+  };
+  const line = (arr, col, wd, dash) => {
+    c.strokeStyle = col; c.lineWidth = wd; c.setLineDash(dash || []);
+    c.beginPath();
+    arr.forEach((v,st) => { const x = X(st), y = Y(v); st ? c.lineTo(x,y) : c.moveTo(x,y); });
+    c.stroke(); c.setLineDash([]);
+  };
+  /* 그 step에서 새로 만들어진 tensor 크기 = 막대 */
+  for (let st = 1; st <= 16; st++){
+    const b = units()[NODES[st-1].u];
+    const x0 = X(st-1) + 2, ww = Math.max(2, X(st)-X(st-1)-4);
+    c.fillStyle = st <= cur ? "rgba(88,166,255,.30)" : "rgba(88,166,255,.10)";
+    c.fillRect(x0, Y(b), ww, (T+PH) - Y(b));
+  }
+  line(series("train", false, "keep"), "#3fb950", 2.3);
+  line(series("train", true,  "keep"), "#3fb950", 1.4, [4,4]);
+  line(series("infer", false, "kv"),   "#bc8cff", 2.3);
+
+  /* 현재 위치 */
+  const R0 = retainedAt(cur, mode, ckpt);
+  const cv0 = mode === "infer" ? R0.kv : R0.keep;
+  c.strokeStyle = "#58a6ff"; c.lineWidth = 1; c.setLineDash([3,3]);
+  c.beginPath(); c.moveTo(X(cur), T); c.lineTo(X(cur), T+PH); c.stroke(); c.setLineDash([]);
+  c.fillStyle = "#58a6ff"; c.beginPath(); c.arc(X(cur), Y(cv0), 4.5, 0, 7); c.fill();
+
+  c.fillStyle = "#3fb950"; c.textAlign = "right"; c.font = "10.5px ui-monospace,monospace";
+  c.fillText("training " + fmtB(trainMax), w-R-4, Y(trainMax)+12);
+  c.fillStyle = "#bc8cff";
+  c.fillText("inference KV " + fmtB(retainedAt(16,"infer",false).kv), w-R-4, Y(U.HID*2)-6);
+  c.fillStyle = "#3fb950";
+  c.fillText("checkpointing " + fmtB(U.HID), w-R-4, Y(U.HID)-5);
+}
+
+/* ==================================================================
+   4. toy block — s=3, h=4, a=2, d_head=2, d_ff=8
+      숫자는 전부 여기서 실제로 계산된다 (하드코딩 없음)
+   ================================================================== */
+const T_S = 3, T_H = 4, T_A = 2, T_DH = 2, T_FF = 8, T_EPS = 1e-5;
+const X0  = [[2,-2,2,-2],[1,3,-1,1],[0,0,4,0]];
+const W_Q = [[1,0,1,0],[0,1,0,1],[1,0,-1,0],[0,1,0,-1]];
+const W_K = [[0,1,1,0],[1,0,0,1],[0,1,-1,0],[1,0,0,-1]];
+const W_V = [[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]];
+const W_O = [[.5,0,.5,0],[0,.5,0,.5],[.5,0,-.5,0],[0,.5,0,-.5]];
+const W_U = [[1,0,0,0,0,1,0,0],[0,1,0,0,1,0,0,0],[0,0,1,0,0,0,0,1],[0,0,0,1,0,0,1,0]];
+const W_D = [[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1],
+             [.5,0,0,0],[0,.5,0,0],[0,0,.5,0],[0,0,0,.5]];
+
+function mm(A, Bm){
+  const n = A.length, k = Bm.length, m = Bm[0].length, out = [];
+  for (let i = 0; i < n; i++){
+    const row = [];
+    for (let j = 0; j < m; j++){
+      let acc = 0;
+      for (let t = 0; t < k; t++) acc += A[i][t]*Bm[t][j];
+      row.push(acc);
+    }
+    out.push(row);
+  }
+  return out;
+}
+function layernorm(M){
+  const out = [], st = [];
+  for (let i = 0; i < M.length; i++){
+    const r = M[i], d = r.length;
+    let mu = 0; for (let j = 0; j < d; j++) mu += r[j]; mu /= d;
+    let va = 0; for (let j = 0; j < d; j++) va += (r[j]-mu)*(r[j]-mu); va /= d;
+    const rs = 1/Math.sqrt(va + T_EPS);
+    st.push({mu:mu, va:va, rs:rs});
+    out.push(r.map(v => (v-mu)*rs));
+  }
+  return {out:out, st:st};
+}
+function gelu(x){
+  return 0.5*x*(1 + Math.tanh(Math.sqrt(2/Math.PI)*(x + 0.044715*x*x*x)));
+}
+/* toy block 한 번 전부 계산해서 캐시 */
+function toyForward(){
+  const l1 = layernorm(X0);
+  const LN1 = l1.out;
+  const Q = mm(LN1, W_Q), K = mm(LN1, W_K), V = mm(LN1, W_V);
+  const sq = Math.sqrt(T_DH), heads = [];
+  for (let hd = 0; hd < T_A; hd++){
+    const c0 = hd*T_DH;
+    const qh = [], kh = [], vh = [];
+    for (let i = 0; i < T_S; i++){
+      qh.push(Q[i].slice(c0, c0+T_DH));
+      kh.push(K[i].slice(c0, c0+T_DH));
+      vh.push(V[i].slice(c0, c0+T_DH));
+    }
+    const Sc = [], P = [];
+    for (let i = 0; i < T_S; i++){
+      const rs = [], rp = [];
+      for (let j = 0; j < T_S; j++){
+        if (j > i){ rs.push(null); continue; }
+        let acc = 0; for (let t = 0; t < T_DH; t++) acc += qh[i][t]*kh[j][t];
+        rs.push(acc/sq);
+      }
+      let mx = -Infinity;
+      for (let j = 0; j <= i; j++) if (rs[j] > mx) mx = rs[j];
+      let tot = 0; const ex = [];
+      for (let j = 0; j < T_S; j++){
+        const e = (rs[j] === null) ? 0 : Math.exp(rs[j]-mx);
+        ex.push(e); tot += e;
+      }
+      for (let j = 0; j < T_S; j++) rp.push(ex[j]/tot);
+      Sc.push(rs); P.push(rp);
+    }
+    const C = [];
+    for (let i = 0; i < T_S; i++){
+      const row = [];
+      for (let t = 0; t < T_DH; t++){
+        let acc = 0; for (let j = 0; j < T_S; j++) acc += P[i][j]*vh[j][t];
+        row.push(acc);
+      }
+      C.push(row);
+    }
+    heads.push({q:qh, k:kh, v:vh, S:Sc, P:P, C:C});
+  }
+  const CONCAT = [];
+  for (let i = 0; i < T_S; i++){
+    const row = [];
+    for (let hd = 0; hd < T_A; hd++) for (let t = 0; t < T_DH; t++) row.push(heads[hd].C[i][t]);
+    CONCAT.push(row);
+  }
+  const AO = mm(CONCAT, W_O);
+  const R1 = X0.map((r,i) => r.map((v,j) => v + AO[i][j]));
+  const l2 = layernorm(R1);
+  const LN2 = l2.out;
+  const UP = mm(LN2, W_U);
+  const G  = UP.map(r => r.map(gelu));
+  const DN = mm(G, W_D);
+  const R2 = R1.map((r,i) => r.map((v,j) => v + DN[i][j]));
+  return { LN1:LN1, ST1:l1.st, Q:Q, K:K, V:V, heads:heads, CONCAT:CONCAT,
+           AO:AO, R1:R1, LN2:LN2, ST2:l2.st, UP:UP, G:G, DN:DN, R2:R2 };
+}
+const TOY = toyForward();
+
+const nf = (v, d) => (v === null || v === undefined) ? "−∞"
+                   : (Math.abs(v) < 5e-5 ? 0 : v).toFixed(d === undefined ? 4 : d);
+
+/* 행렬 렌더 — 절대 불투명 상자로 그리지 않는다. 모든 원소를 숫자로 찍는다. */
+function matHTML(cap, M, opt){
+  opt = opt || {};
+  let s = `<div class="mat"><div class="cap">${cap}</div><table><tbody>`;
+  for (let i = 0; i < M.length; i++){
+    s += "<tr>";
+    for (let j = 0; j < M[i].length; j++){
+      const v = M[i][j];
+      let cls = "";
+      if (opt.hi && opt.hi[0] === i && opt.hi[1] === j) cls += " hi";
+      if (v === null) cls += " msk";
+      if (opt.heads && j % T_DH === 0) cls += (j === 0 ? " hd0" : " hd1");
+      s += `<td class="${cls}">${nf(v, opt.d)}</td>`;
+    }
+    if (opt.rowsum){
+      let t = 0; for (let j = 0; j < M[i].length; j++) t += (M[i][j] || 0);
+      s += `<td style="border:0"><span class="rowsum">Σ = ${t.toFixed(6)}</span></td>`;
+    }
+    s += "</tr>";
+  }
+  return s + "</tbody></table></div>";
+}
+
+/* step -> 어떤 행렬을 보이고 어떤 원소를 손으로 풀어 보일지 */
+function toyView(step){
+  const T = TOY;
+  const eq = (q, body, note) =>
+    `<div class="wq">${q}</div><div class="eq">${body}</div>` +
+    (note ? `<div style="margin-top:9px;color:var(--ink-dim);font-size:12.5px">${note}</div>` : "");
+
+  switch (step){
+    case 0: return { m: matHTML("x_in &nbsp;<b>[3, 4]</b> — token 3개 × hidden 4", X0),
+      w: eq("시작", `x_in = 위 3×4 행렬. 이 <span class="hl">3×4 = 12개 숫자</span>가 이 toy의 residual stream이다.`,
+        `실제 config에서는 같은 자리에 <code>${withCommas(CFG.B*getS()*getH())}</code>개의 숫자가 있다. 구조는 완전히 동일하다.`),
+      n: `▶ 다음 step 을 누르면 위 패널의 step과 이 숫자들이 <b>같이</b> 움직인다.` };
+
+    case 1: return { m: matHTML("① x_in &nbsp;<b>[3, 4]</b>", X0, {hi:[1,1]}),
+      w: eq("1 · block 입력",
+        `x_in[1] = [ 1, <span class="hl">3</span>, −1, 1 ] &nbsp;← token 1의 hidden vector`,
+        `이 4개 숫자가 token 1의 "현재 상태"다. block이 하는 일은 여기에 <b>Δ를 더하는 것</b>뿐이고, 나갈 때도 여전히 4차원이다.`),
+      n: `shape <code>[B,s,h]</code> = <code>[1,3,4]</code>. 큰 config에서는 <code>[1,4096,4096]</code>이고 byte만 ${fmtB(units().HID)}로 커질 뿐 구조는 그대로다.` };
+
+    case 2: {
+      const st = T.ST1[1];
+      return { m: matHTML("② LayerNorm-1 저장 통계 &nbsp;<b>[3] × 2</b>",
+          [T.ST1.map(s => s.mu), T.ST1.map(s => s.rs)], {hi:[0,1], d:6}),
+        w: eq("2 · LN 통계 (token 1 기준)",
+          `μ = (1 + 3 + (−1) + 1) / 4 = <span class="res">${nf(st.mu,4)}</span><br>` +
+          `σ² = (0² + 2² + (−2)² + 0²) / 4 = 8/4 = <span class="res">${nf(st.va,4)}</span><br>` +
+          `rstd = 1/√(σ² + ε) = 1/√(${nf(st.va,4)} + 1e−5) = <span class="res">${nf(st.rs,6)}</span>`,
+          `윗줄 = 3개 token의 μ, 아랫줄 = rstd. token <b>하나당 스칼라 2개</b>뿐이라 h가 통째로 사라진다 — 위 패널에서 이 줄의 막대가 안 보이는 이유.`),
+        n: `저장 이유: backward에서 normalize의 Jacobian을 다시 세우려면 μ와 1/σ가 필요한데, 재계산하려면 h 전체를 다시 훑어야 해서 <b>저장이 더 싸다</b>.` };
+    }
+    case 3: return { m: matHTML("③ LN₁ 출력 &nbsp;<b>[3, 4]</b> — Q·K·V가 <b>공유</b>하는 입력", T.LN1, {hi:[1,1]}),
+      w: eq("3 · LayerNorm-1 출력 (token 1)",
+        `LN₁[1][1] = (x−μ)·rstd = (3 − ${nf(T.ST1[1].mu,4)}) × ${nf(T.ST1[1].rs,6)} = <span class="res">${nf(T.LN1[1][1])}</span><br>` +
+        `LN₁[1]&nbsp;&nbsp;&nbsp; = [ ${T.LN1[1].map(v=>nf(v)).join(", ")} ]`,
+        `token 0을 보면 [2,−2,2,−2] → [1,−1,1,−1] 로 <b>정확히 μ=0, σ=2</b>였다는 걸 암산으로 확인할 수 있다.`),
+      n: `이 <b>한 개</b>의 tensor가 Q, K, V 세 matmul의 입력이다. 그래서 Korthikanti가 6·sbh가 아니라 <b>2·sbh</b>만 센다.` };
+
+    case 4: return { m: matHTML("④ Q = LN₁ · W_Q &nbsp;<b>[3, 4]</b> → head 2개로 쪼갬", T.Q, {hi:[1,2], heads:true}),
+      w: eq("4 · Q (token 1, 열 2)",
+        `Q[1][2] = Σ LN₁[1][t] · W_Q[t][2]<br>` +
+        `&nbsp;&nbsp;= ${nf(T.LN1[1][0])}·1 + ${nf(T.LN1[1][1])}·0 + ${nf(T.LN1[1][2])}·(−1) + ${nf(T.LN1[1][3])}·0<br>` +
+        `&nbsp;&nbsp;= <span class="res">${nf(T.Q[1][2])}</span>`,
+        `세로선은 head 경계다: 열 0–1 = head 0, 열 2–3 = head 1. <b>이건 view일 뿐 복사가 아니다</b> — 같은 buffer를 <code>[3,2,2]</code>로 다시 읽는 것.`),
+      n: `그래서 "head로 쪼갠다"는 <b>0 byte</b>짜리 연산이다. 늘어나는 건 다음 step의 <code>[B,a,s,s]</code>뿐.` };
+
+    case 5: return { m: matHTML("⑤ K = LN₁ · W_K &nbsp;<b>[3, 4]</b>", T.K, {hi:[1,0], heads:true}),
+      w: eq("5 · K (token 1, 열 0)",
+        `K[1][0] = ${nf(T.LN1[1][0])}·0 + ${nf(T.LN1[1][1])}·1 + ${nf(T.LN1[1][2])}·0 + ${nf(T.LN1[1][3])}·1 ` +
+        `= <span class="res">${nf(T.K[1][0])}</span>`,
+        `핵심: K[1]은 <b>token 1의 LN₁만</b> 써서 만들어졌다. token 2가 나중에 도착해도 이 줄은 <b>절대 안 바뀐다</b>.`),
+      n: `그 불변성이 KV cache가 성립하는 <b>유일한</b> 근거다. causal mask가 미래를 못 보게 막아 주니까 과거 K는 영원히 확정된다.` };
+
+    case 6: return { m: matHTML("⑥ V = LN₁ · W_V &nbsp;<b>[3, 4]</b> &nbsp;(W_V = I 로 잡음)", T.V, {hi:[2,2], heads:true}),
+      w: eq("6 · V",
+        `W_V = I 이므로 V = LN₁ 그대로. V[2][2] = <span class="res">${nf(T.V[2][2])}</span>`,
+        `일부러 identity로 잡았다 — 다음 step의 context가 <b>이 행들의 가중평균</b>이라는 게 눈으로 보이게 하려고.`),
+      n: `K와 V 두 tensor가 곧 KV cache다. 공식 <code>2·B·s·L·n_kv·d_head·bytes</code>의 앞 <b>2</b>는 여기서 나온다 — 바이트 수가 아니라 <b>tensor 개수</b>다.` };
+
+    case 7: {
+      const P0 = T.heads[0].P, S0 = T.heads[0].S;
+      const s10 = S0[1][0], s11 = S0[1][1];
+      return { m: matHTML("⑦a head 0 scores = qkᵀ/√2 &nbsp;<b>[3,3]</b> (causal: 위쪽 삼각 = −∞)", S0, {hi:[1,0]}) +
+                  matHTML("⑦b head 0 P = softmax(행별) &nbsp;<b>[3,3]</b>", P0, {hi:[1,0], rowsum:true}) +
+                  matHTML("⑦c head 1 P &nbsp;<b>[3,3]</b>", T.heads[1].P, {rowsum:true}),
+        w: eq("7 · softmax (head 0, token 1 행)",
+          `q₁·k₀ = ${nf(T.heads[0].q[1][0])}·${nf(T.heads[0].k[0][0])} + ${nf(T.heads[0].q[1][1])}·${nf(T.heads[0].k[0][1])} = ${nf(s10*Math.sqrt(T_DH))}<br>` +
+          `/√d_head = /√2 = ${nf(s10)} &nbsp;&nbsp;|&nbsp;&nbsp; q₁·k₁/√2 = ${nf(s11)}<br>` +
+          `softmax: p = 1/(1 + e<sup>−(${nf(s10)} − ${nf(s11)})</sup>) = ` +
+          `<span class="res">${nf(P0[1][0],6)}</span>, ${nf(P0[1][1],6)} &nbsp;→&nbsp; 합 = 1.000000`,
+          `<b>1/√d_head 로 나누는 이유</b>: 성분이 독립·평균0·분산1이면 dot product의 분산이 정확히 d_k라 ` +
+          `score가 √d_k 크기로 자란다. 나눠 주면 어떤 d_head에서도 분산이 1로 고정된다.`),
+        n: `이 행은 이미 <b>${(P0[1][0]*100).toFixed(1)}%</b>가 한 곳에 몰렸다 — softmax가 포화되면 Jacobian ` +
+           `<code>p(1−p) = ${(P0[1][0]*(1-P0[1][0])).toExponential(2)}</code>이 0에 붙어 <b>W_Q·W_K로 gradient가 안 간다</b>. ` +
+           `실제 크기 <code>[B,a,s,s]</code> = <b>${fmtB(units().ATTN)}</b>, block 전체의 ` +
+           `<b>${(units().ATTN/retainedAt(16,"train",false).keep*100).toFixed(0)}%</b>.` };
+    }
+
+    case 8: {
+      const P0 = T.heads[0].P, v0 = T.heads[0].v;
+      return { m: matHTML("⑧ context = P · V &nbsp;head 0 <b>[3,2]</b>", T.heads[0].C, {hi:[1,0]}) +
+                  matHTML("head 1 <b>[3,2]</b>", T.heads[1].C),
+        w: eq("8 · context (head 0, token 1)",
+          `ctx[1] = ${nf(P0[1][0],6)}·v₀ + ${nf(P0[1][1],6)}·v₁ + 0·v₂<br>` +
+          `&nbsp;&nbsp;= ${nf(P0[1][0],6)}·[${v0[0].map(v=>nf(v)).join(", ")}] + ${nf(P0[1][1],6)}·[${v0[1].map(v=>nf(v)).join(", ")}]<br>` +
+          `&nbsp;&nbsp;= [ <span class="res">${T.heads[0].C[1].map(v=>nf(v)).join(", ")}</span> ]`,
+          `가중치가 <b>합이 1인 양수</b>라 결과는 반드시 v 벡터들의 <b>convex hull 안</b>에 있다 — attention 출력이 폭주하지 않는 구조적 이유.`),
+        n: `<code>a × d_head = h</code>이므로 두 head를 합치면 byte가 <b>다시 [B,s,h]</b>다 (${fmtB(units().HID)}). ` +
+           `괴물 <code>[B,a,s,s]</code>는 이 줄을 만들기 위한 <b>중간 계산</b>이었을 뿐.` };
+    }
+
+    case 9: return { m: matHTML("⑨a concat(head0, head1) &nbsp;<b>[3, 4]</b>", T.CONCAT, {heads:true}) +
+                          matHTML("⑨b attn 출력 = concat · W_O &nbsp;<b>[3, 4]</b>", T.AO, {hi:[1,0]}),
+      w: eq("9 · W_O (token 1, 열 0)",
+        `concat[1] = [ ${T.CONCAT[1].map(v=>nf(v)).join(", ")} ] &nbsp;← head0 두 개 + head1 두 개<br>` +
+        `AO[1][0] = ${nf(T.CONCAT[1][0])}·0.5 + ${nf(T.CONCAT[1][1])}·0 + ${nf(T.CONCAT[1][2])}·0.5 + ${nf(T.CONCAT[1][3])}·0 ` +
+        `= <span class="res">${nf(T.AO[1][0])}</span>`,
+        `W_O의 0열이 head0의 0번 차원과 head1의 0번 차원을 <b>0.5씩 섞었다</b>. head가 섞이는 건 오직 여기뿐이다.`),
+      n: `concat은 <code>transpose(1,2).contiguous().view(B,s,h)</code> — 별도 tensor 복사가 아니라 <b>하나의 연속 buffer를 다시 읽는 것</b>이다.` };
+
+    case 10: return { m: matHTML("⑩ residual-1 = x_in + attn 출력 &nbsp;<b>[3, 4]</b>", T.R1, {hi:[1,0]}),
+      w: eq("10 · 고속도로 복귀 (token 1, 열 0)",
+        `R1[1][0] = x_in[1][0] + AO[1][0] = 1 + (${nf(T.AO[1][0])}) = <span class="res">${nf(T.R1[1][0])}</span>`,
+        `attention이 만든 건 <b>Δ</b>였고, 원래 값은 지워지지 않고 <b>그대로 남아 있다</b>. 이게 residual stream의 정의다.`),
+      n: `backward에서 이 <b>+</b>의 미분은 <b>I</b>다 — gradient가 감쇠 없이 통과한다. ` +
+         `<code>∂L/∂x<sub>ℓ</sub> = ∂L/∂x<sub>ℓ+1</sub>·(I + ∂F/∂x<sub>ℓ</sub>)</code>` };
+
+    case 11: {
+      const st = T.ST2[1];
+      return { m: matHTML("⑪ LayerNorm-2 저장 통계 &nbsp;<b>[3] × 2</b>",
+          [T.ST2.map(s => s.mu), T.ST2.map(s => s.rs)], {hi:[0,1], d:6}),
+        w: eq("11 · LN-2 통계 (token 1)",
+          `R1[1] = [ ${T.R1[1].map(v=>nf(v)).join(", ")} ]<br>` +
+          `μ = (${T.R1[1].map(v=>nf(v)).join(" + ").replace(/\+ -/g,"− ")}) / 4 = <span class="res">${nf(st.mu,6)}</span><br>` +
+          `rstd = 1/√(${nf(st.va,6)} + 1e−5) = <span class="res">${nf(st.rs,6)}</span>`,
+          `RMSNorm이면 μ 줄이 통째로 사라진다 → 저장 통계가 <b>정확히 절반</b>.`),
+        n: `LN이 block당 2개이므로 Korthikanti의 LayerNorm 항은 <code>2·sbh × 2 = 4·sbh</code> = ` +
+           `<b>${fmtB(4*CFG.B*getS()*getH())}</b>. 이건 <b>저장 통계가 아니라 LN의 입력</b> 몫이다.` };
+    }
+
+    case 12: return { m: matHTML("⑫ LN₂ 출력 &nbsp;<b>[3, 4]</b>", T.LN2, {hi:[1,1]}),
+      w: eq("12 · LayerNorm-2 출력 (token 1)",
+        `LN₂[1][1] = (${nf(T.R1[1][1])} − ${nf(T.ST2[1].mu,6)}) × ${nf(T.ST2[1].rs,6)} = <span class="res">${nf(T.LN2[1][1])}</span>`,
+        `attention 쪽과 완전히 대칭이다 — 고속도로가 아니라 <b>복사본</b>을 normalize한다.`),
+      n: `이 tensor는 up-projection matmul의 입력이라 저장된다 (dW_up = LN₂ᵀ·dY).` };
+
+    case 13: return { m: matHTML("⑬ MLP up = LN₂ · W_up &nbsp;<b>[3, 8]</b> — 폭이 2배(실전 4배)", T.UP, {hi:[1,4]}),
+      w: eq("13 · up-projection (token 1, 열 4)",
+        `UP[1][4] = Σ LN₂[1][t]·W_up[t][4] = ` +
+        `${nf(T.LN2[1][0])}·0 + ${nf(T.LN2[1][1])}·1 + ${nf(T.LN2[1][2])}·0 + ${nf(T.LN2[1][3])}·0 ` +
+        `= <span class="res">${nf(T.UP[1][4])}</span>`,
+        `toy에서는 <code>d_ff = 2h</code>로 줄였지만 실전은 <b>정확히 4h</b>다 — GPT-1/2/3 전부 4배를 지켰다.`),
+      n: `실제 config에서 이 tensor는 <b>${fmtB(units().MLP)}</b>, hidden state의 <b>4배</b>다. 그리고 MLP는 이 폭짜리를 <b>2개</b> 저장한다.` };
+
+    case 14: {
+      const x = T.UP[1][4], g = T.G[1][4];
+      return { m: matHTML("⑭ GELU 출력 &nbsp;<b>[3, 8]</b>", T.G, {hi:[1,4]}),
+        w: eq("14 · GELU (같은 원소)",
+          `GELU(x) = 0.5·x·(1 + tanh(√(2/π)·(x + 0.044715·x³)))<br>` +
+          `x = ${nf(x,6)} → 0.5·${nf(x,4)}·(1 + tanh(${nf(Math.sqrt(2/Math.PI)*(x+0.044715*x*x*x),6)})) = <span class="res">${nf(g,6)}</span>`,
+          `GELU는 <b>입력</b>을 저장한다 (미분이 입력의 함수). 그래서 13번이 살아 있어야 한다.`),
+        n: `13번과 14번, <b>4h 폭 tensor 두 개</b>가 MLP block 비용 19·sbh 중 16·sbh를 차지한다 — ` +
+           `${fmtB(2*units().MLP)} / ${fmtB(units().MLP*2 + units().HID*2)}.` };
+    }
+
+    case 15: return { m: matHTML("⑮ MLP down = GELU · W_down &nbsp;<b>[3, 4]</b> — 다시 h 폭", T.DN, {hi:[1,0]}),
+      w: eq("15 · down-projection (token 1, 열 0)",
+        `DN[1][0] = GELU[1][0]·1 + GELU[1][4]·0.5<br>` +
+        `&nbsp;&nbsp;= ${nf(T.G[1][0],6)} + 0.5 × ${nf(T.G[1][4],6)} = <span class="res">${nf(T.DN[1][0],6)}</span>`,
+        `넓혔다가 다시 좁힌다. 고속도로 폭은 언제나 h로 고정이다.`),
+      n: `이 값 자체는 backward가 요구하지 않는다 — 다음 연산이 add라서. 살아 있는 건 <b>다음 연산의 입력</b>이기 때문.` };
+
+    case 16: return { m: matHTML("⑯ block 출력 = residual-1 + MLP down &nbsp;<b>[3, 4]</b>", T.R2, {hi:[1,0]}) +
+                           matHTML("비교: 처음 들어온 x_in", X0),
+      w: eq("16 · 나갈 때 (token 1, 열 0)",
+        `out[1][0] = R1[1][0] + DN[1][0] = ${nf(T.R1[1][0])} + ${nf(T.DN[1][0])} = <span class="res">${nf(T.R2[1][0])}</span><br><br>` +
+        `x_in[1] &nbsp;= [ ${X0[1].map(v=>nf(v,1)).join(", ")} ]<br>` +
+        `out[1] &nbsp;&nbsp;= [ ${T.R2[1].map(v=>nf(v)).join(", ")} ]`,
+        `<b>shape이 완전히 같다.</b> 그래서 이 block을 L번 쌓을 수 있고, 그래서 checkpoint 공식이 <code>2·s·b·h·L</code>이다 — <b>이 tensor의 스냅샷 L장</b>.`),
+      n: `x_in에서 out까지 <b>더해진 것만</b> 바뀌었다: Δ_attn + Δ_mlp. 원래 정보는 지워지지 않았다 — ` +
+         `<code>x_L = x_0 + Σ Δ_attn + Σ Δ_ffn</code>` };
+  }
+  return { m:"", w:"", n:"" };
+}
+
+function renderToy(){
+  const v = toyView(cur);
+  $("toyMat").innerHTML  = v.m;
+  $("toyWork").innerHTML = v.w;
+  $("toyNote").innerHTML = v.n;
+}
+
+/* ==================================================================
+   5. Korthikanti 대조표
+   ================================================================== */
+function renderKor(){
+  const B = CFG.B, s = getS(), h = getH(), a = getA(), L = CFG.L, e = getBpe();
+  const U = units(), sbh = s*B*h;
+  const enumerated = retainedAt(16, "train", false).keep;
+  const kAttn = 11*sbh, kMlp = 19*sbh, kLn = 4*sbh, kLin = 34*sbh;
+  const kSq   = 5*a*s*s*B;
+  const kTot  = kLin + kSq;
+  const dropFree = (32 + 2*a*s/h) * sbh;
+  const bfWarn = (e !== 2);
+  $("korTable").innerHTML =
+    `<thead><tr><th>집계 방식</th><th>residual stream<br><span class="dimmed">= LN 입력</span></th>` +
+      `<th>attention 가지</th><th>MLP 가지</th><th>LN 저장통계</th><th>s² 항</th>` +
+      `<th>block 합계</th><th>× L = ${L}</th></tr></thead>` +
+    `<tbody>` +
+    `<tr class="hi"><td><b>위 16개 나열</b><br><span class="dimmed">= ch-03 figure · 1~15번</span></td>` +
+      `<td>1,10번<br>${fmtB(2*U.HID)}</td>` +
+      `<td>3~6,8,9번<br>${fmtB(6*U.HID)}</td>` +
+      `<td>12~15번<br>${fmtB(2*U.MLP + 2*U.HID)}</td>` +
+      `<td>2,11번<br>${fmtB(2*U.LNST)}</td>` +
+      `<td class="r">7번<br>${fmtB(U.ATTN)}</td>` +
+      `<td><b>${fmtB(enumerated)}</b></td><td>${fmtB(enumerated*L)}</td></tr>` +
+    `<tr><td><b>Korthikanti</b> <code>sbh(34 + 5as/h)</code><br><span class="dimmed">dropout 포함, bf16 고정</span></td>` +
+      `<td>4·sbh<br>${fmtB(kLn)}</td><td>11·sbh<br>${fmtB(kAttn)}</td><td>19·sbh<br>${fmtB(kMlp)}</td>` +
+      `<td class="dimmed">미포함<br>(무시할 크기)</td>` +
+      `<td class="r">5as²b<br>${fmtB(kSq)}</td><td><b>${fmtB(kTot)}</b></td><td>${fmtB(kTot*L)}</td></tr>` +
+    `<tr><td>dropout = 0 로 다시 센 값<br><span class="dimmed">(파생 — 논문에 없음)</span></td>` +
+      `<td>4·sbh<br>${fmtB(kLn)}</td><td>10·sbh<br>${fmtB(10*sbh)}</td><td>18·sbh<br>${fmtB(18*sbh)}</td>` +
+      `<td class="dimmed">미포함</td>` +
+      `<td class="r">2as²b<br>${fmtB(2*a*s*s*B)}</td><td><b>${fmtB(dropFree)}</b></td><td>${fmtB(dropFree*L)}</td></tr>` +
+    `<tr><td>gradient checkpointing<br><span class="dimmed">1번만 남김</span></td>` +
+      `<td class="g">1번<br>${fmtB(U.HID)}</td>` +
+      `<td colspan="4" class="dimmed" style="text-align:left">2~15번 전부 폐기 → backward에서 forward 재실행</td>` +
+      `<td class="g"><b>${fmtB(U.HID)}</b></td><td class="g">${fmtB(U.HID*L)}<br>` +
+      `<span class="dimmed">= 2·s·b·h·L</span></td></tr>` +
+    `</tbody>`;
+
+  /* 우연의 일치 경고 — 5as = 2hL 이면 위 표의 두 칸에 똑같은 숫자가 뜬다.
+     (기본 config가 정확히 그 경우다: 5·32·4096 = 655,360 = 2·4096·80)
+     서로 아무 관계도 없는 양이므로 반드시 명시적으로 끊어 줘야 한다.
+
+     dtype 조건이 반드시 같이 걸려야 한다: kSq = 5as²b 는 Korthikanti 계수라
+     bf16(2 B/elem)이 이미 상수 안에 박혀 있어 dtype과 무관한 고정 byte 수인데,
+     checkpoint 바닥 U.HID*L 은 현재 dtype(e)로 계산된다. 따라서 두 칸이 실제로
+     같은 숫자로 찍히는 건 e === 2 일 때뿐이다. e 조건 없이 5as === 2hL 만 보면
+     fp32에서 "2.68 GB와 5.37 GB가 정확히 같은 값"이라는 자기모순 문장이 뜬다. */
+  const coincide = (5*a*s === 2*h*L) && (e === 2);
+  $("coinWarn").innerHTML = coincide
+    ? `<div class="callout no"><b>⚠ 우연의 일치 — 두 칸의 같은 숫자는 아무 관계가 없다.</b><br>` +
+      `지금 config에서 <b>한 layer의 s² 항</b> <code>5as²b = ${fmtB(kSq)}</code>와 ` +
+      `<b>L=${L}개 block 전체의 checkpointing 바닥</b> <code>2·s·b·h·L = ${fmtB(U.HID*L)}</code>이 ` +
+      `<b>정확히 같은 값</b>(${withCommas(kSq)} B)으로 찍힌다. 이유는 순전히 산술이다 — ` +
+      `<code>5as = 5·${a}·${s} = ${withCommas(5*a*s)}</code>가 ` +
+      `<code>2hL = 2·${h}·${L} = ${withCommas(2*h*L)}</code>와 우연히 같아졌을 뿐이다.<br>` +
+      `<b>하나는 layer 1개의 attention, 다른 하나는 L개 block 전체의 저장량이다.</b> ` +
+      `연결 지어 읽으면 안 된다. s나 L 슬라이더를 한 칸만 움직이면 즉시 갈라진다.</div>`
+    : "";
+
+  $("korNote").innerHTML =
+    `<b>두 줄이 다른 건 오류가 아니다 — 세는 대상이 다르다. 열별로 맞춰 보면 정확히 어디서 갈리는지 보인다.</b><br>` +
+    `· <b>residual stream 열은 완전히 일치한다</b>: 4·sbh = ${fmtB(kLn)} = 2 × ${fmtB(U.HID)}. ` +
+    `Korthikanti의 "LayerNorm 4·sbh"가 바로 <b>1번과 10번</b>이다 — LN이 저장하는 입력이 곧 stream tensor니까.<br>` +
+    `· <b>attention 열</b>: 나열 12·sbh vs 논문 11·sbh. 차이 = <b>+2</b>(9번 출력을 셈) <b>−1</b>(dropout mask를 안 셈).<br>` +
+    `· <b>MLP 열</b>: 나열 20·sbh vs 논문 19·sbh. 차이 = <b>+2</b>(15번) <b>−1</b>(dropout mask). ` +
+    `즉 나열은 <b>만들어진 출력</b>(36·sbh), 논문은 <b>저장되는 입력</b>(34·sbh)을 센다.<br>` +
+    `· <b>s² 열이 진짜 큰 차이</b>: 나열은 softmax <b>출력 하나</b>(2as²b = ${fmtB(U.ATTN)}), ` +
+    `논문은 softmax 출력 + dropout mask(1 B) + dropout 출력 <b>세 개</b>(5as²b = ${fmtB(kSq)}). ` +
+    `요즘 LLM pretraining은 <b>dropout = 0</b>이라 현실은 첫 줄 쪽이다.<br>` +
+    `검산: 36·sbh + LN통계 ${withCommas(2*U.LNST)} B + 2as²b = ${withCommas(enumerated)} B ✓<br>` +
+    `<b>둘을 한 합계 안에서 섞어 쓰면 안 된다.</b> 논문을 인용할 땐 <code>34 + 5as/h</code>, ` +
+    `2026년의 dropout-free run을 모델링할 땐 <code>32 + 2as/h</code>.` +
+    (bfWarn ? `<br><br><b class="bad">주의:</b> Korthikanti의 계수 34/11/19/4는 <b>bf16(2 B/elem)</b>을 전제로 ` +
+      `유도된 값이다(dropout mask만 1 B). 지금 dtype이 <b>${D_OPT[CFG.dIx].nm}</b>이라 둘째·셋째 줄은 참고용으로만 봐라 — ` +
+      `첫째 줄과 넷째 줄은 dtype을 그대로 반영한다.` : "");
+
+  const cross = 34*h/(5*a);
+  $("crossNote").innerHTML =
+    `<b>s² 항이 나머지 전부를 이기는 지점.</b> ` +
+    `<code>34 = 5as/h</code> → <code>s = 34h/(5a) = 34·${h}/(5·${a}) = <b>${cross.toFixed(1)}</b></code> token.<br>` +
+    `지금 s = <b>${s}</b>이므로 s² 항이 선형 항의 <b>${(5*a*s/h/34).toFixed(1)}배</b>다 ` +
+    `(${fmtB(kSq)} vs ${fmtB(kLin)}).<br><br>` +
+    `<b>따라오는 결론:</b> 몇백 token만 넘어가면 activation memory를 지배하는 건 ` +
+    `weight도 MLP도 아니고 <b>s×s routing table 하나</b>다. FlashAttention이 ` +
+    `"그걸 아예 안 만든다"는 한 가지만으로 판을 바꾼 이유가 이 한 줄에 있다.`;
+
+  /* pre-LN / post-LN byte 동일성 */
+  const lnTerm = 4*sbh, rmsSave = 2*L*U.LNST;
+  $("lnByteNote").innerHTML =
+    `<b>그런데 memory는 어느 쪽도 같다.</b> post-LN이든 pre-LN이든 LayerNorm은 ` +
+    `<b>자기 입력</b>을 저장한다 — block당 norm 2개 × 2·sbh = <code>4·sbh</code> = ` +
+    `<b>${fmtB(lnTerm)}</b>로 동일하고, checkpoint tensor도 양쪽 다 <code>[B,s,h]</code> = ` +
+    `<b>${fmtB(U.HID)}</b>다(pre-LN은 residual-2 합, post-LN은 마지막 LN 출력). ` +
+    `<code>2·s·b·h·L</code> 공식은 <b>배치 위치와 무관</b>하다.<br><br>` +
+    `RMSNorm이 실제로 아끼는 byte는 딱 하나 — 저장 통계에서 mean이 빠져 ` +
+    `norm당 <code>${withCommas(U.LNST)} B → ${withCommas(U.LNST/2)} B</code>, ` +
+    `norm 2개 × ${L} block으로 <b>${fmtB(rmsSave)} → ${fmtB(rmsSave/2)}</b>. ` +
+    `같은 block의 attention tensor 하나가 <b>${fmtB(U.ATTN)}</b>이다.<br><br>` +
+    `<b>결론: normalization 배치는 gradient flow 결정이지 memory 결정이 아니다.</b> ` +
+    `pre-LN을 쓰는 이유는 byte를 아껴서가 아니라 <b>학습이 되기 때문</b>이다.`;
+}
+
+/* ==================================================================
+   6. ledger 매핑
+   ================================================================== */
+function renderLedger(){
+  const B = CFG.B, s = getS(), h = getH(), a = getA(), L = CFG.L, e = getBpe();
+  const U = units();
+  const act = retainedAt(16, "train", false).keep;
+  const pBlock = 12*h*h;                        // 4h^2 (attn) + 8h^2 (MLP)
+  const kvBlock = 2*B*s*a*(h/a)*e;
+  $("ledgerTable").innerHTML =
+    `<thead><tr><th>이 block의 무엇</th><th>ch-01 ledger</th><th>수식</th><th>block 1개</th><th>× L = ${L}</th></tr></thead>` +
+    `<tbody>` +
+    `<tr><td>W_Q, W_K, W_O <span class="dimmed">(4h²)</span> + W_up, W_down <span class="dimmed">(8h²)</span>, W_V 포함 = <b>${withCommas(pBlock)} param</b></td>` +
+      `<td>item 1 · weights</td><td>2 B/param (bf16)</td><td>${fmtB(pBlock*2)}</td><td>${fmtB(pBlock*2*L)}</td></tr>` +
+    `<tr><td>같은 param의 gradient</td><td>item 2 · gradients</td><td>2 B/param</td>` +
+      `<td>${fmtB(pBlock*2)}</td><td>${fmtB(pBlock*2*L)}</td></tr>` +
+    `<tr><td>같은 param의 AdamW state <span class="dimmed">(fp32 master + m + v)</span></td>` +
+      `<td>item 3 · optimizer</td><td>12 B/param</td><td>${fmtB(pBlock*12)}</td><td>${fmtB(pBlock*12*L)}</td></tr>` +
+    `<tr class="hi"><td><b>위 16개 tensor 전부</b> — 이 figure의 전 내용</td>` +
+      `<td><b>item 4 · activations</b></td><td>sbh(34 + 5as/h) 계열</td>` +
+      `<td><b>${fmtB(act)}</b></td><td><b>${fmtB(act*L)}</b></td></tr>` +
+    `<tr><td class="dimmed">— (block 밖: LM head의 [B·s, V] logit)</td><td>item 5 · logit spike</td>` +
+      `<td class="dimmed">B·s·V·4 B, 순간</td><td class="dimmed">0</td><td class="dimmed">0</td></tr>` +
+    `<tr><td class="dimmed">— (block 밖: CUDA context, NCCL buffer)</td><td>item 6 · overhead</td>` +
+      `<td class="dimmed">2–8 GB 고정</td><td class="dimmed">0</td><td class="dimmed">0</td></tr>` +
+    `<tr style="border-top:2px solid var(--c-kv)"><td><b>K, V가 decode 사이에 남는 것</b></td>` +
+      `<td><b style="color:var(--c-kv)">ledger에 없음</b></td>` +
+      `<td>2·B·s·L·n_kv·d_head·b</td>` +
+      `<td style="color:var(--c-kv)">${fmtB(kvBlock)}</td>` +
+      `<td style="color:var(--c-kv)">${fmtB(kvBlock*L)}</td></tr>` +
+    `</tbody>`;
+
+  const staticB = pBlock*16;
+  $("ledgerNote").innerHTML =
+    `<b>이 figure가 ledger에 꽂히는 자리는 딱 한 줄, item 4다.</b> ` +
+    `16개 tensor 전부가 거기로 들어간다. 나머지 줄은 이 block과 상관이 있긴 하지만 ` +
+    `<b>param 수에만</b> 붙는 정적 비용이다 — block당 ${withCommas(pBlock)} param × 16 B = ` +
+    `<b>${fmtB(staticB)}</b>이고, 이건 B·s를 아무리 바꿔도 <b>1 byte도 안 변한다</b>. ` +
+    `반대로 item 4는 <b>${fmtB(act)}</b>인데 B·s에 정비례(그리고 s²에 일부 비례)해서 움직인다. ` +
+    `"OOM이 나면 batch를 줄여라"가 통하는 이유이자, 줄여도 안 통하는 경우가 있는 이유다.<br><br>` +
+    `<b class="kv">그리고 KV cache는 이 ledger에 아예 줄이 없다.</b> ` +
+    `training은 teacher forcing으로 <b>한 번의 forward</b>에 전체 sequence를 밀어 넣는다 — ` +
+    `autoregressive loop가 없으니 재사용할 것도 없고, 따라서 cache라는 개념 자체가 성립하지 않는다. ` +
+    `training OOM 분석에 KV cache 줄이 있으면 그건 <b>이중 계산</b>이다. ` +
+    `헷갈리는 이유는 바이트 수식이 글자 그대로 같기 때문 — training에서 K·V가 차지하는 ` +
+    `<b>${fmtB(kvBlock)}</b>는 <b>activation</b>이고, optimizer step 후 해제되며, ` +
+    `gradient checkpointing으로 <b>지울 수 있다</b>. inference의 같은 바이트는 지울 수 없다.`;
+}
+
+/* ==================================================================
+   7. 구동
+   ================================================================== */
+function renderStep(){ renderRail(); renderNodes(); renderTotals(); renderNote(); renderToy(); drawFlow(); }
+function renderAll(){ renderDtype(); renderDerived(); renderModes(); renderKor(); renderLedger(); renderStep(); }
+
+function stopPlay(){
+  if (playing){ clearInterval(playing); playing = null; $("bPlay").textContent = "▶▶ 자동"; }
+}
+function stepOnce(){ if (cur >= 16) return false; cur++; return true; }
+
+function boot(){
+  $("bStep").onclick  = () => { stopPlay(); if (stepOnce()) renderStep(); };
+  $("bReset").onclick = () => { stopPlay(); cur = 0; renderStep(); };
+  $("bPlay").onclick  = () => {
+    if (playing){ stopPlay(); return; }
+    if (cur >= 16) cur = 0;
+    $("bPlay").textContent = "⏸ 정지";
+    playing = setInterval(() => {
+      if (!stepOnce()){ stopPlay(); return; }
+      renderStep();
+    }, 1500);
+  };
+  $("mTrain").onclick = () => { mode = "train"; renderModes(); renderStep(); };
+  $("mInfer").onclick = () => { mode = "infer"; renderModes(); renderStep(); };
+  $("ckBox").onchange = e => { ckpt = e.target.checked; renderStep(); };
+
+  $("sB").oninput = e => { CFG.B   = +e.target.value; renderDerived(); renderKor(); renderLedger(); renderStep(); };
+  $("sS").oninput = e => { CFG.sIx = +e.target.value; renderDerived(); renderKor(); renderLedger(); renderStep(); };
+  $("sH").oninput = e => { CFG.hIx = +e.target.value; renderDerived(); renderKor(); renderLedger(); renderStep(); };
+  $("sA").oninput = e => { CFG.aIx = +e.target.value; renderDerived(); renderKor(); renderLedger(); renderStep(); };
+  $("sL").oninput = e => { CFG.L   = +e.target.value; renderDerived(); renderKor(); renderLedger(); renderStep(); };
+
+  window.addEventListener("resize", drawFlow);
+  renderAll();
+}
+if (typeof document !== "undefined") boot();
+</script>
+</body>
+</html>

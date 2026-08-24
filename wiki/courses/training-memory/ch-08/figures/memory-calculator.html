@@ -1,0 +1,551 @@
+<!--
+  figure: memory-calculator.html — Interactive per-GPU training-memory calculator (a "mem_calc.py" in the browser)
+  chapter: ch-08 — Memory Formulas, the Calculator, and the OOM Debugging Loop
+  back to reading: ../read.md   (linked from read.md §2 "Interactive companion")
+  SELF-CONTAINED: inline CSS + vanilla JS only. No external CDNs, no network calls. Open the file directly in any browser.
+
+  What it does: mirrors the six-component per-GPU ledger from the chapter
+      M = weights + gradients + optimizer + activations + logit-spike + overhead
+  and applies the parallelism levers (N/TP/PP/EP, fused-CE, activation checkpointing).
+  It highlights the DOMINANT term, checks against a selectable GPU capacity (40/80 GB),
+  and prints an OOM verdict with the minimal suggested lever, in the chapter's lever order.
+-->
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>ch-08 · Per-GPU Training Memory Calculator</title>
+<style>
+  :root{
+    --bg:#0d1117; --panel:#161b22; --panel2:#1c2330; --edge:#2a3340;
+    --ink:#e6edf3; --muted:#9aa7b4; --dim:#6e7b8a;
+    --accent:#58a6ff; --accent2:#7ee787;
+    --warn:#f0883e; --bad:#f85149; --good:#3fb950;
+    --wt:#6ea8fe; --gr:#79c0ff; --opt:#d2a8ff; --act:#7ee787; --logit:#f0883e; --oh:#8b98a5;
+    --mono:'SFMono-Regular',ui-monospace,'JetBrains Mono',Menlo,Consolas,monospace;
+    --sans:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;padding:0;background:var(--bg);color:var(--ink);font-family:var(--sans);font-size:14px;line-height:1.5}
+  a{color:var(--accent);text-decoration:none}
+  a:hover{text-decoration:underline}
+  .wrap{max-width:1240px;margin:0 auto;padding:20px 18px 60px}
+  header h1{font-size:20px;margin:0 0 3px}
+  header .sub{color:var(--muted);font-size:12.5px;margin-bottom:6px}
+  header .crumb{color:var(--dim);font-size:12px;margin-bottom:16px}
+  .grid{display:grid;grid-template-columns:minmax(340px,1fr) minmax(420px,1.35fr);gap:18px}
+  @media (max-width:960px){.grid{grid-template-columns:1fr}}
+  .card{background:var(--panel);border:1px solid var(--edge);border-radius:10px;padding:14px 15px}
+  .card h2{font-size:13px;letter-spacing:.04em;text-transform:uppercase;color:var(--muted);margin:0 0 12px;font-weight:600}
+  .card h3{font-size:12px;color:var(--dim);margin:14px 0 8px;text-transform:uppercase;letter-spacing:.03em;border-top:1px solid var(--edge);padding-top:12px}
+  .card h3:first-of-type{border-top:none;padding-top:0}
+
+  /* control rows */
+  .row{display:flex;align-items:center;gap:10px;margin:9px 0}
+  .row label{flex:0 0 128px;color:var(--ink);font-size:12.5px}
+  .row .hint{color:var(--dim);font-size:11px}
+  .row input[type=range]{flex:1;min-width:80px;accent-color:var(--accent)}
+  .row .val{flex:0 0 108px;text-align:right;font-family:var(--mono);font-size:12px;color:var(--accent2)}
+  .row input[type=number]{width:96px;background:var(--panel2);border:1px solid var(--edge);color:var(--ink);
+     border-radius:6px;padding:5px 7px;font-family:var(--mono);font-size:12px}
+  select{background:var(--panel2);border:1px solid var(--edge);color:var(--ink);border-radius:6px;padding:5px 8px;font-size:12.5px;font-family:var(--mono)}
+
+  /* segmented toggle groups */
+  .seg{display:inline-flex;border:1px solid var(--edge);border-radius:7px;overflow:hidden}
+  .seg button{background:var(--panel2);border:none;color:var(--muted);padding:5px 12px;font-size:12px;cursor:pointer;font-family:var(--sans)}
+  .seg button+button{border-left:1px solid var(--edge)}
+  .seg button.on{background:var(--accent);color:#08111f;font-weight:600}
+  .seg.grn button.on{background:var(--good);color:#07130b}
+  .seg.wrn button.on{background:var(--warn);color:#1a0e04}
+
+  .togline{display:flex;align-items:center;justify-content:space-between;margin:9px 0}
+  .togline .lab{font-size:12.5px}
+  .togline .lab small{display:block;color:var(--dim);font-size:11px}
+
+  .presets{display:flex;flex-wrap:wrap;gap:6px;margin:2px 0 4px}
+  .presets button{background:var(--panel2);border:1px solid var(--edge);color:var(--muted);border-radius:999px;
+     padding:4px 11px;font-size:11.5px;cursor:pointer}
+  .presets button:hover{border-color:var(--accent);color:var(--ink)}
+
+  /* results */
+  .totline{display:flex;align-items:baseline;gap:10px;margin:2px 0 12px}
+  .totline .big{font-family:var(--mono);font-size:30px;font-weight:700}
+  .totline .cap{color:var(--muted);font-size:13px;font-family:var(--mono)}
+  .bar{position:relative;height:30px;border-radius:6px;background:var(--panel2);border:1px solid var(--edge);overflow:hidden;display:flex}
+  .bar .seg-fill{height:100%}
+  .capline{position:absolute;top:-4px;bottom:-4px;width:2px;background:#fff;z-index:3}
+  .capline::after{content:attr(data-lab);position:absolute;top:-16px;left:3px;font-size:10px;color:#fff;white-space:nowrap;font-family:var(--mono)}
+
+  table.ledger{width:100%;border-collapse:collapse;margin-top:12px;font-size:12.5px}
+  table.ledger th{text-align:left;color:var(--dim);font-weight:600;font-size:11px;text-transform:uppercase;letter-spacing:.03em;padding:5px 6px;border-bottom:1px solid var(--edge)}
+  table.ledger td{padding:6px 6px;border-bottom:1px solid #20272f;font-family:var(--mono);vertical-align:top}
+  table.ledger td.name{font-family:var(--sans)}
+  table.ledger td.num{text-align:right;white-space:nowrap}
+  table.ledger td.formula{color:var(--muted);font-size:11px}
+  table.ledger tr.dom td{background:rgba(88,166,255,.09)}
+  table.ledger tr.subtot td{border-top:1px solid var(--edge);color:var(--ink)}
+  .swatch{display:inline-block;width:9px;height:9px;border-radius:2px;margin-right:6px;vertical-align:baseline}
+  .pct{color:var(--dim);font-size:11px}
+  .domtag{display:inline-block;background:var(--accent);color:#08111f;font-size:9.5px;font-weight:700;border-radius:4px;padding:1px 5px;margin-left:6px;letter-spacing:.03em;vertical-align:middle}
+
+  .verdict{margin-top:14px;border-radius:9px;padding:12px 14px;border:1px solid var(--edge)}
+  .verdict.fit{background:rgba(63,185,80,.10);border-color:rgba(63,185,80,.4)}
+  .verdict.tight{background:rgba(240,136,62,.10);border-color:rgba(240,136,62,.45)}
+  .verdict.oom{background:rgba(248,81,73,.10);border-color:rgba(248,81,73,.5)}
+  .verdict .vhead{font-weight:700;font-size:15px;display:flex;align-items:center;gap:8px}
+  .verdict .vsub{color:var(--muted);font-size:12.5px;margin:6px 0 8px;font-family:var(--mono)}
+  .verdict .lever{font-size:13px}
+  .verdict .lever b{color:var(--ink)}
+  .verdict ol{margin:6px 0 0;padding-left:20px;font-size:12px;color:var(--muted)}
+  .verdict ol li.pick{color:var(--ink);font-weight:600}
+  .dot{width:11px;height:11px;border-radius:50%;display:inline-block}
+  .dot.g{background:var(--good)} .dot.o{background:var(--warn)} .dot.r{background:var(--bad)}
+
+  .formbox{background:#0a0e14;border:1px solid var(--edge);border-radius:8px;padding:11px 13px;margin-top:14px;font-family:var(--mono);font-size:11.5px;color:var(--muted);line-height:1.7;overflow-x:auto}
+  .formbox .c{color:var(--accent2)}
+  .formbox .k{color:var(--logit)}
+  .formbox b{color:var(--ink)}
+  .note{color:var(--dim);font-size:11.5px;margin-top:10px}
+  .kbadge{font-family:var(--mono);font-size:11px;color:var(--accent2);background:var(--panel2);border:1px solid var(--edge);border-radius:5px;padding:1px 6px}
+  .flags{display:flex;flex-wrap:wrap;gap:6px;margin-top:10px}
+  .flag{font-size:11px;font-family:var(--mono);border:1px solid var(--edge);border-radius:6px;padding:2px 8px;color:var(--dim)}
+  .flag.on{color:var(--accent2);border-color:rgba(126,231,135,.4)}
+  hr.soft{border:none;border-top:1px solid var(--edge);margin:14px 0}
+  .twocol{display:grid;grid-template-columns:1fr 1fr;gap:0 16px}
+  @media (max-width:520px){.twocol{grid-template-columns:1fr}}
+  .derivemini{font-family:var(--mono);font-size:11px;color:var(--dim);margin-top:2px}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>Per-GPU Training Memory Calculator <span style="color:var(--dim);font-weight:400;font-size:14px">· a browser <code>mem_calc.py</code></span></h1>
+    <div class="sub">Six additive components — W · G · O · A · L · overhead — with the ZeRO-3 / TP / PP / EP levers. Live.</div>
+    <div class="crumb">ch-08 · Memory Formulas, the Calculator, and the OOM Debugging Loop — back to <a href="../read.md">read.md</a></div>
+  </header>
+
+  <div class="grid">
+    <!-- ============ LEFT: CONTROLS ============ -->
+    <div class="card" id="controls">
+      <h2>Configuration</h2>
+
+      <div class="presets" id="presets"></div>
+
+      <h3>Model</h3>
+      <div class="row">
+        <label>Params&nbsp;P</label>
+        <input type="range" id="P_s" min="0.05" max="1000" step="0.05" value="7">
+        <span class="val" id="P_v"></span>
+      </div>
+      <div class="derivemini" id="P_note"></div>
+      <div class="row"><label>hidden&nbsp;h</label>
+        <input type="number" id="h" value="4096" min="128" step="128"><span class="hint">model dim</span></div>
+      <div class="row"><label>layers&nbsp;L</label>
+        <input type="number" id="L" value="32" min="1" step="1"><span class="hint">transformer blocks</span></div>
+      <div class="row"><label>heads&nbsp;a</label>
+        <input type="number" id="a" value="32" min="1" step="1"><span class="hint">attention heads</span></div>
+      <div class="row"><label>vocab&nbsp;V</label>
+        <input type="number" id="V" value="32000" min="1000" step="1000"><span class="hint">tokens</span></div>
+
+      <h3>Trainable mode &amp; precision</h3>
+      <div class="togline">
+        <div class="lab">Trainable mode</div>
+        <div class="seg" id="mode">
+          <button data-v="full" class="on">Full-FT</button>
+          <button data-v="lora">LoRA</button>
+        </div>
+      </div>
+      <div class="row" id="lora_r_row" style="display:none">
+        <label>LoRA rank&nbsp;r</label>
+        <input type="range" id="r_s" min="1" max="256" step="1" value="16">
+        <span class="val" id="r_v"></span>
+      </div>
+      <div class="togline">
+        <div class="lab">Precision <small>weights / grads = 2 B · Adam fp32 = 12ψ</small></div>
+        <span class="kbadge">bf16 + fp32 Adam</span>
+      </div>
+
+      <h3>Parallelism / world</h3>
+      <div class="row">
+        <label>world&nbsp;W (GPUs)</label>
+        <input type="range" id="W_s" min="1" max="1024" step="1" value="8">
+        <span class="val" id="W_v"></span>
+      </div>
+      <div class="row"><label>TP&nbsp;degree&nbsp;t</label>
+        <input type="number" id="TP" value="1" min="1" step="1"><span class="hint" id="TP_hint">tensor-parallel</span></div>
+      <div class="row"><label>PP&nbsp;degree&nbsp;p</label>
+        <input type="number" id="PP" value="1" min="1" step="1"><span class="hint">pipeline stages</span></div>
+      <div class="row"><label>EP&nbsp;degree</label>
+        <input type="number" id="EP" value="1" min="1" step="1"><span class="hint">expert-parallel (MoE)</span></div>
+      <div class="derivemini" id="dp_note"></div>
+
+      <h3>Batch &amp; sequence</h3>
+      <div class="row">
+        <label>seq&nbsp;len&nbsp;s</label>
+        <input type="range" id="s_s" min="128" max="131072" step="128" value="2048">
+        <span class="val" id="s_v"></span>
+      </div>
+      <div class="row">
+        <label>micro-batch&nbsp;b</label>
+        <input type="range" id="b_s" min="1" max="64" step="1" value="1">
+        <span class="val" id="b_v"></span>
+      </div>
+
+      <h3>Kernels &amp; recompute</h3>
+      <div class="togline">
+        <div class="lab">Fused cross-entropy <small>Liger: logit peak → chunk×V×2</small></div>
+        <div class="seg grn" id="fce"><button data-v="off" class="on">off</button><button data-v="on">on</button></div>
+      </div>
+      <div class="togline">
+        <div class="lab">Activation checkpointing <small>full: A → ~2·s·b·h·L</small></div>
+        <div class="seg grn" id="ckpt"><button data-v="off" class="on">off</button><button data-v="on">on</button></div>
+      </div>
+
+      <h3>Hardware</h3>
+      <div class="togline">
+        <div class="lab">GPU capacity</div>
+        <div class="seg wrn" id="gpu">
+          <button data-v="40">A100 40 GB</button>
+          <button data-v="80" class="on">A100/H100 80 GB</button>
+        </div>
+      </div>
+      <div class="row"><label>overhead</label>
+        <input type="number" id="OH" value="9" min="0" step="0.5"><span class="hint">GiB · CUDA ctx + NCCL + frag</span></div>
+      <div class="note">HBM bandwidth ≈ 2 TB/s vs PCIe ≈ 32 GB/s — the 100–1000× gap that makes offload a last resort.</div>
+    </div>
+
+    <!-- ============ RIGHT: RESULTS ============ -->
+    <div class="card" id="results">
+      <h2>Per-GPU breakdown</h2>
+
+      <div class="totline">
+        <span class="big" id="tot_big">—</span>
+        <span class="cap" id="tot_cap"></span>
+      </div>
+      <div class="bar" id="bar"></div>
+
+      <table class="ledger" id="ledger">
+        <thead><tr><th>Component</th><th>Formula (bytes)</th><th class="num">GiB</th><th class="num">%</th></tr></thead>
+        <tbody id="ledger_body"></tbody>
+      </table>
+
+      <div class="flags" id="flags"></div>
+
+      <div class="verdict" id="verdict"></div>
+
+      <div class="formbox" id="formbox"></div>
+      <div class="note">Displayed in GiB (binary, 1024³ B). GPU capacity buttons are the practitioner budget number; the calculator flags "tight" within a 2 GiB safety margin per the chapter guideline.</div>
+    </div>
+  </div>
+</div>
+
+<script>
+"use strict";
+const GiB = 1024**3;
+
+// ---- element helpers ----------------------------------------------------
+const $ = id => document.getElementById(id);
+const fmt = (g) => g >= 100 ? g.toFixed(0) : g >= 10 ? g.toFixed(1) : g.toFixed(2);
+function segValue(groupId){ const b=$(groupId).querySelector("button.on"); return b?b.dataset.v:null; }
+function bindSeg(groupId, cb){
+  $(groupId).querySelectorAll("button").forEach(btn=>{
+    btn.addEventListener("click",()=>{
+      $(groupId).querySelectorAll("button").forEach(x=>x.classList.remove("on"));
+      btn.classList.add("on"); cb(btn.dataset.v); render();
+    });
+  });
+}
+
+// ---- state read ---------------------------------------------------------
+function readState(){
+  const P = parseFloat($("P_s").value) * 1e9;          // params (absolute)
+  const W = parseInt($("W_s").value);
+  const t = Math.max(1, parseInt($("TP").value)||1);
+  const p = Math.max(1, parseInt($("PP").value)||1);
+  const ep= Math.max(1, parseInt($("EP").value)||1);
+  const s = parseInt($("s_s").value);
+  const b = parseInt($("b_s").value);
+  const h = Math.max(1, parseInt($("h").value)||1);
+  const L = Math.max(1, parseInt($("L").value)||1);
+  const a = Math.max(1, parseInt($("a").value)||1);
+  const V = Math.max(1, parseInt($("V").value)||1);
+  const r = parseInt($("r_s").value);
+  const OH= (parseFloat($("OH").value)||0) * GiB;
+  const mode = segValue("mode");     // full | lora
+  const fce  = segValue("fce")==="on";
+  const ckpt = segValue("ckpt")==="on";
+  const cap  = parseInt(segValue("gpu")) ;               // GB label
+  // DP replicas: world split across TP*PP (EP is a partition of DP for MoE weights;
+  // for a dense model EP=1). N = DP degree that shards ZeRO model states.
+  const modelParallel = t * p;
+  const N = Math.max(1, Math.floor(W / modelParallel));  // DP degree = ZeRO shard count
+  return {P,W,t,p,ep,s,b,h,L,a,V,r,OH,mode,fce,ckpt,cap,N,modelParallel};
+}
+
+// ---- the ledger: six additive per-GPU components ------------------------
+function compute(S){
+  const {P,t,p,s,b,h,L,a,V,r,OH,mode,fce,ckpt,ep} = S;
+  const N = S.N;
+  const psi = P;                       // Ψ in bytes-per-param sense (count)
+  const pPerStage = P / p;             // PP: each rank owns Ψ/p params
+
+  // --- Model states ---
+  let weights, grads, opt, chunkV;
+  let f_w, f_g, f_o;
+  if(mode==="full"){
+    // ZeRO-3: 16Ψ/N split into 2Ψ/N + 2Ψ/N + 12Ψ/N ; PP further divides params by p
+    weights = 2*pPerStage / N;
+    grads   = 2*pPerStage / N;
+    opt     = 12*pPerStage / N;
+    f_w = "2·Ψ/(N)"      + (p>1?" /p":"");
+    f_g = "2·Ψ/(N)"      + (p>1?" /p":"");
+    f_o = "12·Ψ/(N)"     + (p>1?" /p":"") + "  (fp32 4+4+4)";
+  } else {
+    // LoRA: full base held on every replica (2Ψ, NOT /N); adapter states tiny.
+    // adapter param count ≈ 2·r·(#injected matrices)·h. Practitioner estimate:
+    //   ψ_adapter ≈ 2·r·h·L·k  (k≈4 projections/layer). Kept small & world-invariant.
+    const k = 4;
+    const psiAdapter = 2*r*h*L*k;      // params in adapters
+    weights = 2*pPerStage;             // frozen base, full copy per replica (bf16), PP-shardable
+    grads   = 2*psiAdapter;            // adapter grads only
+    opt     = 12*psiAdapter;           // adapter Adam only
+    f_w = "2·Ψ (frozen base, per replica)" + (p>1?" /p":"");
+    f_g = "2·ψ_LoRA (adapter only)";
+    f_o = "12·ψ_LoRA (adapter Adam)";
+  }
+
+  // --- Activations (Megatron TP+SP per-layer, ×L) ---
+  // per-layer (TP+SP): (s·b·h / t)(34 + 5·a·s/h)
+  let act, f_a;
+  if(ckpt){
+    act = 2*s*b*h*L;                   // ~2·s·b·h·L bytes (full checkpointing estimate)
+    f_a = "~2·s·b·h·L   (full ckpt)";
+  } else {
+    act = (s*b*h/t)*(34 + 5*a*s/h)*L;  // full activations
+    f_a = "(s·b·h/t)(34 + 5·a·s/h)·L";
+  }
+
+  // --- Logit-buffer spike (world-invariant) ---
+  // full:  V·s·b·2 ; fused-CE: chunk·V·2  (chunk ~ s tokens of one row-block; use 1/8 of s·b, min 1 row)
+  let logit, f_l;
+  if(fce){
+    const chunk = Math.max(1, Math.ceil(s*b/8));   // Liger chunks along token dim
+    logit = chunk * V * 2;
+    f_l = "chunk·V·2   (fused-CE, chunk=⌈s·b/8⌉)";
+    chunkV = chunk;
+  } else {
+    logit = V * s * b * 2;
+    f_l = "V·s·b·2";
+  }
+
+  // --- Overhead ---
+  const overhead = OH;
+
+  // --- transient FSDP AllGather buffer (peak excursion, informational; folded into note) ---
+  const pUnit = pPerStage / L;                     // one FSDP unit ≈ one layer's params
+  const allgather = 2 * pUnit * 2;                 // ≈ 2 × (P_unit params × 2 bytes)
+
+  const items = [
+    {key:"weights",   name:"Weights",        bytes:weights,   color:"var(--wt)",   formula:f_w},
+    {key:"grads",     name:"Gradients",      bytes:grads,     color:"var(--gr)",   formula:f_g},
+    {key:"opt",       name:"Optimizer (Adam)",bytes:opt,      color:"var(--opt)",  formula:f_o},
+    {key:"act",       name:"Activations",    bytes:act,       color:"var(--act)",  formula:f_a},
+    {key:"logit",     name:"Logit spike",    bytes:logit,     color:"var(--logit)",formula:f_l},
+    {key:"overhead",  name:"Overhead",       bytes:overhead,  color:"var(--oh)",   formula:"CUDA ctx + NCCL + frag"},
+  ];
+  const total = items.reduce((x,i)=>x+i.bytes,0);
+  return {items,total,allgather,chunkV,N,pUnit};
+}
+
+// ---- lever suggestion in the chapter's order ----------------------------
+function suggestLever(S, R){
+  const dom = R.items.reduce((m,i)=> i.bytes>m.bytes?i:m, R.items[0]);
+  const over = R.total - S.cap*GiB;            // GiB budget vs bytes; treat cap as GiB
+  const need = (R.total - (S.cap*GiB)) / GiB;  // GiB to shed to hit capacity
+  // ordered candidate levers, each with an applicability test tied to the dominant component
+  const modelStateDom = ["weights","grads","opt"].includes(dom.key);
+  const order = [
+    { id:"nodes",  txt:"Add nodes (raise world W → larger ZeRO-3 N)",
+      ok: modelStateDom && S.mode==="full",
+      why:"model states dominate and this is Full-FT — 16Ψ/N shrinks with N." },
+    { id:"tp",     txt:"Raise TP degree t",
+      ok: dom.key==="act" || (S.mode!=="full" && modelStateDom) || S.ep>1,
+      why: dom.key==="act" ? "activations dominate — TP(+SP) divides the activation term by t."
+            : "LoRA / MoE model-parallel weights: TP splits the weight matmuls, DP does not help." },
+    { id:"fce",    txt:"Enable fused cross-entropy (Liger)",
+      ok: dom.key==="logit" && !S.fce,
+      why:"the logit spike is the dominant term and fused-CE never materializes V·s·b — it is world-invariant, so nodes/TP/PP won't touch it." },
+    { id:"cut",    txt:"Cut micro-batch b or sequence length s",
+      ok: dom.key==="act" || dom.key==="logit",
+      why:"activations (∝ s², s·b) and the logit spike (∝ s·b) both shrink directly." },
+    { id:"ckpt",   txt:"Enable activation checkpointing",
+      ok: dom.key==="act" && !S.ckpt,
+      why:"activations dominate — full checkpointing drops A to ~2·s·b·h·L at ~33% compute." },
+    { id:"lora",   txt:"Switch Full-FT → LoRA",
+      ok: modelStateDom && S.mode==="full",
+      why:"eliminates the 12Ψ/N Adam + 2Ψ/N grad terms (changes the gradient signal)." },
+    { id:"offload",txt:"Offload optimizer to CPU/NVMe (LAST RESORT)",
+      ok: dom.key==="opt",
+      why:"removes 12Ψ/N from GPU but adds PCIe traffic each step — 100–1000× slower step." },
+  ];
+  const pick = order.find(o=>o.ok) || order[order.length-1];
+  return {dom, need, order, pick};
+}
+
+// ---- render -------------------------------------------------------------
+function render(){
+  // sync mode-dependent UI
+  const mode = segValue("mode");
+  $("lora_r_row").style.display = (mode==="lora") ? "flex":"none";
+
+  const S = readState();
+  const R = compute(S);
+
+  // slider value labels
+  $("P_v").textContent = (S.P>=1e9? (S.P/1e9).toFixed(2)+" B" : (S.P/1e6).toFixed(0)+" M") + " params";
+  $("W_v").textContent = S.W + " GPU" + (S.W>1?"s":"");
+  $("s_v").textContent = S.s.toLocaleString() + " tok";
+  $("b_v").textContent = S.b + " /device";
+  $("r_v").textContent = "r = " + S.r;
+  $("P_note").textContent = "≈ " + (S.P/1e9).toFixed(2) + " B params";
+  $("dp_note").textContent = "DP degree N = W / (TP·PP) = " + S.W + " / " + S.modelParallel + " = " + S.N + "   (ZeRO-3 shards model states across N)";
+  $("TP_hint").textContent = "tensor-parallel" + (S.t>1?" (÷ activations)":"");
+
+  // total line + capacity
+  const totG = R.total/GiB, capG = S.cap;
+  $("tot_big").textContent = fmt(totG) + " GiB";
+  $("tot_big").style.color = totG > capG ? "var(--bad)" : (totG > capG-2 ? "var(--warn)":"var(--good)");
+  $("tot_cap").textContent = "per GPU  ·  vs " + capG + " GB capacity  (" + (totG>capG?"+":"") + fmt(totG-capG) + " GiB)";
+
+  // stacked bar (scaled to max(total, cap))
+  const scale = Math.max(R.total, capG*GiB) * 1.02;
+  const bar = $("bar"); bar.innerHTML="";
+  R.items.forEach(i=>{
+    if(i.bytes<=0) return;
+    const d=document.createElement("div");
+    d.className="seg-fill"; d.style.width=(100*i.bytes/scale)+"%"; d.style.background=i.color;
+    d.title = i.name+" — "+fmt(i.bytes/GiB)+" GiB";
+    bar.appendChild(d);
+  });
+  const cl=document.createElement("div");
+  cl.className="capline"; cl.style.left=(100*capG*GiB/scale)+"%";
+  cl.setAttribute("data-lab", capG+" GB"); bar.appendChild(cl);
+
+  // dominant component
+  const {dom, need, order, pick} = suggestLever(S,R);
+
+  // ledger rows
+  const tb=$("ledger_body"); tb.innerHTML="";
+  R.items.forEach(i=>{
+    const tr=document.createElement("tr");
+    if(i.key===dom.key) tr.className="dom";
+    const pct = R.total>0 ? (100*i.bytes/R.total):0;
+    tr.innerHTML =
+      `<td class="name"><span class="swatch" style="background:${i.color}"></span>${i.name}`+
+        (i.key===dom.key?`<span class="domtag">DOMINANT</span>`:``)+`</td>`+
+      `<td class="formula">${i.formula}</td>`+
+      `<td class="num">${fmt(i.bytes/GiB)}</td>`+
+      `<td class="num pct">${pct.toFixed(0)}%</td>`;
+    tb.appendChild(tr);
+  });
+  // subtotal + total rows
+  const modelStates = R.items.filter(i=>["weights","grads","opt"].includes(i.key)).reduce((x,i)=>x+i.bytes,0);
+  const trS=document.createElement("tr"); trS.className="subtot";
+  trS.innerHTML=`<td class="name">Model-state subtotal (W+G+O)</td><td class="formula">${S.mode==="full"?"= 16·Ψ/N"+(S.p>1?" /p":""):"base + adapter states"}</td><td class="num">${fmt(modelStates/GiB)}</td><td class="num pct">${(100*modelStates/R.total).toFixed(0)}%</td>`;
+  tb.appendChild(trS);
+  const trT=document.createElement("tr"); trT.className="subtot";
+  trT.innerHTML=`<td class="name"><b>TOTAL per GPU</b></td><td class="formula">W+G+O+A+L+overhead</td><td class="num"><b>${fmt(totG)}</b></td><td class="num pct">100%</td>`;
+  tb.appendChild(trT);
+
+  // flags
+  const flags=$("flags"); flags.innerHTML="";
+  const mk=(txt,on)=>{const e=document.createElement("span");e.className="flag"+(on?" on":"");e.textContent=txt;flags.appendChild(e);};
+  mk("ZeRO-3 N="+S.N, S.mode==="full");
+  mk("TP t="+S.t, S.t>1);
+  mk("PP p="+S.p, S.p>1);
+  mk("EP="+S.ep, S.ep>1);
+  mk("fused-CE", S.fce);
+  mk("ckpt", S.ckpt);
+  mk("AllGather peak ≈ "+fmt(R.allgather/GiB)+" GiB", R.allgather/GiB>0.05);
+
+  // verdict
+  const v=$("verdict");
+  let cls, dotcls, head;
+  if(totG > capG){ cls="oom"; dotcls="r"; head="OOM — over capacity"; }
+  else if(totG > capG-2){ cls="tight"; dotcls="o"; head="TIGHT — inside 2 GiB safety margin"; }
+  else { cls="fit"; dotcls="g"; head="FITS — with headroom"; }
+  v.className="verdict "+cls;
+  const oomMath = totG>capG
+    ? `Must shed ≥ <b>${fmt(totG-capG)} GiB</b> (need + allocated − total).`
+    : `Headroom: <b>${fmt(capG-totG)} GiB</b> below the ${capG} GB line.`;
+  let leverHTML = "";
+  if(totG > capG-2){
+    leverHTML =
+      `<div class="lever">Dominant term: <b>${dom.name}</b> (${fmt(dom.bytes/GiB)} GiB). `+
+      `Suggested minimal lever: <b>${pick.txt}</b>.<br><span style="color:var(--muted)">${pick.why}</span></div>`+
+      `<ol>` + order.map(o=>`<li class="${o.id===pick.id?'pick':''}">${o.txt}${o.id===pick.id?' &larr; apply first':''}</li>`).join("") + `</ol>`;
+  } else {
+    leverHTML = `<div class="lever">Dominant term: <b>${dom.name}</b> (${fmt(dom.bytes/GiB)} GiB). No lever needed at this config.</div>`;
+  }
+  v.innerHTML =
+    `<div class="vhead"><span class="dot ${dotcls}"></span>${head}</div>`+
+    `<div class="vsub">${totG.toFixed(2)} GiB / ${capG} GB &nbsp;·&nbsp; ${oomMath}</div>`+
+    leverHTML;
+
+  // formula box (kept on screen, reflecting current mode)
+  const fb=$("formbox");
+  fb.innerHTML =
+    `<b>M_perGPU = W + G + O + A + L + overhead</b>\n`+
+    (S.mode==="full"
+      ? `  W = <span class="c">2·Ψ/N</span>${S.p>1?"·(1/p)":""} , G = <span class="c">2·Ψ/N</span> , O = <span class="c">12·Ψ/N</span>   ⇒ model states = <b>16·Ψ/N</b>${S.p>1?" /p":""}\n`
+      : `  W = <span class="c">2·Ψ</span> (frozen base, per replica) ; G,O on adapter only (≈ <span class="c">14·ψ_LoRA</span>) — <b>node-invariant activations</b>\n`)+
+    `  A = ${S.ckpt? `<span class="c">~2·s·b·h·L</span>  (checkpointed)` : `<span class="c">(s·b·h/t)(34 + 5·a·s/h)·L</span>`}\n`+
+    `  L = ${S.fce? `<span class="k">chunk·V·2</span>  (fused-CE)` : `<span class="k">V·s·b·2</span>`}   ← world-invariant: NOT ÷N, ÷TP, or ÷PP\n`+
+    `  FSDP AllGather peak ≈ <span class="c">2·P_unit·2B</span> = ${fmt(R.allgather/GiB)} GiB (transient excursion)\n`+
+    `  N = W/(TP·PP) = ${S.W}/${S.modelParallel} = ${S.N}   |   Ψ = ${(S.P/1e9).toFixed(2)}B params`;
+}
+
+// ---- presets ------------------------------------------------------------
+const PRESETS = {
+  "7B · N=8 · s=2048 (chapter worked ex.)":
+    {P:7,W:8,TP:1,PP:1,EP:1,s:2048,b:1,h:4096,L:32,a:32,V:32000,mode:"full",fce:"off",ckpt:"off",gpu:"80",OH:9,r:16},
+  "7B · long-seq 16K, vocab 128K (logit-dominated)":
+    {P:7,W:8,TP:1,PP:1,EP:1,s:16384,b:1,h:4096,L:32,a:32,V:131072,mode:"full",fce:"off",ckpt:"off",gpu:"80",OH:9,r:16},
+  "70B · N=64 ZeRO-3 (model-state scale-away)":
+    {P:70,W:64,TP:1,PP:1,EP:1,s:4096,b:1,h:8192,L:80,a:64,V:128000,mode:"full",fce:"on",ckpt:"on",gpu:"80",OH:9,r:16},
+  "7B LoRA · s=8192 (activation-dominated, node-invariant)":
+    {P:7,W:8,TP:1,PP:1,EP:1,s:8192,b:4,h:4096,L:32,a:32,V:32000,mode:"lora",fce:"off",ckpt:"off",gpu:"80",OH:9,r:16},
+  "13B · A100-40GB · b=8 (OOM demo)":
+    {P:13,W:8,TP:1,PP:1,EP:1,s:4096,b:8,h:5120,L:40,a:40,V:32000,mode:"full",fce:"off",ckpt:"off",gpu:"40",OH:9,r:16},
+};
+function applyPreset(cfg){
+  $("P_s").value=cfg.P; $("W_s").value=cfg.W; $("TP").value=cfg.TP; $("PP").value=cfg.PP; $("EP").value=cfg.EP;
+  $("s_s").value=cfg.s; $("b_s").value=cfg.b; $("h").value=cfg.h; $("L").value=cfg.L; $("a").value=cfg.a; $("V").value=cfg.V;
+  $("r_s").value=cfg.r; $("OH").value=cfg.OH;
+  const setseg=(g,val)=>{$(g).querySelectorAll("button").forEach(x=>x.classList.toggle("on",x.dataset.v===val));};
+  setseg("mode",cfg.mode); setseg("fce",cfg.fce); setseg("ckpt",cfg.ckpt); setseg("gpu",cfg.gpu);
+  render();
+}
+(function buildPresets(){
+  const box=$("presets");
+  Object.keys(PRESETS).forEach(name=>{
+    const btn=document.createElement("button");
+    btn.textContent=name.split(" · ")[0] + (name.includes("(")?" — "+name.split("(")[1].replace(")",""):"");
+    btn.title=name;
+    btn.addEventListener("click",()=>applyPreset(PRESETS[name]));
+    box.appendChild(btn);
+  });
+})();
+
+// ---- wire live updates --------------------------------------------------
+["P_s","W_s","s_s","b_s","r_s","h","L","a","V","TP","PP","EP","OH"].forEach(id=>{
+  $(id).addEventListener("input",render);
+  $(id).addEventListener("change",render);
+});
+bindSeg("mode",()=>{}); bindSeg("fce",()=>{}); bindSeg("ckpt",()=>{}); bindSeg("gpu",()=>{});
+
+render();
+</script>
+</body>
+</html>
