@@ -1,0 +1,1682 @@
+<!--
+  Figure: kv-cache.html — "KV cache 완전 해부 — 왜 가능한가 · 얼마인가 · 왜 학습엔 없는가"
+  Chapter: ch-extra (track: ledger / boundary)
+  Back to: ../read.md
+  Companion Q&A: ../qa.md
+
+  Fully self-contained: inline CSS + vanilla JS only. No external CDN, no web font,
+  no image, no fetch/XHR, no MathJax. Renders offline by opening this file directly
+  (file://) in a browser. Dark theme, same CSS custom properties as ch-01
+  adamw-derivation.html and ch-03 checkpointing.html.
+
+  Teaching points made visible:
+    1. (P1) A cache is POSSIBLE because of the causal mask, not because someone was
+       clever. k_j = W_K x_j and v_j = W_V x_j depend on token j alone; appending
+       token t+1 cannot change k_1..k_t. The figure recomputes them with real
+       integer arithmetic and shows the results are bit-identical.
+       Without a cache, N tokens cost 1+2+...+N = N(N+1)/2 token-forward-passes.
+    2. (P2) With a cache: N. Ratio (N+1)/2 — at N=6 that is 21 vs 6 = 3.5x, at
+       N=1024 it is 524,800 vs 1,024 = 512.5x. Q is NOT cached: only the current
+       token's query is ever used again, so q_1..q_{t-1} are dropped every step.
+    3. (P3) Prefill = one parallel pass over the whole prompt, arithmetic intensity
+       ~= tokens-per-weight-read, so ~3100 FLOPs/byte -> COMPUTE-bound. Decode =
+       one token per step re-reading every weight and the whole cache, ~0.3
+       FLOPs/byte -> BANDWIDTH-bound. H100 SXM knee = 1979 TFLOPS / 3.35 TB/s
+       = 590 FLOPs/byte. Decode sits ~2000x below the knee, i.e. ~0.05% of peak.
+    4. (P4) KV bytes = 2 * B * s * L * n_kv_heads * d_head * bytes_per_element.
+       The leading 2 is "K and V" — not two bytes, not a safety factor. Linear in
+       s. The training attention score tensor [B,a,s,s] is QUADRATIC in s. Both
+       curves are drawn on the same log-log axes so the slopes are visible.
+    5. (P5) MHA / GQA / MQA differ in exactly one number: n_kv_heads. Divisors
+       1x, H_q/G, H_q. MLA leaves the family (one latent per token, NO factor 2).
+       The inference divisor does NOT carry over to training activations, because
+       Q is untouched: training divisor = 3*H_q/(H_q + 2*H_kv) ~= 2-3x always.
+    6. (P6) TRAINING HAS NO KV CACHE — zero bytes. Teacher forcing = one parallel
+       forward over the whole sequence => no autoregressive loop => nothing to
+       amortize. K and V do exist during training, but as activations for backward
+       — identical algebra, completely different object. Hence PagedAttention
+       (ch-06) is an inference technique with no training analog.
+
+  Config / numbers used (all verified before writing; see the panel captions):
+    toy model: d_model=4, d_head=2, integer W_Q/W_K/W_V, 6 tokens
+    Llama-3-70B: L=80, n_kv=8, d_head=128, bf16 -> 327,680 B/token = 320.0 KiB
+    Llama-3-8B : L=32, n_kv=8, d_head=128, bf16 -> 131,072 B/token = 128.0 KiB
+    Llama-3-405B: L=126 -> 516,096 B/token = 504.0 KiB
+    DeepSeek-V3 MLA: 61*(512+64)*2 = 70,272 B/token = 68.6 KiB (ratio 56.9x)
+-->
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>KV Cache 완전 해부 — 왜 가능한가 · 얼마인가 · 왜 학습엔 없는가 (ch-extra)</title>
+<style>
+  :root{
+    --bg:#0e1117; --panel:#161b22; --panel2:#1c2230; --edge:#2b3242;
+    --ink:#e6edf3; --ink-dim:#9aa7b4; --ink-faint:#6b7686;
+    --accent:#58a6ff; --accent2:#3fb950; --danger:#f85149; --warn:#d29922;
+    --c-k:#58a6ff;      /* K tensor            */
+    --c-v:#f778ba;      /* V tensor            */
+    --c-q:#bc8cff;      /* Q — 캐시되지 않음   */
+    --c-waste:#f85149;  /* 낭비된 재계산       */
+    --c-cache:#3fb950;  /* 캐시에서 재사용     */
+    --c-pre:#d29922;    /* prefill             */
+    --c-dec:#58a6ff;    /* decode              */
+    --c-train:#3fb950;  /* training 쪽         */
+    --c-base:#8b949e;
+  }
+  *{box-sizing:border-box;}
+  html,body{margin:0;padding:0;max-width:100%;overflow-x:hidden;}
+  body{
+    background:var(--bg); color:var(--ink);
+    font:14px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Apple SD Gothic Neo",
+         "Noto Sans KR",Helvetica,Arial,sans-serif;
+    padding:22px; max-width:1180px; margin:0 auto;
+  }
+  h1{font-size:21px; margin:0 0 3px; letter-spacing:.2px;}
+  .sub{color:var(--ink-dim); font-size:13px; margin:0 0 20px;}
+  .sub code{color:var(--accent);}
+  .panel{background:var(--panel); border:1px solid var(--edge); border-radius:10px;
+    padding:16px; margin-bottom:18px;}
+  .panel h2{font-size:12px; text-transform:uppercase; letter-spacing:.9px; color:var(--ink-dim);
+    margin:0 0 14px; font-weight:600;}
+  .panel h2 .q{color:var(--ink); text-transform:none; letter-spacing:0; font-size:13.5px;}
+  .mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+    font-variant-numeric:tabular-nums;}
+  .dimmed{color:var(--ink-faint);}
+  b.ok{color:var(--accent2);} b.bad{color:var(--danger);} b.wn{color:var(--warn);}
+  p.lead{font-size:13px; color:var(--ink-dim); margin:0 0 13px;}
+  p.lead b{color:var(--ink);}
+
+  .callout{border-left:3px solid var(--warn); background:rgba(210,153,34,.07);
+    padding:11px 14px; border-radius:0 7px 7px 0; font-size:13px; color:var(--ink-dim);
+    margin-top:14px;}
+  .callout b{color:var(--ink);}
+  .callout code{color:var(--accent);}
+  .callout.ok{border-left-color:var(--accent2); background:rgba(63,185,80,.07);}
+  .callout.no{border-left-color:var(--danger); background:rgba(248,81,73,.07);}
+  .callout.blue{border-left-color:var(--accent); background:rgba(88,166,255,.07);}
+
+  /* ---------- config strip ---------- */
+  .cfg{display:flex; gap:7px; flex-wrap:wrap; margin-bottom:14px;}
+  .cfg span{border:1px solid var(--edge); background:var(--panel2); border-radius:6px;
+    padding:4px 9px; font-size:11.5px; color:var(--ink-dim);
+    font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;}
+  .cfg span b{color:var(--accent);}
+
+  /* ---------- run controls ---------- */
+  .runbar{display:flex; gap:7px; flex-wrap:wrap; margin-bottom:13px; align-items:center;}
+  .rb{background:var(--panel2); border:1px solid var(--edge); color:var(--ink);
+    border-radius:7px; padding:9px 14px; cursor:pointer; font-size:12.5px; font-weight:600;
+    transition:.13s;}
+  .rb:hover{border-color:var(--accent);}
+  .rb.primary{background:#1d3a5f; border-color:var(--accent); color:#cfe6ff;}
+  .phase{margin-left:auto; font-size:12.5px; color:var(--ink-dim);}
+  .phase b{color:var(--ink);}
+  .nar{border-left:3px solid var(--accent); background:rgba(88,166,255,.07);
+    padding:11px 14px; border-radius:0 7px 7px 0; font-size:13px; color:var(--ink-dim);
+    margin-top:14px; min-height:60px;}
+  .nar b{color:var(--ink);}
+  .nar .why{display:block; margin-top:6px; color:var(--ink-faint);}
+  .nar .why b{color:var(--warn);}
+
+  /* ---------- KV grid (panel 1) ---------- */
+  .gridwrap{overflow-x:auto;}
+  .kvgrid{display:grid; gap:5px; min-width:560px;}
+  .kvgrid .hd{font-size:10.5px; text-transform:uppercase; letter-spacing:.6px;
+    color:var(--ink-faint); text-align:center; padding-bottom:2px;}
+  .kvgrid .rl{font-size:11.5px; color:var(--ink-faint); display:flex; align-items:center;
+    font-family:ui-monospace,monospace; white-space:nowrap;}
+  .kc{border:1px solid var(--edge); border-radius:6px; padding:5px 3px; text-align:center;
+    font-size:11px; font-family:ui-monospace,monospace; background:#141a24;
+    color:var(--ink-faint); transition:.18s; line-height:1.35;}
+  .kc .lb{display:block; font-size:9px; opacity:.75;}
+  .kc.empty{border-style:dashed; opacity:.22;}
+  .kc.fresh{border-color:var(--c-k); color:#bcd9ff; background:rgba(88,166,255,.16);
+    font-weight:700; box-shadow:0 0 0 1px rgba(88,166,255,.3);}
+  .kc.waste{border-color:var(--c-waste); color:#ffb3ae; background:rgba(248,81,73,.15);}
+  .kc.cached{border-color:var(--c-cache); color:#b7f0c2; background:rgba(63,185,80,.14);}
+  .kc.future{border-style:dashed; opacity:.16;}
+
+  /* ---------- counters ---------- */
+  .cards{display:flex; gap:10px; flex-wrap:wrap; margin-top:14px;}
+  .card{flex:1 1 150px; background:var(--panel2); border:1px solid var(--edge);
+    border-radius:8px; padding:11px 13px;}
+  .card .k{font-size:10.5px; text-transform:uppercase; letter-spacing:.7px;
+    color:var(--ink-faint); margin-bottom:3px;}
+  .card .v{font-size:21px; font-weight:700; font-variant-numeric:tabular-nums;
+    font-family:ui-monospace,monospace;}
+  .card .n{font-size:11.5px; color:var(--ink-faint); margin-top:2px;}
+  .card.bad{border-color:var(--c-waste);} .card.bad .v{color:var(--c-waste);}
+  .card.good{border-color:var(--c-cache);} .card.good .v{color:var(--c-cache);}
+  .card.blue{border-color:var(--accent);} .card.blue .v{color:var(--accent);}
+  .card.warn{border-color:var(--warn);} .card.warn .v{color:var(--warn);}
+
+  /* ---------- proof box ---------- */
+  .proof{background:#10151d; border:1px solid var(--edge); border-radius:8px; padding:13px;
+    font-size:12.5px; line-height:2.0; margin-top:14px; overflow-x:auto;
+    font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;}
+  .proof .rw{white-space:nowrap;}
+  .proof .lbl{color:var(--ink-faint);}
+  .proof .same{color:var(--c-cache); font-weight:700;}
+  .proof .hi{color:var(--accent); font-weight:700;}
+  .proof .warn{color:var(--warn);}
+
+  /* ---------- two-column split ---------- */
+  .split{display:grid; grid-template-columns:1fr 1fr; gap:14px;}
+  @media (max-width:900px){ .split{grid-template-columns:1fr;} }
+  .box{border:1px solid var(--edge); border-radius:9px; padding:12px; background:#10151d;}
+  .box .bh{font-size:11px; text-transform:uppercase; letter-spacing:.8px; margin-bottom:9px;
+    display:flex; justify-content:space-between; align-items:baseline; gap:8px;}
+  .box.left .bh{color:var(--c-waste);}
+  .box.right .bh{color:var(--c-cache);}
+  .box .bh .tag{font-size:10px; border:1px solid currentColor; border-radius:4px; padding:0 5px;}
+
+  /* ---------- cache table ---------- */
+  .cachetbl{display:flex; flex-direction:column; gap:4px;}
+  .crow{display:grid; grid-template-columns:44px 1fr 1fr; gap:6px; align-items:center;
+    font-size:11.5px; font-family:ui-monospace,monospace;}
+  .crow .idx{color:var(--ink-faint); text-align:right;}
+  .crow .kb,.crow .vb{border:1px solid var(--edge); border-radius:5px; padding:3px 6px;
+    text-align:center; background:#141a24; color:var(--ink-faint);}
+  .crow.on .kb{border-color:var(--c-k); color:#bcd9ff; background:rgba(88,166,255,.13);}
+  .crow.on .vb{border-color:var(--c-v); color:#ffc4e2; background:rgba(247,120,186,.13);}
+  .crow.new .kb,.crow.new .vb{box-shadow:0 0 0 1px rgba(63,185,80,.5); border-color:var(--c-cache);}
+  .crow.off .kb,.crow.off .vb{border-style:dashed; opacity:.2;}
+
+  /* ---------- Q strip ---------- */
+  .qstrip{display:flex; gap:5px; flex-wrap:wrap; margin-top:9px;}
+  .qc{border:1px solid var(--edge); border-radius:5px; padding:3px 7px; font-size:11px;
+    font-family:ui-monospace,monospace; color:var(--ink-faint); background:#141a24;}
+  .qc.live{border-color:var(--c-q); color:#dcc6ff; background:rgba(188,140,255,.16);
+    font-weight:700;}
+  .qc.gone{text-decoration:line-through; opacity:.3; border-style:dashed;}
+
+  /* ---------- attention row arithmetic ---------- */
+  .attnrow{background:#10151d; border:1px solid var(--edge); border-radius:8px; padding:12px;
+    margin-top:12px; font-size:12px; overflow-x:auto;
+    font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; line-height:1.95;}
+  .attnrow .rw{white-space:nowrap;}
+  .attnrow .lbl{color:var(--ink-faint); display:inline-block; min-width:132px;}
+  .attnrow .out{color:var(--ink); font-weight:700;}
+  .attnrow .gk{color:var(--c-k);} .attnrow .gv{color:var(--c-v);} .attnrow .gq{color:var(--c-q);}
+
+  /* ---------- prefill/decode timeline ---------- */
+  .tl{display:flex; gap:4px; align-items:flex-end; flex-wrap:nowrap; overflow-x:auto;
+    padding:8px 0 4px;}
+  .tlb{border:1px solid var(--edge); border-radius:6px; background:#141a24; padding:8px 6px;
+    text-align:center; font-size:11px; font-family:ui-monospace,monospace;
+    color:var(--ink-faint); transition:.2s; flex:none;}
+  .tlb.pre{width:220px;}
+  .tlb.dec{width:56px;}
+  .tlb.on.pre{border-color:var(--c-pre); background:rgba(210,153,34,.16); color:#f0d79a;
+    font-weight:700;}
+  .tlb.on.dec{border-color:var(--c-dec); background:rgba(88,166,255,.16); color:#bcd9ff;
+    font-weight:700;}
+  .tlb.done{opacity:.5;}
+  .tlb.todo{border-style:dashed; opacity:.28;}
+  .tlb .t2{display:block; font-size:9.5px; opacity:.8; margin-top:2px;}
+
+  /* ---------- head mapping (panel 5) ---------- */
+  .hmap{display:flex; gap:8px; flex-wrap:wrap; margin-top:6px;}
+  .hgrp{flex:1 1 110px; border:1px solid var(--edge); border-radius:8px; padding:8px;
+    background:#10151d;}
+  .hgrp .qs{display:flex; gap:4px; flex-wrap:wrap; justify-content:center; margin-bottom:6px;}
+  .hq{border:1px solid var(--c-q); border-radius:5px; padding:3px 6px; font-size:10.5px;
+    font-family:ui-monospace,monospace; color:#dcc6ff; background:rgba(188,140,255,.13);}
+  .harrow{text-align:center; color:var(--ink-faint); font-size:11px; line-height:1;
+    margin:2px 0 4px;}
+  .hkv{border:1px solid var(--c-cache); border-radius:5px; padding:4px 6px; font-size:10.5px;
+    font-family:ui-monospace,monospace; color:#b7f0c2; background:rgba(63,185,80,.14);
+    text-align:center; font-weight:700;}
+  .modesel{display:flex; gap:6px; flex-wrap:wrap; margin-bottom:12px;}
+
+  /* ---------- controls ---------- */
+  .wrap{display:grid; grid-template-columns:310px 1fr; gap:18px; align-items:start;}
+  @media (max-width:940px){ .wrap{grid-template-columns:1fr;} }
+  .ctrl{margin-bottom:14px;}
+  .ctrl:last-child{margin-bottom:0;}
+  .ctrl label{display:flex; justify-content:space-between; align-items:baseline; margin-bottom:3px;}
+  .ctrl .name{font-weight:600; font-size:12.5px;}
+  .ctrl .val{color:var(--accent); font-weight:700; font-size:13px;
+    font-family:ui-monospace,monospace; font-variant-numeric:tabular-nums;}
+  input[type=range]{-webkit-appearance:none; appearance:none; width:100%; height:5px;
+    border-radius:5px; background:var(--edge); outline:none; margin:5px 0;}
+  input[type=range]::-webkit-slider-thumb{-webkit-appearance:none; appearance:none;
+    width:16px; height:16px; border-radius:50%; background:var(--accent); cursor:pointer;}
+  input[type=range]::-moz-range-thumb{width:16px; height:16px; border:0; border-radius:50%;
+    background:var(--accent); cursor:pointer;}
+  .pgrid{display:grid; grid-template-columns:1fr 1fr; gap:6px;}
+  .pgrid3{display:grid; grid-template-columns:1fr 1fr 1fr; gap:6px;}
+  .pbtn{background:var(--panel2); border:1px solid var(--edge); color:var(--ink-dim);
+    border-radius:7px; padding:8px 6px; cursor:pointer; font-size:11.5px; transition:.13s;
+    line-height:1.3; font-family:ui-monospace,monospace; text-align:left;}
+  .pbtn:hover{border-color:var(--ink-faint); color:var(--ink);}
+  .pbtn.on{background:#1d2b3f; border-color:var(--accent); color:var(--ink);}
+  .pbtn small{display:block; color:var(--ink-faint); font-size:10px;
+    font-family:-apple-system,"Noto Sans KR",sans-serif;}
+  .pbtn.on small{color:var(--accent);}
+
+  /* ---------- formula display ---------- */
+  .formula{background:#10151d; border:1px solid var(--edge); border-radius:8px;
+    padding:14px 13px; font-size:14px; line-height:2.1; overflow-x:auto;
+    font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;}
+  .formula .rw{white-space:nowrap;}
+  .formula .two{color:var(--warn); font-weight:700;}
+  .formula .num{color:var(--accent); font-weight:700;}
+  .formula .res{color:var(--accent2); font-weight:700;}
+  .formula .cm{color:var(--ink-faint); font-size:11.5px;}
+
+  .outrows{margin-top:12px;}
+  .orow{display:flex; justify-content:space-between; align-items:baseline; gap:10px;
+    padding:6px 2px; border-bottom:1px solid var(--edge); font-size:12.5px; flex-wrap:wrap;}
+  .orow:last-child{border-bottom:0;}
+  .orow .ok2{color:var(--ink-dim);}
+  .orow .ov{font-family:ui-monospace,monospace; font-variant-numeric:tabular-nums;
+    font-weight:700; color:var(--accent);}
+  .orow.big .ov{font-size:17px;}
+  .orow.alert .ov{color:var(--danger);}
+
+  /* ---------- tables ---------- */
+  .tblwrap{overflow-x:auto;}
+  table{width:100%; border-collapse:collapse; font-size:12.5px; margin-top:6px;
+    min-width:520px;}
+  th,td{padding:6px 8px; text-align:right; border-bottom:1px solid var(--edge);
+    font-variant-numeric:tabular-nums; white-space:nowrap;}
+  th{color:var(--ink-faint); font-weight:600; font-size:10.5px; text-transform:uppercase;
+    letter-spacing:.5px;}
+  th:first-child,td:first-child{text-align:left;}
+  td.mono2{font-family:ui-monospace,monospace;}
+  tr.hl td{background:rgba(88,166,255,.10);}
+  tr.gd td{background:rgba(63,185,80,.10);}
+  tr.bd td{background:rgba(248,81,73,.08);}
+  td.g{color:var(--accent2);} td.r{color:var(--danger);} td.w{color:var(--warn);}
+
+  /* height는 JS 상수(CV_H)와 반드시 같은 값 — DPR 되읽기 금지 */
+  canvas{width:100%; display:block; border-radius:8px; background:#10151d;
+    border:1px solid var(--edge);}
+  #cvRoof{height:280px;}
+  #cvScale{height:280px;}
+  .legend{display:flex; gap:14px; font-size:11.5px; color:var(--ink-dim); margin-top:10px;
+    flex-wrap:wrap;}
+  .legend i{display:inline-block; width:18px; height:3px; border-radius:2px;
+    vertical-align:middle; margin-right:6px;}
+  .legend i.sq{width:11px; height:11px; border-radius:3px; vertical-align:-1px;
+    border:1px solid var(--edge);}
+
+  pre{background:#10151d; border:1px solid var(--edge); border-radius:8px; padding:14px;
+    overflow-x:auto; font-size:12.5px; line-height:1.75; margin:0;
+    font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;}
+  pre .cm{color:var(--ink-faint);}
+  pre .kw{color:var(--c-q);}
+  pre .st{color:var(--accent2);}
+  pre .rd{color:var(--danger);}
+  .foot{color:var(--ink-faint); font-size:12px; margin-top:26px; line-height:1.8;}
+  .foot a{color:var(--accent); text-decoration:none;}
+</style>
+</head>
+<body>
+
+<h1>KV Cache 완전 해부 — <span style="color:var(--c-cache)">왜 가능한가</span> ·
+  <span style="color:var(--accent)">얼마인가</span> ·
+  <span style="color:var(--warn)">왜 학습엔 없는가</span></h1>
+<p class="sub">
+  ch-extra companion · 한 줄 요약: KV cache는 <b>causal mask가 강제하는 memoization</b>이고,
+  크기는 <code>2 · B · s · L · n_kv_heads · d_head · bytes</code>로 <b>s에 선형</b>이며,
+  <b>training에는 0 byte</b>다.
+</p>
+
+<!-- ==================== 1. 왜 cache가 애초에 가능한가 ==================== -->
+<div class="panel">
+  <h2>1 · <span class="q">왜 cache가 애초에 <b>가능한가</b> — cache 없이 6 token 생성해보기</span></h2>
+
+  <div class="cfg">
+    <span>d_model = <b>4</b></span><span>d_head = <b>2</b></span>
+    <span>W_K, W_V = <b>4×2 정수 행렬</b></span><span>생성 길이 N = <b>6</b></span>
+    <span>손으로 검산 가능한 크기</span>
+  </div>
+
+  <p class="lead">
+    autoregressive 생성은 token을 하나씩 뱉는다. 그런데 <b>cache가 없으면</b> 매 step마다
+    지금까지의 <b>모든</b> position에 대해 K와 V를 <b>처음부터 다시</b> 계산한다.
+    아래 격자에서 <span style="color:var(--c-k)">파란 칸</span>은 이번 step에 <b>처음</b> 계산된 값,
+    <span style="color:var(--c-waste)">빨간 칸</span>은 <b>직전 step과 bit 단위로 똑같은 값을 또 계산한 것</b>이다.
+  </p>
+
+  <div class="runbar">
+    <button class="rb primary" id="bP1Step">▶ 다음 step</button>
+    <button class="rb" id="bP1Play">▶▶ 자동</button>
+    <button class="rb" id="bP1Reset">↺ 리셋</button>
+    <span class="phase" id="p1phase"></span>
+  </div>
+
+  <div class="gridwrap"><div class="kvgrid" id="p1grid"></div></div>
+
+  <div class="cards">
+    <div class="card blue">
+      <div class="k">이번 step 새 계산</div><div class="v" id="p1new">—</div>
+      <div class="n">K<sub>t</sub>, V<sub>t</sub> — 진짜 필요한 것</div>
+    </div>
+    <div class="card bad">
+      <div class="k">이번 step 재계산(낭비)</div><div class="v" id="p1wst">—</div>
+      <div class="n">직전과 값이 동일한 K<sub>j</sub>, V<sub>j</sub> (j &lt; t)</div>
+    </div>
+    <div class="card bad">
+      <div class="k">누적 계산 (cache 없음)</div><div class="v" id="p1cum">—</div>
+      <div class="n">1+2+…+t = t(t+1)/2</div>
+    </div>
+    <div class="card good">
+      <div class="k">누적 낭비</div><div class="v" id="p1cumw">—</div>
+      <div class="n">t(t−1)/2 — 전부 지울 수 있다</div>
+    </div>
+  </div>
+
+  <div class="proof" id="p1proof"></div>
+
+  <div class="nar" id="p1nar"></div>
+
+  <div class="callout ok">
+    <b>불변식(invariant) — 이게 KV cache의 전부다.</b>
+    causal mask는 <code>M[i,j] = −inf  (j &gt; i)</code>이다. 그래서
+    <code>k_j = W_K x_j</code>, <code>v_j = W_V x_j</code>는 <b>오직 token j 하나</b>에만 의존하고,
+    <code>x_j</code> 자신도 position ≤ j 에만 의존한다.
+    <br><br>
+    따라서 token t+1을 뒤에 붙여도 <b>k₁..k_t, v₁..v_t 는 하나도 바뀌지 않는다.</b>
+    과거의 K, V는 <b>immutable</b>이다 → 다시 계산하는 건 <b>순수한 낭비</b>다.
+    cache는 영리한 트릭이 아니라, <b>이미 pure function인 것에 대한 memoization</b>일 뿐이다.
+    <br><br>
+    <span class="dimmed">거꾸로 말하면: <b>bidirectional attention(encoder)에는 KV cache가 없다.</b>
+    거기선 뒤 token이 앞 token의 표현을 바꾸므로 k_j가 immutable하지 않다.
+    KV cache를 가능하게 하는 건 <b>causality</b>이지 attention이 아니다.</span>
+  </div>
+</div>
+
+<!-- ==================== 2. cache를 붙이면 ==================== -->
+<div class="panel">
+  <h2>2 · <span class="q">cache를 붙이면 — 같은 생성, 나란히 비교</span></h2>
+
+  <p class="lead">
+    왼쪽은 §1과 똑같은 no-cache 정책, 오른쪽은 <b>cache에 한 줄씩 append</b>하는 정책이다.
+    같은 token을 뱉고 <b>수치 결과도 완전히 동일</b>하다 — 다른 건 오직 <b>계산량</b>뿐이다.
+    아래 attention 계산은 실제 정수 내적을 그대로 보여준다.
+  </p>
+
+  <div class="runbar">
+    <button class="rb primary" id="bP2Step">▶ 다음 step</button>
+    <button class="rb" id="bP2Play">▶▶ 자동</button>
+    <button class="rb" id="bP2Reset">↺ 리셋</button>
+    <span class="phase" id="p2phase"></span>
+  </div>
+
+  <div class="split">
+    <div class="box left">
+      <div class="bh"><span>정책 A · cache 없음</span><span class="tag">O(N²)</span></div>
+      <div class="cachetbl" id="p2left"></div>
+      <div style="margin-top:9px;font-size:11.5px;color:var(--ink-faint)">
+        매 step 전부 다시 만든다. 빨간 테두리가 없는 이유는 — <b>전부</b> 새로 만들기 때문이다.
+      </div>
+    </div>
+    <div class="box right">
+      <div class="bh"><span>정책 B · KV cache</span><span class="tag">O(N)</span></div>
+      <div class="cachetbl" id="p2right"></div>
+      <div style="margin-top:9px;font-size:11.5px;color:var(--ink-faint)">
+        초록 테두리 = 이번 step에 <b>새로 append된 한 줄</b>. 나머지는 그냥 <b>읽기만</b> 한다.
+      </div>
+    </div>
+  </div>
+
+  <div class="cards">
+    <div class="card bad">
+      <div class="k">누적 K/V 벡터 계산 — 정책 A</div><div class="v" id="p2ca">—</div>
+      <div class="n">t(t+1)/2</div>
+    </div>
+    <div class="card good">
+      <div class="k">누적 K/V 벡터 계산 — 정책 B</div><div class="v" id="p2cb">—</div>
+      <div class="n">t — token 하나당 정확히 한 번</div>
+    </div>
+    <div class="card blue">
+      <div class="k">비율 A / B</div><div class="v" id="p2ratio">—</div>
+      <div class="n">= (t+1)/2 — t에 <b>선형</b>으로 벌어진다</div>
+    </div>
+    <div class="card warn">
+      <div class="k">N = 1024 이면</div><div class="v">512.5×</div>
+      <div class="n">524,800 vs 1,024 token-forward-pass</div>
+    </div>
+  </div>
+
+  <div style="margin-top:14px">
+    <div style="font-size:11px;text-transform:uppercase;letter-spacing:.8px;color:var(--ink-faint);margin-bottom:6px">
+      Q는 캐시되지 <b style="color:var(--c-q)">않는다</b> — 흔한 착각</div>
+    <div class="qstrip" id="p2q"></div>
+    <div style="margin-top:8px;font-size:12px;color:var(--ink-faint)">
+      q<sub>t</sub>는 <b style="color:var(--c-q)">이번 step에서만</b> 쓰이고 버려진다.
+      "다음 token은 과거를 본다"가 필요한 거지 "과거가 미래를 본다"가 아니기 때문 —
+      causal mask 방향 그대로다. 그래서 이름이 <b>KV</b> cache이지 QKV cache가 아니다.
+    </div>
+  </div>
+
+  <div class="attnrow" id="p2attn"></div>
+
+  <div class="nar" id="p2nar"></div>
+
+  <div class="callout blue">
+    <b>왜 이게 정확히 O(N²) → O(N) 인가.</b>
+    token을 N개 생성할 때 "token 하나에 대한 forward pass" 횟수를 세면,
+    cache 없음 = <code>1+2+…+N = N(N+1)/2</code>, cache 있음 = <code>N</code>.
+    비율은 <code>(N+1)/2</code>다.
+    <br><br>
+    FLOP으로 세도 결론은 같다 (layer 하나, B=1, d=8192 기준, 아래 표는 정확 합산):
+    prefill/decode 원가 <code>7·B·d² + 2·B·t·d</code>를 t=1..N으로 더한 값이다.
+    <div class="tblwrap"><table>
+      <thead><tr><th>N</th><th>cache 있음 (FLOPs)</th><th>cache 없음 (FLOPs)</th><th>비율</th></tr></thead>
+      <tbody id="p2flops"></tbody>
+    </table></div>
+    <span class="dimmed">비율이 <b>N에 선형</b>으로 커진다는 게 핵심. 그리고 실측(Raschka, 124M 모델,
+    200 token, Mac Mini M4 CPU): no cache <b>17.5 s</b> → naive cache <b>3.3 s</b> (5.3×)
+    → pre-allocated <b>2.8 s</b> (6.25×) → + torch.compile <b>2.4 s</b> (7.3×).
+    작은 모델·짧은 생성이라 이론 배수보다 훨씬 작다 — 이론 배수는 N이 커야 나온다.</span>
+  </div>
+</div>
+
+<!-- ==================== 3. prefill vs decode ==================== -->
+<div class="panel">
+  <h2>3 · <span class="q">prefill vs decode — 같은 weight, 완전히 다른 병목</span></h2>
+
+  <p class="lead">
+    한 request는 두 개의 <b>서로 다른 기계</b>를 연달아 돌린다.
+    <b style="color:var(--c-pre)">prefill</b>은 프롬프트 전체를 <b>한 번의 병렬 pass</b>로 밀어넣고,
+    <b style="color:var(--c-dec)">decode</b>는 token을 <b>하나씩</b> 뱉으면서 매 step
+    <b>모든 weight와 cache 전체를 다시 읽는다</b>.
+  </p>
+
+  <div class="cfg">
+    <span>모델 = <b>Llama-3-70B급</b></span><span>P = <b>70e9</b> params</span>
+    <span>bf16 → weights <b>140 GB</b></span><span>prompt T = <b>4,096</b></span>
+    <span>L = <b>80</b>, n_kv = <b>8</b>, d_head = <b>128</b></span><span>B = <b>1</b></span>
+  </div>
+
+  <div class="runbar">
+    <button class="rb primary" id="bP3Step">▶ 다음 step</button>
+    <button class="rb" id="bP3Play">▶▶ 자동</button>
+    <button class="rb" id="bP3Reset">↺ 리셋</button>
+    <span class="phase" id="p3phase"></span>
+  </div>
+
+  <div class="tl" id="p3tl"></div>
+
+  <div class="outrows" id="p3stats"></div>
+
+  <div class="nar" id="p3nar"></div>
+
+  <div style="margin-top:16px">
+    <canvas id="cvRoof"></canvas>
+    <div class="legend">
+      <span><i style="background:#8b949e"></i>roofline = min(peak, BW × I)</span>
+      <span><i style="background:#d29922"></i>prefill · I ≈ 3,100</span>
+      <span><i style="background:#58a6ff"></i>decode(B=1) · I ≈ 0.3</span>
+      <span><i style="background:#3fb950"></i>knee · I = 590</span>
+    </div>
+  </div>
+
+  <div class="callout">
+    <b>왜 decode가 bandwidth-bound인지 — 직관 한 줄.</b>
+    arithmetic intensity(FLOPs/byte)는 결국 <b>"weight를 한 번 읽어서 token 몇 개를 처리하느냐"</b>이다.
+    weight 하나를 읽으면 곱셈-덧셈 2 FLOP을 쓰므로, T개 token을 한 번에 밀면
+    <code>2·P·T FLOPs / 2·P bytes = T FLOPs/byte</code> — <b>intensity ≈ T</b>다.
+    <br>
+    · prefill T=4,096 → intensity ≈ <b>4,096</b> (실측 기준선 ~3,100). knee 590보다 <b>훨씬 위</b> → <b>compute-bound</b>.<br>
+    · decode B=1, token 1개 → intensity ≈ <b>1</b> (실측 기준선 ~0.3). knee 590보다 <b>훨씬 아래</b> → <b>bandwidth-bound</b>.
+    <br><br>
+    실측 기준선이 이론값보다 낮은 이유는 weight 말고도 <b>KV cache 재읽기</b>, attention 자체의 트래픽,
+    non-GEMM 연산(norm/softmax/rope), kernel launch 오버헤드가 전부 <b>byte만 늘리고 FLOP은 별로 안 늘리기</b> 때문이다.
+    <br><br>
+    <b>결론적으로 batch가 유일한 탈출구다.</b> B개 request를 함께 decode하면 weight 한 번 읽고 B개 token을
+    처리하니 intensity ≈ B. knee가 590이므로 <b>B ≈ 590쯤 되어야</b> 비로소 compute-bound에 닿는다 —
+    그런데 B를 키우면 KV cache가 B에 비례해 커진다(§4). <b>이 긴장이 serving 시스템 설계 전부다.</b>
+  </div>
+
+  <div class="callout no">
+    <b>숫자로 못박기.</b> H100 SXM 하나: peak bf16 <code>1,979 TFLOPS</code>, HBM
+    <code>3.35 TB/s</code> → knee = 1979/3.35 = <b>590 FLOPs/byte</b>.
+    decode가 I = 0.3이면 달성 가능한 연산량은 <code>3.35e12 × 0.3 = 1.005 TFLOP/s</code> —
+    peak의 <b>0.051%</b>다. GPU가 놀고 있는 게 아니라 <b>메모리에서 숫자가 안 올라온다</b>.
+  </div>
+</div>
+
+<!-- ==================== 4. memory calculator ==================== -->
+<div class="panel">
+  <h2>4 · <span class="q">얼마인가 — 마스터 공식 계산기</span></h2>
+
+  <div class="wrap">
+    <div>
+      <div class="ctrl">
+        <label><span class="name">preset</span></label>
+        <div class="pgrid" id="p4presets"></div>
+      </div>
+      <div class="ctrl">
+        <label><span class="name">B <span class="dimmed">동시 처리 sequence</span></span>
+               <span class="val" id="vB">1</span></label>
+        <input type="range" id="sB" min="1" max="64" step="1" value="1">
+      </div>
+      <div class="ctrl">
+        <label><span class="name">s <span class="dimmed">캐시된 token 수</span></span>
+               <span class="val" id="vS">8,192</span></label>
+        <input type="range" id="sS" min="0" max="8" step="1" value="4">
+      </div>
+      <div class="ctrl">
+        <label><span class="name">L <span class="dimmed">num_hidden_layers</span></span>
+               <span class="val" id="vL">80</span></label>
+        <input type="range" id="sL" min="1" max="126" step="1" value="80">
+      </div>
+      <div class="ctrl">
+        <label><span class="name">n_kv_heads <span class="dimmed">num_key_value_heads</span></span>
+               <span class="val" id="vKV">8</span></label>
+        <input type="range" id="sKV" min="1" max="64" step="1" value="8">
+      </div>
+      <div class="ctrl">
+        <label><span class="name">d_head <span class="dimmed">hidden/n_heads</span></span>
+               <span class="val" id="vD">128</span></label>
+        <input type="range" id="sD" min="32" max="256" step="16" value="128">
+      </div>
+      <div class="ctrl">
+        <label><span class="name">bytes_per_element</span></label>
+        <div class="pgrid3" id="p4dtype"></div>
+      </div>
+    </div>
+
+    <div>
+      <div class="formula" id="p4form"></div>
+      <div class="outrows">
+        <div class="orow"><span class="ok2">token 1개당 KV <span class="dimmed">(B, s와 무관)</span></span>
+          <span class="ov" id="o4tok">—</span></div>
+        <div class="orow big"><span class="ok2">request 1개 · s token</span>
+          <span class="ov" id="o4req">—</span></div>
+        <div class="orow"><span class="ok2">batch 전체 (B개)</span>
+          <span class="ov" id="o4batch">—</span></div>
+        <div class="orow"><span class="ok2">현실 보정 ×1.15 <span class="dimmed">block table · 단편화 · swap 여유</span></span>
+          <span class="ov" id="o4real">—</span></div>
+        <div class="orow alert"><span class="ok2">8×H100 (640 GB) 에서 동시 request 수
+          <span class="dimmed">— weights 140 GB + overhead 80 GB 제외 → KV 예산 420 GB</span></span>
+          <span class="ov" id="o4conc">—</span></div>
+      </div>
+      <div class="callout ok" id="o4note"></div>
+    </div>
+  </div>
+
+  <div style="margin-top:16px">
+    <div style="font-size:11px;text-transform:uppercase;letter-spacing:.8px;color:var(--ink-faint);margin-bottom:8px">
+      s에 대한 증가율 — <b style="color:var(--accent)">KV cache는 선형</b>,
+      <b style="color:var(--c-v)">학습 attention tensor는 제곱</b> (log–log)</div>
+    <canvas id="cvScale"></canvas>
+    <div class="legend">
+      <span><i style="background:#58a6ff"></i>KV cache 전체 (현재 슬라이더 · L layers) — 기울기 1</span>
+      <span><i style="background:#f778ba"></i>학습 시 [B, a=32, s, s] bf16 × L layers — 기울기 2</span>
+      <span><i style="background:#3fb950"></i>80 GB (H100 1장)</span>
+    </div>
+    <div class="callout no">
+      <b>이 그림이 이 figure에서 가장 중요한 대비 중 하나다.</b>
+      log–log에서 <b>기울기</b>가 곧 지수다. KV cache는 기울기 1(선형), 학습 때의
+      attention score tensor <code>[B, a, s, s]</code>는 기울기 2(제곱)다.
+      <br><br>
+      s = 131,072 에서: KV cache(70B, B=1) = <b>40.00 GiB</b>.
+      같은 길이의 <b>학습</b> attention tensor(a=32, L=80, bf16) =
+      80 × 32 × 131,072² × 2 = <b>87,960,930,222,080 B ≈ 80 TiB</b>.
+      <b>2,048배</b> 차이다.
+      <br><br>
+      그래서 문제의 성격이 완전히 다르다: <b>긴 context serving</b>은 "선형이지만 큰"
+      메모리를 <b>어떻게 나눠 쓰느냐</b>(paging, quantization, GQA)의 문제이고,
+      <b>긴 context 학습</b>은 애초에 그 제곱 tensor를 <b>물리적으로 만들지 않는</b>
+      kernel(FlashAttention, ch-05)의 문제다.
+    </div>
+  </div>
+
+  <div class="tblwrap">
+    <table>
+      <thead><tr><th>모델</th><th>L</th><th>n_kv</th><th>d_head</th>
+        <th>B/token</th><th>KiB/token</th><th>8k</th><th>32k</th><th>128k</th></tr></thead>
+      <tbody id="p4tbl"></tbody>
+    </table>
+  </div>
+  <div class="callout">
+    <b>공식이 무엇에 의존하지 <u>않는지</u>가 더 중요하다.</b>
+    <code>n_heads</code>도 <code>d_model</code>도 식에 없다. 오직
+    <code>L × n_kv_heads × d_head</code>다.
+    그래서 Llama-3는 <b>8B → 405B로 parameter가 50배</b>가 되는 동안 KV cache는
+    <code>516,096 / 131,072 = 3.9375</code>, 즉 <b>3.9배</b>밖에 안 늘었다 —
+    <b>n_kv_heads = 8이 전 사이즈에서 고정</b>이고 L만 32 → 126으로 늘었기 때문이다.
+  </div>
+</div>
+
+<!-- ==================== 5. MHA / GQA / MQA / MLA ==================== -->
+<div class="panel">
+  <h2>5 · <span class="q">MHA vs GQA vs MQA — 숫자 하나(n_kv_heads)만 다르다</span></h2>
+
+  <p class="lead">
+    query head는 <b>8개로 고정</b>이고 KV head 개수 G만 바꾼다.
+    query head h가 읽는 KV head는 <code>h // (H_q / G)</code>다.
+    <b>FLOP은 거의 그대로</b>인데(KV head를 query head 수만큼 broadcast해서 쓴다)
+    <b>cache만 H_q/G 배로 줄어든다</b> — 그래서 공짜에 가깝다.
+  </p>
+
+  <div class="modesel" id="p5modes"></div>
+  <div class="hmap" id="p5map"></div>
+
+  <div class="cards" style="margin-top:14px">
+    <div class="card blue"><div class="k">n_kv_heads (G)</div><div class="v" id="p5g">—</div>
+      <div class="n">H_q = 8 고정</div></div>
+    <div class="card blue"><div class="k">query head / KV head</div><div class="v" id="p5per">—</div>
+      <div class="n">H_q / G</div></div>
+    <div class="card good"><div class="k">cache 나눗수</div><div class="v" id="p5div">—</div>
+      <div class="n">MHA 대비</div></div>
+    <div class="card warn"><div class="k">품질</div><div class="v" id="p5qual">—</div>
+      <div class="n" id="p5qualn">—</div></div>
+  </div>
+
+  <div class="callout blue" id="p5note"></div>
+
+  <div class="tblwrap">
+    <table>
+      <thead><tr><th>Llama-3-70B 를 이 방식으로 지었다면</th><th>n_kv</th><th>B/token</th>
+        <th>KiB/token</th><th>8k request</th><th>나눗수</th></tr></thead>
+      <tbody>
+        <tr class="bd"><td>MHA (n_kv = H_q = 64)</td><td class="mono2">64</td>
+          <td class="mono2">2,621,440</td><td class="mono2 r">2,560.0</td>
+          <td class="mono2 r">20.00 GiB</td><td class="mono2">1×</td></tr>
+        <tr class="gd"><td>GQA-8 <b>(실제 Llama-3-70B)</b></td><td class="mono2">8</td>
+          <td class="mono2">327,680</td><td class="mono2 g">320.0</td>
+          <td class="mono2 g">2.50 GiB</td><td class="mono2 g">8×</td></tr>
+        <tr><td>MQA (n_kv = 1)</td><td class="mono2">1</td>
+          <td class="mono2">40,960</td><td class="mono2">40.0</td>
+          <td class="mono2">0.3125 GiB</td><td class="mono2">64×</td></tr>
+        <tr class="hl"><td>MLA — DeepSeek-V3 (L=61, d_c=512, d_rope=64)</td><td class="mono2">—</td>
+          <td class="mono2">70,272</td><td class="mono2 w">68.6</td>
+          <td class="mono2 w">0.5361 GiB</td><td class="mono2 w">56.9×<span class="dimmed"> (V3 자체 기준)</span></td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="callout">
+    <b>MLA는 공식이 다르다 — 앞의 2가 <u>없다</u>.</b>
+    <code>MLA bytes/token = L · (d_c + d_rope) · bytes_per_element</code>.
+    K와 V를 각각 저장하는 게 아니라 <b>latent <code>c_KV</code> 하나가 둘을 동시에 만들어내기</b> 때문에
+    factor 2가 사라진다. DeepSeek-V3: <code>61 × (512+64) × 2 = 70,272 B = 68.6 KiB/token</code>.
+    같은 geometry의 naive MHA(61 layer × 128 head × 128 d_head)는
+    <code>2 × 61 × 128 × 128 × 2 = 3,997,696 B = 3.81 MiB/token</code> → 압축비
+    <code>3,997,696 / 70,272 = 56.9×</code>.
+    <br><br>
+    <code>d_rope = 64</code>가 압축되지 않고 남는 이유: RoPE는 <b>position에 의존</b>하는 회전이라
+    압축 <i>전에</i> 회전을 걸면 latent가 position-specific이 되어 재사용이 깨진다.
+    그래서 비용이 <code>d_c</code>가 아니라 <code>(d_c + d_rope)</code>다.
+  </div>
+
+  <div class="callout no">
+    <b>여기서 학습 쪽으로 넘어갈 때의 함정.</b>
+    GQA의 나눗수 <code>H_q/G</code>는 <b>inference KV cache에는 100% 적용</b>되지만
+    <b>training activation에는 그렇지 않다.</b> FlashAttention backward는
+    <b>Q, K, V, O와 logsumexp 통계</b>를 들고 있는데 GQA는 <b>K와 V만</b> 줄이고 <b>Q는 그대로</b>다.
+    <br>
+    training QKV-activation 나눗수 = <code>3·H_q / (H_q + 2·H_kv)</code>:
+    <br>
+    · Llama-3-8B (32 → 8): inference <b>4.0×</b> vs training <b>2.00×</b><br>
+    · Llama-3-70B (64 → 8): inference <b>8.0×</b> vs training <b>2.40×</b><br>
+    · MQA (64 → 1): inference <b>64.0×</b> vs training <b>2.909×</b> — 아무리 공격적으로 줄여도 3배를 못 넘는다.
+    <br><br>
+    검산 (B=1, s=8,192, d_head=128, bf16, 70B, layer 1개):
+    GQA-8은 Q 128 MiB + K 16 MiB + V 16 MiB = <b>160 MiB/layer</b> → 80 layer = <b>12.5 GiB</b>.
+    MHA-64는 128×3 = <b>384 MiB/layer</b> → <b>30.0 GiB</b>. 비율 30.0/12.5 = <b>2.4×</b>. ✓
+  </div>
+</div>
+
+<!-- ==================== 6. THE BOUNDARY ==================== -->
+<div class="panel">
+  <h2>6 · <span class="q">경계선 — <b style="color:var(--warn)">training에는 KV cache가 없다 (0 byte)</b></span></h2>
+
+  <p class="lead">
+    이 figure에서 <b>가장 중요한 패널</b>이다. training OOM 분석에 "KV cache" 줄이 들어 있으면
+    그건 <b>이중 계산</b>이다. 이유는 하나: <b>teacher forcing</b>.
+  </p>
+
+  <div class="runbar">
+    <button class="rb primary" id="bP6Step">▶ 다음 step</button>
+    <button class="rb" id="bP6Play">▶▶ 자동</button>
+    <button class="rb" id="bP6Reset">↺ 리셋</button>
+    <span class="phase" id="p6phase"></span>
+  </div>
+
+  <div class="split">
+    <div class="box" style="border-color:rgba(63,185,80,.4)">
+      <div class="bh" style="color:var(--c-train)"><span>TRAINING · teacher forcing</span>
+        <span class="tag">forward pass 1회</span></div>
+      <div id="p6train"></div>
+    </div>
+    <div class="box" style="border-color:rgba(88,166,255,.4)">
+      <div class="bh" style="color:var(--accent)"><span>INFERENCE · autoregressive</span>
+        <span class="tag">prefill 1 + decode N</span></div>
+      <div id="p6infer"></div>
+    </div>
+  </div>
+
+  <div class="nar" id="p6nar"></div>
+
+  <div class="tblwrap">
+    <table>
+      <thead><tr><th>항목</th><th>TRAINING</th><th>INFERENCE</th></tr></thead>
+      <tbody>
+        <tr><td>sequence 당 forward pass</td><td>1 (전체 s를 병렬로)</td><td>prefill 1 + decode N</td></tr>
+        <tr><td>K/V를 왜 들고 있나</td><td>backward가 dL/dQ, dL/dK, dL/dV 계산에 필요</td>
+            <td>다음 decode step이 그 위에서 attend</td></tr>
+        <tr><td>수명</td><td>optimizer step 1회 후 해제</td><td>request 전체 기간</td></tr>
+        <tr><td>사용 중 커지나</td><td class="g">아니오 — 처음부터 s 전체를 한 번에 할당</td>
+            <td class="r">예 — step마다 sequence당 +1 token</td></tr>
+        <tr><td>없앨 수 있나</td><td class="g">예 — gradient checkpointing으로 recompute (ch-03)</td>
+            <td class="r">아니오 — 압축만 가능 (GQA/MLA/quant/paging)</td></tr>
+        <tr class="hl"><td>ledger 상의 항목</td><td>activations</td><td>별도의 persistent KV pool</td></tr>
+        <tr><td>s에 대한 증가</td><td class="r">attention tensor [B,a,s,s] → <b>s²</b></td>
+            <td class="w">KV cache [2,B,s,L,n_kv,d] → <b>s¹</b></td></tr>
+        <tr class="gd"><td><b>KV cache 크기</b></td><td class="g"><b>0 byte</b></td>
+            <td class="w"><b>2·B·s·L·n_kv·d_head·bytes</b></td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="callout no">
+    <b>함정 — 대수식이 글자 하나까지 똑같다.</b>
+    training forward pass 중에 K와 V가 차지하는 byte는
+    <code>2 · B · s · L · n_kv_heads · d_head · b</code> — inference KV cache 공식과 <b>완전히 동일</b>하다.
+    <br>
+    Llama-3-8B geometry, B=1, s=8,192, bf16:
+    <code>2 × 32 × 1 × 8192 × 8 × 128 × 2 = 1,073,741,824 B = 1.00 GiB</code> —
+    8k request 하나의 inference KV cache와 <b>숫자까지 같다</b>.
+    (70B면 양쪽 다 <code>2,684,354,560 B = 2.50 GiB</code>.)
+    <br><br>
+    <b>그런데 전혀 다른 물건이다.</b> training 쪽 1.00 GiB는 <b>backward를 위해 저장된 activation</b>이고,
+    gradient checkpointing을 켜면 <b>사라진다</b>(재계산으로 대체). inference 쪽 1.00 GiB는
+    <b>다음 step이 읽을 상태</b>라 절대 못 지운다.
+    <b>같은 산수, 다른 존재론</b> — 이 구분을 놓치면 ledger가 두 번 청구된다.
+  </div>
+
+  <div class="callout ok">
+    <b>왜 PagedAttention(ch-06)은 training을 못 돕는가.</b>
+    PagedAttention은 <b>KV pool의 단편화</b>를 푸는 기법이다 —
+    16 token 단위 block, sequence별 block table, copy-on-write prefix 공유로
+    KV 이용률을 <b>&gt;96%</b>까지 올린다 (연속 할당 방식은 20–38%).
+    <br><br>
+    그런데 training에는 그 단편화가 <b>애초에 존재하지 않는다</b>.
+    할당 shape이 step 시작 <b>전에 이미 확정</b>된 하나의 연속 tensor이고,
+    step이 끝나면 통째로 해제되며, 생성 길이를 예측할 필요도 없다.
+    풀 문제가 없으니 해법도 필요 없다. <b>PagedAttention은 순수 inference 기법이다.</b>
+  </div>
+
+  <div class="callout blue">
+    <b>boson / Lina TMR 에 붙여 읽기.</b>
+    GDN linear-attention layer는 CP=1로 hard-assert되어 있고, 그 layer의 inference 상태는
+    head당 고정 크기 recurrent state(표준 linear attention이면 <code>d_head × d_head</code> 행렬)라
+    <b>sequence length에 무관</b>하다 → 그 layer들에는
+    <code>2·L·n_kv·d_head·s·b</code> scaling 논리가 <b>아예 적용되지 않는다</b>.
+    <br><br>
+    하지만 <b>학습 쪽은 그대로다</b>: GDN block도 backward를 위해 position별 activation을 저장한다.
+    그래서 32k sequence 학습에서 터지는 건 <b>cache 문제가 아니라 checkpointing 문제</b>다 (ch-03).
+    inference 최적화 문서를 학습 OOM에 그대로 가져다 쓰면 안 되는 이유가 정확히 이것.
+  </div>
+
+  <pre><span class="cm"># training — KV cache가 들어갈 자리가 없다</span>
+logits = model(x[:, :-1])          <span class="cm"># x: [B, s]  →  단 한 번의 forward</span>
+loss   = CE(logits, x[:, 1:])      <span class="cm"># 모든 position에서 동시에 loss</span>
+loss.backward()                    <span class="cm"># 저장해둔 activation 소비</span>
+opt.step(); opt.zero_grad()        <span class="cm"># → activation 전부 해제. 다음 step은 새 batch</span>
+<span class="cm">#  재사용할 "이전 step"이 없다 → 캐시할 대상 자체가 존재하지 않는다</span>
+
+<span class="cm"># inference — 여기서만 cache가 의미를 가진다</span>
+<span class="st">kv = model.prefill(prompt)</span>          <span class="cm"># [2, B, s0, L, n_kv, d]  ← 여기서 태어난다</span>
+for _ in range(N):
+    tok, <span class="st">kv</span> = model.decode(tok, <span class="st">kv</span>)  <span class="cm"># 매 step 한 행 append, 절대 재계산 안 함</span>
+<span class="rd"># 흔한 버그 2개</span>
+<span class="rd">#  (1) 생성이 끝나면 kv를 반드시 리셋 — 안 하면 새 prompt가 이전 sequence의 key에 attend한다</span>
+<span class="rd">#  (2) position id를 따로 추적 — pos_ids = arange(cur, cur+seq_len).</span>
+<span class="rd">#      안 하면 새 token이 매번 position 0으로 취급돼 RoPE가 깨진다</span></pre>
+</div>
+
+<p class="foot">
+  ← 돌아가기: <a href="../read.md">ch-extra read.md</a> ·
+  Q&amp;A: <a href="../qa.md">qa.md</a><br>
+  관련: <a href="../../ch-03/figures/checkpointing.html">ch-03 checkpointing.html</a>
+  (training 쪽 activation을 지우는 방법) ·
+  <a href="../../ch-01/figures/adamw-derivation.html">ch-01 adamw-derivation.html</a><br>
+  근거 slug: <span class="mono">[[kv-cache-mechanism]] · [[kv-cache-memory-formula]] ·
+  [[gqa-mqa-mla-kv-heads]] · [[train-vs-infer-kv-boundary]] · [[causal-mask-neg-inf]]</span>
+</p>
+
+<script>
+"use strict";
+/* ==================================================================
+   0 · 공용 유틸
+   ================================================================== */
+const $ = id => document.getElementById(id);
+const commas = n => String(n).replace(/\B(?=(\d{3})+(?!\d))/g, ",");
+function binBytes(b){
+  if (b < 1024) return b.toFixed(0) + " B";
+  if (b < 1024*1024) return (b/1024).toFixed(b/1024 < 10 ? 2 : 1) + " KiB";
+  if (b < 1024*1024*1024) return (b/1048576).toFixed(b/1048576 < 10 ? 2 : 1) + " MiB";
+  if (b < 1024*1024*1024*1024) return (b/1073741824).toFixed(2) + " GiB";
+  return (b/1099511627776).toFixed(2) + " TiB";
+}
+function sci(x){ return x.toExponential(4).replace("e+", "e"); }
+
+/* 범용 애니메이션 드라이버 — prefix로 b{P}Step / b{P}Play / b{P}Reset 을 찾는다 */
+function makeAnim(prefix, maxStep, draw, ms){
+  const st = { step:0, timer:null };
+  const bp = $("b" + prefix + "Play");
+  function stop(){ if (st.timer){ clearInterval(st.timer); st.timer = null; bp.textContent = "▶▶ 자동"; } }
+  function next(){ if (st.step >= maxStep) return false; st.step++; draw(st.step); return true; }
+  $("b" + prefix + "Step").onclick  = () => { stop(); next(); };
+  bp.onclick = () => {
+    if (st.timer){ stop(); return; }
+    if (st.step >= maxStep){ st.step = 0; draw(0); }
+    bp.textContent = "⏸ 정지";
+    st.timer = setInterval(() => { if (!next()) stop(); }, ms);
+  };
+  $("b" + prefix + "Reset").onclick = () => { stop(); st.step = 0; draw(0); };
+  draw(0);
+  return st;
+}
+
+/* ==================================================================
+   1 · 장난감 모델 — 모든 수를 손으로 검산할 수 있는 크기
+      d_model = 4, d_head = 2, 정수 weight
+   ================================================================== */
+const NTOK = 6, DH = 2, SQ = Math.sqrt(DH);          /* sqrt(2) = 1.414214 */
+const X  = [[1,0,2,1],[0,2,1,0],[2,1,0,1],[1,1,1,0],[0,1,2,2],[2,0,1,1]];
+const WQ = [[1,1],[0,1],[1,0],[1,0]];
+const WK = [[1,0],[0,1],[1,1],[0,-1]];
+const WV = [[0,1],[1,0],[1,1],[1,0]];
+function matvec(x, W){
+  const m = W[0].length, out = [];
+  for (let j = 0; j < m; j++){
+    let s = 0;
+    for (let i = 0; i < x.length; i++) s += x[i]*W[i][j];
+    out.push(s);
+  }
+  return out;
+}
+const K = X.map(x => matvec(x, WK));   /* [[3,1],[1,3],[2,0],[2,2],[2,1],[3,0]] */
+const V = X.map(x => matvec(x, WV));   /* [[3,3],[3,1],[2,2],[2,2],[5,2],[2,3]] */
+const Q = X.map(x => matvec(x, WQ));   /* [[4,1],[1,2],[3,3],[2,2],[4,1],[4,2]] */
+const vec = a => "[" + a.join(", ") + "]";
+
+/* step t (1-based)에서의 attention row: q_t 가 k_1..k_t 에 attend */
+function attnRow(t){
+  const q = Q[t-1], raw = [], sc = [], ex = [];
+  for (let j = 0; j < t; j++){
+    const r = q[0]*K[j][0] + q[1]*K[j][1];
+    raw.push(r); sc.push(r/SQ); ex.push(Math.exp(r/SQ));
+  }
+  const Z = ex.reduce((a,b) => a+b, 0);
+  const p = ex.map(e => e/Z);
+  const o = [0,1].map(d => p.reduce((a, pj, j) => a + pj*V[j][d], 0));
+  return {q, raw, sc, ex, Z, p, o};
+}
+
+/* ---------------- 패널 1: cache 없는 생성 ---------------- */
+function drawP1(t){
+  const g = $("p1grid");
+  g.style.gridTemplateColumns = "132px repeat(" + NTOK + ", 1fr)";
+  let html = '<div class="hd"></div>';
+  for (let j = 1; j <= NTOK; j++) html += '<div class="hd">position ' + j + "</div>";
+  for (let r = 1; r <= NTOK; r++){
+    const shown = r <= t;
+    html += '<div class="rl">step ' + r + (shown ? " · token " + r + " 생성" : "") + "</div>";
+    for (let j = 1; j <= NTOK; j++){
+      if (!shown || j > r){ html += '<div class="kc ' + (shown ? "empty" : "future") + '">·</div>'; continue; }
+      const cls = (j === r) ? "fresh" : "waste";
+      html += '<div class="kc ' + cls + '"><span class="lb">K' + j + "</span>" + vec(K[j-1]) + "</div>";
+    }
+  }
+  g.innerHTML = html;
+
+  const cum = t*(t+1)/2, cumw = t*(t-1)/2;
+  $("p1new").textContent  = t ? "1" : "—";
+  $("p1wst").textContent  = t ? String(t-1) : "—";
+  $("p1cum").textContent  = t ? commas(cum) : "—";
+  $("p1cumw").textContent = t ? commas(cumw) : "—";
+  $("p1phase").innerHTML  = t ? "step <b>" + t + "</b> / " + NTOK : "<b>대기</b> — ▶ 를 눌러 시작";
+
+  /* 재계산이 정말로 bit-identical 인지 실제 산수로 보여준다 */
+  let pf = "";
+  if (t === 0){
+    pf = '<div class="rw"><span class="lbl">준비 — W_K =</span> ' +
+         '[[1,0],[0,1],[1,1],[0,-1]] <span class="lbl">(4×2 정수)</span></div>' +
+         '<div class="rw"><span class="lbl">x₁ =</span> ' + vec(X[0]) +
+         ' <span class="lbl">x₂ =</span> ' + vec(X[1]) +
+         ' <span class="lbl">x₃ =</span> ' + vec(X[2]) + "</div>" +
+         '<div class="rw"><span class="lbl">▶ 를 누르면 step마다 K를 전부 다시 계산한다.</span></div>';
+  } else {
+    pf = '<div class="rw"><span class="lbl">step ' + t + ' 에서 K₁ 재계산:</span> ' +
+         'K₁ = x₁·W_K = ' + vec(X[0]) + ' · W_K = ' +
+         "[" + X[0][0] + "·1 + " + X[0][1] + "·0 + " + X[0][2] + "·1 + " + X[0][3] + "·0, " +
+               X[0][0] + "·0 + " + X[0][1] + "·1 + " + X[0][2] + "·1 + " + X[0][3] + "·(−1)] = " +
+         '<span class="hi">' + vec(K[0]) + "</span></div>";
+    if (t >= 2){
+      pf += '<div class="rw"><span class="lbl">step ' + (t-1) + ' 에서의 K₁ 은:</span> ' +
+            '<span class="same">' + vec(K[0]) + " — 완전히 동일</span>" +
+            ' <span class="lbl">→ x₁도 W_K도 안 변했으니 당연하다</span></div>';
+      pf += '<div class="rw"><span class="lbl">이번 step 진짜 새 값:</span> ' +
+            'K<sub>' + t + '</sub> = x<sub>' + t + '</sub>·W_K = ' + vec(X[t-1]) + ' · W_K = ' +
+            '<span class="hi">' + vec(K[t-1]) + "</span>" +
+            ' <span class="warn">← 이 한 줄만 새로 필요했다</span></div>';
+      pf += '<div class="rw"><span class="lbl">이번 step 낭비:</span> ' +
+            '<span class="warn">' + (t-1) + "개</span> K/V 벡터쌍" +
+            ' <span class="lbl">(누적 ' + cumw + " / " + cum + ")</span></div>";
+    } else {
+      pf += '<div class="rw"><span class="lbl">첫 step:</span> 아직 과거가 없으니 낭비도 0. ' +
+            "여기까진 두 정책이 같다.</div>";
+    }
+  }
+  $("p1proof").innerHTML = pf;
+
+  const NARR = [
+    "<b>대기.</b> 아직 아무것도 계산하지 않았다. 격자의 행 = 생성 step, 열 = token position이다." +
+    '<span class="why">이 패널이 답하려는 질문: <b>왜 KV를 캐싱해도 되는가?</b> ' +
+    "임의의 값을 캐싱하면 틀린다 — 캐싱이 정당하려면 <b>그 값이 절대 안 바뀐다</b>는 보장이 필요하다.</span>",
+    "<b>step 1.</b> token 1을 처리한다. K₁, V₁을 계산했다. 과거가 없으니 낭비도 없다." +
+    '<span class="why">여기까진 cache 유무가 구분되지 않는다. <b>왜?</b> 재사용할 과거가 아직 없으니까.</span>',
+    "<b>step 2.</b> K₁을 <b style='color:var(--c-waste)'>다시</b> 계산했다 — 그런데 값이 step 1과 똑같다." +
+    '<span class="why"><b>왜 같은가:</b> K₁ = W_K·x₁ 이고, x₁은 token 1의 표현인데 causal mask 때문에 ' +
+    "position 2의 존재가 position 1의 표현에 <b>영향을 줄 수 없다</b>. 입력이 같으니 출력도 같다.</span>",
+    "<b>step 3.</b> 낭비가 2개로 늘었다. 빨간 칸이 계단처럼 쌓이기 시작한다." +
+    '<span class="why"><b>왜 계단인가:</b> step t의 낭비는 t−1개다. 즉 낭비가 step마다 <b>선형으로</b> 늘고, ' +
+    "누적하면 <b>제곱</b>이 된다. 이게 O(N²)의 정체다.</span>",
+    "<b>step 4.</b> 누적 계산 10회 중 6회가 낭비다. 이미 절반이 넘었다." +
+    '<span class="why"><b>왜 빠르게 나빠지나:</b> 낭비 비율 = (t−1)/(t+1)·… 이 아니라 누적으로 ' +
+    "t(t−1)/2 ÷ t(t+1)/2 = (t−1)/(t+1) → t가 크면 <b>1에 수렴</b>한다. 길게 생성할수록 거의 전부가 낭비다.</span>",
+    "<b>step 5.</b> 누적 15회 계산 중 10회 낭비. 파란 칸(진짜 필요한 것)은 대각선 하나뿐이다." +
+    '<span class="why"><b>대각선만 필요하다</b>는 게 정확히 cache의 설계도다 — 대각선을 한 번씩만 계산해서 ' +
+    "쌓아두면 그 아래 삼각형 전체가 사라진다.</span>",
+    "<b>step 6 — 끝.</b> 총 21회 K/V 계산 중 <b style='color:var(--c-waste)'>15회가 낭비</b>. " +
+    "필요했던 건 대각선 6개뿐이다." +
+    '<span class="why"><b>일반식:</b> 없이 = 1+2+…+N = N(N+1)/2, 있으면 = N. 비율 (N+1)/2. ' +
+    "N=6이면 21/6 = 3.5배지만 N=1024면 <b>524,800 / 1,024 = 512.5배</b>다. " +
+    "§2에서 이 삼각형을 실제로 지운다.</span>"
+  ];
+  $("p1nar").innerHTML = NARR[t];
+}
+
+/* ---------------- 패널 2: cache 있음 vs 없음 ---------------- */
+function drawP2(t){
+  function tbl(target, mode){
+    let h = "";
+    for (let j = 1; j <= NTOK; j++){
+      let cls = "off";
+      if (t > 0 && j <= t) cls = (mode === "cache" && j === t) ? "on new" : "on";
+      h += '<div class="crow ' + cls + '"><span class="idx">pos ' + j + "</span>" +
+           '<span class="kb">K' + j + " " + (j <= t && t > 0 ? vec(K[j-1]) : "·") + "</span>" +
+           '<span class="vb">V' + j + " " + (j <= t && t > 0 ? vec(V[j-1]) : "·") + "</span></div>";
+    }
+    $(target).innerHTML = h;
+  }
+  tbl("p2left",  "nocache");
+  tbl("p2right", "cache");
+
+  const ca = t*(t+1)/2, cb = t;
+  $("p2ca").textContent    = t ? commas(ca) : "—";
+  $("p2cb").textContent    = t ? commas(cb) : "—";
+  $("p2ratio").textContent = t ? (ca/cb).toFixed(1) + "×" : "—";
+  $("p2phase").innerHTML   = t ? "step <b>" + t + "</b> / " + NTOK : "<b>대기</b> — ▶ 를 눌러 시작";
+
+  /* Q strip — 오직 현재 q_t 만 살아 있다 */
+  let qs = "";
+  for (let j = 1; j <= NTOK; j++){
+    let c = "";
+    if (t > 0 && j === t) c = "live";
+    else if (t > 0 && j < t) c = "gone";
+    qs += '<span class="qc ' + c + '">q' + j + (t > 0 && j <= t ? " " + vec(Q[j-1]) : "") + "</span>";
+  }
+  $("p2q").innerHTML = qs;
+
+  /* attention row 실제 산수 */
+  if (t === 0){
+    $("p2attn").innerHTML =
+      '<div class="rw"><span class="lbl">대기</span> ▶ 를 누르면 step마다 ' +
+      "q<sub>t</sub>·k<sub>j</sub> 내적부터 softmax, 출력까지 전부 숫자로 보여준다.</div>" +
+      '<div class="rw"><span class="lbl">스케일</span> √d_head = √2 = ' + SQ.toFixed(6) + "</div>";
+  } else {
+    const A = attnRow(t);
+    let h = '<div class="rw"><span class="lbl">q<sub>' + t + '</sub> (캐시 안 함)</span>' +
+            '<span class="gq">' + vec(A.q) + "</span></div>";
+    h += '<div class="rw"><span class="lbl">raw score q·k</span>' +
+         A.raw.map((r,j) => "q·k" + (j+1) + "=" + A.q[0] + "·" + K[j][0] + "+" + A.q[1] + "·" + K[j][1] +
+                            "=" + r).join("&nbsp; ") + "</div>";
+    h += '<div class="rw"><span class="lbl">÷ √2 = 1.414214</span>' +
+         A.sc.map(v => v.toFixed(4)).join("&nbsp;&nbsp; ") + "</div>";
+    h += '<div class="rw"><span class="lbl">exp</span>' +
+         A.ex.map(v => v.toFixed(4)).join("&nbsp;&nbsp; ") +
+         '&nbsp; <span class="lbl">Σ =</span> ' + A.Z.toFixed(4) + "</div>";
+    h += '<div class="rw"><span class="lbl">softmax p</span>' +
+         '<span class="out">' + A.p.map(v => v.toFixed(4)).join("&nbsp;&nbsp; ") + "</span>" +
+         '&nbsp; <span class="lbl">합 =</span> ' + A.p.reduce((a,b)=>a+b,0).toFixed(6) + "</div>";
+    h += '<div class="rw"><span class="lbl">o = Σ p<sub>j</sub>·v<sub>j</sub></span>' +
+         '<span class="out">[' + A.o.map(v => v.toFixed(4)).join(", ") + "]</span>" +
+         ' <span class="lbl">← 두 정책이 <b>같은 값</b>을 낸다</span></div>';
+    h += '<div class="rw"><span class="lbl">읽은 K/V</span>' +
+         '<span class="gk">k₁..k' + t + '</span> , <span class="gv">v₁..v' + t + "</span>" +
+         ' <span class="lbl">— 정책 B는 이걸 <b>계산</b>하지 않고 <b>읽기만</b> 했다</span></div>';
+    $("p2attn").innerHTML = h;
+  }
+
+  const NARR = [
+    "<b>대기.</b> 왼쪽/오른쪽 모두 비어 있다." +
+    '<span class="why">두 정책의 <b>출력은 반드시 같아야</b> 한다. 다르면 cache가 아니라 근사다. ' +
+    "아래 attention 산수가 그걸 매 step 확인해준다.</span>",
+    "<b>step 1.</b> 양쪽 다 K₁,V₁ 한 쌍. 누적 1 vs 1." +
+    '<span class="why">q₁ = [4, 1] 은 이번 step에만 쓰이고 버려진다. <b>왜 버려도 되나:</b> ' +
+    "position 1의 query가 미래 token을 볼 일이 없기 때문 — causal mask 방향이 그렇게 정해져 있다.</span>",
+    "<b>step 2.</b> 왼쪽 누적 3, 오른쪽 누적 2. 오른쪽은 <b style='color:var(--c-cache)'>한 줄만 append</b>했다." +
+    '<span class="why">q₁에 취소선이 그어졌다. <b>왜 Q는 캐시하지 않나:</b> 다음 step에 필요한 건 ' +
+    "<b>새 query가 과거 key를 보는 것</b>이지 <b>과거 query가 다시 계산되는 것</b>이 아니다. " +
+    "저장해봐야 아무도 안 읽는다.</span>",
+    "<b>step 3.</b> 누적 6 vs 3 — 정확히 2배." +
+    '<span class="why">비율 = (t+1)/2 = 2. attention row를 보면 p가 [0.4964, 0.4964, 0.0071] — ' +
+    "앞 두 key의 raw score가 둘 다 12로 <b>정확히 같아서</b> softmax도 같다. 손으로 검산 가능하다.</span>",
+    "<b>step 4.</b> 누적 10 vs 4." +
+    '<span class="why">오른쪽 cache는 <b>append-only</b>다 — 기존 행을 수정하지 않는다. ' +
+    "이게 immutability의 실물이고, 그래서 PagedAttention 같은 block 할당이 성립한다(§6).</span>",
+    "<b>step 5.</b> 누적 15 vs 5 = 3.0배." +
+    '<span class="why">비용 구조가 바뀐 것에 주목: 정책 B의 step당 비용은 <b>상수</b>(K/V 한 쌍)인데 ' +
+    "attention 자체는 여전히 t개 key를 읽는다 — <b>계산은 O(1), 읽기는 O(t)</b>. " +
+    "이 '읽기'가 §3의 bandwidth 병목이다.</span>",
+    "<b>step 6 — 끝.</b> 누적 <b style='color:var(--c-waste)'>21</b> vs " +
+    "<b style='color:var(--c-cache)'>6</b> = 3.5배. 출력 o는 양쪽 동일." +
+    '<span class="why"><b>정확히 (N+1)/2 = 7/2 = 3.5</b>. N=1024면 512.5배. ' +
+    "cache는 근사가 아니라 <b>정확한 memoization</b>이라 품질 손실이 0이다 — " +
+    "그래서 모든 serving 스택이 예외 없이 쓴다.</span>"
+  ];
+  $("p2nar").innerHTML = NARR[t];
+}
+
+/* FLOP 비교표 — 정확 합산 (근사식이 아니라 t=1..N 실제 합) */
+function fillP2Flops(){
+  const d = 8192, B = 1;
+  const rows = [128, 256, 1024, 4096].map(N => {
+    /* cache 있음: Σ_{t=1..N} (7Bd² + 2Btd) */
+    const wi = 7*B*d*d*N + 2*B*d*(N*(N+1)/2);
+    /* cache 없음: Σ_{t=1..N} (7Btd² + 2Bt²d) */
+    const no = 7*B*d*d*(N*(N+1)/2) + 2*B*d*(N*(N+1)*(2*N+1)/6);
+    return '<tr><td class="mono2">' + commas(N) + '</td><td class="mono2 g">' + sci(wi) +
+           '</td><td class="mono2 r">' + sci(no) + '</td><td class="mono2">' +
+           (no/wi).toFixed(1) + "×</td></tr>";
+  });
+  $("p2flops").innerHTML = rows.join("");
+}
+
+/* ==================================================================
+   3 · prefill vs decode
+   ================================================================== */
+const P3 = {
+  P: 70e9, T: 4096, L: 80, NKV: 8, DHEAD: 128, BE: 2,
+  PEAK: 1979e12, BW: 3.35e12, NGPU: 8, NDEC: 5
+};
+const KV_PER_TOK_70B = 2 * P3.L * P3.NKV * P3.DHEAD * P3.BE;   /* 327,680 */
+let p3step = 0;                       /* 현재 패널 3 step — resize 시 강조 복원용 */
+
+function drawP3(t){
+  /* t = 0 대기, 1 = prefill, 2..(1+NDEC) = decode 1..NDEC */
+  let h = '<div class="tlb pre ' + (t === 1 ? "on" : t > 1 ? "done" : "todo") + '">' +
+          "PREFILL · prompt 4,096 token 을 <b>한 번에</b>" +
+          '<span class="t2">한 번의 병렬 forward · 큰 GEMM</span></div>';
+  for (let i = 1; i <= P3.NDEC; i++){
+    const st = 1 + i;
+    h += '<div class="tlb dec ' + (t === st ? "on" : t > st ? "done" : "todo") + '">+1 tok' +
+         '<span class="t2">step ' + i + "</span></div>";
+  }
+  h += '<div class="tlb dec todo" style="border-style:dashed">…</div>';
+  $("p3tl").innerHTML = h;
+
+  let rows = "";
+  function R(k, v, cls){ rows += '<div class="orow ' + (cls||"") + '"><span class="ok2">' + k +
+    '</span><span class="ov">' + v + "</span></div>"; }
+
+  if (t === 0){
+    R("상태", "대기 — ▶ 를 눌러 prefill 부터");
+    R("weights (bf16) = 2·P", commas(2*P3.P) + " B = 140.0 GB <span class='dimmed'>(= " +
+      binBytes(2*P3.P) + ")</span>");
+    R("H100 SXM knee", "1,979 TFLOPS ÷ 3.35 TB/s = <b>590</b> FLOPs/byte");
+  } else if (t === 1){
+    const flops = 2*P3.P*P3.T;
+    const bytes = 2*P3.P;
+    R("단계", "<b style='color:var(--c-pre)'>PREFILL</b> — 4,096 token 병렬");
+    R("FLOPs ≈ 2·P·T", "2 × 7.0e10 × 4,096 = " + sci(flops));
+    R("weight 읽기 ≈ 2·P", commas(bytes) + " B = 140.0 GB");
+    R("arithmetic intensity <span class='dimmed'>(weight-only 단순 모델)</span>",
+      "= " + sci(flops) + " ÷ " + sci(bytes) + " = <b>" + (flops/bytes).toFixed(0) +
+      "</b> FLOPs/byte <span class='dimmed'>· 실측 기준선 ~3,100</span>");
+    R("knee(590) 대비", "<b style='color:var(--accent2)'>" + (flops/bytes/590).toFixed(1) +
+      "× 위 → COMPUTE-BOUND</b>");
+    R("8×H100 이론 시간", sci(flops) + " ÷ (8×1.979e15) = <b>36.2 ms</b> → 약 <b>113,086 tok/s</b>");
+    R("cache 상태", "0 → <b>4,096 행</b> 한 번에 채워짐 = " +
+      binBytes(KV_PER_TOK_70B*P3.T));
+  } else {
+    const i = t - 1;
+    const s = P3.T + i - 1;                      /* 이 step이 attend 하는 cache 깊이 */
+    const flops = 2*P3.P;
+    const kvBytes = KV_PER_TOK_70B * s;
+    const bytes = 2*P3.P + kvBytes;
+    const I = flops/bytes;
+    R("단계", "<b style='color:var(--c-dec)'>DECODE step " + i + "</b> — token 1개");
+    R("cache 깊이 s", commas(s) + " token → KV " + binBytes(kvBytes) +
+      " (= " + commas(KV_PER_TOK_70B) + " B/token × " + commas(s) + ")");
+    R("FLOPs ≈ 2·P", sci(flops) + " <span class='dimmed'>— prefill의 1/4096</span>");
+    R("읽는 byte", "weights " + commas(2*P3.P) + " + KV " + commas(kvBytes) +
+      " = <b>" + sci(bytes) + "</b> B");
+    R("arithmetic intensity <span class='dimmed'>(weight+KV 단순 모델)</span>",
+      "= " + sci(flops) + " ÷ " + sci(bytes) + " = <b>" + I.toFixed(4) +
+      "</b> FLOPs/byte <span class='dimmed'>· 실측 기준선 ~0.3</span>");
+    R("knee(590) 대비", "<b style='color:var(--danger)'>1/" + (590/I).toFixed(0) +
+      " 배 → BANDWIDTH-BOUND</b>");
+    R("8×H100 이론 시간", sci(bytes) + " ÷ 2.68e13 B/s = <b>" +
+      (bytes/(P3.NGPU*P3.BW)*1000).toFixed(2) + " ms</b> → 약 <b>" +
+      (1/(bytes/(P3.NGPU*P3.BW))).toFixed(0) + " tok/s</b>");
+    R("prefill 대비 처리량", "<b style='color:var(--danger)'>" +
+      (113086/(1/(bytes/(P3.NGPU*P3.BW)))).toFixed(0) + "× 느림</b>");
+  }
+  $("p3stats").innerHTML = rows;
+  $("p3phase").innerHTML = t === 0 ? "<b>대기</b>" : (t === 1 ? "<b>prefill</b>" :
+    "<b>decode</b> step " + (t-1) + " / " + P3.NDEC);
+
+  const NARR = [
+    "<b>대기.</b> 같은 weight, 같은 모델. 그런데 곧 <b>완전히 다른 두 기계</b>가 된다." +
+    '<span class="why">미리 던지는 질문: prefill과 decode는 <b>왜</b> 병목이 다른가? ' +
+    "힌트 — FLOP은 둘 다 같은 weight를 쓰지만, <b>weight를 한 번 읽고 몇 개의 token을 처리하는가</b>가 다르다.</span>",
+    "<b>PREFILL.</b> 프롬프트 4,096 token이 <b>한 번의 forward</b>로 통과했다. cache 4,096행이 한 번에 채워진다." +
+    '<span class="why"><b>왜 병렬이 가능한가:</b> 프롬프트는 이미 <b>전부 알려져 있다</b>. ' +
+    "causal mask만 씌우면 position t의 계산이 t 이후를 안 보므로, 전 position을 동시에 밀어도 결과가 같다. " +
+    "이건 §6의 teacher forcing과 <b>정확히 같은 논리</b>다.</span>",
+    "<b>DECODE step 1.</b> token 하나를 뱉는데 <b>모델 weight 140 GB를 통째로 다시 읽었다</b>." +
+    '<span class="why"><b>왜 이게 재앙인가:</b> 140 GB를 읽어서 얻은 게 token 1개다. ' +
+    "intensity ≈ 1 FLOP/byte인데 H100의 knee는 590이다 — GPU 연산기의 <b>99.8%가 놀고 있다</b>. " +
+    "느린 게 GPU 탓이 아니라 <b>HBM에서 숫자가 안 올라오는</b> 탓이다.</span>",
+    "<b>DECODE step 2.</b> cache가 한 행 늘었고, 읽어야 할 byte도 그만큼 늘었다." +
+    '<span class="why"><b>왜 점점 느려지나:</b> weight 읽기는 상수인데 KV 읽기가 <b>s에 비례</b>해 늘어난다. ' +
+    "그래서 긴 context일수록 token당 시간이 <b>선형으로</b> 증가한다 — 128k에서는 KV가 40 GiB라 " +
+    "weight 140 GB의 <b>31%</b>나 된다.</span>",
+    "<b>DECODE step 3.</b> 패턴이 확정됐다: <b>매 step 전체 weight + 전체 cache 재읽기</b>." +
+    '<span class="why"><b>탈출구는 batch뿐이다.</b> B개 request를 함께 decode하면 weight 한 번 읽고 ' +
+    "B개 token을 처리하니 intensity ≈ B. knee 590에 닿으려면 B ≈ 590이 필요한데, " +
+    "B를 키우면 KV cache가 B에 비례해 커진다(§4) — <b>이 줄다리기가 serving 설계 전부</b>다.</span>",
+    "<b>DECODE step 4.</b> roofline 그래프에서 decode 점은 왼쪽 <b>경사면</b> 위에 있다." +
+    '<span class="why"><b>경사면 = bandwidth-bound</b>. 그 위에서는 달성 FLOPS = BW × I 이므로 ' +
+    "성능이 <b>연산기 성능과 완전히 무관</b>하다. H100을 H200으로 바꿔도 좋아지는 건 오직 HBM 대역폭뿐.</span>",
+    "<b>DECODE step 5.</b> prefill 36.2 ms에 4,096 token, decode는 token 하나에 약 5.3 ms." +
+    '<span class="why"><b>결론:</b> prefill 처리량 ≈ 113,086 tok/s vs decode ≈ 190 tok/s — <b>약 596배</b>. ' +
+    "같은 weight, 같은 수식, 오직 <b>한 번에 몇 token을 미느냐</b>만 달랐다. " +
+    "이 두 regime은 스케줄링·배치·하드웨어 선택이 전부 달라야 한다.</span>"
+  ];
+  $("p3nar").innerHTML = NARR[Math.min(t, NARR.length - 1)];
+  p3step = t;              /* resize 시에도 현재 강조를 유지하기 위해 보관 */
+  drawRoof(t);
+}
+
+/* ---------------- roofline canvas ---------------- */
+const CV_H = 280;
+function setupCanvas(cv){
+  const r = window.devicePixelRatio || 1;
+  const w = Math.max(cv.clientWidth, 260), h = CV_H;      /* 논리 높이는 상수에서만 */
+  if (cv.width !== Math.round(w*r) || cv.height !== Math.round(h*r)){
+    cv.width  = Math.round(w*r);
+    cv.height = Math.round(h*r);
+  }
+  cv.style.height = h + "px";
+  const c = cv.getContext("2d");
+  c.setTransform(r, 0, 0, r, 0, 0);
+  c.clearRect(0, 0, w, h);
+  return {c, w, h};
+}
+function drawRoof(step){
+  const cv = $("cvRoof"); const {c, w, h} = setupCanvas(cv);
+  const L = 58, R = 16, T = 16, BM = 32, PW = w-L-R, PH = h-T-BM;
+  const ILO = -1, IHI = 4.2;                 /* log10 intensity: 0.1 .. ~16000 */
+  const FLO = 11, FHI = 15.4;                /* log10 FLOP/s: 1e11 .. ~2.5e15 */
+  const X = I => L + PW*((Math.log10(I) - ILO)/(IHI - ILO));
+  const Y = F => T + PH*(1 - (Math.log10(F) - FLO)/(FHI - FLO));
+  const roof = I => Math.min(P3.PEAK, P3.BW*I);
+
+  c.strokeStyle = "#2b3242"; c.fillStyle = "#6b7686";
+  c.font = "10px ui-monospace,monospace"; c.lineWidth = 1;
+  for (let e = FLO; e <= FHI; e++){
+    const y = Y(Math.pow(10, e));
+    c.beginPath(); c.moveTo(L, y); c.lineTo(w-R, y); c.stroke();
+    c.textAlign = "right"; c.fillText("1e" + e, L-6, y+3);
+  }
+  c.textAlign = "center";
+  for (let e = Math.ceil(ILO); e <= Math.floor(IHI); e++){
+    const x = X(Math.pow(10, e));
+    c.beginPath(); c.moveTo(x, T); c.lineTo(x, T+PH); c.stroke();
+    c.fillText("1e" + e, x, h-16);
+  }
+  c.fillText("arithmetic intensity (FLOPs / byte)", L+PW/2, h-3);
+  c.save(); c.translate(12, T+PH/2); c.rotate(-Math.PI/2);
+  c.textAlign = "center"; c.fillText("달성 가능 FLOP/s", 0, 0); c.restore();
+
+  /* roofline */
+  c.strokeStyle = "#8b949e"; c.lineWidth = 2.4; c.beginPath();
+  for (let i = 0; i <= 300; i++){
+    const I = Math.pow(10, ILO + (i/300)*(IHI-ILO));
+    const x = X(I), y = Y(roof(I));
+    i ? c.lineTo(x, y) : c.moveTo(x, y);
+  }
+  c.stroke();
+
+  /* knee */
+  const knee = P3.PEAK/P3.BW;
+  c.strokeStyle = "#3fb950"; c.setLineDash([4,4]); c.lineWidth = 1.5;
+  c.beginPath(); c.moveTo(X(knee), T); c.lineTo(X(knee), T+PH); c.stroke(); c.setLineDash([]);
+  c.fillStyle = "#3fb950"; c.textAlign = "left"; c.font = "11px ui-monospace,monospace";
+  c.fillText("knee 590", X(knee)+6, T+13);
+
+  function pt(I, color, label, up){
+    const x = X(I), y = Y(roof(I));
+    c.fillStyle = color; c.beginPath(); c.arc(x, y, 5, 0, 7); c.fill();
+    c.font = "11px ui-monospace,monospace";
+    const tw = c.measureText(label).width;
+    const flip = x + 10 + tw > w - R;
+    c.textAlign = flip ? "right" : "left";
+    c.fillText(label, x + (flip ? -9 : 9), y + (up ? -8 : 15));
+  }
+  pt(3100, "#d29922", "prefill 3,100 → peak", true);
+  pt(0.3,  "#58a6ff", "decode(B=1) 0.3 → 1.005 TFLOP/s (peak의 0.051%)", false);
+
+  /* 현재 step 강조 */
+  if (step === 1){
+    c.strokeStyle = "#d29922"; c.lineWidth = 2; c.beginPath();
+    c.arc(X(3100), Y(roof(3100)), 11, 0, 7); c.stroke();
+  } else if (step > 1){
+    c.strokeStyle = "#58a6ff"; c.lineWidth = 2; c.beginPath();
+    c.arc(X(0.3), Y(roof(0.3)), 11, 0, 7); c.stroke();
+  }
+
+  /* 영역 라벨 */
+  c.fillStyle = "rgba(88,166,255,.06)"; c.fillRect(L, T, X(knee)-L, PH);
+  c.fillStyle = "rgba(210,153,34,.06)"; c.fillRect(X(knee), T, w-R-X(knee), PH);
+  c.fillStyle = "#6b7686"; c.font = "11px -apple-system,sans-serif";
+  c.textAlign = "center";
+  c.fillText("BANDWIDTH-BOUND", (L + X(knee))/2, T+PH-8);
+  c.fillText("COMPUTE-BOUND", (X(knee) + w-R)/2, T+PH-8);
+}
+
+/* ==================================================================
+   4 · KV memory calculator
+   ================================================================== */
+const SEQS = [512, 1024, 2048, 4096, 8192, 16384, 32768, 65536, 131072];
+const P4 = { B:1, si:4, L:80, KV:8, D:128, BE:2 };
+const PRESETS4 = [
+  {name:"Llama-3-8B",   sub:"L=32 · n_kv=8 · d=128",  L:32,  KV:8,  D:128},
+  {name:"Llama-3-70B",  sub:"L=80 · n_kv=8 · d=128",  L:80,  KV:8,  D:128},
+  {name:"Llama-3-405B", sub:"L=126 · n_kv=8 · d=128", L:126, KV:8,  D:128},
+  {name:"Llama-2-7B",   sub:"MHA · L=32 · n_kv=32",   L:32,  KV:32, D:128},
+  {name:"PaLM-540B",    sub:"MQA · L=118 · n_kv=1",   L:118, KV:1,  D:256},
+  {name:"70B as MHA-64",sub:"가정 · L=80 · n_kv=64",  L:80,  KV:64, D:128}
+];
+const DTYPES = [{n:"bf16 / fp16", b:2}, {n:"fp8 / int8", b:1}, {n:"int4", b:0.5}];
+
+function kvBytes(B, s, L, KV, D, BE){ return 2*B*s*L*KV*D*BE; }
+
+function renderP4(){
+  const s = SEQS[P4.si];
+  const perTok = kvBytes(1, 1, P4.L, P4.KV, P4.D, P4.BE);
+  const perReq = kvBytes(1, s, P4.L, P4.KV, P4.D, P4.BE);
+  const batch  = kvBytes(P4.B, s, P4.L, P4.KV, P4.D, P4.BE);
+
+  $("vB").textContent  = commas(P4.B);
+  $("vS").textContent  = commas(s);
+  $("vL").textContent  = P4.L;
+  $("vKV").textContent = P4.KV;
+  $("vD").textContent  = P4.D;
+
+  $("p4form").innerHTML =
+    '<div class="rw"><span class="two">2</span> · B · s · L · n_kv_heads · d_head · bytes_per_element' +
+    '&nbsp;&nbsp;<span class="cm">← 앞의 2 = <b>K 텐서 1개 + V 텐서 1개</b> (byte 수도, 안전계수도 아니다)</span></div>' +
+    '<div class="rw"><span class="two">2</span> · <span class="num">' + commas(P4.B) + '</span> · <span class="num">' +
+    commas(s) + '</span> · <span class="num">' + P4.L + '</span> · <span class="num">' + P4.KV +
+    '</span> · <span class="num">' + P4.D + '</span> · <span class="num">' + P4.BE + '</span> = ' +
+    '<span class="res">' + commas(batch) + " B</span> = <span class=\"res\">" + binBytes(batch) + "</span></div>" +
+    '<div class="rw"><span class="cm">주의: n_heads 도 d_model 도 식에 없다 — 오직 L × n_kv_heads × d_head 다.</span></div>';
+
+  $("o4tok").innerHTML   = commas(perTok) + " B = " + binBytes(perTok);
+  $("o4req").innerHTML   = commas(perReq) + " B = " + binBytes(perReq);
+  $("o4batch").innerHTML = commas(batch) + " B = " + binBytes(batch);
+  $("o4real").innerHTML  = binBytes(batch*1.15) + " <span class='dimmed'>(×1.15)</span>";
+
+  /* 8×H100 = 640 GB HBM − weights 140 GB − overhead ~80 GB ⇒ KV 예산 ~420 GB.
+     검증된 기준값(168개 / 10.5개)과 자릿수를 맞추기 위해 420 ÷ per-request(GiB) 로 센다. */
+  const reqGiB = perReq/1073741824;
+  const concHarvest = reqGiB > 0 ? 420/reqGiB : 0;
+  $("o4conc").innerHTML = concHarvest.toFixed(1) + " 개 <span class='dimmed'>(420 ÷ " +
+    reqGiB.toFixed(3) + " GiB)</span>";
+
+  let note = "";
+  if (P4.L === 80 && P4.KV === 8 && P4.D === 128 && P4.BE === 2){
+    note = "<b>Llama-3-70B 검증 기준값.</b> token당 <code>2×80×8×128×2 = 327,680 B = 320.0 KiB</code>. " +
+      "8k → <b>2.50 GiB</b>, 32k → <b>10.00 GiB</b>, 128k → <b>40.00 GiB</b>. " +
+      "8×H100(640 GB)에서 weights 140 GB + overhead 80 GB를 빼면 KV 예산 <b>~420 GB</b> → " +
+      "8k 요청 <b>168개</b> 동시 처리, 128k 요청은 <b>10.5개</b>. " +
+      "context를 16배 늘리면 동시성이 <b>정확히 16배</b> 줄어든다 — 선형이니까.";
+  } else {
+    note = "슬라이더를 움직여도 구조는 같다: <b>어떤 항을 줄이든 효과는 곱셈으로 그대로</b> 나타난다. " +
+      "<code>n_kv_heads</code>를 8→1로 줄이면 정확히 8배 줄고(§5), " +
+      "<code>bytes_per_element</code>를 2→1(fp8)로 바꾸면 정확히 2배 줄고, " +
+      "<code>s</code>를 2배로 하면 정확히 2배 늘어난다. " +
+      "<b>Llama-3-70B</b> preset을 누르면 검증된 기준값(320.0 KiB/token)으로 돌아온다.";
+  }
+  $("o4note").innerHTML = note;
+
+  /* preset 하이라이트 */
+  [...$("p4presets").children].forEach((b, i) => {
+    const p = PRESETS4[i];
+    b.className = "pbtn" + (p.L === P4.L && p.KV === P4.KV && p.D === P4.D ? " on" : "");
+  });
+  [...$("p4dtype").children].forEach((b, i) => {
+    b.className = "pbtn" + (DTYPES[i].b === P4.BE ? " on" : "");
+  });
+  drawScale();
+}
+
+function renderP4Static(){
+  $("p4presets").innerHTML = PRESETS4.map((p, i) =>
+    '<button class="pbtn" data-i="' + i + '">' + p.name + "<small>" + p.sub + "</small></button>").join("");
+  [...$("p4presets").children].forEach(b => b.onclick = () => {
+    const p = PRESETS4[+b.dataset.i];
+    P4.L = p.L; P4.KV = p.KV; P4.D = p.D;
+    $("sL").value = p.L; $("sKV").value = p.KV; $("sD").value = p.D;
+    renderP4();
+  });
+  $("p4dtype").innerHTML = DTYPES.map((d, i) =>
+    '<button class="pbtn" data-i="' + i + '">' + d.b + " B<small>" + d.n + "</small></button>").join("");
+  [...$("p4dtype").children].forEach(b => b.onclick = () => {
+    P4.BE = DTYPES[+b.dataset.i].b; renderP4();
+  });
+
+  /* 참조 표 */
+  const REF = [
+    {n:"Llama-3-8B",              L:32,  KV:8,  D:128, cls:""},
+    {n:"Llama-3-70B <b>(기준)</b>", L:80,  KV:8,  D:128, cls:"hl"},
+    {n:"Llama-3-405B",            L:126, KV:8,  D:128, cls:""},
+    {n:"Llama-2-7B (MHA)",        L:32,  KV:32, D:128, cls:"bd"},
+    {n:"PaLM-540B (MQA)",         L:118, KV:1,  D:256, cls:"gd"}
+  ];
+  $("p4tbl").innerHTML = REF.map(r => {
+    const pt = kvBytes(1,1,r.L,r.KV,r.D,2);
+    return '<tr class="' + r.cls + '"><td>' + r.n + '</td><td class="mono2">' + r.L +
+      '</td><td class="mono2">' + r.KV + '</td><td class="mono2">' + r.D +
+      '</td><td class="mono2">' + commas(pt) + '</td><td class="mono2">' + (pt/1024).toFixed(1) +
+      '</td><td class="mono2">' + binBytes(pt*8192) + '</td><td class="mono2">' +
+      binBytes(pt*32768) + '</td><td class="mono2">' + binBytes(pt*131072) + "</td></tr>";
+  }).join("");
+}
+
+/* ---------------- 선형 vs 제곱 canvas ---------------- */
+function drawScale(){
+  const cv = $("cvScale"); const {c, w, h} = setupCanvas(cv);
+  const L = 62, R = 16, T = 14, BM = 32, PW = w-L-R, PH = h-T-BM;
+  const SLO = Math.log10(512), SHI = Math.log10(131072);
+  const BLO = 6, BHI = 14.2;            /* 1 MB .. ~160 TB */
+  const X = s => L + PW*((Math.log10(s) - SLO)/(SHI - SLO));
+  const Y = b => T + PH*(1 - (Math.log10(Math.max(b, 1e6)) - BLO)/(BHI - BLO));
+
+  const kvOf   = s => kvBytes(P4.B, s, P4.L, P4.KV, P4.D, P4.BE);
+  const attnOf = s => P4.L * P4.B * 32 * s * s * 2;      /* [B, a=32, s, s] bf16 × L layers */
+
+  c.strokeStyle = "#2b3242"; c.fillStyle = "#6b7686";
+  c.font = "10px ui-monospace,monospace"; c.lineWidth = 1;
+  for (let e = BLO; e <= BHI; e += 2){
+    const y = Y(Math.pow(10, e));
+    c.beginPath(); c.moveTo(L, y); c.lineTo(w-R, y); c.stroke();
+    c.textAlign = "right"; c.fillText("1e" + e + " B", L-6, y+3);
+  }
+  c.textAlign = "center";
+  SEQS.forEach(s => {
+    const x = X(s);
+    c.strokeStyle = "#2b3242"; c.beginPath(); c.moveTo(x, T); c.lineTo(x, T+PH); c.stroke();
+    c.fillStyle = "#6b7686";
+    c.fillText(s >= 1024 ? (s/1024) + "k" : String(s), x, h-16);
+  });
+  c.fillText("s (캐시된 token 수)", L+PW/2, h-3);
+
+  /* 80 GB 선 */
+  c.strokeStyle = "#3fb950"; c.setLineDash([4,4]); c.lineWidth = 1.5;
+  c.beginPath(); c.moveTo(L, Y(80e9)); c.lineTo(w-R, Y(80e9)); c.stroke(); c.setLineDash([]);
+  c.fillStyle = "#3fb950"; c.textAlign = "left"; c.font = "10.5px ui-monospace,monospace";
+  c.fillText("80 GB — H100 1장", L+6, Y(80e9)-5);
+
+  function curve(fn, color){
+    c.strokeStyle = color; c.lineWidth = 2.4; c.beginPath();
+    for (let i = 0; i <= 200; i++){
+      const s = Math.pow(10, SLO + (i/200)*(SHI-SLO));
+      const x = X(s), y = Y(fn(s));
+      i ? c.lineTo(x, y) : c.moveTo(x, y);
+    }
+    c.save(); c.beginPath(); c.rect(L, T, PW, PH); c.clip(); c.stroke(); c.restore();
+  }
+  curve(attnOf, "#f778ba");
+  curve(kvOf,   "#58a6ff");
+
+  /* 현재 s 마커 */
+  const s0 = SEQS[P4.si], x0 = X(s0);
+  c.strokeStyle = "#58a6ff"; c.setLineDash([3,3]); c.lineWidth = 1;
+  c.beginPath(); c.moveTo(x0, T); c.lineTo(x0, T+PH); c.stroke(); c.setLineDash([]);
+  [[kvOf(s0), "#58a6ff"], [attnOf(s0), "#f778ba"]].forEach(([v, col]) => {
+    const y = Y(v);
+    if (y < T || y > T+PH) return;
+    c.fillStyle = col; c.beginPath(); c.arc(x0, y, 4.5, 0, 7); c.fill();
+    c.font = "11px ui-monospace,monospace";
+    const lab = binBytes(v);
+    const tw = c.measureText(lab).width;
+    const flip = x0 + 9 + tw > w - R;
+    c.textAlign = flip ? "right" : "left";
+    c.fillText(lab, x0 + (flip ? -8 : 8), y - 7);
+  });
+}
+
+/* ==================================================================
+   5 · MHA / GQA / MQA
+   ================================================================== */
+const HQ5 = 8;
+const MODES5 = [
+  {n:"MHA",   G:8, note:"n_kv = H_q. query head 하나가 자기 전용 KV head를 갖는다."},
+  {n:"GQA-4", G:4, note:"query head 2개가 KV head 1개를 공유."},
+  {n:"GQA-2", G:2, note:"query head 4개가 KV head 1개를 공유."},
+  {n:"MQA",   G:1, note:"전체 query head가 KV head 하나를 공유."}
+];
+let mode5 = 1;
+
+function renderP5(){
+  $("p5modes").innerHTML = MODES5.map((m, i) =>
+    '<button class="pbtn" data-i="' + i + '" style="flex:1 1 110px">' + m.n +
+    "<small>n_kv = " + m.G + "</small></button>").join("");
+  [...$("p5modes").children].forEach((b, i) => {
+    b.className = "pbtn" + (i === mode5 ? " on" : "");
+    b.onclick = () => { mode5 = +b.dataset.i; renderP5(); };
+  });
+
+  const G = MODES5[mode5].G, per = HQ5/G;
+  let h = "";
+  for (let g = 0; g < G; g++){
+    h += '<div class="hgrp"><div class="qs">';
+    for (let k = 0; k < per; k++){
+      const qi = g*per + k;
+      h += '<span class="hq">q' + qi + "</span>";
+    }
+    h += '</div><div class="harrow">▼ ▼ ▼</div><div class="hkv">kv' + g + "</div></div>";
+  }
+  $("p5map").innerHTML = h;
+
+  $("p5g").textContent   = String(G);
+  $("p5per").textContent = per + " : 1";
+  $("p5div").textContent = (HQ5/G) + "×";
+  const QUAL = [
+    ["기준", "MHA — 비교 대상"],
+    ["≈ 동일", "구조는 GQA · 실모델 판정선은 n_kv ≥ 8"],
+    ["≈ 동일", "구조는 GQA · 실모델 판정선은 n_kv ≥ 8"],
+    ["하락", "HumanEval −2.2 · GSM8K −1.5 · MMLU −0.6"]
+  ];
+  $("p5qual").textContent   = QUAL[mode5][0];
+  $("p5qualn").textContent  = QUAL[mode5][1];
+
+  $("p5note").innerHTML =
+    "<b>" + MODES5[mode5].n + ".</b> " + MODES5[mode5].note +
+    " query head <code>h</code> → KV head <code>h // " + per + "</code>. " +
+    "cache는 정확히 <b>" + (HQ5/G) + "배</b> 줄고, query head 수는 그대로라 <b>표현력은 유지</b>된다.<br><br>" +
+    "<b>읽을 때 주의.</b> 위 그림은 칸이 보이도록 <code>H_q = 8</code>로 축소한 모형이다. " +
+    "품질 판정선은 <b>공유 비율</b>이 아니라 <b>n_kv_heads 개수 자체</b>이고, 실모델 기준은 " +
+    "<code>n_kv ≥ 8</code>이다. Llama-3-70B는 <code>H_q = 64, n_kv = 8</code>(8:1 공유)로 " +
+    "이 선 위에 딱 걸쳐 있다.<br><br>" +
+    "<b>왜 n_kv = 8이 업계 표준인가.</b> MQA(n_kv=1)는 캐시를 최대로 줄이지만 품질이 눈에 띄게 떨어진다 " +
+    "(PaLM-540B 세대 보고: HumanEval −2.2, GSM8K −1.5, MMLU −0.6). " +
+    "n_kv ≥ 8 이면 MHA와 차이가 noise 수준이다. Llama-3는 8B/70B/405B <b>전 사이즈에서 n_kv = 8 고정</b>이다.<br><br>" +
+    "<b>기존 MHA 체크포인트에서 옮겨가는 법(uptraining):</b> KV head들을 G개 그룹으로 <b>mean-pool</b>한 뒤 " +
+    "원래 pretraining compute의 <b>약 5%</b>만 추가 학습하면 처음부터 GQA로 학습한 것과 " +
+    "perplexity <b>0.1 이내</b>로 회복된다. Llama-2-70B가 GQA-8을 얻은 방식이 정확히 이것이다.";
+}
+
+/* ==================================================================
+   6 · THE BOUNDARY
+   ================================================================== */
+const P6MAX = 8;
+function drawP6(t){
+  /* --- training 박스 --- */
+  const S6 = 6;
+  let tr = '<div style="font-size:11.5px;color:var(--ink-faint);margin-bottom:7px">' +
+           'x = [x₁ … x₆] — <b>ground truth 전체가 이미 알려져 있다</b></div><div class="tl">';
+  for (let i = 1; i <= S6; i++){
+    const on = t >= 1;
+    tr += '<div class="tlb dec ' + (on ? "on" : "todo") +
+          '" style="' + (on ? "border-color:var(--c-train);background:rgba(63,185,80,.16);color:#b7f0c2" : "") +
+          '">x' + i + '<span class="t2">' + (on ? "동시" : "—") + "</span></div>";
+  }
+  tr += "</div>";
+  const TR = [
+    ['<span class="dimmed">대기 — ▶ 를 누르면 teacher forcing이 어떻게 도는지 본다.</span>'],
+    ["<b style='color:var(--c-train)'>1회의 forward pass.</b> 6개 position이 <b>동시에</b> 들어간다. " +
+     "autoregressive loop 자체가 없다."],
+    ["<b>causal mask 적용.</b> position t는 j ≤ t만 본다 — 그래도 <b>pass는 여전히 1회</b>. " +
+     "mask는 병렬성을 깨지 않는다."],
+    ["<b>모든 position에서 동시에 loss.</b> position 1..6의 cross-entropy를 한 번에 구한다. " +
+     "<b>재사용할 '이전 step'이 존재하지 않는다</b> → 캐시할 대상 자체가 없다."],
+    ["<b>backward가 K, V를 읽는다.</b> dL/dQ, dL/dK, dL/dV 계산에 필요하니까. " +
+     "byte 수는 inference KV cache 공식과 <b>글자까지 같다</b> — 그러나 이건 <b>activation</b>이다."],
+    ["<b>optimizer step → 전부 해제.</b> 수명은 optimizer step <b>1회</b>. " +
+     "다음 step은 완전히 새로운 batch다."],
+    ["<b>KV cache = 0 byte.</b> 확정. training ledger에 KV cache 줄이 있으면 <b>이중 계산</b>이다."],
+    ["<b>KV cache = 0 byte.</b> 확정."],
+    ["<b>KV cache = 0 byte.</b> 확정."]
+  ];
+  tr += '<div style="margin-top:10px;font-size:12.5px;color:var(--ink-dim);min-height:52px">' +
+        TR[Math.min(t, TR.length-1)][0] + "</div>";
+  tr += '<div class="cards" style="margin-top:10px"><div class="card ' + (t >= 6 ? "good" : "") +
+        '"><div class="k">KV cache</div><div class="v">' + (t >= 1 ? "0 B" : "—") +
+        '</div><div class="n">구조적으로 0 — 반복 자체가 없다</div></div>' +
+        '<div class="card ' + (t >= 4 ? "warn" : "") + '"><div class="k">저장되는 K/V (activation)</div>' +
+        '<div class="v">' + (t >= 4 ? "1.00 GiB" : "—") +
+        '</div><div class="n">8B, B=1, s=8192, bf16 · checkpointing으로 제거 가능</div></div></div>';
+  $("p6train").innerHTML = tr;
+
+  /* --- inference 박스 --- */
+  let inf = '<div style="font-size:11.5px;color:var(--ink-faint);margin-bottom:7px">' +
+            'prompt 3 token → decode 3 token</div><div class="tl">';
+  const preOn = t >= 6, decN = t >= 7 ? 3 : 0;
+  inf += '<div class="tlb pre ' + (preOn ? "on" : "todo") + '" style="width:150px">PREFILL · 3 tok' +
+         '<span class="t2">' + (preOn ? "cache 3행" : "—") + "</span></div>";
+  for (let i = 1; i <= 3; i++){
+    inf += '<div class="tlb dec ' + (i <= decN ? "on" : "todo") + '">+1' +
+           '<span class="t2">' + (i <= decN ? "행 " + (3+i) : "—") + "</span></div>";
+  }
+  inf += "</div>";
+  const IN = [
+    '<span class="dimmed">대기.</span>',
+    '<span class="dimmed">training 쪽을 먼저 본다.</span>',
+    '<span class="dimmed">training 쪽을 먼저 본다.</span>',
+    '<span class="dimmed">training 쪽을 먼저 본다.</span>',
+    '<span class="dimmed">training 쪽을 먼저 본다.</span>',
+    '<span class="dimmed">training 쪽을 먼저 본다.</span>',
+    "<b style='color:var(--accent)'>PREFILL.</b> 프롬프트 전체를 한 번에 → cache <b>3행</b>이 태어난다. " +
+    "여기서부터 <b>request가 끝날 때까지</b> 살아 있는 persistent 상태다.",
+    "<b style='color:var(--accent)'>DECODE ×3.</b> step마다 cache에 <b>한 행 append</b>. " +
+    "매 step 전체 cache를 다시 <b>읽는다</b> — 그래서 bandwidth-bound(§3).",
+    "<b>정리.</b> 같은 수식, 같은 K/V. 그런데 <b>수명 · 증가 방식 · 제거 가능성</b>이 전부 다르다. " +
+    "이게 아래 표다."
+  ];
+  inf += '<div style="margin-top:10px;font-size:12.5px;color:var(--ink-dim);min-height:52px">' +
+         IN[Math.min(t, IN.length-1)] + "</div>";
+  inf += '<div class="cards" style="margin-top:10px"><div class="card ' + (t >= 7 ? "blue" : "") +
+         '"><div class="k">KV cache</div><div class="v">' +
+         (t >= 7 ? "6행" : t >= 6 ? "3행" : "—") +
+         '</div><div class="n">2·B·s·L·n_kv·d_head·bytes</div></div>' +
+         '<div class="card ' + (t >= 6 ? "blue" : "") + '"><div class="k">동일 설정 8B · s=8192</div>' +
+         '<div class="v">' + (t >= 6 ? "1.00 GiB" : "—") +
+         '</div><div class="n">삭제 불가 — 다음 step이 읽는다</div></div></div>';
+  $("p6infer").innerHTML = inf;
+
+  $("p6phase").innerHTML = t === 0 ? "<b>대기</b>" : "step <b>" + t + "</b> / " + P6MAX;
+
+  const NARR = [
+    "<b>대기.</b> 왼쪽 = training, 오른쪽 = inference. 같은 모델, 같은 attention 수식이다." +
+    '<span class="why">질문: <b>왜</b> training에는 KV cache가 없는가? ' +
+    "\"안 쓰기로 했다\"가 아니라 <b>쓸 대상이 존재하지 않는다</b>는 게 답이다.</span>",
+    "<b>teacher forcing.</b> 정답 sequence 전체가 이미 있으니 6 position을 <b>한 번에</b> 밀어 넣는다." +
+    '<span class="why"><b>왜 이게 가능한가:</b> 학습에서는 모델이 뱉은 token을 다음 입력으로 쓰지 않고 ' +
+    "<b>ground truth</b>를 쓴다. 그래서 t번째 입력을 알기 위해 t−1번째 출력을 기다릴 필요가 없다 — " +
+    "<b>순차 의존성이 끊긴다</b>.</span>",
+    "<b>causal mask는 병렬성을 깨지 않는다.</b> position t는 j ≤ t만 보지만, pass는 여전히 1회다." +
+    '<span class="why"><b>왜:</b> mask는 score 행렬에 더해지는 <b>한 장의 행렬</b>일 뿐이다. ' +
+    "연산 순서를 강제하지 않는다. 그래서 \"T번의 순차 step\"과 \"mask 씌운 1번의 병렬 pass\"가 " +
+    "<b>수치적으로 동일</b>하다 — §3의 prefill이 정확히 같은 논리다.</span>",
+    "<b>loss도 동시에.</b> 6개 position의 cross-entropy가 한 번에 나온다." +
+    '<span class="why"><b>여기가 핵심:</b> cache란 \"이전 step의 계산 결과를 다음 step이 재사용\"하는 것이다. ' +
+    "그런데 <b>step이 하나뿐이면 '이전 step'이 없다</b>. 재사용할 대상이 없으니 " +
+    "cache라는 개념이 성립하지 않는다.</span>",
+    "<b>그런데 K, V는 분명히 메모리에 있다.</b> backward가 dL/dQ, dL/dK, dL/dV를 계산해야 하니까." +
+    '<span class="why"><b>함정이 여기다:</b> byte 수 공식이 ' +
+    "<code>2·B·s·L·n_kv·d_head·b</code>로 inference KV cache와 <b>글자까지 같다</b>. " +
+    "8B, B=1, s=8192, bf16 → 양쪽 다 <b>1,073,741,824 B = 1.00 GiB</b>. " +
+    "같은 산수라고 같은 물건은 아니다.</span>",
+    "<b>optimizer step 후 전부 해제.</b> 수명 = 1 step." +
+    '<span class="why"><b>결정적 차이:</b> training 쪽 1.00 GiB는 <b>gradient checkpointing으로 지울 수 있다</b>' +
+    "(backward 때 재계산). inference 쪽 1.00 GiB는 <b>절대 못 지운다</b> — 다음 decode step이 읽어야 하니까. " +
+    "지울 수 있느냐가 두 물건을 가르는 진짜 기준이다.</span>",
+    "<b>이제 inference.</b> prefill이 cache 3행을 만들고, 그때부터 request가 끝날 때까지 살아 있다." +
+    '<span class="why"><b>왜 여기선 필요한가:</b> decode는 step이 <b>N번</b> 있고, ' +
+    "step t+1이 step t가 만든 K,V를 그대로 다시 쓴다. 반복이 있으니 amortize할 대상이 생긴다. " +
+    "<b>반복이 cache의 존재 조건</b>이다.</span>",
+    "<b>decode ×3.</b> 매 step 한 행 append, 전체를 다시 읽기. cache가 <b>사용 중에 자란다</b>." +
+    '<span class="why"><b>그래서 PagedAttention이 inference 전용이다:</b> ' +
+    "생성 길이를 미리 모르므로 얼마나 할당할지 알 수 없고 → 단편화가 생기고 → block 단위 paging이 필요하다. " +
+    "training은 shape이 step 시작 전에 <b>이미 확정</b>이라 이 문제가 아예 없다.</span>",
+    "<b>경계선 확정.</b> training KV cache = <b style='color:var(--accent2)'>0 byte</b>." +
+    '<span class="why"><b>실무 규칙 한 줄:</b> training OOM 분석에 \"KV cache\" 줄이 있으면 그건 ' +
+    "activation을 두 번 센 것이다. 그리고 <b>정신적 다리</b>: " +
+    "<b>training ≈ prefill + backward, 영원히</b> (compute-bound, cache 없음) / " +
+    "<b>serving = prefill 한 번 + 긴 bandwidth-bound decode 꼬리</b>.</span>"
+  ];
+  $("p6nar").innerHTML = NARR[Math.min(t, NARR.length-1)];
+}
+
+/* ==================================================================
+   구동
+   ================================================================== */
+fillP2Flops();
+renderP4Static();
+renderP4();
+renderP5();
+
+makeAnim("P1", NTOK,        drawP1, 900);
+makeAnim("P2", NTOK,        drawP2, 1000);
+makeAnim("P3", 1+P3.NDEC,   drawP3, 1200);
+makeAnim("P6", P6MAX,       drawP6, 1500);
+
+$("sB").oninput  = e => { P4.B  = +e.target.value; renderP4(); };
+$("sS").oninput  = e => { P4.si = +e.target.value; renderP4(); };
+$("sL").oninput  = e => { P4.L  = +e.target.value; renderP4(); };
+$("sKV").oninput = e => { P4.KV = +e.target.value; renderP4(); };
+$("sD").oninput  = e => { P4.D  = +e.target.value; renderP4(); };
+
+window.addEventListener("resize", () => { drawRoof(p3step); drawScale(); });
+</script>
+</body>
+</html>

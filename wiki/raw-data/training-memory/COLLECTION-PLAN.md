@@ -48,3 +48,54 @@ agent writes the excerpt; flip to `DONE` when `excerpts/<slug>.md` exists.
 - fp8 requires Hopper+; document but note A100-40GB cannot use it (capstone constraint).
 - PagedAttention is inference-time; include only to draw the train-vs-serve memory boundary.
 - If SageAttention training-time (not just inference) evidence is thin, say so explicitly in the excerpt.
+
+### Harvest of 2026-08-18 (`ch-extra` — attention from scratch)
+
+**Poisoned upstream: do NOT copy numbers from the `llm-arch` branch.** The three
+items below were each **re-verified with `python3` during this harvest**; every
+`llm-arch` value listed is wrong and must be replaced with the corrected value
+if a later chapter reaches for it.
+
+| # | `llm-arch` location | What it prints | Correct value (re-verified here) |
+|---|---------------------|----------------|----------------------------------|
+| a | `llm-arch:wiki/courses/llm-arch/ch-02/read.md` §6 (L358-364) and `.../ch-02/excerpts/multi-head-redundancy.md` §1 | head-ablation table `h=1→25.8, 4→26.3, 8→25.8, 16→25.7, 32→24.7`, concluding *"4 heads is the sweet spot"* | Vaswani et al. Table 3 row (A): `h=1 → PPL 5.29 / BLEU 24.9`, `h=4 → 5.00 / 25.5`, `h=8 (base) → 4.92 / 25.8`, `h=16 → 4.91 / 25.8`, `h=32 → 5.01 / 25.4`. Best is `h = 8–16`, not 4. |
+| b | `llm-arch:wiki/courses/llm-arch/ch-03/excerpts/sinusoidal-encoding-frequency-analysis.md` §2 | frequency rows labelled **one step off**, plus `λ ≈ 62,832` for dims `(510,511)` | `ω=0.1` (`10000^-0.25`) belongs to dims **(128,129)**, not (64,65); `ω=0.01` → **(256,257)**, not (128,129); `ω=0.001` → **(384,385)**, not (256,257). Dims `(510,511)` have `λ = 2π·10000^(510/512) = 60,611.5`. `62,832 = 2π·10⁴` is the **unreachable asymptote** (it needs `2i = 512`, but `2i` maxes at 510). |
+| c | `llm-arch:wiki/courses/llm-arch/ch-03/read.md` §5 figure (L297) | `dim 128–129  λ = 56` | `ω = 10000^(-128/512) = 0.1` → `λ = 2π/0.1 = **62.83**` |
+
+Verification notes recorded at harvest time (all reproduced with `python3`):
+
+- (a) is caught by the paper's own prose. Vaswani writes *"single-head attention
+  is 0.9 BLEU worse than the best setting."* The `llm-arch` table gives
+  `best − h=1 = 26.3 − 25.8 = 0.5`; the true row gives `25.8 − 24.9 = 0.9`.
+  Only the corrected row is self-consistent with the paper's sentence.
+- (b) the labels are shifted by exactly one row: `ω_i = 10000^(-2i/d_model)` with
+  `d_model = 512`, so `ω = 0.1 ⇒ 2i/d = 0.25 ⇒ 2i = 128`. Dims `(64,65)` actually
+  carry `ω = 10000^-0.125 = 0.3162`, `λ = 19.9` — a row `llm-arch` never prints.
+  The `(510,511)` error is `+2,220.4` positions (`3.66 %` high).
+- (c) same root cause as (b) — the figure inherited the shifted table. `56` does
+  not correspond to any dimension pair at `d_model = 512`.
+- The arithmetic-intensity line in `excerpts/multi-head-split-concat-wo.md` was
+  also corrected in this harvest: it said `d_head` FLOPs per stored **element**;
+  under the multiply-add convention (2 FLOPs/MAC) `QKᵀ` costs `2·B·h·N²·d_head`
+  FLOPs against `B·h·N²` stored elements, so it is **`2·d_head` FLOPs per stored
+  element** and `d_head` FLOPs per stored **byte** in bf16. Units are now explicit
+  in the excerpt.
+
+**Boson-specific gap neither library can fill.** The `O(N²)` score-matrix material
+throughout Cluster B describes the **softmax baseline only**. Boson / Lina TMR uses
+**GDN linear attention**, which never forms an `N×N` softmax score matrix, so
+`5·a·s²·b` and every `B·h·N²` figure are upper bounds on a path the model does not
+take. Worse, the boson model's actual `d_model`, head count and head dim are **not
+recorded anywhere in the wiki** — the excerpts cannot be specialised to it without
+first capturing that config. Action: record the boson attention config (d_model,
+`h`, `d_head`, GDN state size, CP=1 assertion) as a source file before any chapter
+tries to instantiate the memory formulas for boson.
+
+**Future crawl target — QK-norm.** The `√d_k` scaling in scaled dot-product
+attention rests on a variance assumption (unit-variance, uncorrelated `q`/`k`
+entries) that **decays during training** as `q`/`k` norms grow, which is what drives
+attention-logit blowup. **QK-norm** (RMSNorm/LayerNorm applied to `Q` and `K` before
+the dot product) is the modern fix, and it is **uncovered by any source in either
+`training-memory` or `llm-arch`**. Crawl target: Henry et al. 2020 "Query-Key
+Normalization"; Dehghani et al. 2023 "ViT-22B" (§ attention-logit growth); Chameleon
+(Meta 2024) and Gemma-2/OLMo-2 QK-norm ablations.

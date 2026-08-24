@@ -8,6 +8,10 @@
 
 # 4장 — Attention은 Memory 문제다: O(N²), 그리고 Kernel이 결정하는 이유
 
+> **선수 chapter.** 이 chapter는 attention의 memory 비용을 분석하므로 mechanism 자체는 이미 안다고 가정합니다.
+> Q/K/V, head split, causal mask, RoPE, transformer block의 tensor ledger가 아직 확실하지 않다면
+> [[ch-extra]] — [Attention과 Transformer, 처음부터](../ch-extra/read.md) — 를 먼저 읽으세요. [[ch-03]]과 이 chapter 사이에 위치합니다.
+
 > **핵심 통찰력.** 표준 multi-head attention은 N×N score matrix와 해당 softmax를 activation로 materialize합니다. layer당 head당 O(N²) 바이트는 sequence 길이에 따라 2차적으로 증가하고 long context에서 주요 제한 요소로 FLOP가 아닌 GPU memory를 지배합니다. Rabe & Staats 2021는 이것이 수학적으로 필요하지 않다는 것을 증명합니다. 전체 matrix을 작성하지 않고 실행 중인 softmax normalizer로 key를 스트리밍하여 query당 O(1) 추가 memory에서 exact self-attention을 계산할 수 있습니다. model architecture가 아닌 attention *kernel*의 선택에 따라 training 비용이 layer당 O(N²) 또는 O(N) activation memory인지 여부가 결정됩니다.
 
 > **가이드라인.** training job이 긴 sequence length에서 OOM되면 가장 먼저 조정할 수단(문제를 해결하기 위해 우선 변경해야 하는 설정)은 gradient checkpointing이나 batch size가 아니라 attention kernel입니다. PyTorch SDPA가 MATH backend(전체 N×N matrix를 할당함)로 조용히 fallback하지 않았는지 확인하세요. fallback했다면 FlashAttention 또는 xFormers를 강제하세요. online-softmax recurrence(Milakov & Gimelshein 2018)은 O(N)-memory tiling을 numerically stable하게 만드는 수학적 primitive입니다. 이를 이해하면 kernel이 왜 안전하게 tiling할 수 있는지, 그리고 언제 그렇게 할 수 없는지를 정확히 알 수 있습니다.

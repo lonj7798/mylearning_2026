@@ -8,6 +8,10 @@
 
 # Chapter 4 — Attention Is a Memory Problem: O(N²) and Why the Kernel Decides
 
+> **Prerequisite.** This chapter analyzes attention's memory cost and assumes the mechanism is already familiar.
+> If Q/K/V, the head split, causal masking, RoPE, or the transformer-block tensor ledger are not solid, read
+> [[ch-extra]] — [Attention and the Transformer, From Scratch](../ch-extra/read.md) — first. It sits between [[ch-03]] and this chapter.
+
 > **Core insight.** Standard multi-head attention materializes an N×N score matrix and its softmax as activations: O(N²) bytes per head per layer, which grows quadratically with sequence length and dominates GPU memory — not FLOPs — as the primary limiting factor at long context. Rabe & Staats 2021 prove this is not mathematically necessary: exact self-attention can be computed in O(1) extra memory per query by streaming over keys with a running softmax normalizer, never writing the full matrix. The choice of attention *kernel* — not the model architecture — determines whether training costs O(N²) or O(N) activation memory per layer.
 
 > **Guideline.** If your training job OOMs at long sequence length, the first lever is always the attention kernel, not gradient checkpointing or batch size. Confirm PyTorch SDPA did not silently fall back to the MATH backend (which allocates the full N×N matrix). If it did, force FlashAttention or xFormers. The online-softmax recurrence (Milakov & Gimelshein 2018) is the mathematical primitive that makes O(N)-memory tiling numerically stable; understanding it tells you exactly why the kernel can tile safely and when it cannot.

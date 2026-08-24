@@ -128,3 +128,7 @@ Index rebuilt.
 ## [2026-07-19] Session #34
 - course: training-memory | chapter: ch-01 | phase: read
 - session ended: 2026-07-19T16:46:42.079Z
+
+## [2026-08-03] Session #36
+- course: training-memory | chapter: ch-04 | phase: read
+- session ended: 2026-08-03T21:52:39.915Z

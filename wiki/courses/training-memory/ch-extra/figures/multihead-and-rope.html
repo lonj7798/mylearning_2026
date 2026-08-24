@@ -1,0 +1,1612 @@
+<!--
+  Figure: multihead-and-rope.html — "head를 나누는 것과 위치를 넣는 것"
+  Chapter: ch-extra (attention 보충 트랙)
+  Back to: ../read.md   ·  Companion Q&A: ../qa.md
+
+  Two linked halves in one page:
+    PART A — Multi-head attention: d_model = 8 을 h = 2 개 head (d_head = 4) 로 쪼개고
+             split -> per-head attention -> concat -> @ W_O 를 한 step 씩 애니메이션.
+    PART B — RoPE: 왜 position이 필요한가(permutation equivariance 실증) ->
+             2D pair 회전 -> <R_m q, R_n k> 가 m-n 에만 의존한다는 핵심 데모 ->
+             frequency band -> long-context(YaRN/NTK) 한 줄.
+
+  Fully self-contained: inline CSS + vanilla JS only. No CDN, no web font,
+  no image, no fetch/XHR. Renders offline from file:// by double-clicking.
+
+  Numbers used (all recomputed by hand/python before shipping — do not drift):
+    PART A toy:  N=4, d_model=8, h=2, d_head=4, sqrt(d_head)=2
+      softmax over scaled scores {3,0,0,0}    -> 0.870049 / 0.043317 x3   (e^3  = 20.085537, sum 23.085537)
+      softmax over scaled scores {0,4.5,0,0}  -> 0.967748 / 0.010751 x3   (e^4.5= 90.017131, sum 93.017131)
+      params 4*d_model^2 = 256 for EVERY h ; QK^T FLOPs 2*N^2*d_model = 256 for EVERY h
+      score tensor elements h*N^2 = 16 / 32 / 64 / 128 for h = 1 / 2 / 4 / 8
+    Reference (ch-03/ch-04) config: B=1, s=4096, h=4096, a=32, bf16
+      5as/h = 160 ; crossover s = 34h/(5a) = 870.4 ; [B,a,T,T] = 1,073,741,824 B = 1.07 GB
+    RoPE (d_head=128, base=10000, L=8192):
+      i=0  theta=1.0        lambda=6.2832      rot=1303.7973
+      i=16 theta=0.1        lambda=62.8319     rot=130.3797
+      i=32 theta=0.01       lambda=628.3185    rot=13.0380
+      i=48 theta=0.001      lambda=6283.1853   rot=1.3038
+      i=63 theta=1.1548e-4  lambda=54410.1431  rot=0.1506   <- 느린 끝, 62,832 아님
+      Llama-3 base=500000 -> i=63 theta=2.4551e-6, lambda=2,559,195.5
+      YaRN(alpha=1,beta=32) 경계: i=25.7610 / i=49.8434 ; NTK base' = base*s^(128/126)
+        s=4 -> 40,890 · s=8 -> 82,685 · s=16 -> 167,199 · s=32 -> 338,097
+
+  Teaching points made visible:
+    1. W_Q/W_K/W_V 는 head 개수와 무관하게 (d_model x d_model) 한 장이다. "head를 나눈다"는 건
+       그 한 장의 column을 h 등분해서 보는 것(view+transpose)일 뿐 — 복사도, 추가 parameter도 없다.
+    2. 그래서 parameter는 4*d_model^2 로 h에 완전 불변이고, QK^T FLOPs 도 h가 정확히 소거된다.
+       그런데 score tensor는 [B,h,N,N] 이라 h에 LINEAR 하게 커진다 — head는 compute 공짜,
+       memory 유료. 이게 ch-03 Korthikanti 항의 5*a*s^2*b 에 붙은 a 다.
+    3. 두 head는 같은 문장에서 서로 다른 곳을 본다(여기서는 손으로 심어둔 illustrative pattern).
+       head가 하나면 softmax 평균 하나뿐이라 두 관계를 동시에 표현할 수 없다.
+    4. 순열을 섞어도 출력은 "같은 벡터가 같이 섞여 나올" 뿐이다 — Attn(PX) = P·Attn(X).
+       실제로 max|Out' - P·Out| = 0 을 화면에 찍어서 증명한다. 그래서 position은 밖에서 주입해야 한다.
+    5. RoPE 는 q,k 의 2D pair 를 m*theta_i 만큼 돌린다. 회전은 norm을 보존하고,
+       R_m^T R_n = R_{n-m} 이므로 내적은 절대 위치가 아니라 m-n 에만 의존한다.
+       m,n 을 함께 끌어도 숫자가 미동도 하지 않는 것이 그 증거다.
+    6. theta_i 사다리는 빠른 pair(국소) 부터 느린 pair(전역)까지 깔린다. d_head=128, L=8192 에서
+       i>=50 인 pair는 학습 내내 한 바퀴도 못 돈다 — 그 구간의 각도는 학습에서 본 적 없는 값으로
+       extrapolate 되고, 이게 YaRN/NTK interpolation이 존재하는 이유다.
+-->
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Multi-head + RoPE — head를 나누는 것과 위치를 넣는 것 (ch-extra)</title>
+<style>
+  :root{
+    --bg:#0e1117; --panel:#161b22; --panel2:#1c2230; --edge:#2b3242;
+    --ink:#e6edf3; --ink-dim:#9aa7b4; --ink-faint:#6b7686;
+    --accent:#58a6ff; --accent2:#3fb950; --danger:#f85149; --warn:#d29922;
+    --c-h0:#58a6ff;   /* head 0 */
+    --c-h1:#f778ba;   /* head 1 */
+    --c-q:#bc8cff;    /* query  */
+    --c-k:#3fb950;    /* key    */
+    --c-v:#d29922;    /* value  */
+    --c-rope:#ffd93d; /* rotation */
+  }
+  *{box-sizing:border-box;}
+  html,body{margin:0;padding:0;max-width:100%;overflow-x:hidden;}
+  body{
+    background:var(--bg); color:var(--ink);
+    font:14px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Apple SD Gothic Neo",
+         "Noto Sans KR",Helvetica,Arial,sans-serif;
+    padding:22px; max-width:1180px; margin:0 auto;
+  }
+  h1{font-size:21px; margin:0 0 3px; letter-spacing:.2px;}
+  .sub{color:var(--ink-dim); font-size:13px; margin:0 0 20px;}
+  .sub code{color:var(--accent);}
+  .part{font-size:11px; letter-spacing:1.4px; text-transform:uppercase; color:var(--ink-faint);
+    border-top:1px solid var(--edge); padding-top:16px; margin:30px 0 12px;}
+  .part b{color:var(--accent); letter-spacing:.4px;}
+  .panel{background:var(--panel); border:1px solid var(--edge); border-radius:10px;
+    padding:16px; margin-bottom:18px;}
+  .panel h2{font-size:12px; text-transform:uppercase; letter-spacing:.9px; color:var(--ink-dim);
+    margin:0 0 14px; font-weight:600;}
+  .panel h2 .q{color:var(--ink); text-transform:none; letter-spacing:0; font-size:13.5px;}
+  .mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+    font-variant-numeric:tabular-nums;}
+  .dimmed{color:var(--ink-faint);}
+  b.ok{color:var(--accent2);} b.bad{color:var(--danger);} b.wn{color:var(--warn);}
+  .h0{color:var(--c-h0);} .h1c{color:var(--c-h1);}
+
+  .callout{border-left:3px solid var(--warn); background:rgba(210,153,34,.07);
+    padding:11px 14px; border-radius:0 7px 7px 0; font-size:13px; color:var(--ink-dim);
+    margin-top:14px;}
+  .callout b{color:var(--ink);}
+  .callout.ok{border-left-color:var(--accent2); background:rgba(63,185,80,.07);}
+  .callout.no{border-left-color:var(--danger); background:rgba(248,81,73,.07);}
+  .callout.info{border-left-color:var(--accent); background:rgba(88,166,255,.07);}
+  .callout code{color:var(--accent);}
+
+  .cfg{display:flex; gap:7px; flex-wrap:wrap; margin-bottom:14px;}
+  .cfg span{border:1px solid var(--edge); background:var(--panel2); border-radius:6px;
+    padding:4px 9px; font-size:11.5px; color:var(--ink-dim);
+    font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;}
+  .cfg span b{color:var(--accent);}
+
+  /* ---------- matrices ---------- */
+  .mxwrap{overflow-x:auto; padding-bottom:3px;}
+  .mxblock{display:inline-block; vertical-align:top; margin:0 16px 12px 0;}
+  .mxtitle{font-size:11.5px; color:var(--ink-dim); margin-bottom:5px;
+    font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;}
+  .mxtitle b{color:var(--ink);}
+  table.mx{border-collapse:collapse; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+    font-size:11.5px; font-variant-numeric:tabular-nums;}
+  table.mx td,table.mx th{border:1px solid var(--edge); padding:3px 6px; text-align:right;
+    min-width:42px; white-space:nowrap;}
+  table.mx th{color:var(--ink-faint); font-size:10px; font-weight:600; background:#10151d;
+    min-width:34px;}
+  table.mx th.rl{text-align:left; color:var(--ink-dim); font-size:10.5px;}
+  table.mx td.z{color:var(--ink-faint); opacity:.38;}
+  table.mx td.hi{background:rgba(88,166,255,.22); color:#cfe6ff; font-weight:700;
+    outline:1px solid var(--accent); outline-offset:-1px;}
+  table.mx td.g0,table.mx th.g0{background:rgba(88,166,255,.09);}
+  table.mx td.g1,table.mx th.g1{background:rgba(247,120,186,.09);}
+  table.mx th.g0{color:var(--c-h0);} table.mx th.g1{color:var(--c-h1);}
+  table.mx td.hm{color:#0e1117; font-weight:700;}
+  table.mx tr.sum td{border-top:2px solid var(--edge); color:var(--accent2);}
+
+  .arith{background:#10151d; border:1px solid var(--edge); border-radius:8px; padding:10px 13px;
+    font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:12px;
+    line-height:1.9; overflow-x:auto; margin-top:10px; white-space:nowrap;}
+  .arith .lbl{color:var(--ink-faint);}
+  .arith .res{color:var(--accent2); font-weight:700;}
+  .arith .zt{color:var(--ink-faint); opacity:.5;}
+
+  /* ---------- controls ---------- */
+  .runbar{display:flex; gap:7px; flex-wrap:wrap; align-items:center; margin-bottom:12px;}
+  .rb{background:var(--panel2); border:1px solid var(--edge); color:var(--ink);
+    border-radius:7px; padding:9px 14px; cursor:pointer; font-size:12.5px; font-weight:600;
+    transition:.13s;}
+  .rb:hover{border-color:var(--accent);}
+  .rb.primary{background:#1d3a5f; border-color:var(--accent); color:#cfe6ff;}
+  .rb.on{background:#1d3a5f; border-color:var(--accent); color:#cfe6ff;}
+  .phase{margin-left:auto; font-size:12.5px; color:var(--ink-dim);}
+  .phase b{color:var(--ink);}
+  .narr{border-left:3px solid var(--accent); background:rgba(88,166,255,.07);
+    padding:11px 14px; border-radius:0 7px 7px 0; font-size:13.5px; color:var(--ink-dim);
+    margin-bottom:14px; min-height:44px;}
+  .narr b{color:var(--ink);}
+  .narr .st{color:var(--accent); font-weight:700;}
+
+  .ctrl{margin-bottom:14px;}
+  .ctrl label{display:flex; justify-content:space-between; align-items:baseline; margin-bottom:4px;}
+  .ctrl .name{font-weight:600; font-size:12.5px;}
+  .ctrl .val{color:var(--accent); font-weight:700; font-size:13px;
+    font-family:ui-monospace,monospace;}
+  input[type=range]{-webkit-appearance:none; appearance:none; width:100%; height:5px;
+    border-radius:5px; background:var(--edge); outline:none; margin:6px 0;}
+  input[type=range]::-webkit-slider-thumb{-webkit-appearance:none; appearance:none;
+    width:16px; height:16px; border-radius:50%; background:var(--accent); cursor:pointer;}
+  input[type=range]::-moz-range-thumb{width:16px; height:16px; border:0; border-radius:50%;
+    background:var(--accent); cursor:pointer;}
+  input[type=range].k::-webkit-slider-thumb{background:var(--c-k);}
+  input[type=range].k::-moz-range-thumb{background:var(--c-k);}
+
+  .cards{display:flex; gap:10px; flex-wrap:wrap; margin-top:12px;}
+  .card{flex:1 1 170px; background:var(--panel2); border:1px solid var(--edge);
+    border-radius:8px; padding:11px 13px;}
+  .card .k{font-size:10.5px; text-transform:uppercase; letter-spacing:.7px;
+    color:var(--ink-faint); margin-bottom:3px;}
+  .card .v{font-size:21px; font-weight:700; font-variant-numeric:tabular-nums;
+    font-family:ui-monospace,monospace;}
+  .card .n{font-size:11.5px; color:var(--ink-faint); margin-top:2px;}
+  .card.big .v{font-size:27px; color:var(--accent);}
+  .card.ok{border-color:var(--accent2);} .card.ok .v{color:var(--accent2);}
+  .card.rope{border-color:var(--c-rope);} .card.rope .v{color:var(--c-rope);}
+
+  /* height는 JS 상수 CH[id] 와 반드시 같은 값 — DPR 되읽기 금지 */
+  canvas{width:100%; display:block; border-radius:8px; background:#10151d;
+    border:1px solid var(--edge);}
+  #cvRot{height:320px;}
+  #cvDials{height:180px;}
+  #cvDot{height:250px;}
+  #cvBands{height:280px;}
+  .legend{display:flex; gap:14px; font-size:11.5px; color:var(--ink-dim); margin-top:10px;
+    flex-wrap:wrap;}
+  .legend i{display:inline-block; width:16px; height:3px; border-radius:2px;
+    vertical-align:middle; margin-right:6px;}
+  .legend i.sq{width:11px; height:11px; border-radius:3px; vertical-align:-1px;}
+
+  .grid2{display:grid; grid-template-columns:1fr 1fr; gap:18px;}
+  @media (max-width:940px){ .grid2{grid-template-columns:1fr;} }
+  .wrap{display:grid; grid-template-columns:300px 1fr; gap:18px; align-items:start;}
+  @media (max-width:940px){ .wrap{grid-template-columns:1fr;} }
+
+  .tblwrap{overflow-x:auto;}
+  table.dt{width:100%; border-collapse:collapse; font-size:12.5px; min-width:430px;}
+  table.dt th,table.dt td{padding:6px 8px; text-align:right; border-bottom:1px solid var(--edge);
+    font-variant-numeric:tabular-nums; white-space:nowrap;
+    font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;}
+  table.dt th{color:var(--ink-faint); font-weight:600; font-size:10.5px; text-transform:uppercase;
+    letter-spacing:.5px; font-family:-apple-system,"Noto Sans KR",sans-serif;}
+  table.dt th:first-child,table.dt td:first-child{text-align:left;}
+  table.dt tr.hl td{background:rgba(63,185,80,.10); color:var(--ink); font-weight:700;}
+  table.dt tr.cur td{outline:1px solid var(--accent); outline-offset:-1px;}
+  table.dt td.g{color:var(--accent2);} table.dt td.r{color:var(--danger);}
+  table.dt td.y{color:var(--c-rope);}
+
+  .foot{color:var(--ink-faint); font-size:12px; margin-top:26px; line-height:1.8;
+    border-top:1px solid var(--edge); padding-top:16px;}
+  .foot a{color:var(--accent); text-decoration:none;}
+  .foot a:hover{text-decoration:underline;}
+</style>
+</head>
+<body>
+
+<h1>Multi-head + RoPE — <span class="h0">head를 나누는 것</span>과 <span style="color:var(--c-rope)">위치를 넣는 것</span></h1>
+<p class="sub">
+  ch-extra companion · 왼쪽 절반은 <b>head를 h개로 쪼개도 parameter와 FLOP은 그대로인데 memory만 h배가 되는 이유</b>,
+  오른쪽 절반은 <b>attention이 순서를 전혀 모른다는 사실과 RoPE가 그걸 고치는 방식</b>.
+  모든 숫자는 <code>d_model = 8</code>짜리 장난감에서 <b>실제로 계산</b>된다 — 손으로 검산할 수 있게.
+</p>
+
+<!-- ============================================================ PART A -->
+<div class="part">Part <b>A</b> · Multi-head attention — 쪼개고, 각자 보고, 붙이고, 섞는다</div>
+
+<div class="panel">
+  <h2>A0 · <span class="q">장난감 설정 — 문장 4개 token, d_model = 8, head 2개</span></h2>
+  <div class="cfg">
+    <span>N = <b>4</b> tokens</span><span>d_model = <b>8</b></span><span>h = <b>2</b></span>
+    <span>d_head = 8/2 = <b>4</b></span><span>√d_head = <b>2</b></span><span>causal mask <b>없음</b></span>
+  </div>
+  <div id="a0"></div>
+  <div class="callout no">
+    <b>이 그림에서 W<sub>Q</sub>, W<sub>K</sub>, W<sub>V</sub>는 학습된 값이 아니라 내가 손으로 고른 값이다 (illustrative).</b>
+    실제 모델에서 어떤 head가 무슨 일을 하는지는 <b>학습 결과를 측정</b>해야 알 수 있고, 대부분의 head는
+    이렇게 깔끔하게 해석되지 않는다. 여기서 손으로 심은 이유는 딱 하나 — <b>"head마다 attention pattern이
+    달라질 수 있다"</b>는 구조적 사실을 눈으로 보여주기 위해서다. pattern 자체는 지어낸 것이지만,
+    <b>그 pattern으로부터 나오는 모든 산술(softmax, P·V, concat, W<sub>O</sub>)은 전부 진짜</b>다.
+    <br><br>
+    참고: 이 장난감엔 causal mask가 없어서 head가 <b>뒤쪽 token</b>을 볼 수도 있다
+    (아래 head 1에서 "loudly → ran"이 그렇다). encoder나 bidirectional attention에서는 정상이고,
+    decoder-only LM이라면 mask가 그 절반을 <code>-inf</code>로 지운다 — <code>[[causal-mask-neg-inf]]</code>.
+  </div>
+</div>
+
+<div class="panel">
+  <h2>A1 · <span class="q">한 step씩: split → 각 head의 attention → concat → @ W<sub>O</sub></span></h2>
+  <div class="runbar">
+    <button class="rb primary" id="aStep">▶ 다음 step</button>
+    <button class="rb" id="aPlay">▶▶ 자동</button>
+    <button class="rb" id="aReset">↺ 리셋</button>
+    <span class="phase">step <b id="aPhase">0 / 11</b></span>
+  </div>
+  <div class="narr" id="aNarr"></div>
+  <div id="aStage"></div>
+</div>
+
+<div class="panel">
+  <h2>A2 · <span class="q">같은 문장, 두 head, 완전히 다른 pattern</span></h2>
+  <div id="a2"></div>
+  <div class="callout">
+    <b>head가 하나뿐이라면?</b> 한 position당 softmax 가중평균이 <b>딱 하나</b>다. 즉 "직전 token을 본다"와
+    "동사가 주어를 본다"를 <b>동시에</b> 표현할 수 없고, 억지로 하나의 분포에 섞으면 둘 다 흐려진다.
+    Vaswani §3.2.2 원문이 그 얘기다: <i>"Multi-head attention allows the model to jointly attend to information
+    from different representation subspaces at different positions. With a single attention head,
+    averaging inhibits this."</i>
+  </div>
+</div>
+
+<div class="panel">
+  <h2>A3 · <span class="q">정산 — parameter는 h에 불변, FLOP도 불변, 그런데 memory는 h에 비례</span></h2>
+  <div id="a3"></div>
+  <div class="callout info">
+    <b>왜 h가 정확히 소거되는가.</b> QK<sup>T</sup> 비용은 head 하나당 <code>2·N²·d_head</code>이고 head가 h개니까
+    <code>2·N²·h·d_head = 2·N²·d_model</code> — <b>h가 곱해졌다가 d_head에서 나눠지며 완전히 사라진다.</b>
+    parameter도 같은 논리: W<sub>Q</sub>는 head 개수와 무관하게 <code>(d_model × d_model)</code> 한 장이고,
+    "head를 나눈다"는 건 그 한 장의 <b>column을 h등분해서 본다</b>는 뜻일 뿐이다 (view + transpose, 복사 없음).
+    <br><br>
+    <b>그런데 score tensor는 <code>[B, h, N, N]</code>이다.</b> N² 판이 head마다 하나씩 생기므로
+    저장 byte는 h에 <b>정확히 선형</b>으로 늘어난다. 같은 FLOP에 memory만 두 배 —
+    element당 산술 강도가 <code>2·d_head</code> FLOPs (bf16이면 byte당 <code>d_head</code> FLOPs)라서,
+    h를 두 배로 하면 d_head가 반이 되고 강도도 반이 된다.
+    <br><br>
+    <b>이 a가 바로 ch-03의 그 a다.</b> Korthikanti 공식 <code>34·s·b·h + 5·<b>a</b>·s²·b</code>에서
+    s² 항에만 붙어 있는 head 수. reference config(s=4096, h=4096, a=32)에서
+    <code>5as/h = 5·32·4096/4096 = <b>160</b></code> — 즉 s² 항 하나가 나머지 34 sbh 전체의
+    <b>4.7배</b>다. 둘이 같아지는 지점은 <code>s = 34h/(5a) = 34·4096/(5·32) = <b>870.4</b> tokens</code>.
+    <code>[[transformer-block-tensor-ledger]]</code> · <code>[[multi-head-split-concat-wo]]</code>
+  </div>
+</div>
+
+<!-- ============================================================ PART B -->
+<div class="part">Part <b>B</b> · RoPE — attention은 순서를 모른다, 그리고 회전이 그걸 고친다</div>
+
+<div class="panel">
+  <h2>B1 · <span class="q">먼저 증명: 문장을 섞어도 출력은 "같이 섞여" 나올 뿐이다</span></h2>
+  <div class="runbar">
+    <button class="rb primary" id="pStep">▶ 다음 step</button>
+    <button class="rb" id="pPlay">▶▶ 자동</button>
+    <button class="rb" id="pReset">↺ 리셋</button>
+    <span class="phase">step <b id="pPhase">0 / 4</b></span>
+  </div>
+  <div class="ctrl" style="max-width:520px">
+    <label><span class="name">순열 π <span class="dimmed">(새 i번째 행 ← 원래 π(i)번째 행)</span></span>
+      <span class="val mono" id="pPermTxt">—</span></label>
+    <div class="runbar" id="pPerms" style="margin-bottom:0"></div>
+  </div>
+  <div class="narr" id="pNarr"></div>
+  <div id="pStage"></div>
+</div>
+
+<div class="panel">
+  <h2>B2 · <span class="q">RoPE 한 pair를 직접 돌려보기 — θ<sub>i</sub> = base<sup>−2i/d</sup></span></h2>
+  <div class="wrap">
+    <div>
+      <div class="runbar">
+        <button class="rb primary" id="rStep">▶ 다음 step</button>
+        <button class="rb" id="rPlay">▶▶ 자동</button>
+        <button class="rb" id="rReset">↺ 리셋</button>
+      </div>
+      <div class="ctrl">
+        <label><span class="name">position m</span><span class="val mono" id="vRm">0</span></label>
+        <input type="range" id="rm" min="0" max="32" step="1" value="0">
+      </div>
+      <div class="ctrl">
+        <label><span class="name">pair index i <span class="dimmed">(d = 8이므로 0..3)</span></span>
+          <span class="val mono" id="vRi">0</span></label>
+        <input type="range" id="ri" min="0" max="3" step="1" value="0">
+      </div>
+      <div class="cards" style="flex-direction:column">
+        <div class="card rope"><div class="k">θ<sub>i</sub> = 10000<sup>−2i/8</sup></div>
+          <div class="v" id="rTheta">—</div><div class="n" id="rThetaN">—</div></div>
+        <div class="card"><div class="k">회전각 m·θ<sub>i</sub></div>
+          <div class="v" id="rAng">—</div><div class="n" id="rAngN">—</div></div>
+        <div class="card ok"><div class="k">‖q‖ 보존 확인</div>
+          <div class="v" id="rNorm">—</div><div class="n">회전은 orthogonal — 길이를 절대 안 바꾼다</div></div>
+      </div>
+    </div>
+    <div>
+      <canvas id="cvRot"></canvas>
+      <div class="legend">
+        <span><i style="background:#6b7686"></i>원래 pair (q<sub>2i</sub>, q<sub>2i+1</sub>)</span>
+        <span><i style="background:#bc8cff"></i>R<sub>m</sub>q — m·θ<sub>i</sub> 만큼 회전</span>
+        <span><i style="background:#ffd93d"></i>회전각</span>
+      </div>
+      <div class="narr" id="rNarr" style="margin-top:12px;margin-bottom:0"></div>
+      <div class="arith" id="rArith"></div>
+    </div>
+  </div>
+  <h2 style="margin-top:20px">같은 position m에서 4개 pair가 각자 얼마나 돌았나</h2>
+  <canvas id="cvDials"></canvas>
+  <div class="callout">
+    <b>이게 frequency band다.</b> pair 0은 θ=1.0 rad이라 position 한 칸에 <b>1 rad</b>씩 돈다 —
+    6.28칸이면 한 바퀴, 즉 <b>아주 국소적인 거리</b>만 구분한다. pair 3은 θ=0.001이라 32칸을 가도
+    0.032 rad(1.8°) 밖에 못 돈다 — 대신 <b>수천 칸 떨어진 차이</b>를 구분한다.
+    d/2개의 pair는 서로 다른 시계 속도를 가진 <b>시계 뱅크</b>이고, 그 사다리는 2017년 sinusoidal PE의
+    ω<sub>i</sub>와 <b>완전히 같은 값</b>이다 — RoPE의 발명은 사다리가 아니라 <b>그걸 어디에 적용하느냐</b>였다.
+    <code>[[sinusoidal-absolute-encoding]]</code>
+  </div>
+</div>
+
+<div class="panel">
+  <h2>B3 · <span class="q">핵심 데모 — ⟨R<sub>m</sub>q, R<sub>n</sub>k⟩ 는 m − n 에만 의존한다</span></h2>
+  <div class="wrap">
+    <div>
+      <div class="ctrl">
+        <label><span class="name" style="color:var(--c-q)">query 위치 m</span>
+          <span class="val mono" id="vKm">17</span></label>
+        <input type="range" id="km" min="0" max="64" step="1" value="17">
+      </div>
+      <div class="ctrl">
+        <label><span class="name" style="color:var(--c-k)">key 위치 n</span>
+          <span class="val mono" id="vKn">5</span></label>
+        <input type="range" id="kn" class="k" min="0" max="64" step="1" value="5">
+      </div>
+      <div class="runbar">
+        <button class="rb" id="kLock">🔒 Δ 고정</button>
+        <button class="rb primary" id="kStep">▶ 다음 step</button>
+        <button class="rb" id="kPlay">▶▶ 자동</button>
+        <button class="rb" id="kReset">↺ 리셋</button>
+      </div>
+      <div class="cards" style="flex-direction:column">
+        <div class="card"><div class="k">상대거리 Δ = m − n</div>
+          <div class="v" id="kDelta">—</div><div class="n">이 값만 바뀌면 아래 내적이 바뀐다</div></div>
+        <div class="card big"><div class="k">⟨R<sub>m</sub>q, R<sub>n</sub>k⟩</div>
+          <div class="v" id="kDot">—</div><div class="n" id="kDotN">—</div></div>
+        <div class="card"><div class="k">회전 없는 원래 내적 q·k</div>
+          <div class="v" id="kRaw">—</div><div class="n">Δ = 0 일 때의 값과 정확히 같다</div></div>
+      </div>
+    </div>
+    <div>
+      <div class="narr" id="kNarr"></div>
+      <canvas id="cvDot"></canvas>
+      <div class="legend">
+        <span><i style="background:#ffd93d"></i>Δ 에 대한 내적 곡선 (m, n 각각과는 무관)</span>
+        <span><i class="sq" style="background:#58a6ff"></i>현재 (m, n)</span>
+        <span><i style="background:#3fb950"></i>Δ = 0 → 회전 없는 q·k</span>
+      </div>
+    </div>
+  </div>
+
+  <h2 style="margin-top:20px">pair별 분해 — 왜 절대 위치가 사라지는가</h2>
+  <div class="tblwrap"><table class="dt" id="kPairs"></table></div>
+  <div class="arith" id="kArith"></div>
+
+  <h2 style="margin-top:20px">같은 Δ, 다른 (m, n) — 내적이 전부 같은지 직접 확인</h2>
+  <div class="tblwrap"><table class="dt" id="kProof"></table></div>
+  <div class="callout ok">
+    <b>왜 이렇게 되는가 — 두 줄 유도.</b> 회전 행렬은 orthogonal이라 <code>R<sub>m</sub><sup>T</sup> = R<sub>−m</sub></code>이고,
+    각도는 더해지므로 <code>R<sub>−m</sub>R<sub>n</sub> = R<sub>n−m</sub></code>이다. 따라서
+    <br><code>(R<sub>m</sub>q)<sup>T</sup>(R<sub>n</sub>k) = q<sup>T</sup>R<sub>m</sub><sup>T</sup>R<sub>n</sub>k = q<sup>T</sup>R<sub>n−m</sub>k</code>
+    <br>— m과 n이 각각 사라지고 <b>n − m 만 남는다</b>. 위 표의 pair별 닫힌 형태
+    <code>(q<sub>2i</sub>k<sub>2i</sub> + q<sub>2i+1</sub>k<sub>2i+1</sub>)·cos(Δθ<sub>i</sub>)
+    + (q<sub>2i</sub>k<sub>2i+1</sub> − q<sub>2i+1</sub>k<sub>2i</sub>)·sin(Δθ<sub>i</sub>)</code>가
+    같은 얘기를 성분으로 쓴 것 — <b>cos에는 pair의 내적, sin에는 pair의 외적(2D 행렬식)</b>이 붙는다.
+    <br><br>
+    <b>유일성.</b> ① 내적이 m−n에만 의존할 것 ② f(x, 0) = x ③ 크기 보존 —
+    이 세 조건을 동시에 만족하는 f는 <code>f(q, m) = q·e<sup>imθ</sup></code> <b>하나뿐</b>이다.
+    극형식 f = R·e<sup>iΘ</sup>로 두면 ②가 R을 |q|로 고정하고(위치는 <b>돌릴 수만 있고 늘릴 수는 없다</b>),
+    ①이 위상을 <code>Θ(q) + mθ</code>라는 <b>선형</b> 형태로 강제한다.
+    <code>[[rope-rotary-position-embedding]]</code>
+  </div>
+  <div class="callout info">
+    <b>memory 관점에서 왜 RoPE가 공짜인가.</b> 회전은 attention kernel <b>바깥</b>에서 Q와 K에 적용된다.
+    FlashAttention/SDPA 입장에서는 그냥 평범한 (Q, K, V) 삼총사가 들어올 뿐이라 O(T) activation 계약이
+    그대로 유지된다. 반면 ALiBi·T5 RPE처럼 <b>logit에 더하는</b> 방식은
+    <code>[B, H, T, T]</code> bias tensor를 실체화해야 한다 — B=1, H=32, T=8192, bf16이면
+    <b>4.000 GiB / layer</b>, A100-40GB의 10%다. RoPE가 쓰는 건 cos/sin 캐시
+    <code>[L, d_head/2]</code> 두 장뿐 (fp32, L=8192, d_head=128 → <b>4.00 MiB</b>, 전 layer 공유,
+    trainable parameter 0, gradient 0, optimizer state 0).
+  </div>
+</div>
+
+<div class="panel">
+  <h2>B4 · <span class="q">frequency band — 빠른 pair는 국소, 느린 pair는 전역</span></h2>
+  <div class="cfg">
+    <span>d_head = <b>128</b></span><span>base = <b>10000</b> (Llama 1/2, Mistral, Qwen2)</span>
+    <span>비교 base = <b>500000</b> (Llama 3)</span><span>학습 길이 L = <b>8192</b></span>
+  </div>
+  <canvas id="cvBands"></canvas>
+  <div class="legend">
+    <span><i style="background:#ffd93d"></i>θ<sub>i</sub> = 10000<sup>−2i/128</sup></span>
+    <span><i style="background:#58a6ff"></i>θ<sub>i</sub> = 500000<sup>−2i/128</sup> (Llama 3)</span>
+    <span><i style="background:#3fb950"></i>r<sub>i</sub> = 32 경계 (YaRN β) — i ≈ 25.76</span>
+    <span><i style="background:#f85149"></i>r<sub>i</sub> = 1 경계 (YaRN α) — i ≈ 49.84</span>
+  </div>
+  <div class="tblwrap" style="margin-top:14px"><table class="dt" id="bandTbl"></table></div>
+  <div class="callout">
+    <b>가장 느린 pair의 파장은 54,410.1 position이다 — 62,832이 아니다.</b>
+    2π×10000 = 62,831.85는 지수가 정확히 1.0일 때의 값인데, 실제로 도달하는 최대 지수는
+    (d−2)/d = 126/128 = 0.9844 뿐이다. 흔한 오기라서 못 박아 둔다.
+  </div>
+</div>
+
+<div class="panel">
+  <h2>B5 · <span class="q">그래서 long context에서 무슨 일이 벌어지나</span></h2>
+  <div class="callout no">
+    <b>학습에서 본 적 없는 각도로 extrapolate 된다.</b> 위 표의 마지막 열 r<sub>i</sub> = L·θ<sub>i</sub>/2π 는
+    "학습 길이 동안 그 pair가 몇 바퀴 돌았나"다. d_head=128, L=8192에서 <b>i ≥ 50인 pair는 r &lt; 1</b> —
+    <b>한 바퀴도 못 돌았다</b>. 즉 그 pair가 학습 중 실제로 경험한 각도는 [0, 2π)의 일부 구간뿐인데,
+    context를 32k로 늘리면 곧바로 <b>본 적 없는 각도 영역</b>으로 들어간다. attention score가 그대로 무너지는 이유다.
+    <br><br>
+    <b>그래서 보간(interpolation)을 한다.</b> <b>YaRN</b>은 대역별로 다르게 취급한다 —
+    d_head=128, L=8192, α=1, β=32 기준 경계가 <code>i ≈ 25.76</code>과 <code>i ≈ 49.84</code>이라
+    <b>pair 0–25는 손대지 않고</b>(국소 관계는 이미 잘 배웠으니 건드리면 손해),
+    <b>26–49는 램프</b> <code>θ'<sub>i</sub> = θ<sub>i</sub>(1−γ<sub>i</sub>) + (θ<sub>i</sub>/s)γ<sub>i</sub></code>,
+    <b>50–63은 완전히 θ<sub>i</sub>/s로 축소</b>한다.
+    <b>NTK-aware</b>는 더 거칠게 base 자체를 올린다: <code>base' = base·s<sup>d/(d−2)</sup></code>,
+    d=128에서 지수 1.01587 → s=4면 40,890 · s=8이면 82,685 · s=16이면 167,199 · s=32면 338,097.
+    Llama 3이 base=500000을 쓰는 것도 같은 계열의 조치이고(가장 느린 파장이 54,410 → 2,559,196 position으로 늘어난다),
+    그래서 "base를 올리는 것"은 <b>거친 형태의 interpolation</b>이라고 부른다.
+    <code>[[rope-rotary-position-embedding]]</code> · <code>[[attention-permutation-equivariance]]</code>
+  </div>
+</div>
+
+<p class="foot">
+  ← 돌아가기: <a href="../read.md">ch-extra read.md</a> ·
+  질문 기록: <a href="../qa.md">qa.md</a><br>
+  같은 chapter의 다른 figure: <a href="./attention-step-by-step.html">attention-step-by-step.html</a> ·
+  <a href="./transformer-block-dataflow.html">transformer-block-dataflow.html</a> ·
+  <a href="./kv-cache.html">kv-cache.html</a><br>
+  인용 excerpt: <code>[[multi-head-split-concat-wo]]</code> · <code>[[qkv-scaled-dot-product]]</code> ·
+  <code>[[sqrt-dk-scaling-variance]]</code> · <code>[[causal-mask-neg-inf]]</code> ·
+  <code>[[attention-permutation-equivariance]]</code> · <code>[[sinusoidal-absolute-encoding]]</code> ·
+  <code>[[rope-rotary-position-embedding]]</code> · <code>[[transformer-block-tensor-ledger]]</code><br>
+  출처: Vaswani et al. 2017 §3.2.1–§3.2.3 (Attention Is All You Need) ·
+  Su et al. 2021 (RoFormer / RoPE, arXiv:2104.09864) ·
+  Peng et al. 2023 (YaRN, arXiv:2309.00071) ·
+  Korthikanti et al. 2022 (Sequence Parallelism &amp; Selective Recompute, arXiv:2205.05198)
+</p>
+
+<script>
+"use strict";
+/* ================== MATH CORE BEGIN (DOM-free, node로 단독 실행 가능) ================== */
+
+/* ---------- Part A: 4-token 장난감 ---------- */
+const TOK   = ["The", "cat", "loudly", "ran"];
+const CLS   = ["DET", "NOUN", "ADV", "VERB"];
+const CLSKO = ["관사 · function word", "명사 · 주어", "부사 · 수식어", "동사"];
+const N_TOK = 4, D_MODEL = 8, H_HEADS = 2, D_HEAD = 4, SQRT_DH = 2;
+
+/* X = [ position one-hot (dim 0..3) | content one-hot (dim 4..7) ]
+   content dim 의미: 4 = noun-ness, 5 = verb-ness, 6 = function word, 7 = modifier */
+const X = [
+  [1,0,0,0,  0,0,1,0],   // The     pos0, func
+  [0,1,0,0,  1,0,0,0],   // cat     pos1, noun
+  [0,0,1,0,  0,0,0,1],   // loudly  pos2, modifier
+  [0,0,0,1,  0,1,0,0]    // ran     pos3, verb
+];
+
+/* W_Q: 왼쪽 4 column = head 0 (position 기반), 오른쪽 4 column = head 1 (content 기반).
+   head 0 → "직전 token" : position p 의 query 는 position p−1 의 key 를 찾는다.
+   head 1 → 통사 의존   : func→noun, noun→func, modifier→verb, verb→noun. */
+const WQ = [
+  [3,0,0,0,  0,0,0,0],
+  [3,0,0,0,  0,0,0,0],
+  [0,3,0,0,  0,0,0,0],
+  [0,0,3,0,  0,0,0,0],
+  [0,0,0,0,  0,0,2,0],
+  [0,0,0,0,  3,0,0,0],
+  [0,0,0,0,  2,0,0,0],
+  [0,0,0,0,  0,2,0,0]
+];
+const WK = [
+  [2,0,0,0,  0,0,0,0],
+  [0,2,0,0,  0,0,0,0],
+  [0,0,2,0,  0,0,0,0],
+  [0,0,0,2,  0,0,0,0],
+  [0,0,0,0,  3,0,0,0],
+  [0,0,0,0,  0,3,0,0],
+  [0,0,0,0,  0,0,3,0],
+  [0,0,0,0,  0,0,0,3]
+];
+/* W_V: 두 head 모두 content dim 에서만 값을 읽는다.
+   head 0 의 value = 그 token 의 content code ×2 (직전 token 의 내용을 그대로 복사),
+   head 1 의 value = 겹치는 코드 (섞임이 눈에 보이도록). */
+const WV = [
+  [0,0,0,0,  0,0,0,0],
+  [0,0,0,0,  0,0,0,0],
+  [0,0,0,0,  0,0,0,0],
+  [0,0,0,0,  0,0,0,0],
+  [2,0,0,0,  2,1,0,0],
+  [0,2,0,0,  1,2,0,0],
+  [0,0,2,0,  0,0,2,1],
+  [0,0,0,2,  0,0,1,2]
+];
+/* W_O: 출력 dim c(0..3) = head0[c] + head1[c],  dim c+4 = head0[c] − head1[c].
+   head 끼리 정보가 섞이는 곳은 오직 여기 한 군데다. */
+const WO = [
+  [1,0,0,0,  1,0,0,0],
+  [0,1,0,0,  0,1,0,0],
+  [0,0,1,0,  0,0,1,0],
+  [0,0,0,1,  0,0,0,1],
+  [1,0,0,0, -1,0,0,0],
+  [0,1,0,0,  0,-1,0,0],
+  [0,0,1,0,  0,0,-1,0],
+  [0,0,0,1,  0,0,0,-1]
+];
+
+function mm(A, B){
+  const n = A.length, m = B.length, p = B[0].length, C = [];
+  for (let i = 0; i < n; i++){
+    const row = new Array(p).fill(0);
+    for (let k = 0; k < m; k++){
+      const a = A[i][k];
+      if (a === 0) continue;
+      for (let j = 0; j < p; j++) row[j] += a * B[k][j];
+    }
+    C.push(row);
+  }
+  return C;
+}
+function tp(A){
+  const out = [];
+  for (let j = 0; j < A[0].length; j++) out.push(A.map(r => r[j]));
+  return out;
+}
+function cols(A, c0, c1){ return A.map(r => r.slice(c0, c1)); }
+function softmaxRow(r){
+  const mx = Math.max.apply(null, r);
+  const e = r.map(v => Math.exp(v - mx));
+  const s = e.reduce((a, b) => a + b, 0);
+  return e.map(v => v / s);
+}
+function softmaxRows(M){ return M.map(softmaxRow); }
+
+function runBlock(Xin){
+  const Q = mm(Xin, WQ), K = mm(Xin, WK), V = mm(Xin, WV);
+  const heads = [];
+  for (let hh = 0; hh < H_HEADS; hh++){
+    const c0 = hh * D_HEAD;
+    const Qh = cols(Q, c0, c0 + D_HEAD),
+          Kh = cols(K, c0, c0 + D_HEAD),
+          Vh = cols(V, c0, c0 + D_HEAD);
+    const S  = mm(Qh, tp(Kh));
+    const Ss = S.map(r => r.map(v => v / SQRT_DH));
+    const P  = softmaxRows(Ss);
+    const O  = mm(P, Vh);
+    heads.push({Qh, Kh, Vh, S, Ss, P, O});
+  }
+  const cat = [];
+  for (let i = 0; i < Xin.length; i++) cat.push(heads[0].O[i].concat(heads[1].O[i]));
+  const out = mm(cat, WO);
+  return {Q, K, V, heads, cat, out};
+}
+
+/* h 를 바꿔도 parameter / FLOP 이 변하지 않음을 보이는 표 */
+function invariance(){
+  const rows = [];
+  [1, 2, 4, 8].forEach(h => {
+    const dh = D_MODEL / h;
+    rows.push({
+      h, dh,
+      params : 4 * D_MODEL * D_MODEL,
+      flops  : 2 * N_TOK * N_TOK * h * dh,
+      elems  : h * N_TOK * N_TOK,
+      inten  : 2 * dh
+    });
+  });
+  return rows;
+}
+
+/* ---------- permutation ---------- */
+const PERMS = [[0,1,2,3], [2,0,3,1], [3,2,1,0], [1,3,0,2]];
+function permRows(M, p){ return p.map(ix => M[ix].slice()); }
+function permBoth(M, p){ return p.map(i => p.map(j => M[i][j])); }   // P M P^T
+function maxAbsDiff(A, B){
+  let m = 0;
+  for (let i = 0; i < A.length; i++)
+    for (let j = 0; j < A[0].length; j++) m = Math.max(m, Math.abs(A[i][j] - B[i][j]));
+  return m;
+}
+
+/* ---------- Part B: RoPE ---------- */
+const RD = 8, RBASE = 10000;                       // 장난감 head dim = 8 → pair 4개
+const RQ = [1, 0,  2, 1,  0, 1.5,  1, -1];         // query  (pair 로 끊어 읽는다)
+const RK = [0, 1,  1, 2,  1, 0,    2,  1];         // key
+
+function theta(i, d, base){ return Math.pow(base, -2 * i / d); }
+function rotPair(x, y, a){
+  const c = Math.cos(a), s = Math.sin(a);
+  return [x * c - y * s, x * s + y * c];
+}
+function ropeVec(v, m, d, base){
+  const o = [];
+  for (let i = 0; i < d / 2; i++){
+    const r = rotPair(v[2*i], v[2*i+1], m * theta(i, d, base));
+    o.push(r[0], r[1]);
+  }
+  return o;
+}
+function dotv(a, b){ let s = 0; for (let i = 0; i < a.length; i++) s += a[i] * b[i]; return s; }
+function norm2(a){ return Math.sqrt(dotv(a, a)); }
+
+/* pair 별 닫힌 형태:
+   <R_m q_i, R_n k_i> = (q0k0+q1k1)·cos(Δθ_i) + (q0k1 − q1k0)·sin(Δθ_i),  Δ = m − n
+   cos 에는 pair 의 내적, sin 에는 pair 의 외적(2D 행렬식)이 붙는다. */
+function pairTerms(q, k, m, n, d, base){
+  const out = [], D = m - n;
+  for (let i = 0; i < d / 2; i++){
+    const th = theta(i, d, base);
+    const q0 = q[2*i], q1 = q[2*i+1], k0 = k[2*i], k1 = k[2*i+1];
+    const dp = q0*k0 + q1*k1, cr = q0*k1 - q1*k0;
+    const ang = D * th, c = Math.cos(ang), s = Math.sin(ang);
+    out.push({i, th, q0, q1, k0, k1, dp, cr, D, ang, c, s, contrib: dp*c + cr*s});
+  }
+  return out;
+}
+function ropeDot(q, k, m, n, d, base){
+  return dotv(ropeVec(q, m, d, base), ropeVec(k, n, d, base));
+}
+
+/* 실제 d_head = 128 의 band 표 (L = 학습 길이) */
+const BAND_D = 128, BAND_L = 8192;
+function bandRow(i, base){
+  const th  = theta(i, BAND_D, base);
+  const lam = 2 * Math.PI / th;
+  return {i, th, lam, rot: BAND_L / lam};
+}
+/* r_i = L·θ_i/2π = target 이 되는 실수 pair index (YaRN 경계) */
+function bandBoundary(target, base){
+  const th = 2 * Math.PI * target / BAND_L;
+  return -Math.log(th) / Math.log(base) * BAND_D / 2;
+}
+/* ================== MATH CORE END ================== */
+
+
+/* ================== 표시 유틸 ================== */
+const $ = id => document.getElementById(id);
+function ni(v){
+  if (Object.is(v, -0)) v = 0;
+  return Number.isInteger(v) ? String(v) : String(v);
+}
+function nd(v, k){
+  if (Math.abs(v) < 5e-13) v = 0;
+  return v.toFixed(k === undefined ? 6 : k);
+}
+function sci(v, k){ return v.toExponential(k === undefined ? 4 : k); }
+
+/* 행렬 표 만들기.
+   opt: {rows, colsLab, fmt, cell(i,j,v)->extra class, group(j)->'g0'|'g1'|'' , title} */
+function mx(M, opt){
+  opt = opt || {};
+  const fmt = opt.fmt || (v => ni(v));
+  let h = "";
+  if (opt.title) h += `<div class="mxtitle">${opt.title}</div>`;
+  h += `<table class="mx">`;
+  if (opt.colsLab){
+    h += "<tr><th></th>";
+    opt.colsLab.forEach((c, j) => {
+      const g = opt.group ? opt.group(j) : "";
+      h += `<th class="${g}">${c}</th>`;
+    });
+    h += "</tr>";
+  }
+  M.forEach((row, i) => {
+    h += "<tr>";
+    if (opt.rows) h += `<th class="rl">${opt.rows[i]}</th>`;
+    row.forEach((v, j) => {
+      const g = opt.group ? opt.group(j) : "";
+      const ex = opt.cell ? (opt.cell(i, j, v) || "") : "";
+      const z  = (v === 0 && !ex) ? "z" : "";
+      h += `<td class="${g} ${z} ${ex}">${fmt(v, i, j)}</td>`;
+    });
+    h += "</tr>";
+  });
+  h += "</table>";
+  return `<div class="mxblock">${h}</div>`;
+}
+/* softmax 확률 행렬을 heatmap 으로 */
+function heat(P, opt){
+  opt = opt || {};
+  const rgb = opt.rgb || "88,166,255";
+  return mx(P, {
+    rows: opt.rows, colsLab: opt.colsLab, title: opt.title,
+    fmt: v => nd(v, 4),
+    cell: (i, j, v) => {
+      return "";
+    }
+  }).replace(/<td class="([^"]*)">([\d.]+)<\/td>/g, (mtc, cls, val) => {
+    const a = Math.min(1, parseFloat(val));
+    const light = a > 0.45;
+    return `<td class="${cls} ${light ? "hm" : ""}" style="background:rgba(${rgb},${(0.10 + 0.85*a).toFixed(3)})">${val}</td>`;
+  });
+}
+/* 음수는 괄호로 감싸 손검산 때 부호가 헷갈리지 않게 한다 */
+function par(v, f){ const s = f(v); return v < 0 ? `(${s})` : s; }
+/* 내적을 항까지 펼쳐 쓰기 */
+function dotStr(a, b, fa, fb){
+  fa = fa || ni; fb = fb || ni;
+  const parts = a.map((v, i) => {
+    const z = (v === 0 || b[i] === 0) ? ' class="zt"' : "";
+    return `<span${z}>${par(v, fa)}·${par(b[i], fb)}</span>`;
+  });
+  return parts.join(" + ");
+}
+
+const BLK = runBlock(X);
+const POSLAB = ["d0", "d1", "d2", "d3", "d4", "d5", "d6", "d7"];
+const HEADLAB = ["h0", "h1", "h2", "h3"];
+const TOKLAB = TOK.map((t, i) => `${i}:${t}`);
+const grp8 = j => (j < 4 ? "g0" : "g1");
+
+
+/* ================== A0 : 설정 ================== */
+(function renderA0(){
+  const rows = TOK.map((t, i) => `${i}:${t}`);
+  let h = `<div class="mxwrap">`;
+  h += mx(X, {
+    rows, colsLab: POSLAB, group: grp8,
+    title: `입력 <b>X</b> &nbsp;[N=4 × d_model=8] &nbsp;· 왼쪽 4칸 = position one-hot, 오른쪽 4칸 = content code`
+  });
+  h += `<div class="mxblock" style="max-width:340px;white-space:normal">
+     <div class="mxtitle">token 별 의미</div>
+     <table class="mx"><tr><th class="rl">token</th><th class="rl">품사</th><th class="rl">content dim</th></tr>
+     ${TOK.map((t, i) => `<tr><th class="rl">${i}: ${t}</th><td style="text-align:left">${CLSKO[i]}</td>
+        <td>d${4 + [2,0,3,1][i]}</td></tr>`).join("")}
+     </table>
+     <div class="mxtitle" style="margin-top:8px;color:var(--ink-faint)">
+       content dim 뜻: d4=noun-ness · d5=verb-ness · d6=function word · d7=modifier
+     </div>
+   </div>`;
+  h += `</div>`;
+  $("a0").innerHTML = h;
+})();
+
+
+/* ================== A1 : step 애니메이션 ================== */
+const A_STEPS = [
+  {
+    t: "입력 X",
+    n: `문장 <b>"The cat loudly ran"</b> 4개 token, 각각 8차원. 여기서 <b>d0–d3은 position one-hot</b>,
+        <b>d4–d7은 content code</b>다. 위치 정보를 내가 <b>손으로 X 안에 넣어줬다</b>는 사실을 기억해라 —
+        Part B에서 이걸 빼면 attention이 순서를 완전히 잃는다는 걸 증명한다.`,
+    r: () => `<div class="mxwrap">` + mx(X, {rows: TOKLAB, colsLab: POSLAB, group: grp8,
+        title: `<b>X</b> [4 × 8]`}) + `</div>`
+  },
+  {
+    t: "Q = X W_Q",
+    n: `<b>W<sub>Q</sub>는 (8 × 8) 한 장이다.</b> head가 2개라고 해서 행렬이 2장이 되지 않는다 —
+        왼쪽 4 column이 <span class="h0">head 0</span> 몫, 오른쪽 4 column이 <span class="h1c">head 1</span> 몫으로
+        <b>이미 한 장에 융합</b>되어 있다. 실제 구현에서 <code>nn.Linear(d_model, d_model)</code> 하나를 쓰는 이유다
+        (matmul 한 번이 3번보다 훨씬 빠르다).`,
+    r: () => {
+      const j = 4, i = 3;
+      return `<div class="mxwrap">` +
+        mx(WQ, {rows: POSLAB, colsLab: POSLAB, group: grp8,
+          title: `<b>W<sub>Q</sub></b> [8 × 8] — column 0–3은 <span class="h0">head 0</span>, 4–7은 <span class="h1c">head 1</span>`,
+          cell: (r, c) => (c === j ? "hi" : "")}) +
+        mx(BLK.Q, {rows: TOKLAB, colsLab: POSLAB, group: grp8, title: `<b>Q</b> = X W<sub>Q</sub> &nbsp;[4 × 8]`,
+          cell: (r, c) => (r === i && c === j ? "hi" : "")}) +
+        `</div>
+        <div class="arith"><span class="lbl">Q[${i}][${j}] = X[${i}] · W<sub>Q</sub>[:,${j}] =</span>
+          ${dotStr(X[i], tp(WQ)[j])} = <span class="res">${ni(BLK.Q[i][j])}</span></div>`;
+    }
+  },
+  {
+    t: "K = X W_K,  V = X W_V",
+    n: `같은 방식으로 K와 V도 뽑는다. <b>d_k는 Q와 K가 반드시 같아야</b> 하고(내적을 하니까),
+        <b>d_v는 자유</b>다 — W<sub>O</sub>의 입력 폭과만 맞으면 된다. 여기선 관례대로 셋 다 4로 맞췄다.
+        역할을 한 줄로: <b>W<sub>Q</sub> = 내가 뭘 찾는가</b>, <b>W<sub>K</sub> = 내가 뭘 광고하는가</b>,
+        <b>W<sub>V</sub> = 내가 뭘 전달하는가</b>.`,
+    r: () => `<div class="mxwrap">` +
+      mx(BLK.K, {rows: TOKLAB, colsLab: POSLAB, group: grp8, title: `<b>K</b> = X W<sub>K</sub>`}) +
+      mx(BLK.V, {rows: TOKLAB, colsLab: POSLAB, group: grp8, title: `<b>V</b> = X W<sub>V</sub>`}) +
+      `</div>
+      <div class="arith"><span class="lbl">shape:</span> Q, K, V ∈ ℝ<sup>4×8</sup> &nbsp;
+        <span class="lbl">— 아직 head는 등장하지도 않았다. 여기까지는 head가 1개든 8개든 완전히 동일한 연산이다.</span></div>`
+  },
+  {
+    t: "split — view + transpose (복사 아님)",
+    n: `<b>여기가 "head를 나눈다"의 전부다.</b> Q를 <code>.view(N, h, d_head).transpose(1,2)</code> 하면
+        <code>[N, 8]</code>이 <code>[h=2, N, d_head=4]</code>가 된다. <b>새 tensor를 만들지 않는다</b> —
+        같은 메모리를 다른 stride로 볼 뿐이다. 그래서 parameter도 FLOP도 하나도 늘지 않는다.`,
+    r: () => `<div class="mxwrap">` +
+      mx(BLK.heads[0].Qh, {rows: TOKLAB, colsLab: HEADLAB, title: `<b class="h0">Q<sup>(0)</sup></b> = Q[:, 0:4]`,
+        cell: () => "g0"}) +
+      mx(BLK.heads[0].Kh, {rows: TOKLAB, colsLab: HEADLAB, title: `<b class="h0">K<sup>(0)</sup></b>`, cell: () => "g0"}) +
+      mx(BLK.heads[0].Vh, {rows: TOKLAB, colsLab: HEADLAB, title: `<b class="h0">V<sup>(0)</sup></b>`, cell: () => "g0"}) +
+      `</div><div class="mxwrap">` +
+      mx(BLK.heads[1].Qh, {rows: TOKLAB, colsLab: HEADLAB, title: `<b class="h1c">Q<sup>(1)</sup></b> = Q[:, 4:8]`,
+        cell: () => "g1"}) +
+      mx(BLK.heads[1].Kh, {rows: TOKLAB, colsLab: HEADLAB, title: `<b class="h1c">K<sup>(1)</sup></b>`, cell: () => "g1"}) +
+      mx(BLK.heads[1].Vh, {rows: TOKLAB, colsLab: HEADLAB, title: `<b class="h1c">V<sup>(1)</sup></b>`, cell: () => "g1"}) +
+      `</div>`
+  },
+  {
+    t: "head 0 — S = Q(0) K(0)ᵀ",
+    n: `<span class="h0">head 0</span>의 raw score. 행 i = query token, 열 j = key token.
+        <b>모든 원소가 6 아니면 0</b>인 건 내가 W를 그렇게 골랐기 때문이고, 진짜 모델에선 물론 아무 실수나 나온다.
+        중요한 건 <b>이 판이 N × N</b>이라는 것 — token 수의 제곱이다.`,
+    r: () => {
+      const i = 2, j = 1;
+      return `<div class="mxwrap">` +
+        mx(BLK.heads[0].S, {rows: TOKLAB, colsLab: TOKLAB,
+          title: `<b class="h0">S<sup>(0)</sup></b> = Q<sup>(0)</sup>K<sup>(0)T</sup> &nbsp;[4 × 4] &nbsp;<span class="dimmed">raw</span>`,
+          cell: (r, c) => (r === i && c === j ? "hi" : "g0")}) + `</div>
+        <div class="arith"><span class="lbl">S[${i}][${j}] = q<sub>${i}</sub> · k<sub>${j}</sub> =</span>
+          ${dotStr(BLK.heads[0].Qh[i], BLK.heads[0].Kh[j])} = <span class="res">${ni(BLK.heads[0].S[i][j])}</span>
+          <span class="lbl">&nbsp; ("loudly"의 query가 "cat"의 key와 만난 값)</span></div>`;
+    }
+  },
+  {
+    t: "head 0 — /√d_head 하고 softmax",
+    n: `<b>√d_head = √4 = 2로 나눈다.</b> 왜? 성분이 독립·평균0·분산1이면 d_k차원 내적의 분산이 정확히
+        <b>d_k</b>가 되어 점수가 √d_k에 비례해 커지고, 그러면 softmax가 포화돼 Jacobian
+        <code>p<sub>i</sub>(δ<sub>ij</sub> − p<sub>j</sub>)</code>가 0으로 붕괴한다 —
+        <b>W<sub>Q</sub>, W<sub>K</sub>로 gradient가 흐르는 유일한 통로가 그 Jacobian</b>이라
+        포화된 head는 "어디를 볼지"를 영영 못 배운다. 그래서 나누면 분산이 d_k/d_k = 1로 고정된다.
+        <code>[[sqrt-dk-scaling-variance]]</code><br>
+        softmax 뒤 <b>각 행의 합은 정확히 1.0</b> — 출력이 value들의 convex combination이 되는 근거다.`,
+    r: () => `<div class="mxwrap">` +
+      mx(BLK.heads[0].Ss, {rows: TOKLAB, colsLab: TOKLAB, fmt: v => nd(v, 1),
+        title: `<b class="h0">S<sup>(0)</sup>/2</b> &nbsp;<span class="dimmed">scaled</span>`, cell: () => "g0"}) +
+      heat(BLK.heads[0].P, {rows: TOKLAB, colsLab: TOKLAB, rgb: "88,166,255",
+        title: `<b class="h0">P<sup>(0)</sup></b> = softmax(row)`}) +
+      `</div>
+      <div class="arith">
+        <span class="lbl">행 0:</span> exp([3, 0, 0, 0]) = [${nd(Math.exp(3), 6)}, 1, 1, 1],
+        합 = <span class="res">${nd(Math.exp(3) + 3, 6)}</span> →
+        [${nd(BLK.heads[0].P[0][0], 6)}, ${nd(BLK.heads[0].P[0][1], 6)}, ${nd(BLK.heads[0].P[0][2], 6)}, ${nd(BLK.heads[0].P[0][3], 6)}]
+        <span class="lbl">&nbsp;행 합 =</span> <span class="res">${nd(BLK.heads[0].P[0].reduce((a, b) => a + b, 0), 6)}</span>
+      </div>`
+  },
+  {
+    t: "head 1 — 같은 연산, 다른 W",
+    n: `<span class="h1c">head 1</span>은 <b>정확히 같은 수식</b>을 <b>다른 4개 column</b>에 적용할 뿐이다.
+        그런데 W가 다르므로 완전히 다른 pattern이 나온다. 행 3("ran")의 점수만 4.5로 더 큰데,
+        점수를 1.5 올린 결과가 확률로는 <b>0.870 → 0.968</b>이다 — softmax는 지수라서
+        <b>점수 차이가 조금만 벌어져도 확률이 급격히 한쪽으로 몰린다</b>.`,
+    r: () => `<div class="mxwrap">` +
+      mx(BLK.heads[1].S, {rows: TOKLAB, colsLab: TOKLAB, title: `<b class="h1c">S<sup>(1)</sup></b> raw`,
+        cell: () => "g1"}) +
+      mx(BLK.heads[1].Ss, {rows: TOKLAB, colsLab: TOKLAB, fmt: v => nd(v, 1),
+        title: `<b class="h1c">S<sup>(1)</sup>/2</b>`, cell: () => "g1"}) +
+      heat(BLK.heads[1].P, {rows: TOKLAB, colsLab: TOKLAB, rgb: "247,120,186",
+        title: `<b class="h1c">P<sup>(1)</sup></b> = softmax(row)`}) +
+      `</div>
+      <div class="arith">
+        <span class="lbl">행 3:</span> exp([0, 4.5, 0, 0]) = [1, ${nd(Math.exp(4.5), 6)}, 1, 1],
+        합 = <span class="res">${nd(Math.exp(4.5) + 3, 6)}</span> →
+        최대 확률 <span class="res">${nd(BLK.heads[1].P[3][1], 6)}</span>,
+        나머지 각각 ${nd(BLK.heads[1].P[3][0], 6)}
+      </div>`
+  },
+  {
+    t: "두 head를 나란히",
+    n: `<b>같은 문장인데 두 판이 전혀 다르다.</b>
+        <span class="h0">head 0</span>은 대각선 바로 아래 — <b>"직전 token을 본다"</b>.
+        <span class="h1c">head 1</span>은 흩어져 있다 — <b>"관사↔명사, 부사→동사, 동사→주어"</b>라는 통사 관계.
+        head가 하나였다면 이 둘을 <b>한 분포에 평균</b>내야 했고, 그러면 둘 다 흐려진다.
+        (다시 강조: 이 두 pattern은 <b>내가 심은 illustrative 예시</b>이지 측정값이 아니다.)`,
+    r: () => `<div class="mxwrap">` +
+      heat(BLK.heads[0].P, {rows: TOKLAB, colsLab: TOKLAB, rgb: "88,166,255",
+        title: `<b class="h0">head 0 — 직전 token head</b> (positional)`}) +
+      heat(BLK.heads[1].P, {rows: TOKLAB, colsLab: TOKLAB, rgb: "247,120,186",
+        title: `<b class="h1c">head 1 — 통사 의존 head</b> (syntactic)`}) +
+      `</div>`
+  },
+  {
+    t: "O(h) = P(h) V(h)",
+    n: `확률 행렬로 value를 <b>가중평균</b>한다. 행 합이 1이므로 출력 벡터는 반드시
+        <b>value 벡터들의 convex hull 안</b>에 들어간다 — attention이 "값을 만들어내지" 않고
+        <b>이미 있는 값들을 섞기만 한다</b>는 뜻이다.`,
+    r: () => {
+      const i = 3, c = 0;
+      const col = BLK.heads[1].Vh.map(r => r[c]);
+      return `<div class="mxwrap">` +
+        mx(BLK.heads[0].O, {rows: TOKLAB, colsLab: HEADLAB, fmt: v => nd(v, 6),
+          title: `<b class="h0">O<sup>(0)</sup></b> = P<sup>(0)</sup>V<sup>(0)</sup>`, cell: () => "g0"}) +
+        mx(BLK.heads[1].O, {rows: TOKLAB, colsLab: HEADLAB, fmt: v => nd(v, 6),
+          title: `<b class="h1c">O<sup>(1)</sup></b> = P<sup>(1)</sup>V<sup>(1)</sup>`,
+          cell: (r, cc) => (r === i && cc === c ? "hi" : "g1")}) + `</div>
+        <div class="arith"><span class="lbl">O<sup>(1)</sup>[${i}][${c}] = Σ<sub>j</sub> P<sup>(1)</sup>[${i}][j]·V<sup>(1)</sup>[j][${c}] =</span>
+          ${dotStr(BLK.heads[1].P[i], col, v => nd(v, 4), ni)} =
+          <span class="res">${nd(BLK.heads[1].O[i][c], 4)}</span>
+          <span class="lbl">&nbsp;(소수 4자리로 반올림해 검산하면 딱 맞는다 — 표의 6자리 값은 ${nd(BLK.heads[1].O[i][c], 6)})</span></div>`;
+    }
+  },
+  {
+    t: "Concat — 사실은 transpose + reshape",
+    n: `"concat"이라는 말 때문에 <b>따로 있던 tensor를 붙여 복사</b>한다고 오해하기 쉽다. 아니다 —
+        <code>[h, N, d_head]</code>를 <code>.transpose(1,2).contiguous().view(N, h·d_head)</code> 하는 것,
+        즉 <b>연속 버퍼 하나를 다시 보는 것</b>이다. 폭이 정확히 d_model로 되돌아온다: 4 + 4 = 8.`,
+    r: () => `<div class="mxwrap">` +
+      mx(BLK.cat, {rows: TOKLAB, colsLab: POSLAB, group: grp8, fmt: v => nd(v, 6),
+        title: `<b>Concat(head<sub>0</sub>, head<sub>1</sub>)</b> [4 × 8] — 왼쪽 4칸 <span class="h0">head 0</span>, 오른쪽 4칸 <span class="h1c">head 1</span>`}) +
+      `</div>`
+  },
+  {
+    t: "@ W_O — head들이 처음으로 섞이는 곳",
+    n: `<b>여기까지 두 head는 서로를 전혀 모른다.</b> 각자 자기 4차원 subspace에서 독립적으로 계산했다.
+        W<sub>O</sub>가 유일하게 <b>head를 가로질러 정보를 섞는 지점</b>이다. 이 W<sub>O</sub>는 일부러
+        "출력 dim 0–3 = head0 + head1, dim 4–7 = head0 − head1"이 되도록 골랐다 — 합과 차를 만드는 mixer.
+        결과는 다시 <code>[N, d_model]</code>로, residual stream에 그대로 더해질 수 있는 폭이다.`,
+    r: () => {
+      const i = 0, c = 4;
+      return `<div class="mxwrap">` +
+        mx(WO, {rows: POSLAB, colsLab: POSLAB,
+          title: `<b>W<sub>O</sub></b> [8 × 8] — 행 0–3은 <span class="h0">head 0</span> 입력, 4–7은 <span class="h1c">head 1</span> 입력`,
+          cell: (r, cc) => (cc === c ? "hi" : (r < 4 ? "g0" : "g1"))}) +
+        mx(BLK.out, {rows: TOKLAB, colsLab: POSLAB, fmt: v => nd(v, 6),
+          title: `<b>출력</b> = Concat · W<sub>O</sub> &nbsp;[4 × 8]`,
+          cell: (r, cc) => (r === i && cc === c ? "hi" : "")}) + `</div>
+        <div class="arith"><span class="lbl">out[${i}][${c}] = Concat[${i}] · W<sub>O</sub>[:,${c}] =</span>
+          ${dotStr(BLK.cat[i], tp(WO)[c], v => nd(v, 6), ni)} =
+          <span class="res">${nd(BLK.out[i][c], 6)}</span>
+          <span class="lbl">&nbsp;(= head0[0] − head1[0])</span></div>`;
+    }
+  },
+  {
+    t: "정산",
+    n: `<b>head를 몇 개로 쪼개든 parameter도 FLOP도 정확히 그대로다.</b> 바뀌는 건 딱 하나 —
+        <code>[B, h, N, N]</code> score tensor의 크기가 <b>h에 비례</b>해 커진다.
+        multi-head는 <b>compute 중립, memory 유료</b>. 아래 A3 표에서 숫자로 확인해라.`,
+    r: () => renderA3Table()
+  }
+];
+
+let aStep = 0, aTimer = null;
+function aRender(){
+  const s = A_STEPS[aStep];
+  $("aPhase").textContent = `${aStep} / ${A_STEPS.length - 1} — ${s.t}`;
+  $("aNarr").innerHTML = `<span class="st">step ${aStep} · ${s.t}</span><br>${s.n}`;
+  $("aStage").innerHTML = s.r();
+}
+function aStopPlay(){ if (aTimer){ clearInterval(aTimer); aTimer = null; $("aPlay").textContent = "▶▶ 자동"; } }
+$("aStep").onclick = () => { aStopPlay(); aStep = Math.min(aStep + 1, A_STEPS.length - 1); aRender(); };
+$("aPlay").onclick = () => {
+  if (aTimer){ aStopPlay(); return; }
+  $("aPlay").textContent = "⏸ 정지";
+  aTimer = setInterval(() => {
+    if (aStep >= A_STEPS.length - 1){ aStopPlay(); return; }
+    aStep++; aRender();
+  }, 2100);
+};
+$("aReset").onclick = () => { aStopPlay(); aStep = 0; aRender(); };
+
+
+/* ================== A2 : pattern 비교 (항상 보임) ================== */
+(function renderA2(){
+  const desc0 = ["행 0 (The): 앞 token이 없어 자기 자신", "행 1 (cat): 직전 = The",
+                 "행 2 (loudly): 직전 = cat", "행 3 (ran): 직전 = loudly"];
+  const desc1 = ["행 0 (The, 관사): 꾸미는 명사 cat", "행 1 (cat, 명사): 자기 관사 The",
+                 "행 2 (loudly, 부사): 꾸미는 동사 ran", "행 3 (ran, 동사): 주어 cat — 가장 뾰족(0.968)"];
+  let h = `<div class="mxwrap">` +
+    heat(BLK.heads[0].P, {rows: TOKLAB, colsLab: TOKLAB, rgb: "88,166,255",
+      title: `<b class="h0">head 0 · positional</b> — "직전 token을 본다"`}) +
+    heat(BLK.heads[1].P, {rows: TOKLAB, colsLab: TOKLAB, rgb: "247,120,186",
+      title: `<b class="h1c">head 1 · syntactic</b> — "통사적으로 연결된 token을 본다"`}) +
+    `</div>`;
+  h += `<div class="grid2" style="margin-top:6px">
+    <div><div class="mxtitle" style="color:var(--c-h0)">head 0이 보는 것</div>
+      <ul style="margin:4px 0 0 18px;padding:0;font-size:12.5px;color:var(--ink-dim)">
+        ${desc0.map(d => `<li>${d}</li>`).join("")}</ul></div>
+    <div><div class="mxtitle" style="color:var(--c-h1)">head 1이 보는 것</div>
+      <ul style="margin:4px 0 0 18px;padding:0;font-size:12.5px;color:var(--ink-dim)">
+        ${desc1.map(d => `<li>${d}</li>`).join("")}</ul></div>
+  </div>`;
+  $("a2").innerHTML = h;
+})();
+
+
+/* ================== A3 : 불변성 표 ================== */
+function renderA3Table(){
+  const rows = invariance();
+  let h = `<div class="tblwrap"><table class="dt">
+    <tr><th>head 수 h</th><th>d_head</th><th>parameter<br>4·d_model²</th><th>QK<sup>T</sup> FLOPs<br>2·N²·h·d_head</th>
+        <th>score tensor<br>원소 h·N²</th><th>원소당 산술강도<br>2·d_head FLOPs</th></tr>`;
+  rows.forEach(r => {
+    h += `<tr class="${r.h === 2 ? "cur" : ""}">
+      <td>h = ${r.h}</td><td>${r.dh}</td>
+      <td class="g">${r.params}</td><td class="g">${r.flops}</td>
+      <td class="r">${r.elems}</td><td>${r.inten}</td></tr>`;
+  });
+  h += `</table></div>`;
+  h += `<div class="cards">
+    <div class="card ok"><div class="k">parameter — h에 불변</div><div class="v">256</div>
+      <div class="n">4 · 8² · (W_Q, W_K, W_V, W_O)</div></div>
+    <div class="card ok"><div class="k">QK<sup>T</sup> FLOPs — h에 불변</div><div class="v">256</div>
+      <div class="n">2·N²·d_model, h가 정확히 소거</div></div>
+    <div class="card"><div class="k">score 원소 — h에 <b class="bad">비례</b></div>
+      <div class="v" style="color:var(--danger)">16 → 128</div>
+      <div class="n">h = 1 → 8 로 갈 때 8배</div></div>
+  </div>`;
+  return h;
+}
+$("a3").innerHTML = renderA3Table();
+
+
+/* ================== B1 : permutation equivariance ================== */
+let pPerm = 1, pStep = 0, pTimer = null;
+const P_STEPS = [
+  {
+    t: "원래 문장",
+    n: `기준. 위에서 계산한 그 블록 그대로다. <b>이 출력 4행을 기억</b>해라 — 아래에서 섞은 뒤
+        <b>같은 벡터가 그대로 나오는지</b>만 보면 된다.`
+  },
+  {
+    t: "X의 행을 순열 π로 섞는다",
+    n: `token을 섞는다 = <b>X의 행을 섞는다</b> = <code>PX</code>. 각 행은 자기 <b>내용을 통째로 들고</b> 이동한다.
+        (내가 X에 넣어둔 position code까지 같이 따라간다 — 이게 바로 "attention이 볼 수 있는 위치 정보는
+        오직 벡터 안에 들어 있는 것뿐"이라는 뜻이다.)`
+  },
+  {
+    t: "score 행렬: S' = P S Pᵀ",
+    n: `<b>새 숫자가 하나도 생기지 않았다.</b> 원래 S의 원소가 행·열 모두 같은 순열로 재배치됐을 뿐:
+        <code>S'<sub>ij</sub> = S<sub>π(i)π(j)</sub></code>. 그리고 softmax의 분모
+        <code>Σ<sub>j</sub> exp(·)</code>는 <b>더하는 순서에 무관</b>하므로
+        <code>softmax(PSPᵀ) = P·softmax(S)·Pᵀ</code>가 된다.`
+  },
+  {
+    t: "출력: Out' = P·Out",
+    n: `마지막 한 수: <code>Out' = (P A Pᵀ)(P V) = P A (PᵀP) V = P A V = P·Out</code>.
+        <b>Pᵀ와 P가 소거된다.</b> 아래 max|Out' − P·Out| 을 봐라 — <b>수학적으로는 정확히 0</b>이고,
+        화면에 남는 ~1e−16은 <b>부동소수 덧셈의 비결합성</b>(같은 항을 다른 순서로 더한 결과) 때문이다.
+        출력 성분 크기가 ~2 이므로 상대오차는 double의 machine epsilon(2.2e−16) 수준 —
+        <b>계산 오차이지 수학적 차이가 아니다</b>. 반면 위 step의 score 행렬은 정수 산술이라 차이가 진짜 0으로 찍힌다.`
+  },
+  {
+    t: "결론",
+    n: `<b>attention은 permutation-EQUIVARIANT다 (invariant가 아니다).</b>
+        출력이 안 변하는 게 아니라 <b>입력과 똑같이 따라 움직인다</b>. 변하지 않는 건 출력 <b>집합</b>이다.
+        즉 bare attention에게 "3번째 token"이라는 개념 자체가 없다.
+        게다가 이 증명은 <b>RMSNorm/LayerNorm과 FFN(행마다 독립)</b>, <b>residual add(원소별)</b>에도
+        똑같이 통하므로 <b>transformer block 전체, 나아가 stack 전체</b>가 equivariant다.
+        <br><br><b>단, causal mask는 이 증명을 깬다</b>: <code>P M Pᵀ = M</code>은 π = id 일 때만 성립한다.
+        그래서 decoder-only LM은 PE가 전혀 없어도 "token i는 정확히 i+1개를 본다"는 <b>약한 절대 위치 신호</b>가
+        샌다 (Haviv et al. 2022 / Kazemnejad et al. 2023의 NoPE). 위 증명이 <b>엄밀히 정확한 건
+        bidirectional attention</b>이다. <code>[[attention-permutation-equivariance]]</code>`
+  }
+];
+function pRender(){
+  const perm = PERMS[pPerm];
+  $("pPermTxt").textContent = "[" + perm.join(", ") + "]";
+  $("pPhase").textContent = `${pStep} / ${P_STEPS.length - 1} — ${P_STEPS[pStep].t}`;
+  $("pNarr").innerHTML = `<span class="st">step ${pStep} · ${P_STEPS[pStep].t}</span><br>${P_STEPS[pStep].n}`;
+
+  const Xp   = permRows(X, perm);
+  const BLKp = runBlock(Xp);
+  const permTokLab = perm.map((ix, i) => `${i}:${TOK[ix]}`);
+  const expectOut  = permRows(BLK.out, perm);
+  const diff       = maxAbsDiff(BLKp.out, expectOut);
+
+  let h = "";
+  if (pStep === 0){
+    h += `<div class="mxwrap">` +
+      mx(X, {rows: TOKLAB, colsLab: POSLAB, group: grp8, title: `<b>X</b> 원본`}) +
+      mx(BLK.out, {rows: TOKLAB, colsLab: POSLAB, fmt: v => nd(v, 4), title: `<b>Out</b> = MultiHead(X)`}) +
+      `</div>`;
+  } else if (pStep === 1){
+    h += `<div class="mxwrap">` +
+      mx(X,  {rows: TOKLAB,     colsLab: POSLAB, group: grp8, title: `<b>X</b> 원본`}) +
+      mx(Xp, {rows: permTokLab, colsLab: POSLAB, group: grp8, title: `<b>PX</b> — 행만 재배치 (π = [${perm.join(", ")}])`}) +
+      `</div>`;
+  } else if (pStep === 2){
+    const S  = BLK.heads[1].Ss;
+    const Sp = permBoth(S, perm);
+    h += `<div class="mxwrap">` +
+      mx(S,  {rows: TOKLAB, colsLab: TOKLAB, fmt: v => nd(v, 1),
+              title: `<b class="h1c">S<sup>(1)</sup>/2</b> 원본`, cell: () => "g1"}) +
+      mx(Sp, {rows: permTokLab, colsLab: permTokLab, fmt: v => nd(v, 1),
+              title: `<b class="h1c">P S<sup>(1)</sup>Pᵀ/2</b> — 같은 숫자, 자리만 이동`, cell: () => "g1"}) +
+      mx(BLKp.heads[1].Ss, {rows: permTokLab, colsLab: permTokLab, fmt: v => nd(v, 1),
+              title: `<b>실제로 PX 로 다시 계산한 값</b>`, cell: () => "g1"}) +
+      `</div>
+      <div class="arith"><span class="lbl">max |P S Pᵀ − S(PX)| =</span>
+        <span class="res">${(function(){ const d = maxAbsDiff(Sp, BLKp.heads[1].Ss); return d === 0 ? "0" : sci(d, 1); })()}</span>
+        <span class="lbl">&nbsp;— score는 정수 산술이라 반올림 오차조차 없이 0이다.</span></div>`;
+  } else {
+    h += `<div class="mxwrap">` +
+      mx(BLKp.out, {rows: permTokLab, colsLab: POSLAB, fmt: v => nd(v, 4),
+                    title: `<b>Out' = MultiHead(PX)</b> — 실제 계산`}) +
+      mx(expectOut, {rows: permTokLab, colsLab: POSLAB, fmt: v => nd(v, 4),
+                    title: `<b>P · Out</b> — 원본 출력의 행만 재배치`}) +
+      `</div>`;
+    h += `<div class="cards">
+      <div class="card ok"><div class="k">max | Out' − P·Out |</div>
+        <div class="v">${diff === 0 ? "0" : sci(diff, 1)}</div>
+        <div class="n">${diff === 0
+          ? "정확히 0 (π = 항등이라 덧셈 순서까지 동일)"
+          : "수학적으로는 0. 남은 값은 부동소수 <b>덧셈 순서</b> 차이 — 출력 크기 ~2 대비 상대오차 " +
+            sci(diff / 2, 1) + ", 즉 double의 machine epsilon 수준이다."}</div></div>
+      <div class="card"><div class="k">출력 집합</div><div class="v">동일</div>
+        <div class="n">같은 4개 벡터가 순서만 바뀌어 나온다</div></div>
+      <div class="card"><div class="k">따라서</div><div class="v" style="font-size:19px">equivariant</div>
+        <div class="n">invariant 가 아니다 — 출력이 입력을 따라 움직인다</div></div>
+    </div>`;
+  }
+  $("pStage").innerHTML = h;
+}
+function pStopPlay(){ if (pTimer){ clearInterval(pTimer); pTimer = null; $("pPlay").textContent = "▶▶ 자동"; } }
+$("pStep").onclick = () => { pStopPlay(); pStep = Math.min(pStep + 1, P_STEPS.length - 1); pRender(); };
+$("pPlay").onclick = () => {
+  if (pTimer){ pStopPlay(); return; }
+  $("pPlay").textContent = "⏸ 정지";
+  pTimer = setInterval(() => {
+    if (pStep >= P_STEPS.length - 1){ pStopPlay(); return; }
+    pStep++; pRender();
+  }, 2400);
+};
+$("pReset").onclick = () => { pStopPlay(); pStep = 0; pRender(); };
+(function buildPermButtons(){
+  $("pPerms").innerHTML = PERMS.map((p, i) =>
+    `<button class="rb ${i === pPerm ? "on" : ""}" data-i="${i}">[${p.join(",")}]</button>`).join("");
+  Array.prototype.forEach.call($("pPerms").children, b => {
+    b.onclick = () => {
+      pPerm = +b.dataset.i;
+      Array.prototype.forEach.call($("pPerms").children, x => x.classList.remove("on"));
+      b.classList.add("on");
+      pRender();
+    };
+  });
+})();
+
+
+/* ================== canvas 공통 ==================
+   주의: 논리 높이는 CH 상수에서만 읽는다. cv.getAttribute("height") 를 되읽으면
+   직전 호출이 써 넣은 h*devicePixelRatio 를 다시 h 로 삼아 redraw 마다 배로 커진다. */
+const CH = {cvRot: 320, cvDials: 180, cvDot: 250, cvBands: 280};
+function setupCanvas(cv){
+  const r = window.devicePixelRatio || 1;
+  const w = Math.max(cv.clientWidth, 240), h = CH[cv.id];
+  if (cv.width !== Math.round(w * r) || cv.height !== Math.round(h * r)){
+    cv.width  = Math.round(w * r);
+    cv.height = Math.round(h * r);
+  }
+  cv.style.height = h + "px";
+  const c = cv.getContext("2d");
+  c.setTransform(r, 0, 0, r, 0, 0);
+  c.clearRect(0, 0, w, h);
+  return {c, w, h};
+}
+function arrow(c, ox, oy, ang, len, color, wd){
+  const ex = ox + Math.cos(ang) * len, ey = oy - Math.sin(ang) * len;
+  c.strokeStyle = color; c.lineWidth = wd;
+  c.beginPath(); c.moveTo(ox, oy); c.lineTo(ex, ey); c.stroke();
+  const hl = 9 + wd, ha = 0.36;
+  c.beginPath();
+  c.moveTo(ex, ey);
+  c.lineTo(ex - hl * Math.cos(ang - ha), ey + hl * Math.sin(ang - ha));
+  c.moveTo(ex, ey);
+  c.lineTo(ex - hl * Math.cos(ang + ha), ey + hl * Math.sin(ang + ha));
+  c.stroke();
+  return [ex, ey];
+}
+
+
+/* ================== B2 : 한 pair 회전 ================== */
+let rm = 0, ri = 0, rTimer = null;
+function rRender(){
+  const th   = theta(ri, RD, RBASE);
+  const ang  = rm * th;
+  const q0   = RQ[2*ri], q1 = RQ[2*ri+1];
+  const rot  = rotPair(q0, q1, ang);
+  const base0 = Math.hypot(q0, q1), base1 = Math.hypot(rot[0], rot[1]);
+
+  $("vRm").textContent = rm;
+  $("vRi").textContent = ri;
+  $("rTheta").textContent = th >= 0.01 ? nd(th, 4) : sci(th, 4);
+  $("rThetaN").textContent = `dim ${2*ri}, ${2*ri+1} 짝 · 파장 λ = 2π/θ = ${nd(2*Math.PI/th, 2)} position`;
+  $("rAng").textContent = nd(ang, 4) + " rad";
+  $("rAngN").textContent = `${nd(ang * 180 / Math.PI, 2)}° · 한 바퀴의 ${nd(ang / (2*Math.PI), 3)}배`;
+  $("rNorm").textContent = nd(Math.abs(base1 - base0), 6);
+
+  $("rNarr").innerHTML =
+    `<span class="st">pair ${ri} · position ${rm}</span><br>` +
+    `이 pair는 position 한 칸마다 <b>${th >= 0.01 ? nd(th, 4) : sci(th, 3)} rad</b>씩 돈다. ` +
+    `position ${rm}에서는 누적 <b>${nd(ang, 4)} rad (${nd(ang*180/Math.PI, 1)}°)</b>. ` +
+    (ang < 0.05
+      ? `<b>거의 안 움직인다</b> — 이 pair는 훨씬 먼 거리를 구분하라고 있는 <b>저주파 채널</b>이다.`
+      : ang < 2*Math.PI
+        ? `아직 한 바퀴를 못 채웠다 — 이 구간에서는 각도가 거리와 <b>단조롭게</b> 대응한다.`
+        : `이미 <b>${nd(ang/(2*Math.PI), 2)}바퀴</b>를 돌았다 — 이 pair만으로는 거리가 ` +
+          `<b>2π 주기로 겹쳐</b> 구분이 안 된다. 그래서 느린 pair들이 같이 필요하다.`) +
+    ` 회전은 orthogonal 변환이라 <b>길이는 정확히 보존</b>된다 (오차 ${nd(Math.abs(base1-base0), 6)}).`;
+
+  $("rArith").innerHTML =
+    `<span class="lbl">θ<sub>${ri}</sub> = 10000<sup>−2·${ri}/8</sup> =</span> ${th >= 0.01 ? nd(th, 6) : sci(th, 6)}<br>` +
+    `<span class="lbl">a = m·θ = ${rm} × ${th >= 0.01 ? nd(th, 6) : sci(th, 4)} =</span> ${nd(ang, 6)} rad<br>` +
+    `<span class="lbl">q'<sub>${2*ri}</sub>&nbsp; = q<sub>${2*ri}</sub>·cos a − q<sub>${2*ri+1}</sub>·sin a =</span> ` +
+    `${par(q0, ni)}·${par(Math.cos(ang), v => nd(v, 6))} − ${par(q1, ni)}·${par(Math.sin(ang), v => nd(v, 6))}` +
+    ` = <span class="res">${nd(rot[0], 6)}</span><br>` +
+    `<span class="lbl">q'<sub>${2*ri+1}</sub> = q<sub>${2*ri}</sub>·sin a + q<sub>${2*ri+1}</sub>·cos a =</span> ` +
+    `${par(q0, ni)}·${par(Math.sin(ang), v => nd(v, 6))} + ${par(q1, ni)}·${par(Math.cos(ang), v => nd(v, 6))}` +
+    ` = <span class="res">${nd(rot[1], 6)}</span><br>` +
+    `<span class="lbl">‖q‖ =</span> ${nd(base0, 6)} &nbsp; <span class="lbl">‖R<sub>m</sub>q‖ =</span> ${nd(base1, 6)} ` +
+    `&nbsp;<span class="lbl">차이 =</span> <span class="res">${nd(Math.abs(base1-base0), 6)}</span><br>` +
+    `<span class="lbl zt">※ cos/sin을 6자리로 반올림해 보여주므로, 손으로 검산하면 q'의 마지막 자리가 ±1 어긋날 수 있다 ` +
+    `(계산 자체는 배정밀도로 한다).</span>`;
+
+  drawRot();
+  drawDials();
+}
+function drawRot(){
+  const cv = $("cvRot"); const o = setupCanvas(cv); const c = o.c, w = o.w, h = o.h;
+  const cx = w / 2, cy = h / 2;
+  const q0 = RQ[2*ri], q1 = RQ[2*ri+1];
+  const mag = Math.hypot(q0, q1) || 1;
+  const R = Math.min(w, h) / 2 - 38;
+  const th = theta(ri, RD, RBASE), ang = rm * th;
+  const a0 = Math.atan2(q1, q0);
+
+  c.strokeStyle = "#1c2230"; c.lineWidth = 1;
+  for (let r = R / 3; r <= R; r += R / 3){ c.beginPath(); c.arc(cx, cy, r, 0, Math.PI * 2); c.stroke(); }
+  c.strokeStyle = "#2b3242";
+  c.beginPath(); c.moveTo(cx - R - 16, cy); c.lineTo(cx + R + 16, cy);
+  c.moveTo(cx, cy - R - 16); c.lineTo(cx, cy + R + 16); c.stroke();
+  c.fillStyle = "#6b7686"; c.font = "10px ui-monospace,monospace"; c.textAlign = "left";
+  c.fillText(`dim ${2*ri}`, cx + R + 2, cy - 6);
+  c.fillText(`dim ${2*ri+1}`, cx + 6, cy - R - 6);
+
+  // 원래 벡터 (길이는 회전 전후 동일 — 방향만 그린다)
+  arrow(c, cx, cy, a0, R * 0.92, "#6b7686", 2);
+  c.fillStyle = "#6b7686"; c.font = "11px ui-monospace,monospace";
+  c.fillText(`q = (${ni(q0)}, ${ni(q1)})`,
+    cx + Math.cos(a0) * (R * 0.92 + 8), cy - Math.sin(a0) * (R * 0.92 + 8));
+
+  // 회전 궤적
+  if (Math.abs(ang) > 0.004){
+    c.strokeStyle = "rgba(255,217,61,.30)"; c.lineWidth = 1.5;
+    c.beginPath();
+    const steps = Math.max(2, Math.min(600, Math.round(Math.abs(ang) * 60)));
+    for (let s = 0; s <= steps; s++){
+      const aa = a0 + ang * s / steps;
+      const rr = R * 0.92 * (1 - 0.10 * s / steps);
+      const x = cx + Math.cos(aa) * rr, y = cy - Math.sin(aa) * rr;
+      s ? c.lineTo(x, y) : c.moveTo(x, y);
+    }
+    c.stroke();
+    // 각도 호
+    c.strokeStyle = "#ffd93d"; c.lineWidth = 2;
+    c.beginPath();
+    c.arc(cx, cy, 44, -a0, -(a0 + Math.min(ang, Math.PI * 2)), ang > 0);
+    c.stroke();
+    const midA = a0 + Math.min(ang, Math.PI * 2) / 2;
+    c.fillStyle = "#ffd93d"; c.font = "11px ui-monospace,monospace"; c.textAlign = "center";
+    c.fillText(`${nd(ang, 3)} rad`, cx + Math.cos(midA) * 66, cy - Math.sin(midA) * 66);
+  }
+
+  // 회전된 벡터
+  c.textAlign = "left";
+  const rA = a0 + ang;
+  arrow(c, cx, cy, rA, R * 0.92, "#bc8cff", 3);
+  const rot = rotPair(q0, q1, ang);
+  c.fillStyle = "#bc8cff"; c.font = "bold 11px ui-monospace,monospace";
+  c.fillText(`R${rm}q = (${nd(rot[0], 3)}, ${nd(rot[1], 3)})`,
+    cx + Math.cos(rA) * (R * 0.92 + 10) - 20, cy - Math.sin(rA) * (R * 0.92 + 10) - 8);
+}
+function drawDials(){
+  const cv = $("cvDials"); const o = setupCanvas(cv); const c = o.c, w = o.w, h = o.h;
+  const n = RD / 2;
+  const cw = w / n, R = Math.min(cw / 2 - 20, h / 2 - 32);
+  for (let i = 0; i < n; i++){
+    const cx = cw * (i + 0.5), cy = h / 2 + 6;
+    const th = theta(i, RD, RBASE), ang = rm * th;
+    c.strokeStyle = i === ri ? "#bc8cff" : "#2b3242"; c.lineWidth = i === ri ? 2 : 1;
+    c.beginPath(); c.arc(cx, cy, R, 0, Math.PI * 2); c.stroke();
+    c.strokeStyle = "#2b3242"; c.lineWidth = 1;
+    c.beginPath(); c.moveTo(cx - R, cy); c.lineTo(cx + R, cy); c.stroke();
+    // 궤적
+    if (Math.abs(ang) > 0.004){
+      c.strokeStyle = "rgba(255,217,61,.35)"; c.lineWidth = 1.5;
+      c.beginPath();
+      const steps = Math.max(2, Math.min(400, Math.round(Math.abs(ang) * 40)));
+      for (let s = 0; s <= steps; s++){
+        const aa = ang * s / steps, rr = R * 0.86;
+        const x = cx + Math.cos(aa) * rr, y = cy - Math.sin(aa) * rr;
+        s ? c.lineTo(x, y) : c.moveTo(x, y);
+      }
+      c.stroke();
+    }
+    arrow(c, cx, cy, 0, R * 0.86, "#6b7686", 1.5);
+    arrow(c, cx, cy, ang, R * 0.86, i === ri ? "#bc8cff" : "#ffd93d", 2.5);
+    c.fillStyle = "#9aa7b4"; c.font = "10.5px ui-monospace,monospace"; c.textAlign = "center";
+    c.fillText(`pair ${i} · θ=${th >= 0.01 ? nd(th, 2) : sci(th, 1)}`, cx, cy - R - 16);
+    c.fillStyle = "#6b7686";
+    c.fillText(`${nd(ang, 3)} rad · ${nd(ang / (2*Math.PI), 3)}회전`, cx, cy + R + 18);
+  }
+}
+$("rm").oninput = e => { rm = +e.target.value; rRender(); };
+$("ri").oninput = e => { ri = +e.target.value; rRender(); };
+function rStopPlay(){ if (rTimer){ clearInterval(rTimer); rTimer = null; $("rPlay").textContent = "▶▶ 자동"; } }
+$("rStep").onclick = () => { rStopPlay(); rm = Math.min(rm + 1, 32); $("rm").value = rm; rRender(); };
+$("rPlay").onclick = () => {
+  if (rTimer){ rStopPlay(); return; }
+  $("rPlay").textContent = "⏸ 정지";
+  rTimer = setInterval(() => {
+    if (rm >= 32){ rStopPlay(); return; }
+    rm++; $("rm").value = rm; rRender();
+  }, 200);
+};
+$("rReset").onclick = () => { rStopPlay(); rm = 0; $("rm").value = 0; rRender(); };
+
+
+/* ================== B3 : 핵심 데모 ================== */
+let km = 17, kn = 5, kLocked = false, kTimer = null;
+const K_RAW = dotv(RQ, RK);
+function kRender(){
+  const D    = km - kn;
+  const dotR = ropeDot(RQ, RK, km, kn, RD, RBASE);
+  const terms = pairTerms(RQ, RK, km, kn, RD, RBASE);
+  const closed = terms.reduce((a, t) => a + t.contrib, 0);
+
+  $("vKm").textContent = km; $("vKn").textContent = kn;
+  $("km").value = km; $("kn").value = kn;
+  $("kDelta").textContent = D;
+  $("kDot").textContent = nd(dotR, 6);
+  $("kDotN").textContent = `pair별 닫힌 형태 합 = ${nd(closed, 6)} · 차이 ${nd(Math.abs(dotR - closed), 6)}`;
+  $("kRaw").textContent = nd(K_RAW, 6);
+
+  $("kNarr").innerHTML =
+    `<span class="st">m = ${km}, n = ${kn} → Δ = ${D}</span><br>` +
+    (kLocked
+      ? `<b>Δ 고정 모드다.</b> 슬라이더 하나를 끌면 다른 하나가 따라온다 — 즉 <b>절대 위치는 계속 바뀌는데
+         Δ는 그대로</b>. 위 큰 숫자가 <b>미동도 하지 않는 것</b>이 RoPE의 전부다.
+         (m=${km}, n=${kn}) 이든 (m=${km+7}, n=${kn+7}) 이든 attention score는 같은 값이다.`
+      : `지금은 자유 모드다. m이나 n을 <b>따로</b> 움직이면 Δ가 바뀌고 내적도 바뀐다.
+         이제 <b>🔒 Δ 고정</b>을 누르고 다시 끌어봐라 — <b>같은 Δ를 유지하는 한 숫자가 얼어붙는다</b>.
+         그게 "절대 위치가 소거되고 상대 위치만 남는다"의 체감형이다.`) +
+    ` &nbsp;참고로 Δ = 0이면 회전이 서로 상쇄되어 <b>원래 내적 q·k = ${nd(K_RAW, 6)}</b>와 정확히 같아진다.`;
+
+  // pair 분해 표
+  let h = `<tr><th>pair i</th><th>θ<sub>i</sub></th><th>q·k (pair)</th><th>q×k (pair)</th>
+    <th>Δθ<sub>i</sub></th><th>cos</th><th>sin</th><th>기여분</th></tr>`;
+  terms.forEach(t => {
+    h += `<tr><td>i = ${t.i}</td>
+      <td class="y">${t.th >= 0.01 ? nd(t.th, 4) : sci(t.th, 3)}</td>
+      <td>${nd(t.dp, 2)}</td><td>${nd(t.cr, 2)}</td>
+      <td>${nd(t.ang, 6)}</td><td>${nd(t.c, 6)}</td><td>${nd(t.s, 6)}</td>
+      <td class="g">${nd(t.contrib, 6)}</td></tr>`;
+  });
+  h += `<tr class="hl"><td>합계</td><td colspan="6">Σ<sub>i</sub> [ (q·k)<sub>i</sub>cos(Δθ<sub>i</sub>) + (q×k)<sub>i</sub>sin(Δθ<sub>i</sub>) ]</td>
+    <td>${nd(closed, 6)}</td></tr>`;
+  $("kPairs").innerHTML = h;
+
+  const t0 = terms[0];
+  $("kArith").innerHTML =
+    `<span class="lbl">pair 0 검산 —</span> q<sub>0,1</sub> = (${ni(t0.q0)}, ${ni(t0.q1)}), ` +
+    `k<sub>0,1</sub> = (${ni(t0.k0)}, ${ni(t0.k1)})<br>` +
+    `<span class="lbl">내적 q·k =</span> ${par(t0.q0, ni)}·${par(t0.k0, ni)} + ${par(t0.q1, ni)}·${par(t0.k1, ni)} = <span class="res">${nd(t0.dp, 2)}</span>
+     &nbsp;<span class="lbl">외적 q×k =</span> ${par(t0.q0, ni)}·${par(t0.k1, ni)} − ${par(t0.q1, ni)}·${par(t0.k0, ni)} = <span class="res">${nd(t0.cr, 2)}</span><br>` +
+    `<span class="lbl">기여 =</span> ${par(t0.dp, v => nd(v, 2))}·cos(${nd(t0.ang, 4)}) + ${par(t0.cr, v => nd(v, 2))}·sin(${nd(t0.ang, 4)}) = ` +
+    `${par(t0.dp, v => nd(v, 2))}·${par(t0.c, v => nd(v, 6))} + ${par(t0.cr, v => nd(v, 2))}·${par(t0.s, v => nd(v, 6))} = <span class="res">${nd(t0.contrib, 6)}</span><br>` +
+    `<span class="lbl">직접 회전해 구한 전체 내적 =</span> <span class="res">${nd(dotR, 6)}</span>
+     &nbsp;<span class="lbl">닫힌 형태 합 =</span> <span class="res">${nd(closed, 6)}</span>
+     &nbsp;<span class="lbl">차이 =</span> <span class="res">${nd(Math.abs(dotR - closed), 12)}</span>`;
+
+  // 같은 Δ, 다른 (m,n)
+  let p = `<tr><th>m</th><th>n</th><th>Δ = m − n</th><th>m·θ<sub>0</sub></th><th>n·θ<sub>0</sub></th>
+    <th>⟨R<sub>m</sub>q, R<sub>n</sub>k⟩</th></tr>`;
+  const base = Math.max(0, -D);
+  for (let s = 0; s < 6; s++){
+    const nn = base + s * 9, mm2 = nn + D;
+    if (mm2 < 0) continue;
+    const dv = ropeDot(RQ, RK, mm2, nn, RD, RBASE);
+    const cur = (mm2 === km && nn === kn);
+    p += `<tr class="${cur ? "cur" : ""}"><td>${mm2}</td><td>${nn}</td><td class="y">${D}</td>
+      <td>${nd(mm2 * theta(0, RD, RBASE), 3)}</td><td>${nd(nn * theta(0, RD, RBASE), 3)}</td>
+      <td class="g">${nd(dv, 9)}</td></tr>`;
+  }
+  p += `<tr class="hl"><td colspan="5">회전 각도는 행마다 전부 다른데(4번째·5번째 열), 마지막 열은 전부 같다</td>
+    <td>${nd(ropeDot(RQ, RK, Math.max(0, D) , Math.max(0, -D), RD, RBASE), 9)}</td></tr>`;
+  $("kProof").innerHTML = p;
+
+  drawDot(D);
+}
+function drawDot(curD){
+  const cv = $("cvDot"); const o = setupCanvas(cv); const c = o.c, w = o.w, h = o.h;
+  const L = 46, R = 14, T = 14, BM = 28, PW = w - L - R, PH = h - T - BM;
+  const DMIN = -64, DMAX = 64;
+  const f = D => pairTerms(RQ, RK, D, 0, RD, RBASE).reduce((a, t) => a + t.contrib, 0);
+  let lo = Infinity, hi = -Infinity;
+  for (let D = DMIN; D <= DMAX; D += 0.5){ const v = f(D); if (v < lo) lo = v; if (v > hi) hi = v; }
+  const pad = (hi - lo) * 0.12 || 1; lo -= pad; hi += pad;
+  const X2 = D => L + PW * (D - DMIN) / (DMAX - DMIN);
+  const Y2 = v => T + PH * (1 - (v - lo) / (hi - lo));
+
+  c.strokeStyle = "#2b3242"; c.fillStyle = "#6b7686"; c.font = "10px ui-monospace,monospace";
+  c.lineWidth = 1;
+  for (let k = 0; k <= 4; k++){
+    const v = lo + (hi - lo) * k / 4, y = Y2(v);
+    c.beginPath(); c.moveTo(L, y); c.lineTo(w - R, y); c.stroke();
+    c.textAlign = "right"; c.fillText(nd(v, 1), L - 5, y + 3);
+  }
+  c.textAlign = "center";
+  [-64, -32, 0, 32, 64].forEach(D => {
+    c.strokeStyle = D === 0 ? "#3fb950" : "#2b3242"; c.lineWidth = D === 0 ? 1.5 : 1;
+    c.beginPath(); c.moveTo(X2(D), T); c.lineTo(X2(D), T + PH); c.stroke();
+    c.fillStyle = "#6b7686"; c.fillText(String(D), X2(D), h - 9);
+  });
+  c.fillStyle = "#6b7686"; c.fillText("Δ = m − n", L + PW / 2, h - 9 - 13);
+
+  // Δ=0 기준선 = 회전 없는 q·k
+  c.strokeStyle = "#3fb950"; c.setLineDash([4, 4]); c.lineWidth = 1.4;
+  c.beginPath(); c.moveTo(L, Y2(K_RAW)); c.lineTo(w - R, Y2(K_RAW)); c.stroke(); c.setLineDash([]);
+
+  c.strokeStyle = "#ffd93d"; c.lineWidth = 2.2; c.beginPath();
+  let first = true;
+  for (let D = DMIN; D <= DMAX; D += 0.25){
+    const x = X2(D), y = Y2(f(D));
+    first ? (c.moveTo(x, y), first = false) : c.lineTo(x, y);
+  }
+  c.stroke();
+
+  const y0 = Y2(f(curD)), x0 = X2(curD);
+  c.strokeStyle = "#58a6ff"; c.lineWidth = 1; c.setLineDash([3, 3]);
+  c.beginPath(); c.moveTo(x0, T); c.lineTo(x0, T + PH); c.stroke(); c.setLineDash([]);
+  c.fillStyle = "#58a6ff"; c.beginPath(); c.arc(x0, y0, 5, 0, 7); c.fill();
+  c.font = "11px ui-monospace,monospace";
+  const lbl = `Δ=${curD} · ${nd(f(curD), 4)}`;
+  const tw = c.measureText(lbl).width;
+  const flip = x0 + 10 + tw > w - R;
+  c.textAlign = flip ? "right" : "left";
+  c.fillText(lbl, x0 + (flip ? -9 : 9), Math.max(T + 12, y0 - 10));
+}
+/* Δ 고정 모드에서는 m, n 이 [0, 64] 를 벗어나지 않도록 유효 구간을 먼저 계산한 뒤 clamp 한다.
+   D = m − n 이 고정이므로 m 의 유효 구간은 [max(0, D), min(64, 64+D)] 이다. */
+$("km").oninput = e => {
+  const v = +e.target.value;
+  if (kLocked){
+    const D = km - kn;
+    const mv = Math.min(Math.min(64, 64 + D), Math.max(Math.max(0, D), v));
+    km = mv; kn = mv - D;
+  } else km = v;
+  kRender();
+};
+$("kn").oninput = e => {
+  const v = +e.target.value;
+  if (kLocked){
+    const D = km - kn;
+    const nv = Math.min(Math.min(64, 64 - D), Math.max(Math.max(0, -D), v));
+    kn = nv; km = nv + D;
+  } else kn = v;
+  kRender();
+};
+$("kLock").onclick = () => {
+  kLocked = !kLocked;
+  $("kLock").classList.toggle("on", kLocked);
+  $("kLock").textContent = kLocked ? "🔓 Δ 고정 해제" : "🔒 Δ 고정";
+  kRender();
+};
+function kStopPlay(){ if (kTimer){ clearInterval(kTimer); kTimer = null; $("kPlay").textContent = "▶▶ 자동"; } }
+function kAdvance(){
+  const D = km - kn;
+  if (kLocked){
+    const room = 64 - Math.max(km, kn);
+    if (room <= 0){ km = Math.max(0, D); kn = Math.max(0, -D); }
+    else { km++; kn++; }
+  } else {
+    km = km >= 64 ? 0 : km + 1;
+  }
+  kRender();
+}
+$("kStep").onclick = () => { kStopPlay(); kAdvance(); };
+$("kPlay").onclick = () => {
+  if (kTimer){ kStopPlay(); return; }
+  if (!kLocked){ kLocked = true; $("kLock").classList.add("on"); $("kLock").textContent = "🔓 Δ 고정 해제"; }
+  $("kPlay").textContent = "⏸ 정지";
+  kTimer = setInterval(kAdvance, 190);
+};
+$("kReset").onclick = () => {
+  kStopPlay();
+  km = 17; kn = 5; kLocked = false;
+  $("kLock").classList.remove("on"); $("kLock").textContent = "🔒 Δ 고정";
+  kRender();
+};
+
+
+/* ================== B4 : frequency band ================== */
+(function renderBands(){
+  const rows = [0, 16, 32, 48, 63].map(i => bandRow(i, 10000));
+  let h = `<tr><th>pair i</th><th>2i/d</th><th>θ<sub>i</sub> = 10000<sup>−2i/128</sup></th>
+    <th>파장 λ = 2π/θ (position)</th><th>L=8192 동안 회전수 r<sub>i</sub></th><th>대역</th></tr>`;
+  rows.forEach(r => {
+    const band = r.rot >= 100 ? "빠름 · 국소" : r.rot >= 10 ? "중간" : r.rot >= 1 ? "느림" : "매우 느림 · 전역";
+    h += `<tr class="${r.rot < 1 ? "hl" : ""}">
+      <td>i = ${r.i}</td><td>${nd(2*r.i/128, 4)}</td>
+      <td class="y">${r.th >= 0.001 ? nd(r.th, 6) : sci(r.th, 4)}</td>
+      <td>${nd(r.lam, 4)}</td>
+      <td class="${r.rot < 1 ? "r" : "g"}">${nd(r.rot, 4)}</td>
+      <td style="text-align:left">${band}</td></tr>`;
+  });
+  const l3 = bandRow(63, 500000);
+  h += `<tr><td colspan="6" style="text-align:left;color:var(--ink-faint);white-space:normal">
+    비교 — 같은 i = 63 을 Llama 3 의 base = 500000 으로 계산하면 θ = ${sci(l3.th, 4)},
+    λ = ${nd(l3.lam, 1)} position (base 10000 의 ${nd(l3.lam / bandRow(63, 10000).lam, 1)}배).
+    base 를 올린다는 건 <b>모든 파장을 한꺼번에 늘리는 것</b>이라 거친 형태의 interpolation 이다.</td></tr>`;
+  $("bandTbl").innerHTML = h;
+})();
+function drawBands(){
+  const cv = $("cvBands"); const o = setupCanvas(cv); const c = o.c, w = o.w, h = o.h;
+  const L = 52, R = 16, T = 16, BM = 30, PW = w - L - R, PH = h - T - BM;
+  const LO = -6, HI = 0;                          // log10(theta)
+  const X2 = i => L + PW * i / 63;
+  const Y2 = t => T + PH * (1 - (Math.log10(t) - LO) / (HI - LO));
+
+  c.strokeStyle = "#2b3242"; c.fillStyle = "#6b7686"; c.font = "10px ui-monospace,monospace";
+  c.lineWidth = 1;
+  for (let e = LO; e <= HI; e++){
+    const y = Y2(Math.pow(10, e));
+    c.beginPath(); c.moveTo(L, y); c.lineTo(w - R, y); c.stroke();
+    c.textAlign = "right"; c.fillText("1e" + e, L - 5, y + 3);
+  }
+  c.textAlign = "center";
+  [0, 16, 32, 48, 63].forEach(i => c.fillText(String(i), X2(i), h - 10));
+  c.fillText("pair index i  (d_head = 128)", L + PW / 2, h - 10 - 12);
+  c.save(); c.translate(12, T + PH / 2); c.rotate(-Math.PI / 2);
+  c.textAlign = "center"; c.fillText("θ_i (log)", 0, 0); c.restore();
+
+  // YaRN 경계 (r=32, r=1)
+  const bB = bandBoundary(32, 10000), bA = bandBoundary(1, 10000);
+  c.fillStyle = "rgba(248,81,73,.07)";
+  c.fillRect(X2(bA), T, (w - R) - X2(bA), PH);
+  [[bB, "#3fb950", `r=32 (β) · i≈${nd(bB, 2)}`], [bA, "#f85149", `r=1 (α) · i≈${nd(bA, 2)}`]].forEach(b => {
+    c.strokeStyle = b[1]; c.lineWidth = 1.6; c.setLineDash([5, 4]);
+    c.beginPath(); c.moveTo(X2(b[0]), T); c.lineTo(X2(b[0]), T + PH); c.stroke(); c.setLineDash([]);
+    c.fillStyle = b[1]; c.font = "10px ui-monospace,monospace"; c.textAlign = "left";
+    c.fillText(b[2], X2(b[0]) + 4, T + 12);
+  });
+
+  [[10000, "#ffd93d", 2.4], [500000, "#58a6ff", 2.0]].forEach(cfg => {
+    c.strokeStyle = cfg[1]; c.lineWidth = cfg[2]; c.beginPath();
+    for (let i = 0; i <= 63; i += 0.25){
+      const x = X2(i), y = Y2(theta(i, BAND_D, cfg[0]));
+      i === 0 ? c.moveTo(x, y) : c.lineTo(x, y);
+    }
+    c.stroke();
+  });
+  [0, 16, 32, 48, 63].forEach(i => {
+    const t = theta(i, BAND_D, 10000);
+    c.fillStyle = "#ffd93d"; c.beginPath(); c.arc(X2(i), Y2(t), 3.6, 0, 7); c.fill();
+  });
+  c.fillStyle = "#f85149"; c.font = "10.5px ui-monospace,monospace"; c.textAlign = "right";
+  c.fillText("이 구간은 L=8192 동안 1회전도 못 한다", w - R - 6, T + PH - 8);
+}
+
+
+/* ================== 구동 ================== */
+function redrawAll(){ drawRot(); drawDials(); drawDot(km - kn); drawBands(); }
+aRender();
+pRender();
+rRender();
+kRender();
+drawBands();
+window.addEventListener("resize", redrawAll);
+</script>
+</body>
+</html>

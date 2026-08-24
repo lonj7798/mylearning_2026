@@ -1,0 +1,1537 @@
+<!--
+  Figure: attention-step-by-step.html — "attention 한 번을 손으로 따라가기"
+  Chapter: ch-extra (attention 기초 보강 — ch-02/ch-03/ch-04로 이어지는 다리)
+  Back to: ../read.md  ·  Companion Q&A: ../qa.md
+
+  Fully self-contained: inline CSS + vanilla JS only. No external CDN, no web font,
+  no image, no fetch/XHR, no MathJax. Renders offline from file:// by opening this
+  file directly in a browser. Every number on screen is computed in-page from the
+  six embedding vectors and the three weight matrices declared at the top of the
+  MATH CORE block — nothing is transcribed by hand.
+
+  Toy config (chosen so every number is hand-checkable):
+    문장 = "나 는 어제 책 을 읽었다"  → N = 6 tokens
+    d_model = 4, d_head = d_k = d_v = 4, heads = 1, B = 1
+    sqrt(d_k) = 2  (정확히 2 — 나눗셈을 암산할 수 있게 4를 골랐다)
+
+  Verified anchor numbers reproduced here (do not drift):
+    q_5 = [1.76, -0.16, 0.60, 0.76]              (읽었다)
+    q_5 · k_3 = 3.2344  (책; 행 5의 최댓값)  → /2 = 1.6172
+    행 5 softmax(causal, scaled) = [0.2282, 0.0943, 0.1410, 0.3310, 0.0807, 0.1248], 합 = 1
+    행 5 softmax(causal, UNscaled) 최댓값 = 0.5156  vs scaled 0.3310
+    o_5 = [1.0134, 0.5834, 0.4033, 0.2206]
+    Var(q·k) = d_k, sd = sqrt(d_k):  d=4→2, 64→8, 128→11.3137, 512→22.6274
+    gradient death @ d_k=64, s=(24,16): unscaled p=0.99966, p(1-p)=3.3524e-4
+                                        scaled   p=0.73106, p(1-p)=0.196612  → 586x
+    Vaswani 검증 예제 (d_k=4): scaled weights [0.506480, 0.186324, 0.307196], out [0.813676, 0.493520]
+                                unscaled      [0.665241, 0.090031, 0.244728]
+    score tensor [B,a,s,s] bf16: toy 1x1x6x6x2 = 72 B
+                                 ref B=1,a=32,s=4096 = 1,073,741,824 B = 1.07 GB / layer
+                                 x80 layers = 85,899,345,920 B = 85.90 GB
+                                 s=32768 → 68,719,476,736 B = 68.72 GB / layer
+    crossover s = 34h/(5a) = 34*4096/(5*32) = 870.4 토큰
+
+  Teaching points made visible:
+    1. embedding은 계산이 아니라 [V, d] 표에서 행 하나를 꺼내는 lookup이다.
+       V는 개수, d는 공간 (ch-02 qa-deep-2 Q7).
+    2. matmul은 블랙박스가 아니다 — 출력 성분 하나 = 곱 4개의 합. 화면에서 손으로 검산된다.
+    3. score = q_i·k_j 는 "찾는 것"과 "광고하는 것"의 일치도. W_Q/W_K가 그 두 축을 만든다.
+    4. 1/sqrt(d_k)는 미관이 아니라 필요조건이다. Var(q·k) = d_k → 안 나누면 softmax가
+       saturate하고 Jacobian p(1-p)이 죽어 W_Q/W_K가 학습을 멈춘다 (586x 예제).
+    5. causal mask는 페널티가 아니라 완전 차단(e^-inf = 0)이며, 이것이 teacher forcing과
+       KV cache가 성립하는 근거다. 구현은 finfo(dtype).min — -1e9는 fp16에서 표현 불가.
+    6. softmax의 max 빼기는 결과를 바꾸지 않는다(e^-m이 약분). 이 "max 하나 + 합 하나"가
+       ch-04 online softmax가 tile마다 들고 다니는 두 통계량이다.
+    7. output은 v들의 convex combination — 새 값을 만드는 게 아니라 있는 값을 섞는다.
+    8. 이 [6,6] 표의 shape이 [B, a, s, s]이며 ch-03/ch-04의 s^2 항 그 자체다.
+    9. Q,K,V 중 하나라도 빼면: XX^T는 대칭이 되어 방향성을 못 쓰고, RMSNorm 뒤에는
+       대각이 항상 행 최댓값이라 self-loop로 붕괴한다.
+-->
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>attention 한 번을 손으로 따라가기 (ch-extra)</title>
+<style>
+  :root{
+    --bg:#0e1117; --panel:#161b22; --panel2:#1c2230; --edge:#2b3242;
+    --ink:#e6edf3; --ink-dim:#9aa7b4; --ink-faint:#6b7686;
+    --accent:#58a6ff; --accent2:#3fb950; --danger:#f85149; --warn:#d29922;
+    --c-q:#bc8cff;     /* query  */
+    --c-k:#f778ba;     /* key    */
+    --c-v:#3fb950;     /* value  */
+    --c-p:#d29922;     /* softmax weight */
+    --c-mask:#f85149;  /* masked */
+    --c-base:#8b949e;
+  }
+  *{box-sizing:border-box;}
+  html,body{margin:0;padding:0;max-width:100%;overflow-x:hidden;}
+  body{
+    background:var(--bg); color:var(--ink);
+    font:14px/1.65 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Apple SD Gothic Neo",
+         "Noto Sans KR",Helvetica,Arial,sans-serif;
+    padding:22px; max-width:1180px; margin:0 auto;
+  }
+  h1{font-size:21px; margin:0 0 3px; letter-spacing:.2px;}
+  .sub{color:var(--ink-dim); font-size:13px; margin:0 0 20px;}
+  .sub code, code{color:var(--accent);
+    font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.92em;}
+  .panel{background:var(--panel); border:1px solid var(--edge); border-radius:10px;
+    padding:16px; margin-bottom:18px; transition:border-color .2s, box-shadow .2s;}
+  .panel.hot{border-color:var(--accent); box-shadow:0 0 0 1px rgba(88,166,255,.30);}
+  .panel h2{font-size:12px; text-transform:uppercase; letter-spacing:.9px; color:var(--ink-dim);
+    margin:0 0 14px; font-weight:600;}
+  .panel h2 .q{color:var(--ink); text-transform:none; letter-spacing:0; font-size:13.5px;}
+  .mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+    font-variant-numeric:tabular-nums;}
+  .dimmed{color:var(--ink-faint);}
+  b.ok{color:var(--accent2);} b.bad{color:var(--danger);} b.wn{color:var(--warn);}
+  .cq{color:var(--c-q);} .ck{color:var(--c-k);} .cv{color:var(--c-v);} .cp{color:var(--c-p);}
+
+  .callout{border-left:3px solid var(--warn); background:rgba(210,153,34,.07);
+    padding:11px 14px; border-radius:0 7px 7px 0; font-size:13px; color:var(--ink-dim);
+    margin-top:14px;}
+  .callout b{color:var(--ink);}
+  .callout.ok{border-left-color:var(--accent2); background:rgba(63,185,80,.07);}
+  .callout.no{border-left-color:var(--danger); background:rgba(248,81,73,.07);}
+  .callout.info{border-left-color:var(--accent); background:rgba(88,166,255,.07);}
+
+  /* ---------- config chips ---------- */
+  .cfg{display:flex; gap:7px; flex-wrap:wrap; margin-bottom:12px;}
+  .cfg span{border:1px solid var(--edge); background:var(--panel2); border-radius:6px;
+    padding:4px 9px; font-size:11.5px; color:var(--ink-dim);
+    font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;}
+  .cfg span b{color:var(--accent);}
+
+  /* ---------- sentence strip ---------- */
+  .sent{display:flex; gap:7px; flex-wrap:wrap; margin:4px 0 6px;}
+  .tokbox{border:1px solid var(--edge); background:var(--panel2); border-radius:8px;
+    padding:7px 11px; text-align:center; min-width:70px; transition:.18s;}
+  .tokbox .w{font-size:15px; font-weight:700;}
+  .tokbox .id{font-size:10px; color:var(--ink-faint);
+    font-family:ui-monospace,monospace; margin-top:1px;}
+  .tokbox.on{border-color:var(--accent); background:#1d2b3f;}
+  .tokbox.qsel{border-color:var(--c-q); background:rgba(188,140,255,.13);}
+  .tokbox.dim{opacity:.35;}
+  .tokbox.clk{cursor:pointer;}
+  .tokbox.clk:hover{border-color:var(--ink-faint);}
+
+  /* ---------- runbar ---------- */
+  .runbar{display:flex; gap:7px; flex-wrap:wrap; align-items:center; margin-bottom:12px;}
+  .rb{background:var(--panel2); border:1px solid var(--edge); color:var(--ink);
+    border-radius:7px; padding:9px 14px; cursor:pointer; font-size:12.5px; font-weight:600;
+    transition:.13s;}
+  .rb:hover{border-color:var(--accent);}
+  .rb.primary{background:#1d3a5f; border-color:var(--accent); color:#cfe6ff;}
+  .stagebadge{margin-left:auto; font-size:12px; color:var(--ink-dim);
+    font-family:ui-monospace,monospace;}
+  .stagebadge b{color:var(--accent);}
+  .prog{height:4px; background:#10151d; border:1px solid var(--edge); border-radius:3px;
+    overflow:hidden; margin-bottom:14px;}
+  .prog i{display:block; height:100%; background:linear-gradient(90deg,#1f6feb,#58a6ff);
+    width:0%; transition:width .25s;}
+
+  .narr{background:#10151d; border:1px solid var(--edge); border-left:3px solid var(--accent);
+    border-radius:0 8px 8px 0; padding:12px 15px; font-size:13.5px; line-height:1.85;
+    color:var(--ink-dim); min-height:74px;}
+  .narr b{color:var(--ink);}
+  .narr .hd{display:block; color:var(--accent); font-size:11px; letter-spacing:.7px;
+    text-transform:uppercase; margin-bottom:5px; font-weight:700;}
+
+  .stageview{margin-top:14px;}
+  .stagerow{display:flex; gap:14px; flex-wrap:wrap; align-items:flex-start;}
+  .stagerow > div{flex:1 1 300px; min-width:0;}
+
+  /* ---------- numeric vectors ---------- */
+  .vec{display:flex; gap:4px; align-items:center; flex-wrap:wrap; margin:3px 0;}
+  .vec .lbl{font-size:12px; color:var(--ink-dim); min-width:74px;
+    font-family:ui-monospace,monospace;}
+  .num{border:1px solid var(--edge); background:#10151d; border-radius:5px;
+    padding:4px 7px; font-size:12px; min-width:56px; text-align:right;
+    font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+    font-variant-numeric:tabular-nums;}
+  .num.q{border-color:rgba(188,140,255,.55); color:#dcc6ff;}
+  .num.k{border-color:rgba(247,120,186,.55); color:#ffc2e0;}
+  .num.v{border-color:rgba(63,185,80,.55); color:#b7f0c2;}
+  .num.hi{border-color:var(--accent); background:rgba(88,166,255,.14); color:#cfe6ff;}
+  .num.new{animation:pop .6s ease-out;}
+  @keyframes pop{0%{background:rgba(88,166,255,.35);}100%{background:#10151d;}}
+  .num.pend{opacity:.3; border-style:dashed;}
+
+  /* ---------- mini arithmetic table ---------- */
+  .tblwrap{overflow-x:auto;}
+  table.mini{border-collapse:collapse; font-size:12px; margin:8px 0 2px; min-width:320px;
+    font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+    font-variant-numeric:tabular-nums;}
+  table.mini th, table.mini td{border:1px solid var(--edge); padding:5px 9px; text-align:right;
+    white-space:nowrap;}
+  table.mini th{color:var(--ink-faint); font-weight:600; font-size:10.5px;
+    text-transform:uppercase; letter-spacing:.5px; background:var(--panel2);}
+  table.mini td.lb{text-align:left; color:var(--ink-dim); background:var(--panel2);}
+  table.mini tr.prod td{color:var(--warn);}
+  table.mini td.sum{background:rgba(88,166,255,.12); color:#cfe6ff; font-weight:700;}
+  table.mini td.zero{color:var(--ink-faint); opacity:.55;}
+
+  /* ---------- the [6,6] matrix ---------- */
+  .matwrap{overflow-x:auto;}
+  .mat{display:grid; grid-template-columns:78px repeat(6, minmax(64px,1fr)); gap:3px;
+    min-width:520px;}
+  .mat .h{font-size:11px; color:var(--ink-faint); text-align:center; padding:4px 2px;
+    font-family:ui-monospace,monospace; white-space:nowrap;}
+  .mat .rh{font-size:11.5px; color:var(--ink-dim); text-align:right; padding:6px 6px 6px 0;
+    white-space:nowrap;}
+  .mat .c{border:1px solid var(--edge); background:#10151d; border-radius:5px;
+    padding:6px 3px; text-align:center; font-size:11.5px;
+    font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+    font-variant-numeric:tabular-nums; color:var(--ink-dim); transition:.2s;}
+  .mat .c.empty{opacity:.22; border-style:dashed;}
+  .mat .c.on{color:var(--ink);}
+  .mat .c.cur{border-color:var(--accent); box-shadow:0 0 0 1px rgba(88,166,255,.45);
+    color:#cfe6ff;}
+  .mat .c.rowhi{border-color:rgba(188,140,255,.6);}
+  .mat .c.msk{color:var(--c-mask); background:rgba(248,81,73,.09);
+    border-color:rgba(248,81,73,.35); border-style:dashed;}
+  .mat .rh.hi{color:var(--c-q); font-weight:700;}
+  .legend{display:flex; gap:14px; font-size:11.5px; color:var(--ink-dim); margin-top:11px;
+    flex-wrap:wrap;}
+  .legend i{display:inline-block; width:11px; height:11px; border-radius:3px;
+    vertical-align:-1px; margin-right:5px; border:1px solid var(--edge);}
+
+  /* ---------- cards ---------- */
+  .sumrow{display:flex; gap:10px; flex-wrap:wrap; margin-top:14px;}
+  .card{flex:1 1 190px; background:var(--panel2); border:1px solid var(--edge);
+    border-radius:8px; padding:11px 13px;}
+  .card .k{font-size:10.5px; text-transform:uppercase; letter-spacing:.7px;
+    color:var(--ink-faint); margin-bottom:3px;}
+  .card .v{font-size:20px; font-weight:700; font-variant-numeric:tabular-nums;
+    font-family:ui-monospace,monospace;}
+  .card .n{font-size:11.5px; color:var(--ink-faint); margin-top:2px; line-height:1.55;}
+  .card.a .v{color:var(--accent);} .card.g .v{color:var(--accent2);}
+  .card.r .v{color:var(--danger);} .card.w .v{color:var(--warn);}
+
+  /* ---------- buttons row ---------- */
+  .btns{display:flex; gap:6px; flex-wrap:wrap; margin-bottom:12px;}
+  .pbtn{background:var(--panel2); border:1px solid var(--edge); color:var(--ink-dim);
+    border-radius:7px; padding:7px 11px; cursor:pointer; font-size:11.5px; transition:.13s;
+    line-height:1.35; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;}
+  .pbtn:hover{border-color:var(--ink-faint); color:var(--ink);}
+  .pbtn.on{background:#1d2b3f; border-color:var(--accent); color:var(--ink);}
+  .pbtn small{display:block; font-size:10px; color:var(--ink-faint);
+    font-family:-apple-system,"Noto Sans KR",sans-serif;}
+  .pbtn.on small{color:var(--accent);}
+
+  /* ---------- bars ---------- */
+  .bars{display:flex; flex-direction:column; gap:5px; margin-top:8px;}
+  .barrow{display:grid; grid-template-columns:66px 1fr 62px; gap:8px; align-items:center;
+    font-size:11.5px;}
+  .barrow .nm{color:var(--ink-dim); font-family:ui-monospace,monospace; text-align:right;}
+  .barrow .tk{background:#10151d; border:1px solid var(--edge); border-radius:4px; height:16px;
+    position:relative; overflow:hidden;}
+  .barrow .fl{position:absolute; left:0; top:0; bottom:0; border-radius:3px 0 0 3px;
+    transition:width .3s;}
+  .barrow .vl{font-family:ui-monospace,monospace; font-variant-numeric:tabular-nums;
+    color:var(--ink-dim); text-align:right;}
+
+  /* height는 JS 상수 CANVAS_H와 반드시 같은 값 — DPR 되읽기 금지 */
+  canvas{width:100%; display:block; border-radius:8px; background:#10151d;
+    border:1px solid var(--edge);}
+  #cvVar{height:270px;}
+
+  .grid2{display:grid; grid-template-columns:1fr 1fr; gap:18px;}
+  @media (max-width:940px){ .grid2{grid-template-columns:1fr;} }
+  .foot{color:var(--ink-faint); font-size:12px; margin-top:26px; line-height:1.85;}
+  .foot a{color:var(--accent); text-decoration:none;}
+  pre{background:#10151d; border:1px solid var(--edge); border-radius:8px; padding:13px;
+    overflow-x:auto; font-size:12.5px; line-height:1.7; margin:10px 0 0;
+    font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;}
+  pre .cm{color:var(--ink-faint);} pre .kw{color:var(--c-q);} pre .st{color:var(--accent2);}
+</style>
+</head>
+<body>
+
+<h1>attention 한 번을 <b style="color:var(--accent)">손으로</b> 따라가기</h1>
+<p class="sub">
+  ch-extra companion · 문장 <b>"나 는 어제 책 을 읽었다"</b> 6 token,
+  <code>d_model = 4</code>, <code>d_head = 4</code>, head 1개.
+  화면의 모든 숫자는 아래 <code>x</code>, <code>W_Q</code>, <code>W_K</code>, <code>W_V</code>에서
+  <b>이 페이지가 직접 계산</b>한다 — 옮겨 적은 값이 하나도 없으니 전부 손으로 검산된다.
+</p>
+
+<!-- ==================== 1. 설정 ==================== -->
+<div class="panel">
+  <h2>1 · <span class="q">설정 — 왜 이렇게 작게 줄였나</span></h2>
+  <div class="cfg">
+    <span>N = <b>6</b> tokens</span><span>d_model = <b>4</b></span><span>d_head = d_k = d_v = <b>4</b></span>
+    <span>heads a = <b>1</b></span><span>B = <b>1</b></span><span>√d_k = <b>2</b></span>
+    <span>dtype = <b>bf16</b> (2 B)</span>
+  </div>
+  <p style="font-size:13px;color:var(--ink-dim);margin:0">
+    실제 모델은 <code>d_model = 4096</code>, <code>head 32개</code>, <code>s = 4096</code>이라
+    행렬 하나가 1,073,741,824개의 숫자다. 그걸 눈으로 검산할 수는 없다. 그래서 여기서는
+    <b>d를 4로, 문장을 6 token으로</b> 줄였다 — <b>연산은 완전히 동일하고 크기만 다르다</b>.
+    마지막 §6에서 이 장난감 표를 실제 크기로 되돌려 놓는다.
+  </p>
+  <div class="callout info">
+    <b>이 페이지가 답하는 질문 하나.</b> "attention이 무슨 계산을 하는가"를 문장으로 아는 것과,
+    <b>숫자 하나하나가 어디서 나왔는지 짚는 것</b>은 다른 능력이다. 뒤 chapter들(ch-03 activation,
+    ch-04 FlashAttention)은 전부 <b>이 계산의 중간 tensor 몇 개를 들고 있느냐</b>를 다룬다.
+    그러니 그 tensor들이 각각 뭔지 여기서 손으로 만들어 두고 간다.
+  </div>
+</div>
+
+<!-- ==================== 2. 스텝퍼 ==================== -->
+<div class="panel" id="pStep">
+  <h2>2 · <span class="q">한 step씩 — token에서 output vector까지</span></h2>
+
+  <div class="runbar">
+    <button class="rb primary" id="bStep">▶ 다음 step</button>
+    <button class="rb" id="bPlay">▶▶ 자동</button>
+    <button class="rb" id="bReset">↺ 리셋</button>
+    <span class="stagebadge" id="stageBadge">—</span>
+  </div>
+  <div class="prog"><i id="progBar"></i></div>
+
+  <p style="font-size:12.5px;color:var(--ink-faint);margin:0 0 8px">
+    질문자(query) token을 골라라 — §3~§7의 계산이 이 행을 대상으로 진행된다.
+    바꾸면 score 단계로 되감긴다.
+  </p>
+  <div class="sent" id="qsel"></div>
+
+  <div class="narr" id="narr"></div>
+  <div class="stageview" id="stageView"></div>
+</div>
+
+<!-- ==================== 3. 누적 상태 ==================== -->
+<div class="panel">
+  <h2>3 · <span class="q">누적 상태 — Q / K / V 와 [6,6] 행렬</span></h2>
+
+  <div class="grid2">
+    <div>
+      <div style="font-size:12px;color:var(--ink-faint);margin-bottom:6px">
+        <b class="cq">Q</b> = X·W_Q &nbsp;·&nbsp; <b class="ck">K</b> = X·W_K &nbsp;·&nbsp;
+        <b class="cv">V</b> = X·W_V &nbsp;<span class="dimmed">(각각 [6,4])</span>
+      </div>
+      <div id="qkvBox"></div>
+    </div>
+    <div>
+      <div style="font-size:12px;color:var(--ink-faint);margin-bottom:6px" id="matTitle">—</div>
+      <div class="matwrap"><div class="mat" id="matGrid"></div></div>
+      <div class="legend">
+        <span><i style="background:#10151d"></i>아직 계산 안 됨</span>
+        <span><i style="background:rgba(88,166,255,.35);border-color:#58a6ff"></i>방금 계산됨</span>
+        <span><i style="background:rgba(248,81,73,.25);border-color:#f85149"></i>causal mask (−∞)</span>
+        <span><i style="background:rgba(210,153,34,.35);border-color:#d29922"></i>softmax 확률</span>
+      </div>
+      <div style="font-size:12px;color:var(--ink-faint);margin-top:10px" id="matNote">—</div>
+    </div>
+  </div>
+</div>
+
+<!-- ==================== 4. 왜 √d_k ==================== -->
+<div class="panel" id="pVar">
+  <h2>4 · <span class="q">왜 √d<sub>k</sub>로 나누는가 — 미관이 아니라 필요조건</span></h2>
+
+  <div class="grid2">
+    <div>
+      <canvas id="cvVar" height="270"></canvas>
+      <div class="legend">
+        <span><i style="background:#d29922"></i>이론: sd = √d</span>
+        <span><i style="background:#58a6ff"></i>실측 (이 페이지가 직접 샘플링)</span>
+        <span><i style="background:#3fb950"></i>√d로 나눈 뒤 = 1.0 (평평)</span>
+      </div>
+      <div class="callout" id="varNote">—</div>
+    </div>
+    <div>
+      <div style="font-size:12.5px;color:var(--ink-dim);margin-bottom:8px">
+        <b style="color:var(--ink)">유도 (Vaswani 각주 4).</b> q, k의 각 성분이 독립이고 평균 0, 분산 1이면
+        <span class="mono">q·k = Σ<sub>i=1..d<sub>k</sub></sub> q<sub>i</sub>k<sub>i</sub></span> 는
+        <br>· <span class="mono">E[q·k] = Σ E[q<sub>i</sub>]E[k<sub>i</sub>] = 0</span>
+        <br>· <span class="mono">Var(q·k) = Σ Var(q<sub>i</sub>k<sub>i</sub>) = Σ E[q<sub>i</sub>²]E[k<sub>i</sub>²] = Σ 1·1 = d<sub>k</sub></span>
+        <br>· <span class="mono">sd(q·k) = √d<sub>k</sub></span>,
+        &nbsp;<span class="mono">Var(q·k / √d<sub>k</sub>) = d<sub>k</sub>/d<sub>k</sub> = 1</span> — <b>어떤 d에서도 분산 1</b>.
+      </div>
+      <div class="tblwrap" id="sdTable"></div>
+      <div class="callout no" id="gradBox">—</div>
+    </div>
+  </div>
+
+  <div style="margin-top:16px">
+    <div class="btns" id="scBtns">
+      <button class="pbtn on" data-sc="1">√d<sub>k</sub>로 나눔 <small>scaled</small></button>
+      <button class="pbtn" data-sc="0">안 나눔 <small>unscaled</small></button>
+    </div>
+    <div class="grid2">
+      <div>
+        <div style="font-size:12px;color:var(--ink-faint);margin-bottom:4px" id="scHead">—</div>
+        <div class="bars" id="scBars"></div>
+      </div>
+      <div>
+        <div style="font-size:12px;color:var(--ink-faint);margin-bottom:4px">
+          Vaswani 검증 예제 — d<sub>k</sub> = 4, key 3개
+          <span class="dimmed">(q=[1,0,1,0], k=[1,0,1,0]/[0,1,0,1]/[1,1,0,0])</span>
+        </div>
+        <div class="tblwrap" id="vasTable"></div>
+      </div>
+    </div>
+    <div class="callout" id="scNote">—</div>
+  </div>
+</div>
+
+<!-- ==================== 5. 왜 세 개인가 ==================== -->
+<div class="panel">
+  <h2>5 · <span class="q">왜 세 개인가 — Q, K, V 중 하나를 빼면 무엇이 깨지나</span></h2>
+  <div class="btns" id="w3Btns">
+    <button class="pbtn on" data-w3="ok">제대로 <small>S = (XW_Q)(XW_K)ᵀ</small></button>
+    <button class="pbtn" data-w3="sym">W 없이 <small>S = XXᵀ (Q=K=x)</small></button>
+    <button class="pbtn" data-w3="norm">RMSNorm 뒤 XXᵀ <small>자기 자신만 본다</small></button>
+  </div>
+  <div class="grid2">
+    <div>
+      <div class="matwrap"><div class="mat" id="w3Grid"></div></div>
+    </div>
+    <div>
+      <div class="callout info" id="w3Note">—</div>
+    </div>
+  </div>
+  <div class="callout">
+    <b>V까지 빼면?</b> <code>W_V</code>를 지우고 <code>v_j = x_j</code>로 두면 output이
+    <b>입력 벡터들의 볼록결합</b>으로만 제한된다. 그러면 "누구를 볼지"는 정해도
+    <b>"무엇을 넘겨줄지"는 못 고른다</b>. K는 <b class="cq">Q</b>와 비교당할 geometry에 살아야 하고,
+    V는 <code>W_O</code>가 residual stream으로 되돌릴 geometry에 살아야 한다 — 두 요구가 서로
+    다르기 때문에 행렬이 <b>두 개가 아니라 세 개</b>다.
+    <span class="dimmed">(d<sub>k</sub>는 Q와 K가 반드시 같아야 하지만 d<sub>v</sub>는 자유롭다 —
+    dot product에 안 들어가니까.)</span>
+  </div>
+</div>
+
+<!-- ==================== 6. 메모리 ==================== -->
+<div class="panel" id="pMem">
+  <h2>6 · <span class="q">이 [6,6] 표가 곧 ch-03/ch-04의 s² 항이다</span></h2>
+
+  <div class="grid2">
+    <div>
+      <div style="font-size:12px;color:var(--ink-faint);margin-bottom:6px">
+        완성된 attention 확률 행렬 — 진할수록 큰 확률. 행마다 합 = 1.
+      </div>
+      <div class="matwrap"><div class="mat" id="heatGrid"></div></div>
+      <div style="font-size:12px;color:var(--ink-faint);margin-top:9px">
+        shape <span class="mono">[B, a, s, s] = [1, 1, 6, 6]</span> ·
+        원소 36개 × 2 B = <b class="mono" style="color:var(--ink)">72 B</b>
+      </div>
+    </div>
+    <div>
+      <div style="font-size:12px;color:var(--ink-faint);margin-bottom:6px">
+        같은 tensor를 실제 크기로 — <span class="mono">B=1, a=32, bf16, L=80 layers</span>
+      </div>
+      <div class="btns" id="memBtns"></div>
+      <div class="sumrow" id="memOut"></div>
+      <div class="callout" id="memNote">—</div>
+    </div>
+  </div>
+
+  <div class="callout no">
+    <b>이 표는 저장 비용은 최악, 재계산 비용은 최선이다.</b>
+    softmax의 backward는 <span class="mono">dS = P ⊙ (dP − rowsum(dP ⊙ P))</span> —
+    <b>출력 P를 필요로 한다</b>. 그래서 forward가 이 [B,a,s,s] 표를 backward까지 붙들고 있어야 한다.
+    그런데 이걸 다시 만드는 비용은 <b>matmul 한 번 + softmax 한 번</b>뿐이다.
+    ch-03의 selective recomputation과 ch-04의 FlashAttention은 정확히 이 비대칭을 노린다 —
+    HBM에 절대 쓰지 않고 SRAM tile 안에서 만들어 쓰고 버린다.
+    <span class="dimmed">(그래서 §2 step 6의 "max 하나 + 합 하나"가 중요하다 —
+    tile을 옮겨가며 그 두 통계량만 갱신하면 전체 softmax를 정확히 복원할 수 있다.)</span>
+  </div>
+</div>
+
+<p class="foot">
+  ← 돌아가기: <a href="../read.md">ch-extra read.md</a> ·
+  질문 기록: <a href="../qa.md">qa.md</a><br>
+  이어지는 곳: ch-03 activation ledger(<span class="mono">2·s·b·h·L</span>, selective recompute) ·
+  ch-04 online softmax / FlashAttention(<span class="mono">5·a·s²·b</span> 항을 없애는 법)<br>
+  출처: Vaswani et al. 2017 §3.2.1–§3.2.3 &amp; 각주 4 · Korthikanti et al. 2022 (arXiv:2205.05198) §4.1
+</p>
+
+<script>
+"use strict";
+/* ==================== MATH CORE START ====================
+   여기부터 MATH CORE END까지는 DOM을 전혀 건드리지 않는 순수 계산부다.
+   (node로 따로 떼어 실행해 파이썬 기준값과 대조할 수 있도록 분리해 둔다.)   */
+
+const TOK  = ["나", "는", "어제", "책", "을", "읽었다"];
+const IDS  = [4821, 17, 9302, 6154, 23, 31877];
+const DIMN = ["명사", "조사", "동사", "시간"];        // 설명용 축 이름 (실제 모델엔 이런 라벨 없음)
+const VDIM = ["주체", "관계", "행위", "시점"];        // value 공간 축 이름
+const N = 6, DM = 4, DH = 4, SQRT_DK = Math.sqrt(DH); // = 2
+
+/* embedding table의 6개 행. norm ≈ √d = 2 — RMSNorm을 통과한 뒤와 비슷한 크기다. */
+const X = [
+  [ 1.6,  0.6,  0.2, -0.2],   // 나
+  [ 0.4,  1.8, -0.2,  0.2],   // 는
+  [ 0.2,  0.4, -0.4,  1.8],   // 어제
+  [ 2.0,  0.4,  0.4, -0.2],   // 책
+  [ 0.2,  1.6,  0.6, -0.4],   // 을
+  [-0.2,  0.2,  1.8,  0.6]    // 읽었다
+];
+/* 행 = 입력 축(명사/조사/동사/시간), 열 = 출력 축. 학습되는 유일한 파라미터. */
+const WQ = [                    // "무엇을 찾는가"
+  [ 0.1,  0.9,  0.0,  0.1],     // 명사 → 조사를 찾는다
+  [ 0.8,  0.1,  0.0,  0.0],     // 조사 → 명사를 찾는다
+  [ 0.9,  0.0,  0.1,  0.4],     // 동사 → 명사(목적어) + 시간
+  [ 0.0,  0.0,  0.7,  0.1]      // 시간 → 동사를 찾는다
+];
+const WK = [                    // "무엇을 광고하는가"
+  [ 0.9,  0.1,  0.0,  0.0],
+  [ 0.1,  0.9,  0.0,  0.0],
+  [ 0.0,  0.0,  0.9,  0.1],
+  [ 0.0,  0.0,  0.2,  0.9]
+];
+const WV = [                    // "선택되면 무엇을 넘기는가"
+  [ 0.9,  0.1,  0.0,  0.0],
+  [ 0.0,  0.7,  0.1,  0.0],
+  [ 0.1,  0.0,  0.9,  0.1],
+  [ 0.0,  0.1,  0.0,  0.9]
+];
+
+function matmul(A, B){
+  const n = A.length, kk = B.length, m = B[0].length, out = [];
+  for (let i = 0; i < n; i++){
+    const r = new Array(m).fill(0);
+    for (let t = 0; t < kk; t++){ const a = A[i][t]; for (let j = 0; j < m; j++) r[j] += a*B[t][j]; }
+    out.push(r);
+  }
+  return out;
+}
+function dot(a, b){ let s = 0; for (let t = 0; t < a.length; t++) s += a[t]*b[t]; return s; }
+
+const Q = matmul(X, WQ), K = matmul(X, WK), V = matmul(X, WV);
+
+/* S[i][j] = q_i · k_j  (raw), SS = S / √d_k */
+const S  = [], SS = [];
+for (let i = 0; i < N; i++){
+  const r = [], rs = [];
+  for (let j = 0; j < N; j++){ const d = dot(Q[i], K[j]); r.push(d); rs.push(d/SQRT_DK); }
+  S.push(r); SS.push(rs);
+}
+
+/* causal softmax: j > i 는 -inf → 확률 0. max를 빼도 결과는 동일(e^-m이 약분). */
+function causalSoftmax(row, i){
+  let m = -Infinity;
+  for (let j = 0; j <= i; j++) if (row[j] > m) m = row[j];
+  const ex = [], p = new Array(row.length).fill(0);
+  let sum = 0;
+  for (let j = 0; j <= i; j++){ const e = Math.exp(row[j] - m); ex.push(e); sum += e; }
+  for (let j = 0; j <= i; j++) p[j] = ex[j]/sum;
+  return {p, max:m, ex, sum};
+}
+const SM  = [], SMU = [], P = [], PU = [];
+for (let i = 0; i < N; i++){
+  const a = causalSoftmax(SS[i], i), b = causalSoftmax(S[i], i);
+  SM.push(a); SMU.push(b); P.push(a.p); PU.push(b.p);
+}
+
+/* output_i = Σ_j p_ij · v_j  (convex combination) */
+const OUT = [];
+for (let i = 0; i < N; i++){
+  const o = new Array(DH).fill(0);
+  for (let j = 0; j < N; j++){ const w = P[i][j]; if (!w) continue;
+    for (let t = 0; t < DH; t++) o[t] += w*V[j][t]; }
+  OUT.push(o);
+}
+
+/* ---- §5: W 없이 = XXᵀ (대칭), 그리고 RMSNorm 뒤 XXᵀ (대각이 행 최댓값) ---- */
+function rmsnorm(v){
+  let ms = 0; for (const z of v) ms += z*z; ms /= v.length;
+  const inv = 1/Math.sqrt(ms + 1e-5);
+  return v.map(z => z*inv);
+}
+const XN = X.map(rmsnorm);
+function gram(M){
+  const g = [];
+  for (let i = 0; i < N; i++){ const r = []; for (let j = 0; j < N; j++) r.push(dot(M[i], M[j])); g.push(r); }
+  return g;
+}
+const XXT = gram(X), XNT = gram(XN);
+
+/* ---- §4: gradient death (d_k = 64, 두 점수 24와 16 — 둘 다 ±3σ 안) ---- */
+const GD = (function(){
+  const s1 = 24, s2 = 16, sq = 8;
+  const pu = 1/(1 + Math.exp(-(s1 - s2)));            // unscaled softmax의 상위 확률
+  const ps = 1/(1 + Math.exp(-((s1 - s2)/sq)));       // scaled
+  const ju = pu*(1 - pu), js = ps*(1 - ps);           // softmax Jacobian 대각 p(1-p)
+  return {s1, s2, sq, pu, ps, ju, js, ratio: js/ju};
+})();
+
+/* ---- §4: Vaswani 검증 예제 (d_k = 4, key 3개) ---- */
+const VAS = (function(){
+  const q = [1,0,1,0], ks = [[1,0,1,0],[0,1,0,1],[1,1,0,0]], vs = [[1,0],[0,1],[1,1]];
+  const raw = ks.map(k => dot(q,k));
+  const build = arr => {
+    const ex = arr.map(Math.exp), sum = ex.reduce((a,b)=>a+b,0);
+    const w = ex.map(e => e/sum);
+    const o = [0,1].map(t => w.reduce((a,_,j) => a + w[j]*vs[j][t], 0));
+    return {sc:arr, ex, sum, w, o};
+  };
+  return {raw, scaled: build(raw.map(v => v/2)), unscaled: build(raw)};
+})();
+
+/* ---- §4: dot product 표준편차의 실측 (seed 고정 → 매번 같은 그림) ---- */
+function mulberry32(a){
+  return function(){
+    a |= 0; a = (a + 0x6D2B79F5) | 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+/* dims는 오름차순 — 누적합의 중간 지점에서 재기 때문에 한 번의 스트림으로 전부 잰다.
+   Box-Muller는 한 번에 두 개를 만드니 남는 하나를 캐시해 둔다. */
+function empiricalSD(dims, samples, seed){
+  const rnd = mulberry32(seed);
+  let spare = null;
+  function gauss(){
+    if (spare !== null){ const s = spare; spare = null; return s; }
+    const u1 = Math.max(rnd(), 1e-12), u2 = rnd();
+    const r = Math.sqrt(-2*Math.log(u1)), th = 2*Math.PI*u2;
+    spare = r*Math.sin(th);
+    return r*Math.cos(th);
+  }
+  const dmax = dims[dims.length - 1];
+  const s = new Array(dims.length).fill(0), ss = new Array(dims.length).fill(0);
+  for (let n = 0; n < samples; n++){
+    let acc = 0, di = 0;
+    for (let t = 1; t <= dmax; t++){
+      acc += gauss()*gauss();                    /* q_t · k_t 한 항 */
+      if (t === dims[di]){ s[di] += acc; ss[di] += acc*acc; di++; }
+    }
+  }
+  return dims.map((d, i) => {
+    const mean = s[i]/samples, varr = ss[i]/samples - mean*mean;
+    return {d, sd: Math.sqrt(varr), theory: Math.sqrt(d)};
+  });
+}
+const SD_DIMS    = [1,2,4,8,16,32,64,128,256,512];
+const SD_SAMPLES = 6000;
+const SD_EMP     = empiricalSD(SD_DIMS, SD_SAMPLES, 20250818);
+
+/* ---- §6: score tensor 크기 ---- */
+const MEM_S = [6, 512, 1024, 2048, 4096, 8192, 16384, 32768];
+function scoreBytes(s, heads, layers){ return heads*s*s*2*layers; }
+const TOY_BYTES = scoreBytes(6, 1, 1);                 // = 72
+const REF_BYTES = scoreBytes(4096, 32, 1);             // = 1,073,741,824
+const CROSSOVER = 34*4096/(5*32);                      // = 870.4 tokens
+/* ==================== MATH CORE END ==================== */
+
+/* ==================================================================
+   표시 유틸
+   ================================================================== */
+const $ = id => document.getElementById(id);
+function fx(x, p){
+  p = (p === undefined) ? 4 : p;
+  let v = x;
+  if (Math.abs(v) < 5e-7) v = 0;
+  return v.toFixed(p);
+}
+function gbytes(b){
+  if (b >= 1e9) return (b/1e9).toFixed(2) + " GB";
+  if (b >= 1e6) return (b/1e6).toFixed(2) + " MB";
+  if (b >= 1e3) return (b/1e3).toFixed(2) + " kB";
+  return b + " B";
+}
+function commas(n){ return n.toLocaleString("en-US"); }
+function vecRow(label, vec, cls, opts){
+  opts = opts || {};
+  const cells = vec.map((z, t) => {
+    const hi = (opts.hi !== undefined && opts.hi === t) ? " hi" : "";
+    const pend = (opts.upto !== undefined && t > opts.upto) ? " pend" : "";
+    const txt  = pend ? "·" : fx(z, opts.p === undefined ? 2 : opts.p);
+    return `<span class="num ${cls}${hi}${pend}">${txt}</span>`;
+  }).join("");
+  return `<div class="vec"><span class="lbl">${label}</span>${cells}</div>`;
+}
+function miniDot(labA, a, labB, b, resLab, scaleBy){
+  const prods = a.map((z, t) => z*b[t]);
+  const total = prods.reduce((s, z) => s + z, 0);
+  const th = a.map((_, t) => `<th>t = ${t}</th>`).join("");
+  const ra = a.map(z => `<td>${fx(z, 2)}</td>`).join("");
+  const rb = b.map(z => `<td>${fx(z, 2)}</td>`).join("");
+  const rp = prods.map(z => `<td class="${Math.abs(z) < 1e-9 ? "zero" : ""}">${fx(z, 4)}</td>`).join("");
+  const scaled = (scaleBy ? `<tr><td class="lb">÷ √d<sub>k</sub> = 2</td>` +
+      `<td colspan="${a.length}" class="sum">${fx(total/SQRT_DK, 4)}</td></tr>` : "");
+  return `<div class="tblwrap"><table class="mini">
+    <tr><th></th>${th}<th>합</th></tr>
+    <tr><td class="lb">${labA}</td>${ra}<td class="lb">—</td></tr>
+    <tr><td class="lb">${labB}</td>${rb}<td class="lb">—</td></tr>
+    <tr class="prod"><td class="lb">곱</td>${rp}<td class="sum">${fx(total, 4)}</td></tr>
+    ${scaled}
+    <tr><td class="lb">${resLab}</td><td colspan="${a.length + 1}" class="sum">${fx(scaleBy ? total/SQRT_DK : total, 4)}</td></tr>
+  </table></div>`;
+}
+
+/* ==================================================================
+   step 정의 — 선택된 query i에 따라 길이가 달라진다
+   ================================================================== */
+let QI = 5;           // 선택된 query token index
+let ip = 0;           // 현재 step
+let steps = [];
+let playing = null;
+let SCALED = true;    // §4 토글
+let W3 = "ok";        // §5 토글
+let MEMI = 4;         // §6 선택 (기본 s = 4096)
+
+function buildSteps(){
+  const L = [];
+  L.push({st:1, k:"intro"});
+  for (let j = 0; j < N; j++) L.push({st:1, k:"tok", j});
+  L.push({st:2, k:"W"});
+  for (let j = 0; j < DH; j++) L.push({st:2, k:"qcomp", j});
+  L.push({st:2, k:"qall"}); L.push({st:2, k:"kall"}); L.push({st:2, k:"vall"});
+  L.push({st:3, k:"intro"});
+  for (let j = 0; j <= QI; j++) L.push({st:3, k:"dot", j});
+  L.push({st:3, k:"rest"});
+  L.push({st:4, k:"divide"}); L.push({st:4, k:"why"}); L.push({st:4, k:"grad"});
+  L.push({st:5, k:"row"}); L.push({st:5, k:"all"});
+  L.push({st:6, k:"max"}); L.push({st:6, k:"exp"}); L.push({st:6, k:"sum"});
+  L.push({st:6, k:"norm"}); L.push({st:6, k:"allrows"});
+  L.push({st:7, k:"intro"});
+  for (let j = 0; j <= QI; j++) L.push({st:7, k:"acc", j});
+  L.push({st:7, k:"done"});
+  L.push({st:8, k:"heat"});
+  steps = L;
+}
+const STAGE_NAME = {
+  1:"embedding lookup", 2:"Q · K · V 투영", 3:"score = q·k", 4:"÷ √d_k",
+  5:"causal mask", 6:"softmax", 7:"output = Σ p·v", 8:"[B,a,s,s] 그리고 memory"
+};
+function cur(){ return steps[Math.min(ip, steps.length - 1)]; }
+function firstIndexOfStage(st){ for (let i = 0; i < steps.length; i++) if (steps[i].st === st) return i; return 0; }
+
+/* ==================================================================
+   narration + stage view
+   ================================================================== */
+function narrationFor(c){
+  const i = QI, ti = TOK[i];
+  if (c.st === 1 && c.k === "intro") return {
+    h:"stage 1 — token은 아직 숫자가 아니다",
+    t:`문장을 token <b>6개</b>로 잘랐다. attention이 하는 일은 이 6개 사이에서
+       <b>누가 누구를 얼마나 참조할지</b>를 정하고, 그 비율로 내용을 섞는 것이다.
+       지금부터 그 한 번을 끝까지 손으로 따라간다.`};
+  if (c.st === 1 && c.k === "tok"){
+    const j = c.j;
+    const extra = j === 0
+      ? `embedding은 <b>계산이 아니라 lookup</b>이다 — <span class="mono">[V, d]</span> 표에서
+         ${IDS[j]}번째 <b>행을 그대로 꺼내온다</b>. <b>V는 개수</b>("서로 다른 token이 몇 종류냐"),
+         <b>d는 공간</b>("각 token을 몇 차원에 놓느냐") — 둘은 전혀 다른 축이다 (ch-02 qa-deep-2 Q7).`
+      : j === 1
+      ? `같은 표의 다른 행일 뿐이다. token마다 계산이 다른 게 아니라 <b>행 번호만 다르다</b>.`
+      : j === 2
+      ? `여기 4개 축에 <b>명사/조사/동사/시간</b>이라는 이름을 붙여 뒀지만, 실제 모델의 축에는
+         이런 라벨이 없다 — 학습이 알아서 만든 방향들이다. 설명을 위한 장치다.`
+      : j === 3
+      ? `각 행의 norm이 대략 <b>2 = √d</b>인 걸 보라. RMSNorm을 통과한 뒤의 크기가 정확히 이렇다
+         (<span class="mono">‖x‖ = √d_model</span>). 실제 layer 입력도 이 상태로 들어온다.`
+      : j === 4
+      ? `boson 기준으로 이 표는 <span class="mono">[248,000, 4096]</span> —
+         248,000 × 4096 × 2 B = <b>${gbytes(248000*4096*2)}</b>짜리 weight다.
+         우리는 그중 6행 × 4열만 보고 있는 셈이다.`
+      : `6개 행이 다 나왔다. 이 <span class="mono">X (6×4)</span>가 attention의 입력이다.
+         참고로 <b>여기까지는 token 사이에 아무 정보 교환도 없다</b> — 섞는 일은 전부 다음 단계에서 일어난다.`;
+    return {h:`stage 1 — "${TOK[j]}" → id ${IDS[j]} → 4차원 vector`, t:extra};
+  }
+  if (c.st === 2 && c.k === "W") return {
+    h:"stage 2 — 여기서 처음으로 학습되는 파라미터가 등장한다",
+    t:`같은 <span class="mono">x</span>를 <b>세 번 서로 다르게</b> 투영한다.
+       <span class="mono cq">W_Q</span>, <span class="mono ck">W_K</span>,
+       <span class="mono cv">W_V</span>는 각각 <span class="mono">[d_model, d_head] = [4,4]</span>.
+       attention이 "무엇을 어떻게 볼지" 아는 근거는 <b>전부 이 세 행렬 안에</b> 있다.
+       입력 x는 그대로고, 바뀌는 건 이 행렬들뿐이다.`};
+  if (c.st === 2 && c.k === "qcomp"){
+    const j = c.j;
+    return {h:`stage 2 — q<sub>${i}</sub>[${j}] 하나를 손으로`,
+      t: j === 0
+      ? `matmul을 블랙박스로 두지 않는다. 출력 성분 하나는 <b>곱 4개의 합</b>이다:
+         <span class="mono">q[${j}] = Σ<sub>t</sub> x[t]·W_Q[t][${j}]</span>.
+         아래 표의 "곱" 줄을 왼쪽부터 더하면 정확히 결과가 나온다.`
+      : `열이 바뀌면 <b>W_Q의 다른 열</b>을 쓴다. x는 그대로다. 이걸 d_head번 반복한 게
+         "x @ W_Q" 한 줄의 실체이고, 그걸 6개 token에 대해 또 반복한 게 <span class="mono">X @ W_Q</span>다.`};
+  }
+  if (c.st === 2 && c.k === "qall") return {
+    h:"stage 2 — Q 완성: 내가 뭘 찾고 있나",
+    t:`6개 token 전부 <b>같은</b> <span class="mono cq">W_Q</span>를 통과했다.
+       token마다 다른 행렬을 쓰는 게 아니다. q는 <b>"내가 찾는 것"</b>이다 —
+       "${ti}"의 q는 <span class="mono">${Q[i].map(z=>fx(z,2)).join(", ")}</span>,
+       0번 축(명사를 찾는 축)이 가장 크다. 동사가 목적어를 찾는 셈이다.`};
+  if (c.st === 2 && c.k === "kall") return {
+    h:"stage 2 — K 완성: 나는 뭘 광고하나",
+    t:`k는 <b>"내가 내걸고 있는 간판"</b>이다. q와 <b>반드시 같은 공간</b>에 살아야 한다 —
+       곧 dot product로 비교할 거니까. 그래서 <span class="mono">d_k(q) = d_k(k)</span>는
+       <b>강제</b>다. 반면 <span class="mono">d_v</span>는 자유롭다.`};
+  if (c.st === 2 && c.k === "vall") return {
+    h:"stage 2 — V 완성: 선택되면 뭘 넘겨주나",
+    t:`v는 <b>점수 계산에 전혀 들어가지 않는다</b>. 점수가 다 정해진 뒤 <b>가중합의 재료</b>로만 쓰인다.
+       그래서 v의 차원은 q·k와 무관하게 정할 수 있다. attention = <b>미분 가능한 dictionary lookup</b>:
+       key로 찾고(q·k), value를 꺼내온다(Σ p·v).`};
+  if (c.st === 3 && c.k === "intro") return {
+    h:`stage 3 — 질문자 i = ${i} "${ti}"`,
+    t:`이제 <span class="mono cq">q<sub>${i}</sub></span>와 문장 안 <b>모든</b>
+       <span class="mono ck">k<sub>j</sub></span>를 하나씩 dot product 한다.
+       결과 6개가 <span class="mono">[6,6]</span> score 행렬의 <b>${i}번째 행</b>이다.
+       "얼마나 잘 맞는가"의 척도로 <b>내적</b>을 쓰는 이유는 단순하다 —
+       같은 방향이면 크고, 직교면 0이고, 무엇보다 <b>GEMM 한 번</b>으로 끝난다.`};
+  if (c.st === 3 && c.k === "dot"){
+    const j = c.j, raw = S[i][j];
+    const best = j === 3 && i === 5;
+    return {h:`stage 3 — score[${i}][${j}] = q<sub>${i}</sub> · k<sub>${j}</sub> = ${fx(raw,4)}`,
+      t: best
+      ? `<b class="ok">지금까지 중 가장 큰 값</b>이다 — "읽었다"가 "책"을 가장 강하게 원한다.
+         우연이 아니다: <span class="mono cq">W_Q</span>가 동사 축을 "명사 찾기" 축으로 보내고,
+         <span class="mono ck">W_K</span>가 명사 축을 "명사 광고" 축으로 보냈기 때문이다.
+         <b>두 행렬이 만든 결과</b>지 embedding이 만든 게 아니다.`
+      : `표의 "곱" 줄 4칸을 더한 값이다. 이 한 칸이 <b>attention 행렬의 원소 하나</b>다.
+         자연어로는 <b>"${ti}"가 "${TOK[j]}"를 얼마나 원하는가</b>.
+         ${j === i ? `자기 자신과의 점수도 <b>똑같이 계산한다</b> — self-attention에서 자기 칸은 특별대우가 없다.` : ""}`};
+  }
+  if (c.st === 3 && c.k === "rest") return {
+    h:"stage 3 — 나머지 5개 행도 같은 방식",
+    t:`실제로는 이걸 for문으로 돌리지 않는다. <span class="mono">S = Q(6×4) @ Kᵀ(4×6)</span>
+       <b>matmul 한 번</b>이다 — 비용 <span class="mono">2·N²·d_k = 2·36·4 = 288 FLOPs</span>.
+       실제 크기에서는 <span class="mono">2·B·N²·d_k</span>, 즉 <b>N에 제곱</b>으로 늘어난다.
+       그리고 지금 만든 이 표가 <b>메모리에 실체로 존재</b>한다는 사실이 ch-03/ch-04의 전부다.`};
+  if (c.st === 4 && c.k === "divide") return {
+    h:"stage 4 — 전부 √d_k = 2로 나눈다",
+    t:`값이 절반이 됐을 뿐 <b>순서는 하나도 안 바뀐다</b>. 그럼 왜 나누는가?
+       순서가 아니라 <b>간격</b>을 줄이려는 것이다 — softmax는 값의 순서가 아니라
+       <b>차이</b>에 반응하기 때문이다. 다음 두 step이 그 이유다.`};
+  if (c.st === 4 && c.k === "why") return {
+    h:"stage 4 — 이유 ①: 점수의 표준편차가 √d로 커진다",
+    t:`dot product는 <b>d_k개 항의 합</b>이다. 성분이 독립·평균0·분산1이면 합의 분산은 정확히
+       <span class="mono">d_k</span>, 표준편차는 <span class="mono">√d_k</span>다.
+       즉 <b>d가 커질수록 점수가 √d배씩 벌어진다</b>. 아래 §4 그래프에서 파란 실측점이
+       주황 이론선 <span class="mono">√d</span>에 정확히 얹히는 걸 봐라. <span class="mono">√d_k</span>로
+       나누면 <b>어떤 d에서도 분산이 정확히 1</b>로 돌아온다.`};
+  if (c.st === 4 && c.k === "grad") return {
+    h:"stage 4 — 이유 ②: 안 나누면 학습 자체가 멈춘다",
+    t:`점수가 벌어지면 softmax가 one-hot으로 saturate하고, softmax Jacobian
+       <span class="mono">∂p_i/∂s_j = p_i(δ_ij − p_j)</span>가 0으로 죽는다.
+       이 Jacobian은 gradient가 <span class="mono cq">W_Q</span>,
+       <span class="mono ck">W_K</span>에 도달하는 <b>유일한 경로</b>다 —
+       죽으면 <b>"어디를 볼지"를 배우는 능력 자체가 정지</b>한다.
+       오른쪽 빨간 상자의 <b>${GD.ratio.toFixed(0)}배</b>가 그 값이다.`};
+  if (c.st === 5 && c.k === "row") return {
+    h:`stage 5 — causal mask: j > ${i} 를 −∞ 로`,
+    t:`j > i 칸에 <b>−∞</b>를 더한다. <span class="mono">e<sup>−∞</sup> = 0</span>이므로 softmax 뒤
+       <b>정확히 0</b>이다 — 감점이 아니라 <b>완전 차단</b>이다.
+       ${i === N-1
+         ? `"${ti}"는 마지막 token이라 막힐 게 없다. 대신 <b>행 3("책")</b>을 봐라 —
+            "책"의 q는 조사를 찾는데, 정작 자기 조사인 "을"은 <b>뒤에 있어서 못 본다</b>.
+            그래서 앞의 "는"으로 간다. mask는 이런 식으로 <b>의미까지 바꾼다</b>.`
+         : `행 ${i}은 자기 뒤 ${N-1-i}칸이 통째로 죽는다.`}`};
+  if (c.st === 5 && c.k === "all") return {
+    h:"stage 5 — 위쪽 삼각형 전체가 죽는다",
+    t:`N² = 36칸 중 실제로 쓰는 건 <span class="mono">N(N+1)/2 = 21</span>칸.
+       이게 <b>teacher forcing이 성립하는 근거</b>이고, 동시에 나중에
+       <b>KV cache가 성립하는 근거</b>다 — <span class="mono">k_j = W_K x_j</span>는 token j에만
+       의존하고 <b>뒤 token이 와도 절대 안 바뀐다</b>.
+       <b class="bad">구현 주의</b>: <span class="mono">-1e9</span>는 fp16에서 표현 불가다
+       (최대 65504 → −inf로 캐스팅). <span class="mono">torch.finfo(dtype).min</span>을 써라.
+       리터럴 −inf도 위험하다 — 행 전체가 막히면 <span class="mono">0/0 = NaN</span>이 되어
+       backward를 통째로 오염시킨다.`};
+  if (c.st === 6){
+    const sm = SM[i];
+    if (c.k === "max") return {h:`stage 6 — ① 행 ${i}의 최댓값 m = ${fx(sm.max,4)}`,
+      t:`먼저 살아있는 칸들 중 <b>최댓값</b>을 찾는다 (여기서는 j = ${SS[i].slice(0,i+1).indexOf(sm.max)},
+         "${TOK[SS[i].slice(0,i+1).indexOf(sm.max)]}" 열). 이 값은 곧 빼기 위해 구한다.`};
+    if (c.k === "exp") return {h:"stage 6 — ② exp(x − m)",
+      t:`각 원소에서 m을 <b>빼고</b> exp를 취한다. 왜 빼는가?
+         <span class="mono">exp(x)</span>는 x가 조금만 커도 넘친다 — fp16은 <span class="mono">x > 11.09</span>에서
+         이미 inf다. m을 빼면 최댓값이 정확히 <span class="mono">exp(0) = 1</span>이 되어 <b>절대 overflow하지 않는다</b>.
+         그리고 결과는 <b>완전히 동일하다</b> — 분자·분모에서 <span class="mono">e<sup>−m</sup></span>이 그대로 약분되니까.
+         <b>정확도를 희생한 근사가 아니라 항등변형</b>이다.`};
+    if (c.k === "sum") return {h:`stage 6 — ③ 합 = ${fx(sm.sum,4)}`,
+      t:`exp들을 더한다. 이 <b>"최댓값 m 하나 + 합 ℓ 하나"</b>가 ch-04 <b>online softmax</b>가
+         tile을 옮겨다니며 들고 가는 바로 그 두 통계량이다. 새 tile에서 더 큰 m′을 만나면
+         이미 쌓은 합에 <span class="mono">e<sup>m−m′</sup></span>를 곱해 보정하면 되므로,
+         <b>행 전체를 한 번에 보지 않고도</b> 정확한 softmax를 낼 수 있다.
+         FlashAttention이 [s,s] 표를 HBM에 안 쓰고 넘어가는 트릭의 핵심이 이것이다.`};
+    if (c.k === "norm") return {h:"stage 6 — ④ 합으로 나눠 확률로",
+      t:`각 exp를 합으로 나눈다. 행 ${i}의 합은 <span class="mono">${fx(P[i].reduce((a,b)=>a+b,0), 6)}</span> — <b>정확히 1</b>.
+         이제 이 행은 <b>확률분포</b>다. 최댓값은 j = ${P[i].indexOf(Math.max.apply(null, P[i]))}
+         ("${TOK[P[i].indexOf(Math.max.apply(null, P[i]))]}")에 <span class="mono">${fx(Math.max.apply(null, P[i]),4)}</span>.`};
+    return {h:"stage 6 — ⑤ 6개 행 전부",
+      t:`softmax는 <span class="mono">dim = −1</span>, 즉 <b>행 방향에만</b> 걸린다.
+         각 행이 독립적으로 합 1이고, <b>열 방향 합은 1이 아니다</b>.
+         행 0은 볼 게 자기밖에 없어서 <span class="mono">1.0</span> 하나 — 첫 token의 attention은 언제나 자명하다.`};
+  }
+  if (c.st === 7 && c.k === "intro") return {
+    h:"stage 7 — output = Σ p·v",
+    t:`이제 확률로 <span class="mono cv">v</span>들을 <b>가중합</b>한다:
+       <span class="mono">o_${i} = Σ_j p_${i}j · v_j</span>.
+       가중치가 전부 양수이고 합이 1이므로 결과는 반드시 <b>v들의 convex hull 안</b>에 들어간다 —
+       attention은 <b>새 값을 만들지 않는다. 있는 값을 섞을 뿐이다.</b>`};
+  if (c.st === 7 && c.k === "acc"){
+    const j = c.j;
+    return {h:`stage 7 — + ${fx(P[i][j],4)} × v<sub>${j}</sub> ("${TOK[j]}")`,
+      t:`v<sub>${j}</sub>의 각 성분에 <span class="mono">${fx(P[i][j],4)}</span>를 곱해 누적한다.
+         ${j === 3 && i === 5
+           ? `"책"의 가중치가 가장 커서 <b>이 한 줄이 결과를 가장 많이 밀어준다</b>.`
+           : `가중치가 작으면 기여도 작다 — 그래서 attention을 "soft"라고 부른다.
+              hard argmax였다면 여기서 gradient가 <b>거의 어디서나 0</b>이라 학습이 불가능했을 것이다.`}`};
+  }
+  if (c.st === 7 && c.k === "done") return {
+    h:"stage 7 — head 하나의 출력 완성",
+    t:`<span class="mono">o_${i} = [${OUT[i].map(z=>fx(z,4)).join(", ")}]</span>.
+       실제 모델은 여기에 <span class="mono">W_O</span>를 곱해 residual stream으로 되돌리고,
+       head가 여러 개면 <b>concat 뒤</b> 한 번에 곱한다. 그 concat은 복사가 아니라
+       <b>transpose + reshape</b> — 원래 하나의 연속 버퍼다.`};
+  return {
+    h:"stage 8 — 이 표의 정체: [B, a, s, s]",
+    t:`완성된 확률 행렬 전체다. shape이 <span class="mono">[B, a, s, s]</span>이고,
+       우리 장난감은 <span class="mono">1×1×6×6×2 B = ${TOY_BYTES} B</span>.
+       그런데 <span class="mono">B=1, a=32, s=4096, bf16</span>이면 같은 tensor가
+       <b>${gbytes(REF_BYTES)}</b>, 그것도 <b>layer마다</b>. 80 layer면
+       <b>${gbytes(REF_BYTES*80)}</b>. ch-03/ch-04에서 계속 나오는
+       <span class="mono">5·a·s²·b</span> 항이 <b>바로 이 표</b>다. §6에서 직접 만져봐라.`};
+}
+
+function stageViewFor(c){
+  const i = QI;
+  /* ---- stage 1 ---- */
+  if (c.st === 1){
+    if (c.k === "intro"){
+      return `<div class="sent">${TOK.map((t, j) =>
+        `<div class="tokbox"><div class="w">${t}</div><div class="id">id ${IDS[j]}</div></div>`).join("")}</div>
+        <div class="callout info">이 6개 사이의 <b>모든 쌍</b>에 점수를 매기는 게 attention이다 —
+        6×6 = 36쌍. 그래서 비용이 <b>N에 제곱</b>이다.</div>`;
+    }
+    const j = c.j;
+    let rows = "";
+    for (let r = 0; r <= j; r++){
+      rows += vecRow(`x[${r}] ${TOK[r]}`, X[r], "", {p:2});
+    }
+    const norm = Math.sqrt(dot(X[j], X[j]));
+    return `<div class="stagerow">
+      <div>
+        <table class="mini">
+          <tr><th>token</th><th>id</th><th>표에서 하는 일</th></tr>
+          <tr><td class="lb">"${TOK[j]}"</td><td>${IDS[j]}</td>
+              <td class="lb">E[${IDS[j]}, :] 행을 그대로 복사</td></tr>
+        </table>
+        <div style="margin-top:10px">${vecRow(`x[${j}]`, X[j], "hi", {p:2})}</div>
+        <div style="font-size:11.5px;color:var(--ink-faint);margin-top:6px" class="mono">
+          축 이름: ${DIMN.join(" / ")} &nbsp;·&nbsp; ‖x‖ = ${fx(norm, 4)} (≈ √d = 2)
+        </div>
+      </div>
+      <div>${rows}</div></div>`;
+  }
+  /* ---- stage 2 ---- */
+  if (c.st === 2){
+    if (c.k === "W"){
+      const wt = (name, W, cls) => {
+        let h = `<div style="font-size:12px;margin:0 0 3px" class="${cls}"><b>${name}</b>
+          <span class="dimmed">[4,4]</span></div>`;
+        for (let r = 0; r < DM; r++) h += vecRow(DIMN[r] + " 행", W[r], cls === "cq" ? "q" : cls === "ck" ? "k" : "v", {p:2});
+        return `<div>${h}</div>`;
+      };
+      return `<div class="stagerow">${wt("W_Q — 무엇을 찾는가", WQ, "cq")}
+        ${wt("W_K — 무엇을 광고하는가", WK, "ck")}
+        ${wt("W_V — 무엇을 넘기는가", WV, "cv")}</div>
+        <div class="callout">행 = 입력 축, 열 = 출력 축. 예를 들어 <span class="mono cq">W_Q</span>의
+        "동사" 행이 <span class="mono">[0.9, 0, 0.1, 0.4]</span>인 건
+        <b>"동사스러운 token은 명사를 찾아라"</b>를 인코딩한 것이다. 실제 모델은 이걸
+        <b>gradient로 스스로 찾아낸다</b> — 여기선 설명을 위해 손으로 심었다.</div>`;
+    }
+    if (c.k === "qcomp"){
+      const j = c.j;
+      const col = WQ.map(r => r[j]);
+      const partial = Q[i].map((z, t) => t <= j ? z : 0);
+      return `${miniDot(`x[${i}] "${TOK[i]}"`, X[i], `W_Q[:, ${j}]`, col, `q<sub>${i}</sub>[${j}]`, false)}
+        <div style="margin-top:10px">${vecRow(`q[${i}] 진행`, partial, "q", {p:2, upto:j, hi:j})}</div>
+        <div style="font-size:11.5px;color:var(--ink-faint);margin-top:6px">
+          <span class="mono">W_Q[:, ${j}]</span> = W_Q의 ${j}번째 <b>열</b>
+          (${DIMN.map((d, t) => `${d}행 ${fx(WQ[t][j],1)}`).join(", ")})
+        </div>`;
+    }
+    const which = c.k === "qall" ? {M:Q, cls:"q", nm:"Q", w:"W_Q"} :
+                  c.k === "kall" ? {M:K, cls:"k", nm:"K", w:"W_K"} :
+                                   {M:V, cls:"v", nm:"V", w:"W_V"};
+    let rows = "";
+    for (let r = 0; r < N; r++) rows += vecRow(`${which.nm.toLowerCase()}[${r}] ${TOK[r]}`, which.M[r], which.cls, {p:2});
+    const axes = c.k === "vall" ? VDIM : DIMN.map(d => "찾는:" + d);
+    return `<div>${rows}</div>
+      <div style="font-size:11.5px;color:var(--ink-faint);margin-top:8px" class="mono">
+        ${which.nm} = X @ ${which.w} &nbsp;·&nbsp; [6,4] @ [4,4] → [6,4] &nbsp;·&nbsp;
+        축: ${axes.join(" / ")}</div>`;
+  }
+  /* ---- stage 3 ---- */
+  if (c.st === 3){
+    if (c.k === "intro"){
+      return `<div class="stagerow">
+        <div>${vecRow(`q[${i}] "${TOK[i]}"`, Q[i], "q", {p:2})}
+          <div style="font-size:12px;color:var(--ink-faint);margin:8px 0 4px">비교 대상 (모든 k):</div>
+          ${K.map((k, j) => vecRow(`k[${j}] ${TOK[j]}`, k, "k", {p:2})).join("")}</div></div>`;
+    }
+    if (c.k === "dot"){
+      const j = c.j;
+      const done = [];
+      for (let t = 0; t <= j; t++) done.push(S[i][t]);
+      return `${miniDot(`q[${i}] "${TOK[i]}"`, Q[i], `k[${j}] "${TOK[j]}"`, K[j], `score[${i}][${j}]`, false)}
+        <div style="margin-top:10px">${vecRow(`행 ${i} 진행`, S[i].map((z,t)=> t<=j?z:0), "", {p:4, upto:j, hi:j})}</div>`;
+    }
+    let h = `<div class="tblwrap"><table class="mini"><tr><th>i \\ j</th>${
+      TOK.map((t,j)=>`<th>${j} ${t}</th>`).join("")}</tr>`;
+    for (let r = 0; r < N; r++){
+      h += `<tr><td class="lb">${r} ${TOK[r]}</td>${S[r].map((z,jj)=>
+        `<td class="${r===i?"sum":""}">${fx(z,4)}</td>`).join("")}</tr>`;
+    }
+    h += `</table></div>`;
+    return h + `<div style="font-size:11.5px;color:var(--ink-faint);margin-top:8px" class="mono">
+      S = Q @ Kᵀ · [6,4] @ [4,6] → [6,6] · 2·N²·d_k = 288 FLOPs</div>`;
+  }
+  /* ---- stage 4 ---- */
+  if (c.st === 4){
+    if (c.k === "divide"){
+      return `<div class="tblwrap"><table class="mini">
+        <tr><th></th>${TOK.map((t,j)=>`<th>${j} ${t}</th>`).join("")}</tr>
+        <tr><td class="lb">raw score</td>${S[i].map(z=>`<td>${fx(z,4)}</td>`).join("")}</tr>
+        <tr class="prod"><td class="lb">÷ √d_k = 2</td>${SS[i].map(z=>`<td>${fx(z,4)}</td>`).join("")}</tr>
+        </table></div>
+        <div style="font-size:12px;color:var(--ink-dim);margin-top:8px">
+        최댓값 <span class="mono">${fx(Math.max.apply(null, S[i].slice(0,i+1)),4)}</span> →
+        <span class="mono">${fx(Math.max.apply(null, SS[i].slice(0,i+1)),4)}</span>,
+        최댓값−최솟값 간격 <span class="mono">${fx(Math.max.apply(null,S[i].slice(0,i+1))-Math.min.apply(null,S[i].slice(0,i+1)),4)}</span> →
+        <span class="mono">${fx((Math.max.apply(null,S[i].slice(0,i+1))-Math.min.apply(null,S[i].slice(0,i+1)))/2,4)}</span>.
+        <b>순서는 그대로, 간격만 절반.</b></div>`;
+    }
+    if (c.k === "why"){
+      let h = `<div class="tblwrap"><table class="mini"><tr><th>d<sub>k</sub></th><th>sd = √d<sub>k</sub></th>
+        <th>실측 sd</th><th>나눈 뒤 sd</th></tr>`;
+      for (const r of SD_EMP){
+        if ([4,16,64,128,512].indexOf(r.d) < 0) continue;
+        h += `<tr><td class="lb">${r.d}${r.d===4?" (여기)":""}</td><td>${r.theory.toFixed(4)}</td>
+          <td>${r.sd.toFixed(4)}</td><td class="sum">${(r.sd/r.theory).toFixed(4)}</td></tr>`;
+      }
+      h += `</table></div>`;
+      return h + `<div class="callout ok">아래 <b>§4 패널</b>이 이 실측을 그래프로 그린다.
+        d_k = 4에서는 sd가 2라 별 문제가 없지만, 실전 <span class="mono">d_k = 128</span>이면
+        sd = <b>11.31</b>이고, N = 32768개 중 최댓값은 대략
+        <span class="mono">sd·√(2 ln N) = 11.31 × 4.56 ≈ 51.6</span>까지 간다.
+        <b>softmax 입력 간격이 수십 nat</b> — 완전한 one-hot이다.</div>`;
+    }
+    return `<div class="tblwrap"><table class="mini">
+      <tr><th>d_k = 64, 점수 24 vs 16</th><th>안 나눔</th><th>÷ 8</th></tr>
+      <tr><td class="lb">softmax 입력</td><td>24, 16</td><td>3.0, 2.0</td></tr>
+      <tr><td class="lb">상위 확률 p</td><td>${GD.pu.toFixed(5)}</td><td>${GD.ps.toFixed(6)}</td></tr>
+      <tr class="prod"><td class="lb">Jacobian p(1−p)</td><td>${GD.ju.toExponential(4)}</td>
+        <td>${GD.js.toFixed(6)}</td></tr>
+      <tr><td class="lb">gradient 비율</td><td colspan="2" class="sum">${GD.ratio.toFixed(0)}배</td></tr>
+      </table></div>
+      <div class="callout no"><b>24와 16은 이상한 값이 아니다.</b> d_k = 64면 sd = 8이므로
+      ±3σ = ±24 — 둘 다 <b>평범한 범위 안</b>의 값이다. 그런데 안 나누면 그 두 점수만으로
+      softmax가 <span class="mono">0.99966</span>까지 붙고 gradient가
+      <b>${GD.ratio.toFixed(0)}배</b> 줄어든다.
+      Vaswani §3.2.1이 "dot product가 커지면 softmax가 gradient가 극히 작은 영역으로 밀린다"고 쓴 게
+      정확히 이 숫자다.</div>`;
+  }
+  /* ---- stage 5 ---- */
+  if (c.st === 5){
+    if (c.k === "row"){
+      return `<div class="tblwrap"><table class="mini">
+        <tr><th>행 ${i}</th>${TOK.map((t,j)=>`<th>${j} ${t}</th>`).join("")}</tr>
+        <tr><td class="lb">scaled</td>${SS[i].map(z=>`<td>${fx(z,4)}</td>`).join("")}</tr>
+        <tr class="prod"><td class="lb">+ mask</td>${SS[i].map((z,j)=>
+          j<=i?`<td>${fx(z,4)}</td>`:`<td style="color:var(--c-mask)">−∞</td>`).join("")}</tr>
+        </table></div>
+        <pre><span class="cm"># 정석 구현 — dtype마다 최솟값이 다르므로 리터럴을 쓰지 않는다</span>
+mask = torch.ones(T, T, dtype=torch.bool).tril()      <span class="cm"># j &lt;= i 가 True (대각 포함!)</span>
+attn = attn.masked_fill(~mask, torch.<span class="st">finfo</span>(attn.dtype).<span class="st">min</span>)
+<span class="cm"># float16.min = -65504 · bfloat16.min = -3.3895e38 · float32.min = -3.4028e38</span></pre>`;
+    }
+    let h = `<div class="tblwrap"><table class="mini"><tr><th>i \\ j</th>${
+      TOK.map((t,j)=>`<th>${j} ${t}</th>`).join("")}</tr>`;
+    for (let r = 0; r < N; r++){
+      h += `<tr><td class="lb">${r} ${TOK[r]}</td>${SS[r].map((z,jj)=>
+        jj<=r ? `<td>${fx(z,4)}</td>` : `<td style="color:var(--c-mask);opacity:.75">−∞</td>`).join("")}</tr>`;
+    }
+    h += `</table></div>`;
+    return h + `<div class="callout ok">살아있는 칸 <b>21개</b> / 전체 36개.
+      dense kernel은 <b>죽은 15칸까지 계산하고 저장</b>한다 — 구조적으로 낭비인데
+      Korthikanti의 <span class="mono">5·a·s²·b</span>는 그 낭비를 그대로 센다.
+      FlashAttention-2는 대각선 위 KV block을 <b>아예 건너뛰어</b> attention 계산의 약 <b>절반</b>을 아낀다.</div>`;
+  }
+  /* ---- stage 6 ---- */
+  if (c.st === 6){
+    const sm = SM[i], live = i + 1;
+    const head = `<tr><th>행 ${i}</th>${TOK.slice(0, live).map((t,j)=>`<th>${j} ${t}</th>`).join("")}<th>합</th></tr>`;
+    const rowScaled = `<tr><td class="lb">masked score</td>${SS[i].slice(0,live).map(z=>
+      `<td>${fx(z,4)}</td>`).join("")}<td class="lb">—</td></tr>`;
+    if (c.k === "max"){
+      return `<div class="tblwrap"><table class="mini">${head}${
+        `<tr><td class="lb">masked score</td>${SS[i].slice(0,live).map(z=>
+          `<td class="${Math.abs(z-sm.max)<1e-12?"sum":""}">${fx(z,4)}</td>`).join("")}<td class="lb">—</td></tr>`}
+        <tr class="prod"><td class="lb">m (최댓값)</td><td colspan="${live+1}" class="sum">${fx(sm.max,4)}</td></tr>
+        </table></div>`;
+    }
+    if (c.k === "exp"){
+      return `<div class="tblwrap"><table class="mini">${head}${rowScaled}
+        <tr><td class="lb">x − m</td>${SS[i].slice(0,live).map(z=>
+          `<td>${fx(z-sm.max,4)}</td>`).join("")}<td class="lb">—</td></tr>
+        <tr class="prod"><td class="lb">exp(x − m)</td>${sm.ex.map(z=>
+          `<td>${fx(z,4)}</td>`).join("")}<td class="lb">—</td></tr>
+        </table></div>
+        <div class="callout">모든 <span class="mono">exp(x−m) ≤ 1</span>이다 — 최댓값 칸이 정확히 1.
+        <b>overflow가 구조적으로 불가능</b>해진다.</div>`;
+    }
+    if (c.k === "sum"){
+      let run = 0;
+      const runs = sm.ex.map(z => { run += z; return run; });
+      return `<div class="tblwrap"><table class="mini">${head}
+        <tr><td class="lb">exp(x − m)</td>${sm.ex.map(z=>`<td>${fx(z,4)}</td>`).join("")}<td class="lb">—</td></tr>
+        <tr class="prod"><td class="lb">누적합 ℓ</td>${runs.map(z=>`<td>${fx(z,4)}</td>`).join("")}
+          <td class="sum">${fx(sm.sum,4)}</td></tr>
+        </table></div>
+        <div class="callout info"><b>(m, ℓ) 두 숫자</b>가 이 행의 softmax를 완전히 요약한다.
+        ch-04 online softmax는 tile마다 이 둘만 갱신한다 —
+        새 최댓값 m′을 만나면 <span class="mono">ℓ ← ℓ·e<sup>m−m′</sup> + (새 tile의 합)</span>.
+        <b>근사가 아니라 정확히 같은 값</b>이다.</div>`;
+    }
+    if (c.k === "norm"){
+      return `<div class="tblwrap"><table class="mini">${head}
+        <tr><td class="lb">exp(x − m)</td>${sm.ex.map(z=>`<td>${fx(z,4)}</td>`).join("")}
+          <td>${fx(sm.sum,4)}</td></tr>
+        <tr class="prod"><td class="lb">÷ ℓ = p</td>${P[i].slice(0,live).map(z=>
+          `<td>${fx(z,4)}</td>`).join("")}<td class="sum">${fx(P[i].reduce((a,b)=>a+b,0),6)}</td></tr>
+        </table></div>` + barsHTML(P[i], live, "var(--c-p)");
+    }
+    let h = `<div class="tblwrap"><table class="mini"><tr><th>i \\ j</th>${
+      TOK.map((t,j)=>`<th>${j} ${t}</th>`).join("")}<th>행 합</th></tr>`;
+    for (let r = 0; r < N; r++){
+      h += `<tr><td class="lb">${r} ${TOK[r]}</td>${P[r].map((z,jj)=>
+        jj<=r ? `<td class="${r===i?"sum":""}">${fx(z,4)}</td>`
+              : `<td class="zero">0</td>`).join("")}<td>${fx(P[r].reduce((a,b)=>a+b,0),4)}</td></tr>`;
+    }
+    h += `</table></div>`;
+    return h;
+  }
+  /* ---- stage 7 ---- */
+  if (c.st === 7){
+    if (c.k === "intro"){
+      let rows = "";
+      for (let j = 0; j <= i; j++) rows += vecRow(`v[${j}] ${TOK[j]} ×${fx(P[i][j],4)}`, V[j], "v", {p:2});
+      return `<div>${rows}</div>
+        <div style="font-size:11.5px;color:var(--ink-faint);margin-top:8px" class="mono">
+        축: ${VDIM.join(" / ")} · o = Σ p·v ∈ conv{v_0 … v_${i}}</div>`;
+    }
+    if (c.k === "acc"){
+      const j = c.j;
+      const acc = new Array(DH).fill(0);
+      for (let t = 0; t <= j; t++) for (let d = 0; d < DH; d++) acc[d] += P[i][t]*V[t][d];
+      const contrib = V[j].map(z => z*P[i][j]);
+      return `<div class="tblwrap"><table class="mini">
+        <tr><th></th>${VDIM.map((d,t)=>`<th>${t} ${d}</th>`).join("")}</tr>
+        <tr><td class="lb">v[${j}] "${TOK[j]}"</td>${V[j].map(z=>`<td>${fx(z,2)}</td>`).join("")}</tr>
+        <tr><td class="lb">× p = ${fx(P[i][j],4)}</td>${contrib.map(z=>`<td>${fx(z,4)}</td>`).join("")}</tr>
+        <tr class="prod"><td class="lb">누적 o</td>${acc.map(z=>`<td class="sum">${fx(z,4)}</td>`).join("")}</tr>
+        </table></div>` + barsHTML(P[i], i+1, "var(--c-p)", j);
+    }
+    return `<div>${vecRow(`o[${i}] 최종`, OUT[i], "hi", {p:4})}</div>
+      <div class="tblwrap"><table class="mini">
+      <tr><th>성분</th>${VDIM.map((d,t)=>`<th>${t} ${d}</th>`).join("")}</tr>
+      <tr><td class="lb">min(v_j)</td>${VDIM.map((_,t)=>
+        `<td>${fx(Math.min.apply(null, V.slice(0,i+1).map(v=>v[t])),4)}</td>`).join("")}</tr>
+      <tr class="prod"><td class="lb">o[${i}]</td>${OUT[i].map(z=>`<td class="sum">${fx(z,4)}</td>`).join("")}</tr>
+      <tr><td class="lb">max(v_j)</td>${VDIM.map((_,t)=>
+        `<td>${fx(Math.max.apply(null, V.slice(0,i+1).map(v=>v[t])),4)}</td>`).join("")}</tr>
+      </table></div>
+      <div class="callout ok">모든 성분이 <b>min과 max 사이</b>에 있다 — convex combination이니 당연하다.
+      attention은 값을 <b>만들지 않고 섞는다</b>. 새로운 방향을 만드는 건 그 다음의
+      <span class="mono">W_O</span>와 MLP의 몫이다.</div>`;
+  }
+  /* ---- stage 8 ---- */
+  return `<div class="callout info">아래 <b>§6</b>에 완성된 heatmap과 실제 크기 계산이 있다.
+    지금 만든 <span class="mono">[6,6]</span> 표가 <span class="mono">[B, a, s, s]</span>로 커진 것이
+    training memory의 주범이다.</div>`;
+}
+
+function barsHTML(p, live, color, hiJ){
+  const mx = Math.max.apply(null, p.slice(0, live));
+  let h = `<div class="bars">`;
+  for (let j = 0; j < live; j++){
+    const w = mx > 0 ? (p[j]/mx*100) : 0;
+    const bright = (hiJ !== undefined && j === hiJ) ? "1" : ".55";
+    h += `<div class="barrow"><span class="nm">${j} ${TOK[j]}</span>
+      <span class="tk"><i class="fl" style="width:${w.toFixed(2)}%;background:${color};opacity:${bright}"></i></span>
+      <span class="vl">${fx(p[j],4)}</span></div>`;
+  }
+  return h + `</div>`;
+}
+
+/* ==================================================================
+   §3 누적 상태 렌더
+   ================================================================== */
+function matStateFor(c){
+  /* mode: none | raw | scaled | maskedrow | masked | probrow | prob */
+  if (c.st < 3) return {mode:"none", upto:-1};
+  if (c.st === 3) return c.k === "dot" ? {mode:"raw", upto:c.j, rowOnly:true}
+                 : c.k === "rest" ? {mode:"raw", upto:N-1} : {mode:"none", upto:-1};
+  if (c.st === 4) return {mode:"scaled", upto:N-1};
+  if (c.st === 5) return c.k === "row" ? {mode:"maskedrow", upto:N-1} : {mode:"masked", upto:N-1};
+  if (c.st === 6) return c.k === "allrows" ? {mode:"prob", upto:N-1}
+                 : c.k === "norm" ? {mode:"probrow", upto:N-1} : {mode:"masked", upto:N-1};
+  return {mode:"prob", upto:N-1};
+}
+function renderMat(){
+  const c = cur(), st = matStateFor(c), i = QI;
+  const titles = {
+    none:"score 행렬 — 아직 비어 있다",
+    raw:"S = Q·Kᵀ <span class='dimmed'>(raw score, 나누기 전)</span>",
+    scaled:"S / √d_k <span class='dimmed'>(간격이 절반으로)</span>",
+    maskedrow:`S / √d_k + mask <span class='dimmed'>(행 ${i}만 적용)</span>`,
+    masked:"S / √d_k + causal mask <span class='dimmed'>(위쪽 삼각형 −∞)</span>",
+    probrow:`softmax 적용 <span class='dimmed'>(행 ${i}만)</span>`,
+    prob:"P = softmax(masked scores) <span class='dimmed'>(행마다 합 = 1)</span>"
+  };
+  $("matTitle").innerHTML = titles[st.mode];
+
+  let h = `<div class="h"></div>` + TOK.map((t, j) => `<div class="h">${j}<br>${t}</div>`).join("");
+  for (let r = 0; r < N; r++){
+    h += `<div class="rh ${r === i ? "hi" : ""}">${r} ${TOK[r]}</div>`;
+    for (let j = 0; j < N; j++){
+      let txt = "·", cls = "c empty";
+      const isRow = (r === i);
+      const rowReady = st.rowOnly ? isRow : true;
+      const cellReady = rowReady && (st.rowOnly ? j <= st.upto : true);
+      if (st.mode !== "none" && cellReady){
+        const masked = (st.mode === "masked" && j > r) ||
+                       (st.mode === "maskedrow" && isRow && j > r) ||
+                       (st.mode === "probrow" && isRow && j > r) ||
+                       (st.mode === "prob" && j > r);
+        if (masked){ txt = "−∞"; cls = "c msk"; if (st.mode === "prob" || (st.mode === "probrow" && isRow)) txt = "0"; }
+        else if (st.mode === "raw"){ txt = fx(S[r][j], 3); cls = "c on"; }
+        else if (st.mode === "scaled"){ txt = fx(SS[r][j], 3); cls = "c on"; }
+        else if (st.mode === "masked" || st.mode === "maskedrow"){ txt = fx(SS[r][j], 3); cls = "c on"; }
+        else if (st.mode === "probrow"){
+          if (isRow){ txt = fx(P[r][j], 3); cls = "c on"; }
+          else { txt = fx(SS[r][j], 3); cls = (j > r) ? "c msk" : "c on"; if (j > r) txt = "−∞"; }
+        }
+        else if (st.mode === "prob"){ txt = fx(P[r][j], 3); cls = "c on"; }
+        if (st.mode === "prob" || (st.mode === "probrow" && isRow)){
+          if (j <= r){
+            const a = P[r][j] / 1.0;
+            cls = "c on";
+            h += `<div class="${cls} ${isRow ? "rowhi" : ""}"
+                    style="background:rgba(210,153,34,${(0.10 + a*0.75).toFixed(3)})">${txt}</div>`;
+            continue;
+          }
+        }
+        if (st.rowOnly && isRow && j === st.upto) cls += " cur";
+        if (isRow && !st.rowOnly) cls += " rowhi";
+      }
+      h += `<div class="${cls}">${txt}</div>`;
+    }
+  }
+  $("matGrid").innerHTML = h;
+
+  const notes = {
+    none:"stage 3에 도달하면 한 칸씩 채워진다.",
+    raw:`칸 하나 = q<sub>i</sub>·k<sub>j</sub> 하나. 전체 <b>36칸</b> = N².`,
+    scaled:"모든 칸이 정확히 2로 나뉘었다 — 순서 불변, 간격 절반.",
+    maskedrow: QI === N-1
+      ? `행 ${QI}은 마지막 token이라 막을 칸이 없다 — 대신 행 0~4의 오른쪽이 어떻게 죽는지 보라.`
+      : `행 ${QI}의 j > ${QI} 칸 ${N-1-QI}개가 −∞로 막혔다.`,
+    masked:"살아있는 칸 21 / 36. dense kernel은 죽은 15칸도 계산하고 저장한다.",
+    probrow:`행 ${QI}만 확률로 바뀌었다. 나머지 행은 아직 score 상태.`,
+    prob:"이제 이 표 전체가 attention 확률 행렬 = shape [B, a, s, s]의 실체다."
+  };
+  $("matNote").innerHTML = notes[st.mode];
+
+  /* Q/K/V 박스 */
+  let qh = "";
+  const showQ = c.st > 2 || (c.st === 2 && (c.k === "qall" || c.k === "kall" || c.k === "vall" || c.k === "qcomp"));
+  const showK = c.st > 2 || (c.st === 2 && (c.k === "kall" || c.k === "vall"));
+  const showV = c.st > 2 || (c.st === 2 && c.k === "vall");
+  const partialQ = (c.st === 2 && c.k === "qcomp") ? c.j : DH - 1;
+  for (let r = 0; r < N; r++){
+    const isSel = (r === QI);
+    qh += `<div style="margin-bottom:6px;${isSel ? "outline:1px solid rgba(188,140,255,.35);outline-offset:3px;border-radius:6px" : ""}">`;
+    qh += vecRow(`x[${r}] ${TOK[r]}`, X[r], "", {p:2});
+    if (showQ) qh += vecRow(`q[${r}]`, Q[r], "q", {p:2,
+      upto:(c.st === 2 && c.k === "qcomp") ? (isSel ? partialQ : -1) : DH - 1});
+    if (showK) qh += vecRow(`k[${r}]`, K[r], "k", {p:2});
+    if (showV) qh += vecRow(`v[${r}]`, V[r], "v", {p:2});
+    qh += `</div>`;
+  }
+  $("qkvBox").innerHTML = qh;
+}
+
+/* ==================================================================
+   §4 렌더 (variance canvas + 토글)
+   ================================================================== */
+const CANVAS_H = 270;   /* CSS #cvVar{height:270px} 와 반드시 같은 값 */
+function setupCanvas(cv){
+  const r = window.devicePixelRatio || 1;
+  const w = Math.max(cv.clientWidth, 240), h = CANVAS_H;   /* 논리 높이는 상수에서만 읽는다 */
+  if (cv.width !== Math.round(w*r) || cv.height !== Math.round(h*r)){
+    cv.width  = Math.round(w*r);
+    cv.height = Math.round(h*r);
+  }
+  cv.style.height = h + "px";
+  const c = cv.getContext("2d");
+  c.setTransform(r, 0, 0, r, 0, 0);
+  c.clearRect(0, 0, w, h);
+  return {c, w, h};
+}
+function drawVar(){
+  const cv = $("cvVar"); if (!cv) return;
+  const o = setupCanvas(cv), c = o.c, w = o.w, h = o.h;
+  const L = 46, R = 14, T = 14, BM = 30, PW = w - L - R, PH = h - T - BM;
+  const dmin = 1, dmax = 512, ymin = 0.5, ymax = 32;
+  const X0 = d => L + PW*(Math.log2(d) - Math.log2(dmin))/(Math.log2(dmax) - Math.log2(dmin));
+  const Y0 = v => T + PH*(1 - (Math.log2(Math.max(v, ymin)) - Math.log2(ymin))/(Math.log2(ymax) - Math.log2(ymin)));
+
+  c.font = "10px ui-monospace,monospace"; c.lineWidth = 1;
+  c.strokeStyle = "#2b3242"; c.fillStyle = "#6b7686";
+  [0.5,1,2,4,8,16,32].forEach(v => {
+    const y = Y0(v);
+    c.beginPath(); c.moveTo(L, y); c.lineTo(w - R, y); c.stroke();
+    c.textAlign = "right"; c.fillText(String(v), L - 6, y + 3);
+  });
+  c.textAlign = "center";
+  SD_DIMS.forEach(d => { if (d === 1 || d === 4 || d === 16 || d === 64 || d === 128 || d === 512)
+    c.fillText(String(d), X0(d), h - 10); });
+  c.fillText("d_k", L + PW/2, h - 10 - 13);
+  c.save(); c.translate(13, T + PH/2); c.rotate(-Math.PI/2);
+  c.textAlign = "center"; c.fillText("sd(q·k)", 0, 0); c.restore();
+
+  /* 나눈 뒤 = 1.0 */
+  c.strokeStyle = "#3fb950"; c.lineWidth = 2; c.setLineDash([5,4]);
+  c.beginPath(); c.moveTo(L, Y0(1)); c.lineTo(w - R, Y0(1)); c.stroke(); c.setLineDash([]);
+
+  /* 이론 √d */
+  c.strokeStyle = "#d29922"; c.lineWidth = 2.2; c.beginPath();
+  for (let i = 0; i <= 200; i++){
+    const d = Math.pow(2, Math.log2(dmin) + (i/200)*(Math.log2(dmax) - Math.log2(dmin)));
+    const x = X0(d), y = Y0(Math.sqrt(d));
+    if (i) c.lineTo(x, y); else c.moveTo(x, y);
+  }
+  c.stroke();
+
+  /* 실측 */
+  c.fillStyle = "#58a6ff";
+  SD_EMP.forEach(r => { c.beginPath(); c.arc(X0(r.d), Y0(r.sd), 3.6, 0, 7); c.fill(); });
+
+  /* 우리 예제 표시 */
+  c.strokeStyle = "#58a6ff"; c.lineWidth = 1; c.setLineDash([3,3]);
+  c.beginPath(); c.moveTo(X0(4), T); c.lineTo(X0(4), T + PH); c.stroke(); c.setLineDash([]);
+  c.fillStyle = "#9aa7b4"; c.textAlign = "left"; c.font = "10.5px ui-monospace,monospace";
+  c.fillText("이 페이지 d_k=4 → sd 2", X0(4) + 6, T + 12);
+  c.fillText("d_k=128 → sd 11.31", X0(128) - 96, Y0(11.3137) - 8);
+
+  const r128 = SD_EMP.filter(r => r.d === 128)[0], r512 = SD_EMP.filter(r => r.d === 512)[0];
+  $("varNote").innerHTML =
+    `점 하나는 <b>이 페이지가 실제로 뽑은</b> 샘플 ${commas(SD_SAMPLES)}개의 표준편차다 (seed 고정).
+     d = 128에서 실측 <b class="mono">${r128.sd.toFixed(3)}</b> vs 이론
+     <span class="mono">√128 = ${Math.sqrt(128).toFixed(4)}</span>,
+     d = 512에서 <b class="mono">${r512.sd.toFixed(3)}</b> vs
+     <span class="mono">${Math.sqrt(512).toFixed(4)}</span>.
+     <b>주황선 위에 얹힌다</b> — Var(q·k) = d_k가 실측으로 확인된다
+     <span class="dimmed">(유한 샘플이라 1~2% 오차는 남는다)</span>.
+     초록 점선은 √d_k로 나눈 뒤: <b>d가 뭐든 1.0</b>.
+     <span class="dimmed">이 가정(성분 독립·분산 1)은 표준 init에서 정확하고 학습이 진행되면 흐려진다 —
+     그래서 요즘 모델은 QK-norm(Q와 K에 RMSNorm)으로 다시 강제하기도 한다.</span>`;
+
+  let th = `<table class="mini"><tr><th>d_k</th><th>√d_k</th><th>쓰는 곳</th></tr>`;
+  [[4,"이 페이지"],[64,"Vaswani base (h=8, d_model=512)"],[128,"Llama·Qwen 계열 d_head"],[512,"단일 head로 d_model 전체"]]
+    .forEach(row => { th += `<tr><td class="lb">${row[0]}</td><td class="sum">${Math.sqrt(row[0]).toFixed(4)}</td>
+      <td class="lb">${row[1]}</td></tr>`; });
+  $("sdTable").innerHTML = `<div class="tblwrap">${th}</table></div>`;
+
+  $("gradBox").innerHTML =
+    `<b>안 나누면 gradient가 죽는다 — 숫자로.</b> d_k = 64 (sd = 8)에서 점수 두 개
+     <span class="mono">s₁ = 24, s₂ = 16</span>. 둘 다 ±3σ = ±24 안이니 <b>평범한 값</b>이다.
+     <br>· 안 나눔: softmax(24, 16) → p = <span class="mono">${GD.pu.toFixed(5)}</span>,
+       Jacobian <span class="mono">p(1−p) = ${GD.ju.toExponential(4)}</span>
+     <br>· ÷8: softmax(3, 2) → p = <span class="mono">${GD.ps.toFixed(6)}</span>,
+       <span class="mono">p(1−p) = ${GD.js.toFixed(6)}</span>
+     <br>→ <b>${GD.ratio.toFixed(0)}배</b> 차이. 이 Jacobian이 gradient가
+     <span class="mono cq">W_Q</span>·<span class="mono ck">W_K</span>에 닿는 <b>유일한 통로</b>다.`;
+}
+function renderScale(){
+  const i = QI, live = i + 1;
+  const p = SCALED ? P[i] : PU[i];
+  $("scHead").innerHTML = `행 ${i} "${TOK[i]}"의 softmax — ` +
+    (SCALED ? `<b class="ok">÷ √d_k = 2 적용</b>` : `<b class="bad">나누지 않음</b>`);
+  $("scBars").innerHTML = barsHTML(p, live, SCALED ? "var(--accent2)" : "var(--danger)");
+  [...$("scBtns").children].forEach(b => b.classList.toggle("on", (b.dataset.sc === "1") === SCALED));
+
+  const topS = Math.max.apply(null, P[i].slice(0, live));
+  const topU = Math.max.apply(null, PU[i].slice(0, live));
+  $("scNote").innerHTML =
+    `<b>d_k = 4에서는 차이가 작다 — 그게 정확히 Vaswani가 말한 바다.</b>
+     이 행의 최댓값은 <span class="mono">${fx(topS,4)}</span>(나눔) →
+     <span class="mono">${fx(topU,4)}</span>(안 나눔)로 <b>${(topU/topS).toFixed(2)}배</b>만 뾰족해진다.
+     논문 §3.2.1도 "d_k가 작으면 두 방식이 비슷하게 동작한다"고 썼다.
+     문제는 <b>d_k가 커질 때</b>다 — sd가 √d_k로 자라니 점수 간격도 같이 자라고,
+     위 빨간 상자처럼 <b>${GD.ratio.toFixed(0)}배</b>짜리 gradient 차이가 난다.
+     오른쪽 검증 예제(d_k=4)에서도 최상위 가중치가
+     <span class="mono">${VAS.scaled.w[0].toFixed(6)} → ${VAS.unscaled.w[0].toFixed(6)}</span>로 뛴다 —
+     <b>d_k = 4에서조차</b> 이 정도는 움직인다.`;
+
+  let t = `<table class="mini"><tr><th></th><th>k₁</th><th>k₂</th><th>k₃</th><th>합</th></tr>
+    <tr><td class="lb">raw q·k</td>${VAS.raw.map(z=>`<td>${z.toFixed(0)}</td>`).join("")}<td class="lb">—</td></tr>
+    <tr><td class="lb">÷2 후 exp</td>${VAS.scaled.ex.map(z=>`<td>${z.toFixed(6)}</td>`).join("")}
+      <td>${VAS.scaled.sum.toFixed(6)}</td></tr>
+    <tr class="prod"><td class="lb">weight (scaled)</td>${VAS.scaled.w.map(z=>`<td class="sum">${z.toFixed(6)}</td>`).join("")}
+      <td>${VAS.scaled.w.reduce((a,b)=>a+b,0).toFixed(6)}</td></tr>
+    <tr><td class="lb">weight (unscaled)</td>${VAS.unscaled.w.map(z=>`<td>${z.toFixed(6)}</td>`).join("")}
+      <td>${VAS.unscaled.w.reduce((a,b)=>a+b,0).toFixed(6)}</td></tr>
+    <tr><td class="lb">out (scaled)</td><td colspan="4" class="sum">[${VAS.scaled.o.map(z=>z.toFixed(6)).join(", ")}]</td></tr>
+    </table>`;
+  $("vasTable").innerHTML = `<div class="tblwrap">${t}</div>`;
+}
+
+/* ==================================================================
+   §5 왜 세 개인가
+   ================================================================== */
+function renderW3(){
+  [...$("w3Btns").children].forEach(b => b.classList.toggle("on", b.dataset.w3 === W3));
+  const M = W3 === "ok" ? S : W3 === "sym" ? XXT : XNT;
+  const mx = Math.max.apply(null, M.map(r => Math.max.apply(null, r)));
+  let h = `<div class="h"></div>` + TOK.map((t, j) => `<div class="h">${j}<br>${t}</div>`).join("");
+  for (let r = 0; r < N; r++){
+    h += `<div class="rh">${r} ${TOK[r]}</div>`;
+    for (let j = 0; j < N; j++){
+      const v = M[r][j];
+      const a = Math.max(0, v/mx);
+      const diag = (r === j && W3 !== "ok");
+      h += `<div class="c on ${diag ? "cur" : ""}"
+              style="background:rgba(${W3==="ok"?"88,166,255":"248,81,73"},${(0.06 + a*0.55).toFixed(3)})">
+              ${fx(v, 2)}</div>`;
+    }
+  }
+  $("w3Grid").innerHTML = h;
+
+  if (W3 === "ok"){
+    $("w3Note").innerHTML =
+      `<b>제대로 된 경우.</b> <span class="mono">S[5][3] = ${fx(S[5][3],4)}</span> ("읽었다" → "책")인데
+       <span class="mono">S[3][5] = ${fx(S[3][5],4)}</span> ("책" → "읽었다")다 —
+       <b>${(S[5][3]/S[3][5]).toFixed(1)}배</b> 차이. 언어의 관계는 <b>방향이 있다</b>:
+       "읽었다"는 목적어를 찾아야 하지만 "책"이 동사를 같은 세기로 찾을 이유는 없다.
+       <span class="mono cq">W_Q</span>와 <span class="mono ck">W_K</span>가 <b>서로 다른 행렬</b>이라서
+       이 비대칭이 표현 가능하다.`;
+  } else if (W3 === "sym"){
+    $("w3Note").innerHTML =
+      `<b>W를 빼고 <span class="mono">S = XXᵀ</span>로 두면 — 행렬이 대칭이 된다.</b>
+       <span class="mono">S[5][3] = ${fx(XXT[5][3],2)} = S[3][5] = ${fx(XXT[3][5],2)}</span>.
+       "읽었다 → 책"과 "책 → 읽었다"가 <b>수학적으로 같은 값일 수밖에 없다</b>.
+       표현할 수 있는 관계가 <b>절반</b>으로 줄어든다.
+       게다가 <span class="mono">XXᵀ</span>는 입력의 <b>고정 함수</b>라 학습되는 파라미터가 하나도 없다 —
+       "무엇을 볼지" 자체를 배울 수가 없다.`;
+  } else {
+    const rowmax = XNT.map((r, i2) => r.every(z => XNT[i2][i2] >= z));
+    const selfp = causalSoftmax(XNT[5].map(z => z/SQRT_DK), 5).p;
+    $("w3Note").innerHTML =
+      `<b>더 나쁜 건 여기다.</b> 실제 layer 입력은 RMSNorm을 통과해
+       <span class="mono">‖x_i‖ = √d</span>로 <b>전부 같은 길이</b>다. 그러면 Cauchy-Schwarz에 의해
+       <span class="mono">x_i·x_j ≤ ‖x_i‖‖x_j‖ = ‖x_i‖² = (XXᵀ)_ii</span> —
+       <b>대각이 항상 그 행의 최댓값</b>이다 (여기서는 전부 <span class="mono">${fx(XNT[0][0],2)} = d</span>,
+       6개 행 모두 최댓값: <b class="ok">${rowmax.every(Boolean) ? "확인" : "불일치"}</b>).
+       행 5의 softmax를 실제로 돌리면 자기 자신에
+       <b class="mono">${fx(selfp[5],4)}</b>가 몰린다 (균등이면 ${fx(1/6,4)}) —
+       <b>attention이 self-loop로 붕괴</b>한다.
+       게다가 대각과 나머지의 간격은 <span class="mono">d</span>에 비례하는데 나누는 건
+       <span class="mono">√d</span>뿐이라, <b>d가 커질수록 더 심해진다</b> — d = 4인 여기가 가장 약한 경우다.
+       그래서 Q와 K는 <b>반드시 서로 다른 투영</b>이어야 한다.`;
+  }
+}
+
+/* ==================================================================
+   §6 memory
+   ================================================================== */
+function renderMem(){
+  $("memBtns").innerHTML = MEM_S.map((s, i2) =>
+    `<button class="pbtn ${i2 === MEMI ? "on" : ""}" data-m="${i2}">s = ${commas(s)}</button>`).join("");
+  [...$("memBtns").children].forEach(b => b.onclick = () => { MEMI = +b.dataset.m; renderMem(); });
+
+  const s = MEM_S[MEMI];
+  const per = scoreBytes(s, 32, 1), all = per*80;
+  $("memOut").innerHTML =
+    `<div class="card a"><div class="k">원소 수 (한 layer)</div>
+       <div class="v">${commas(32*s*s)}</div><div class="n">32 heads × ${commas(s)}²</div></div>
+     <div class="card w"><div class="k">layer 1개</div>
+       <div class="v">${gbytes(per)}</div><div class="n">${commas(per)} B (bf16)</div></div>
+     <div class="card r"><div class="k">80 layers</div>
+       <div class="v">${gbytes(all)}</div><div class="n">${commas(all)} B</div></div>
+     <div class="card g"><div class="k">장난감 대비</div>
+       <div class="v">${(per/TOY_BYTES).toExponential(2)}×</div><div class="n">우리 표 ${TOY_BYTES} B 기준</div></div>`;
+
+  $("memNote").innerHTML =
+    `<b>s를 2배 하면 4배</b>가 된다 — 표 자체가 <span class="mono">s×s</span>이기 때문이다.
+     s = 4096일 때 layer당 <b>${gbytes(scoreBytes(4096,32,1))}</b>인데
+     s = 32768이면 <b>${gbytes(scoreBytes(32768,32,1))}</b>다.
+     반면 Q/K/V 같은 <span class="mono">[B, s, h]</span> tensor는 s에 <b>선형</b>으로만 큰다.
+     두 항이 같아지는 지점이 <span class="mono">s = 34h/(5a) = 34×4096/(5×32) =
+     <b>${CROSSOVER.toFixed(1)}</b> 토큰</span> —
+     <b>몇백 토큰만 넘어도 activation memory는 사실상 전부 이 표</b>다.
+     <span class="dimmed">(Korthikanti는 softmax 출력 + dropout mask + dropout 출력까지 세서
+     layer당 <span class="mono">5·a·s²·b</span> = s=4096에서 2.68 GB로 잡는다.
+     여기 숫자는 softmax 출력 <span class="mono">2·a·s²·b</span> 한 장만 센
+     보수적 하한이다.)</span>`;
+
+  /* heatmap */
+  let h = `<div class="h"></div>` + TOK.map((t, j) => `<div class="h">${j}<br>${t}</div>`).join("");
+  for (let r = 0; r < N; r++){
+    h += `<div class="rh">${r} ${TOK[r]}</div>`;
+    for (let j = 0; j < N; j++){
+      if (j > r){ h += `<div class="c msk">0</div>`; continue; }
+      const a = P[r][j];
+      h += `<div class="c on" style="background:rgba(210,153,34,${(0.08 + a*0.85).toFixed(3)})">${fx(P[r][j],3)}</div>`;
+    }
+  }
+  $("heatGrid").innerHTML = h;
+}
+
+/* ==================================================================
+   구동
+   ================================================================== */
+function renderQSel(){
+  $("qsel").innerHTML = TOK.map((t, j) =>
+    `<div class="tokbox clk ${j === QI ? "qsel" : ""}" data-i="${j}">
+       <div class="w">${t}</div><div class="id">i = ${j}</div></div>`).join("");
+  [...$("qsel").children].forEach(b => b.onclick = () => {
+    const nx = +b.dataset.i;
+    if (nx === QI) return;
+    QI = nx; buildSteps(); ip = firstIndexOfStage(3); stopPlay(); render();
+  });
+}
+function renderStep(){
+  const c = cur();
+  const nr = narrationFor(c);
+  $("narr").innerHTML = `<span class="hd">${nr.h}</span>${nr.t}`;
+  $("stageView").innerHTML = stageViewFor(c);
+  $("stageBadge").innerHTML =
+    `stage <b>${c.st}</b> / 8 · ${STAGE_NAME[c.st]} · step <b>${ip + 1}</b> / ${steps.length}`;
+  $("progBar").style.width = ((ip + 1)/steps.length*100).toFixed(1) + "%";
+  $("pVar").classList.toggle("hot", c.st === 4);
+  $("pMem").classList.toggle("hot", c.st === 8);
+}
+function render(){ renderQSel(); renderStep(); renderMat(); renderScale(); renderW3(); renderMem(); drawVar(); }
+
+function stopPlay(){ if (playing){ clearInterval(playing); playing = null; $("bPlay").textContent = "▶▶ 자동"; } }
+function stepOnce(){
+  if (ip >= steps.length - 1) return false;
+  ip++; renderStep(); renderMat(); return true;
+}
+$("bStep").onclick = () => { stopPlay(); stepOnce(); };
+$("bPlay").onclick = () => {
+  if (playing){ stopPlay(); return; }
+  $("bPlay").textContent = "⏸ 정지";
+  playing = setInterval(() => { if (!stepOnce()) stopPlay(); }, 1400);
+};
+$("bReset").onclick = () => { stopPlay(); ip = 0; renderStep(); renderMat(); };
+[...$("scBtns").children].forEach(b => b.onclick = () => { SCALED = (b.dataset.sc === "1"); renderScale(); });
+[...$("w3Btns").children].forEach(b => b.onclick = () => { W3 = b.dataset.w3; renderW3(); });
+window.addEventListener("resize", drawVar);
+
+buildSteps();
+render();
+</script>
+</body>
+</html>
