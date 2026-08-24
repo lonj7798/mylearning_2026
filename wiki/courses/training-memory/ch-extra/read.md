@@ -346,7 +346,7 @@ with W_i^Q ∈ R^(d_model × d_k), W_i^K ∈ R^(d_model × d_k),
      W_i^V ∈ R^(d_model × d_v), and W^O ∈ R^(h·d_v × d_model)
 ```
 
-Vaswani writes `h` for the head count; this chapter uses `a`, because `h` is already `d_model`. The block quote above is the **only** place in this chapter where `h` means "number of heads" — everywhere else, including the rest of §4, `a` is the head count and `h = d_model = 4096`.
+Vaswani writes `h` for the head count; this chapter uses `a`, because `h` is already `d_model`. Inside this block quote — and in the verbatim Table-3 config in §4.5, and in one sentence of §4.5's figure callout describing that figure's own labelling — `h` is the paper's head count. Those are the three exceptions listed in §1's Conventions note; in the chapter's own prose the head count is **always** `a`, and `h = d_model = 4096`.
 
 And the motivation, verbatim:
 

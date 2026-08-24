@@ -56,6 +56,8 @@ L = 80 blocks
 3. **형제 chapter의 알려진 불일치 — 안전하게 읽으라고 명시해 둔다.** `ch-04/read.md` §5(L211–216)는 head당 `8 MB / 128 MB / 2 GB`, model 전체 `8 GB / 128 GB / 2 TB`를 인쇄하는데, 이것들은 **binary** 양에 **decimal** label이 붙은 것이다(정확히는 8 MiB / 128 MiB / 2 GiB, 그리고 8 GiB / 128 GiB / 2 TiB). 이 chapter의 §4.4가 같은 row를 unit을 올바르게 명명해 다시 서술한다. 숫자는 하나도 다르지 않고 label만 다르다.
 4. **기호.** 이 chapter 전체에서 `h = d_model`, `a = n_heads`이며, 이는 Korthikanti의 `34·s·b·h + 5·a·s²·b`와 일치한다. Head 수는 **언제나** `a`이고 절대 `h`가 아니다. 예외는 (i) §4.1의 Vaswani 원문 block quote와 §4.5의 원문 Table-3 config — 거기서는 논문 자신의 `h`가 head 수를 뜻한다 — 그리고 (ii) §4.5 figure callout에서 그 figure 자체의 labelling을 서술하는 한 문장뿐이며, 셋 다 등장하는 자리에 표시해 두었다. 다른 자료를 읽을 때 이 점을 조심하라: Vaswani, HuggingFace config(`num_attention_heads`), 대부분의 blog post는 `h`를 head 수로 쓰고, memory 문헌(Korthikanti, Megatron)은 `h`를 hidden size로 쓴다.
 
+💡 **쉬운 설명.** 이 네 항목은 "왜 같은 계산인데 chapter마다 숫자가 다르지?"라는 짜증의 원인을 미리 제거해 둔 것이다. (1) MAC 하나를 2 FLOPs로 세느냐 1로 세느냐에 따라 모든 FLOP 값이 **정확히 두 배** 차이 난다 — 이 chapter는 2로 센다. (2) `GB`(10⁹)와 `GiB`(2³⁰)는 7.4% 다르고, 이 차이가 §7.2에서 "동시 request 156개냐 168개냐"를 가른다. (3) 형제 chapter ch-04는 binary 양에 decimal label을 붙여 놓았으니, 그 표를 볼 때 `128 MB`는 사실 `128 MiB`라고 읽어라. (4) 가장 자주 사고를 내는 것이 `h`다 — Vaswani 논문과 HuggingFace config에서 `h`는 **head 수**이고, memory 문헌과 이 chapter에서 `h`는 **hidden size**(4096)다. 이 chapter는 head 수를 언제나 `a`로 쓰므로, `h`가 보이면 4096을 떠올려라.
+
 > **⚠ boson / Lina TMR을 위한 scope note — 여기 있는 것을 집으로 가져가기 전에 반드시 읽어라.** 이 chapter의 모든 내용은 **표준 softmax attention**을 서술한다. 즉 `N×N` score matrix 전체가 materialize되고, 그 matrix가 곧 `5·a·s²·b` 항이다. boson의 attention layer는 `CP=1`이 hard-assert된 **GDN linear-attention**이고, linear attention에는 **`N×N` score matrix가 아예 없다** — 따라서 `O(N²)` activation 서사, `5as²b` coefficient, `s = 34h/(5a)` crossover, 그리고 "약 870 token을 넘으면 attention이 지배한다"는 결론은 전부 *GDN이 대체하는 baseline*에 대한 진술이지 당신이 training하는 model에 대한 진술이 아니다. 그래도 배워라. 그것들이 GDN이 존재하는 이유이고, 모든 kernel chapter([[ch-04]]–[[ch-06]])가 다투는 대상이며, 당신이 중간에 끼워 넣는 softmax-attention layer는 그 값을 전액 지불한다. 다만 quadratic 직관을 boson 자신의 budget에 그대로 이식하지는 마라 — §8이 ledger를 넘기는 지점에서 이 단서를 다시 서술한다.
 
 ---
@@ -368,7 +370,7 @@ with W_i^Q ∈ R^(d_model × d_k), W_i^K ∈ R^(d_model × d_k),
      W_i^V ∈ R^(d_model × d_v), and W^O ∈ R^(h·d_v × d_model)
 ```
 
-Vaswani는 head 수를 `h`로 쓰지만, 이 chapter는 `a`를 쓴다. `h`는 이미 `d_model`이기 때문이다. 위의 block quote가 이 chapter에서 `h`가 "head 수"를 뜻하는 **유일한** 자리다 — §4의 나머지를 포함해 다른 모든 곳에서 head 수는 `a`이고 `h = d_model = 4096`이다.
+Vaswani는 head 수를 `h`로 쓰지만, 이 chapter는 `a`를 쓴다. `h`는 이미 `d_model`이기 때문이다. 이 block quote 안에서 — 그리고 §4.5의 Table-3 원문 config, §4.5 figure callout에서 그 figure 자체의 표기를 설명하는 문장 한 곳에서 — `h`는 논문의 head 수다. 이 셋이 §1 Conventions note가 열거한 예외 전부이고, chapter 본문의 서술에서 head 수는 **항상** `a`이며 `h = d_model = 4096`이다.
 
 그리고 동기, 원문 그대로:
 
@@ -863,7 +865,9 @@ ch-03이 쓰는 Korthikanti coefficient: (34 + 5as/h)·sbh = 194 sbh-unit = bloc
                                     194 / 2 = 97x
 ```
 
-50×와 97× 사이의 2배 격차는 *전적으로* §8.2가 자세히 풀어 놓는 output-대-저장-input 차이와 dropout 차이다(Korthikanti는 열거가 하나만 세는 `s²` shape tensor를 셋 세고, 여기에 이 chapter의 dropout-free 독법이 지우는 dropout tensor 셋이 더해진다). **어느 비율도 틀리지 않았다. 분자가 다른 비율일 뿐이다.** ch-03에서 97×를 기대하고 여기 왔다면 당신이 들고 있는 것은 Korthikanti의 published coefficient이고, 50×는 위에 열거한 16-tensor 목록을 기준으로 잰 같은 lever다.
+50×와 97× 사이의 2배 격차는 *전적으로* §8.2가 자세히 풀어 놓는 output-대-저장-input 차이와 dropout 차이다(Korthikanti의 `5as²b`는 열거가 하나만 세는 `s²` shape tensor를 셋 세고, 여기에 이 chapter의 dropout-free 독법이 지우는 dropout tensor 셋이 더해진다). **어느 비율도 틀리지 않았다. 분자가 다른 비율일 뿐이다.** ch-03에서 97×를 기대하고 여기 왔다면 당신이 들고 있는 것은 Korthikanti의 published coefficient이고, 50×는 위에 열거한 16-tensor 목록을 기준으로 잰 같은 lever다.
+
+💡 **쉬운 설명.** 같은 lever(gradient checkpointing)를 두 chapter가 서로 다른 배율로 인용하는 것이 헷갈릴 수 있는데, **분모는 완전히 같다** — block당 `2 sbh` checkpoint, 즉 33.55 MB다. 다른 건 "무엇을 아꼈다고 세느냐"뿐이다. 이 chapter는 실제로 열거한 16개 tensor(100 sbh-unit)를 세서 50×를 얻고, ch-03은 Korthikanti가 출판한 coefficient(194 sbh-unit)를 세서 97×를 얻는다. 194 − 100 = 94의 정체는 §8.2가 짚는 두 가지 — Korthikanti가 `s²` tensor를 셋 세는 것(dropout mask + dropout output 포함)과, output이 아니라 저장 input을 세는 관점 차이 — 그게 전부다. 면접이나 문서에서 인용할 때는 **어느 분자를 쓴 비율인지**를 같이 말하면 된다.
 
 **혼자만 다르게 행동하는 tensor 하나.** 항목 7은 quadratic하게 자란다: `[B,a,T,T]`는 `T=4096`에서 block당 1.07 GB이고, `T=8192`에서는 `1 × 32 × 8192 × 8192 × 2 = 4,294,967,296 B = 4.29 GB` — 정확히 4배, 즉 quadratic이다. 이것은 동시에 **가장 큰** 저장 tensor이면서 **재구성이 가장 싼** 것이다(matmul 하나 + softmax 하나). 그 비대칭성이 selective recomputation([[ch-03]] §3)과 FlashAttention([[ch-05]])이 활용하는 대상이다. [[transformer-block-tensor-ledger]] 참조.
 
@@ -976,6 +980,8 @@ KV budget = 6.40e11 (HBM) - 1.40e11 (weights, 70e9 x 2 B) - 8.0e10 (overhead)
 ```
 
 Context 16배에 동시 request가 **정확히** 16분의 1 — linearity가 요점이다. (함정에 주의하라: *숫자* 420을 변환 없이 *binary* 숫자 2.5와 40으로 나누면 168과 10.5가 나오는데, 이것이 `figures/kv-cache.html` 패널 4의 8×H100 card가 인쇄하는 값이다. 그 두 답은 `2³⁰/10⁹ = 1.074`만큼의 unit slip이고, byte-exact한 답은 156과 9.8이다.) 그리고 raw formula는 **lower bound**다 — block/page table(1–2%), fragmentation(contiguous 5–15%, paged <5%), swap 여유분, CUDA-graph bucket 예약분을 고려해 **1.15**를 곱하면 현실적인 수치는 **136**과 **8.5**에 떨어진다.
+
+💡 **쉬운 설명.** 이 문단이 §1 Convention note가 존재하는 이유의 실물 예시다. 8k request 하나의 cache는 `2,684,354,560 B`인데, 이 값은 decimal로는 `2.68 GB`, binary로는 정확히 `2.50 GiB`다. 예산 `4.20e11 B`를 **byte로** 나누면 `4.20e11 / 2.684e9 = 156.5`가 나오지만, 예산은 decimal 숫자 `420`으로 두고 cache만 binary 숫자 `2.5`로 읽어서 나누면 `168`이 나온다 — 계산이 틀린 게 아니라 **두 숫자의 단위가 서로 다른 것**이다. 두 답의 비는 정확히 `2³⁰/10⁹ = 1.074`다. 규칙은 단순하다: 나눗셈 한 번 안에서는 양쪽을 모두 byte로 맞춰라. (figure의 패널 4는 아직 168/10.5를 인쇄하고 있으니, 그 card를 볼 때는 이 문단을 authority로 읽어라.)
 
 ### 7.3 MHA / GQA / MQA / MLA — 한 축 위의 네 점
 

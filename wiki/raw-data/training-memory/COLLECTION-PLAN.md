@@ -58,22 +58,28 @@ if a later chapter reaches for it.
 
 | # | `llm-arch` location | What it prints | Correct value (re-verified here) |
 |---|---------------------|----------------|----------------------------------|
-| a | `llm-arch:wiki/courses/llm-arch/ch-02/read.md` §6 (L358-364) and `.../ch-02/excerpts/multi-head-redundancy.md` §1 | head-ablation table `h=1→25.8, 4→26.3, 8→25.8, 16→25.7, 32→24.7`, concluding *"4 heads is the sweet spot"* | Vaswani et al. Table 3 row (A): `h=1 → PPL 5.29 / BLEU 24.9`, `h=4 → 5.00 / 25.5`, `h=8 (base) → 4.92 / 25.8`, `h=16 → 4.91 / 25.8`, `h=32 → 5.01 / 25.4`. Best is `h = 8–16`, not 4. |
+| a | `llm-arch:wiki/courses/llm-arch/ch-02/read.md` §6 (table L357-362, prose L364) and `.../ch-02/excerpts/multi-head-redundancy.md` §1 (table L15-21, prose L23) | head-ablation table `h=1→25.8, 4→26.3, 8→25.8, 16→25.7, 32→24.7` — argmax at `h=4`. `read.md`: *"The sweet spot is around 4-16 heads."* Excerpt: *"going from 1 head to 4 heads improves BLEU by 0.5 points, but going from 4 to 8 provides no improvement."* Both pages also mis-cite it as **"Table 2"**. | Vaswani et al. **Table 3 row (A)** (not Table 2): `h=1 → PPL 5.29 / BLEU 24.9`, `h=4 → 5.00 / 25.5`, `h=8 (base) → 4.92 / 25.8`, `h=16 → 4.91 / 25.8`, `h=32 → 5.01 / 25.4`. Argmax is `h = 8–16` (tied at 25.8), not 4; `h=8` is the *best* row, not a plateau after 4. |
 | b | `llm-arch:wiki/courses/llm-arch/ch-03/excerpts/sinusoidal-encoding-frequency-analysis.md` §2 | frequency rows labelled **one step off**, plus `λ ≈ 62,832` for dims `(510,511)` | `ω=0.1` (`10000^-0.25`) belongs to dims **(128,129)**, not (64,65); `ω=0.01` → **(256,257)**, not (128,129); `ω=0.001` → **(384,385)**, not (256,257). Dims `(510,511)` have `λ = 2π·10000^(510/512) = 60,611.5`. `62,832 = 2π·10⁴` is the **unreachable asymptote** (it needs `2i = 512`, but `2i` maxes at 510). |
-| c | `llm-arch:wiki/courses/llm-arch/ch-03/read.md` §5 figure (L297) | `dim 128–129  λ = 56` | `ω = 10000^(-128/512) = 0.1` → `λ = 2π/0.1 = **62.83**` |
+| c | `llm-arch:wiki/courses/llm-arch/ch-03/read.md` §5 figure (L297 and L315) | `dim 128–129  λ = 56` and `dim 510–511  λ = 62,832` | `dims (128,129)`: `ω = 10000^(-128/512) = 0.1` → `λ = 2π/0.1 = **62.83**`. `dims (510,511)`: `λ = **60,611.5**`, same asymptote error as (b). The figure's other two rows (`dim 0–1 λ = 2π`, `dim 256–257 λ = 628`) are **correct** — so this figure is *not* the shifted table of (b), it is two isolated bad values. |
 
 Verification notes recorded at harvest time (all reproduced with `python3`):
 
-- (a) is caught by the paper's own prose. Vaswani writes *"single-head attention
-  is 0.9 BLEU worse than the best setting."* The `llm-arch` table gives
-  `best − h=1 = 26.3 − 25.8 = 0.5`; the true row gives `25.8 − 24.9 = 0.9`.
-  Only the corrected row is self-consistent with the paper's sentence.
+- (a) is caught by the paper's own prose. Vaswani writes *"while single-head
+  attention is 0.9 BLEU worse than the best setting, quality also drops off with
+  too many heads."* The `llm-arch` table gives `best − h=1 = 26.3 − 25.8 = 0.5`;
+  the true row gives `25.8 − 24.9 = 0.9`. Only the corrected row is
+  self-consistent with the paper's sentence. The `llm-arch` table also drops the
+  PPL column entirely, which is where the `h=8` vs `h=16` ordering actually lives
+  (`4.92` vs `4.91` — BLEU ties at `25.8`).
 - (b) the labels are shifted by exactly one row: `ω_i = 10000^(-2i/d_model)` with
   `d_model = 512`, so `ω = 0.1 ⇒ 2i/d = 0.25 ⇒ 2i = 128`. Dims `(64,65)` actually
   carry `ω = 10000^-0.125 = 0.3162`, `λ = 19.9` — a row `llm-arch` never prints.
   The `(510,511)` error is `+2,220.4` positions (`3.66 %` high).
-- (c) same root cause as (b) — the figure inherited the shifted table. `56` does
-  not correspond to any dimension pair at `d_model = 512`.
+- (c) is **not** the shift of (b): the figure's `dim 256–257 λ = 628` row is
+  right (true `628.32`), which a shifted table could not produce. `56` is a bare
+  wrong value — inverting it gives `ω = 2π/56 = 0.1122 ⇒ 2i = 121.6`, not an even
+  integer, so it corresponds to **no** dimension pair at `d_model = 512`. The
+  figure's `510–511 λ = 62,832` row *is* the same asymptote error as (b).
 - The arithmetic-intensity line in `excerpts/multi-head-split-concat-wo.md` was
   also corrected in this harvest: it said `d_head` FLOPs per stored **element**;
   under the multiply-add convention (2 FLOPs/MAC) `QKᵀ` costs `2·B·h·N²·d_head`
