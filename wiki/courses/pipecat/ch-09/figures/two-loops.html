@@ -1,0 +1,1001 @@
+<!--
+  Figure: two-loops.html — "두 개의 agent loop: context / tool / turn-end는 누가 소유하는가"
+  Chapter: pipecat ch-09 (Two Agent Loops)
+  Back to: ../read.md  (§3 context 소유권, §5 function calling, §9 turn 상한, §11 adopt/wrap/bypass)
+
+  Fully self-contained: inline CSS + vanilla JS. No CDN, no fetch, no external fonts.
+  Opens directly from file:// .
+
+  모든 식별자/줄번호는 pinned tree commit 0cbf9c5b031eef06e53f0a193b9a67d60230e6be에서 직접 읽은 것:
+    processors/aggregators/llm_context.py
+        class LLMContext :83, self._messages :110, self._tools :111, self._tool_choice :112,
+        get_messages() :221, messages = self._messages :245 (live list),
+        truncate_large_values 분기 :257-258, copy.deepcopy :282/:290
+    processors/aggregators/llm_response_universal.py
+        LLMUserAggregator :563, LLMAssistantAggregator :1384,
+        LLMContextFrame(context=self._context) :487,
+        _handle_function_call_in_progress :1747, {"role":"tool","content":"IN_PROGRESS"} :1776,
+        _handle_function_call_result :1783, _handle_function_call_finished :1908,
+        push_context_frame(FrameDirection.UPSTREAM) :1889,
+        _update_function_call_result :2157, message["content"] = result :2165,
+        LLMContextAggregatorPair :2251
+    services/openai/base_llm.py
+        await super().process_frame(frame, direction) :599, if isinstance(frame, LLMContextFrame): :601,
+        push_frame(LLMFullResponseStartFrame()) :603, start_processing_metrics() :604,
+        await self._process_context(frame.context) :605, run_function_calls(...) :588
+    services/llm_service.py
+        register_function :879, run_function_calls :1437, FunctionCallsStartedFrame broadcast :1455,
+        _run_function_call :1547, FunctionCallInProgressFrame :1576, handler(params) :1683,
+        function_call_result_callback :1589, run_in_parallel 플래그 :305
+    frames.py  FunctionCallResultFrame :770 (DataFrame, UninterruptibleFrame),
+        FunctionCallsStartedFrame :1349, FunctionCallFromLLM :1330, FunctionCallInProgressFrame :2164
+    grep -rn "max_turns\|max_iterations\|max_tool_calls" src/pipecat/  ->  0 hits
+
+  boson-agent (read-only, /Users/jaewon/mywork_2026/Lina_2026/boson-agent-dev/boson-agent):
+    loop/agent_loop.py     run_agent_loop :176, ctx.add_message("user", …) :198,
+                           while turn_count < runtime.config.max_turns :207-209,
+                           provider.stream(messages=ctx.get_messages(), …) :250-254,
+                           assistant tool-use 메시지 수작업 조립 :316-328, break :363,
+                           while/else 소진 경로 :365, _execute_tool_uses :393,
+                           ctx.add_message("user", [result]) :540
+    context/manager.py     ContextManager :21, get_messages() -> deepcopy(self._messages) :47-52
+    schemas/config_schema.py   max_turns: int = Field(default=50, ge=1, le=1000) :62
+    schemas/message_schema.py  Message.role = Literal["user","assistant"] :46  (tool role 없음)
+    metatool/router.py     ToolRouter :37, dispatch :103, set_allowed_tools :57, _allowed_tools_var :32
+
+  시나리오(사용자 발화·tool 인자·응답 텍스트)는 예시다. 클래스명·줄번호·프레임 방향·
+  누가 무엇을 mutate하는지는 전부 실제 코드다.
+-->
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>two loops — 누가 context/tool/turn을 소유하는가 (pipecat ch-09)</title>
+<style>
+  /* --- 반응형 타이포 스케일: 태블릿에서 root를 키운다 ------------------- */
+  html{font-size:14px;}
+  @media (pointer:coarse){ html{font-size:17px;} }
+  @media (min-width:1500px){ html{font-size:15.5px;} }
+
+  :root{
+    --bg:#0e1117; --panel:#161b22; --panel2:#1c2230; --edge:#2b3242;
+    --ink:#e6edf3; --ink-dim:#9aa7b4; --ink-faint:#6b7686;
+    --accent:#58a6ff; --accent2:#3fb950; --danger:#f85149; --warn:#d29922;
+    --c-pipe:#58a6ff;   /* Pipecat 쪽    */
+    --c-boson:#f778ba;  /* boson 쪽      */
+    --c-ctx:#d29922;    /* context mutate */
+    --c-tool:#bc8cff;   /* tool 경로      */
+    --c-up:#3fb950;     /* UPSTREAM       */
+  }
+  *{box-sizing:border-box;}
+  html,body{margin:0;padding:0;}
+  body{
+    background:var(--bg); color:var(--ink);
+    font:1rem/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Apple SD Gothic Neo",
+         "Noto Sans KR",Helvetica,Arial,sans-serif;
+    padding:22px; max-width:92rem; margin:0 auto;
+  }
+  h1{font-size:1.5rem; margin:0 0 3px; letter-spacing:.2px;}
+  .sub{color:var(--ink-dim); font-size:0.9286rem; margin:0 0 20px;}
+  .sub code{color:var(--accent);}
+  .panel{background:var(--panel); border:1px solid var(--edge); border-radius:10px;
+    padding:16px; margin-bottom:18px;}
+  .panel h2{font-size:0.8571rem; text-transform:uppercase; letter-spacing:.9px; color:var(--ink-dim);
+    margin:0 0 14px; font-weight:600;}
+  .panel h3{font-size:0.8571rem; color:var(--ink); margin:16px 0 8px; font-weight:600;}
+  .mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+    font-variant-numeric:tabular-nums;}
+  code{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:0.9em;}
+
+  .grid2{display:grid; grid-template-columns:1fr 1fr; gap:16px;}
+  .grid2u{display:grid; grid-template-columns:1.15fr .85fr; gap:16px; align-items:start;}
+  @media (max-width:1000px){ .grid2{grid-template-columns:1fr;} .grid2u{grid-template-columns:1fr;} }
+
+  /* ---------- 실행 버튼 ---------- */
+  .runbar{display:flex; gap:7px; flex-wrap:wrap; align-items:center;}
+  .rb{background:var(--panel2); border:1px solid var(--edge); color:var(--ink);
+    border-radius:7px; padding:8px 12px; cursor:pointer; font-size:0.8929rem; font-weight:600;
+    transition:.13s;}
+  .rb:hover{border-color:var(--accent);}
+  .rb.primary{background:#1d3a5f; border-color:var(--accent); color:#cfe6ff;}
+  .rb.warnb{background:#3a2a10; border-color:var(--warn); color:#ffe0a3;}
+  .rb:disabled{opacity:.4; cursor:default; border-color:var(--edge);}
+  .stepnum{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:0.8214rem;
+    color:var(--ink-faint); margin-left:auto;}
+
+  .opt{display:flex; align-items:flex-start; gap:8px; font-size:0.8214rem; color:var(--ink-dim);
+    cursor:pointer; line-height:1.45; margin-top:10px;}
+  .opt input{margin:3px 0 0; accent-color:var(--danger); flex:none;}
+  .opt b{color:var(--ink); font-weight:600;}
+
+  /* ---------- 스텝 컬럼 ---------- */
+  .colhead{display:flex; align-items:center; gap:8px; font-size:0.8571rem; font-weight:600;
+    margin:0 0 8px; padding-bottom:6px; border-bottom:1px solid var(--edge);}
+  .colhead .dot{width:10px; height:10px; border-radius:3px; flex:none;}
+  .colhead small{color:var(--ink-faint); font-weight:400; font-size:0.75rem; margin-left:auto;
+    font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;}
+  .steps{display:flex; flex-direction:column; gap:6px;}
+  .st{border:1px solid var(--edge); border-radius:8px; background:#10151d; padding:8px 10px;
+    opacity:.28; transition:.2s;}
+  .st.on{opacity:1;}
+  .st.cur{border-color:var(--accent); background:rgba(88,166,255,.09);}
+  .st.cur.bos{border-color:var(--c-boson); background:rgba(247,120,186,.09);}
+  .st .who{font-size:0.75rem; color:var(--ink-faint); text-transform:uppercase;
+    letter-spacing:.6px; display:block; margin-bottom:2px;}
+  .st .ln{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:0.7857rem;
+    color:var(--ink); display:block; white-space:pre-wrap; word-break:break-word;}
+  .st .cm{display:block; font-size:0.8214rem; color:var(--ink-dim); margin-top:4px; line-height:1.5;}
+  .st .ref{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:0.7143rem;
+    color:var(--c-tool);}
+  .st.idle{opacity:.2; border-style:dashed;}
+
+  /* ---------- collision 배지 ---------- */
+  .badges{display:flex; gap:7px; flex-wrap:wrap; margin-top:14px;}
+  .bg{border:1px solid var(--edge); border-radius:7px; padding:7px 10px; font-size:0.7857rem;
+    color:var(--ink-faint); background:var(--panel2); transition:.2s; line-height:1.35; min-width:9rem;}
+  .bg b{display:block; font-size:0.8214rem; color:var(--ink-faint); margin-bottom:1px;}
+  .bg.hot{border-color:var(--danger); background:rgba(248,81,73,.12); color:var(--ink-dim);}
+  .bg.hot b{color:var(--danger);}
+  .bg.fired{border-color:var(--warn); color:var(--ink-dim);}
+  .bg.fired b{color:var(--warn);}
+
+  /* ---------- 메시지 리스트 ---------- */
+  .msgs{background:#10151d; border:1px solid var(--edge); border-radius:8px; padding:10px;
+    font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:0.7857rem;
+    line-height:1.6; min-height:12rem; overflow-x:auto;}
+  .m{border-left:3px solid var(--edge); padding:4px 0 4px 9px; margin-bottom:5px; white-space:pre-wrap;
+    word-break:break-word; transition:.25s; border-radius:0 4px 4px 0;}
+  .m.user{border-left-color:var(--accent);}
+  .m.asst{border-left-color:var(--accent2);}
+  .m.tool{border-left-color:var(--c-tool);}
+  .m.flash{background:rgba(210,153,34,.22); border-left-color:var(--warn);}
+  .m.stale{background:rgba(248,81,73,.12); border-left-color:var(--danger);}
+  .m .k{color:var(--ink-faint);}
+  .m .v{color:var(--ink);}
+  .m .id{color:var(--c-tool);}
+  .ghost{border:1px dashed var(--danger); border-radius:8px; padding:8px 10px; margin-top:9px;
+    font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:0.75rem;
+    color:var(--ink-faint); background:rgba(248,81,73,.06); white-space:pre-wrap;}
+
+  pre{background:#10151d; border:1px solid var(--edge); border-radius:8px; padding:12px;
+    overflow-x:auto; font-size:0.8214rem; line-height:1.7; margin:0;
+    font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; white-space:pre;}
+  pre .cm{color:var(--ink-faint);} pre .kw{color:var(--c-tool);} pre .st2{color:var(--accent2);}
+  pre .hl{color:var(--warn); font-weight:700;} pre .ln{color:var(--ink-faint);}
+  pre .bad{color:var(--danger);} pre .dim{color:var(--ink-faint);} pre .ok{color:var(--accent2);}
+
+  /* height는 JS의 CANVAS_H_TOPO 상수와 반드시 같은 값 — 레이아웃 점프 방지 */
+  canvas{width:100%; display:block; border-radius:8px; background:#10151d;
+    border:1px solid var(--edge);}
+  #cvTopo{height:300px;}
+  .legend{display:flex; gap:14px; font-size:0.8214rem; color:var(--ink-dim); margin-top:9px;
+    flex-wrap:wrap;}
+  .legend i{display:inline-block; width:16px; height:10px; border-radius:3px;
+    vertical-align:middle; margin-right:5px;}
+
+  .counters{display:flex; gap:8px; flex-wrap:wrap; margin-top:12px;}
+  .chip2{border:1px solid var(--edge); border-radius:7px; padding:7px 11px; font-size:0.8214rem;
+    background:var(--panel2); color:var(--ink-faint); min-width:8.5rem;}
+  .chip2 b{display:block; font-size:1.2143rem; color:var(--ink); margin-bottom:1px;}
+  .chip2.danger b{color:var(--danger);}
+  .chip2.good b{color:var(--accent2);}
+
+  .callout{border-left:3px solid var(--warn); background:rgba(210,153,34,.07);
+    padding:11px 14px; border-radius:0 7px 7px 0; font-size:0.8929rem; color:var(--ink-dim);
+    margin-top:14px; line-height:1.65;}
+  .callout b{color:var(--ink);}
+  .callout.ok{border-left-color:var(--accent2); background:rgba(63,185,80,.07);}
+  .callout.bad{border-left-color:var(--danger); background:rgba(248,81,73,.07);}
+  .callout code{color:var(--accent);}
+
+  /* ---------- resolution ---------- */
+  .resbtns{display:grid; grid-template-columns:repeat(3,1fr); gap:7px;}
+  @media (max-width:700px){ .resbtns{grid-template-columns:1fr;} }
+  .resb{background:var(--panel2); border:1px solid var(--edge); color:var(--ink-dim);
+    border-radius:8px; padding:10px 11px; cursor:pointer; font-size:0.8571rem; text-align:left;
+    transition:.13s; line-height:1.4;}
+  .resb:hover{border-color:var(--ink-faint); color:var(--ink);}
+  .resb.on{background:#1d2b3f; border-color:var(--accent); color:var(--ink);}
+  .resb b{display:block; font-size:0.9286rem; color:var(--ink); margin-bottom:2px;}
+  .resb small{display:block; color:var(--ink-faint); font-size:0.75rem;}
+  .resb.on small{color:var(--accent);}
+
+  .pipeview{display:flex; flex-wrap:wrap; gap:5px; margin:12px 0 0;}
+  .pp{border:1px solid var(--edge); border-radius:7px; padding:6px 9px; background:var(--panel2);
+    font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:0.7857rem;
+    color:var(--ink); white-space:nowrap;}
+  .pp small{display:block; font-family:inherit; color:var(--ink-faint); font-size:0.7143rem;
+    font-family:-apple-system,BlinkMacSystemFont,"Apple SD Gothic Neo","Noto Sans KR",sans-serif;}
+  .pp.gone{opacity:.35; border-style:dashed; text-decoration:line-through; color:var(--danger);
+    border-color:var(--danger);}
+  .pp.new{border-color:var(--c-boson); color:#ffd6ec;}
+  .pp.add{border-color:var(--warn); color:#ffe0a3;}
+
+  .brk{display:flex; flex-direction:column; gap:7px; margin-top:12px;}
+  .bk{border:1px solid var(--edge); border-left-width:3px; border-radius:0 7px 7px 0;
+    background:#10151d; padding:9px 11px; font-size:0.8214rem; color:var(--ink-dim); line-height:1.55;}
+  .bk b{color:var(--ink); display:block; font-size:0.8571rem; margin-bottom:2px;}
+  .bk.lose{border-left-color:var(--danger);}
+  .bk.keep{border-left-color:var(--accent2);}
+  .bk.build{border-left-color:var(--warn);}
+  .bk code{color:var(--accent);}
+
+  table{width:100%; border-collapse:collapse; font-size:0.8214rem; margin-top:10px;}
+  th,td{padding:6px 8px; text-align:left; border-bottom:1px solid var(--edge); vertical-align:top;}
+  th{color:var(--ink-faint); font-weight:600; font-size:0.75rem; text-transform:uppercase;
+    letter-spacing:.5px;}
+  td.k{color:var(--ink-dim); width:26%;}
+  td.sel{background:rgba(88,166,255,.09); color:var(--ink);}
+  .foot{color:var(--ink-faint); font-size:0.8214rem; margin-top:26px; line-height:1.8;}
+  .foot a{color:var(--accent); text-decoration:none;}
+  .foot code{color:var(--ink-dim);}
+</style>
+</head>
+<body>
+
+<h1>two loops — <span class="mono">context</span> · <span class="mono">tool</span> · <span class="mono">turn-end</span>는 누가 소유하는가</h1>
+<p class="sub">
+  ch-09 §3–§11 companion · 같은 turn 하나를 Pipecat의 aggregator topology와 boson의
+  <code>run_agent_loop</code>에서 나란히 돌려 본다. 충돌은 일어나는 순간에 켜진다.
+  <span class="mono" style="color:var(--ink-faint)">commit 0cbf9c5</span>
+</p>
+
+<!-- ===================== 1. 같은 turn, 두 loop ===================== -->
+<div class="panel">
+  <h2>1 · 같은 turn을 두 loop에서 — <span class="mono">"오늘 서울 날씨 알려줘"</span></h2>
+  <div class="runbar">
+    <button class="rb primary" id="bStep">▶ 다음 step</button>
+    <button class="rb" id="bAuto">▶▶ 끝까지</button>
+    <button class="rb" id="bResetStep">↺ reset</button>
+    <span class="stepnum" id="stepIdx">step 0 / 9</span>
+  </div>
+
+  <div class="grid2" style="margin-top:14px;">
+    <div>
+      <div class="colhead"><span class="dot" style="background:var(--c-pipe)"></span>
+        Pipecat — topology가 loop다
+        <small>pipeline이 닫는다</small></div>
+      <div class="steps" id="colPipe"></div>
+    </div>
+    <div>
+      <div class="colhead"><span class="dot" style="background:var(--c-boson)"></span>
+        boson — <span class="mono">run_agent_loop</span> 561 L
+        <small>while 블록이 닫는다</small></div>
+      <div class="steps" id="colBoson"></div>
+    </div>
+  </div>
+
+  <h3>충돌 지점 — 발생하는 순간 켜진다</h3>
+  <div class="badges" id="badges"></div>
+  <div class="callout" id="collideNote">step을 진행하면 충돌이 켜진다.</div>
+</div>
+
+<!-- ===================== 2. 살아 있는 message list ===================== -->
+<div class="panel">
+  <h2>2 · 공유되는 <span class="mono">LLMContext._messages</span> — 그리고 제자리 rewrite</h2>
+  <div class="grid2u">
+    <div>
+      <div class="msgs" id="msgList"></div>
+      <div class="ghost" id="ghostBox" style="display:none;"></div>
+      <label class="opt"><input type="checkbox" id="optDeep">
+        <span><b>boson 식으로 포팅: <span class="mono">get_messages()</span>가 <span class="mono">deepcopy</span>를 반환</span></b>
+        — <span class="mono">context/manager.py:47-52</span>의 방어적 복사를
+        <span class="mono">LLMContext</span>에 그대로 옮겼다고 가정한다.</span></label>
+    </div>
+    <div>
+<pre><span class="cm"># processors/aggregators/llm_context.py:221,245</span>
+<span class="ln">221</span> def get_messages(self, llm_specific_filter=None, *,
+<span class="ln">   </span>                 truncate_large_values: bool = False):
+<span class="ln">245</span>     messages = <span class="hl">self._messages</span>   <span class="cm"># 복사 아님. 살아 있는 list.</span>
+<span class="ln">257</span>     if truncate_large_values:
+<span class="ln">258</span>         messages = LLMContext._truncate_large_values_from_messages(messages)
+<span class="ln">261</span>     return messages
+
+<span class="cm"># llm_response_universal.py:2157  — 이게 위 결정의 이유다</span>
+<span class="ln">2157</span> def _update_function_call_result(self, function_name, tool_call_id, result):
+<span class="ln">2158</span>     for message in self._context.<span class="hl">get_messages()</span>:
+<span class="ln">2160</span>         if (not isinstance(message, LLMSpecificMessage)
+<span class="ln">2161</span>             and message["role"] == "tool"
+<span class="ln">2163</span>             and message["tool_call_id"] == tool_call_id):
+<span class="ln">2165</span>             <span class="hl">message["content"] = result</span>   <span class="cm"># 제자리 rewrite</span>
+
+<span class="cm"># boson: packages/basement/basement/context/manager.py:47-52</span>
+<span class="ln">  47</span> def get_messages(self) -&gt; list[Message]:
+<span class="ln">  51</span>     return <span class="bad">deepcopy(self._messages)</span>  <span class="cm"># 외부 mutation 차단이 목적</span></pre>
+      <div class="callout" id="mutNote">
+        Pipecat은 <b>일부러</b> 복사하지 않는다. assistant aggregator가 placeholder를
+        나중에 제자리에서 고쳐 쓰기 때문이다. 방어적 복사 본능이 여기서는 뒤집힌다.
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ===================== 3. loop = topology ===================== -->
+<div class="panel">
+  <h2>3 · loop는 topology다 — <span class="mono">LLMContextFrame</span> 하나 = inference 하나</h2>
+  <canvas id="cvTopo"></canvas>
+  <div class="legend">
+    <span><i style="background:var(--c-pipe)"></i>DOWNSTREAM <span class="mono">LLMContextFrame</span></span>
+    <span><i style="background:var(--c-up)"></i>UPSTREAM 재-prompt <span class="mono">:1889</span></span>
+    <span><i style="background:var(--c-tool)"></i>tool 경로 <span class="mono">run_function_calls :1437</span></span>
+    <span><i style="background:var(--warn)"></i><span class="mono">ToolTurnCap</span> (네가 써야 하는 것)</span>
+  </div>
+  <div class="runbar" style="margin-top:12px;">
+    <button class="rb primary" id="bCycle">▶ cycle 1회</button>
+    <button class="rb warnb" id="bRunaway">⟳ runaway 시작 — tool이 매번 tool을 부른다</button>
+    <button class="rb" id="bTopoReset">↺ reset</button>
+  </div>
+  <label class="opt"><input type="checkbox" id="optCap">
+    <span><b><span class="mono">ToolTurnCap(max_turns=8)</span>을 <span class="mono">llm</span>과
+    <span class="mono">tts</span> 사이에 끼운다</b> — 재-prompt는 전부 이 자리를 UPSTREAM으로 지나간다
+    (<span class="mono">llm_response_universal.py:1889</span>). read.md §9의 코드.</span></label>
+  <div class="counters" id="counters"></div>
+  <div class="callout bad" id="topoNote">
+    <b>Pipecat에는 turn 상한이 없다.</b>
+    <span class="mono">grep -rn "max_turns\|max_iterations\|max_tool_calls" src/pipecat/</span> → <b>0 hits</b>.
+    유일한 bound는 호출 단위다: <span class="mono">function_call_timeout_secs</span>
+    (<span class="mono">llm_service.py:307</span>) 또는 tool별 <span class="mono">timeout_secs</span>.
+  </div>
+</div>
+
+<!-- ===================== 4. adopt / wrap / bypass ===================== -->
+<div class="panel">
+  <h2>4 · 세 가지 해결책 — 무엇이 깨지는지만 본다 (추천 없음)</h2>
+  <div class="resbtns" id="resBtns"></div>
+  <div class="grid2u" style="margin-top:14px;">
+    <div>
+      <h3 style="margin-top:0;">pipeline이 어떻게 남는가 — 정규 7칸 (<span class="mono">read.md §2.7</span>)</h3>
+      <div class="pipeview" id="pipeView"></div>
+      <div class="brk" id="breakList"></div>
+    </div>
+    <div>
+      <h3 style="margin-top:0;">세 비용, 나란히 (<span class="mono">read.md §11.4</span>)</h3>
+      <table>
+        <thead><tr><th>항목</th><th>adopt</th><th>wrap</th><th>bypass</th></tr></thead>
+        <tbody id="costBody"></tbody>
+      </table>
+      <div class="callout" id="resNote"></div>
+    </div>
+  </div>
+</div>
+
+<p class="foot">
+  companion to <a href="../read.md">ch-09 read.md</a> ·
+  소스: <code>llm_context.py</code>, <code>llm_response_universal.py</code>,
+  <code>services/openai/base_llm.py</code>, <code>services/llm_service.py</code>,
+  <code>frames.py</code> @ <code>0cbf9c5</code> ·
+  boson: <code>loop/agent_loop.py</code>, <code>context/manager.py</code>,
+  <code>metatool/router.py</code>, <code>schemas/message_schema.py</code> (read-only).<br>
+  발화 텍스트와 tool 인자는 예시다. 클래스명·줄번호·프레임 방향·mutation 주체는 실제 코드에서 읽은 것이다.
+</p>
+
+<script>
+/* ===================== 공통 ===================== */
+const CANVAS_H_TOPO = 300;
+
+function setupCanvas(cv, H){
+  const r = window.devicePixelRatio || 1;
+  const w = Math.max(cv.clientWidth, 200), h = H;
+  if (cv.width !== Math.round(w*r) || cv.height !== Math.round(h*r)){
+    cv.width = Math.round(w*r); cv.height = Math.round(h*r);
+  }
+  cv.style.height = h + "px";
+  const c = cv.getContext("2d");
+  c.setTransform(r,0,0,r,0,0);
+  c.clearRect(0,0,w,h);
+  return {c, w, h};
+}
+
+const $ = (id) => document.getElementById(id);
+const CSSV = (n) => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+
+/* ===================== 1. 같은 turn, 두 loop ===================== */
+const BADGES = [
+  {id:"OWNER",  t:"context 소유자",
+   d:"Pipecat: <span class='mono'>LLMContext</span>(llm_context.py:83)는 <b>application 코드가 만들어 들고 있는</b> 평범한 객체다 — 필드 세 개, <span class='mono'>_messages</span>:110 / <span class='mono'>_tools</span>:111 / <span class='mono'>_tool_choice</span>:112. LLM service는 history에 대해 완전히 stateless다. boson: <span class='mono'>ContextManager</span>(context/manager.py:21)를 <span class='mono'>run_agent_loop</span>가 인자로 받아 혼자 쓴다."},
+  {id:"MUT",    t:"get_messages() 반환",
+   d:"Pipecat: 필터가 없으면 <b>살아 있는 list 그 자체</b>(llm_context.py:245). <span class='mono'>truncate_large_values=True</span>일 때만 deep copy. boson: <span class='mono'>deepcopy(self._messages)</span>(manager.py:47-52) — 목적이 정반대다. 순진하게 포팅하면 tool-result 경로가 <b>조용히</b> 깨진다."},
+  {id:"DISPATCH",t:"tool dispatch",
+   d:"Pipecat: <span class='mono'>LLMService.run_function_calls</span>(llm_service.py:1437) → <span class='mono'>_run_function_call</span>:1547. registry는 <span class='mono'>self._functions: dict[str|None, FunctionCallRegistryItem]</span> 하나뿐 — <b>permission도 stage allowlist도 없다</b>. boson: <span class='mono'>ToolRouter.dispatch</span>(router.py:103)가 게이트 3개를 순서대로 통과시킨다 — exposure(모델에 보이는 것: <span class='mono'>use_tool</span>/<span class='mono'>use_skill</span> 둘뿐), availability(<span class='mono'>_allowed_tools_var</span> ContextVar, router.py:32/57), permission(<span class='mono'>PermissionChecker.check_tool</span>)."},
+  {id:"SCHEMA", t:"tool 결과 스키마",
+   d:"Pipecat: <span class='mono'>{\"role\":\"tool\", \"content\":…, \"tool_call_id\":…}</span> — OpenAI 모양의 평범한 dict. boson: <span class='mono'>Message.role</span>은 <span class='mono'>Literal[\"user\",\"assistant\"]</span>뿐이다(message_schema.py:46). <b>tool role이 없다.</b> 결과는 user 메시지 안에 <span class='mono'>ToolResultBlock</span>으로 실려 간다(agent_loop.py:540). 이건 rename이 아니라 <b>schema rewrite</b>다."},
+  {id:"TURN",   t:"turn 종료 결정",
+   d:"Pipecat: 아무도 결정하지 않는다. frame이 더 안 나올 뿐이다. <span class='mono'>grep -rn \"max_turns|max_iterations|max_tool_calls\" src/pipecat/</span> → <b>0 hits</b>. boson: <span class='mono'>while turn_count &lt; runtime.config.max_turns</span>(agent_loop.py:207-209, 기본값 50 @ config_schema.py:62), 텍스트 전용 응답이면 <span class='mono'>break</span>(:363), 소진되면 <span class='mono'>while/else</span>(:365)가 <span class='mono'>MessageEnd(stop_reason=\"max_turns\")</span>를 낸다."}
+];
+
+const STEPS = [
+  { fire:["OWNER"],
+    p:{who:"LLMUserAggregator (LLM 앞)",
+       ln:"push_aggregation()  :856\ncontext.add_message({\"role\":\"user\", …})",
+       cm:"<span class='ref'>llm_response_universal.py:563</span> · <span class='ref'>:808</span>에서 TranscriptionFrame을 삼키고, turn이 끝나면 <b>공유 context</b>에 append한다.",
+       cls:""},
+    b:{who:"run_agent_loop 본문",
+       ln:"run_agent_loop(runtime, user_input)  :176\nctx.add_message(\"user\", content)  :198",
+       cm:"<span class='ref'>agent_loop.py:176</span> · 561 L짜리 async generator 하나가 turn bounding·message mutation·streaming·dispatch를 <b>동시에</b> 소유한다.",
+       cls:""} },
+
+  { fire:["TURN"],
+    p:{who:"user aggregator → LLM",
+       ln:"await self.push_context_frame()   # DOWNSTREAM 기본값\nLLMContextFrame(context=self._context)  :487",
+       cm:"프레임은 <b>context 객체 자체</b>를 실어 나른다. 복사본이 아니다. 다음 processor가 곧 <span class='mono'>llm</span>이다.",
+       cls:""},
+    b:{who:"loop 진입",
+       ln:"turn_count = 0\nwhile turn_count < runtime.config.max_turns:   :207-209",
+       cm:"<span class='mono'>max_turns: int = Field(default=50, ge=1, le=1000)</span> — <span class='ref'>schemas/config_schema.py:62</span>. Pipecat에는 이 줄에 대응하는 것이 <b>없다</b>.",
+       cls:""} },
+
+  { fire:[],
+    p:{who:"OpenAIBaseLLMService.process_frame",
+       ln:"599  await super().process_frame(frame, direction)\n601  if isinstance(frame, LLMContextFrame):\n603      await self.push_frame(LLMFullResponseStartFrame())\n604      await self.start_processing_metrics()\n605      await self._process_context(frame.context)",
+       cm:"<span class='ref'>services/openai/base_llm.py</span> · <b>inference 정확히 한 번.</b> service는 history를 갖고 있지 않다 — 프레임에 실려 온 것을 읽을 뿐이다. :605 이후로 재-prompt하는 코드는 이 파일에 없다.",
+       cls:""},
+    b:{who:"provider stream",
+       ln:"runtime.provider.stream(\n    messages=ctx.get_messages(),   # deepcopy 스냅샷\n    system=ctx.get_system_prompt(), tools=tools)   :250-254",
+       cm:"loop가 매 iteration마다 스스로 provider를 부른다. 재-prompt는 while이 돌면 그냥 일어난다.",
+       cls:""} },
+
+  { fire:[],
+    p:{who:"tool call 파싱 → 발사",
+       ln:"FunctionCallFromLLM(name, tool_call_id, args, context)   frames.py:1330\nawait self.run_function_calls(function_calls)   base_llm.py:588\n  → LLMService.run_function_calls  :1437\n  → FunctionCallsStartedFrame broadcast  :1455",
+       cm:"<span class='mono'>FunctionCallsStartedFrame</span>은 <span class='mono'>SystemFrame</span>(frames.py:1349) — 이 프레임을 세는 것이 나중에 turn cap을 만드는 재료가 된다.",
+       cls:""},
+    b:{who:"assistant 메시지 수작업 조립",
+       ln:"# :316-328\ntext = re.sub(r\"<system-reminder>.*?</system-reminder>\", \"\", text)\nblocks = [TextBlock(text=text)] if text else []\nblocks += [ToolUseBlock(id=…, name=…, input=…) for …]",
+       cm:"Anthropic 모양의 block 리스트를 손으로 만든다. Pipecat이라면 adapter 12개 뒤로 숨는 부분이다(<span class='mono'>BaseLLMAdapter.to_provider_tools_format</span>, adapters/ 3,647 L / 12 provider).",
+       cls:""} },
+
+  { fire:["DISPATCH"],
+    p:{who:"_run_function_call + assistant aggregator",
+       ln:"1547 _run_function_call(runner_item)\n1576   FunctionCallInProgressFrame  (UninterruptibleFrame)\n1747 _handle_function_call_in_progress(frame)\n1776   {\"role\":\"tool\", \"content\":\"IN_PROGRESS\", \"tool_call_id\":…}",
+       cm:"placeholder가 <b>지금</b> context에 들어간다. 게이트는 하나도 통과하지 않는다 — registry에 permission 슬롯이 없다.",
+       cls:""},
+    b:{who:"_execute_tool_uses — 순차, 게이트 3개",
+       ln:"393 async def _execute_tool_uses(runtime, tool_uses, hooks, api, ctx)\n    for idx, tu in enumerate(tool_uses):        # 병렬 없음\n      router.dispatch(name, args)   metatool/router.py:103\n        1) permission_checker.check_tool(name)\n        2) allowed = _allowed_tools_var.get()   # stage allowlist\n        3) dispatch table 조회 → _invoke_handler",
+       cm:"exposure·availability·permission을 <b>일부러 분리</b>해 둔 세 게이트. Pipecat registry에는 이 셋을 놓을 자리가 없다.",
+       cls:""} },
+
+  { fire:["SCHEMA"],
+    p:{who:"handler → result_callback",
+       ln:"await item.handler(params)     :1683   # 값을 반환하지 않는다\nawait params.result_callback({\"conditions\":\"nice\",\"temperature\":\"75\"})\n1589 function_call_result_callback → settled = True\n     FunctionCallResultFrame   frames.py:770  (DataFrame, UninterruptibleFrame)",
+       cm:"in-progress도 result도 <b>uninterruptible</b>이다 — \"once a result is generated we always want to update the context.\"",
+       cls:""},
+    b:{who:"결과를 user 메시지로 append",
+       ln:"ctx.add_message(\"user\", [result])    :540\nToolResultBlock(tool_use_id, content, is_error)\n# Message.role = Literal[\"user\",\"assistant\"]   message_schema.py:46",
+       cm:"tool role이 없으므로 <b>고쳐 쓸 placeholder도 없다</b>. 결과는 그냥 새 메시지로 붙는다.",
+       cls:""} },
+
+  { fire:["MUT"],
+    p:{who:"제자리 rewrite",
+       ln:"1783 _handle_function_call_result\n1908 _handle_function_call_finished\n2157 _update_function_call_result(name, tool_call_id, result)\n2158   for message in self._context.get_messages():   # 살아 있는 dict들\n2165       message[\"content\"] = result",
+       cm:"<b>이 줄 하나가 get_messages()의 설계를 결정한다.</b> 복사본을 돌려줬다면 여기서 쓴 값은 버려진다.",
+       cls:"hotp"},
+    b:{who:"— 해당 없음 —",
+       ln:"(고쳐 쓸 placeholder가 존재하지 않는다)",
+       cm:"boson은 append-only다. 그래서 <span class='mono'>deepcopy</span>가 안전하고, 그래서 그 습관을 그대로 옮기면 위 :2165가 무의미해진다.",
+       cls:"idle"} },
+
+  { fire:["TURN"],
+    p:{who:"loop를 닫는 것은 pipeline이다",
+       ln:"1889 await self.push_context_frame(FrameDirection.UPSTREAM)\n# assistant_agg → transport.output → tts → llm  (processor 4칸을 거슬러)",
+       cm:"assistant aggregator는 <span class='mono'>transport.output()</span> <b>뒤</b>에 있다. 재-prompt는 파이프를 거꾸로 타고 같은 service로 재진입한다. think-act-observe는 <b>topology</b>지 while 블록이 아니다.",
+       cls:""},
+    b:{who:"같은 함수, 같은 스택 프레임",
+       ln:"turn_count += 1\ncontinue   # 같은 while의 다음 iteration",
+       cm:"loop는 이동하지 않는다. 561 L 함수 안에 그대로 머문다.",
+       cls:""} },
+
+  { fire:["TURN"],
+    p:{who:"turn이 끝난다 — 아무도 끝내지 않는다",
+       ln:"# 2번째 inference: tool call 없음 → LLMFullResponseEndFrame\n1677 push_aggregation()\n1685   {\"role\":\"assistant\", \"content\": aggregation}",
+       cm:"<b>종료 결정 주체가 없다.</b> tool call이 안 나왔으니 UPSTREAM 프레임이 안 나오고, 그래서 다음 inference가 없을 뿐이다. 상한은 어디에도 없다.",
+       cls:""},
+    b:{who:"break — 명시적 종료",
+       ln:"363 break                       # 텍스트 전용 응답\n365 while/else:                   # 소진 경로\n      TextDelta(text=\"\\n[Max turns exceeded — stopping]\")\n      MessageEnd(stop_reason=\"max_turns\")",
+       cm:"끝내는 문장이 <b>실제로 존재</b>하고, 소진됐을 때 무슨 말을 할지도 코드에 적혀 있다.",
+       cls:""} }
+];
+
+let stepN = 0, autoTimer = null;
+
+function renderBadges(){
+  const fireAt = {};
+  STEPS.forEach((s,i)=> s.fire.forEach(f => { if(fireAt[f]===undefined) fireAt[f]=i+1; }));
+  $("badges").innerHTML = BADGES.map(b=>{
+    const first = fireAt[b.id] || 99;
+    const hot = STEPS[stepN-1] && STEPS[stepN-1].fire.indexOf(b.id) >= 0;
+    const cls = hot ? "bg hot" : (stepN >= first ? "bg fired" : "bg");
+    return `<div class="${cls}"><b>${b.id}</b>${b.t}</div>`;
+  }).join("");
+
+  const cur = STEPS[stepN-1];
+  if (!cur || cur.fire.length === 0){
+    $("collideNote").className = "callout";
+    $("collideNote").innerHTML = stepN === 0
+      ? "step을 진행하면 충돌이 켜진다. 배지 다섯 개 = 이 챕터가 결정을 넘겨주는 다섯 축이다."
+      : "이 step에서는 새 충돌이 켜지지 않는다 — 두 loop가 같은 일을 서로 다른 자리에서 할 뿐이다.";
+  } else {
+    const b = BADGES.find(x => x.id === cur.fire[0]);
+    $("collideNote").className = "callout bad";
+    $("collideNote").innerHTML = `<b>${b.id} — ${b.t}</b><br>${b.d}`;
+  }
+}
+
+function renderSteps(){
+  const col = (key, side) => STEPS.map((s,i)=>{
+    const d = s[key];
+    const on = i < stepN;
+    const cur = i === stepN-1;
+    const cls = ["st", on?"on":"", cur?("cur"+(side==="bos"?" bos":"")):"", d.cls==="idle"?"idle":""].join(" ");
+    return `<div class="${cls}"><span class="who">${d.who}</span>`
+         + `<span class="ln">${esc(d.ln)}</span>`
+         + `<span class="cm">${d.cm}</span></div>`;
+  }).join("");
+  $("colPipe").innerHTML  = col("p","pipe");
+  $("colBoson").innerHTML = col("b","bos");
+  $("stepIdx").textContent = `step ${stepN} / ${STEPS.length}`;
+  $("bStep").disabled = stepN >= STEPS.length;
+}
+
+function esc(s){ return s.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;"); }
+
+function redrawStepPanels(){ renderSteps(); renderBadges(); renderMessages(); }
+
+$("bStep").addEventListener("click", ()=>{
+  if (stepN < STEPS.length){ stepN++; redrawStepPanels(); }
+});
+$("bAuto").addEventListener("click", ()=>{
+  if (autoTimer){ clearInterval(autoTimer); autoTimer = null; return; }
+  autoTimer = setInterval(()=>{
+    if (stepN >= STEPS.length){ clearInterval(autoTimer); autoTimer = null; return; }
+    stepN++; redrawStepPanels();
+  }, 1100);
+});
+$("bResetStep").addEventListener("click", ()=>{
+  if (autoTimer){ clearInterval(autoTimer); autoTimer = null; }
+  stepN = 0; redrawStepPanels();
+});
+
+/* ===================== 2. 살아 있는 message list ===================== */
+const TCID = "call_a7f2";
+const TOOL_RESULT = '{"conditions": "nice", "temperature": "75"}';
+
+function renderMessages(){
+  const deep = $("optDeep").checked;
+  const n = stepN;
+  const out = [];
+
+  if (n >= 1) out.push({cls:"user", flash:n===1, html:
+    `<span class="k">{</span>"role": <span class="v">"user"</span>, "content": <span class="v">"오늘 서울 날씨 알려줘"</span><span class="k">}</span>`});
+
+  if (n >= 4) out.push({cls:"asst", flash:n===4, html:
+    `<span class="k">{</span>"role": <span class="v">"assistant"</span>, "tool_calls": [{"id": <span class="id">"${TCID}"</span>, "type": "function",\n   "function": {"name": <span class="v">"get_current_weather"</span>, "arguments": "{\\"location\\":\\"Seoul\\",\\"format\\":\\"celsius\\"}"}}]<span class="k">}</span>`});
+
+  if (n >= 5){
+    const written = n >= 7 && !deep;
+    const stale   = n >= 7 && deep;
+    out.push({cls:"tool", flash:(n===5)||(n===7&&!deep), stale:stale, html:
+      `<span class="k">{</span>"role": <span class="v">"tool"</span>, "content": ${
+        written ? `<span class="v">${esc(TOOL_RESULT)}</span>` : `<span class="bad" style="color:var(--danger)">"IN_PROGRESS"</span>`
+      }, "tool_call_id": <span class="id">"${TCID}"</span><span class="k">}</span>`});
+  }
+
+  if (n >= 9) out.push({cls:"asst", flash:n===9, html:
+    `<span class="k">{</span>"role": <span class="v">"assistant"</span>, "content": <span class="v">"서울은 지금 맑고 24도예요."</span><span class="k">}</span>`});
+
+  $("msgList").innerHTML = out.length
+    ? out.map(m=>`<div class="m ${m.cls}${m.flash?" flash":""}${m.stale?" stale":""}">${m.html}</div>`).join("")
+    : `<div style="color:var(--ink-faint)">LLMContext._messages == []   <span style="opacity:.7">— application이 만들어 들고 있는 객체 하나 (llm_context.py:83)</span></div>`;
+
+  const g = $("ghostBox");
+  if (deep && n >= 7){
+    g.style.display = "";
+    g.textContent =
+      "# _update_function_call_result(:2157)가 받아 든 것 — deepcopy(self._messages)\n" +
+      "[ …, {'role': 'tool', 'content': " + TOOL_RESULT + ", 'tool_call_id': '" + TCID + "'} ]\n" +
+      "↑ message[\"content\"] = result 는 여기에 적혔다. 함수가 리턴하는 순간 이 list는 GC된다.\n" +
+      "   실제 context는 여전히 \"IN_PROGRESS\"이고, 다음 inference는 그걸 그대로 모델에 보낸다.";
+  } else {
+    g.style.display = "none";
+  }
+
+  const note = $("mutNote");
+  if (deep){
+    note.className = "callout bad";
+    note.innerHTML = "<b>깨졌다. 예외도, 로그도 없이.</b> <span class='mono'>_update_function_call_result</span>는 "
+      + "복사본을 순회하며 성공적으로 쓰고 성공적으로 리턴한다. 실패 신호가 없다 — "
+      + "다음 turn에 모델이 <span class='mono'>\"IN_PROGRESS\"</span>를 tool 결과로 읽는 것이 유일한 증상이다. "
+      + "이것이 boson <span class='mono'>ContextManager</span>를 그대로 옮길 때 생기는 <b>가장 날카로운 비호환</b>이다.";
+  } else {
+    note.className = "callout";
+    note.innerHTML = "Pipecat은 <b>일부러</b> 복사하지 않는다. assistant aggregator가 placeholder를 "
+      + "나중에 제자리에서 고쳐 쓰기 때문이다(<span class='mono'>:2165</span>). 방어적 복사 본능이 여기서는 뒤집힌다. "
+      + "복사가 필요하면 경로가 따로 있다 — <span class='mono'>truncate_large_values=True</span>일 때만 "
+      + "<span class='mono'>copy.deepcopy</span>가 돈다(<span class='mono'>llm_context.py:257-258, :282/:290</span>).";
+  }
+}
+$("optDeep").addEventListener("change", renderMessages);
+
+/* ===================== 3. loop = topology ===================== */
+const CAP_MAX = 8;
+const topo = {
+  phase: "idle", t: 0, running: false, runaway: false,
+  infer: 0, tools: 0, upstream: 0, blocked: false, first: true, raf: null, last: 0
+};
+const PHASE_MS = { down:700, infer:650, tooldown:500, toolrun:600, toolup:600, up:900, stop:1200 };
+
+function boxes(w){
+  const cap = $("optCap").checked;
+  const names = [
+    {k:"A", t:"LLMUserAggregator", s:":563"},
+    {k:"B", t:"OpenAILLMService",  s:"base_llm.py:601-605"}
+  ];
+  if (cap) names.push({k:"C", t:"ToolTurnCap", s:"max_turns=" + CAP_MAX});
+  names.push({k:"D", t:"TTSService", s:"ch-07"});
+  names.push({k:"E", t:"transport.output()", s:"ch-08"});
+  names.push({k:"F", t:"LLMAssistantAggregator", s:":1384"});
+
+  const m = 10, gap = 6, n = names.length;
+  const bw = (w - 2*m - gap*(n-1)) / n, bh = 50, y = 26;
+  const map = {};
+  names.forEach((o,i)=>{
+    const x = m + i*(bw+gap);
+    map[o.k] = {x, y, w:bw, h:bh, cx:x+bw/2, cy:y+bh/2, t:o.t, s:o.s};
+  });
+  return map;
+}
+
+function rrect(c,x,y,w,h,r){
+  c.beginPath();
+  c.moveTo(x+r,y); c.arcTo(x+w,y,x+w,y+h,r); c.arcTo(x+w,y+h,x,y+h,r);
+  c.arcTo(x,y+h,x,y,r); c.arcTo(x,y,x+w,y,r); c.closePath();
+}
+function fitText(c, s, maxw){
+  let t = s;
+  while (t.length > 4 && c.measureText(t).width > maxw) t = t.slice(0, -2);
+  return t === s ? s : t + "…";
+}
+function arrow(c, x1, y1, x2, y2, col, dash){
+  c.save(); c.strokeStyle = col; c.lineWidth = 1.6;
+  if (dash) c.setLineDash(dash);
+  c.beginPath(); c.moveTo(x1,y1); c.lineTo(x2,y2); c.stroke(); c.setLineDash([]);
+  const a = Math.atan2(y2-y1, x2-x1);
+  c.beginPath(); c.moveTo(x2,y2);
+  c.lineTo(x2-9*Math.cos(a-0.4), y2-9*Math.sin(a-0.4));
+  c.lineTo(x2-9*Math.cos(a+0.4), y2-9*Math.sin(a+0.4));
+  c.closePath(); c.fillStyle = col; c.fill(); c.restore();
+}
+
+function drawTopo(){
+  const cv = $("cvTopo");
+  const g = setupCanvas(cv, CANVAS_H_TOPO);
+  const c = g.c, w = g.w;
+  const B = boxes(w);
+  const cap = $("optCap").checked;
+  const PIPE = CSSV("--c-pipe"), UP = CSSV("--c-up"), TOOL = CSSV("--c-tool"),
+        WARN = CSSV("--warn"), EDGE = CSSV("--edge"), DIM = CSSV("--ink-faint"),
+        INK = CSSV("--ink"), DANGER = CSSV("--danger");
+
+  /* --- downstream 화살표 (박스 사이) --- */
+  const order = cap ? ["A","B","C","D","E","F"] : ["A","B","D","E","F"];
+  c.save();
+  for (let i=0;i<order.length-1;i++){
+    const a = B[order[i]], b = B[order[i+1]];
+    arrow(c, a.x+a.w, a.cy, b.x-2, b.cy, EDGE);
+  }
+  c.restore();
+
+  /* --- 박스 --- */
+  order.forEach(k=>{
+    const b = B[k];
+    const hot = (k==="B" && (topo.phase==="infer")) ||
+                (k==="F" && (topo.phase==="toolup")) ||
+                (k==="C" && topo.blocked);
+    c.fillStyle = hot ? "rgba(88,166,255,.14)" : "#161b22";
+    c.strokeStyle = topo.blocked && k==="C" ? DANGER : (hot ? PIPE : (k==="C" ? WARN : EDGE));
+    c.lineWidth = 1.4;
+    rrect(c, b.x, b.y, b.w, b.h, 7); c.fill(); c.stroke();
+    c.fillStyle = INK;
+    c.font = "600 11px ui-monospace,SFMono-Regular,Menlo,monospace";
+    c.textAlign = "center";
+    c.fillText(fitText(c, b.t, b.w-8), b.cx, b.y+21);
+    c.fillStyle = DIM;
+    c.font = "10px ui-monospace,SFMono-Regular,Menlo,monospace";
+    c.fillText(fitText(c, b.s, b.w-8), b.cx, b.y+36);
+  });
+
+  /* --- UPSTREAM 재-prompt 경로 --- */
+  const upY = 118;
+  c.save();
+  c.strokeStyle = UP; c.lineWidth = 1.6; c.setLineDash([5,4]);
+  c.beginPath();
+  c.moveTo(B.F.cx, B.F.y+B.F.h); c.lineTo(B.F.cx, upY);
+  c.lineTo(B.B.cx, upY); c.stroke(); c.setLineDash([]);
+  arrow(c, B.B.cx+14, upY, B.B.cx, B.B.y+B.B.h+2, UP);
+  c.fillStyle = UP; c.font = "10px ui-monospace,SFMono-Regular,Menlo,monospace";
+  c.textAlign = "center";
+  c.fillText("push_context_frame(FrameDirection.UPSTREAM)  llm_response_universal.py:1889",
+             (B.B.cx+B.F.cx)/2, upY-6);
+  c.restore();
+  if (cap){
+    c.save();
+    c.strokeStyle = topo.blocked ? DANGER : WARN; c.lineWidth = 1.4;
+    c.beginPath(); c.moveTo(B.C.cx, upY-7); c.lineTo(B.C.cx, upY+7); c.stroke();
+    c.restore();
+  }
+
+  /* --- tool 경로 --- */
+  const tw = Math.min(300, w*0.55), tx = Math.max(8, Math.min(B.B.cx - tw/2, w-tw-8)), ty = 196, th = 56;
+  c.fillStyle = topo.phase==="toolrun" ? "rgba(188,140,255,.14)" : "#161b22";
+  c.strokeStyle = (topo.phase==="toolrun"||topo.phase==="tooldown") ? TOOL : EDGE;
+  c.lineWidth = 1.4;
+  rrect(c, tx, ty, tw, th, 7); c.fill(); c.stroke();
+  c.textAlign = "center"; c.fillStyle = INK;
+  c.font = "600 11px ui-monospace,SFMono-Regular,Menlo,monospace";
+  c.fillText(fitText(c, "run_function_calls() :1437 → _run_function_call() :1547", tw-10), tx+tw/2, ty+21);
+  c.fillStyle = DIM; c.font = "10px ui-monospace,SFMono-Regular,Menlo,monospace";
+  c.fillText(fitText(c, "await params.result_callback(result) → FunctionCallResultFrame", tw-10), tx+tw/2, ty+37);
+  c.fillStyle = TOOL;
+  c.fillText(fitText(c, "게이트 없음: permission / stage allowlist 슬롯이 registry에 없다", tw-10), tx+tw/2, ty+50);
+  arrow(c, B.B.cx-20, B.B.y+B.B.h+2, tx+tw*0.35, ty-2, TOOL, [4,3]);
+  arrow(c, tx+tw*0.75, ty-2, B.F.cx-6, B.F.y+B.F.h+2, TOOL, [4,3]);
+
+  /* --- 입구 라벨 --- */
+  c.textAlign = "left"; c.fillStyle = PIPE;
+  c.font = "10px ui-monospace,SFMono-Regular,Menlo,monospace";
+  c.fillText("LLMContextFrame :487 (DOWNSTREAM)", B.A.x, B.A.y-8);
+  c.textAlign = "right"; c.fillStyle = DIM;
+  c.fillText("inference 1회 / LLMContextFrame 1개", w-10, B.A.y-8);
+
+  /* --- 이동 중인 token --- */
+  const p = tokenPos(B, tx, tw, ty, upY, w);
+  if (p){
+    c.beginPath(); c.arc(p.x, p.y, 8, 0, Math.PI*2);
+    c.fillStyle = p.col; c.fill();
+    c.fillStyle = "#0e1117"; c.font = "700 9px ui-monospace,Menlo,monospace";
+    c.textAlign = "center"; c.fillText(p.ch, p.x, p.y+3);
+    c.fillStyle = p.col; c.font = "10px ui-monospace,SFMono-Regular,Menlo,monospace";
+    c.textAlign = "center";
+    c.fillText(p.label, Math.max(90, Math.min(p.x, w-90)), p.y - 14);
+  }
+
+  if (topo.blocked){
+    c.fillStyle = DANGER; c.textAlign = "center";
+    c.font = "600 11px ui-monospace,SFMono-Regular,Menlo,monospace";
+    c.fillText("ToolTurnCap: 8회 초과 — 프레임을 삼키고 TTSSpeakFrame으로 대체", w/2, 160);
+  }
+}
+
+function lerp(a,b,t){ return a + (b-a)*t; }
+
+function tokenPos(B, tx, tw, ty, upY, w){
+  const t = topo.t;
+  switch(topo.phase){
+    case "down":  return {x: lerp(B.A.x+B.A.w, B.B.x, t), y: B.B.cy, col: CSSV("--c-pipe"),
+                          ch:"C", label:"LLMContextFrame"};
+    case "infer": return {x: B.B.cx, y: B.B.cy, col: CSSV("--c-pipe"), ch:"∞",
+                          label:"_process_context() :605"};
+    case "tooldown": return {x: lerp(B.B.cx-20, tx+tw*0.35, t), y: lerp(B.B.y+B.B.h, ty, t),
+                          col: CSSV("--c-tool"), ch:"F", label:"FunctionCallsStartedFrame :1455"};
+    case "toolrun": return {x: tx+tw/2, y: ty+th_(), col: CSSV("--c-tool"), ch:"F",
+                          label:"handler(params) :1683"};
+    case "toolup": return {x: lerp(tx+tw*0.75, B.F.cx, t), y: lerp(ty, B.F.y+B.F.h, t),
+                          col: CSSV("--c-tool"), ch:"R", label:"FunctionCallResultFrame (uninterruptible)"};
+    case "up":    {
+      const capOn = $("optCap").checked;
+      const stopX = capOn && topo.blocked ? B.C.cx : B.B.cx;
+      const tt = capOn && topo.blocked ? Math.min(t*1.0, 1) : t;
+      const x = lerp(B.F.cx, stopX, tt);
+      return {x, y: upY, col: topo.blocked ? CSSV("--danger") : CSSV("--c-up"), ch:"C",
+              label: topo.blocked ? "여기서 막힌다" : "재-prompt :1889"};
+    }
+    default: return null;
+  }
+}
+function th_(){ return 28; }
+
+function nextPhase(){
+  const capOn = $("optCap").checked;
+  switch(topo.phase){
+    case "down":     topo.phase = "infer"; topo.infer++; break;
+    case "infer":    topo.phase = "tooldown"; break;
+    case "tooldown": topo.phase = "toolrun"; topo.tools++; break;
+    case "toolrun":  topo.phase = "toolup"; break;
+    case "toolup":
+      topo.upstream++;
+      if (capOn && topo.upstream > CAP_MAX){ topo.blocked = true; }
+      topo.phase = "up"; break;
+    case "up":
+      if (topo.blocked){ topo.phase = "idle"; topo.running = false; topo.runaway = false; }
+      else if (topo.runaway){ topo.phase = "infer"; topo.infer++; }
+      else { topo.phase = "idle"; topo.running = false; }
+      break;
+    default: topo.phase = "idle"; topo.running = false;
+  }
+  topo.t = 0;
+  renderCounters();
+}
+
+function tick(ts){
+  if (!topo.running){ topo.raf = null; return; }
+  const dt = topo.last ? ts - topo.last : 16;
+  topo.last = ts;
+  const dur = PHASE_MS[topo.phase] || 600;
+  topo.t += dt / dur;
+  if (topo.t >= 1) nextPhase();
+  drawTopo();
+  topo.raf = topo.running ? requestAnimationFrame(tick) : null;
+}
+function startTopo(runaway){
+  topo.runaway = runaway;
+  topo.blocked = false;
+  if (!topo.running){
+    topo.phase = topo.first ? "down" : "infer";
+    if (!topo.first) topo.infer++;
+    topo.first = false;
+    topo.t = 0; topo.running = true; topo.last = 0;
+    topo.raf = requestAnimationFrame(tick);
+  }
+  renderCounters();
+}
+function renderCounters(){
+  const capOn = $("optCap").checked;
+  const over = !capOn && topo.upstream >= 5;
+  $("counters").innerHTML =
+    `<div class="chip2"><b>${topo.infer}</b>inference (LLMContextFrame 1개당 1회)</div>` +
+    `<div class="chip2"><b>${topo.tools}</b>tool call (run_function_calls)</div>` +
+    `<div class="chip2 ${over?"danger":""}"><b>${topo.upstream}</b>UPSTREAM 재-prompt :1889</div>` +
+    `<div class="chip2 ${capOn?(topo.blocked?"danger":"good"):"danger"}"><b>${
+        capOn ? (Math.min(topo.upstream, CAP_MAX) + "/" + CAP_MAX) : "∞"
+      }</b>${
+        capOn ? (topo.blocked ? ("ToolTurnCap — " + topo.upstream + "번째를 차단") : "ToolTurnCap (네가 쓴 processor)")
+              : "프레임워크 상한 — 없음"
+      }</div>`;
+}
+
+$("bCycle").addEventListener("click", ()=> startTopo(false));
+$("bRunaway").addEventListener("click", ()=> startTopo(true));
+$("bTopoReset").addEventListener("click", ()=>{
+  topo.running = false; topo.runaway = false; topo.phase = "idle"; topo.t = 0;
+  topo.infer = 0; topo.tools = 0; topo.upstream = 0; topo.blocked = false; topo.first = true;
+  if (topo.raf){ cancelAnimationFrame(topo.raf); topo.raf = null; }
+  renderCounters(); drawTopo();
+});
+$("optCap").addEventListener("change", ()=>{
+  if (!$("optCap").checked) topo.blocked = false;
+  renderCounters(); drawTopo();
+});
+
+/* ===================== 4. adopt / wrap / bypass ===================== */
+const PIPE7 = [
+  {t:"transport.input()", s:"ch-05"},
+  {t:"stt", s:"STTService · ch-06"},
+  {t:"user_aggregator", s:"LLMUserAggregator :563"},
+  {t:"llm", s:"OpenAILLMService :601"},
+  {t:"tts", s:"TTSService · ch-07"},
+  {t:"transport.output()", s:"MediaSender · ch-08"},
+  {t:"assistant_aggregator", s:"LLMAssistantAggregator :1384"}
+];
+
+const RES = {
+  adopt: {
+    title:"adopt", sub:"Pipecat loop를 쓰고 tool을 포팅",
+    pipe:(i)=> i===4 ? "add" : "",           /* llm 뒤에 ToolTurnCap 삽입 */
+    insertAfter:{ idx:3, t:"ToolTurnCap(max_turns=8)", s:"네가 쓰는 processor · read.md §9", cls:"add" },
+    breaks:[
+      {c:"build", b:"turn 상한이 사라진다",
+       d:"<span class='mono'>grep max_turns src/pipecat/</span> → 0 hits. <span class='mono'>agent_loop.py:207-209</span>의 guard와 <span class='mono'>:365</span>의 <span class='mono'>while/else</span> 소진 경로를, UPSTREAM <span class='mono'>LLMContextFrame</span>(또는 <span class='mono'>FunctionCallsStartedFrame</span>)을 세는 <span class='mono'>FrameProcessor</span>로 다시 만들거나 <b>의식적으로 버려야</b> 한다."},
+      {c:"lose", b:"tool-role schema rewrite — rename이 아니다",
+       d:"<span class='mono'>Message.role = Literal[\"user\",\"assistant\"]</span>(message_schema.py:46)에 <span class='mono'>ToolResultBlock</span>을 실어 보내던 규약이, OpenAI 모양의 <span class='mono'>{\"role\":\"tool\",\"tool_call_id\":…}</span> dict로 바뀐다. <span class='mono'>Message</span>/<span class='mono'>ContentBlock</span> 계층 자체가 번역 대상이 아니라 <b>사문화</b>된다."},
+      {c:"lose", b:"게이트 3개를 놓을 자리가 없다",
+       d:"exposure(<span class='mono'>use_tool</span>/<span class='mono'>use_skill</span> 2개로 고정 — prompt-cache prefix가 tools→system→messages 순이라서), availability(<span class='mono'>_allowed_tools_var</span> stage allowlist), permission(<span class='mono'>PermissionChecker.check_tool</span>). Pipecat registry는 <span class='mono'>dict[str|None, FunctionCallRegistryItem]</span> 하나다 — handler 안의 guard나 catch-all(<span class='mono'>register_function(None, handler)</span>)로 살려야 한다."},
+      {c:"build", b:"tool signature 22개가 전부 바뀐다",
+       d:"<span class='mono'>handler(**arguments) -> value</span> → <span class='mono'>async handler(params: FunctionCallParams)</span> + <span class='mono'>await params.result_callback(result)</span>. 그리고 Pipecat 기본값이 <span class='mono'>run_in_parallel=True</span>(llm_service.py:305)이므로, boson이 <span class='mono'>_execute_tool_uses</span>(:393)에서 당연시하던 <b>순차 실행을 명시적으로 다시 선언</b>해야 한다."},
+      {c:"keep", b:"얻는 것",
+       d:"adapter 12개(3,647 L)가 손으로 쓴 provider shaper 6개를 대체한다. interruption 취급이 프레임워크 것이 되고(<span class='mono'>FunctionCallInProgressFrame</span>/<span class='mono'>FunctionCallResultFrame</span>이 <span class='mono'>UninterruptibleFrame</span>), tool 호출이 observer plane에 그대로 보인다."}
+    ]
+  },
+  wrap: {
+    title:"wrap", sub:"boson loop를 FrameProcessor 하나에 넣는다",
+    replaceRange:[2,3], remove:[6],
+    replacement:{ t:"BosonAgentProcessor", s:"run_agent_loop를 통째로 품는다 · ~200–300 L", cls:"new" },
+    breaks:[
+      {c:"keep", b:"깨지는 게 거의 없다 — boson 쪽은 무손실",
+       d:"<span class='mono'>max_turns</span>, 게이트 3개, <span class='mono'>Message</span> schema, hook, tool signature 22개 전부 그대로. <span class='mono'>deepcopy</span>도 <b>여전히 옳다</b> — 그 값을 제자리에서 고쳐 쓰는 aggregator를 안 쓰기 때문이다."},
+      {c:"lose", b:"Pipecat의 LLM 절반을 통째로 안 쓴다",
+       d:"<span class='mono'>LLMContext</span>·<span class='mono'>LLMContextAggregatorPair</span>·<span class='mono'>LLMService</span>·adapter 계층·<span class='mono'>run_function_calls</span> 전부 미사용. tool 호출은 네가 직접 프레임을 내지 않는 한 observer plane에서 <b>보이지 않는다</b>."},
+      {c:"lose", b:"turn 경계를 다시 정해야 한다",
+       d:"<span class='mono'>LLMUserAggregator</span>를 안 쓰므로 ch-06의 turn-strategy 체인이 빠진다 — \"사용자 turn이 끝났다\"는 신호를 누가 주는지 다시 결정해야 한다. Flows(ch-10)는 쓰지 않는 <span class='mono'>LLMContext</span>를 조작하므로 사실상 비싸진다."},
+      {c:"build", b:"진짜 위험은 cancellation seam",
+       d:"boson의 <span class='mono'>cancellation_flag</span>는 <span class='mono'>:344</span>(tool batch 뒤)와 <span class='mono'>:513</span>(tool 1개 완료 뒤) 두 곳에서만 읽힌다 — <b>TextDelta 사이에서는 절대 안 읽는다</b>. Pipecat interruption은 <span class='mono'>process_frame</span> task를 <b>지금 걸려 있는 await에서</b> 취소한다. 그 await가 provider stream 안이면 561 L 함수 한가운데서 하드 <span class='mono'>CancelledError</span>다. 여기를 가장 먼저, 가장 세게, 한국어 오디오로 테스트해야 한다."},
+      {c:"build", b:"turn 전체가 process_frame 하나 안에 있다",
+       d:"tool 호출도 재-prompt도 전부 그 안이다. ch-04 §4의 두 task 모델에서, 오래 도는 <span class='mono'>process_frame</span>은 그동안 cancellable task를 <b>점유</b>한다."}
+    ]
+  },
+  bypass: {
+    title:"bypass", sub:"Pipecat은 voice I/O로만 쓴다",
+    remove:[2,3,6],
+    insertAfter:{ idx:1, t:"boson_bridge", s:"네 processor: transcript out / text in · ~100–150 L", cls:"new" },
+    breaks:[
+      {c:"keep", b:"이미 이 모양이 돌고 있다",
+       d:"ch-03에서 확인한 대로 <span class='mono'>StreamingConversationAgent</span>는 <span class='mono'>AgentTextDelta</span>만 내보내고 tool은 basement/gateway 안에서 text-native로 남는다. realtime_voice가 <b>voice layer 자리에 이미 들어가 있는</b> 같은 형태다 — 가설이 아니라 네 repo의 사실이다."},
+      {c:"lose", b:"pipeline 7칸 중 3칸이 사라진다",
+       d:"<span class='mono'>user_aggregator</span>, <span class='mono'>llm</span>, <span class='mono'>assistant_aggregator</span>. 남는 것은 <span class='mono'>transport.input()</span> · <span class='mono'>stt</span> · turn detection/VAD · <span class='mono'>boson_bridge</span> · <span class='mono'>tts</span> · <span class='mono'>transport.output()</span>."},
+      {c:"lose", b:"Flows(ch-10)는 완전히 불가, 관측도 없다",
+       d:"agent 행동에 대한 frame 수준 가시성이 0이다. rule layer를 pipeline middleware로 쓰는 ch-12의 수법도 voice 절반에만 적용된다."},
+      {c:"build", b:"영원히 네가 소유하는 번역 계층",
+       d:"두 프레임워크를 동시에 돌린다. Pipecat frame model은 boson 안으로 들어가지 못하고, boson <span class='mono'>StreamEvent</span>도 Pipecat 안으로 못 들어온다. rule violation·stage 전이·barge-in 분류 — agent에 의미 있는 새 신호마다 손으로 배선해야 한다."},
+      {c:"keep", b:"그대로 지키는 것",
+       d:"boson 전부. text-native 계약, 게이트 3개, <span class='mono'>max_turns</span>, schema. 그리고 ch-05~ch-08이 정리한 transport 폭·serializer·interruption cascade를 가진 voice layer."}
+    ]
+  }
+};
+
+const COST = [
+  ["새로 쓰는 Pipecat 코드", "~30 L cap + 게이트 + reminder processor", "~200–300 L, processor 하나", "~120–170 L bridge"],
+  ["삭제되는 boson 코드", "run_agent_loop(561 L) + 취소복구 ~80 L + provider shaper 6개", "없음", "없음"],
+  ["바뀌는 tool signature", "22", "0", "0"],
+  ["max_turns", "processor로 재건", "유지", "유지"],
+  ["게이트 3개", "catch-all/decorator로 재건", "유지", "유지"],
+  ["message schema", "rewrite", "유지", "유지"],
+  ["adapter 계층 사용", "예 (12개)", "아니오", "아니오"],
+  ["Flows(ch-10)", "가능", "비쌈", "불가"],
+  ["observer가 tool 호출을 보는가", "본다", "네가 낸 것만", "못 본다"],
+  ["agent interruption", "프레임워크 제공", "네가 증명할 seam", "네가 증명할 seam"],
+  ["네 repo에 이미 구현됨", "아니오", "아니오", "예 (voice layer가 realtime_voice)"]
+];
+
+let resKey = "adopt";
+
+function renderRes(){
+  $("resBtns").innerHTML = Object.keys(RES).map(k=>{
+    const r = RES[k];
+    return `<button class="resb ${k===resKey?"on":""}" data-k="${k}"><b>${r.title}</b><small>${r.sub}</small></button>`;
+  }).join("");
+  Array.prototype.forEach.call($("resBtns").children, el=>{
+    el.addEventListener("click", ()=>{ resKey = el.getAttribute("data-k"); renderRes(); });
+  });
+
+  /* pipeline 뷰 */
+  const r = RES[resKey];
+  const items = [];
+  PIPE7.forEach((p,i)=>{
+    let cls = "";
+    if (r.remove && r.remove.indexOf(i) >= 0) cls = "gone";
+    if (r.replaceRange && i >= r.replaceRange[0] && i <= r.replaceRange[1]) cls = "gone";
+    items.push(`<div class="pp ${cls}">${p.t}<small>${p.s}</small></div>`);
+    if (r.insertAfter && r.insertAfter.idx === i)
+      items.push(`<div class="pp ${r.insertAfter.cls}">${r.insertAfter.t}<small>${r.insertAfter.s}</small></div>`);
+    if (r.replaceRange && i === r.replaceRange[1])
+      items.push(`<div class="pp ${r.replacement.cls}">${r.replacement.t}<small>${r.replacement.s}</small></div>`);
+  });
+  $("pipeView").innerHTML = items.join('<span style="color:var(--ink-faint);align-self:center">→</span>');
+
+  $("breakList").innerHTML = r.breaks.map(b=>
+    `<div class="bk ${b.c}"><b>${b.b}</b>${b.d}</div>`).join("");
+
+  const col = {adopt:1, wrap:2, bypass:3}[resKey];
+  $("costBody").innerHTML = COST.map(row=>
+    `<tr><td class="k">${row[0]}</td>` +
+    [1,2,3].map(i=>`<td class="${i===col?"sel":""}">${row[i]}</td>`).join("") +
+    `</tr>`).join("");
+
+  $("resNote").className = "callout";
+  $("resNote").innerHTML = "<b>이 표의 어떤 행도 판정이 아니다.</b> 마지막 행은 논거가 아니라 "
+    + "네 repository에 대한 사실 진술이다. 가격을 매기는 것은 ch-13이고, 이 챕터의 일은 "
+    + "<b>결정을 결정되지 않은 채로 넘기는 것</b>이다.";
+}
+
+/* ===================== 부팅 ===================== */
+renderRes();
+redrawStepPanels();
+renderCounters();
+drawTopo();
+let rzTimer = null;
+window.addEventListener("resize", ()=>{
+  clearTimeout(rzTimer);
+  rzTimer = setTimeout(drawTopo, 120);
+});
+</script>
+</body>
+</html>

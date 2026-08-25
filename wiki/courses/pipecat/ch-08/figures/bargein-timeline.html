@@ -1,0 +1,1249 @@
+<!--
+  Figure: bargein-timeline.html — "끼어들기 신호가 이미 존재하는 순간부터, 마지막 바이트가 멎을 때까지"
+  Chapter: pipecat ch-08 (Barge-In and the Interruption Cascade)
+  Back to: ../read.md  (§3 EndFrame, §4 emergent cascade, §4.1 accumulator, §5 hop by hop,
+                        §6 N/r, §7 truncation, §8 obligations, §9 differential)
+
+  Fully self-contained: inline CSS + vanilla JS. No CDN, no fetch, no external fonts.
+  Opens directly from file:// .
+
+  SCOPE: this figure BEGINS at an interruption signal that already exists.
+  There is no VAD control anywhere in it — the detection layer is ch-06's
+  turn-boundary.html. The only origination fact drawn here is the one that
+  distinguishes the three stacks: audio-origination vs text-origination.
+
+  Every identifier / path / line number below was read out of the pinned tree:
+    frames.py                 UninterruptibleFrame :147, CancelFrame :999,
+                              InterruptionFrame :1142 (field-less SystemFrame),
+                              TTSTextFrame :417, EndFrame(ControlFrame, UninterruptibleFrame) :1899
+    frame_processor.py        _cancelling :253, queue_frame :700 / early-return :714,
+                              broadcast_interruption :1017-1022, broadcast_frame :1038-1054,
+                              broadcast_sibling_id cross-link :1051-1052,
+                              _start_interruption :1130-1150, __cancel_process_task call :1149,
+                              has_queued_frame :1244,
+                              SYSTEM_PRIORITY / DEFAULT_PRIORITY = 20 put() :162-168
+    services/tts_service.py   _handle_interruption :1030-1066,
+                              _aggregated_frame_sequencer.clear() :1041,
+                              _serialization_queue.reset() :1048, InterruptibleTTSService :1969
+    services/llm_service.py   InterruptionFrame branch :688-689, _handle_interruptions :758-761
+    transports/base_output.py audio_bytes_10ms :135, _audio_chunk_size :136,
+                              MediaSender.handle_interruptions :566-593,
+                              _audio_queue rebuild :690, _clock_queue = PriorityQueue() :1070,
+                              _clock_task_handler :1079
+    transports/base_transport.py  audio_out_10ms_chunks: int = 4  :72
+    serializers/twilio.py     {"event":"clear","streamSid":...} :187
+    llm_response_universal.py push_aggregation empty-return :1679-1680,
+                              _trigger_assistant_turn_stopped :2179 / event :2189
+    boson gateway/interrupt/  cancellation.py:128-132, bootstrap.py:316 (dead PartialDetector),
+                              server/websocket.py:288-317 (2000 ms silence timer),
+                              WordFilterPolicy(max_chars=3), DurationPolicy(min_ms=500)
+    realtime_voice            AudioTextPlayoutLedger.audible_text(), session.py:502-507
+                              (semantic_interrupt), GenerationAudioQueue.discard_generation()
+
+  The 3-second Korean sentence and its per-word timing are a WORKED EXAMPLE from
+  read.md §6.2. Chunk arithmetic (40 ms/chunk, ~75 chunks) is exact; word pts are
+  proportional to character count, which is a stand-in for a real TTS's timestamps.
+-->
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>barge-in cascade — 신호 이후 (pipecat ch-08)</title>
+<style>
+  /* --- 반응형 타이포 스케일: 태블릿에서 root를 키운다 ------------------- */
+  html{font-size:14px;}
+  @media (pointer:coarse){ html{font-size:17px;} }
+  @media (min-width:1500px){ html{font-size:15.5px;} }
+
+  :root{
+    --bg:#0e1117; --panel:#161b22; --panel2:#1c2230; --edge:#2b3242;
+    --ink:#e6edf3; --ink-dim:#9aa7b4; --ink-faint:#6b7686;
+    --accent:#58a6ff; --accent2:#3fb950; --danger:#f85149; --warn:#d29922;
+    --c-sys:#58a6ff;    /* SystemFrame / out-of-band */
+    --c-data:#3fb950;   /* DataFrame / 이미 들린 오디오 */
+    --c-ctrl:#d29922;   /* ControlFrame / in-band */
+    --c-bare:#bc8cff;   /* Frame 직속 */
+    --c-ins:#f778ba;    /* 끼어들기 지점 */
+    --c-pc:#58a6ff;     /* Pipecat  */
+    --c-bs:#d29922;     /* boson    */
+    --c-rv:#bc8cff;     /* realtime_voice */
+  }
+  *{box-sizing:border-box;}
+  html,body{margin:0;padding:0;}
+  body{
+    background:var(--bg); color:var(--ink);
+    font:1rem/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Apple SD Gothic Neo",
+         "Noto Sans KR",Helvetica,Arial,sans-serif;
+    padding:22px; max-width:88rem; margin:0 auto;
+  }
+  h1{font-size:1.5rem; margin:0 0 3px; letter-spacing:.2px;}
+  .sub{color:var(--ink-dim); font-size:0.9286rem; margin:0 0 20px;}
+  .sub code{color:var(--accent);}
+  .panel{background:var(--panel); border:1px solid var(--edge); border-radius:10px;
+    padding:16px; margin-bottom:18px;}
+  .panel h2{font-size:0.8571rem; text-transform:uppercase; letter-spacing:.9px; color:var(--ink-dim);
+    margin:0 0 14px; font-weight:600;}
+  .panel h3{font-size:0.8571rem; color:var(--ink); margin:18px 0 8px; font-weight:600;}
+  .mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+    font-variant-numeric:tabular-nums;}
+  code{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:0.9em;}
+
+  .grid2{display:grid; grid-template-columns:1fr 1fr; gap:18px;}
+  .grid3{display:grid; grid-template-columns:1fr 1fr 1fr; gap:14px;}
+  .wrap{display:grid; grid-template-columns:20rem 1fr; gap:18px; align-items:start;}
+  @media (max-width:1000px){
+    .wrap{grid-template-columns:1fr;} .grid2{grid-template-columns:1fr;}
+    .grid3{grid-template-columns:1fr;}
+  }
+
+  /* ---------- controls ---------- */
+  .ctl{display:flex; flex-direction:column; gap:5px; margin-bottom:12px;}
+  .ctl label{font-size:0.8214rem; color:var(--ink-dim); display:flex;
+    justify-content:space-between; align-items:baseline; gap:8px;}
+  .ctl label b{color:var(--ink); font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+    font-variant-numeric:tabular-nums; font-size:0.8571rem;}
+  input[type=range]{width:100%; accent-color:var(--c-ins); margin:0;}
+  select{background:var(--panel2); color:var(--ink); border:1px solid var(--edge);
+    border-radius:6px; padding:5px 7px; font-size:0.8214rem;
+    font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;}
+
+  .presets{display:grid; grid-template-columns:1fr 1fr; gap:6px; margin-bottom:12px;}
+  .pbtn{background:var(--panel2); border:1px solid var(--edge); color:var(--ink-dim);
+    border-radius:7px; padding:8px 7px; cursor:pointer; font-size:0.8214rem; transition:.13s;
+    line-height:1.3; text-align:left;}
+  .pbtn:hover{border-color:var(--ink-faint); color:var(--ink);}
+  .pbtn.on{background:#2a1c2a; border-color:var(--c-ins); color:var(--ink);}
+  .pbtn small{display:block; color:var(--ink-faint); font-size:0.7143rem;}
+  .pbtn.on small{color:var(--c-ins);}
+
+  .opts{display:flex; flex-direction:column; gap:7px; margin-top:12px;}
+  .opt{display:flex; align-items:flex-start; gap:8px; font-size:0.8214rem; color:var(--ink-dim);
+    cursor:pointer; line-height:1.4;}
+  .opt input{margin:3px 0 0; accent-color:var(--accent2); flex:none;}
+  .opt b{color:var(--ink); font-weight:600;}
+
+  .runbar{display:flex; gap:7px; margin-top:14px; flex-wrap:wrap;}
+  .rb{flex:1 1 6rem; background:var(--panel2); border:1px solid var(--edge); color:var(--ink);
+    border-radius:7px; padding:9px 6px; cursor:pointer; font-size:0.8929rem; font-weight:600;
+    transition:.13s;}
+  .rb:hover{border-color:var(--accent);}
+  .rb.primary{background:#1d3a5f; border-color:var(--accent); color:#cfe6ff;}
+  .rb[disabled]{opacity:.4; cursor:default;}
+
+  pre{background:#10151d; border:1px solid var(--edge); border-radius:8px; padding:13px;
+    overflow-x:auto; font-size:0.8214rem; line-height:1.7; margin:0;
+    font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; white-space:pre;}
+  pre .cm{color:var(--ink-faint);} pre .kw{color:var(--c-bare);} pre .st{color:var(--accent2);}
+  pre .ins{color:var(--c-ins); font-weight:700;} pre .ln{color:var(--ink-faint);}
+  pre .bad{color:var(--danger);} pre .dim{color:var(--ink-faint);}
+  pre .cur{background:rgba(247,120,186,.16); border-radius:3px;}
+  pre .fn{color:var(--accent);}
+
+  /* ---------- cascade hops ---------- */
+  .hops{display:flex; flex-direction:column; gap:6px;}
+  .hop{background:var(--panel2); border:1px solid var(--edge); border-left:3px solid var(--edge);
+    border-radius:7px; padding:8px 11px; opacity:.32; transition:.18s; cursor:pointer;}
+  .hop.on{opacity:1;}
+  .hop.cur{border-color:var(--c-ins); box-shadow:0 0 0 1px rgba(247,120,186,.35);}
+  .hop .hh{display:flex; align-items:baseline; gap:8px; flex-wrap:wrap;}
+  .hop .n{font-size:0.7143rem; color:var(--ink-faint); font-variant-numeric:tabular-nums;
+    min-width:1.6rem;}
+  .hop .t{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+    font-size:0.8214rem; color:var(--ink);}
+  .hop .w{font-size:0.7143rem; color:var(--ink-faint); margin-left:auto; white-space:nowrap;}
+  .hop .d{font-size:0.7857rem; color:var(--ink-dim); margin-top:3px; line-height:1.5;}
+  .hop .d code{color:var(--accent);}
+  .hop.dir-down{border-left-color:var(--c-sys);}
+  .hop.dir-up{border-left-color:var(--c-bare);}
+  .hop.dir-out{border-left-color:var(--danger);}
+
+  .counters{display:flex; gap:8px; flex-wrap:wrap; margin-top:12px;}
+  .chip2{border:1px solid var(--edge); border-radius:7px; padding:7px 11px; font-size:0.8571rem;
+    background:var(--panel2); color:var(--ink-faint); min-width:7.5rem;}
+  .chip2 b{display:block; font-size:1.2143rem; color:var(--ink); margin-bottom:1px;
+    font-variant-numeric:tabular-nums;}
+  .chip2.zero b{color:var(--danger);}
+  .chip2.good b{color:var(--accent2);}
+  .chip2.warn b{color:var(--warn);}
+
+  /* height는 JS의 CANVAS_H_* 상수와 반드시 같은 값 — 레이아웃 점프 방지 */
+  canvas{width:100%; display:block; border-radius:8px; background:#10151d;
+    border:1px solid var(--edge); touch-action:none;}
+  #cvTimeline{height:330px; cursor:ew-resize;}
+  #cvNr{height:200px;}
+  .legend{display:flex; gap:14px; font-size:0.8214rem; color:var(--ink-dim); margin-top:9px;
+    flex-wrap:wrap;}
+  .legend i{display:inline-block; width:16px; height:10px; border-radius:3px;
+    vertical-align:middle; margin-right:5px;}
+
+  /* ---------- stack cards ---------- */
+  .stack{background:#10151d; border:1px solid var(--edge); border-radius:8px; padding:11px 12px;
+    border-top:3px solid var(--edge);}
+  .stack.pc{border-top-color:var(--c-pc);}
+  .stack.bs{border-top-color:var(--c-bs);}
+  .stack.rv{border-top-color:var(--c-rv);}
+  .stack h4{margin:0 0 3px; font-size:0.8929rem; font-family:ui-monospace,SFMono-Regular,Menlo,
+    Consolas,monospace;}
+  .stack .sd{font-size:0.7143rem; color:var(--ink-faint); margin-bottom:9px; line-height:1.45;}
+  .stack .row{display:flex; gap:7px; font-size:0.7857rem; line-height:1.5; padding:3px 0;
+    border-bottom:1px solid rgba(43,50,66,.6);}
+  .stack .row:last-child{border-bottom:none;}
+  .stack .row .k{color:var(--ink-faint); flex:0 0 6.6rem;}
+  .stack .row .v{color:var(--ink-dim); flex:1;}
+  .stack .row .v code{color:var(--accent); font-size:0.95em;}
+  .stack .row .v b{color:var(--ink);}
+
+  .msg{border:1px solid var(--edge); border-radius:7px; padding:8px 10px; margin-top:7px;
+    background:var(--panel2); font-size:0.7857rem; line-height:1.55;}
+  .msg .r{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:0.7143rem;
+    color:var(--ink-faint); display:block; margin-bottom:3px;}
+  .msg .c{color:var(--ink); word-break:break-word;}
+  .msg .tag{color:var(--warn); font-weight:700;}
+  .msg .fixtag{color:var(--c-ins); font-weight:700;}
+  .msg.none{border-style:dashed; border-color:var(--danger); color:var(--danger);
+    background:rgba(248,81,73,.06); font-style:italic;}
+  .msg .note{display:block; color:var(--ink-faint); font-size:0.7143rem; margin-top:5px;
+    font-style:normal;}
+
+  .verdict{border-radius:8px; padding:12px 14px; font-size:0.9286rem; margin-top:12px;
+    border:1px solid var(--edge); background:var(--panel2); line-height:1.6;}
+  .verdict.ok{border-color:var(--accent2); background:rgba(63,185,80,.08);}
+  .verdict.bad{border-color:var(--danger); background:rgba(248,81,73,.08);}
+  .verdict b{font-size:1.0714rem;}
+  .verdict code{color:var(--accent);}
+
+  .callout{border-left:3px solid var(--warn); background:rgba(210,153,34,.07);
+    padding:11px 14px; border-radius:0 7px 7px 0; font-size:0.8929rem; color:var(--ink-dim);
+    margin-top:14px; line-height:1.65;}
+  .callout b{color:var(--ink);}
+  .callout.ok{border-left-color:var(--accent2); background:rgba(63,185,80,.07);}
+  .callout.bad{border-left-color:var(--danger); background:rgba(248,81,73,.07);}
+  .callout.info{border-left-color:var(--accent); background:rgba(88,166,255,.07);}
+  .callout code{color:var(--accent);}
+  .callout a{color:var(--accent); text-decoration:none;}
+
+  table{width:100%; border-collapse:collapse; font-size:0.8214rem; margin-top:6px;}
+  th,td{padding:5px 7px; text-align:left; border-bottom:1px solid var(--edge); vertical-align:top;}
+  th{color:var(--ink-faint); font-weight:600; font-size:0.75rem; text-transform:uppercase;
+    letter-spacing:.5px;}
+  td.num{text-align:right; font-variant-numeric:tabular-nums;
+    font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;}
+  td code{color:var(--accent);}
+  .foot{color:var(--ink-faint); font-size:0.8214rem; margin-top:26px; line-height:1.8;}
+  .foot a{color:var(--accent); text-decoration:none;}
+  .foot b{color:var(--ink-dim);}
+</style>
+</head>
+<body>
+
+<h1>barge-in cascade — <span class="mono">InterruptionFrame</span> 이후에 일어나는 전부</h1>
+<p class="sub">
+  ch-08 §4–§9 companion · 이 그림은 <b>끼어들기 신호가 이미 존재하는 순간</b>에서 시작한다.
+  신호를 <i>만드는</i> 층(VAD, turn-start strategy)은 여기 없다 —
+  그건 <a href="../../ch-06/figures/turn-boundary.html" style="color:var(--accent)">ch-06 <code>turn-boundary.html</code></a>에서
+  이미 만졌다. 여기서부터는 <b>이미 말해진 바이트가 멎을 때까지</b>가 전부다.
+  <span class="mono" style="color:var(--ink-faint)">pinned tree</span>
+</p>
+
+<!-- ===================== 1. TIMELINE ===================== -->
+<div class="panel">
+  <h2>1 · 하나의 barge-in, 세 스택 공유 축 — 드래그해서 무엇이 버려지는지 봐라</h2>
+  <div class="wrap">
+    <div>
+      <div class="presets" id="tlPresets"></div>
+      <div class="ctl">
+        <label>끼어들기 시점 <span class="mono" style="color:var(--c-ins)">t_sig</span>
+          <b id="tSigOut">1500 ms</b></label>
+        <input type="range" id="tSig" min="0" max="3000" step="20" value="1500">
+      </div>
+      <div class="callout info" style="margin-top:10px; font-size:0.8214rem">
+        Lina가 읽는 문장은 <b>3초</b>다:<br>
+        <span class="mono" style="color:var(--ink); font-size:0.7857rem" id="sentEcho"></span><br>
+        벤더는 이걸 websocket으로 <b>~400 ms</b>만에 다 밀어 넣었다. 재생은 realtime.<br>
+        위쪽 ruler는 <code>TTSTextFrame.pts</code>다 — 단어는 <code>_clock_task_handler</code>
+        (<code>base_output.py:1079</code>)가 <b>재생 시각까지 자고 나서</b> 놓아준다.
+        aggregator는 <code>transport.output()</code> 뒤에 앉아 있으므로
+        <b>실제로 들린 텍스트만</b> 본 적이 있다. truncation은 알고리즘이 아니라
+        <b>pipeline 위치</b>의 성질이다.
+      </div>
+      <div class="counters" id="tlCounters"></div>
+    </div>
+    <div>
+      <canvas id="cvTimeline"></canvas>
+      <div class="legend">
+        <span><i style="background:var(--c-data)"></i>이미 들린 오디오</span>
+        <span><i style="background:#2b3242"></i>큐에 남아 버려질 오디오</span>
+        <span><i style="background:var(--c-ins)"></i>신호 존재 시점</span>
+        <span><i style="background:var(--danger)"></i>파기 / 취소</span>
+        <span><i style="background:var(--warn)"></i>history에 남는 것</span>
+      </div>
+      <div class="grid3" style="margin-top:14px" id="tlStacks"></div>
+    </div>
+  </div>
+</div>
+
+<!-- ===================== 2. CASCADE ===================== -->
+<div class="panel">
+  <h2>2 · cascade — 조정자는 없다. 독립적인 hop이 각자 발화한다</h2>
+  <div class="wrap">
+    <div>
+      <div class="runbar">
+        <button class="rb primary" id="cascPlay">▶ broadcast</button>
+        <button class="rb" id="cascStep">step ▸</button>
+        <button class="rb" id="cascReset">reset</button>
+      </div>
+      <div class="callout" style="margin-top:12px">
+        <b><code>StartInterruptionFrame</code> / <code>StopInterruptionFrame</code>은 존재하지 않는다.</b>
+        grep 결과 0건. 있는 건 <b>필드 없는</b> <code>InterruptionFrame</code>
+        (<code>frames.py:1142</code>) 하나뿐이고,
+        <code>broadcast_frame()</code>가 그걸 <b>두 개</b> 만들어
+        <code>broadcast_sibling_id</code>로 교차 연결한 뒤 양방향으로 하나씩 밀어 넣는다.
+      </div>
+      <div id="cascDetail"></div>
+    </div>
+    <div>
+      <div class="hops" id="cascHops"></div>
+    </div>
+  </div>
+</div>
+
+<!-- ===================== 3. ACCUMULATOR ===================== -->
+<div class="panel">
+  <h2>3 · accumulate-then-flush — 인접해 보이는 두 frame 사이에서 죽는다 (§4.1)</h2>
+  <div class="wrap">
+    <div>
+      <div class="ctl">
+        <label>취소 지점 <b id="accPosOut">frame 3 뒤</b></label>
+        <input type="range" id="accPos" min="0" max="5" step="1" value="3">
+      </div>
+      <div class="opts">
+        <label class="opt"><input type="checkbox" id="optReset">
+          <span><b>InterruptionFrame reset handler를 넣는다</b> —
+            <span class="mono">self._buffer = ""</span> 한 줄 (§8.1 obligation 1)</span></label>
+      </div>
+      <div class="counters" id="accCounters"></div>
+      <div class="callout bad" style="margin-top:12px">
+        <b>Pipecat도 자기 코드에서 이걸 밟았다.</b>
+        <code>tts_service.py:1041</code> —
+        <span class="mono" style="color:var(--ink); font-size:0.7857rem">
+        self._aggregated_frame_sequencer.clear()&nbsp;&nbsp;# discard all pending slots on interruption</span><br>
+        주석이 존재한다는 건 누군가 그 버그를 배포했다는 뜻이다.
+      </div>
+    </div>
+    <div>
+      <pre id="accCode"></pre>
+      <div id="accOut"></div>
+    </div>
+  </div>
+</div>
+
+<!-- ===================== 4. IN-BAND vs OUT-OF-BAND ===================== -->
+<div class="panel">
+  <h2>4 · in-band vs out-of-band — ch-04의 <span class="mono">N/r</span>을 그대로 쓴다 (§6)</h2>
+  <div class="wrap">
+    <div>
+      <div class="ctl">
+        <label>sample_rate <b id="srOut">24000 Hz</b></label>
+        <select id="sr">
+          <option value="8000">8000 — 전화망 (Twilio)</option>
+          <option value="16000">16000</option>
+          <option value="24000" selected>24000 — 기본 예제</option>
+          <option value="44100">44100</option>
+        </select>
+      </div>
+      <div class="ctl">
+        <label><span class="mono">audio_out_10ms_chunks</span> <b id="chOut">4</b></label>
+        <input type="range" id="ch10" min="1" max="20" step="1" value="4">
+      </div>
+      <div class="ctl">
+        <label><span class="mono">audio_out_channels</span> <b id="acOut">1</b></label>
+        <select id="ac"><option value="1" selected>1 — mono</option><option value="2">2 — stereo</option></select>
+      </div>
+      <div class="ctl">
+        <label>남은 발화 길이 <b id="remOut">1500 ms</b></label>
+        <input type="range" id="rem" min="200" max="6000" step="100" value="1500">
+      </div>
+      <table id="nrTable"></table>
+    </div>
+    <div>
+      <canvas id="cvNr"></canvas>
+      <div class="legend">
+        <span><i style="background:var(--c-ctrl)"></i>in-band — 청크 뒤에 줄 서기</span>
+        <span><i style="background:var(--c-sys)"></i>out-of-band — <span class="mono">SYSTEM_PRIORITY</span></span>
+      </div>
+      <div id="nrVerdict"></div>
+    </div>
+  </div>
+</div>
+
+<!-- ===================== 5. CONTEXT PAYOFF ===================== -->
+<div class="panel">
+  <h2>5 · payoff — 잘린 턴은 history에 <em>무엇으로</em> 남는가 (§7, §9)</h2>
+  <div class="opts" style="margin-bottom:14px">
+    <label class="opt"><input type="checkbox" id="optFix">
+      <span><b>가상의 fix를 켠다</b> — <span class="mono">LLMAssistantAggregator</span>를 subclass하고
+        <span class="mono">push_aggregation</span>을 override해서 <span class="mono">"[고객 끼어듦]"</span>를 붙인다 (§7.9)</span></label>
+  </div>
+  <div class="grid3" id="ctxOut"></div>
+  <div id="ctxNote"></div>
+</div>
+
+<p class="foot">
+  <b>출처</b> — 이 그림에 뜨는 모든 식별자·경로·줄번호는 pinned tree에서 직접 읽은 것이다:
+  <code>frames.py:147/999/1142/1899</code> ·
+  <code>frame_processor.py:253/700/714/1017-1022/1038-1054/1130-1150/1244</code> ·
+  <code>services/tts_service.py:1030-1066, 1041, 1048</code> ·
+  <code>services/llm_service.py:688-689, 758-761</code> ·
+  <code>transports/base_output.py:135-136/566-593/690/1070/1079</code> ·
+  <code>transports/base_transport.py:72</code> ·
+  <code>serializers/twilio.py:187</code> ·
+  <code>llm_response_universal.py:1679-1680, 2179, 2189</code>.
+  boson: <code>gateway/interrupt/cancellation.py:128-132</code>, <code>bootstrap.py:316</code>,
+  <code>server/websocket.py:288-317</code>. realtime_voice: <code>session.py:502-507</code>.
+  <br>
+  한국어 3초 문장과 단어별 <span class="mono">pts</span>는 read.md §6.2의 worked example이다 —
+  청크 산술(40 ms/chunk, ~75 chunks)은 정확하고, 단어 타임스탬프는 글자 수 비례 stand-in이다.
+  <br>
+  <a href="../read.md">← ch-08 read.md로 돌아가기</a> ·
+  <a href="../../ch-06/figures/turn-boundary.html">ch-06 turn-boundary.html (신호를 만드는 층)</a>
+</p>
+
+<script>
+/* =======================================================================
+   상수 — 전부 소스에서 읽은 실제 값
+   ======================================================================= */
+const CANVAS_H_TL = 330;   /* #cvTimeline { height:330px } 와 동일해야 한다 */
+const CANVAS_H_NR = 200;   /* #cvNr       { height:200px } 와 동일해야 한다 */
+
+/* frame_processor.py:162-168 */
+const SYSTEM_PRIORITY  = 10;
+const DEFAULT_PRIORITY = 20;
+
+/* read.md §6.2 worked example */
+const SENT_MS   = 3000;                       /* Lina의 문장 길이 */
+const ARRIVE_MS = 400;                        /* 벤더가 다 밀어 넣는 데 걸린 시간 */
+const BOSON_SILENCE_MS = 2000;                /* server/websocket.py:288-317 */
+const BOSON_MIN_MS     = 500;                 /* DurationPolicy(min_ms=500) */
+const AXIS_MAX  = 5400;                       /* boson 마커가 축 밖으로 안 나가게 */
+
+const SENTENCE = "고객님, 이 상품은 65세까지 갱신 없이 보장이 되고요, 지금 가입하시면…";
+const WORDS    = SENTENCE.split(" ");
+const PHRASES  = ["고객님, ", "이 상품은 65세까지 갱신 없이 보장이 되고요, ", "지금 가입하시면…"];
+
+/* 단어별 pts — 글자 수 비례 (TTSTextFrame.pts 의 stand-in) */
+const WORD_PTS = (function(){
+  const total = WORDS.reduce((a,w)=>a+w.length,0);
+  let acc = 0, out = [];
+  for (const w of WORDS){
+    const start = SENT_MS * acc / total;
+    acc += w.length;
+    out.push({ text:w, start:start, end: SENT_MS * acc / total });
+  }
+  return out;
+})();
+
+/* =======================================================================
+   canvas — 스케일된 치수를 절대 다시 읽지 않는다
+   ======================================================================= */
+function setupCanvas(cv, CANVAS_H){
+  const r = window.devicePixelRatio || 1;
+  const w = Math.max(cv.clientWidth, 200), h = CANVAS_H;
+  if (cv.width !== Math.round(w*r) || cv.height !== Math.round(h*r)){
+    cv.width = Math.round(w*r); cv.height = Math.round(h*r);
+  }
+  cv.style.height = h + "px";
+  const c = cv.getContext("2d"); c.setTransform(r,0,0,r,0,0); c.clearRect(0,0,w,h);
+  return {c, w, h};
+}
+const CSS = getComputedStyle(document.documentElement);
+function V(n){ return CSS.getPropertyValue(n).trim(); }
+function esc(s){ return String(s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;"); }
+function roundRect(c,x,y,w,h,r){
+  if (w <= 0) return;
+  r = Math.min(r, w/2, h/2);
+  c.beginPath(); c.moveTo(x+r,y); c.lineTo(x+w-r,y); c.quadraticCurveTo(x+w,y,x+w,y+r);
+  c.lineTo(x+w,y+h-r); c.quadraticCurveTo(x+w,y+h,x+w-r,y+h); c.lineTo(x+r,y+h);
+  c.quadraticCurveTo(x,y+h,x,y+h-r); c.lineTo(x,y+r); c.quadraticCurveTo(x,y,x+r,y); c.closePath();
+}
+
+/* =======================================================================
+   상태
+   ======================================================================= */
+const S = {
+  tSig: 1500,      /* 끼어들기 신호가 존재하는 시점 (ms, 문장 내) */
+  cascStep: 0,     /* 패널 2 */
+  accPos: 3,       /* 패널 3 */
+  accReset: false,
+  sr: 24000, ch10: 4, ac: 1, rem: 1500,   /* 패널 4 */
+  fix: false       /* 패널 5 */
+};
+
+document.getElementById("sentEcho").textContent = SENTENCE;
+
+/* =======================================================================
+   파생값 — 세 스택이 하나의 t_sig에서 각자 무엇을 얻는가
+   ======================================================================= */
+function chunkBytes(sr, ch10, ac){ return Math.trunc(sr/100) * ac * 2 * ch10; }
+function chunkMs(ch10){ return ch10 * 10; }          /* audio_bytes_10ms 정의상 항상 10ms 단위 */
+
+function derive(){
+  const t = S.tSig;
+  const cm = chunkMs(4);                              /* base_transport.py:72 → 4 → 40 ms */
+  const remaining = Math.max(0, SENT_MS - t);
+  const chunksLeft = Math.ceil(remaining / cm);
+
+  /* Pipecat — _clock_task_handler가 presentation time에 놓아준 단어까지만 aggregator가 봤다 */
+  const spokenWords = WORD_PTS.filter(w => w.start < t).map(w => w.text);
+  const pcText = spokenWords.join(" ");
+
+  /* realtime_voice — AudioTextPlayoutLedger.audible_text(): phrase까지 걷고, 걸친 phrase는 ratio */
+  let acc = 0, rvText = "";
+  const totalChars = PHRASES.reduce((a,p)=>a+p.length,0);
+  for (const p of PHRASES){
+    const pStart = SENT_MS * acc / totalChars;
+    const pEnd   = SENT_MS * (acc + p.length) / totalChars;
+    if (t >= pEnd)      rvText += p;
+    else if (t > pStart){
+      const ratio = (t - pStart) / (pEnd - pStart);
+      rvText += p.slice(0, Math.trunc(p.length * ratio));
+      acc += p.length; break;
+    } else break;
+    acc += p.length;
+  }
+
+  /* boson — 신호는 2000 ms 침묵 타이머가 만든다. 그 전엔 존재할 수 없다. */
+  const bsSignal = t + BOSON_SILENCE_MS;
+  const bsTooLate = bsSignal >= SENT_MS;
+  /* partial_text = 그때까지 "생성된" 텍스트. 생성은 ~400 ms에 이미 끝났다 → 문장 전체. */
+  const bsText = SENTENCE;
+
+  return { t, cm, remaining, chunksLeft, spokenWords, pcText, rvText,
+           bsSignal, bsTooLate, bsText, inBandDelay: chunksLeft * cm };
+}
+
+/* =======================================================================
+   PANEL 1 — timeline
+   ======================================================================= */
+const TL_PRESETS = [
+  { t: 0,    n:"첫 pts 이전",       d:"pipecat: history에 아무것도 안 남는다" },
+  { t: 260,  n:"첫 어절 직후",       d:"단어 1개만 aggregator에 도달" },
+  { t: 1500, n:"문장 한복판",        d:"75청크 중 38개가 큐에 남아 있다" },
+  { t: 2850, n:"95% 지점",           d:"거의 다 들렸다 — 그래도 태그는 없다" }
+];
+
+const cvTL = document.getElementById("cvTimeline");
+
+function drawTimeline(){
+  const {c, w, h} = setupCanvas(cvTL, CANVAS_H_TL);
+  const D = derive();
+  const x0 = 118, x1 = w - 18;
+  const xOf = ms => x0 + (ms / AXIS_MAX) * (x1 - x0);
+  const mono = 'ui-monospace,SFMono-Regular,Menlo,Consolas,monospace';
+
+  /* ---- 축 ---- */
+  c.strokeStyle = V('--edge'); c.lineWidth = 1;
+  c.fillStyle = V('--ink-faint'); c.font = '9px ' + mono; c.textAlign = 'center';
+  for (let ms = 0; ms <= AXIS_MAX; ms += 500){
+    const x = Math.round(xOf(ms)) + .5;
+    c.globalAlpha = (ms % 1000 === 0) ? .85 : .35;
+    c.beginPath(); c.moveTo(x, 56); c.lineTo(x, h - 14); c.stroke();
+    c.globalAlpha = 1;
+    if (ms % 1000 === 0) c.fillText((ms/1000) + 's', x, 50);
+  }
+
+  /* ---- 단어 ruler (TTSTextFrame.pts) ---- */
+  c.textAlign = 'left';
+  c.fillStyle = V('--ink-dim'); c.font = '9px ' + mono;
+  c.fillText('TTSTextFrame.pts →', 8, 26);
+  c.save(); c.beginPath(); c.rect(x0, 8, xOf(SENT_MS) - x0, 26); c.clip();
+  WORD_PTS.forEach((wd, i) => {
+    const xa = xOf(wd.start), xb = xOf(wd.end);
+    const played = wd.start < D.t;
+    c.fillStyle = played ? 'rgba(63,185,80,.16)' : 'rgba(43,50,66,.55)';
+    roundRect(c, xa + 1, 10, Math.max(0, xb - xa - 2), 20, 3); c.fill();
+    c.fillStyle = played ? V('--ink') : V('--ink-faint');
+    c.font = '9px -apple-system,"Apple SD Gothic Neo","Noto Sans KR",sans-serif';
+    c.fillText(wd.text, xa + 3, 24);
+  });
+  c.restore();
+
+  /* ---- 세 스택 행 ---- */
+  const rows = [
+    { key:'pc', label:'Pipecat',        col:V('--c-pc'), y:76 },
+    { key:'rv', label:'realtime_voice', col:V('--c-rv'), y:158 },
+    { key:'bs', label:'boson gateway',  col:V('--c-bs'), y:240 }
+  ];
+  const BH = 26;
+
+  rows.forEach(r => {
+    c.textAlign = 'right'; c.font = '10px ' + mono; c.fillStyle = r.col;
+    c.fillText(r.label, x0 - 10, r.y + 17);
+    c.textAlign = 'left';
+
+    if (r.key === 'bs'){
+      /* boson: 오디오 경로가 계약상 없다 */
+      c.setLineDash([4,4]); c.strokeStyle = V('--edge'); c.lineWidth = 1;
+      roundRect(c, xOf(0), r.y, xOf(SENT_MS) - xOf(0), BH, 5); c.stroke(); c.setLineDash([]);
+      c.fillStyle = V('--ink-faint'); c.font = '9px ' + mono;
+      c.fillText('오디오 큐 없음 — gateway는 text-native (contract)', xOf(0) + 8, r.y + 17);
+    } else {
+      /* 이미 들린 오디오 */
+      c.fillStyle = 'rgba(63,185,80,.30)';
+      roundRect(c, xOf(0), r.y, xOf(D.t) - xOf(0), BH, 5); c.fill();
+      /* 큐에 남아 버려질 오디오 */
+      const bx = xOf(D.t), bw = xOf(SENT_MS) - bx;
+      c.fillStyle = 'rgba(43,50,66,.85)'; roundRect(c, bx, r.y, bw, BH, 5); c.fill();
+      c.save(); c.beginPath(); roundRect(c, bx, r.y, bw, BH, 5); c.clip();
+      c.strokeStyle = 'rgba(248,81,73,.45)'; c.lineWidth = 1;
+      for (let x = bx - BH; x < bx + bw; x += 7){
+        c.beginPath(); c.moveTo(x, r.y + BH); c.lineTo(x + BH, r.y); c.stroke();
+      }
+      c.restore();
+      /* 청크 눈금 — 40 ms 하나가 interrupt granularity */
+      c.strokeStyle = 'rgba(230,237,243,.10)';
+      for (let ms = 0; ms <= SENT_MS; ms += D.cm){
+        const x = Math.round(xOf(ms)) + .5;
+        c.beginPath(); c.moveTo(x, r.y + BH - 5); c.lineTo(x, r.y + BH); c.stroke();
+      }
+      c.strokeStyle = r.col; c.lineWidth = 1;
+      roundRect(c, xOf(0)+.5, r.y+.5, xOf(SENT_MS)-xOf(0)-1, BH-1, 5); c.stroke();
+    }
+  });
+
+  /* ---- 도착 브래킷: 벤더가 400 ms 만에 다 밀어 넣었다 ---- */
+  c.strokeStyle = V('--accent'); c.globalAlpha = .55; c.lineWidth = 1;
+  c.beginPath(); c.moveTo(xOf(0), 68); c.lineTo(xOf(ARRIVE_MS), 68); c.stroke();
+  c.globalAlpha = 1; c.fillStyle = V('--accent'); c.font = '9px ' + mono;
+  c.textAlign = 'left';
+  c.fillText('벤더 도착 ' + ARRIVE_MS + 'ms — 이후 전부 _audio_queue 안', xOf(ARRIVE_MS) + 6, 71);
+
+  /* ---- 마커 ---- */
+  function marker(ms, y, col, label, sub){
+    const x = Math.round(xOf(ms)) + .5;
+    c.strokeStyle = col; c.lineWidth = 1.6;
+    c.beginPath(); c.moveTo(x, y); c.lineTo(x, y + BH); c.stroke();
+    c.fillStyle = col;
+    c.beginPath(); c.moveTo(x, y + BH); c.lineTo(x - 4, y + BH + 6); c.lineTo(x + 4, y + BH + 6);
+    c.closePath(); c.fill();
+    c.font = '9px ' + mono; c.textAlign = 'left';
+    const flip = x > x1 - 190;
+    c.textAlign = flip ? 'right' : 'left';
+    const tx = flip ? x - 6 : x + 6;
+    c.fillText(label, tx, y + BH + 15);
+    if (sub){ c.fillStyle = V('--ink-faint'); c.fillText(sub, tx, y + BH + 25); }
+  }
+
+  /* 신호 세로선 (audio-origination 두 스택) */
+  c.strokeStyle = V('--c-ins'); c.lineWidth = 1; c.setLineDash([3,3]); c.globalAlpha = .6;
+  c.beginPath(); c.moveTo(Math.round(xOf(D.t))+.5, 8); c.lineTo(Math.round(xOf(D.t))+.5, h - 14);
+  c.stroke(); c.setLineDash([]); c.globalAlpha = 1;
+
+  marker(D.t, 76, V('--c-ins'),
+         'broadcast_interruption()  SYSTEM_PRIORITY=' + SYSTEM_PRIORITY,
+         'PriorityQueue 재할당 → ' + D.chunksLeft + '청크 파기 (base_output.py:1070)');
+  marker(D.t, 158, V('--c-ins'),
+         '_active_generation += 1  (6개 지점에서 비교)',
+         'discard_generation() + av.AudioFifo 폐기');
+
+  if (D.bsSignal <= AXIS_MAX){
+    marker(D.bsSignal, 240, D.bsTooLate ? V('--danger') : V('--c-bs'),
+           '2000 ms 침묵 타이머 발화 (websocket.py:288-317)',
+           D.bsTooLate ? '문장은 이미 ' + Math.round(D.bsSignal - SENT_MS) + 'ms 전에 끝났다 — 끊을 게 없다'
+                       : 'STT partial + DurationPolicy(min_ms=' + BOSON_MIN_MS + ')');
+  }
+
+  /* 하단 캡션 */
+  c.textAlign = 'center'; c.font = '9px ' + mono; c.fillStyle = V('--ink-faint');
+  c.fillText('신호를 만드는 층은 이 그림에 없다 — ch-06 turn-boundary.html', (x0 + x1)/2, h - 3);
+}
+
+function renderTLSide(){
+  const D = derive();
+  document.getElementById("tSigOut").textContent = D.t + " ms";
+
+  const cs = [
+    { v: D.chunksLeft, l: "청크 파기<br><span style='font-size:.72rem'>40 ms each</span>", cls: D.chunksLeft ? "warn" : "good" },
+    { v: D.spokenWords.length + "/" + WORDS.length, l: "aggregator가<br>본 단어", cls: D.spokenWords.length ? "" : "zero" },
+    { v: D.inBandDelay + " ms", l: "in-band였다면<br>지연 <span class='mono'>N/r</span>", cls: "zero" },
+    { v: D.bsTooLate ? "0" : "1", l: "boson이 실제로<br>끊을 수 있는가", cls: D.bsTooLate ? "zero" : "" }
+  ];
+  document.getElementById("tlCounters").innerHTML = cs.map(x =>
+    `<div class="chip2 ${x.cls}"><b>${x.v}</b>${x.l}</div>`).join("");
+
+  const row = (k, v) => `<div class="row"><span class="k">${k}</span><span class="v">${v}</span></div>`;
+  const stacks = [
+    { cls:"pc", t:"Pipecat", sd:"emergent cascade · 조정자 없음",
+      rows:[
+        row("신호",   `필드 없는 <code>InterruptionFrame</code><br><code>frames.py:1142</code>`),
+        row("정지 방식", `각 processor가 <b>자기</b> process task를 취소<br><code>_start_interruption :1130-1150</code>`),
+        row("TTS",    `누산기 전부 clear<br><code>tts_service.py:1030-1066</code>`),
+        row("오디오 큐", `새 <code>asyncio.PriorityQueue()</code> — <b>${D.chunksLeft}</b>청크 파기`),
+        row("LLM",    `abort API 없음. <code>CancelledError</code>가 provider의<br><code>async for</code> 안에서 터진다 → <code>LLMFullResponseEndFrame</code> 영영 안 옴`),
+        row("캐리어",  `<code>{"event":"clear"}</code> <code>twilio.py:187</code>`)
+      ]},
+    { cls:"rv", t:"realtime_voice", sd:"generation-ID 동등성 · 6개 지점",
+      rows:[
+        row("신호",   `정수 하나 — 새 <code>_active_generation</code>`),
+        row("정지 방식", `협조적: 6개 지점이 각각 stale work를 <code>GENERATION_DROPPED</code>`),
+        row("오디오 큐", `<code>discard_generation()</code>이 deque를 조건 lock 아래 재구성`),
+        row("캐리어",  `<code>OutboundAudioTrack</code>이 <code>av.AudioFifo</code>를 통째로 버림`),
+        row("잘린 지점", `<code>audible_text()</code> — sample ratio 재구성. TTS 타임스탬프 불필요`),
+        row("정확도",   `단어 경계에서는 근사, phrase 경계에서는 정확. 발화 속도가 흔들리면 오차가 커진다`)
+      ]},
+    { cls:"bs", t:"boson gateway/interrupt/", sd:"text-native · 581줄 정책, 신호는 transcript 뒤",
+      rows:[
+        row("신호",   `<code>text: str</code>. 모든 판단 지점이 문자열을 받는다`),
+        row("가장 이른 시점", `STT partial이 존재한 <b>뒤</b> + <code>DurationPolicy(min_ms=500)</code>;<br>실서비스 게이트는 <b>2000 ms</b> 침묵 타이머`),
+        row("dead code", `<code>PartialDetector</code>는 <code>bootstrap.py:316</code>에서 한 번 생성되고 필드가 <b>어디서도 읽히지 않는다</b>`),
+        row("한국어 함정", `<code>WordFilterPolicy(max_chars=3)</code>가 <b>글자 수</b>로 세서<br>"네", "아니요"를 조용히 무시`),
+        row("오디오",  `범위 밖 — gateway는 계약상 text-native`)
+      ]}
+  ];
+  document.getElementById("tlStacks").innerHTML = stacks.map(s =>
+    `<div class="stack ${s.cls}"><h4>${s.t}</h4><div class="sd">${s.sd}</div>${s.rows.join("")}</div>`
+  ).join("");
+}
+
+function renderTL(){ drawTimeline(); renderTLSide(); }
+
+(function initTL(){
+  const box = document.getElementById("tlPresets");
+  box.innerHTML = TL_PRESETS.map((p,i) =>
+    `<button class="pbtn" data-i="${i}">${p.n}<small>${p.d}</small></button>`).join("");
+  box.addEventListener("click", e => {
+    const b = e.target.closest(".pbtn"); if (!b) return;
+    S.tSig = TL_PRESETS[+b.dataset.i].t;
+    document.getElementById("tSig").value = S.tSig;
+    syncPresetHighlight(); renderAll();
+  });
+  const sl = document.getElementById("tSig");
+  sl.addEventListener("input", () => {
+    S.tSig = +sl.value; syncPresetHighlight(); renderAll();
+  });
+
+  /* canvas 드래그 */
+  let dragging = false;
+  function pick(ev){
+    const rect = cvTL.getBoundingClientRect();
+    const w = cvTL.clientWidth, x0 = 118, x1 = w - 18;
+    const px = ev.clientX - rect.left;
+    let ms = Math.round(((px - x0) / (x1 - x0)) * AXIS_MAX / 20) * 20;
+    ms = Math.max(0, Math.min(SENT_MS, ms));
+    S.tSig = ms; document.getElementById("tSig").value = ms;
+    syncPresetHighlight(); renderAll();
+  }
+  cvTL.addEventListener("pointerdown", e => { dragging = true; cvTL.setPointerCapture(e.pointerId); pick(e); });
+  cvTL.addEventListener("pointermove", e => { if (dragging) pick(e); });
+  cvTL.addEventListener("pointerup",   e => { dragging = false; });
+  cvTL.addEventListener("pointercancel", () => { dragging = false; });
+})();
+
+function syncPresetHighlight(){
+  document.querySelectorAll("#tlPresets .pbtn").forEach(b => {
+    b.classList.toggle("on", TL_PRESETS[+b.dataset.i].t === S.tSig);
+  });
+}
+
+/* =======================================================================
+   PANEL 2 — cascade hops
+   ======================================================================= */
+const HOPS = [
+  { dir:"down", who:"신호를 만든 processor", t:"broadcast_interruption()",
+    w:"frame_processor.py:1017-1022",
+    d:`<code>__reset_process_task()</code> → <code>stop_all_metrics()</code> →
+       <code>broadcast_frame(InterruptionFrame)</code>. 여기서 끝. 아무에게도 통보하지 않고,
+       아무도 기다리지 않는다.`,
+    code:`<span class="ln">1017</span>  <span class="kw">async def</span> <span class="fn">broadcast_interruption</span>(self):
+<span class="ln">1019</span>      logger.debug(f<span class="st">"{self}: broadcasting interruption"</span>)
+<span class="ln">1020</span>      self.__reset_process_task()
+<span class="ln">1021</span>      <span class="kw">await</span> self.stop_all_metrics()
+<span class="ln">1022</span>      <span class="kw">await</span> self.<span class="ins">broadcast_frame(InterruptionFrame)</span>` },
+
+  { dir:"down", who:"broadcast_frame", t:"인스턴스 두 개 + broadcast_sibling_id 교차 연결",
+    w:"frame_processor.py:1038-1054",
+    d:`하나의 frame이 양쪽으로 <b>흐르는</b> 게 아니다. <b>두 개</b>가 만들어져 서로의
+       <code>id</code>를 물고 반대 방향으로 출발한다. 둘은 서로를 기다리지 않는다.`,
+    code:`<span class="ln">1049</span>  downstream_frame = frame_cls(**kwargs)
+<span class="ln">1050</span>  upstream_frame   = frame_cls(**kwargs)
+<span class="ln">1051</span>  downstream_frame.<span class="ins">broadcast_sibling_id</span> = upstream_frame.id
+<span class="ln">1052</span>  upstream_frame.<span class="ins">broadcast_sibling_id</span> = downstream_frame.id
+<span class="ln">1053</span>  <span class="kw">await</span> self.push_frame(downstream_frame)
+<span class="ln">1054</span>  <span class="kw">await</span> self.push_frame(upstream_frame, FrameDirection.UPSTREAM)` },
+
+  { dir:"down", who:"모든 processor (base)", t:"_start_interruption() — 자기 task를 자기가 죽인다",
+    w:"frame_processor.py:1130-1150",
+    d:`중앙 조정자는 없다. base <code>process_frame</code>이 각 processor에서 이걸 부르고,
+       그 task는 <b>네 <code>process_frame()</code> 안, 임의의 <code>await</code> 지점</b>에 있다.
+       현재 frame이 <code>UninterruptibleFrame</code>이면 취소하지 않고 큐만 비운다.`,
+    code:`<span class="ln">1133</span>  current_is_uninterruptible = isinstance(
+<span class="ln">1134</span>      self.__process_current_frame, <span class="kw">UninterruptibleFrame</span>)
+<span class="ln">1136</span>  <span class="kw">if</span> current_is_uninterruptible:
+<span class="ln">1141</span>      self.__reset_process_queue()
+<span class="ln">1142</span>  <span class="kw">else</span>:
+<span class="ln">1149</span>      <span class="kw">await</span> self.<span class="ins">__cancel_process_task()</span>
+<span class="ln">1150</span>      self.__create_process_task()` },
+
+  { dir:"down", who:"FrameQueue.reset()", t:"EndFrame은 살아남는다 — SystemFrame이 아니기 때문에",
+    w:"frames.py:1899 · frames.py:147",
+    d:`<code>EndFrame</code>은 <b><code>SystemFrame</code>이 아니다</b>:
+       <code>class EndFrame(ControlFrame, UninterruptibleFrame)</code>.
+       우아한 종료는 <b>의도적으로 in-band</b>다 — 그래야 마지막 인사말이 안 잘린다.
+       in-band이므로 flush에 죽을 텐데, 그래서 mixin을 달았다.
+       난폭한 <code>CancelFrame</code>(<code>:999</code>)만 우선 채널을 탄다.`,
+    code:`<span class="ln">1899</span>  <span class="kw">class</span> <span class="fn">EndFrame</span>(<span class="ins">ControlFrame, UninterruptibleFrame</span>):
+<span class="cm">        # This frame is marked as UninterruptibleFrame to ensure it is
+        # not lost when an InterruptionFrame is processed.</span>
+
+<span class="ln">0999</span>  <span class="kw">class</span> <span class="fn">CancelFrame</span>(<span class="bad">SystemFrame</span>):   <span class="cm"># 난폭한 쪽만 우선 채널</span>` },
+
+  { dir:"down", who:"LLMService", t:"abort API는 없다. CancelledError가 async for 안에서 터진다",
+    w:"llm_service.py:688-689, 758-761",
+    d:`<code>_handle_interruptions</code>는 <code>cancel_on_interruption</code>으로 등록된
+       tool call만 취소한다. 생성 자체는 <b>process task가 취소되면서</b> provider의 streaming
+       <code>async for</code> 안에서 <code>CancelledError</code>로 죽는다 — 그래서
+       <code>finally</code> 블록의 <code>LLMFullResponseEndFrame</code>은 끊긴 턴에서
+       <b>절대 push되지 않는다</b>.`,
+    code:`<span class="ln">0688</span>  <span class="kw">if</span> isinstance(frame, InterruptionFrame):
+<span class="ln">0689</span>      <span class="kw">await</span> self._handle_interruptions(frame)
+<span class="ln">0758</span>  <span class="kw">async def</span> <span class="fn">_handle_interruptions</span>(self, _: InterruptionFrame):
+<span class="cm">        # tool call만 취소한다. 생성을 멈추는 API는 존재하지 않는다.</span>` },
+
+  { dir:"down", who:"TTSService", t:"프레임워크에서 가장 긴 interruption 루틴 — 누산기 목록 그 자체",
+    w:"tts_service.py:1030-1066",
+    d:`텍스트 누산기, 필터, sequencer, serialization queue, word timestamp, audio context —
+       <b>손으로 하나씩</b> 비운다. <code>:1041</code>의 주석은 누군가 그 버그를 배포했다는 증거다.
+       websocket 계열 subclass(<code>InterruptibleTTSService :1969</code>)는 소켓을 아예 튕긴다 —
+       반쯤 말해진 서버 측 컨텍스트는 되감을 수 없기 때문에.`,
+    code:`<span class="ln">1034</span>  <span class="kw">await</span> self._text_aggregator.handle_interruption()
+<span class="ln">1039</span>  self._streamed_text = <span class="st">""</span>
+<span class="ln">1041</span>  self.<span class="ins">_aggregated_frame_sequencer.clear()</span>  <span class="cm"># discard all pending slots on interruption</span>
+<span class="ln">1043</span>  <span class="kw">await</span> self.reset_word_timestamps()
+<span class="ln">1048</span>  self.<span class="ins">_serialization_queue.reset()</span>   <span class="cm"># UninterruptibleFrame은 남긴다</span>` },
+
+  { dir:"down", who:"output transport (MediaSender)", t:"clock task 취소 + 새 PriorityQueue 할당",
+    w:"base_output.py:566-593, 1070",
+    d:`clock task와 video task를 취소하고, <code>_audio_queue</code>는 상황에 따라
+       <code>reset()</code>하거나 취소 후 재생성한다. 그리고 clock 큐는
+       <b>새 객체로 갈아 끼운다</b> — 아직 <code>pts</code>가 안 된 timed frame이 전부 사라진다.`,
+    code:`<span class="ln">0573</span>  <span class="kw">await</span> self._cancel_clock_task()
+<span class="ln">0574</span>  <span class="kw">await</span> self._cancel_video_task()
+<span class="ln">0576</span>  <span class="kw">if</span> self._audio_queue.has_uninterruptible <span class="kw">or</span> self._mixer:
+<span class="ln">0583</span>      self._audio_queue.reset()
+<span class="ln">0585</span>  <span class="kw">else</span>: <span class="kw">await</span> self._cancel_audio_task(); self._create_audio_task()
+<span class="ln">1070</span>  self._clock_queue = <span class="ins">asyncio.PriorityQueue()</span>` },
+
+  { dir:"out", who:"serializer", t:"네 프로세스 밖으로 — 캐리어의 playout buffer",
+    w:"serializers/twilio.py:187",
+    d:`네 큐를 비우는 것만으로는 <b>불충분하다</b>. 이미 선로에 올라간 바이트는
+       Twilio의 playout buffer 안에 살아 있고, 그건 네 손이 닿지 않는 곳이다.
+       그래서 명시적인 flush 메시지를 쏜다.`,
+    code:`<span class="ln">0187</span>  answer = {<span class="st">"event"</span>: <span class="ins">"clear"</span>, <span class="st">"streamSid"</span>: self._stream_sid}` },
+
+  { dir:"up", who:"upstream 형제 인스턴스", t:"같은 순간, 반대 방향으로",
+    w:"frame_processor.py:1054",
+    d:`downstream 인스턴스가 TTS를 지나는 동안 upstream 인스턴스는
+       transport.input()과 STT 쪽으로 올라간다. 둘의 <b>순서는 보장되지 않는다</b>.
+       "인접"은 거짓말이라는 ch-04의 경고가 여기서 청구서로 돌아온다.` ,
+    code:`<span class="cm"># 같은 클래스, 다른 인스턴스, 다른 방향, 아무 동기화 없음</span>
+<span class="ln">1054</span>  <span class="kw">await</span> self.push_frame(upstream_frame, <span class="ins">FrameDirection.UPSTREAM</span>)` }
+];
+
+let cascTimer = null;
+
+function renderCascade(){
+  const box = document.getElementById("cascHops");
+  box.innerHTML = HOPS.map((hp, i) => {
+    const on  = i < S.cascStep;
+    const cur = i === S.cascStep - 1;
+    const arrow = hp.dir === "up" ? "↑ UPSTREAM" : (hp.dir === "out" ? "→ 프로세스 밖" : "↓ DOWNSTREAM");
+    return `<div class="hop dir-${hp.dir} ${on?"on":""} ${cur?"cur":""}" data-i="${i}">
+      <div class="hh"><span class="n">${i}</span><span class="t">${hp.t}</span>
+        <span class="w">${arrow} · ${hp.w}</span></div>
+      <div class="d"><b style="color:var(--ink-dim)">${hp.who}</b> — ${hp.d}</div>
+    </div>`;
+  }).join("");
+
+  const i = Math.max(0, S.cascStep - 1);
+  const hp = HOPS[i];
+  document.getElementById("cascDetail").innerHTML = S.cascStep === 0
+    ? `<div class="callout info" style="margin-top:12px">아직 아무 일도 일어나지 않았다.
+       <b>▶ broadcast</b>를 눌러라.</div>`
+    : `<h3 style="margin-top:14px">hop ${i} · <span class="mono">${hp.w}</span></h3>
+       <pre>${hp.code}</pre>`;
+}
+
+(function initCascade(){
+  const play = document.getElementById("cascPlay");
+  function stop(){ if (cascTimer){ clearInterval(cascTimer); cascTimer = null; } play.textContent = "▶ broadcast"; }
+  play.addEventListener("click", () => {
+    if (cascTimer){ stop(); return; }
+    if (S.cascStep >= HOPS.length) S.cascStep = 0;
+    play.textContent = "⏸ pause";
+    cascTimer = setInterval(() => {
+      S.cascStep++;
+      if (S.cascStep >= HOPS.length){ S.cascStep = HOPS.length; stop(); }
+      renderCascade();
+    }, 750);
+    renderCascade();
+  });
+  document.getElementById("cascStep").addEventListener("click", () => {
+    stop();
+    S.cascStep = Math.min(HOPS.length, S.cascStep + 1); renderCascade();
+  });
+  document.getElementById("cascReset").addEventListener("click", () => {
+    stop(); S.cascStep = 0; renderCascade();
+  });
+  document.getElementById("cascHops").addEventListener("click", e => {
+    const el = e.target.closest(".hop"); if (!el) return;
+    stop(); S.cascStep = (+el.dataset.i) + 1; renderCascade();
+  });
+})();
+
+/* =======================================================================
+   PANEL 3 — accumulate-then-flush (§4.1 / §8.1)
+   ======================================================================= */
+const ACC_FRAMES = [
+  { turn:1, cls:"LLMFullResponseStartFrame", text:null },
+  { turn:1, cls:"LLMTextFrame",   text:"고객님, 이 상품은 " },
+  { turn:1, cls:"LLMTextFrame",   text:"65세까지 갱신 없이 " },
+  { turn:1, cls:"LLMTextFrame",   text:"보장이 되고요, " },
+  { turn:1, cls:"LLMTextFrame",   text:"지금 가입하시면…" },
+  { turn:1, cls:"LLMFullResponseEndFrame", text:null },
+  { turn:2, cls:"LLMTextFrame",   text:"네, 안녕하세요 " },
+  { turn:2, cls:"LLMFullResponseEndFrame", text:null }
+];
+
+function simulateAcc(){
+  const cut = S.accPos;               /* frame[cut] 까지 처리된 뒤 취소가 들어온다 */
+  let buffer = "", writes = [], states = [];
+
+  function apply(f){
+    if (f.cls === "LLMTextFrame") buffer += f.text;
+    else if (f.cls === "LLMFullResponseEndFrame"){ writes.push(buffer); buffer = ""; }
+  }
+
+  for (let i = 0; i < ACC_FRAMES.length; i++){
+    const f = ACC_FRAMES[i];
+    if (i <= cut){ apply(f); states.push({ i, st:"done", buf:buffer }); }
+    else if (f.turn === 1){ states.push({ i, st:"killed", buf:buffer }); }
+    else break;
+  }
+  const bufAtCut = buffer;
+  if (S.accReset) buffer = "";
+  const bufAfterReset = buffer;
+
+  /* 다음 턴 */
+  const next = [];
+  ACC_FRAMES.forEach((f, i) => {
+    if (f.turn !== 2) return;
+    apply(f);
+    next.push({ i, st:"next", buf:buffer });
+  });
+
+  const alreadyFlushed = cut >= 5;
+  return { cut, bufAtCut, bufAfterReset, writes, states, next, alreadyFlushed };
+}
+
+function renderAcc(){
+  const R = simulateAcc();
+  document.getElementById("accPosOut").textContent = "frame " + R.cut + " 뒤";
+
+  /* --- 코드 --- */
+  const resetLines = S.accReset
+? `
+        <span class="ins">if isinstance(frame, InterruptionFrame):</span>
+            <span class="ins">self._buffer = ""</span>            <span class="cm"># obligation 1 — await 없음</span>
+        <span class="ins">elif</span> isinstance(frame, LLMTextFrame):`
+: `
+        <span class="bad">#   InterruptionFrame 분기가 없다</span>
+        if isinstance(frame, LLMTextFrame):`;
+
+  document.getElementById("accCode").innerHTML =
+`<span class="kw">class</span> <span class="fn">SentenceLogger</span>(FrameProcessor):
+    <span class="kw">async def</span> <span class="fn">process_frame</span>(self, frame, direction):
+        <span class="kw">await</span> <span class="fn">super</span>().process_frame(frame, direction)   <span class="cm"># obligation 3 — _start_interruption이 여기서 돈다</span>${resetLines}
+            self._buffer += frame.text                <span class="cm"># frame A</span>
+        <span class="kw">elif</span> isinstance(frame, LLMFullResponseEndFrame):
+            <span class="kw">await</span> self._sink.write(self._buffer)     <span class="cm"># frame B</span>
+            self._buffer = <span class="st">""</span>
+        <span class="kw">await</span> self.push_frame(frame, direction)`;
+
+  /* --- frame 목록 --- */
+  const line = (o, tag) => {
+    const f = ACC_FRAMES[o.i];
+    const col = o.st === "done" ? "var(--accent2)" : o.st === "killed" ? "var(--danger)" : "var(--c-bare)";
+    const mark = o.st === "done" ? "✓" : o.st === "killed" ? "✕" : "▸";
+    return `<div class="row"><span class="k" style="color:${col}">${mark} ${o.i} · ${tag}</span>
+      <span class="v"><code>${f.cls}</code>${f.text ? ` <span style="color:var(--ink)">"${esc(f.text)}"</span>` : ""}</span></div>`;
+  };
+
+  const cutRow = `<div class="row" style="background:rgba(247,120,186,.10)">
+      <span class="k" style="color:var(--c-ins)">⚡ 취소</span>
+      <span class="v"><code>InterruptionFrame</code> — <code>_start_interruption()</code>이
+      process task를 <b>이 두 frame 사이</b>에서 죽인다.
+      <code>_buffer</code> = <b style="color:${R.bufAtCut ? "var(--danger)" : "var(--accent2)"}">"${esc(R.bufAtCut)}"</b>
+      ${S.accReset ? `→ handler 실행 후 <b style="color:var(--accent2)">""</b>` : ""}</span></div>`;
+
+  document.getElementById("accOut").innerHTML =
+    `<div class="stack" style="margin-top:14px; border-top-color:var(--c-ins)">
+       <h4 style="color:var(--c-ins)">frame 하나씩</h4>
+       ${R.states.filter(o=>o.st==="done").map(o=>line(o,"turn 1")).join("")}
+       ${cutRow}
+       ${R.states.filter(o=>o.st==="killed").map(o=>line(o,"turn 1")).join("")}
+       ${R.next.map(o=>line(o,"turn 2")).join("")}
+     </div>` + crmBlock(R);
+
+  const bad = !S.accReset && R.bufAtCut.length > 0;
+  document.getElementById("accCounters").innerHTML =
+    `<div class="chip2 ${bad ? "zero" : "good"}"><b>${R.bufAtCut.length}</b>취소 시점<br><span class="mono">_buffer</span> 글자</div>
+     <div class="chip2 ${bad ? "zero" : "good"}"><b>${bad ? "오염" : "정상"}</b>다음 턴<br>CRM 기록</div>
+     <div class="chip2"><b>${R.writes.length}</b><span class="mono">_sink.write()</span><br>호출 횟수</div>`;
+}
+
+function crmBlock(R){
+  const w = R.writes[R.writes.length - 1] || "";
+  const bad = !S.accReset && R.bufAtCut.length > 0;
+  if (R.alreadyFlushed){
+    return `<div class="verdict ok">turn 1이 이미 <code>LLMFullResponseEndFrame</code>에서 flush된 뒤다.
+      <code>_buffer</code>는 비어 있었고, 취소는 아무것도 남기지 않았다.
+      <b>이 구간에서만</b> reset handler 없이도 안전하다 — 그리고 네가 그 구간을 고를 수는 없다.</div>`;
+  }
+  return `<div class="verdict ${bad ? "bad" : "ok"}">
+    <b>다음 턴의 CRM 로그</b><br>
+    <span class="mono" style="font-size:0.9286rem; color:${bad ? "var(--danger)" : "var(--accent2)"}">
+      _sink.write("${esc(w)}")</span><br>
+    ${bad
+      ? `앞부분은 <b>지난 턴의 조각</b>이다. frame A와 frame B는 인접해 보이지만
+         <code>__process_frame_task_handler</code>를 <b>두 번</b> 왕복하는 별개의 여행이고,
+         취소는 그 사이에 착륙한다.`
+      : `reset handler 한 줄이 지난 턴 조각을 잘라냈다. 등록도, 인터페이스 구현도,
+         누구에게 알릴 필요도 없다 — cascade는 emergent이므로 <b>올바른 processor는
+         평범한 네 줄로 참여하고, 틀린 processor는 조용히 참여하지 않는다.</b>`}
+  </div>`;
+}
+
+(function initAcc(){
+  const sl = document.getElementById("accPos");
+  sl.addEventListener("input", () => { S.accPos = +sl.value; renderAcc(); });
+  document.getElementById("optReset").addEventListener("change", e => {
+    S.accReset = e.target.checked; renderAcc();
+  });
+})();
+
+/* =======================================================================
+   PANEL 4 — in-band vs out-of-band (ch-04의 N/r)
+   ======================================================================= */
+const cvNR = document.getElementById("cvNr");
+
+function nrCalc(){
+  const b10 = Math.trunc(S.sr / 100) * S.ac * 2;      /* base_output.py:135 */
+  const size = b10 * S.ch10;                          /* base_output.py:136 */
+  const cm  = S.ch10 * 10;                            /* 정의상 10 ms 단위 */
+  const N   = Math.ceil(S.rem / cm);                  /* 큐에 남아 있는 청크 수 */
+  return { b10, size, cm, N, inBand: N * cm, outBand: cm };
+}
+
+function drawNR(){
+  const {c, w, h} = setupCanvas(cvNR, CANVAS_H_NR);
+  const R = nrCalc();
+  const mono = 'ui-monospace,SFMono-Regular,Menlo,Consolas,monospace';
+  const x0 = 16, x1 = w - 16;
+  const shown = Math.min(R.N, 90);
+  const cellW = Math.max(2.5, Math.min(13, (x1 - x0 - 26) / (shown + 1)));
+
+  function queueRow(y, title, col, sigAtHead){
+    c.font = '10px ' + mono; c.textAlign = 'left'; c.fillStyle = V('--ink-dim');
+    c.fillText(title, x0, y - 6);
+    let x = x0;
+    function sig(){
+      c.fillStyle = V('--c-ins'); roundRect(c, x, y, Math.max(cellW, 9) - 1.5, 22, 2); c.fill();
+      x += Math.max(cellW, 9) + 6;
+    }
+    if (sigAtHead) sig();
+    for (let i = 0; i < shown; i++){
+      c.fillStyle = sigAtHead ? 'rgba(43,50,66,.9)' : 'rgba(210,153,34,.32)';
+      roundRect(c, x, y, cellW - 1.5, 22, 2); c.fill();
+      x += cellW;
+    }
+    if (R.N > shown){
+      c.fillStyle = V('--ink-faint'); c.font = '9px ' + mono;
+      c.fillText('…+' + (R.N - shown), x + 3, y + 16); x += 34;
+    }
+    if (!sigAtHead) { x += 4; sig(); }
+    return x;
+  }
+
+  /* in-band */
+  const endA = queueRow(34, 'in-band — DEFAULT_PRIORITY=' + DEFAULT_PRIORITY +
+                            ' · 신호가 ' + R.N + '개 청크 뒤에 줄을 선다', V('--c-ctrl'), false);
+  c.fillStyle = V('--danger'); c.font = '11px ' + mono; c.textAlign = 'left';
+  c.fillText('→ 정지까지 ' + R.inBand + ' ms', x0, 78);
+  c.fillStyle = V('--ink-faint'); c.font = '9px ' + mono;
+  c.fillText('핸들러가 단순 return이어도 똑같이 늦는다. N/r은 큐 깊이의 함수다.', x0 + 118, 78);
+
+  /* out-of-band */
+  queueRow(112, 'out-of-band — SYSTEM_PRIORITY=' + SYSTEM_PRIORITY +
+                ' · 신호가 head로 튀어 오른다', V('--c-sys'), true);
+  c.fillStyle = V('--accent2'); c.font = '11px ' + mono;
+  c.fillText('→ 정지까지 ≤ ' + R.outBand + ' ms (쓰기 중인 청크 하나)', x0, 156);
+  c.fillStyle = V('--ink-faint'); c.font = '9px ' + mono;
+  c.fillText('그리고 캐리어 버퍼는 serializer의 flush가 따로 처리한다 (twilio.py:187).', x0 + 208, 156);
+
+  /* 비율 */
+  c.textAlign = 'right'; c.font = '10px ' + mono; c.fillStyle = V('--ink-dim');
+  c.fillText('배율 ' + (R.inBand / R.outBand).toFixed(0) + '×', x1, 78);
+
+  c.textAlign = 'center'; c.font = '9px ' + mono; c.fillStyle = V('--ink-faint');
+  c.fillText('청크 하나 = ' + R.size + ' bytes = ' + R.cm + ' ms  ·  audio_bytes_10ms=' + R.b10 +
+             ' × audio_out_10ms_chunks=' + S.ch10, w/2, h - 8);
+}
+
+function renderNR(){
+  const R = nrCalc();
+  document.getElementById("srOut").textContent = S.sr + " Hz";
+  document.getElementById("chOut").textContent = S.ch10;
+  document.getElementById("acOut").textContent = S.ac;
+  document.getElementById("remOut").textContent = S.rem + " ms";
+
+  document.getElementById("nrTable").innerHTML =
+    `<tr><th>식 (base_output.py:135-136)</th><th style="text-align:right">값</th></tr>
+     <tr><td><code>int(sample_rate/100) * channels * 2</code></td><td class="num">${R.b10} B</td></tr>
+     <tr><td><code>_audio_chunk_size</code> = 위 × <code>audio_out_10ms_chunks</code></td><td class="num">${R.size} B</td></tr>
+     <tr><td>청크 하나의 재생 길이 <span style="color:var(--ink-faint)">= chunks × 10 ms</span></td><td class="num">${R.cm} ms</td></tr>
+     <tr><td><b>N</b> — 큐에 남은 청크 수</td><td class="num">${R.N}</td></tr>
+     <tr><td><b>N/r</b> — in-band 신호의 도달 지연</td><td class="num" style="color:var(--danger)">${R.inBand} ms</td></tr>
+     <tr><td>out-of-band 신호의 도달 지연</td><td class="num" style="color:var(--accent2)">≤ ${R.outBand} ms</td></tr>`;
+
+  const dflt = (S.sr === 24000 && S.ch10 === 4 && S.ac === 1);
+  document.getElementById("nrVerdict").innerHTML =
+    `<div class="verdict ${R.inBand > 500 ? "bad" : "ok"}">
+      <b>chunk size는 버퍼링 손잡이가 아니라 interrupt granularity 결정이다.</b>
+      소스가 직접 그렇게 말한다 — <code>base_output.py:83</code>:
+      <span class="mono" style="color:var(--ink)">"If we receive long audio frames we will chunk them.
+      This will help with interruption handling."</span><br>
+      ${dflt ? `기본값에서 <code>_audio_chunk_size = (24000/100) × 1 × 2 × 4 = 1920</code> bytes,
+                <code>1920 / 24000 = 0.08</code>, <code>/2 = 0.04</code> s — <b>40 ms</b>.
+                <code>/2</code>가 필요한 이유는 16-bit에서 샘플당 2바이트이기 때문이다.<br>` : ``}
+      <span class="mono">sample_rate</span>를 바꿔 봐라 — 청크의 <b>바이트 수</b>는 변해도
+      <b>재생 길이</b>는 변하지 않는다. <span class="mono">N</span>은 남은 오디오의 <b>시간</b>에만 달려 있다.
+     </div>`;
+}
+
+(function initNR(){
+  const bind = (id, key, isNum) => {
+    const el = document.getElementById(id);
+    el.addEventListener("input", () => { S[key] = isNum ? +el.value : el.value; renderNR(); drawNR(); });
+    el.addEventListener("change", () => { S[key] = isNum ? +el.value : el.value; renderNR(); drawNR(); });
+  };
+  bind("sr", "sr", true); bind("ch10", "ch10", true);
+  bind("ac", "ac", true); bind("rem", "rem", true);
+})();
+
+/* =======================================================================
+   PANEL 5 — context payoff
+   ======================================================================= */
+const NEXT_USER = "근데 그거 몇 살까지 되나요?";
+
+function renderCtx(){
+  const D = derive();
+  const fix = S.fix;
+
+  function msg(role, content, cls, note){
+    return `<div class="msg ${cls||""}"><span class="r">"role": "${role}"</span>
+      <span class="c">${content}</span>${note ? `<span class="note">${note}</span>` : ""}</div>`;
+  }
+
+  /* --- Pipecat --- */
+  let pc;
+  if (D.pcText === ""){
+    pc = msg("assistant", "— 없음 —", "none",
+      `<code>push_aggregation</code>이 <code>llm_response_universal.py:1679-1680</code>에서
+       빈 aggregation으로 return한다. 턴이 history에서 <b>통째로 사라진다</b>.
+       ${fix ? `fix를 켜도 이 경우는 못 막는다 — override가 돌기 전에 return하기 때문에,
+                <code>_handle_interruptions</code>에서 직접 써야 한다.` : ``}`);
+  } else {
+    pc = msg("assistant",
+      esc(D.pcText) + (fix ? ` <span class="fixtag">[고객 끼어듦]</span>` : ``),
+      "",
+      fix ? `<code>TextPartForConcatenation</code>로 tag를 덧붙인 subclass.
+             <code>_interrupting</code> 플래그를 <code>_handle_interruptions</code>에서 세운다.`
+          : `태그 없음, 말줄임표 없음, <code>interrupted</code> 필드 없음.
+             모델은 이걸 <b>짧게 끝난 답변</b>으로 읽는다.`);
+  }
+
+  /* --- boson --- */
+  const bs = msg("assistant",
+    esc(SENTENCE) + ` <span class="tag">[interrupted-by-user]</span>`, "",
+    `<code>cancellation.py:128-132</code>. 단 이건 <b>들린</b> prefix가 아니라
+     <b>생성된</b> prefix다 — 생성은 ~${ARRIVE_MS} ms에 이미 끝나 있었다.
+     ${D.bsTooLate ? `게다가 2000 ms 침묵 게이트 때문에 신호 자체가
+       문장이 끝난 뒤(<b>+${Math.round(D.bsSignal - SENT_MS)} ms</b>)에야 생긴다.` : ``}
+     태그는 <code>set_interrupt_tags</code>로 교체 가능하고 docstring 예시가 한국어다.`);
+
+  /* --- realtime_voice --- */
+  const rv = msg("assistant",
+    (D.rvText === "" ? `<span style="color:var(--ink-faint)">""</span>` : esc(D.rvText)) +
+    ` <span class="tag">semantic_interrupt: true</span>`, "",
+    `<code>AudioTextPlayoutLedger.audible_text()</code> — phrase까지 걷고 걸친 phrase는
+     <code>text[:int(len(text) * ratio)]</code>. 단어 중간에서는 <b>틀리지만</b>
+     TTS에서 타임스탬프를 하나도 안 받아도 된다. 플래그는 <code>session.py:502-507</code>.`);
+
+  const cards = [
+    { cls:"pc", t:"Pipecat", sd:`잘린 지점 = <b>pipeline 위치</b> + <code>TTSTextFrame.pts</code><br>
+        aggregator가 <code>transport.output()</code> <b>뒤에</b> 앉아 있다.
+        벤더가 word timestamp를 안 주면 단위는 <b>문장 전체</b>로 무너진다 (§7.6)`, body: pc },
+    { cls:"bs", t:"boson gateway", sd:`잘린 지점을 <b>측정하지 않는다</b><br>
+        <code>partial_text</code> — 생성된 prefix`, body: bs },
+    { cls:"rv", t:"realtime_voice", sd:`잘린 지점 = <b>sample ratio</b> 재구성<br>
+        TTS 타임스탬프 불필요, 단어 중간은 근사`, body: rv }
+  ];
+
+  document.getElementById("ctxOut").innerHTML = cards.map(k =>
+    `<div class="stack ${k.cls}"><h4>${k.t}</h4><div class="sd">${k.sd}</div>
+     ${k.body}${msg("user", esc(NEXT_USER), "")}</div>`).join("");
+
+  document.getElementById("ctxNote").innerHTML =
+    `<div class="verdict ${fix ? "ok" : ""}">
+      ${fix
+        ? `<b>fix의 값은 15줄이다.</b> <code>push_aggregation</code>은
+           <code>LLMAssistantAggregator</code>의 평범한 <code>async def</code>이므로 subclass로 끝난다.
+           <b>단</b> 두 가지: (1) <code>on_assistant_turn_stopped</code> 핸들러에서 메시지를
+           <i>append</i>하면 안 된다 — <code>_trigger_assistant_turn_stopped</code>가
+           <code>:2179</code>에서 이미 commit하고 <code>:2189</code>에서 이벤트를 쏘므로,
+           그 접근은 마지막 메시지를 <b>덮어써야</b> 한다. (2) 빈 aggregation 케이스는
+           <code>:1679</code>에서 먼저 return하므로 여전히 사라진다.`
+        : `<b>세 개의 메커니즘, 세 개의 서로 다른 실패 양식.</b>
+           Pipecat은 <i>표현</i>에서 진다 — 들린 것을 정확히 재구성해 놓고, "이 턴은 잘렸다"는
+           딱 한 비트를 버린다 (<code>interrupted=True</code>는 일시적인
+           <code>AssistantTurnStoppedMessage</code>에만 산다). boson은 <i>기원</i>에서 진다 —
+           transcript 없이는 신호가 존재조차 못 한다. realtime_voice는 <i>근사</i>에서 진다 —
+           글자/샘플 선형 추정은 단어 안에서 틀린다.
+           <br>여기서 점수를 매기지 마라. ch-13이 그걸 하는 유일한 자리다.`}
+     </div>`;
+}
+
+document.getElementById("optFix").addEventListener("change", e => {
+  S.fix = e.target.checked; renderCtx();
+});
+
+/* =======================================================================
+   부팅
+   ======================================================================= */
+function renderAll(){
+  renderTL();
+  renderCascade();
+  renderAcc();
+  renderNR(); drawNR();
+  renderCtx();
+}
+let rzTimer = null;
+window.addEventListener("resize", () => {
+  clearTimeout(rzTimer);
+  rzTimer = setTimeout(() => { drawTimeline(); drawNR(); }, 120);
+});
+syncPresetHighlight();
+renderAll();
+</script>
+</body>
+</html>

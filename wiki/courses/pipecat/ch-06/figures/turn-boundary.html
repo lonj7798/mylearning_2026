@@ -1,0 +1,1646 @@
+<!--
+  Figure: turn-boundary.html — "사용자의 turn은 언제 끝나는가 — 세 층에서 세 번 결정된다"
+  Chapter: pipecat ch-06 (VAD / streaming STT / turn-strategy chain)
+  Back to: ../read.md
+
+  Fully self-contained: inline CSS + vanilla JS. No CDN, no fetch, no external fonts.
+  Opens directly from file:// .
+
+  Every constant, class name, file path and line number below was read out of the pinned
+  tree at commit 0cbf9c5b031eef06e53f0a193b9a67d60230e6be:
+
+    audio/vad/vad_analyzer.py     VAD_CONFIDENCE 0.7 :25, VAD_START_SECS 0.2 :26,
+                                  VAD_STOP_SECS 0.2 :27, VAD_MIN_VOLUME 0.6 :28,
+                                  VADState :31 (QUIET/STARTING/SPEAKING/STOPPING :41-44),
+                                  VADParams :47, VADAnalyzer :63,
+                                  set_params def :151, num_frames_required() :159,
+                                  vad_frames_per_sec :162, _vad_start_frames :164,
+                                  _vad_stop_frames :165,
+                                  AND gate `speaking = ...` :211,
+                                  transitions :213-232, terminal promotions :234-246
+    audio/vad/silero.py           sample_rates [8000, 16000] :61,
+                                  num_frames_required() -> 512/256 :191/:197
+    audio/vad/vad_controller.py   VADController :31 (edge-triggered emitter)
+    services/stt_latency.py       DEFAULT_TTFS_P99 1.0 :38, 23 measured constants :41-64,
+                                  NVIDIA/WHISPER aliases :67/:68
+    services/stt_service.py       STTService :51, SegmentedSTTService :797,
+                                  WebsocketSTTService :929, run_stt def :335,
+                                  push_frame TranscriptionFrame stamp :519,
+                                  _handle_vad_user_stopped_speaking :627,
+                                  _audio_buffer_size_1s = sample_rate * 2 :837,
+                                  pcm_to_wav(...) :890
+    turns/user_turn_strategies.py default start :40, default stop :51,
+                                  UserTurnStrategies :55, ExternalUserTurnStrategies :82
+    turns/user_stop/turn_analyzer_user_turn_stop_strategy.py
+                                  TurnAnalyzerUserTurnStopStrategy :34,
+                                  stt_deadline :236, stop_secs warning :247-256,
+                                  timeout = max(0, ttfs - stop_secs) :302
+    turns/user_stop/speech_timeout_user_turn_stop_strategy.py
+                                  SpeechTimeoutUserTurnStopStrategy :27,
+                                  user_speech_timeout 0.6 :52,
+                                  effective_stt_wait :223
+    audio/turn/smart_turn/base_smart_turn.py  STOP_SECS = 3 :27
+    audio/turn/smart_turn/local_smart_turn_v3.py  "smart-turn-v3.2-cpu.onnx" :50
+    processors/aggregators/llm_response_universal.py  LLMUserAggregatorParams :120,
+                                  fields :169-177
+    9 external-endpointing assignment sites across 8 files — line numbers in the strip.
+    services/funasr/stt.py        _FUNASR_LANGUAGES :42, coercion to "auto" :61
+    services/sarvam/stt.py        Language.KOK_IN: "kok-IN" :849  (Konkani, not Korean)
+    services/elevenlabs/stt.py    LANGUAGE_MAP :61, Language.KO: "kor" :109,
+                                  language_to_service_language :322 (ElevenLabsSTTService :210
+                                  only — ElevenLabsRealtimeSTTService :452 has none)
+
+  The audio envelope (confidence / volume per chunk) is SYNTHETIC — a plausible Korean
+  utterance. The state machine that consumes it is transcribed line-for-line from
+  vad_analyzer.py:202-248, and every threshold, frame count and latency constant is real.
+-->
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>turn boundary — VAD / STT / strategy chain (pipecat ch-06)</title>
+<style>
+  /* --- 반응형 타이포 스케일: 태블릿에서 root를 키운다 ------------------- */
+  html{font-size:14px;}
+  @media (pointer:coarse){ html{font-size:17px;} }
+  @media (min-width:1500px){ html{font-size:15.5px;} }
+
+  :root{
+    --bg:#0e1117; --panel:#161b22; --panel2:#1c2230; --edge:#2b3242;
+    --ink:#e6edf3; --ink-dim:#9aa7b4; --ink-faint:#6b7686;
+    --accent:#58a6ff; --accent2:#3fb950; --danger:#f85149; --warn:#d29922;
+    --c-quiet:#6b7686;    /* VADState.QUIET    */
+    --c-start:#d29922;    /* VADState.STARTING */
+    --c-speak:#3fb950;    /* VADState.SPEAKING */
+    --c-stopp:#bc8cff;    /* VADState.STOPPING */
+    --c-ins:#f778ba;      /* 선택된 것 / 강조   */
+  }
+  *{box-sizing:border-box;}
+  html,body{margin:0;padding:0;}
+  body{
+    background:var(--bg); color:var(--ink);
+    font:1rem/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Apple SD Gothic Neo",
+         "Noto Sans KR",Helvetica,Arial,sans-serif;
+    padding:22px; max-width:88rem; margin:0 auto;
+  }
+  h1{font-size:1.5rem; margin:0 0 3px; letter-spacing:.2px;}
+  .sub{color:var(--ink-dim); font-size:0.9286rem; margin:0 0 20px;}
+  .sub code, .sub .mono{color:var(--accent);}
+  .panel{background:var(--panel); border:1px solid var(--edge); border-radius:10px;
+    padding:16px; margin-bottom:18px;}
+  .panel h2{font-size:0.8571rem; text-transform:uppercase; letter-spacing:.9px; color:var(--ink-dim);
+    margin:0 0 14px; font-weight:600;}
+  .panel h3{font-size:0.8571rem; color:var(--ink); margin:18px 0 8px; font-weight:600;}
+  .mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+    font-variant-numeric:tabular-nums;}
+  code{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:0.9em;}
+
+  .grid2{display:grid; grid-template-columns:1fr 1fr; gap:18px;}
+  .wrap{display:grid; grid-template-columns:20rem 1fr; gap:18px; align-items:start;}
+  .wrapr{display:grid; grid-template-columns:1fr 21rem; gap:18px; align-items:start;}
+  @media (max-width:1000px){
+    .wrap,.wrapr{grid-template-columns:1fr;} .grid2{grid-template-columns:1fr;}
+  }
+
+  /* ---------- sliders ---------- */
+  .sl{margin-bottom:11px;}
+  .sl label{display:flex; justify-content:space-between; font-size:0.8214rem;
+    color:var(--ink-dim); margin-bottom:3px; gap:8px;}
+  .sl label b{color:var(--ink); font-weight:600;
+    font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;}
+  .sl label .v{color:var(--accent); font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+    font-variant-numeric:tabular-nums;}
+  .sl label .v.off{color:var(--warn);}
+  .sl input[type=range]{width:100%; accent-color:var(--accent); margin:0;}
+  .sl .d{font-size:0.7143rem; color:var(--ink-faint); line-height:1.4;}
+
+  .seg{display:flex; gap:6px; margin-bottom:12px;}
+  .seg button{flex:1; background:var(--panel2); border:1px solid var(--edge); color:var(--ink-dim);
+    border-radius:7px; padding:8px 6px; cursor:pointer; font-size:0.8214rem; transition:.13s;
+    font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;}
+  .seg button:hover{border-color:var(--ink-faint); color:var(--ink);}
+  .seg button.on{background:#1d3a5f; border-color:var(--accent); color:#cfe6ff;}
+
+  .runbar{display:flex; gap:7px; margin-top:12px; flex-wrap:wrap;}
+  .rb{flex:1 1 6rem; background:var(--panel2); border:1px solid var(--edge); color:var(--ink);
+    border-radius:7px; padding:9px 6px; cursor:pointer; font-size:0.8929rem; font-weight:600;
+    transition:.13s;}
+  .rb:hover{border-color:var(--accent);}
+  .rb.primary{background:#1d3a5f; border-color:var(--accent); color:#cfe6ff;}
+
+  .opts{display:flex; flex-direction:column; gap:7px; margin-top:12px;}
+  .opt{display:flex; align-items:flex-start; gap:8px; font-size:0.8214rem; color:var(--ink-dim);
+    cursor:pointer; line-height:1.4;}
+  .opt input{margin:3px 0 0; accent-color:var(--c-ins); flex:none;}
+  .opt b{color:var(--ink); font-weight:600;}
+
+  pre{background:#10151d; border:1px solid var(--edge); border-radius:8px; padding:13px;
+    overflow-x:auto; font-size:0.8214rem; line-height:1.7; margin:0;
+    font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; white-space:pre;}
+  pre .cm{color:var(--ink-faint);} pre .kw{color:var(--c-stopp);} pre .st{color:var(--accent2);}
+  pre .ins{color:var(--c-ins); font-weight:700;} pre .ln{color:var(--ink-faint);}
+  pre .bad{color:var(--danger);} pre .dim{color:var(--ink-faint);}
+  pre .num{color:var(--accent); font-weight:700;}
+
+  /* ---------- meters ---------- */
+  .meters{display:flex; flex-direction:column; gap:9px; margin-top:12px;}
+  .meter .top{display:flex; justify-content:space-between; font-size:0.7857rem;
+    color:var(--ink-dim); margin-bottom:3px;
+    font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;}
+  .meter .track{position:relative; height:.85rem; background:#10151d; border:1px solid var(--edge);
+    border-radius:5px; overflow:hidden;}
+  .meter .fill{position:absolute; left:0; top:0; bottom:0; background:var(--ink-faint);
+    transition:width .08s linear, background .08s linear;}
+  .meter .fill.pass{background:var(--c-speak);}
+  .meter .thr{position:absolute; top:-2px; bottom:-2px; width:2px; background:var(--danger);}
+  .gate{margin-top:10px; border:1px solid var(--edge); border-radius:8px; background:#10151d;
+    padding:9px 11px; font-size:0.8214rem; line-height:1.6;
+    font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;}
+  .gate .t{color:var(--c-speak);} .gate .f{color:var(--danger);}
+  .gate .k{color:var(--ink-faint);}
+
+  /* height는 JS의 CANVAS_H_* 상수와 반드시 같은 값 — 레이아웃 점프 방지 */
+  canvas{width:100%; display:block; border-radius:8px; background:#10151d;
+    border:1px solid var(--edge);}
+  #cvVad{height:270px;}
+  #cvStt{height:240px;}
+  #cvClock{height:250px;}
+  #cvDec{height:220px;}
+  .legend{display:flex; gap:14px; font-size:0.7857rem; color:var(--ink-dim); margin-top:9px;
+    flex-wrap:wrap;}
+  .legend i{display:inline-block; width:16px; height:10px; border-radius:3px;
+    vertical-align:middle; margin-right:5px;}
+
+  .callout{border-left:3px solid var(--warn); background:rgba(210,153,34,.07);
+    padding:11px 14px; border-radius:0 7px 7px 0; font-size:0.8571rem; color:var(--ink-dim);
+    margin-top:14px; line-height:1.65;}
+  .callout b{color:var(--ink);}
+  .callout.ok{border-left-color:var(--accent2); background:rgba(63,185,80,.07);}
+  .callout.bad{border-left-color:var(--danger); background:rgba(248,81,73,.07);}
+  .callout.flat{border-left-color:var(--ink-faint); background:rgba(107,118,134,.07);}
+  .callout code{color:var(--accent);}
+
+  .counters{display:flex; gap:8px; flex-wrap:wrap; margin-top:12px;}
+  .chip2{border:1px solid var(--edge); border-radius:7px; padding:7px 11px; font-size:0.7857rem;
+    background:var(--panel2); color:var(--ink-faint); min-width:7.5rem;}
+  .chip2 b{display:block; font-size:1.1429rem; color:var(--ink); margin-bottom:1px;
+    font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;}
+  .chip2.good b{color:var(--accent2);}
+  .chip2.warnv b{color:var(--warn);}
+  .chip2.bad b{color:var(--danger);}
+
+  /* ---------- 두 기계 비교 (점수 없음) ---------- */
+  .beh{display:grid; grid-template-columns:1fr 1fr; gap:12px; margin-top:12px;}
+  @media (max-width:760px){ .beh{grid-template-columns:1fr;} }
+  .behbox{background:#10151d; border:1px solid var(--edge); border-radius:8px; padding:11px 13px;}
+  .behbox h4{margin:0 0 7px; font-size:0.8214rem; color:var(--ink);
+    font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-weight:600;}
+  .behbox .trace{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+    font-size:0.7857rem; line-height:1.75; color:var(--ink-dim); white-space:pre-wrap;}
+  .behbox .trace em{color:var(--c-start); font-style:normal;}
+  .behbox .trace s{color:var(--ink-faint); text-decoration:none;}
+  .behbox .emit{margin-top:8px; font-size:0.7857rem; color:var(--ink-dim);
+    border-top:1px dashed var(--edge); padding-top:7px;}
+  .behbox .emit b{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;}
+
+  /* ---------- provider bar chart ---------- */
+  .provwrap{max-height:31rem; overflow-y:auto; border:1px solid var(--edge); border-radius:8px;
+    background:#10151d; padding:8px;}
+  .prow{display:grid; grid-template-columns:11.5rem 1fr 3rem; gap:7px; align-items:center;
+    padding:3px 5px; border-radius:5px; cursor:pointer; transition:.1s;}
+  .prow:hover{background:rgba(88,166,255,.08);}
+  .prow.on{background:rgba(247,120,186,.13); outline:1px solid var(--c-ins);}
+  .prow .nm{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:0.7143rem;
+    color:var(--ink-dim); white-space:nowrap; overflow:hidden; text-overflow:ellipsis;}
+  .prow.on .nm{color:var(--ink);}
+  .prow .bwrap{height:.72rem; background:#161b22; border-radius:3px; position:relative;}
+  .prow .b{position:absolute; left:0; top:0; bottom:0; background:#2f6fb3; border-radius:3px;}
+  .prow .val{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:0.7143rem;
+    color:var(--ink); text-align:right; font-variant-numeric:tabular-nums;}
+  .prow.ko .b{background:var(--c-speak);}
+  .prow.pass{opacity:.55;} .prow.pass .b{background:var(--ink-faint);}
+  .prow.alias .b{background:#5a4a8a;}
+  .prow .tag{font-size:0.6429rem; border:1px solid var(--edge); border-radius:3px; padding:0 4px;
+    margin-left:5px; color:var(--ink-faint); white-space:nowrap;}
+  .prow .tag.ko{border-color:var(--c-speak); color:var(--c-speak);}
+  .prow .tag.warn{border-color:var(--danger); color:var(--danger);}
+  .provnote{font-size:0.7143rem; color:var(--ink-faint); line-height:1.55; margin-top:7px;
+    font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;}
+
+  .stream{background:#10151d; border:1px solid var(--edge); border-radius:8px; padding:10px;
+    height:15rem; overflow-y:auto; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+    font-size:0.75rem; line-height:1.7;}
+  .stream div{white-space:nowrap;}
+  .stream .t{color:var(--ink-faint);}
+  .stream .i{color:var(--warn);} .stream .f{color:var(--accent2); font-weight:700;}
+  .stream .s{color:var(--ink-faint);} .stream .txt{color:var(--ink);}
+
+  /* ---------- strategy chain ---------- */
+  .chaingrid{display:grid; grid-template-columns:1fr 1fr; gap:12px;}
+  @media (max-width:760px){ .chaingrid{grid-template-columns:1fr;} }
+  .stratbox{background:#10151d; border:1px solid var(--edge); border-radius:8px; padding:10px;}
+  .stratbox h4{margin:0 0 8px; font-size:0.75rem; text-transform:uppercase; letter-spacing:.7px;
+    color:var(--ink-faint); font-weight:600;}
+  .strat{border:1px solid var(--edge); border-radius:7px; padding:7px 9px; margin-bottom:6px;
+    background:var(--panel2); font-size:0.7857rem; line-height:1.5; cursor:default;}
+  .strat b{display:block; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+    font-size:0.7857rem; color:var(--ink);}
+  .strat span{color:var(--ink-faint); font-size:0.7143rem;}
+  .strat.fire{border-color:var(--c-speak); background:rgba(63,185,80,.1);}
+  .strat.veto{border-color:var(--danger); background:rgba(248,81,73,.1);}
+  .strat.idle{opacity:.5;}
+  .strat.pick{border-color:var(--accent);}
+  .strat .res{float:right; font-size:0.7143rem;
+    font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;}
+  .strat .res.fire{color:var(--c-speak);} .strat .res.veto{color:var(--danger);}
+  .strat .res.idle{color:var(--ink-faint);}
+
+  /* ---------- external endpointing strip ---------- */
+  table{width:100%; border-collapse:collapse; font-size:0.75rem; margin-top:6px;}
+  th,td{padding:5px 7px; text-align:left; border-bottom:1px solid var(--edge); vertical-align:middle;}
+  th{color:var(--ink-faint); font-weight:600; font-size:0.6786rem; text-transform:uppercase;
+    letter-spacing:.5px;}
+  td.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;}
+  tr.ext td:first-child{border-left:3px solid var(--c-ins);}
+  tr.loc td:first-child{border-left:3px solid var(--ink-faint);}
+  .tg{display:inline-flex; align-items:center; gap:5px; cursor:pointer; color:var(--ink-dim);
+    font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:0.7143rem;}
+  .tg input{accent-color:var(--c-ins); margin:0;}
+  .badge{font-size:0.6786rem; border-radius:4px; padding:1px 6px; white-space:nowrap;
+    border:1px solid var(--edge); color:var(--ink-faint);}
+  .badge.ext{border-color:var(--c-ins); color:var(--c-ins);}
+  .badge.loc{border-color:var(--ink-faint); color:var(--ink-faint);}
+  .badge.uncond{border-color:var(--accent2); color:var(--accent2);}
+
+  .foot{color:var(--ink-faint); font-size:0.7857rem; margin-top:26px; line-height:1.8;}
+  .foot a{color:var(--accent); text-decoration:none;}
+  .foot b{color:var(--ink-dim);}
+</style>
+</head>
+<body>
+
+<h1>turn boundary — 사용자의 turn은 <span class="mono">언제</span> 끝나는가</h1>
+<p class="sub">
+  하나의 한국어 발화 “<b>여보세요, 어제 주문한 물건이 아직 안 왔는데요</b>”를 공유 time axis 위에서
+  세 층이 각자 판정한다 — <span class="mono">VAD</span> (audio) →
+  <span class="mono">streaming STT</span> (transcript) →
+  <span class="mono">turn-strategy chain</span> (arbiter).
+  <span class="mono" style="color:var(--ink-faint)">pipecat @ 0cbf9c5</span>
+</p>
+
+<!-- ═══════════════ PANEL 1 — VAD ═══════════════ -->
+<div class="panel">
+  <h2>1 · audio-level 답 — <span class="mono">VADAnalyzer</span>의 4-state hysteresis machine
+    <span class="mono" style="text-transform:none; color:var(--ink-faint)">(vad_analyzer.py:63)</span></h2>
+  <div class="wrap">
+    <div>
+      <div class="seg" id="rateSeg">
+        <button data-sr="16000" class="on">16 kHz · 512 samples</button>
+        <button data-sr="8000">8 kHz · 256 samples</button>
+      </div>
+      <div class="sl">
+        <label><b>confidence</b><span class="v" id="oConf">0.70</span></label>
+        <input type="range" id="sConf" min="0.05" max="0.95" step="0.05" value="0.7">
+        <div class="d">VAD_CONFIDENCE = 0.7 (:25)</div>
+      </div>
+      <div class="sl">
+        <label><b>min_volume</b><span class="v" id="oVol">0.60</span></label>
+        <input type="range" id="sVol" min="0" max="0.95" step="0.05" value="0.6">
+        <div class="d">VAD_MIN_VOLUME = 0.6 (:28) — gate는 AND다 (:211)</div>
+      </div>
+      <div class="sl">
+        <label><b>start_secs</b><span class="v" id="oStart">0.20</span></label>
+        <input type="range" id="sStart" min="0.032" max="1.0" step="0.016" value="0.2">
+        <div class="d">VAD_START_SECS = 0.2 (:26) → <span id="oStartFrames">6</span> chunks</div>
+      </div>
+      <div class="sl">
+        <label><b>stop_secs</b><span class="v" id="oStop">0.20</span></label>
+        <input type="range" id="sStop" min="0.032" max="1.2" step="0.016" value="0.2">
+        <div class="d">VAD_STOP_SECS = 0.2 (:27) → <span id="oStopFrames">6</span> chunks</div>
+      </div>
+      <div class="runbar">
+        <button class="rb primary" id="bPlay1">▶ 재생</button>
+        <button class="rb" id="bReset1">↺ 기본값</button>
+      </div>
+      <div class="meters">
+        <div class="meter">
+          <div class="top"><span>confidence</span><span id="mConfV">—</span></div>
+          <div class="track"><div class="fill" id="mConf"></div><div class="thr" id="mConfT"></div></div>
+        </div>
+        <div class="meter">
+          <div class="top"><span>volume</span><span id="mVolV">—</span></div>
+          <div class="track"><div class="fill" id="mVol"></div><div class="thr" id="mVolT"></div></div>
+        </div>
+      </div>
+      <div class="gate" id="gateOut">chunk 위에 마우스를 올리거나 ▶ 재생</div>
+    </div>
+    <div>
+      <canvas id="cvVad"></canvas>
+      <div class="legend">
+        <span><i style="background:#6b7686"></i>QUIET</span>
+        <span><i style="background:#d29922"></i>STARTING</span>
+        <span><i style="background:#3fb950"></i>SPEAKING</span>
+        <span><i style="background:#bc8cff"></i>STOPPING</span>
+        <span><i style="background:#f778ba"></i>VADController가 emit한 frame (:31)</span>
+      </div>
+      <div class="counters" id="vadCount"></div>
+      <h3><span class="mono">def set_params</span> (:151) 를 지금 값으로 손계산</h3>
+      <pre id="calcOut"></pre>
+    </div>
+  </div>
+
+  <h3>two-frame false start — 같은 입력, 두 기계 (behaviour만 기록한다)</h3>
+  <div class="opts">
+    <label class="opt"><input type="checkbox" id="optBlip">
+      <span><b>blip 주입</b> — 발화 시작(0.40 s) 앞 <span class="mono">0.128 s</span> 지점에 <b>2 chunk</b>짜리 짧은 소리
+      (기침 / 마이크 툭)를 넣는다. 두 기계에 같은 buffer가 들어간다.</span></label>
+  </div>
+  <div class="beh">
+    <div class="behbox" id="behPipecat"></div>
+    <div class="behbox" id="behRtv"></div>
+  </div>
+  <div class="callout flat" id="behNote"></div>
+</div>
+
+<!-- ═══════════════ PANEL 2 — STREAMING STT ═══════════════ -->
+<div class="panel">
+  <h2>2 · transcript-level 답 — streaming STT vs
+    <span class="mono">SegmentedSTTService</span>
+    <span style="text-transform:none; color:var(--ink-faint)" class="mono">(stt_service.py:797)</span></h2>
+  <div class="wrapr">
+    <div>
+      <canvas id="cvStt"></canvas>
+      <div class="legend">
+        <span><i style="background:#d29922"></i>InterimTranscriptionFrame (provider가 직접 생성)</span>
+        <span><i style="background:#3fb950"></i>TranscriptionFrame(finalized=True)</span>
+        <span><i style="background:#2f6fb3"></i>_audio_buffer 누적</span>
+        <span><i style="background:#f778ba"></i>run_stt() 1회 blocking call</span>
+      </div>
+      <div class="counters" id="sttCount"></div>
+      <div class="callout" id="segNote"></div>
+    </div>
+    <div>
+      <h3 style="margin-top:0">frame stream</h3>
+      <div class="stream" id="sttStream"></div>
+      <div class="runbar">
+        <button class="rb primary" id="bPlay2">▶ 재생</button>
+      </div>
+    </div>
+  </div>
+
+  <h3><span class="mono">stt_latency.py</span> 전체 23개 constant — 이 표는 코스 전체에서 여기서만 만든다</h3>
+  <div class="wrapr">
+    <div>
+      <div class="provwrap" id="provList"></div>
+      <div class="provnote" id="provNote"></div>
+    </div>
+    <div>
+      <div class="seg" id="koSeg">
+        <button data-ko="0" class="on">전체 23개</button>
+        <button data-ko="1">Korean 확인된 것만</button>
+      </div>
+      <div class="callout flat" id="provSel"></div>
+      <div class="callout bad">
+        <b>Konkani 함정.</b> <span class="mono">SarvamSTTService</span>의 유일한
+        <span class="mono">KO*</span> key는 <span class="mono">Language.KOK_IN: "kok-IN"</span>
+        (<span class="mono">sarvam/stt.py:849</span>) — 한국어가 아니라 <b>Konkani</b>(인도 고아 지방 언어)다.
+      </div>
+      <div class="callout">
+        <b>FunASR는 13번째인데 mechanism이 다르다.</b>
+        <span class="mono">Language.KO</span> mapping이 아예 없고
+        평범한 string set만 있다 —
+        <span class="mono">_FUNASR_LANGUAGES = {"zh","en","ja","ko","yue","nospeech"}</span>
+        (<span class="mono">funasr/stt.py:42</span>), 이 밖의 값은 전부
+        <span class="mono">"auto"</span>로 강제된다 (:61).
+        TTFS constant는 <span class="mono">stt_latency.py</span>에 없다.
+      </div>
+      <div class="callout flat">
+        정확도(accuracy) 숫자도, 8 kHz telephony 전용 숫자도
+        <b>tree 어디에도 없다</b>. 여기 있는 건 speech-end → final transcript의
+        P99 TTFS 하나뿐이고, 전부 <span class="mono">stop_secs=0.2</span>에서 측정됐다 (:16-18).
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════ PANEL 3 — STRATEGY CHAIN ═══════════════ -->
+<div class="panel">
+  <h2>3 · arbiter — <span class="mono">src/pipecat/turns/</span> strategy chain
+    <span style="text-transform:none; color:var(--ink-faint)" class="mono">(mount point는 LLMUserAggregatorParams:120)</span></h2>
+  <div class="wrap">
+    <div>
+      <div class="sl">
+        <label><b>VADParams.stop_secs</b><span class="v" id="oStop3">0.20</span></label>
+        <input type="range" id="sStop3" min="0.032" max="1.2" step="0.016" value="0.2">
+        <div class="d">panel 1의 slider와 같은 값이다 (양방향 연결)</div>
+      </div>
+      <div class="sl">
+        <label><b>ttfs_p99_latency</b><span class="v" id="oTtfs">0.35</span></label>
+        <input type="range" id="sTtfs" min="0.35" max="2.14" step="0.01" value="0.35">
+        <div class="d">STTMetadataFrame이 실어 오는 값 — 위 표에서 고르면 따라온다</div>
+      </div>
+      <div class="seg" id="stopSeg">
+        <button data-s="smart" class="on">TurnAnalyzer (default)</button>
+        <button data-s="timeout">SpeechTimeout(0.6)</button>
+      </div>
+      <div class="opts">
+        <label class="opt"><input type="checkbox" id="optSmart" checked>
+          <span><b>smart-turn verdict = COMPLETE</b> —
+          <span class="mono">smart-turn-v3.2-cpu.onnx</span>가 audio만 보고 낸 판정
+          (transcript는 안 읽는다)</span></label>
+        <label class="opt"><input type="checkbox" id="optFinal" checked>
+          <span><b>TranscriptionFrame.finalized = True</b>가 deadline 전에 도착 —
+          도착하면 safety-net timer를 short-circuit 한다</span></label>
+      </div>
+      <div id="warnBox"></div>
+    </div>
+    <div>
+      <canvas id="cvClock"></canvas>
+      <div class="legend">
+        <span><i style="background:#3fb950"></i>speech_end (timestamp − stop_secs)</span>
+        <span><i style="background:#bc8cff"></i>VAD stop event</span>
+        <span><i style="background:#d29922"></i>effective_stt_wait</span>
+        <span><i style="background:#58a6ff"></i>stt_deadline</span>
+        <span><i style="background:#f778ba"></i>turn boundary</span>
+      </div>
+      <div class="counters" id="clockCount"></div>
+    </div>
+  </div>
+
+  <div class="chaingrid" style="margin-top:16px;">
+    <div class="stratbox">
+      <h4>start strategies — <span class="mono">user_turn_strategies.py:40</span></h4>
+      <div id="chainStart"></div>
+    </div>
+    <div class="stratbox">
+      <h4>stop strategies — <span class="mono">user_turn_strategies.py:51</span></h4>
+      <div id="chainStop"></div>
+    </div>
+  </div>
+  <pre style="margin-top:14px;" id="mountOut"></pre>
+
+  <h3>external endpointing — assignment site <b>9</b>개 / file <b>8</b>개 (<span class="mono">sarvam/stt.py</span>가 2개)</h3>
+  <p style="font-size:0.7857rem; color:var(--ink-faint); margin:0 0 4px; line-height:1.6;">
+    각 row의 guard toggle을 뒤집으면 그 service가 <span class="mono">EXTERNAL</span> ↔
+    <span class="mono">LOCAL chain</span> 사이를 실제로 이동한다.
+    Soniox와 AssemblyAI는 <b>같은 flag</b>(<span class="mono">vad_force_turn_endpoint</span>)라 toggle도 하나다.
+  </p>
+  <div style="overflow-x:auto;">
+    <table id="extTable">
+      <thead><tr>
+        <th>service</th><th>site</th><th>guard</th><th>toggle</th><th>지금 turn을 누가 정하나</th>
+      </tr></thead>
+      <tbody id="extBody"></tbody>
+    </table>
+  </div>
+  <div class="counters" id="extCount"></div>
+  <div class="callout flat">
+    별개 mechanism: <span class="mono">inworld</span> / <span class="mono">xai</span> /
+    <span class="mono">openai</span>의 <b>realtime LLM</b> service는
+    <span class="mono">user_turn_strategies=ExternalUserTurnStrategies()</span>를
+    <b>constructor kwarg</b>로 넘긴다 — metadata frame에 assign 하는 게 아니다.
+    STT service가 아니므로 위 9개 count에 들어가지 않는다.
+  </div>
+</div>
+
+<!-- ═══════════════ DECISIVE VIEW ═══════════════ -->
+<div class="panel">
+  <h2>decisive view · 같은 발화, 세 개의 turn 판정 — dead air를 공유 축에서 읽는다</h2>
+  <canvas id="cvDec"></canvas>
+  <div class="legend">
+    <span><i style="background:#f85149"></i>dead air (사용자가 말을 멈춘 뒤 아무 일도 안 일어나는 구간)</span>
+    <span><i style="background:#3fb950"></i>speech</span>
+    <span><i style="background:#d29922"></i>대기 timer</span>
+    <span><i style="background:#58a6ff"></i>ASR / STT 작업</span>
+  </div>
+  <div class="counters" id="decCount"></div>
+  <div class="callout" id="decNote"></div>
+</div>
+
+<div class="foot">
+  <b>합성된 것</b>: chunk별 confidence / volume envelope, interim transcript 문자열과 그 도착 시각,
+  smart-turn inference 시간(0.03 s로 그림), finalized transcript의 “보통” 도착 시각(p99의 0.55배로 그림 —
+  p99는 worst case다), decisive view의 realtime_voice RTT 막대(tree에 숫자가 없어 선택된 provider의 p99를
+  stand-in으로 썼다).
+  <b>진짜인 것</b>: 4-state 전이 규칙과 AND gate(<span class="mono">vad_analyzer.py:202-248</span>),
+  frame-count 산술(:159-165), 23개 TTFS constant 전부, strategy class 이름과 default,
+  <span class="mono">stt_deadline</span> 식(:236), <span class="mono">max(0, ttfs − stop_secs)</span>(:223/:302),
+  external endpointing 9 site의 파일·줄번호·guard 표현식.
+  <br>chapter: <a href="../read.md">../read.md</a>
+</div>
+
+<script>
+"use strict";
+
+/* ══════════════════════════════════════════════════════════════════
+   상수 — 전부 pinned tree(0cbf9c5)에서 읽어온 실제 값
+   ══════════════════════════════════════════════════════════════════ */
+const VAD_CONFIDENCE = 0.7;   // vad_analyzer.py:25
+const VAD_START_SECS = 0.2;   // vad_analyzer.py:26
+const VAD_STOP_SECS  = 0.2;   // vad_analyzer.py:27
+const VAD_MIN_VOLUME = 0.6;   // vad_analyzer.py:28
+const DEFAULT_TTFS_P99 = 1.0; // stt_latency.py:38
+const SMART_TURN_STOP_SECS = 3;       // base_smart_turn.py:27
+const USER_SPEECH_TIMEOUT = 0.6;      // speech_timeout_user_turn_stop_strategy.py:52
+const USER_TURN_STOP_TIMEOUT = 5.0;   // llm_response_universal.py:173
+const AUDIO_IDLE_TIMEOUT = 1.0;       // llm_response_universal.py:170
+const BOSON_SILENCE_MS = 2000;        // boson gateway websocket.py:616
+
+const CANVAS_H_VAD   = 270;
+const CANVAS_H_STT   = 240;
+const CANVAS_H_CLOCK = 250;
+const CANVAS_H_DEC   = 220;
+
+const COL = {
+  bg:"#10151d", edge:"#2b3242", ink:"#e6edf3", dim:"#9aa7b4", faint:"#6b7686",
+  accent:"#58a6ff", green:"#3fb950", danger:"#f85149", warn:"#d29922",
+  quiet:"#6b7686", starting:"#d29922", speaking:"#3fb950", stopping:"#bc8cff",
+  pink:"#f778ba", blue2:"#2f6fb3"
+};
+
+/* stt_latency.py:41-64 — 측정된 23개 전부. alias 2개(:67,:68)와 DEFAULT(:38)는 따로 표시 */
+const PROVIDERS = [
+  {c:"DEEPGRAM_TTFS_P99",            v:0.35, ln:45, ko:"pass", note:"LANGUAGE_MAP 자체가 없는 passthrough"},
+  {c:"DEEPGRAM_SAGEMAKER_TTFS_P99",  v:0.35, ln:46, ko:"pass", note:"동일 passthrough"},
+  {c:"SONIOX_TTFS_P99",              v:0.35, ln:61, ko:"yes",  note:"soniox/stt.py Language.KO"},
+  {c:"ELEVENLABS_REALTIME_TTFS_P99", v:0.41, ln:48, ko:"no",   note:"ElevenLabsRealtimeSTTService(:452)에는 language_to_service_language 없음"},
+  {c:"ASSEMBLYAI_TTFS_P99",          v:0.42, ln:41, ko:"no",   note:"map에 Korean entry 없음"},
+  {c:"GRADIUM_TTFS_P99",             v:0.62, ln:52, ko:"no",   note:""},
+  {c:"SPEECHMATICS_TTFS_P99",        v:0.74, ln:62, ko:"yes",  note:"speechmatics/stt.py Language.KO"},
+  {c:"CARTESIA_TTFS_P99",            v:0.81, ln:44, ko:"no",   note:"CartesiaTurnsSTTService는 출시 시점 English-only"},
+  {c:"SARVAM_REALTIME_TTFS_P99",     v:1.00, ln:59, ko:"kok",  note:"유일한 KO* key가 Language.KOK_IN (:849) = Konkani"},
+  {c:"TOGETHER_TTFS_P99",            v:1.00, ln:64, ko:"no",   note:""},
+  {c:"SARVAM_TTFS_P99",              v:1.17, ln:57, ko:"kok",  note:"동일 — Language.KOK_IN (:849)"},
+  {c:"GLADIA_TTFS_P99",              v:1.49, ln:50, ko:"yes",  note:"gladia/stt.py Language.KO"},
+  {c:"GROQ_TTFS_P99",                v:1.54, ln:53, ko:"no",   note:""},
+  {c:"GOOGLE_TTFS_P99",              v:1.57, ln:51, ko:"yes",  note:"google/stt.py Language.KO"},
+  {c:"SMALLEST_TTFS_P99",            v:1.59, ln:60, ko:"no",   note:""},
+  {c:"OPENAI_REALTIME_TTFS_P99",     v:1.66, ln:56, ko:"no",   note:"server VAD는 turn_detection=False라 기본 off"},
+  {c:"AZURE_TTFS_P99",               v:1.80, ln:43, ko:"yes",  note:"azure/common.py:200 Language.KO"},
+  {c:"MISTRAL_TTFS_P99",             v:1.89, ln:54, ko:"no",   note:""},
+  {c:"AWS_TRANSCRIBE_TTFS_P99",      v:1.90, ln:42, ko:"yes",  note:"aws/stt.py Language.KO"},
+  {c:"ELEVENLABS_TTFS_P99",          v:2.01, ln:47, ko:"yes",  note:"Language.KO: \"kor\" (:109) — 세 글자 코드"},
+  {c:"OPENAI_TTFS_P99",              v:2.01, ln:55, ko:"no",   note:""},
+  {c:"FAL_TTFS_P99",                 v:2.07, ln:49, ko:"yes",  note:"fal/stt.py Language.KO"},
+  {c:"XAI_TTFS_P99",                 v:2.14, ln:63, ko:"yes",  note:"xai/stt.py Language.KO"}
+];
+const ALIASES = [
+  {c:"NVIDIA_TTFS_P99",  v:DEFAULT_TTFS_P99, ln:67, ko:"yes", note:"= DEFAULT_TTFS_P99 (local, Riva). nvidia/stt.py Language.KO"},
+  {c:"WHISPER_TTFS_P99", v:DEFAULT_TTFS_P99, ln:68, ko:"yes", note:"= DEFAULT_TTFS_P99 (local). whisper/base_stt.py Language.KO"}
+];
+/* Moonshine은 Korean 확인된 12개 중 하나지만 stt_latency.py에 constant가 없다 */
+
+/* external endpointing — 9 sites / 8 files. guard 표현식은 소스 그대로 */
+const EXT_SITES = [
+  {svc:"CartesiaTurnsSTTService",  file:"cartesia/turns/stt.py:198",  guard:"(guard 없음)", key:null,          uncond:true},
+  {svc:"DeepgramFluxSTTService",   file:"deepgram/flux/stt_base.py:250", guard:"(guard 없음)", key:null,       uncond:true},
+  {svc:"SpeechmaticsSTTService",   file:"speechmatics/stt.py:561",    guard:"is_given(mode) and mode != TurnDetectionMode.EXTERNAL", key:"turn_detection_mode", def:true},
+  {svc:"GladiaSTTService",         file:"gladia/stt.py:370",          guard:"self._settings.enable_vad",       key:"enable_vad",   def:true},
+  {svc:"SonioxSTTService",         file:"soniox/stt.py:422",          guard:"not self._vad_force_turn_endpoint", key:"vad_force", def:false, inv:true},
+  {svc:"AssemblyAISTTService",     file:"assemblyai/stt.py:669",      guard:"not self._vad_force_turn_endpoint", key:"vad_force", def:false, inv:true},
+  {svc:"SarvamSTTService",         file:"sarvam/stt.py:395",          guard:"self._settings.vad_signals",      key:"vad_signals", def:true},
+  {svc:"SarvamRealtimeSTTService", file:"sarvam/stt.py:1034",         guard:'self._endpointing == "vad"',      key:"endpointing", def:true},
+  {svc:"OpenAISTTService",         file:"openai/stt.py:414",          guard:"self._server_vad_enabled",        key:"server_vad", def:false}
+];
+/* toggle이 들고 있는 건 guard 표현식의 진리값이 아니라 FLAG 자체의 값이다.
+   default는 각 service 생성자/Settings에서 읽은 실제 기본값:
+     speechmatics  turn_detection_mode = TurnDetectionMode.EXTERNAL (:450) → guard False
+     gladia        enable_vad = False (:279)                               → guard False
+     soniox        vad_force_turn_endpoint = True (:287)                   → not True = False
+     assemblyai    vad_force_turn_endpoint = True                          → 같은 flag
+     sarvam        vad_signals = None (:269)                               → guard False
+     sarvam-rt     endpointing = "vad" (:922)                              → guard True
+     openai        turn_detection = False → server_vad_enabled False       → guard False */
+const GUARDS = {
+  turn_detection_mode:{label:'turn_detection_mode를 EXTERNAL 아닌 값으로', val:false},
+  enable_vad:{label:'enable_vad = True', val:false},
+  vad_force:{label:'vad_force_turn_endpoint = True', val:true},
+  vad_signals:{label:'vad_signals = True', val:false},
+  endpointing:{label:'endpointing == "vad"', val:true},
+  server_vad:{label:'server_vad_enabled = True', val:false}
+};
+
+/* ── 합성 발화 envelope: [t0, t1, confidence, volume, 라벨] ────────── */
+const UTTERANCE = [
+  [0.00, 0.40, 0.04, 0.12, ""],
+  [0.40, 1.35, 0.93, 0.78, "여보세요"],
+  [1.35, 1.51, 0.09, 0.19, ""],                  // 0.16 s = 5 chunk (기본 6보다 짧다)
+  [1.51, 2.05, 0.91, 0.74, "어제 주문한"],
+  [2.05, 2.18, 0.08, 0.17, ""],                  // 0.13 s = 4 chunk
+  [2.18, 3.05, 0.92, 0.71, "물건이 아직 안"],
+  [3.05, 3.30, 0.88, 0.44, "왔는데요(작게)"],      // conf는 통과, volume이 min_volume 밑
+  [3.30, 4.60, 0.04, 0.11, ""]
+];
+const BLIP = [0.128, 0.192];   // chunk 4, 5 — 실제 발화(0.40 s)와 떨어져 있어야 false start가 된다
+const UTT_TEXT = "여보세요, 어제 주문한 물건이 아직 안 왔는데요";
+
+/* ── 공유 상태 ─────────────────────────────────────────────────── */
+const S = {
+  sr: 16000,
+  confidence: VAD_CONFIDENCE,
+  minVolume: VAD_MIN_VOLUME,
+  startSecs: VAD_START_SECS,
+  stopSecs: VAD_STOP_SECS,
+  blip: false,
+  provIdx: 0,             // PROVIDERS 인덱스
+  ttfs: 0.35,
+  koOnly: false,
+  stopStrategy: "smart",  // "smart" | "timeout"
+  smartComplete: true,
+  finalized: true,
+  hoverChunk: -1,
+  playT: null,            // 재생 중 커서 시각(초), null이면 정지
+  vad: null               // 마지막 simulate 결과
+};
+
+const $ = (id) => document.getElementById(id);
+const fmt = (x, n) => Number(x).toFixed(n === undefined ? 2 : n);
+
+/* ══════════════════════════════════════════════════════════════════
+   canvas — 절대 scale된 width/height를 되읽지 않는다. 논리 높이는 상수.
+   ══════════════════════════════════════════════════════════════════ */
+function setupCanvas(cv, H){
+  const r = window.devicePixelRatio || 1;
+  const w = Math.max(cv.clientWidth, 200), h = H;
+  if (cv.width !== Math.round(w*r) || cv.height !== Math.round(h*r)){
+    cv.width = Math.round(w*r); cv.height = Math.round(h*r);
+  }
+  cv.style.height = h + "px";
+  const c = cv.getContext("2d"); c.setTransform(r,0,0,r,0,0); c.clearRect(0,0,w,h);
+  return {c, w, h};
+}
+function rrect(c, x, y, w, h, r){
+  const rr = Math.min(r, Math.abs(w)/2, Math.abs(h)/2);
+  c.beginPath();
+  c.moveTo(x+rr, y);
+  c.arcTo(x+w, y, x+w, y+h, rr);
+  c.arcTo(x+w, y+h, x, y+h, rr);
+  c.arcTo(x, y+h, x, y, rr);
+  c.arcTo(x, y, x+w, y, rr);
+  c.closePath();
+}
+function label(c, txt, x, y, col, size, align){
+  c.fillStyle = col; c.textAlign = align || "left"; c.textBaseline = "middle";
+  c.font = (size||11) + "px ui-monospace,SFMono-Regular,Menlo,Consolas,monospace";
+  c.fillText(txt, x, y);
+}
+function vline(c, x, y0, y1, col, dash){
+  c.save(); c.strokeStyle = col; c.lineWidth = 1;
+  if (dash) c.setLineDash(dash);
+  c.beginPath(); c.moveTo(x+0.5, y0); c.lineTo(x+0.5, y1); c.stroke(); c.restore();
+}
+
+/* ══════════════════════════════════════════════════════════════════
+   PANEL 1 — VADAnalyzer 4-state machine
+   ══════════════════════════════════════════════════════════════════ */
+
+/* Python의 round()는 half-to-even(banker's rounding)이다. JS Math.round와 다르므로 직접 구현. */
+function pyRound(x){
+  const f = Math.floor(x), d = x - f;
+  if (Math.abs(d - 0.5) < 1e-12) return (f % 2 === 0) ? f : f + 1;
+  return Math.round(x);
+}
+function numFramesRequired(){ return S.sr === 16000 ? 512 : 256; }   // silero.py:197
+function chunkDur(){ return numFramesRequired() / S.sr; }            // vad_analyzer.py:162
+function startFrames(){ return pyRound(S.startSecs / chunkDur()); }  // :164
+function stopFrames(){  return pyRound(S.stopSecs  / chunkDur()); }  // :165
+const T_TOTAL = 4.6;
+
+function envAt(t){
+  for (const s of UTTERANCE) if (t >= s[0] && t < s[1]) return {conf:s[2], vol:s[3], lab:s[4]};
+  return {conf:0.04, vol:0.11, lab:""};
+}
+function buildChunks(){
+  const d = chunkDur(), n = Math.floor(T_TOTAL / d), out = [];
+  for (let i = 0; i < n; i++){
+    const t0 = i*d, e = envAt(t0 + d/2);
+    let conf = e.conf, vol = e.vol, blip = false;
+    if (S.blip && t0 >= BLIP[0] - 1e-9 && t0 < BLIP[1] - 1e-9){ conf = 0.95; vol = 0.82; blip = true; }
+    out.push({i, t0, t1:t0+d, conf, vol, blip, lab:e.lab});
+  }
+  return out;
+}
+
+/* vad_analyzer.py:202-248 을 그대로 옮긴 것 (한 번에 chunk 1개씩 들어온다고 가정) */
+function simulateVAD(chunks){
+  const sf = startFrames(), pf = stopFrames();
+  let state = "QUIET", startCnt = 0, stopCnt = 0, everStarted = false;
+  const rows = [], events = [];
+  for (const ch of chunks){
+    const speaking = ch.conf >= S.confidence && ch.vol >= S.minVolume;   // :211
+    const before = state;
+    if (speaking){                                                       // :213-222
+      if (state === "QUIET"){ state = "STARTING"; startCnt = 1; }
+      else if (state === "STARTING"){ startCnt += 1; }
+      else if (state === "STOPPING"){ state = "SPEAKING"; stopCnt = 0; }
+    } else {                                                             // :223-232
+      if (state === "STARTING"){ state = "QUIET"; startCnt = 0; }
+      else if (state === "SPEAKING"){ state = "STOPPING"; stopCnt = 1; }
+      else if (state === "STOPPING"){ stopCnt += 1; }
+    }
+    if (state === "STARTING" && startCnt >= sf){ state = "SPEAKING"; startCnt = 0; }  // :234-239
+    if (state === "STOPPING" && stopCnt >= pf){ state = "QUIET"; stopCnt = 0; }       // :241-246
+    /* VADController(:31)는 terminal state로의 전이에서만 frame을 emit 한다 */
+    if (state !== before){
+      if (state === "SPEAKING" && before !== "STOPPING"){
+        events.push({t:ch.t1, kind:"start"}); everStarted = true;
+      } else if (state === "QUIET" && before === "STOPPING" && everStarted){
+        events.push({t:ch.t1, kind:"stop", speechEnd: ch.t1 - S.stopSecs});
+      }
+    }
+    rows.push({...ch, speaking, state, startCnt, stopCnt});
+  }
+  return {rows, events, sf, pf};
+}
+
+function xOf(t, padL, w, padR){ return padL + (t / T_TOTAL) * (w - padL - padR); }
+
+function drawVad(){
+  const cv = $("cvVad"); const {c, w} = setupCanvas(cv, CANVAS_H_VAD);
+  const padL = 52, padR = 10;
+  const sim = S.vad, rows = sim.rows;
+  const cw = Math.max(1, (w - padL - padR) * (chunkDur() / T_TOTAL));
+
+  const confTop = 12, confH = 56, volTop = 78, volH = 56;
+  const stTop = 148, stH = 24, cntTop = 178, cntH = 20, evY = 214, axY = 244;
+
+  /* 두 개의 plot */
+  const plots = [
+    {top:confTop, h:confH, key:"conf", thr:S.confidence, name:"confidence", tcol:COL.danger},
+    {top:volTop,  h:volH,  key:"vol",  thr:S.minVolume,  name:"volume",     tcol:COL.danger}
+  ];
+  for (const p of plots){
+    c.strokeStyle = COL.edge; c.lineWidth = 1;
+    c.strokeRect(padL+0.5, p.top+0.5, w-padL-padR-1, p.h);
+    for (const r of rows){
+      const x = xOf(r.t0, padL, w, padR), hh = Math.max(1, r[p.key] * p.h);
+      const pass = r[p.key] >= p.thr;
+      c.fillStyle = pass ? (p.key === "conf" ? "rgba(63,185,80,.75)" : "rgba(88,166,255,.7)")
+                         : "rgba(107,118,134,.5)";
+      if (r.blip) c.fillStyle = pass ? COL.pink : "rgba(247,120,186,.4)";
+      c.fillRect(x, p.top + p.h - hh, Math.max(cw-0.6, 0.8), hh);
+    }
+    const ty = p.top + p.h - p.thr * p.h;
+    c.save(); c.setLineDash([4,3]); c.strokeStyle = p.tcol; c.lineWidth = 1;
+    c.beginPath(); c.moveTo(padL, ty+0.5); c.lineTo(w-padR, ty+0.5); c.stroke(); c.restore();
+    label(c, p.name, 6, p.top + 9, COL.dim, 10);
+    label(c, fmt(p.thr), 6, ty, p.tcol, 10);
+  }
+
+  /* state band */
+  label(c, "VADState", 6, stTop + stH/2, COL.dim, 10);
+  const scol = {QUIET:COL.quiet, STARTING:COL.starting, SPEAKING:COL.speaking, STOPPING:COL.stopping};
+  for (const r of rows){
+    const x = xOf(r.t0, padL, w, padR);
+    c.fillStyle = scol[r.state];
+    c.globalAlpha = r.state === "QUIET" ? 0.32 : 0.9;
+    c.fillRect(x, stTop, Math.max(cw-0.5, 0.8), stH);
+    c.globalAlpha = 1;
+  }
+
+  /* hysteresis counter */
+  label(c, "count", 6, cntTop + cntH/2, COL.dim, 10);
+  for (const r of rows){
+    const x = xOf(r.t0, padL, w, padR);
+    let n = 0, need = 1, col = null;
+    if (r.state === "STARTING"){ n = r.startCnt; need = sim.sf; col = COL.starting; }
+    else if (r.state === "STOPPING"){ n = r.stopCnt; need = sim.pf; col = COL.stopping; }
+    if (col && n > 0){
+      const hh = Math.max(2, (n / Math.max(need,1)) * cntH);
+      c.fillStyle = col;
+      c.fillRect(x, cntTop + cntH - hh, Math.max(cw-0.6, 0.8), hh);
+    }
+  }
+  c.strokeStyle = COL.edge; c.beginPath();
+  c.moveTo(padL, cntTop+cntH+0.5); c.lineTo(w-padR, cntTop+cntH+0.5); c.stroke();
+
+  /* emit된 frame */
+  for (const ev of sim.events){
+    const x = xOf(ev.t, padL, w, padR);
+    vline(c, x, confTop, cntTop+cntH, COL.pink, [3,3]);
+    c.fillStyle = COL.pink;
+    c.beginPath(); c.moveTo(x, evY-5); c.lineTo(x+5, evY+4); c.lineTo(x-5, evY+4); c.closePath(); c.fill();
+    const txt = ev.kind === "start" ? "VADUserStartedSpeakingFrame" : "VADUserStoppedSpeakingFrame";
+    const anchor = x > w*0.55 ? "right" : "left";
+    label(c, txt + " @" + fmt(ev.t,3) + "s", anchor === "right" ? x-8 : x+8, evY, COL.pink, 10, anchor);
+    if (ev.kind === "stop"){
+      const xe = xOf(ev.speechEnd, padL, w, padR);
+      vline(c, xe, stTop, cntTop+cntH, COL.green, [2,4]);
+      label(c, "speech_end = ts − stop_secs", xe-8, evY+16, COL.green, 10, "right");
+    }
+  }
+
+  /* 시간 축 */
+  c.strokeStyle = COL.edge; c.beginPath();
+  c.moveTo(padL, axY+0.5); c.lineTo(w-padR, axY+0.5); c.stroke();
+  for (let t = 0; t <= T_TOTAL + 1e-9; t += 0.5){
+    const x = xOf(t, padL, w, padR);
+    vline(c, x, axY-4, axY, COL.faint);
+    label(c, fmt(t,1) + "s", x, axY+10, COL.faint, 10, "center");
+  }
+  /* 발화 라벨 */
+  for (const s of UTTERANCE){
+    if (!s[4]) continue;
+    const x0 = xOf(s[0], padL, w, padR), x1 = xOf(s[1], padL, w, padR);
+    c.fillStyle = "rgba(230,237,243,.06)"; c.fillRect(x0, confTop, x1-x0, 4);
+    c.fillStyle = COL.dim; c.textAlign = "center"; c.textBaseline = "middle";
+    c.font = "10px -apple-system,BlinkMacSystemFont,'Apple SD Gothic Neo',sans-serif";
+    c.fillText(s[4], (x0+x1)/2, confTop - 4);
+  }
+
+  /* cursor */
+  const cur = S.playT !== null ? S.playT
+            : (S.hoverChunk >= 0 && rows[S.hoverChunk] ? rows[S.hoverChunk].t0 : null);
+  if (cur !== null){
+    const x = xOf(cur, padL, w, padR);
+    vline(c, x, confTop, axY, COL.ink);
+  }
+}
+
+function currentChunk(){
+  const rows = S.vad.rows;
+  if (S.playT !== null){
+    const i = Math.min(rows.length-1, Math.floor(S.playT / chunkDur()));
+    return rows[i];
+  }
+  if (S.hoverChunk >= 0 && rows[S.hoverChunk]) return rows[S.hoverChunk];
+  return null;
+}
+
+function updateMeters(){
+  const r = currentChunk();
+  const setM = (fillId, valId, thrId, v, thr) => {
+    const pass = v !== null && v >= thr;
+    $(fillId).style.width = (v === null ? 0 : v*100) + "%";
+    $(fillId).className = "fill" + (pass ? " pass" : "");
+    $(thrId).style.left = (thr*100) + "%";
+    $(valId).textContent = v === null ? "—" : fmt(v);
+  };
+  setM("mConf","mConfV","mConfT", r ? r.conf : null, S.confidence);
+  setM("mVol","mVolV","mVolT",   r ? r.vol  : null, S.minVolume);
+  if (!r){ $("gateOut").innerHTML = "chunk 위에 마우스를 올리거나 ▶ 재생"; return; }
+  const a = r.conf >= S.confidence, b = r.vol >= S.minVolume;
+  const tf = (x) => x ? '<span class="t">True</span>' : '<span class="f">False</span>';
+  $("gateOut").innerHTML =
+    '<span class="k">chunk ' + r.i + '  t=' + fmt(r.t0,3) + 's' + (r.blip ? '  ← blip' : '') + '</span><br>' +
+    'speaking = ' + fmt(r.conf) + ' &gt;= ' + fmt(S.confidence) + ' <b>and</b> ' +
+    fmt(r.vol) + ' &gt;= ' + fmt(S.minVolume) + '<br>' +
+    '         = ' + tf(a) + ' <b>and</b> ' + tf(b) + ' = ' + tf(a && b) +
+    '  <span class="k">(:211)</span><br>' +
+    '<span class="k">state</span> ' + r.state +
+    (r.state === "STARTING" ? '  <span class="k">starting_count</span> ' + r.startCnt + '/' + S.vad.sf : '') +
+    (r.state === "STOPPING" ? '  <span class="k">stopping_count</span> ' + r.stopCnt + '/' + S.vad.pf : '');
+}
+
+function renderCalc(){
+  const fr = numFramesRequired(), d = chunkDur();
+  const sQ = S.startSecs / d, pQ = S.stopSecs / d;
+  const off = (v, base) => Math.abs(v-base) > 1e-9;
+  const n = (x) => '<span class="num">' + x + '</span>';
+  $("calcOut").innerHTML =
+'<span class="cm"># src/pipecat/audio/vad/vad_analyzer.py</span>\n' +
+'<span class="ln">151</span> def <span class="ins">set_params</span>(self, params: VADParams):\n' +
+'<span class="ln">159</span>     self._vad_frames = self.<span class="kw">num_frames_required</span>()   <span class="cm">→ ' + n(fr) + '   (silero.py:197)</span>\n' +
+'<span class="ln">160</span>     self._vad_frames_num_bytes = ' + fr + ' * 1 * 2      <span class="cm">→ ' + (fr*2) + ' bytes</span>\n' +
+'<span class="ln">162</span>     vad_frames_per_sec = self._vad_frames / self.sample_rate\n' +
+'                        = ' + fr + ' / ' + S.sr + ' = ' + n(fmt(d,3)) + ' s\n' +
+'<span class="ln">164</span>     self._vad_start_frames = round(' + fmt(S.startSecs,3) + ' / ' + fmt(d,3) + ')\n' +
+'                           = round(' + fmt(sQ,4) + ') = ' + n(startFrames()) + ' chunks' +
+   (off(S.startSecs, VAD_START_SECS) ? '' : '   <span class="cm">← 7이 아니다</span>') + '\n' +
+'<span class="ln">165</span>     self._vad_stop_frames  = round(' + fmt(S.stopSecs,3) + ' / ' + fmt(d,3) + ')\n' +
+'                           = round(' + fmt(pQ,4) + ') = ' + n(stopFrames()) + ' chunks\n' +
+'\n<span class="cm"># 512/16000 = 256/8000 = 0.032 → sample rate를 바꿔도 chunk 수는 같다.\n' +
+'#   Lina TMR의 8 kHz μ-law telephony audio는 VAD 재튜닝이 필요 없다.</span>';
+}
+
+function vadCounters(){
+  const sim = S.vad;
+  const startEv = sim.events.filter(e => e.kind === "start");
+  const stopEv  = sim.events.filter(e => e.kind === "stop");
+  const last = stopEv.length ? stopEv[stopEv.length-1] : null;
+  const chips = [
+    ["chunk 길이", fmt(chunkDur(),3) + " s", ""],
+    ["_vad_start_frames", sim.sf, "good"],
+    ["_vad_stop_frames", sim.pf, "good"],
+    ["emit된 start frame", startEv.length, startEv.length ? "" : "bad"],
+    ["emit된 stop frame", stopEv.length, stopEv.length ? "" : "bad"],
+    ["speech_end", last ? fmt(last.speechEnd,3) + " s" : "—", last ? "" : "bad"]
+  ];
+  $("vadCount").innerHTML = chips.map(x =>
+    '<div class="chip2 ' + x[2] + '"><b>' + x[1] + '</b>' + x[0] + '</div>').join("");
+  if (last) S.speechEndT = last.speechEnd, S.vadStopT = last.t;
+  else S.speechEndT = null, S.vadStopT = null;
+}
+
+function renderBehaviour(){
+  const d = chunkDur();
+  const i0 = Math.round(BLIP[0] / d);
+  const on = S.blip;
+  const pipeTrace = on
+    ? 'chunk ' + i0 + '  conf 0.95 vol 0.82 → speaking=True\n' +
+      '          QUIET → <em>STARTING</em>, starting_count = 1\n' +
+      'chunk ' + (i0+1) + '  speaking=True → STARTING, starting_count = 2\n' +
+      'chunk ' + (i0+2) + '  conf 0.04 vol 0.12 → speaking=False\n' +
+      '          <em>STARTING → QUIET</em>, starting_count = 0   (:225-227)\n' +
+      '\n2 < _vad_start_frames(' + S.vad.sf + ') 이므로 SPEAKING으로\n승격된 적이 없다 (:234-239).'
+    : 'blip이 꺼져 있다. 실제 발화(0.40 s)에서\n' +
+      'QUIET → STARTING → (' + S.vad.sf + ' chunk 유지) → SPEAKING 으로\n' +
+      '정상 승격하고 VADUserStartedSpeakingFrame이 나간다.';
+  $("behPipecat").innerHTML =
+    '<h4>pipecat — VADAnalyzer (4-state)</h4>' +
+    '<div class="trace">' + pipeTrace + '</div>' +
+    '<div class="emit">emit: ' + (on
+      ? '<b style="color:var(--ink-faint)">없음</b> — VADController(:31)는 terminal state 전이에서만 ' +
+        'frame을 만들고 STARTING/STOPPING은 analyzer 밖에서 관측조차 되지 않는다.'
+      : '<b>VADUserStartedSpeakingFrame</b>') + '</div>';
+  const rtvTrace = on
+    ? 'chunk ' + i0 + '  prob 0.95 >= threshold 0.5\n' +
+      '          self._speaking: False → <em>True</em>\n' +
+      'chunk ' + (i0+1) + '  prob 0.95 >= 0.5 → 유지\n' +
+      'chunk ' + (i0+2) + '  prob 0.04 < 0.5\n' +
+      '          self._speaking: True → False\n' +
+      '\n중간 state가 없다. 첫 chunk가 곧 판정이다.\nvolume gate도, min_volume도 없다.'
+    : 'blip이 꺼져 있다. 실제 발화 첫 chunk(0.40 s)에서\n' +
+      'self._speaking = True, 즉시 SPEECH_STARTED.\n대기 frame 수라는 개념 자체가 없다.';
+  $("behRtv").innerHTML =
+    '<h4>realtime_voice — self._speaking bool (2-state)</h4>' +
+    '<div class="trace">' + rtvTrace + '</div>' +
+    '<div class="emit">emit: <b>SPEECH_STARTED</b>' + (on ? ' → SPEECH_ENDED' : '') +
+    ' — [[rtv-vad-chunking]] 기준 SPEECH_STARTED는 generation을 advance 시키고 ' +
+    'assistant를 cancel 한다.</div>';
+  $("behNote").innerHTML = on
+    ? '<b>같은 2-chunk buffer, 다른 결과.</b> 하나는 아무것도 내보내지 않았고, 하나는 assistant를 취소했다. ' +
+      'realtime_voice에는 <span class="mono">min_volume</span> gate도, ' +
+      '<span class="mono">STARTING → QUIET</span> 복귀 경로도, ' +
+      '<span class="mono">8 kHz</span> 경로도 없다 — ' +
+      '<span class="mono">ValueError("SileroVAD requires 16 kHz mono PCM")</span>는 hard raise다. ' +
+      '반대로 pipecat 쪽 지연은 <span class="mono">start_secs</span>만큼 실제로 존재한다 (' +
+      fmt(S.startSecs,3) + ' s = ' + S.vad.sf + ' chunk). ' +
+      '<b>어느 쪽이 낫다는 판단은 여기서 하지 않는다 — 채점은 ch-13에서만 한다.</b>'
+    : 'blip을 켜면 같은 입력이 두 기계에서 어떻게 갈라지는지 볼 수 있다. ' +
+      '두 결과는 behaviour로만 기록하고 점수는 매기지 않는다.';
+}
+
+function panel1Update(){
+  S.vad = simulateVAD(buildChunks());
+  drawVad(); updateMeters(); renderCalc(); vadCounters(); renderBehaviour();
+}
+
+/* ══════════════════════════════════════════════════════════════════
+   PANEL 2 — streaming STT vs SegmentedSTTService
+   ══════════════════════════════════════════════════════════════════ */
+const T2 = 6.2;
+const SEGMENTED_TTFS = 2.01;   // ElevenLabsSTTService(SegmentedSTTService), stt_latency.py:47
+const INTERIMS = [
+  [0.72, "여보"],
+  [1.05, "여보세요"],
+  [1.72, "여보세요 어제"],
+  [2.05, "여보세요 어제 주문"],
+  [2.35, "여보세요 어제 주문한 물건"],
+  [2.90, "여보세요 어제 주문한 물건이 아직"],
+  [3.20, "여보세요 어제 주문한 물건이 아직 안 왔는"]
+];
+function prov(){ return S.provIdx < PROVIDERS.length ? PROVIDERS[S.provIdx] : ALIASES[S.provIdx - PROVIDERS.length]; }
+function speechEnd(){ return S.speechEndT !== null && S.speechEndT !== undefined ? S.speechEndT : 3.05; }
+function vadStop(){ return S.vadStopT !== null && S.vadStopT !== undefined ? S.vadStopT : 3.25; }
+function finalStreamT(){ return speechEnd() + S.ttfs; }
+function finalSegT(){ return speechEnd() + SEGMENTED_TTFS; }
+
+function renderProviders(){
+  const max = 2.14;
+  const rowHtml = (p, idx, cls) => {
+    const sel = idx === S.provIdx;
+    let tags = "";
+    if (p.ko === "yes")  tags = '<span class="tag ko">Language.KO</span>';
+    if (p.ko === "pass") tags = '<span class="tag">passthrough · LANGUAGE_MAP 없음</span>';
+    if (p.ko === "kok")  tags = '<span class="tag warn">⚠ KOK_IN = Konkani</span>';
+    const rc = "prow" + (sel ? " on" : "") + (p.ko === "yes" ? " ko" : "") +
+               (p.ko === "pass" ? " pass" : "") + (cls ? " " + cls : "");
+    return '<div class="' + rc + '" data-i="' + idx + '">' +
+      '<span class="nm">' + p.c.replace("_TTFS_P99","") + '<span style="color:var(--ink-faint)">:' + p.ln + '</span></span>' +
+      '<span class="bwrap"><span class="b" style="width:' + (p.v/max*100) + '%"></span></span>' +
+      '<span class="val">' + p.v.toFixed(2) + '</span>' +
+      (tags ? '<span class="nm" style="grid-column:1/4; margin:-2px 0 3px 2px">' + tags + '</span>' : '') +
+      '</div>';
+  };
+  let h = "";
+  PROVIDERS.forEach((p,i) => { if (!S.koOnly || p.ko === "yes") h += rowHtml(p, i, null); });
+  h += '<div class="provnote" style="margin:9px 0 4px">— DEFAULT_TTFS_P99 = 1.0 (:38), 아래 둘은 그 alias다 —</div>';
+  ALIASES.forEach((p,i) => { if (!S.koOnly || p.ko === "yes") h += rowHtml(p, PROVIDERS.length+i, "alias"); });
+  $("provList").innerHTML = h;
+  $("provList").querySelectorAll(".prow").forEach(el => {
+    el.addEventListener("click", () => {
+      S.provIdx = parseInt(el.dataset.i, 10);
+      S.ttfs = prov().v; $("sTtfs").value = S.ttfs;
+      renderAll();
+    });
+  });
+  const p = prov();
+  $("provNote").textContent =
+    "측정 constant 23개 + DEFAULT 1개 + alias 2개. 0.35 s ~ 2.14 s, 6.1배 spread. " +
+    "Moonshine은 Korean 확인된 12개 service 중 하나지만 stt_latency.py에 constant가 없다.";
+  $("provSel").innerHTML =
+    '<b>선택됨</b> <span class="mono">' + p.c + ' = ' + p.v.toFixed(2) + '</span> ' +
+    '<span class="mono" style="color:var(--ink-faint)">(stt_latency.py:' + p.ln + ')</span><br>' +
+    '<span class="mono" style="font-size:0.9em">STTMetadataFrame.ttfs_p99_latency</span> 로 broadcast되어 ' +
+    'panel 3의 두 stop strategy가 그대로 소비한다.' +
+    (p.note ? '<br><span style="color:var(--ink-faint)">' + p.note + '</span>' : '');
+}
+
+function drawStt(){
+  const cv = $("cvStt"); const {c, w} = setupCanvas(cv, CANVAS_H_STT);
+  const padL = 92, padR = 12;
+  const X = (t) => padL + (t / T2) * (w - padL - padR);
+  const se = speechEnd(), vs = vadStop(), cur = S.playT2;
+
+  const laneA = 24, laneB = 78, laneC = 148, axY = 216, lh = 22;
+
+  /* 1) user audio */
+  label(c, "user audio", 6, laneA + lh/2, COL.dim, 10);
+  for (const s of UTTERANCE){
+    if (!s[4]) continue;
+    c.fillStyle = "rgba(63,185,80,.75)";
+    rrect(c, X(s[0]), laneA, X(s[1])-X(s[0]), lh, 4); c.fill();
+  }
+  vline(c, X(se), laneA-6, axY, COL.green, [3,3]);
+  label(c, "speech_end " + fmt(se,2) + "s", X(se)+5, laneA-12, COL.green, 10);
+  vline(c, X(vs), laneA-6, axY, COL.stopping, [3,3]);
+  label(c, "VADUserStoppedSpeakingFrame " + fmt(vs,2) + "s", X(vs)+5, laneA-24, COL.stopping, 10);
+
+  /* 2) streaming */
+  label(c, "streaming", 6, laneB, COL.ink, 11);
+  label(c, "Websocket", 6, laneB+13, COL.faint, 9);
+  label(c, "STTService:929", 6, laneB+25, COL.faint, 9);
+  c.fillStyle = "rgba(88,166,255,.16)";
+  c.fillRect(X(0.40), laneB-10, X(vs)-X(0.40), lh);
+  for (let t = 0.40; t < vs; t += 0.02){
+    vline(c, X(t), laneB-10, laneB+lh-10, "rgba(88,166,255,.32)");
+  }
+  label(c, "~20 ms chunk를 socket으로 그대로", X(0.44), laneB+lh+2, COL.faint, 9);
+  for (const it of INTERIMS){
+    const x = X(it[0]);
+    c.fillStyle = COL.warn;
+    c.beginPath(); c.moveTo(x, laneB-16); c.lineTo(x+4, laneB-9); c.lineTo(x-4, laneB-9); c.closePath(); c.fill();
+  }
+  const fs = finalStreamT();
+  c.fillStyle = COL.green; rrect(c, X(fs)-3, laneB-20, 6, 26, 2); c.fill();
+  label(c, "final(finalized=True) " + fmt(fs,2) + "s", X(fs)+7, laneB-14, COL.green, 10);
+  c.save(); c.setLineDash([2,3]); c.strokeStyle = COL.warn;
+  c.beginPath(); c.moveTo(X(se), laneB+lh+16); c.lineTo(X(fs), laneB+lh+16); c.stroke(); c.restore();
+  label(c, "ttfs_p99 = " + S.ttfs.toFixed(2) + "s", (X(se)+X(fs))/2, laneB+lh+16, COL.warn, 10, "center");
+
+  /* 3) segmented */
+  label(c, "segmented", 6, laneC, COL.ink, 11);
+  label(c, "SegmentedSTT", 6, laneC+13, COL.faint, 9);
+  label(c, "Service:797", 6, laneC+25, COL.faint, 9);
+  c.fillStyle = "rgba(47,111,179,.55)";
+  rrect(c, X(0.40), laneC-10, X(vs)-X(0.40), lh, 4); c.fill();
+  label(c, "_audio_buffer 누적 (밖으로 나가는 frame 0개)", X(0.44), laneC+2, "#cfe6ff", 9);
+  const segEnd = finalSegT();
+  c.fillStyle = "rgba(247,120,186,.35)"; c.strokeStyle = COL.pink;
+  rrect(c, X(vs), laneC-10, X(segEnd)-X(vs), lh, 4); c.fill(); c.stroke();
+  label(c, "run_stt() 1회 blocking", X(vs)+6, laneC+2, COL.pink, 9);
+  c.fillStyle = COL.green; rrect(c, X(segEnd)-3, laneC-14, 6, 30, 2); c.fill();
+  label(c, "final " + fmt(segEnd,2) + "s", X(segEnd)+7, laneC-6, COL.green, 10);
+
+  /* 축 */
+  c.strokeStyle = COL.edge; c.beginPath(); c.moveTo(padL, axY+0.5); c.lineTo(w-padR, axY+0.5); c.stroke();
+  for (let t = 0; t <= T2 + 1e-9; t += 0.5){
+    const x = X(t); vline(c, x, axY-4, axY, COL.faint);
+    label(c, fmt(t,1), x, axY+10, COL.faint, 10, "center");
+  }
+  if (cur !== null && cur !== undefined) vline(c, X(cur), 8, axY, COL.ink);
+}
+
+function renderSttStream(){
+  const se = speechEnd(), vs = vadStop(), fs = finalStreamT(), sg = finalSegT();
+  const cur = (S.playT2 === null || S.playT2 === undefined) ? T2 : S.playT2;
+  const ev = [];
+  ev.push([0.40, "s", "VADUserStartedSpeakingFrame"]);
+  for (const it of INTERIMS) ev.push([it[0], "i", "InterimTranscriptionFrame  “" + it[1] + "”"]);
+  ev.push([vs, "s", "VADUserStoppedSpeakingFrame(stop_secs=" + fmt(S.stopSecs,3) + ")"]);
+  ev.push([vs, "s", "  segmented: pcm_to_wav(_audio_buffer, " + S.sr + ")  :890 → run_stt() :335"]);
+  ev.push([fs, "f", "TranscriptionFrame  finalized=True  “" + UTT_TEXT + "”"]);
+  ev.push([fs, "s", "  push_frame(:519)가 finalized를 stamp하고 TTFB window를 닫는다"]);
+  ev.push([sg, "f", "segmented의 final  “" + UTT_TEXT + "”  (" + SEGMENTED_TTFS.toFixed(2) + "s)"]);
+  ev.sort((a,b) => a[0]-b[0]);
+  $("sttStream").innerHTML = ev.map(e => {
+    const dim = e[0] > cur ? ' style="opacity:.22"' : '';
+    return '<div' + dim + '><span class="t">' + fmt(e[0],2) + 's </span>' +
+      '<span class="' + e[1] + '">' + (e[1]==="f" ? "◆ " : e[1]==="i" ? "◇ " : "· ") + e[2] + '</span></div>';
+  }).join("");
+}
+
+function panel2Update(){
+  drawStt(); renderSttStream();
+  const se = speechEnd(), fs = finalStreamT(), sg = finalSegT();
+  const chips = [
+    ["선택된 provider", prov().c.replace("_TTFS_P99",""), ""],
+    ["ttfs_p99_latency", S.ttfs.toFixed(2) + " s", ""],
+    ["streaming final", fmt(fs,2) + " s", "good"],
+    ["segmented final", fmt(sg,2) + " s", "warnv"],
+    ["interim frame 수", INTERIMS.length + " (streaming) / 0 (segmented)", ""],
+    ["차이", "+" + fmt(sg-fs,2) + " s", (sg-fs) > 0.5 ? "bad" : ""]
+  ];
+  $("sttCount").innerHTML = chips.map(x =>
+    '<div class="chip2 ' + x[2] + '"><b>' + x[1] + '</b>' + x[0] + '</div>').join("");
+  $("segNote").innerHTML =
+    '<b>STTService는 InterimTranscriptionFrame을 스스로 만들지 않는다.</b> ' +
+    'base class 파일에는 그 이름이 0번 나오고, 25개 provider module이 직접 생성한다. ' +
+    'base가 하는 일은 <span class="mono">push_frame(:519)</span>에서 ' +
+    '<span class="mono">TranscriptionFrame</span>만 가로채 <span class="mono">finalized</span>를 stamp하고 ' +
+    'TTFB window를 닫는 것뿐이다. — segmented 쪽의 pre-roll은 ' +
+    '<span class="mono">_audio_buffer_size_1s = self.sample_rate * 2</span> (:837), 즉 ' +
+    S.sr + ' × 2 = ' + (S.sr*2) + ' bytes = 정확히 1.000 s이고, ' +
+    'panel 1이 방금 세어 준 detection lag ' + S.vad.sf + ' chunk(' + fmt(S.vad.sf*chunkDur(),3) + ' s)를 덮는다.';
+}
+
+/* ══════════════════════════════════════════════════════════════════
+   PANEL 3 — turn-strategy chain
+   ══════════════════════════════════════════════════════════════════ */
+const TYPICAL_FINAL_FACTOR = 0.55;  // p99는 worst case — 실제 도착은 합성으로 0.55×p99에 그린다
+const SMART_INFER = 0.03;           // ONNX inference 시간(합성)
+
+function turnTimings(){
+  const se = speechEnd(), vs = vadStop();
+  const effWait = Math.max(0, S.ttfs - S.stopSecs);           // :223 / :302
+  const sttDeadline = se + S.ttfs;                             // :236  ts − stop_secs + ttfs
+  const finalT = se + TYPICAL_FINAL_FACTOR * S.ttfs;
+  const verdictT = vs + SMART_INFER;
+  const floorEnd = vs + USER_SPEECH_TIMEOUT;                   // SpeechTimeout의 policy floor
+  let turnT = null, why = "";
+  if (S.stopStrategy === "smart"){
+    if (!S.smartComplete){
+      turnT = null;
+      why = "smart-turn이 INCOMPLETE를 냈다 → 이 stop strategy는 turn을 만들지 않는다. " +
+            "aggregator는 user_turn_stop_timeout = " + USER_TURN_STOP_TIMEOUT.toFixed(1) + " s까지 기다린다.";
+    } else if (S.finalized && finalT <= sttDeadline){
+      turnT = Math.max(verdictT, finalT);
+      why = "finalized transcript가 deadline보다 먼저 도착 → safety-net timer를 short-circuit 하고 즉시 발화.";
+    } else {
+      turnT = Math.max(verdictT, sttDeadline);
+      why = "finalized flag가 없다 → max(0, ttfs − stop_secs) = " + fmt(effWait,2) +
+            " s timer를 끝까지 기다린 뒤 발화.";
+    }
+  } else {
+    const base = (S.finalized && finalT <= sttDeadline) ? finalT : sttDeadline;
+    turnT = Math.max(floorEnd, base);
+    why = "policy floor(user_speech_timeout = 0.6 s)는 항상 돈다. STT safety net과 겹쳐서 늦은 쪽이 이긴다.";
+  }
+  return {se, vs, effWait, sttDeadline, finalT, verdictT, floorEnd, turnT, why};
+}
+
+function drawClock(){
+  const cv = $("cvClock"); const {c, w} = setupCanvas(cv, CANVAS_H_CLOCK);
+  const t = turnTimings();
+  const padL = 108, padR = 14;
+  const tA = t.se - 0.45;
+  const tB = Math.max(t.sttDeadline, t.floorEnd, t.turnT === null ? 0 : t.turnT) + 0.55;
+  const X = (x) => padL + ((x - tA) / (tB - tA)) * (w - padL - padR);
+  const rows = [30, 66, 102, 138, 174];
+  const axY = 214, bh = 18;
+
+  const rowLab = (y, a, b) => { label(c, a, 6, y, COL.ink, 10.5); if (b) label(c, b, 6, y+12, COL.faint, 9); };
+
+  /* speech_end */
+  vline(c, X(t.se), 14, axY, COL.green, [3,3]);
+  label(c, "speech_end", X(t.se)+4, 16, COL.green, 10);
+
+  /* row0: VAD stop_secs */
+  rowLab(rows[0], "VAD", "vad_analyzer.py:165");
+  c.fillStyle = "rgba(188,140,255,.45)"; c.strokeStyle = COL.stopping;
+  rrect(c, X(t.se), rows[0]-bh/2, X(t.vs)-X(t.se), bh, 4); c.fill(); c.stroke();
+  label(c, "stop_secs " + fmt(S.stopSecs,3) + "s = " + S.vad.pf + " chunk", X(t.se)+5, rows[0], "#e6d6ff", 9.5);
+  vline(c, X(t.vs), 14, axY, COL.stopping, [3,3]);
+  label(c, "VAD stop", X(t.vs)+4, 28, COL.stopping, 10);
+
+  /* row1: smart-turn */
+  const smartOn = S.stopStrategy === "smart";
+  rowLab(rows[1], smartOn ? "TurnAnalyzer" : "TurnAnalyzer (미선택)",
+         "smart-turn-v3.2-cpu.onnx");
+  c.globalAlpha = smartOn ? 1 : 0.3;
+  c.fillStyle = "rgba(88,166,255,.5)"; c.strokeStyle = COL.accent;
+  rrect(c, X(t.vs), rows[1]-bh/2, Math.max(X(t.verdictT)-X(t.vs), 3), bh, 3); c.fill(); c.stroke();
+  label(c, (S.smartComplete ? "verdict: COMPLETE" : "verdict: INCOMPLETE") +
+        "  (audio만 본다 — transcript 안 읽음)", X(t.verdictT)+6, rows[1],
+        S.smartComplete ? COL.green : COL.danger, 9.5);
+  c.globalAlpha = 1;
+
+  /* row2: STT safety net */
+  rowLab(rows[2], "STT safety net", "max(0, ttfs − stop_secs)");
+  if (t.effWait > 0){
+    c.fillStyle = "rgba(210,153,34,.35)"; c.strokeStyle = COL.warn;
+    rrect(c, X(t.vs), rows[2]-bh/2, X(t.vs + t.effWait)-X(t.vs), bh, 4); c.fill(); c.stroke();
+    label(c, "= max(0, " + S.ttfs.toFixed(2) + " − " + fmt(S.stopSecs,2) + ") = " + fmt(t.effWait,2) + "s",
+          X(t.vs)+5, rows[2], "#f0dcae", 9.5);
+  } else {
+    label(c, "0 s 로 collapse — stop_secs >= ttfs_p99", X(t.vs)+5, rows[2], COL.danger, 9.5);
+  }
+  vline(c, X(t.sttDeadline), 14, axY, COL.accent, [4,3]);
+  label(c, "stt_deadline = ts − stop_secs + ttfs = " + fmt(t.sttDeadline,2) + "s",
+        X(t.sttDeadline)+5, 44, COL.accent, 10);
+
+  /* row3: finalized transcript / policy floor */
+  if (smartOn){
+    rowLab(rows[3], "transcript", "finalized short-circuit");
+    if (S.finalized){
+      c.fillStyle = COL.green; rrect(c, X(t.finalT)-3, rows[3]-bh/2-3, 6, bh+6, 2); c.fill();
+      label(c, "TranscriptionFrame.finalized=True @" + fmt(t.finalT,2) + "s",
+            X(t.finalT)+7, rows[3], COL.green, 9.5);
+    } else {
+      label(c, "finalized flag 없음 → short-circuit 불가, timer 만기까지 대기",
+            X(t.vs)+5, rows[3], COL.faint, 9.5);
+    }
+  } else {
+    rowLab(rows[3], "SpeechTimeout", "user_speech_timeout 0.6");
+    c.fillStyle = "rgba(248,81,73,.25)"; c.strokeStyle = COL.danger;
+    rrect(c, X(t.vs), rows[3]-bh/2, X(t.floorEnd)-X(t.vs), bh, 4); c.fill(); c.stroke();
+    label(c, "policy floor 0.6 s — 항상 돈다", X(t.vs)+5, rows[3], "#ffc9c5", 9.5);
+  }
+
+  /* row4: turn boundary */
+  rowLab(rows[4], "turn boundary", "UserTurnController");
+  if (t.turnT === null){
+    label(c, "이 turn에서는 발화하지 않는다 (veto)", X(t.vs)+5, rows[4], COL.danger, 10);
+  } else {
+    c.fillStyle = "rgba(248,81,73,.22)";
+    c.fillRect(X(t.se), rows[4]-bh/2, X(t.turnT)-X(t.se), bh);
+    label(c, "dead air " + fmt(t.turnT - t.se, 2) + "s", X(t.se)+5, rows[4], "#ffb3ae", 9.5);
+    vline(c, X(t.turnT), 14, axY, COL.pink);
+    c.fillStyle = COL.pink;
+    c.beginPath(); c.moveTo(X(t.turnT), rows[4]-bh/2-9); c.lineTo(X(t.turnT)+5, rows[4]-bh/2-1);
+    c.lineTo(X(t.turnT)-5, rows[4]-bh/2-1); c.closePath(); c.fill();
+    label(c, "UserStoppedSpeakingFrame @" + fmt(t.turnT,2) + "s",
+          X(t.turnT) > w*0.6 ? X(t.turnT)-8 : X(t.turnT)+8, 60, COL.pink, 10,
+          X(t.turnT) > w*0.6 ? "right" : "left");
+  }
+
+  /* 축 */
+  c.strokeStyle = COL.edge; c.beginPath(); c.moveTo(padL, axY+0.5); c.lineTo(w-padR, axY+0.5); c.stroke();
+  const step = (tB - tA) > 3 ? 0.5 : 0.25;
+  for (let x = Math.ceil(tA/step)*step; x <= tB; x += step){
+    vline(c, X(x), axY-4, axY, COL.faint);
+    label(c, fmt(x,2) + "s", X(x), axY+11, COL.faint, 9.5, "center");
+  }
+}
+
+function renderChain(){
+  const t = turnTimings();
+  const smartOn = S.stopStrategy === "smart";
+  const st = (cls, name, sub, res) =>
+    '<div class="strat ' + cls + '"><span class="res ' + (res ? res[1] : "idle") + '">' +
+    (res ? res[0] : "") + '</span><b>' + name + '</b><span>' + sub + '</span></div>';
+  $("chainStart").innerHTML =
+    st("fire", "VADUserTurnStartStrategy()",
+       "vad_user_turn_start_strategy.py:14 — panel 1의 VADUserStartedSpeakingFrame을 진짜 turn start로 승격",
+       ["fire @0.40s", "fire"]) +
+    st("idle", "TranscriptionUserTurnStartStrategy()",
+       "transcription_user_turn_start_strategy.py:14 — VAD를 놓쳐도 transcript가 도착하면 turn을 연다",
+       ["대기", "idle"]) +
+    '<div class="provnote">이 두 개가 default다 (user_turn_strategies.py:40) — ' +
+    'chapter의 part 1(audio)과 part 2(transcript)가 정확히 하나씩 대응된다.<br>' +
+    '선택지: MinWords / WakePhrase / KrispVivaIP / External</div>';
+  $("chainStop").innerHTML =
+    st(smartOn ? (S.smartComplete ? "fire pick" : "veto pick") : "idle",
+       "TurnAnalyzerUserTurnStopStrategy(turn_analyzer=LocalSmartTurnAnalyzerV3())",
+       "user_turn_stop_strategy:34 — <b>이게 default stop strategy다</b>. audio-only ONNX classifier가 " +
+       "Whisper log-mel feature 위에서 판정한다. SmartTurnParams.stop_secs = " + SMART_TURN_STOP_SECS +
+       " 는 analyzer 자신의 silence fallback일 뿐, 모델은 <b>매 VAD stop마다</b> 호출된다 — 즉 ML 판정이 정상 경로다.",
+       smartOn ? (S.smartComplete ? ["fire @" + fmt(t.turnT === null ? 0 : t.turnT, 2) + "s", "fire"]
+                                  : ["veto", "veto"]) : ["미선택", "idle"]) +
+    st(!smartOn ? "fire pick" : "idle",
+       "SpeechTimeoutUserTurnStopStrategy(user_speech_timeout=0.6)",
+       "speech_timeout_user_turn_stop_strategy.py:27/:52 — VAD-only 경로. default가 아니라 " +
+       "<b>명시적으로 골라서 내려가는 downgrade</b>다.",
+       !smartOn ? ["fire @" + fmt(t.turnT === null ? 0 : t.turnT, 2) + "s", "fire"] : ["미선택", "idle"]);
+  $("mountOut").innerHTML =
+'<span class="cm"># src/pipecat/processors/aggregators/llm_response_universal.py:120</span>\n' +
+'<span class="ln">120</span> @dataclass\n' +
+'      class <span class="ins">LLMUserAggregatorParams</span>:\n' +
+'<span class="ln">170</span>          audio_idle_timeout: float = <span class="num">' + AUDIO_IDLE_TIMEOUT.toFixed(1) + '</span>\n' +
+'<span class="ln">171</span>          user_turn_strategies: UserTurnStrategies | None = None\n' +
+'<span class="ln">172</span>          user_mute_strategies: list[BaseUserMuteStrategy] = field(default_factory=list)\n' +
+'<span class="ln">173</span>          user_turn_stop_timeout: float = <span class="num">' + USER_TURN_STOP_TIMEOUT.toFixed(1) + '</span>\n' +
+'<span class="ln">174</span>          user_idle_timeout: float = 0\n' +
+'<span class="ln">175</span>          <span class="ins">vad_analyzer</span>: VADAnalyzer | None = None\n' +
+'\n<span class="cm"># vad_analyzer가 transport가 아니라 AGGREGATOR params의 field라는 것이\n' +
+'#   voice-I/O phase에서 가장 놀라운 wiring 사실이다 (ch-05의 CHANGELOG 제거의 직접 결과).</span>';
+  $("warnBox").innerHTML = "";
+  let warn = "";
+  if (Math.abs(S.stopSecs - VAD_STOP_SECS) > 1e-9){
+    warn += '<div class="callout bad" style="margin-top:12px"><b>logger.warning (:247-256)</b><br>' +
+      '<span class="mono" style="font-size:0.85em">VAD stop_secs (' + fmt(S.stopSecs,3) +
+      's) differs from the recommended default (0.2s). Built-in p99 latency values assume ' +
+      'stop_secs=0.2. Re-run stt-benchmark with your settings and pass the TTFS P99 latency ' +
+      'result as ttfs_p99_latency to your STT service.</span></div>';
+  }
+  if (S.ttfs > 0 && S.stopSecs >= S.ttfs){
+    warn += '<div class="callout bad" style="margin-top:12px"><b>logger.warning (:258-266)</b><br>' +
+      '<span class="mono" style="font-size:0.85em">VAD stop_secs (' + fmt(S.stopSecs,3) +
+      's) &gt;= STT p99 latency (' + S.ttfs.toFixed(2) + 's). STT wait timeout collapsed to 0s, ' +
+      'which may cause delayed turn detection specified by the user_turn_stop_timeout parameter ' +
+      'in the LLMUserAggregatorParams.</span></div>';
+  }
+  if (!warn) warn = '<div class="callout ok" style="margin-top:12px">' +
+    '<span class="mono">stop_secs = 0.2</span> — 23개 TTFS constant가 전부 이 값에서 측정됐으므로 ' +
+    '표의 숫자를 그대로 써도 된다.</div>';
+  $("warnBox").innerHTML = warn;
+
+  const chips = [
+    ["stop_secs", fmt(S.stopSecs,3) + " s", Math.abs(S.stopSecs-VAD_STOP_SECS) > 1e-9 ? "warnv" : "good"],
+    ["ttfs_p99", S.ttfs.toFixed(2) + " s", ""],
+    ["effective_stt_wait", fmt(t.effWait,2) + " s", t.effWait === 0 ? "bad" : ""],
+    ["stt_deadline", fmt(t.sttDeadline,2) + " s", ""],
+    ["turn boundary", t.turnT === null ? "없음" : fmt(t.turnT,2) + " s", t.turnT === null ? "bad" : "good"],
+    ["dead air", t.turnT === null ? "≥ " + USER_TURN_STOP_TIMEOUT.toFixed(1) + " s"
+        : fmt(t.turnT - t.se, 2) + " s", t.turnT === null ? "bad" : ""]
+  ];
+  $("clockCount").innerHTML = chips.map(x =>
+    '<div class="chip2 ' + x[2] + '"><b>' + x[1] + '</b>' + x[0] + '</div>').join("") +
+    '<div class="chip2" style="flex:1 1 100%; min-width:0"><b style="font-size:0.7857rem">' +
+    t.why + '</b>판정 근거</div>';
+}
+
+function extActive(site){
+  if (site.uncond) return true;
+  const g = GUARDS[site.key].val;
+  return site.inv ? !g : g;
+}
+function renderExt(){
+  let html = "";
+  const seen = {};
+  for (const s of EXT_SITES){
+    const act = extActive(s);
+    let toggle = '<span class="badge uncond">guard 없음</span>';
+    if (!s.uncond){
+      const g = GUARDS[s.key];
+      const idb = "g_" + s.key;
+      const shared = seen[s.key] ? ' <span style="color:var(--ink-faint)">(공유)</span>' : "";
+      toggle = '<label class="tg"><input type="checkbox" data-g="' + s.key + '"' +
+               (g.val ? " checked" : "") + '> ' + g.label + shared + '</label>';
+      seen[s.key] = true;
+    }
+    html += '<tr class="' + (act ? "ext" : "loc") + '">' +
+      '<td class="mono">' + s.svc + '</td>' +
+      '<td class="mono" style="color:var(--ink-faint)">' + s.file + '</td>' +
+      '<td class="mono" style="color:' + (act ? "var(--c-ins)" : "var(--ink-faint)") + '">' + s.guard + '</td>' +
+      '<td>' + toggle + '</td>' +
+      '<td>' + (act
+        ? '<span class="badge ext">EXTERNAL — provider가 정한다</span>'
+        : '<span class="badge loc">LOCAL chain — VAD + smart-turn</span>') + '</td></tr>';
+  }
+  $("extBody").innerHTML = html;
+  $("extBody").querySelectorAll("input[data-g]").forEach(el => {
+    el.addEventListener("change", () => {
+      GUARDS[el.dataset.g].val = el.checked;
+      renderExt();
+    });
+  });
+  const nExt = EXT_SITES.filter(extActive).length;
+  const chips = [
+    ["assignment site", EXT_SITES.length, ""],
+    ["file", "8", ""],
+    ["unconditional", EXT_SITES.filter(s => s.uncond).length, "good"],
+    ["provider-flag-gated", EXT_SITES.filter(s => !s.uncond).length, "warnv"],
+    ["지금 EXTERNAL", nExt, nExt > 3 ? "warnv" : ""],
+    ["기본값에서 EXTERNAL", "3", ""]
+  ];
+  $("extCount").innerHTML = chips.map(x =>
+    '<div class="chip2 ' + x[2] + '"><b>' + x[1] + '</b>' + x[0] + '</div>').join("") +
+    '<div class="chip2" style="flex:1 1 100%; min-width:0"><b style="font-size:0.7857rem">' +
+    '7개 flag-gated 중 기본값이 켜져 있는 건 SarvamRealtimeSTTService 하나뿐이다 ' +
+    '(endpointing = "vad", sarvam/stt.py:922) — flag-gated인데 상자를 열어 보면 unconditional처럼 행동한다. ' +
+    'Soniox와 AssemblyAI는 같은 flag를 쓰고 docstring 문장까지 같으므로 절대 다른 그룹에 넣지 않는다.' +
+    '</b>기본값 읽는 법</div>';
+}
+
+function panel3Update(){ drawClock(); renderChain(); }
+
+/* ══════════════════════════════════════════════════════════════════
+   DECISIVE VIEW — 같은 발화, 세 개의 turn 판정
+   ══════════════════════════════════════════════════════════════════ */
+function decTimings(){
+  const t = turnTimings();
+  const se = t.se;
+  const lastPartial = INTERIMS[INTERIMS.length-1][0];          // 3.20 s
+  const boson = lastPartial + BOSON_SILENCE_MS/1000;           // websocket.py:616
+  const rtvEnd = 3.30;                                         // volume gate가 없어 조용한 꼬리까지 speech
+  const rtvFire = rtvEnd + S.ttfs;                             // finalize() 1회 blocking (stand-in 값)
+  return {t, se, boson, rtvEnd, rtvFire, pipe: t.turnT};
+}
+function drawDec(){
+  const cv = $("cvDec"); const {c, w} = setupCanvas(cv, CANVAS_H_DEC);
+  const d = decTimings();
+  const padL = 118, padR = 16;
+  const TB = Math.max(d.boson, d.rtvFire, d.pipe === null ? 0 : d.pipe) + 0.5;
+  const X = (x) => padL + (x / TB) * (w - padL - padR);
+  const rows = [34, 92, 150], bh = 24, axY = 190;
+
+  const drawLane = (y, name, sub, fireT, blocks, fireLab) => {
+    label(c, name, 6, y-4, COL.ink, 10.5);
+    label(c, sub, 6, y+9, COL.faint, 9);
+    /* speech */
+    c.fillStyle = "rgba(63,185,80,.6)";
+    rrect(c, X(0.40), y-bh/2, X(d.se)-X(0.40), bh, 4); c.fill();
+    for (const b of blocks){
+      c.fillStyle = b[3]; c.strokeStyle = b[4] || b[3];
+      rrect(c, X(b[0]), y-bh/2, Math.max(X(b[1])-X(b[0]), 2), bh, 4); c.fill(); c.stroke();
+      if (b[2]) label(c, b[2], X(b[0])+5, y, "#e6edf3", 9);
+    }
+    if (fireT !== null){
+      vline(c, X(fireT), y-bh/2-8, y+bh/2+8, COL.pink);
+      c.fillStyle = COL.pink;
+      c.beginPath(); c.moveTo(X(fireT), y-bh/2-8); c.lineTo(X(fireT)+5, y-bh/2-1);
+      c.lineTo(X(fireT)-5, y-bh/2-1); c.closePath(); c.fill();
+      label(c, fireLab + "  dead air " + fmt(fireT - d.se, 2) + "s",
+            X(fireT)+8, y - bh/2 - 3, COL.pink, 10);
+    } else {
+      label(c, "발화 없음 (veto)", X(d.se)+8, y - bh/2 - 3, COL.danger, 10);
+    }
+  };
+
+  drawLane(rows[0], "boson", "PartialDetector · 텍스트 침묵",
+    d.boson,
+    [[d.se, d.boson, "_start_silence_timer(2000 ms) — 마지막 partial 3.20s부터", "rgba(210,153,34,.35)", COL.warn]],
+    "final_transcript");
+  drawLane(rows[1], "realtime_voice", "2-state VAD + unary ASR",
+    d.rtvFire,
+    [[d.se, d.rtvEnd, "volume gate 없음 → 조용한 꼬리도 speech", "rgba(107,118,134,.35)", COL.faint],
+     [d.rtvEnd, d.rtvFire, "OpenAICompatibleUnaryASR.finalize() 1회 blocking", "rgba(88,166,255,.35)", COL.accent]],
+    "ASR 결과");
+  drawLane(rows[2], "pipecat", "streaming STT + smart-turn",
+    d.pipe,
+    [[d.se, d.t.vs, "stop_secs " + fmt(S.stopSecs,2) + "s", "rgba(188,140,255,.4)", COL.stopping],
+     [d.t.vs, d.pipe === null ? d.t.vs : d.pipe,
+      d.t.effWait > 0 ? "smart-turn + max(0, ttfs − stop_secs)" : "smart-turn", "rgba(210,153,34,.3)", COL.warn]],
+    "UserStoppedSpeakingFrame");
+
+  /* speech_end 기준선 */
+  vline(c, X(d.se), 14, axY, COL.green, [3,3]);
+  label(c, "speech_end " + fmt(d.se,2) + "s", X(d.se)+4, 16, COL.green, 10);
+
+  c.strokeStyle = COL.edge; c.beginPath(); c.moveTo(padL, axY+0.5); c.lineTo(w-padR, axY+0.5); c.stroke();
+  for (let x = 0; x <= TB; x += 0.5){
+    vline(c, X(x), axY-4, axY, COL.faint);
+    label(c, fmt(x,1), X(x), axY+11, COL.faint, 9.5, "center");
+  }
+}
+function decUpdate(){
+  drawDec();
+  const d = decTimings();
+  const chips = [
+    ["boson dead air", fmt(d.boson-d.se,2) + " s", "bad"],
+    ["realtime_voice dead air", fmt(d.rtvFire-d.se,2) + " s", "warnv"],
+    ["pipecat dead air", d.pipe === null ? "—" : fmt(d.pipe-d.se,2) + " s", d.pipe === null ? "bad" : "good"],
+    ["boson − pipecat", d.pipe === null ? "—" : fmt(d.boson-d.pipe,2) + " s", ""],
+    ["단위", "ms(텍스트) → s(오디오)", ""]
+  ];
+  $("decCount").innerHTML = chips.map(x =>
+    '<div class="chip2 ' + x[2] + '"><b>' + x[1] + '</b>' + x[0] + '</div>').join("");
+  $("decNote").innerHTML =
+    '<b>세 줄의 차이는 튜닝이 아니라 denomination이다.</b> boson의 ' +
+    '<span class="mono">2000 ms</span>는 <b>텍스트 침묵</b>을 재고 — 그 밑에는 client ASR의 emission ' +
+    'interval이 또 깔려 있어 floor가 2 s보다 크다 — pipecat의 ' +
+    '<span class="mono">' + fmt(S.stopSecs,2) + ' s + smart-turn</span>은 <b>오디오</b>를 잰다. ' +
+    'realtime_voice는 그 중간에서, VAD stop 뒤에 전체 발화 1회 transcription RTT를 critical path에 ' +
+    '그대로 얹는다 (streaming STT가 아예 없다). ' +
+    '위 RTT 막대는 tree에 숫자가 없어 선택된 provider의 p99 ' +
+    '(<span class="mono">' + S.ttfs.toFixed(2) + ' s</span>)를 stand-in으로 쓴 것이다. ' +
+    '<b>여기서도 채점은 하지 않는다 — ch-13이 유일한 채점 장소다.</b>';
+}
+
+/* ══════════════════════════════════════════════════════════════════
+   wiring
+   ══════════════════════════════════════════════════════════════════ */
+function renderAll(){
+  panel1Update();
+  panel2Update();
+  panel3Update();
+  decUpdate();
+}
+
+function syncLabels(){
+  $("oConf").textContent = fmt(S.confidence);
+  $("oVol").textContent = fmt(S.minVolume);
+  $("oStart").textContent = fmt(S.startSecs,3);
+  $("oStop").textContent = fmt(S.stopSecs,3);
+  $("oStop3").textContent = fmt(S.stopSecs,3);
+  $("oTtfs").textContent = S.ttfs.toFixed(2);
+  $("oStartFrames").textContent = startFrames();
+  $("oStopFrames").textContent = stopFrames();
+  $("oStop").className = "v" + (Math.abs(S.stopSecs-VAD_STOP_SECS) > 1e-9 ? " off" : "");
+  $("oStop3").className = "v" + (Math.abs(S.stopSecs-VAD_STOP_SECS) > 1e-9 ? " off" : "");
+}
+
+function bindRange(id, key, after){
+  $(id).addEventListener("input", () => {
+    S[key] = parseFloat($(id).value);
+    if (after) after();
+    syncLabels(); renderAll();
+  });
+}
+
+/* panel 1 */
+bindRange("sConf", "confidence");
+bindRange("sVol", "minVolume");
+bindRange("sStart", "startSecs");
+bindRange("sStop", "stopSecs", () => { $("sStop3").value = S.stopSecs; });
+/* panel 3 — stop_secs는 양방향 */
+bindRange("sStop3", "stopSecs", () => { $("sStop").value = S.stopSecs; });
+$("sTtfs").addEventListener("input", () => {
+  S.ttfs = parseFloat($("sTtfs").value);
+  syncLabels(); renderAll();
+});
+
+$("rateSeg").querySelectorAll("button").forEach(b => {
+  b.addEventListener("click", () => {
+    $("rateSeg").querySelectorAll("button").forEach(x => x.classList.remove("on"));
+    b.classList.add("on");
+    S.sr = parseInt(b.dataset.sr, 10);
+    syncLabels(); renderAll();
+  });
+});
+$("koSeg").querySelectorAll("button").forEach(b => {
+  b.addEventListener("click", () => {
+    $("koSeg").querySelectorAll("button").forEach(x => x.classList.remove("on"));
+    b.classList.add("on");
+    S.koOnly = b.dataset.ko === "1";
+    renderProviders();
+  });
+});
+$("stopSeg").querySelectorAll("button").forEach(b => {
+  b.addEventListener("click", () => {
+    $("stopSeg").querySelectorAll("button").forEach(x => x.classList.remove("on"));
+    b.classList.add("on");
+    S.stopStrategy = b.dataset.s;
+    renderAll();
+  });
+});
+$("optBlip").addEventListener("change", () => { S.blip = $("optBlip").checked; renderAll(); });
+$("optSmart").addEventListener("change", () => { S.smartComplete = $("optSmart").checked; renderAll(); });
+$("optFinal").addEventListener("change", () => { S.finalized = $("optFinal").checked; renderAll(); });
+
+$("bReset1").addEventListener("click", () => {
+  S.confidence = VAD_CONFIDENCE; S.minVolume = VAD_MIN_VOLUME;
+  S.startSecs = VAD_START_SECS; S.stopSecs = VAD_STOP_SECS; S.sr = 16000; S.blip = false;
+  $("sConf").value = S.confidence; $("sVol").value = S.minVolume;
+  $("sStart").value = S.startSecs; $("sStop").value = S.stopSecs; $("sStop3").value = S.stopSecs;
+  $("optBlip").checked = false;
+  $("rateSeg").querySelectorAll("button").forEach((x,i) => x.classList.toggle("on", i === 0));
+  syncLabels(); renderAll();
+});
+
+/* hover로 chunk 뜯어보기 */
+const cvVadEl = $("cvVad");
+cvVadEl.addEventListener("mousemove", (e) => {
+  const r = cvVadEl.getBoundingClientRect();
+  const padL = 52, padR = 10, w = r.width;
+  const t = ((e.clientX - r.left) - padL) / (w - padL - padR) * T_TOTAL;
+  const i = Math.floor(t / chunkDur());
+  S.hoverChunk = (i >= 0 && i < S.vad.rows.length) ? i : -1;
+  S.playT = null;
+  drawVad(); updateMeters();
+});
+cvVadEl.addEventListener("mouseleave", () => { S.hoverChunk = -1; drawVad(); updateMeters(); });
+
+/* 재생 */
+let anim1 = null, anim2 = null;
+$("bPlay1").addEventListener("click", () => {
+  if (anim1){ clearInterval(anim1); anim1 = null; }
+  S.playT = 0; S.hoverChunk = -1;
+  anim1 = setInterval(() => {
+    S.playT += 0.032;
+    if (S.playT > T_TOTAL){ clearInterval(anim1); anim1 = null; S.playT = null; }
+    drawVad(); updateMeters();
+  }, 24);
+});
+$("bPlay2").addEventListener("click", () => {
+  if (anim2){ clearInterval(anim2); anim2 = null; }
+  S.playT2 = 0;
+  anim2 = setInterval(() => {
+    S.playT2 += 0.05;
+    if (S.playT2 > T2){ clearInterval(anim2); anim2 = null; S.playT2 = null; }
+    drawStt(); renderSttStream();
+  }, 26);
+});
+
+let rz = null;
+window.addEventListener("resize", () => {
+  if (rz) clearTimeout(rz);
+  rz = setTimeout(renderAll, 120);
+});
+
+/* init */
+S.playT = null; S.playT2 = null;
+S.provIdx = 0; S.ttfs = PROVIDERS[0].v;
+$("sTtfs").value = S.ttfs;
+S.vad = simulateVAD(buildChunks());
+vadCounters();
+syncLabels();
+renderProviders();
+renderExt();
+renderAll();
+</script>
+</body>
+</html>

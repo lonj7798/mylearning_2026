@@ -1,0 +1,1235 @@
+<!--
+  Figure: transport-comparison.html — "같은 bot, 네 개의 transport stack"
+  Chapter: pipecat ch-05 (Transports: WebRTC, WebSocket, Telephony-as-a-Serializer)
+  Back to: ../read.md  (§1 BaseTransport, §5 FastAPIWebsocket, §6 serializer + 4 kHz,
+                        §8 smallwebrtc, §9 gateway/server, §10 realtime_voice)
+
+  Fully self-contained: inline CSS + vanilla JS. No CDN, no fetch, no external fonts.
+  Opens directly from file:// .
+
+  Every class name, path, line number and default below was read out of the pinned tree
+  (src/pipecat/) or out of ../read.md, which attests the boson-side numbers via excerpt:
+
+    transports/base_transport.py      class BaseTransport(BaseObject) :96, file is 137 L
+                                      abstract input() :122, output() :131 -> FrameProcessor
+    ls src/pipecat/transports/        11 provider packages (+ base_input/base_output/base_transport)
+    grep "^class .*(BaseTransport)"   13 subclasses, file:line listed in the STACKS/SUBCLASSES data
+    transports/websocket/fastapi.py   FastAPIWebsocketTransport :611
+                                      _send_interval = 0 :437, = (chunk/rate)/2 :456
+                                      "emulate an audio device" comment :432-438
+    transports/smallwebrtc/transport.py  SmallWebRTCTransport :951
+    runner/utils.py                   _create_telephony_transport :486, return ... :554
+    serializers/                      base_serializer.py (ABC) + 7 concrete: twilio telnyx
+                                      plivo exotel genesys vonage protobuf
+    serializers/twilio.py             twilio_sample_rate: int = 8000 :79, clear event :187
+    serializers/telnyx.py  :60 :62-63 :151   plivo.py :54 :139   exotel.py :49 :99
+    serializers/genesys.py :148 :77          vonage.py :48
+
+  NOT verified / deliberately not drawn: per-hop latency in milliseconds. read.md §12
+  records that the fabricated clock, the two resamples and the granularity difference are
+  "latency terms with no measurements attached" and hands them to ch-11. This figure shows
+  the terms and refuses to invent the numbers. The Korean cue bands in the Nyquist panel
+  are drawn qualitatively for the same reason — read.md claims "at and above 4 kHz", not a
+  measured spectrum.
+-->
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>transport bench — 네 stack과 4 kHz 천장 (pipecat ch-05)</title>
+<style>
+  /* --- 반응형 타이포 스케일: 태블릿에서 root를 키운다 ------------------- */
+  html{font-size:14px;}
+  @media (pointer:coarse){ html{font-size:17px;} }
+  @media (min-width:1500px){ html{font-size:15.5px;} }
+
+  :root{
+    --bg:#0e1117; --panel:#161b22; --panel2:#1c2230; --edge:#2b3242;
+    --ink:#e6edf3; --ink-dim:#9aa7b4; --ink-faint:#6b7686;
+    --accent:#58a6ff; --accent2:#3fb950; --danger:#f85149; --warn:#d29922;
+    --c-rtc:#58a6ff;    /* WebRTC 계열      */
+    --c-ws:#3fb950;     /* raw WebSocket    */
+    --c-tel:#d29922;    /* telephony        */
+    --c-own:#f778ba;    /* boson 자체 구현  */
+    --c-bare:#bc8cff;
+  }
+  *{box-sizing:border-box;}
+  html,body{margin:0;padding:0;}
+  body{
+    background:var(--bg); color:var(--ink);
+    font:1rem/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Apple SD Gothic Neo",
+         "Noto Sans KR",Helvetica,Arial,sans-serif;
+    padding:22px; max-width:88rem; margin:0 auto;
+  }
+  h1{font-size:1.5rem; margin:0 0 3px; letter-spacing:.2px;}
+  .sub{color:var(--ink-dim); font-size:0.9286rem; margin:0 0 20px;}
+  .sub code{color:var(--accent);}
+  .panel{background:var(--panel); border:1px solid var(--edge); border-radius:10px;
+    padding:16px; margin-bottom:18px;}
+  .panel h2{font-size:0.8571rem; text-transform:uppercase; letter-spacing:.9px; color:var(--ink-dim);
+    margin:0 0 14px; font-weight:600;}
+  .panel h3{font-size:0.8571rem; color:var(--ink); margin:18px 0 8px; font-weight:600;}
+  .mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+    font-variant-numeric:tabular-nums;}
+  code{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:0.9em;}
+
+  .wrap{display:grid; grid-template-columns:20rem 1fr; gap:18px; align-items:start;}
+  .grid2{display:grid; grid-template-columns:1fr 1fr; gap:18px;}
+  @media (max-width:1000px){ .wrap{grid-template-columns:1fr;} .grid2{grid-template-columns:1fr;} }
+
+  /* ---------- stack 선택 버튼 ---------- */
+  .pal{display:flex; flex-direction:column; gap:6px;}
+  .pitem{background:var(--panel2); border:1px solid var(--edge); color:var(--ink-dim);
+    border-radius:8px; padding:8px 10px; cursor:pointer; text-align:left; font-size:0.8571rem;
+    transition:.13s; line-height:1.35;}
+  .pitem:hover{border-color:var(--ink-faint); color:var(--ink);}
+  .pitem.on{color:var(--ink);}
+  .pitem.on.s0{background:#152435; border-color:var(--c-rtc);}
+  .pitem.on.s1{background:#14261a; border-color:var(--c-ws);}
+  .pitem.on.s2{background:#2a2312; border-color:var(--c-tel);}
+  .pitem.on.s3{background:#2a1c2a; border-color:var(--c-own);}
+  .pitem b{display:block; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+    font-size:0.8571rem; color:var(--ink); margin-bottom:1px;}
+  .pitem span{font-size:0.7857rem; color:var(--ink-faint); display:block;}
+
+  /* ---------- hop 상세 ---------- */
+  .hops{display:flex; flex-direction:column; gap:7px;}
+  .hop{background:#10151d; border:1px solid var(--edge); border-radius:8px; padding:9px 11px;
+    font-size:0.8214rem; line-height:1.5;}
+  .hop b{display:block; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+    font-size:0.8214rem; color:var(--ink); margin-bottom:2px;}
+  .hop span{color:var(--ink-dim); display:block;}
+  .hop .lat{display:inline-block; margin-top:4px; font-size:0.7143rem; border-radius:4px;
+    padding:1px 6px; border:1px solid var(--edge); color:var(--ink-faint);}
+  .hop .lat.num{border-color:var(--accent2); color:var(--accent2);}
+  .hop .lat.unk{border-color:var(--warn); color:var(--warn);}
+  .hop .lat.none{border-color:var(--edge); color:var(--ink-faint);}
+
+  /* ---------- 버튼 ---------- */
+  .runbar{display:flex; gap:7px; margin-top:14px; flex-wrap:wrap;}
+  .rb{flex:1 1 6rem; background:var(--panel2); border:1px solid var(--edge); color:var(--ink);
+    border-radius:7px; padding:9px 6px; cursor:pointer; font-size:0.8929rem; font-weight:600;
+    transition:.13s;}
+  .rb:hover{border-color:var(--accent);}
+  .rb.primary{background:#1d3a5f; border-color:var(--accent); color:#cfe6ff;}
+  .segs{display:flex; gap:6px; flex-wrap:wrap; margin-bottom:12px;}
+  .seg{background:var(--panel2); border:1px solid var(--edge); color:var(--ink-dim);
+    border-radius:7px; padding:7px 11px; cursor:pointer; font-size:0.8214rem; transition:.13s;
+    font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;}
+  .seg:hover{border-color:var(--ink-faint); color:var(--ink);}
+  .seg.on{background:#2a2312; border-color:var(--c-tel); color:var(--ink);}
+  .seg.dis{opacity:.4; cursor:not-allowed; text-decoration:line-through;}
+
+  .opts{display:flex; flex-direction:column; gap:7px; margin-top:12px;}
+  .opt{display:flex; align-items:flex-start; gap:8px; font-size:0.8214rem; color:var(--ink-dim);
+    cursor:pointer; line-height:1.4;}
+  .opt input{margin:3px 0 0; accent-color:var(--warn); flex:none;}
+  .opt b{color:var(--ink); font-weight:600;}
+
+  pre{background:#10151d; border:1px solid var(--edge); border-radius:8px; padding:13px;
+    overflow-x:auto; font-size:0.8571rem; line-height:1.7; margin:0;
+    font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; white-space:pre;}
+  pre .cm{color:var(--ink-faint);} pre .kw{color:var(--c-bare);} pre .st{color:var(--accent2);}
+  pre .hi{color:var(--c-tel); font-weight:700;} pre .ln{color:var(--ink-faint);}
+  pre .bad{color:var(--danger);} pre .dim{color:var(--ink-faint);}
+
+  /* ---------- counting strip ---------- */
+  .counters{display:flex; gap:8px; flex-wrap:wrap;}
+  .chip2{border:1px solid var(--edge); border-radius:7px; padding:7px 11px; font-size:0.8571rem;
+    background:var(--panel2); color:var(--ink-faint); min-width:8.5rem;}
+  .chip2 b{display:block; font-size:1.2143rem; color:var(--ink); margin-bottom:1px;}
+  .chip2.good b{color:var(--accent2);}
+  .chip2.zero b{color:var(--danger);}
+  .lschips{display:flex; gap:5px; flex-wrap:wrap; margin-top:9px;}
+  .ls{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:0.7857rem;
+    border:1px solid var(--edge); border-radius:5px; padding:3px 7px; color:var(--ink-dim);
+    background:#10151d;}
+  .ls.pkg{border-color:var(--accent); color:var(--accent);}
+  .ls.abc{opacity:.35; text-decoration:line-through;}
+  .ls.tel{border-color:var(--c-tel); color:var(--c-tel);}
+  .ls.pb{border-color:var(--c-bare); color:var(--c-bare);}
+  .ls.absent{border-style:dashed; border-color:var(--danger); color:var(--danger); opacity:.75;}
+
+  /* height는 JS의 CANVAS_H_* 상수와 반드시 같은 값 — 레이아웃 점프 방지 */
+  canvas{width:100%; display:block; border-radius:8px; background:#10151d;
+    border:1px solid var(--edge);}
+  #cvPath{height:360px;}
+  #cvSer{height:280px;}
+  #cvBand{height:250px;}
+  .legend{display:flex; gap:14px; font-size:0.8214rem; color:var(--ink-dim); margin-top:9px;
+    flex-wrap:wrap;}
+  .legend i{display:inline-block; width:16px; height:10px; border-radius:3px;
+    vertical-align:middle; margin-right:5px;}
+
+  .stream{background:#10151d; border:1px solid var(--edge); border-radius:8px; padding:10px;
+    max-height:17rem; overflow-y:auto; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+    font-size:0.7857rem; line-height:1.7; margin-top:10px;}
+  .stream div{white-space:pre-wrap;}
+  .stream .t{color:var(--ink-faint);}
+  .stream .ok{color:var(--accent2);} .stream .warn{color:var(--warn);}
+  .stream .er{color:var(--danger);} .stream .cur{color:var(--ink);}
+
+  .verdict{border-radius:8px; padding:12px 14px; font-size:0.9286rem; margin-top:12px;
+    border:1px solid var(--edge); background:var(--panel2); line-height:1.6;}
+  .verdict b{font-size:1.0714rem;}
+  .callout{border-left:3px solid var(--warn); background:rgba(210,153,34,.07);
+    padding:11px 14px; border-radius:0 7px 7px 0; font-size:0.8929rem; color:var(--ink-dim);
+    margin-top:14px; line-height:1.65;}
+  .callout b{color:var(--ink);}
+  .callout.ok{border-left-color:var(--accent2); background:rgba(63,185,80,.07);}
+  .callout.bad{border-left-color:var(--danger); background:rgba(248,81,73,.07);}
+  .callout code{color:var(--accent);}
+
+  table{width:100%; border-collapse:collapse; font-size:0.8214rem; margin-top:6px;}
+  th,td{padding:6px 7px; text-align:left; border-bottom:1px solid var(--edge); vertical-align:top;}
+  th{color:var(--ink-faint); font-weight:600; font-size:0.75rem; text-transform:uppercase;
+    letter-spacing:.5px;}
+  td.num{text-align:right; font-variant-numeric:tabular-nums;}
+  .tw{overflow-x:auto;}
+  .mk{font-weight:700; text-align:center;}
+  .mk.y{color:var(--accent2);} .mk.n{color:var(--danger);} .mk.p{color:var(--warn);}
+  .tag{font-size:0.7143rem; border-radius:4px; padding:1px 6px; margin-left:6px;
+    border:1px solid var(--edge); color:var(--ink-faint); white-space:nowrap;}
+  .tag.rtc{border-color:var(--c-rtc); color:var(--c-rtc);}
+  .tag.tel{border-color:var(--c-tel); color:var(--c-tel);}
+  .tag.own{border-color:var(--c-own); color:var(--c-own);}
+  .foot{color:var(--ink-faint); font-size:0.8214rem; margin-top:26px; line-height:1.8;}
+  .foot a{color:var(--accent); text-decoration:none;}
+</style>
+</head>
+<body>
+
+<h1>transport bench — 같은 bot, 네 개의 stack</h1>
+<p class="sub">
+  <code>BaseTransport</code>는 <code>base_transport.py:96</code>에서 시작해 파일이 <code>:137</code>에서 끝나는
+  <b>137줄 파일 안의 42줄 클래스</b>이고, abstract method는 정확히 둘 —
+  <code>input()</code> <code>:122</code>, <code>output()</code> <code>:131</code>, 둘 다
+  <code>-&gt; FrameProcessor</code>. 그래서 stack을 바꾸는 일은 pipeline이 아니라
+  <b>connection 객체와 params 클래스</b>를 바꾸는 일이다. 아래 네 stack은 그 명제의 검증판이다.
+</p>
+
+<!-- ================= PANEL A : 네 stack의 packet path ================= -->
+<div class="panel">
+  <h2>Panel A · packet path — jitter buffer와 codec이 어디 앉는가</h2>
+  <div class="wrap">
+    <div>
+      <div class="pal" id="palStacks"></div>
+      <div class="runbar">
+        <button class="rb primary" id="btnPathAll">네 개 모두 밝게</button>
+      </div>
+      <div class="callout">
+        <b>지연(latency) 숫자는 일부러 비어 있다.</b> read.md §12는 위조된 clock, 두 번의 resample,
+        granularity 차이를 “measurements가 붙지 않은 latency term”이라고 기록하고 ch-11로 넘긴다.
+        여기서는 <b>항(term)만</b> 표시하고 ms는 지어내지 않는다. 코드에 실제로 있는 숫자
+        (10 ms / 20 ms / <code>_send_interval</code>)만 초록 배지로 붙는다.
+      </div>
+    </div>
+    <div>
+      <canvas id="cvPath"></canvas>
+      <div class="legend">
+        <span><i style="background:var(--c-rtc)"></i>WebRTC (aiortc)</span>
+        <span><i style="background:var(--c-ws)"></i>raw WebSocket</span>
+        <span><i style="background:var(--c-tel)"></i>WebSocket + telephony serializer</span>
+        <span><i style="background:var(--c-own)"></i>boson realtime_voice</span>
+        <span><i style="background:#10151d;border:1px dashed var(--danger)"></i>존재하지 않는 hop</span>
+      </div>
+      <h3 id="hopTitle">hop 상세</h3>
+      <div class="hops" id="hopList"></div>
+    </div>
+  </div>
+</div>
+
+<!-- ================= PANEL B : serializer 확대 + 프레임 한 개 ================= -->
+<div class="panel">
+  <h2>Panel B · 결정적 패널 — serializer 상자를 열고 frame 한 개를 통과시킨다</h2>
+  <div class="segs" id="segProv"></div>
+  <div class="wrap">
+    <div>
+      <div class="runbar">
+        <button class="rb primary" id="btnPlay">▶ 재생</button>
+        <button class="rb" id="btnStep">step ▸</button>
+        <button class="rb" id="btnReset">reset</button>
+      </div>
+      <div class="segs" style="margin-top:12px" id="segDir"></div>
+      <div id="provFacts"></div>
+      <div class="stream" id="serLog"></div>
+    </div>
+    <div>
+      <canvas id="cvSer"></canvas>
+      <div class="legend">
+        <span><i style="background:var(--c-tel)"></i>wire (8-bit companded)</span>
+        <span><i style="background:var(--accent2)"></i>PCM16</span>
+        <span><i style="background:var(--danger)"></i>interruption / clear</span>
+      </div>
+      <pre id="serCode"></pre>
+    </div>
+  </div>
+  <div class="callout bad" id="serVerdict"></div>
+</div>
+
+<!-- ================= PANEL C : Nyquist band ================= -->
+<div class="panel">
+  <h2>Panel C · Nyquist 천장 — upsample은 sample 수를 복원하지 대역폭을 복원하지 않는다</h2>
+  <div class="wrap">
+    <div>
+      <div class="opts">
+        <label class="opt"><input type="checkbox" id="ckUp" checked>
+          <span><b>16 kHz로 upsample한 뒤를 본다</b> — <code>ulaw_to_pcm</code> 후 STT가 받는 신호</span></label>
+        <label class="opt"><input type="checkbox" id="ckKor" checked>
+          <span><b>한국어 cue 대역 표시</b> — 마찰음 ㅅ/ㅆ/ㅊ, 받침 release burst</span></label>
+        <label class="opt"><input type="checkbox" id="ckMu" checked>
+          <span><b>μ-law 8-bit companding</b> — 대역 제한 위에 얹히는 양자화 손실</span></label>
+      </div>
+      <div class="counters" style="margin-top:14px" id="bandStats"></div>
+      <div class="callout" id="bandNote"></div>
+    </div>
+    <div>
+      <canvas id="cvBand"></canvas>
+      <div class="legend">
+        <span><i style="background:var(--accent2)"></i>wire에 실제로 실린 대역</span>
+        <span><i style="background:#3a2020;border:1px solid var(--danger)"></i>Nyquist 위 — 정보 없음</span>
+        <span><i style="background:var(--warn)"></i>한국어 변별 cue</span>
+      </div>
+      <div class="callout bad" style="margin-top:12px">
+        <b>정성적 그림이다.</b> read.md는 “ㅅ/ㅆ/ㅊ와 받침의 변별 에너지가 <b>4 kHz 이상에</b> 있다”고
+        말하지 실측 spectrum을 주지 않는다. 그래서 대역은 위치만 표시하고 dB 축은 그리지 않는다.
+        운영 규칙 쪽이 실제 결론이다 — <b>16 kHz mic에서 잰 한국어 STT 정확도는 이 pipeline으로
+        이전되지 않는다.</b>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ================= PANEL D : counting strip ================= -->
+<div class="panel">
+  <h2>Panel D · 재고 조사 — 정확한 수</h2>
+  <div class="counters" id="invCounts"></div>
+
+  <div class="grid2" style="margin-top:16px">
+    <div>
+      <h3><code>ls src/pipecat/transports/</code></h3>
+      <div class="lschips" id="lsTransports"></div>
+      <div class="callout bad" style="margin-top:12px">
+        <b>telephony transport는 없다.</b> <code>twilio/</code>, <code>telnyx/</code>,
+        <code>plivo/</code>, <code>exotel/</code>, <code>sip/</code> — 이 디렉터리들은 이 commit에
+        존재하지 않는다. 전화 통화는 <code>FastAPIWebsocketTransport</code> + provider별
+        <code>FrameSerializer</code>다. 프레임워크 자체 runner가 그 증거다:
+        <code>_create_telephony_transport</code> (<code>runner/utils.py:486</code>) 가
+        <code>params.serializer = TwilioFrameSerializer(...)</code>를 세우고
+        <code>:554</code>에서 <code>FastAPIWebsocketTransport(websocket=websocket, params=params)</code>를 돌려준다.
+      </div>
+    </div>
+    <div>
+      <h3><code>ls src/pipecat/serializers/</code></h3>
+      <div class="lschips" id="lsSerializers"></div>
+      <div class="tw"><table id="tblSer"></table></div>
+    </div>
+  </div>
+
+  <h3>13개 <code>BaseTransport</code> subclass — 11개 package에 흩어져 있다</h3>
+  <div class="tw"><table id="tblSub"></table></div>
+</div>
+
+<!-- ================= PANEL E : capability matrix ================= -->
+<div class="panel">
+  <h2>Panel E · capability matrix — 어느 쪽에 대응물이 없는가</h2>
+  <div class="tw"><table id="tblCap"></table></div>
+  <div class="callout" id="capNote"></div>
+</div>
+
+<p class="foot">
+  ← <a href="../read.md">ch-05 read.md</a> ·
+  Panel A → §5.4 / §8.1 · Panel B → §6.3–§6.5, §6.9 · Panel C → §6.6 · Panel D → §2, §6.1 ·
+  Panel E → §9.3, §10.2, §10.3<br>
+  ms 단위 hop latency는 이 그림에 없다. read.md §12가 그것을 <a href="../../ch-11/read.md">ch-11</a>로 넘긴다.
+</p>
+
+<script>
+"use strict";
+
+/* ====================================================================
+   0. 캔버스 — 논리 높이는 상수. cv.height를 다시 읽지 않는다.
+   ==================================================================== */
+const CANVAS_H_PATH = 360;
+const CANVAS_H_SER  = 280;
+const CANVAS_H_BAND = 250;
+
+function setupCanvas(cv, CANVAS_H){
+  const r = window.devicePixelRatio || 1;
+  const w = Math.max(cv.clientWidth, 200), h = CANVAS_H;
+  if (cv.width !== Math.round(w*r) || cv.height !== Math.round(h*r)){
+    cv.width = Math.round(w*r); cv.height = Math.round(h*r);
+  }
+  cv.style.height = h + "px";
+  const c = cv.getContext("2d"); c.setTransform(r,0,0,r,0,0); c.clearRect(0,0,w,h);
+  return {c, w, h};
+}
+
+/* 태블릿에서 캔버스 글자도 같이 키운다 (rem이 캔버스에는 안 먹으므로 수동) */
+const COARSE = !!(window.matchMedia && window.matchMedia("(pointer:coarse)").matches);
+const FS = COARSE ? 1.15 : 1;
+function fpx(n){ return Math.round(n*FS); }
+const MONO = 'ui-monospace,SFMono-Regular,Menlo,Consolas,monospace';
+const SANS = '-apple-system,BlinkMacSystemFont,"Apple SD Gothic Neo","Noto Sans KR",sans-serif';
+
+const COL = {
+  ink:"#e6edf3", dim:"#9aa7b4", faint:"#6b7686", edge:"#2b3242",
+  panel:"#1c2230", bg:"#10151d",
+  rtc:"#58a6ff", ws:"#3fb950", tel:"#d29922", own:"#f778ba",
+  ok:"#3fb950", bad:"#f85149", warn:"#d29922", bare:"#bc8cff"
+};
+
+function rr(c,x,y,w,h,r){
+  c.beginPath();
+  c.moveTo(x+r,y); c.lineTo(x+w-r,y); c.quadraticCurveTo(x+w,y,x+w,y+r);
+  c.lineTo(x+w,y+h-r); c.quadraticCurveTo(x+w,y+h,x+w-r,y+h);
+  c.lineTo(x+r,y+h); c.quadraticCurveTo(x,y+h,x,y+h-r);
+  c.lineTo(x,y+r); c.quadraticCurveTo(x,y,x+r,y); c.closePath();
+}
+function fitText(c, txt, max){
+  if (c.measureText(txt).width <= max) return txt;
+  let s = txt;
+  while (s.length > 1 && c.measureText(s+"…").width > max) s = s.slice(0,-1);
+  return s+"…";
+}
+
+/* ====================================================================
+   1. 검증된 데이터 — 전부 pinned tree 또는 read.md에서 읽어온 값
+   ==================================================================== */
+
+/* Panel A: 네 stack. hop.lat = {kind:'num'|'unk'|'none', text} */
+const STACKS = [
+  {
+    key:"rtc", name:"SmallWebRTCTransport", color:COL.rtc,
+    where:"transports/smallwebrtc/transport.py:951",
+    note:"package 2 176 L · 평범한 TransportParams (subclass 아님)",
+    hops:[
+      {t:"브라우저 mic", d:"getUserMedia · 48 kHz", lat:{k:"unk",x:"latency term — 미측정"}},
+      {t:"Opus encode", d:"브라우저 codec · 20 ms packet", lat:{k:"num",x:"20 ms packet"}},
+      {t:"SRTP / DTLS / UDP", d:"packet loss·재정렬 허용 · head-of-line blocking 없음", lat:{k:"unk",x:"network — 미측정"}},
+      {t:"aiortc jitter buffer", d:"라이브러리가 소유 · Pipecat 코드에 없음", lat:{k:"unk",x:"jitter buffer — 미측정"}, key:true},
+      {t:"Opus decode + PyAV resample", d:"48 kHz → audio_in_sample_rate", lat:{k:"unk",x:"resample term"}},
+      {t:"InputAudioRawFrame", d:"transport.input() → FrameProcessor", lat:{k:"none",x:"—"}},
+      {t:"출력: RawAudioTrack", d:"_samples_per_10ms · 어긋나면 ValueError", lat:{k:"num",x:"10 ms granularity"}}
+    ]
+  },
+  {
+    key:"ws", name:"FastAPIWebsocketTransport", color:COL.ws,
+    where:"transports/websocket/fastapi.py:611",
+    note:"이미 accept된 socket을 받는다 — route·handshake·auth는 당신 것",
+    hops:[
+      {t:"클라이언트", d:"당신이 정한 프레이밍", lat:{k:"unk",x:"latency term — 미측정"}},
+      {t:"TCP / TLS", d:"재전송 보장 = head-of-line blocking", lat:{k:"unk",x:"network — 미측정"}},
+      {t:"jitter buffer 없음", d:"TCP에는 playout clock이 없다", lat:{k:"none",x:"hop 부재"}, absent:true},
+      {t:"codec 없음(기본)", d:"serializer가 없으면 inbound 전량 silently drop (§5.3)", lat:{k:"none",x:"—"}, absent:true},
+      {t:"serializer.deserialize()", d:"params.serializer — 설정 안 하면 위 줄이 된다", lat:{k:"unk",x:"직렬화 term"}, key:true},
+      {t:"InputAudioRawFrame", d:"transport.input() → FrameProcessor", lat:{k:"none",x:"—"}},
+      {t:"출력: 위조된 clock", d:"_send_interval = (chunk/rate)/2 · fastapi.py:456", lat:{k:"num",x:"1920 B @24 kHz → 40 ms"}, key:true}
+    ]
+  },
+  {
+    key:"tel", name:"FastAPIWebsocketTransport + TwilioFrameSerializer", color:COL.tel,
+    where:"runner/utils.py:486 → :554",
+    note:"전화 통화 = 같은 transport + provider별 serializer. telephony transport는 없다.",
+    hops:[
+      {t:"전화기 / 통신사", d:"8 kHz 샘플링 · anti-alias LPF가 이미 4 kHz 위를 잘라냄", lat:{k:"unk",x:"carrier — 미측정"}, key:true},
+      {t:"Twilio media WebSocket", d:"JSON + base64 · 20 ms ≈ 160 μ-law byte", lat:{k:"num",x:"20 ms payload"}},
+      {t:"TCP / TLS", d:"WebSocket stack 그대로 — jitter buffer 없음", lat:{k:"unk",x:"network — 미측정"}},
+      {t:"TwilioFrameSerializer", d:"codec 경계 + resample 지점 + call control + DTMF decoder", lat:{k:"unk",x:"resample term ×2"}, key:true},
+      {t:"ulaw_to_pcm + resample 8k→16k", d:"sample 수는 복원, 대역폭은 복원 안 됨 (Panel C)", lat:{k:"unk",x:"resample term"}},
+      {t:"InputAudioRawFrame", d:"16 kHz PCM16 — STT는 만족한다", lat:{k:"none",x:"—"}},
+      {t:"출력: pcm_to_ulaw + clear", d:"barge-in은 {\"event\":\"clear\"}로 carrier buffer를 비운다", lat:{k:"unk",x:"carrier playout — 미측정"}}
+    ]
+  },
+  {
+    key:"own", name:"realtime_voice/transport/webrtc/", color:COL.own,
+    where:"boson 사유 코드 · [[rtv-webrtc-transport]] 경유",
+    note:"파일 목록 합 1 276 L (헤드라인 “~960”은 §10.1에서 미검증 판정)",
+    hops:[
+      {t:"브라우저 mic", d:"동일 — getUserMedia", lat:{k:"unk",x:"latency term — 미측정"}},
+      {t:"WebRTCSessionManager 인가", d:"HMAC token · TTL 15분 · one live peer", lat:{k:"none",x:"연결 시 1회"}, key:true},
+      {t:"SRTP / DTLS / UDP", d:"동일한 aiortc RTCPeerConnection", lat:{k:"unk",x:"network — 미측정"}},
+      {t:"aiortc jitter buffer", d:"동일 — 라이브러리 소유", lat:{k:"unk",x:"jitter buffer — 미측정"}},
+      {t:"PyAV resample + AudioFifo", d:"나머지 sample을 버리지 않고 보관", lat:{k:"unk",x:"resample term"}},
+      {t:"OrderedControlChannel", d:"버전·sequence·64 KiB cap·audio 금지 (control.py:25/117/136)", lat:{k:"none",x:"오디오 경로 아님"}, key:true},
+      {t:"출력: OutboundAudioTrack", d:"packet_duration_ms = 20 · 48 kHz 960 sample", lat:{k:"num",x:"20 ms granularity"}}
+    ]
+  }
+];
+
+/* Panel B/D: serializer — 전부 read.md §6.5 표에서 검증된 값 */
+const SERS = [
+  {id:"twilio", cls:"TwilioFrameSerializer", file:"twilio.py", loc:314,
+   field:"twilio_sample_rate", idKey:"streamSid", rate:8000, rateLoc:"twilio.py:79",
+   codec:"μ-law", codecFull:"μ-law (8-bit companded)",
+   clear:'{"event": "clear", "streamSid": …}', clearLoc:"twilio.py:187",
+   hangup:"auto_hang_up: bool = True", tel:true},
+  {id:"telnyx", cls:"TelnyxFrameSerializer", file:"telnyx.py", loc:292,
+   field:"telnyx_sample_rate", idKey:null, rate:8000, rateLoc:"telnyx.py:60",
+   codec:"PCMU 기본 / PCMA", codecFull:'inbound_encoding·outbound_encoding, "PCMU" 기본 (:62–63), "PCMA" 지원, 그 외 raise ValueError (:166, :273)',
+   clear:'{"event": "clear"}  ← id 없음', clearLoc:"telnyx.py:151",
+   hangup:"auto_hang_up: bool = True", tel:true},
+  {id:"plivo", cls:"PlivoFrameSerializer", file:"plivo.py", loc:256,
+   field:"plivo_sample_rate", idKey:"streamId", rate:8000, rateLoc:"plivo.py:54",
+   codec:"μ-law", codecFull:"μ-law (8-bit companded)",
+   clear:'{"event": "clearAudio", "streamId": …}', clearLoc:"plivo.py:139",
+   hangup:"auto_hang_up: bool = True", tel:true},
+  {id:"exotel", cls:"ExotelFrameSerializer", file:"exotel.py", loc:171,
+   field:"exotel_sample_rate", idKey:"stream_sid", rate:8000, rateLoc:"exotel.py:49",
+   codec:"raw PCM (companding 없음)", codecFull:"linear PCM — serialize가 bare resample (:104–106), pcm_to_ulaw 없음",
+   clear:'{"event": "clear", "stream_sid": …}', clearLoc:"exotel.py:99",
+   hangup:"auto_hang_up 없음 — call_sid는 “not used” (:60)", tel:true},
+  {id:"genesys", cls:"GenesysAudioHookSerializer", file:"genesys.py", loc:964,
+   field:"genesys_sample_rate", idKey:null, rate:8000, rateLoc:"genesys.py:148",
+   codec:"PCMU 또는 L16", codecFull:'AudioHookMediaFormat.PCMU = "PCMU"  # μ-law, 8kHz (:77), 또는 L16',
+   clear:"AudioHook 프로토콜 — read.md §6.10", clearLoc:"genesys.py",
+   hangup:"—", tel:true},
+  {id:"vonage", cls:"VonageFrameSerializer", file:"vonage.py", loc:188,
+   field:"vonage_sample_rate", idKey:null, rate:16000, rateLoc:"vonage.py:48",
+   codec:"—", codecFull:"— (read.md §6.5 표에 코덱 미기재)",
+   clear:"—", clearLoc:"vonage.py",
+   hangup:"—", tel:true},
+  {id:"protobuf", cls:"ProtobufFrameSerializer", file:"protobuf.py", loc:null,
+   field:"—", rate:null, rateLoc:"—",
+   codec:"protobuf 인코딩 (telephony 아님)", codecFull:"telephony provider가 아니다 — frame을 protobuf로 직렬화",
+   clear:"—", clearLoc:"—", hangup:"—", tel:false}
+];
+
+const TRANSPORT_LS = [
+  {n:"base_input.py", k:"file"}, {n:"base_output.py", k:"file"}, {n:"base_transport.py", k:"file"},
+  {n:"daily/", k:"pkg"}, {n:"heygen/", k:"pkg"}, {n:"lemonslice/", k:"pkg"},
+  {n:"livekit/", k:"pkg"}, {n:"local/", k:"pkg"}, {n:"moq/", k:"pkg"},
+  {n:"smallwebrtc/", k:"pkg"}, {n:"tavus/", k:"pkg"}, {n:"vonage/", k:"pkg"},
+  {n:"websocket/", k:"pkg"}, {n:"whatsapp/", k:"pkg"},
+  {n:"twilio/", k:"absent"}, {n:"telnyx/", k:"absent"}, {n:"plivo/", k:"absent"},
+  {n:"exotel/", k:"absent"}, {n:"sip/", k:"absent"}
+];
+
+const SUBCLASSES = [
+  ["DailyTransport","daily/transport.py:2279"],
+  ["HeyGenTransport","heygen/transport.py:293"],
+  ["LemonSliceTransport","lemonslice/transport.py:711"],
+  ["LiveKitTransport","livekit/transport.py:1054"],
+  ["LocalAudioTransport","local/audio.py:203"],
+  ["TkLocalTransport","local/tk.py:246"],
+  ["MOQTransport","moq/transport.py:1390"],
+  ["SmallWebRTCTransport","smallwebrtc/transport.py:951"],
+  ["TavusTransport","tavus/transport.py:883"],
+  ["VonageVideoConnectorTransport","vonage/video_connector.py:329"],
+  ["WebsocketClientTransport","websocket/client.py:479"],
+  ["SingleClientWebsocketServerTransport","websocket/server.py:518"],
+  ["FastAPIWebsocketTransport","websocket/fastapi.py:611"]
+];
+
+/* Panel E: capability matrix. 값: y / n / p(부분) + 주석 */
+const CAPS = [
+  {c:"session authorization (HMAC token · TTL · one live peer)",
+   rtc:["n","없음 — grep 결과 두 건 다 webhook 서명"], ws:["n","transport에 없음"],
+   tel:["n","없음"], own:["y","WebRTCSessionManager, 15분 TTL, SessionConflictError"],
+   gw:["y","access.py 374 L — bearer·subprotocol·origin·principal 바인딩"]},
+  {c:"data-channel / control 프로토콜 스키마",
+   rtc:["n","on_app_message(message: Any) — 스키마 없음"], ws:["p","serializer를 당신이 쓴다"],
+   tel:["y","provider가 스키마를 정의"], own:["y","ControlEvent v1 · sequence · 64 KiB · audio 금지"],
+   gw:["p","protocol.py 114 L — 3필드 JSON, 시퀀스 없음"]},
+  {c:"telephony (전화 통화)",
+   rtc:["n","해당 없음"], ws:["p","serializer를 붙이면"], tel:["y","6개 provider serializer"],
+   own:["n","없음"], gw:["n","텍스트 전용, 오디오 경로 없음"]},
+  {c:"renegotiation / ICE restart",
+   rtc:["y","renegotiate(..., restart_pc), ask_to_renegotiate()"], ws:["n","해당 없음"],
+   tel:["n","해당 없음"], own:["n","accept_offer(reconnect=True) 뿐"], gw:["n","해당 없음"]},
+  {c:"playout back-pressure (진짜 clock)",
+   rtc:["y","RTP track이 시간으로 back-pressure"], ws:["n","위조 — _send_interval + _write_audio_sleep()"],
+   tel:["n","위조 + carrier buffer"], own:["y","wall-clock pacing (tracks.py L168)"],
+   gw:["n","오디오 없음"]},
+  {c:"두 socket이 한 session을 다툴 때",
+   rtc:["n","pipeline은 connection 단위"], ws:["n","없음"], tel:["n","없음"], own:["y","one-live-peer 강제"],
+   gw:["y","_dispatch_generations · _reserve_session_dispatch(:515) · await된 취소(:584)"]},
+  {c:"reconnect-and-resume · idle TTL",
+   rtc:["n","없음"], ws:["n","없음"], tel:["n","없음"], own:["p","reconnect=True"],
+   gw:["y","session identity + 1800 s idle TTL"]},
+  {c:"video / screen share",
+   rtc:["y","있음"], ws:["p","params에 video 필드 존재"], tel:["n","해당 없음"],
+   own:["n","__post_init__이 output_channels != 1 거부"], gw:["n","해당 없음"]},
+  {c:"이름 붙은 error 타입",
+   rtc:["p","일반 예외"], ws:["p","일반 예외"], tel:["p","ValueError 정도"],
+   own:["y","7개 — webrtc/errors.py, 33 L"], gw:["p","error 메시지 4개 사이트"]},
+  {c:"같은 package family의 다른 transport",
+   rtc:["y","10개 더"], ws:["y","10개 더"], tel:["y","10개 더"], own:["n","없음"], gw:["n","없음"]}
+];
+
+/* ====================================================================
+   2. Panel A — 네 stack의 packet path
+   ==================================================================== */
+let selStack = 2;   /* 기본은 telephony: 이 챕터의 결정적 stack */
+let showAll  = false;
+
+const palStacks = document.getElementById("palStacks");
+STACKS.forEach((s,i)=>{
+  const b = document.createElement("button");
+  b.className = "pitem s"+i;
+  b.innerHTML = "<b>"+s.name+"</b><span>"+s.where+"</span>";
+  b.addEventListener("click", ()=>{ selStack = i; showAll = false; renderPanelA(); });
+  palStacks.appendChild(b);
+});
+document.getElementById("btnPathAll").addEventListener("click", ()=>{
+  showAll = !showAll; renderPanelA();
+});
+
+function drawPath(){
+  const cv = document.getElementById("cvPath");
+  const {c,w,h} = setupCanvas(cv, CANVAS_H_PATH);
+  const n = STACKS.length;
+  const padX = 10, gap = 8;
+  const colW = (w - padX*2 - gap*(n-1)) / n;
+  const topY = 34;
+  const maxHops = Math.max.apply(null, STACKS.map(s=>s.hops.length));
+  const boxH = Math.min(34, (h - topY - 16) / maxHops - 6);
+  const stepY = boxH + 6;
+
+  STACKS.forEach((s,si)=>{
+    const on = showAll || si === selStack;
+    const x = padX + si*(colW+gap);
+    c.globalAlpha = on ? 1 : 0.26;
+
+    /* 컬럼 헤더 */
+    c.fillStyle = s.color; c.font = "700 "+fpx(11)+"px "+MONO;
+    c.textAlign = "left"; c.textBaseline = "alphabetic";
+    const short = s.name.length > 34 ? s.name.slice(0,32)+"…" : s.name;
+    c.fillText(fitText(c, short, colW-4), x+2, 14);
+    c.fillStyle = COL.faint; c.font = fpx(9)+"px "+MONO;
+    c.fillText(fitText(c, s.where, colW-4), x+2, 26);
+
+    s.hops.forEach((hp,hi)=>{
+      const y = topY + hi*stepY;
+      const dashed = !!hp.absent;
+      c.save();
+      if (dashed) c.setLineDash([4,3]);
+      rr(c, x, y, colW, boxH, 6);
+      c.fillStyle = dashed ? "rgba(248,81,73,.06)"
+                   : (hp.key ? "rgba(255,255,255,.055)" : COL.panel);
+      c.fill();
+      c.lineWidth = hp.key ? 1.6 : 1;
+      c.strokeStyle = dashed ? COL.bad : (hp.key ? s.color : COL.edge);
+      c.stroke();
+      c.restore();
+
+      c.fillStyle = dashed ? COL.bad : COL.ink;
+      c.font = (hp.key?"700 ":"")+fpx(10)+"px "+SANS;
+      c.textAlign = "left"; c.textBaseline = "middle";
+      c.fillText(fitText(c, hp.t, colW-12), x+7, y+boxH/2 - (boxH>26?6:0));
+      if (boxH > 26){
+        c.fillStyle = COL.faint; c.font = fpx(8.5)+"px "+MONO;
+        c.fillText(fitText(c, hp.lat.x, colW-12), x+7, y+boxH/2 + 8);
+      }
+
+      /* hop 사이 화살표 */
+      if (hi < s.hops.length-1){
+        const ay = y + boxH + 3;
+        c.strokeStyle = dashed ? COL.bad : s.color; c.globalAlpha = on ? 0.55 : 0.2;
+        c.lineWidth = 1;
+        c.beginPath(); c.moveTo(x+colW/2, ay-1); c.lineTo(x+colW/2, ay+2); c.stroke();
+        c.globalAlpha = on ? 1 : 0.26;
+      }
+    });
+  });
+  c.globalAlpha = 1;
+}
+
+function renderPanelA(){
+  Array.prototype.forEach.call(palStacks.children, (el,i)=>{
+    el.classList.toggle("on", !showAll && i === selStack);
+  });
+  document.getElementById("btnPathAll").classList.toggle("primary", showAll);
+  const s = STACKS[selStack];
+  document.getElementById("hopTitle").innerHTML =
+    "hop 상세 — <code style='color:"+s.color+"'>"+s.name+"</code> · "+s.note;
+  const list = document.getElementById("hopList");
+  list.innerHTML = "";
+  s.hops.forEach(hp=>{
+    const d = document.createElement("div");
+    d.className = "hop";
+    if (hp.absent) d.style.borderColor = COL.bad;
+    else if (hp.key) d.style.borderColor = s.color;
+    d.innerHTML = "<b>"+hp.t+"</b><span>"+hp.d+"</span>"+
+      "<span class='lat "+(hp.lat.k==="num"?"num":hp.lat.k==="unk"?"unk":"none")+"'>"+hp.lat.x+"</span>";
+    list.appendChild(d);
+  });
+  drawPath();
+}
+
+/* ====================================================================
+   3. Panel B — serializer 상자를 열고 frame 한 개를 통과시킨다
+   ==================================================================== */
+let selProv = 0;                 /* SERS index — twilio */
+let selDir  = "in";              /* in | out | int */
+let stepIx  = -1;                /* -1 = 시작 전 */
+let timer   = null;
+
+const DIRS = [
+  {id:"in",  label:"inbound  (통신사 → frame)"},
+  {id:"out", label:"outbound (frame → 통신사)"},
+  {id:"int", label:"interruption (barge-in)"}
+];
+
+/* 한 방향의 단계 목록을 provider 사실로부터 만든다.
+   20 ms 페이로드를 표준 단위로 쓴다 — read.md §6.6의 “~160 byte(20 ms)” 예시. */
+function buildSteps(s, dir){
+  const R = s.rate;                       /* wire rate       */
+  const P = 16000;                        /* pipeline 쪽 rate — TransportParams 기본 audio_in_sample_rate */
+  const wireSamples = Math.round(R * 0.02);
+  const pipeSamples = Math.round(P * 0.02);
+  const companded = (s.id === "twilio" || s.id === "plivo" ||
+                     s.id === "telnyx" || s.id === "genesys");
+  /* Vonage: read.md §6.5 표의 codec 칸이 “—”다. 기록이 없으므로 바이트 수를 지어내지 않고
+     null로 둔다. wire rate(16 kHz)만 검증된 값이다. */
+  const unknown = (s.id === "vonage");
+  const B = v => unknown ? null : v;
+
+  if (dir === "int"){
+    return [
+      {t:"InterruptionFrame", d:"pipeline이 barge-in을 결정했다", bytes:null, kind:"ctl",
+       code:"elif isinstance(frame, InterruptionFrame):"},
+      {t:"serialize()", d:s.file+":166 의 분기 — 오디오 경로가 아니다", bytes:null, kind:"ctl",
+       code:"async def serialize(self, frame) -> str | bytes | None:"},
+      {t:"clear 이벤트", d:s.clear, bytes:null, kind:"clr",
+       code: s.clear.indexOf("{") === 0
+             ? 'answer = '+s.clear.split("  ←")[0].replace("…", "self._stream_sid")+"   # "+s.clearLoc
+             : (s.clear === "—"
+                ? "# read.md §6.5 표에 interruption 이벤트 기록 없음 — 지어내지 않는다"
+                : "# "+s.clear)},
+      {t:"json.dumps → socket", d:"통신사가 자기 playout buffer를 비운다 — barge-in은 pipeline queue가 아니라 저쪽 buffer를 지워야 끝난다",
+       bytes:null, kind:"clr",
+       code:"return json.dumps(answer)"}
+    ];
+  }
+  if (dir === "in"){
+    const wireDesc = unknown ? "20 ms · "+R.toLocaleString()+" Hz · codec 미기재 — read.md §6.5 표의 codec 칸이 “—”다"
+                    : "20 ms · "+R.toLocaleString()+" Hz · "+(companded?"μ-law 1 byte/sample":"linear PCM 2 byte/sample");
+    const steps = [
+      {t:"통신사 wire", d:wireDesc,
+       bytes: B(companded ? wireSamples : wireSamples*2), rate:R, kind:"wire",
+       code:'message["media"]["payload"]  # base64'},
+      {t:"base64.b64decode", d:"JSON 텍스트 → 바이트", bytes: B(companded ? wireSamples : wireSamples*2), rate:R, kind:"wire",
+       code:"payload = base64.b64decode(payload_base64)   # twilio.py:291"}
+    ];
+    if (companded){
+      steps.push({t:"ulaw_to_pcm(...)", d:"8-bit companded → 16-bit linear · 그리고 resample",
+        bytes: wireSamples*2, rate:R, kind:"pcm",
+        code:"deserialized_data = await ulaw_to_pcm(\n    payload, self._"+s.id+"_sample_rate,\n    self._sample_rate, self._input_resampler)   # :294"});
+    } else if (unknown){
+      steps.push({t:"codec 경로 미검증", d:"read.md는 VonageFrameSerializer의 codec을 기록하지 않는다 — 여기서 지어내지 않는다",
+        bytes:null, rate:R, kind:"wire",
+        code:"# vonage.py:48 만 검증됨: vonage_sample_rate: int = 16000"});
+    } else {
+      steps.push({t:"resampler.resample(...)", d:"companding 없음 — resample만 한다",
+        bytes: wireSamples*2, rate:R, kind:"pcm",
+        code:"await self._input_resampler.resample(\n    payload, self._"+s.id+"_sample_rate, self._sample_rate)"});
+    }
+    steps.push({t:"resample "+(R/1000)+" k → 16 k",
+      d: R===P ? "동률 — 실질 no-op" : (pipeSamples+" sample이 "+wireSamples+" sample에서 만들어진다"),
+      bytes: B(pipeSamples*2), rate:P, kind:"pcm",
+      code: R===P ? "# 같은 rate — 보간 없음" : "# 보간: sample 수는 늘고 대역폭은 안 는다"});
+    steps.push({t:"InputAudioRawFrame", d:"STT는 16 kHz PCM16을 받고 만족한다", bytes: B(pipeSamples*2), rate:P, kind:"frm",
+      code:"return InputAudioRawFrame(audio=..., sample_rate=self._sample_rate, num_channels=1)"});
+    return steps;
+  }
+  /* out */
+  const steps = [
+    {t:"TTSAudioRawFrame", d:"20 ms · 16 kHz PCM16 (파이프라인 rate)", bytes: B(pipeSamples*2), rate:P, kind:"frm",
+     code:"elif isinstance(frame, AudioRawFrame):\n    data = frame.audio               # :189-190"}
+  ];
+  if (companded){
+    steps.push({t:"pcm_to_ulaw(...)", d:"resample 후 companding — 한 함수 안에서", bytes: wireSamples, rate:R, kind:"wire",
+      code:"serialized_data = await pcm_to_ulaw(\n    data, frame.sample_rate, self._"+s.id+"_sample_rate,\n    self._output_resampler)          # :193"});
+  } else if (unknown){
+    steps.push({t:"codec 경로 미검증", d:"read.md §6.5는 Vonage의 codec을 기록하지 않는다", bytes:null, rate:R, kind:"wire",
+      code:"# vonage.py:48 만 검증됨"});
+  } else {
+    steps.push({t:"output_resampler.resample(...)", d:"linear PCM 그대로 — pcm_to_ulaw 없음", bytes: wireSamples*2, rate:R, kind:"pcm",
+      code:"await self._output_resampler.resample(\n    data, frame.sample_rate, self._"+s.id+"_sample_rate)   # exotel.py:104–106"});
+  }
+  steps.push({t:"base64.b64encode", d:"바이트 → JSON에 들어갈 텍스트", bytes: B(companded?wireSamples:wireSamples*2), rate:R, kind:"wire",
+    code:'payload = base64.b64encode(serialized_data).decode("utf-8")   # :200'});
+  steps.push(s.idKey
+    ? {t:"media 메시지", d:"모든 outbound media에 <"+s.idKey+"> 가 붙는다 — stream_sid는 매 메시지, call_sid는 REST call control에만",
+       bytes: null, rate:R, kind:"clr",
+       code:'answer = {"event": "media",\n          "'+s.idKey+'": self._stream_sid,\n          "media": {"payload": payload}}'
+            + (s.id==="twilio" ? "   # twilio.py:201–205" : "")}
+    : {t:"media 메시지", d:"이 provider의 media 메시지 식별자 필드는 read.md에 기록이 없다 — 지어내지 않는다",
+       bytes: null, rate:R, kind:"clr",
+       code:"# 검증된 것: "+s.rateLoc+" 의 wire rate 뿐"});
+  return steps;
+}
+
+const segProv = document.getElementById("segProv");
+SERS.forEach((s,i)=>{
+  const b = document.createElement("button");
+  b.className = "seg" + (s.tel ? "" : " dis");
+  b.textContent = s.file + (s.loc ? " · "+s.loc+" L" : "");
+  b.title = s.cls;
+  b.addEventListener("click", ()=>{
+    if (!s.tel){
+      logSer("er", s.cls+" 는 telephony serializer가 아니다 — 7개 구현 중 유일하게 통신사와 무관하다.");
+      return;
+    }
+    selProv = i; resetSer(); renderPanelB();
+  });
+  segProv.appendChild(b);
+});
+
+const segDir = document.getElementById("segDir");
+DIRS.forEach(d=>{
+  const b = document.createElement("button");
+  b.className = "seg"; b.textContent = d.label;
+  b.addEventListener("click", ()=>{ selDir = d.id; resetSer(); renderPanelB(); });
+  segDir.appendChild(b);
+});
+
+function logSer(cls, txt){
+  const el = document.getElementById("serLog");
+  const d = document.createElement("div");
+  d.className = cls;
+  d.textContent = txt;
+  el.appendChild(d); el.scrollTop = el.scrollHeight;
+}
+function resetSer(){
+  stepIx = -1;
+  if (timer){ clearInterval(timer); timer = null; }
+  document.getElementById("btnPlay").textContent = "▶ 재생";
+  document.getElementById("serLog").innerHTML = "";
+}
+function stepSer(){
+  const steps = buildSteps(SERS[selProv], selDir);
+  if (stepIx >= steps.length-1){
+    if (timer){ clearInterval(timer); timer=null;
+      document.getElementById("btnPlay").textContent = "▶ 재생"; }
+    return;
+  }
+  stepIx++;
+  const st = steps[stepIx];
+  const b = st.bytes === null ? "" : "  ["+st.bytes+" B @ "+(st.rate/1000)+" kHz]";
+  logSer(st.kind==="clr"?"er":st.kind==="pcm"?"ok":st.kind==="frm"?"cur":"warn",
+         (stepIx+1)+". "+st.t+b+"\n   "+st.d);
+  renderPanelB();
+}
+document.getElementById("btnStep").addEventListener("click", stepSer);
+document.getElementById("btnReset").addEventListener("click", ()=>{ resetSer(); renderPanelB(); });
+document.getElementById("btnPlay").addEventListener("click", ()=>{
+  if (timer){ clearInterval(timer); timer=null;
+    document.getElementById("btnPlay").textContent = "▶ 재생"; return; }
+  if (stepIx >= buildSteps(SERS[selProv], selDir).length-1) resetSer();
+  document.getElementById("btnPlay").textContent = "⏸ 정지";
+  timer = setInterval(stepSer, 1100);
+  stepSer();
+});
+
+function drawSer(){
+  const cv = document.getElementById("cvSer");
+  const {c,w,h} = setupCanvas(cv, CANVAS_H_SER);
+  const s = SERS[selProv];
+  const steps = buildSteps(s, selDir);
+
+  /* serializer 상자: 첫 단계와 마지막 단계를 뺀 가운데가 serializer 내부 */
+  const boxX = w*0.16, boxW = w*0.68, boxY = 46, boxH = h - 96;
+  c.save(); c.setLineDash([5,4]);
+  rr(c, boxX, boxY, boxW, boxH, 10);
+  c.fillStyle = "rgba(210,153,34,.05)"; c.fill();
+  c.strokeStyle = COL.tel; c.lineWidth = 1.4; c.stroke();
+  c.restore();
+  c.fillStyle = COL.tel; c.font = "700 "+fpx(11)+"px "+MONO;
+  c.textAlign = "left"; c.textBaseline = "alphabetic";
+  c.fillText(s.cls, boxX+8, boxY-16);
+  c.fillStyle = COL.faint; c.font = fpx(9)+"px "+MONO;
+  c.fillText("serializers/"+s.file+" · "+(s.loc?s.loc+" L · ":"")+
+             "codec 경계 + resample 지점 + call control + DTMF decoder", boxX+8, boxY-4);
+
+  /* 단계 노드들 */
+  const n = steps.length;
+  const cy = boxY + boxH*0.42;
+  const slotW = w / n;
+  steps.forEach((st,i)=>{
+    const x = slotW*i + slotW/2;
+    const done = i <= stepIx;
+    const cur  = i === stepIx;
+    const col = st.kind==="clr" ? COL.bad : st.kind==="pcm" ? COL.ok
+              : st.kind==="frm" ? COL.rtc : COL.tel;
+
+    /* 연결선 */
+    if (i>0){
+      c.strokeStyle = done ? col : COL.edge; c.lineWidth = done?2:1;
+      c.beginPath(); c.moveTo(slotW*(i-1)+slotW/2+22, cy); c.lineTo(x-22, cy); c.stroke();
+      if (done){
+        c.fillStyle = col; c.beginPath();
+        c.moveTo(x-22,cy); c.lineTo(x-28,cy-4); c.lineTo(x-28,cy+4); c.closePath(); c.fill();
+      }
+    }
+    /* 노드 */
+    c.globalAlpha = done ? 1 : 0.38;
+    c.beginPath(); c.arc(x, cy, cur?18:14, 0, Math.PI*2);
+    c.fillStyle = cur ? col : COL.panel; c.fill();
+    c.lineWidth = cur?2.4:1.4; c.strokeStyle = col; c.stroke();
+    c.fillStyle = cur ? "#0e1117" : col; c.font = "700 "+fpx(11)+"px "+MONO;
+    c.textAlign="center"; c.textBaseline="middle"; c.fillText(String(i+1), x, cy+1);
+
+    /* 라벨 */
+    c.fillStyle = done ? COL.ink : COL.faint; c.font = (cur?"700 ":"")+fpx(9.5)+"px "+SANS;
+    c.textBaseline = "top";
+    c.fillText(fitText(c, st.t, slotW-6), x, cy+24);
+    if (st.bytes !== null){
+      c.fillStyle = col; c.font = fpx(9)+"px "+MONO;
+      c.fillText(st.bytes+" B @ "+(st.rate/1000)+"k", x, cy+38);
+    }
+    c.globalAlpha = 1;
+
+    /* 바이트 막대 — 크기 변화가 눈에 보이게 */
+    if (st.bytes !== null){
+      const maxB = Math.max.apply(null, steps.map(t=>t.bytes||0)) || 1;
+      const bw = Math.max(6, (st.bytes/maxB) * (slotW*0.62));
+      const by = boxY + boxH - 26;
+      c.globalAlpha = done ? 0.9 : 0.22;
+      rr(c, x-bw/2, by, bw, 12, 3);
+      c.fillStyle = col; c.fill();
+      c.globalAlpha = 1;
+    }
+  });
+
+  /* 하단 축 설명 */
+  c.fillStyle = COL.faint; c.font = fpx(9)+"px "+SANS;
+  c.textAlign="left"; c.textBaseline="alphabetic";
+  c.fillText("막대 = 20 ms 한 덩어리의 바이트 수 (상대). 바이트가 늘어나는 지점이 resample이고, "
+    + "정보가 늘어나는 지점은 아니다.", 6, h-8);
+}
+
+function renderPanelB(){
+  Array.prototype.forEach.call(segProv.children, (el,i)=>{
+    el.classList.toggle("on", i === selProv && SERS[i].tel);
+  });
+  Array.prototype.forEach.call(segDir.children, (el,i)=>{
+    el.classList.toggle("on", DIRS[i].id === selDir);
+  });
+  const s = SERS[selProv];
+  const steps = buildSteps(s, selDir);
+
+  document.getElementById("provFacts").innerHTML =
+    "<div class='hops' style='margin-top:12px'>"
+    + "<div class='hop'><b>"+s.field+": int = "+(s.rate?s.rate:"—")+"</b>"
+    + "<span>검증 위치 <code>"+s.rateLoc+"</code> · wire Nyquist 천장 = "
+    + (s.rate ? (s.rate/2/1000)+" kHz" : "—")+"</span></div>"
+    + "<div class='hop'><b>codec</b><span>"+s.codecFull+"</span></div>"
+    + "<div class='hop'><b>interruption</b><span><code>"+s.clear+"</code> — "+s.clearLoc+"</span></div>"
+    + "<div class='hop'><b>call control</b><span>"+s.hangup+"</span></div>"
+    + "</div>";
+
+  const cur = stepIx >= 0 ? steps[Math.min(stepIx, steps.length-1)] : null;
+  document.getElementById("serCode").innerHTML = cur
+    ? "<span class='dim'># serializers/"+s.file+" — 단계 "+(stepIx+1)+"/"+steps.length+"</span>\n"
+      + "<span class='hi'>"+esc(cur.code)+"</span>"
+    : "<span class='dim'># ▶ 재생 또는 step ▸ 을 눌러 frame 한 개를 통과시킨다\n"
+      + "# "+s.cls+" · serializers/"+s.file+"</span>";
+
+  document.getElementById("serVerdict").innerHTML = verdictFor(s);
+  drawSer();
+  renderPanelC();
+  drawBand();
+}
+function esc(t){ return t.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;"); }
+
+function verdictFor(s){
+  if (s.rate === 16000){
+    return "<b>Vonage는 여섯 중 유일한 예외다.</b> <code>vonage_sample_rate: int = 16000</code> "
+      + "(<code>vonage.py:48</code>) 이므로 Nyquist 천장이 8 kHz이고, Panel C의 빨간 영역이 사라진다. "
+      + "나머지 다섯은 전부 8 kHz다.";
+  }
+  if (s.id === "exotel"){
+    return "<b>Exotel은 다른 축의 예외다.</b> 유일하게 companded codec이 아니라 linear PCM을 보낸다 — "
+      + "serialize가 <code>pcm_to_ulaw</code> 없이 맨 resample이다 (<code>exotel.py:104–106</code>). "
+      + "그리고 유일하게 <code>auto_hang_up</code>이 없다: <code>call_sid</code>를 받지만 docstring이 "
+      + "“optional, not used in this implementation” (<code>:60</code>)라고 말한다. "
+      + "wire rate는 여전히 8 kHz라서 <b>4 kHz 천장은 그대로다</b> — companding만 빠진 것이지 대역은 그대로다.";
+  }
+  if (s.id === "telnyx"){
+    return "<b>Telnyx의 clear에는 식별자가 없다.</b> <code>{\"event\": \"clear\"}</code> 하나뿐 "
+      + "(<code>telnyx.py:151</code>) — Twilio의 <code>streamSid</code>, Plivo의 <code>streamId</code>와 "
+      + "다르다. 그리고 encoding이 설정 가능한 유일한 provider다: <code>\"PCMU\"</code> 기본, "
+      + "<code>\"PCMA\"</code> 지원, 그 외에는 <code>raise ValueError</code> (<code>:166, :273</code>).";
+  }
+  if (s.id === "genesys"){
+    return "<b>964줄 — 7개 중 가장 큰 파일이고 telephony 중에서도 가장 크다.</b> "
+      + "<code>AudioHookMediaFormat.PCMU = \"PCMU\"  # μ-law, 8kHz</code> (<code>:77</code>). "
+      + "wire rate는 <code>genesys_sample_rate: int = 8000</code> (<code>:148</code>) — 같은 4 kHz 천장.";
+  }
+  if (s.id === "plivo"){
+    return "<b>Plivo만 이벤트 이름이 다르다.</b> <code>{\"event\": \"clearAudio\", \"streamId\": …}</code> "
+      + "(<code>plivo.py:139</code>) — <code>clear</code>도 <code>streamSid</code>도 아니다. "
+      + "provider별 serializer가 필요한 이유가 정확히 이런 문자열들이다.";
+  }
+  return "<b>이 상자 하나가 다섯 가지 일을 동시에 한다.</b> codec 경계, resample 지점, call-control "
+    + "클라이언트(<code>auto_hang_up</code>), DTMF decoder(<code>InputDTMFFrame(KeypadEntry(digit))</code>), "
+    + "그리고 interruption을 통신사 이벤트로 번역하는 곳. "
+    + "outbound DTMF는 <b>어느 serializer에도 없다</b> — <code>_write_dtmf_audio()</code>가 합성한 톤 WAV를 "
+    + "평범한 오디오로 밀어 넣는 것이 전부다. 비대칭이다.";
+}
+
+/* ====================================================================
+   4. Panel C — Nyquist 천장과 한국어 cue 대역
+   read.md §6.6은 “4 kHz 이상”이라는 정성적 주장만 준다. 그래서 대역은
+   위치 표시만 하고 dB 축은 그리지 않는다. 숫자를 지어내지 않는다.
+   ==================================================================== */
+const KOR_BANDS = [
+  {lo:4000, hi:8000, t:"마찰음·파찰음 ㅅ ㅆ ㅊ", s:"사/싸, 자/차를 가르는 에너지"},
+  {lo:4000, hi:7000, t:"받침 release burst", s:"갔/같/잤 습니다"}
+];
+
+function drawBand(){
+  const cv = document.getElementById("cvBand");
+  const {c,w,h} = setupCanvas(cv, CANVAS_H_BAND);
+  const s = SERS[selProv];
+  const wireRate = s.rate || 8000;
+  const up = document.getElementById("ckUp").checked;
+  const showKor = document.getElementById("ckKor").checked;
+  const showMu = document.getElementById("ckMu").checked;
+
+  const FMAX = 8000;                       /* 축 상한 = 16 kHz 신호의 Nyquist */
+  const L = 46, R = w-14, T = 30, B = h-42;
+  const x = f => L + (f/FMAX)*(R-L);
+  const ceil = wireRate/2;                 /* wire Nyquist */
+
+  /* 축 */
+  c.strokeStyle = COL.edge; c.lineWidth = 1;
+  c.beginPath(); c.moveTo(L,B); c.lineTo(R,B); c.stroke();
+  c.fillStyle = COL.faint; c.font = fpx(9)+"px "+MONO;
+  c.textAlign="center"; c.textBaseline="top";
+  for (let f=0; f<=FMAX; f+=1000){
+    c.beginPath(); c.moveTo(x(f),B); c.lineTo(x(f),B+4); c.stroke();
+    c.fillText((f/1000)+"k", x(f), B+7);
+  }
+  c.textAlign="left";
+  c.fillText("frequency (Hz) — 세로축 없음: 이 그림은 정성적이다", L, B+22);
+
+  /* 실제로 실린 대역 */
+  c.fillStyle = "rgba(63,185,80,.20)";
+  c.fillRect(L, T, x(ceil)-L, B-T);
+  c.strokeStyle = COL.ok; c.lineWidth = 1.2;
+  c.beginPath(); c.moveTo(L,T); c.lineTo(x(ceil),T); c.stroke();
+
+  /* Nyquist 위 — 정보 없음 */
+  if (ceil < FMAX){
+    c.fillStyle = "rgba(248,81,73,.10)";
+    c.fillRect(x(ceil), T, R-x(ceil), B-T);
+    /* 해칭 */
+    c.save();
+    c.beginPath(); c.rect(x(ceil), T, R-x(ceil), B-T); c.clip();
+    c.strokeStyle = "rgba(248,81,73,.30)"; c.lineWidth = 1;
+    for (let i=-(B-T); i<(R-x(ceil)); i+=9){
+      c.beginPath(); c.moveTo(x(ceil)+i, B); c.lineTo(x(ceil)+i+(B-T), T); c.stroke();
+    }
+    c.restore();
+    c.fillStyle = COL.bad; c.font = "700 "+fpx(11)+"px "+SANS;
+    c.textAlign="center"; c.textBaseline="middle";
+    c.fillText("정보 없음", (x(ceil)+R)/2, T+(B-T)*0.34);
+    c.font = fpx(9.5)+"px "+SANS;
+    c.fillText(up ? "upsample이 채운 보간값 — 원본에 없던 대역"
+                  : "통신사 anti-alias filter가 이미 잘라냈다",
+               (x(ceil)+R)/2, T+(B-T)*0.34+16);
+  }
+
+  /* Nyquist 천장 선 */
+  c.strokeStyle = COL.bad; c.lineWidth = 2;
+  c.setLineDash([6,4]);
+  c.beginPath(); c.moveTo(x(ceil), T-10); c.lineTo(x(ceil), B); c.stroke();
+  c.setLineDash([]);
+  c.fillStyle = COL.bad; c.font = "700 "+fpx(10.5)+"px "+MONO;
+  c.textAlign = ceil > FMAX*0.7 ? "right" : "left"; c.textBaseline="alphabetic";
+  c.fillText("Nyquist = "+wireRate.toLocaleString()+" / 2 = "+(ceil/1000)+" kHz",
+             ceil > FMAX*0.7 ? x(ceil)-6 : x(ceil)+6, T-14);
+
+  /* 한국어 cue 대역 */
+  if (showKor){
+    KOR_BANDS.forEach((bd,i)=>{
+      const y = T + 26 + i*30;
+      const bx = x(bd.lo), bw2 = x(bd.hi)-x(bd.lo);
+      rr(c, bx, y, bw2, 20, 4);
+      c.fillStyle = "rgba(210,153,34,.22)"; c.fill();
+      c.strokeStyle = COL.warn; c.lineWidth = 1.2; c.stroke();
+      c.fillStyle = COL.warn; c.font = "700 "+fpx(9.5)+"px "+SANS;
+      c.textAlign="left"; c.textBaseline="middle";
+      c.fillText(fitText(c, bd.t, bw2-8), bx+6, y+10);
+      c.fillStyle = COL.dim; c.font = fpx(9)+"px "+SANS;
+      c.textAlign="right";
+      c.fillText(fitText(c, bd.s, bx-L-6), bx-6, y+10);
+    });
+  }
+
+  /* μ-law 양자화 표시 — 실린 대역 안에 격자 */
+  if (showMu && s.id !== "exotel" && s.rate){
+    c.save();
+    c.beginPath(); c.rect(L, B-34, x(ceil)-L, 30); c.clip();
+    c.strokeStyle = "rgba(230,237,243,.16)"; c.lineWidth = 1;
+    for (let gx=L; gx<x(ceil); gx+=6){
+      c.beginPath(); c.moveTo(gx, B-34); c.lineTo(gx, B-4); c.stroke();
+    }
+    c.restore();
+    c.strokeStyle = "rgba(230,237,243,.28)";
+    c.strokeRect(L, B-34, x(ceil)-L, 30);
+    c.fillStyle = COL.dim; c.font = fpx(9)+"px "+SANS;
+    c.textAlign="left"; c.textBaseline="middle";
+    c.fillText("μ-law 8-bit 로그 양자화 — PCM16 대비 유효 dynamic range 약 2 bit 손실", L+6, B-19);
+  }
+
+  /* 위쪽 캡션 */
+  c.fillStyle = COL.dim; c.font = fpx(10)+"px "+SANS;
+  c.textAlign="left"; c.textBaseline="top";
+  c.fillText(up ? "STT가 보는 신호: 16 kHz PCM16 — 축은 0–8 kHz"
+                : "wire 위의 신호: "+(wireRate/1000)+" kHz — 축은 0–8 kHz", L, 6);
+}
+
+function renderPanelC(){
+  const s = SERS[selProv];
+  const wireRate = s.rate || 8000;
+  const ceil = wireRate/2;
+  const up = document.getElementById("ckUp").checked;
+  const wireSamples = Math.round(wireRate*0.02);
+  const pipeSamples = 320;
+
+  document.getElementById("bandStats").innerHTML =
+      chip("wire rate", wireRate.toLocaleString()+" Hz", s.rateLoc, ceil===8000?"good":"zero")
+    + chip("Nyquist 천장", (ceil/1000)+" kHz", "= wire rate / 2", ceil===8000?"good":"zero")
+    + chip("20 ms sample 수", wireSamples+" → "+(up?pipeSamples:wireSamples),
+           up?"보간으로 늘어난 수":"upsample 전", "")
+    + chip("새로 생긴 정보", "0", "보간은 정보를 만들지 않는다", "zero");
+
+  document.getElementById("bandNote").innerHTML =
+    ceil === 8000
+    ? "<b>Vonage(16 kHz)에서는 빨간 영역이 없다.</b> 그래서 한국어 마찰음·받침 cue가 wire 위에 "
+      + "남아 있다. 나머지 다섯 provider에서는 남지 않는다. provider 선택이 STT 정확도 선택이라는 뜻이다."
+    : "<b>운영 규칙:</b> 16 kHz 마이크 오디오에서 측정한 한국어 STT 정확도는 이 pipeline으로 "
+      + "<b>이전되지 않는다</b>. “조금 낙관적”이 아니라 이전 불가다. 통신사를 통과한 실제 8 kHz μ-law로 "
+      + "측정하거나, 그 수치를 <b>미상</b>으로 기록하라. 통신사 접근 전 정직한 대용치는 "
+      + "16 kHz eval set을 3.4–4 kHz로 low-pass → μ-law encode/decode → 16 kHz upsample 후 재측정이고, "
+      + "그조차 packet loss·jitter·통신사 AGC를 빼먹으므로 여전히 낙관적이다.";
+}
+function chip(t,v,sub,cls){
+  return "<div class='chip2 "+(cls||"")+"'><b>"+v+"</b>"+t
+       + (sub?"<br><span style='font-size:0.7143rem'>"+sub+"</span>":"")+"</div>";
+}
+["ckUp","ckKor","ckMu"].forEach(id=>{
+  document.getElementById(id).addEventListener("change", ()=>{ renderPanelC(); drawBand(); });
+});
+
+/* ====================================================================
+   5. Panel D — 재고 조사
+   ==================================================================== */
+function renderPanelD(){
+  const pkgs = TRANSPORT_LS.filter(e=>e.k==="pkg").length;
+  const tels = SERS.filter(s=>s.tel).length;
+  document.getElementById("invCounts").innerHTML =
+      chip("transport provider package", String(pkgs), "ls src/pipecat/transports/", "good")
+    + chip("BaseTransport subclass", String(SUBCLASSES.length), "일부 package는 둘 이상 낸다", "good")
+    + chip("구체 FrameSerializer", "7", tels+" telephony + protobuf", "good")
+    + chip("telephony transport package", "0", "twilio/ telnyx/ plivo/ sip/ 없음", "zero")
+    + chip("BaseTransport abstract method", "2", "input() :122 · output() :131", "good")
+    + chip("BaseTransport 줄 수", "42", "137줄 파일 안, :96에서 시작", "");
+
+  const lt = document.getElementById("lsTransports");
+  lt.innerHTML = "";
+  TRANSPORT_LS.forEach(e=>{
+    const d = document.createElement("span");
+    d.className = "ls " + (e.k==="pkg" ? "pkg" : e.k==="absent" ? "absent" : "");
+    d.textContent = e.k==="absent" ? e.n+"  ✗" : e.n;
+    if (e.k==="absent") d.title = "이 commit에 존재하지 않는다";
+    lt.appendChild(d);
+  });
+
+  const lsr = document.getElementById("lsSerializers");
+  lsr.innerHTML = "";
+  const abc = document.createElement("span");
+  abc.className = "ls abc"; abc.textContent = "base_serializer.py";
+  abc.title = "ABC — 구체 구현 7개에 포함되지 않는다";
+  lsr.appendChild(abc);
+  SERS.forEach(s=>{
+    const d = document.createElement("span");
+    d.className = "ls " + (s.tel ? "tel" : "pb");
+    d.textContent = s.file;
+    d.title = s.cls;
+    lsr.appendChild(d);
+  });
+
+  let html = "<tr><th>serializer</th><th>wire rate</th><th>codec</th><th>interruption</th></tr>";
+  SERS.forEach(s=>{
+    const rate = s.rate ? "<code>"+s.field+" = "+s.rate+"</code><br><span style='color:var(--ink-faint)'>"
+                          +s.rateLoc+"</span>" : "—";
+    html += "<tr><td><code>"+s.cls+"</code>"+(s.loc?" <span class='tag'>"+s.loc+" L</span>":"")
+          + (s.tel?"":" <span class='tag'>telephony 아님</span>")+"</td>"
+          + "<td>"+rate+"</td><td>"+s.codec+"</td>"
+          + "<td><code>"+s.clear+"</code></td></tr>";
+  });
+  document.getElementById("tblSer").innerHTML = html;
+
+  let sub = "<tr><th>class</th><th>src/pipecat/transports/…</th></tr>";
+  SUBCLASSES.forEach(r=>{
+    sub += "<tr><td><code>"+r[0]+"</code></td><td class='mono' style='color:var(--ink-dim)'>"
+         + r[1]+"</td></tr>";
+  });
+  document.getElementById("tblSub").innerHTML = sub;
+}
+
+/* ====================================================================
+   6. Panel E — capability matrix
+   ==================================================================== */
+function renderPanelE(){
+  const cols = [
+    {k:"rtc", h:"Pipecat<br>SmallWebRTC", cls:"rtc"},
+    {k:"ws",  h:"Pipecat<br>FastAPIWebsocket", cls:""},
+    {k:"tel", h:"Pipecat WS<br>+ telephony serializer", cls:"tel"},
+    {k:"own", h:"boson<br>realtime_voice", cls:"own"},
+    {k:"gw",  h:"boson<br>gateway/server", cls:"own"}
+  ];
+  let html = "<tr><th>capability</th>";
+  cols.forEach(c=>{ html += "<th style='text-align:center'>"+c.h+"</th>"; });
+  html += "</tr>";
+  CAPS.forEach(row=>{
+    html += "<tr><td>"+row.c+"</td>";
+    cols.forEach(c=>{
+      const v = row[c.k];
+      const g = v[0]==="y" ? "✔" : v[0]==="n" ? "✘" : "◐";
+      html += "<td class='mk "+v[0]+"' title=\""+v[1].replace(/"/g,"'")+"\">"+g
+            + "<div style='font-weight:400;font-size:0.75rem;color:var(--ink-faint);"
+            + "text-align:center;line-height:1.35;margin-top:2px'>"+v[1]+"</div></td>";
+    });
+    html += "</tr>";
+  });
+  document.getElementById("tblCap").innerHTML = html;
+
+  document.getElementById("capNote").innerHTML =
+    "<b>정직한 회계.</b> <code>gateway/server/</code>는 1 404 L "
+    + "(websocket.py 734 · access.py 374 · protocol.py 114 · interruption.py 95 · history.py 70 · __init__.py 17)이고, "
+    + "그중 <b>약 700 L에 Pipecat 대응물이 없다</b> — access.py의 인증·principal 바인딩, history.py의 debug projection, "
+    + "generation 기반 dispatch 프로토콜. 마이그레이션의 정확한 문장은 “1 404줄을 지운다”가 아니라 "
+    + "<b>“~700줄 유지 + ~700줄 이식”</b>이다. "
+    + "<code>realtime_voice/transport/webrtc/</code> 쪽은 파일 목록 합이 <b>1 276 L</b>인데 excerpt 헤드라인은 "
+    + "“~960 LOC”라고 말한다 — read.md §10.1은 이 33 % 차이를 미검증으로 남겨 뒀다. "
+    + "Pipecat transport를 채택하면 telephony와 provider package 10개, renegotiation, ICE restart가 따라오고, "
+    + "<b>HMAC session 인가</b>와 <b>버전·sequence가 붙은 ControlEvent</b>를 애플리케이션 코드로 다시 쓰는 비용을 낸다. "
+    + "Pipecat은 둘 다 출하하지 않는다.";
+}
+
+/* ====================================================================
+   7. boot
+   ==================================================================== */
+function boot(){
+  renderPanelA();
+  resetSer();
+  renderPanelB();   /* renderPanelC + drawBand 를 안에서 호출한다 */
+  renderPanelD();
+  renderPanelE();
+}
+let rzTimer = null;
+window.addEventListener("resize", ()=>{
+  clearTimeout(rzTimer);
+  rzTimer = setTimeout(()=>{ drawPath(); drawSer(); drawBand(); }, 120);
+});
+boot();
+</script>
+</body>
+</html>

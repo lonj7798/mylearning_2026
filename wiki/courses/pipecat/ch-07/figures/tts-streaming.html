@@ -1,0 +1,1132 @@
+<!--
+  Figure: tts-streaming.html — "TTFA, 그리고 그 앞뒤에 붙는 것들"
+  Chapter: pipecat ch-07 (Streaming TTS)
+  Back to: ../read.md  (§1.2 TTFA/TTFB, §1.4 세 구간, §4.1 mode, §4.5 토큰 워크,
+                        §6.5/§6.6 pts + clock queue, §7.1 provider 표, §7.3 Rime,
+                        §7.4 교집합 6, §7.8 zero-audio, §9.1-9.3 KoreanPhraseChunker)
+
+  Fully self-contained: inline CSS + vanilla JS. No CDN, no fetch, no external
+  fonts. Opens directly from file:// .
+
+  모든 식별자 / 파일 / 줄번호는 read.md 가 인용한 pinned tree 에서 그대로 가져왔다:
+    metrics/metrics.py:193-203        TextAggregationMetricsData
+    metrics/metrics.py (TTFA block)   TTFAMetricsData{ttfa, ttfb, leading_silence}
+    observers/loggers/metrics_log_observer.py:153-157   TTFA 로그 한 줄
+    processors/metrics/frame_processor_metrics.py:190-238  process_ttfa_metrics
+    services/tts_service.py:82-96     TextAggregationMode{SENTENCE, TOKEN}
+    services/tts_service.py:296-299   기본값 SENTENCE
+    services/tts_service.py:273-276   language_to_service_language 변환 시점
+    services/tts_service.py:1380-1397 start_word_timestamps (PTS baseline)
+    services/tts_service.py:1472-1490 _add_word_timestamps -> pts = base + ts_ns
+    services/cartesia/tts.py:312-319  200-300ms 주석 + TODO
+    services/rime/tts.py:46-63        LANGUAGE_MAP 5개, use_base_code=False
+    services/azure/common.py:199-201  Language.KO -> "ko-KR"
+    transports/base_output.py:394-398 pts 유무로 clock queue / audio queue 분기
+    transports/base_output.py:642-656 handle_timed_frame / handle_sync_frame
+    transports/base_output.py:1079-1100 _clock_task_handler
+    transports/base_output.py:130-136 10ms*CHUNKS 청킹 계약 (1x 재생)
+    utils/text/simple_text_aggregator.py:78  _check_sentence_with_lookahead
+    utils/string.py:151               match_endofsentence
+    processors/aggregators/sentence.py:18-31/54-58  decoy SentenceAggregator
+    tests/test_tts_zero_audio_contexts.py:7-13     write-off 테스트 docstring
+    realtime_voice KoreanPhraseChunker  L28-34 docstring, L56-60, L115-149,
+                                        L255 _is_safe_period, L277 _is_numeric_separator
+
+  Panel 1 의 ms 값은 슬라이더로 만드는 시뮬레이션이다 — 구간의 이름과 소유자,
+  그리고 docstring 이 적어 둔 크기(200-300ms / 100-400ms / 0-250ms)만 실제다.
+  Panel 2 의 EMIT 토큰 번호와 EMIT 문자열은 read.md §4.5 실행 결과 그대로다.
+  Panel 4 의 표는 read.md §7.1 의 class-by-class 표를 옮긴 것이다.
+-->
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>TTFA bench — 첫 들리는 샘플까지 (pipecat ch-07)</title>
+<style>
+  /* --- 반응형 타이포 스케일: 태블릿에서 root를 키운다 ------------------- */
+  html{font-size:14px;}
+  @media (pointer:coarse){ html{font-size:17px;} }
+  @media (min-width:1500px){ html{font-size:15.5px;} }
+
+  :root{
+    --bg:#0e1117; --panel:#161b22; --panel2:#1c2230; --edge:#2b3242;
+    --ink:#e6edf3; --ink-dim:#9aa7b4; --ink-faint:#6b7686;
+    --accent:#58a6ff; --accent2:#3fb950; --danger:#f85149; --warn:#d29922;
+    --c-agg:#d29922;    /* (a) aggregation delay */
+    --c-ttfb:#58a6ff;   /* (b) provider TTFB     */
+    --c-sil:#f85149;    /* (c) leading silence   */
+    --c-audio:#3fb950;  /* 실제 들리는 오디오     */
+    --c-ins:#f778ba;    /* 강조 / 대조군          */
+  }
+  *{box-sizing:border-box;}
+  html,body{margin:0;padding:0;}
+  body{
+    background:var(--bg); color:var(--ink);
+    font:1rem/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Apple SD Gothic Neo",
+         "Noto Sans KR",Helvetica,Arial,sans-serif;
+    padding:22px; max-width:88rem; margin:0 auto;
+  }
+  h1{font-size:1.5rem; margin:0 0 3px; letter-spacing:.2px;}
+  .sub{color:var(--ink-dim); font-size:0.9286rem; margin:0 0 20px;}
+  .sub code{color:var(--accent);}
+  .panel{background:var(--panel); border:1px solid var(--edge); border-radius:10px;
+    padding:16px; margin-bottom:18px;}
+  .panel h2{font-size:0.8571rem; text-transform:uppercase; letter-spacing:.9px; color:var(--ink-dim);
+    margin:0 0 14px; font-weight:600;}
+  .panel h3{font-size:0.8571rem; color:var(--ink); margin:18px 0 8px; font-weight:600;}
+  .mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+    font-variant-numeric:tabular-nums;}
+  code{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:0.9em;}
+
+  .grid2{display:grid; grid-template-columns:1fr 1fr; gap:18px;}
+  .wrap{display:grid; grid-template-columns:20rem 1fr; gap:18px; align-items:start;}
+  @media (max-width:1000px){ .wrap{grid-template-columns:1fr;} .grid2{grid-template-columns:1fr;} }
+
+  /* ---------- sliders ---------- */
+  .sl{margin-bottom:13px;}
+  .sl label{display:flex; justify-content:space-between; align-items:baseline;
+    font-size:0.8214rem; color:var(--ink-dim); margin-bottom:5px; gap:8px;}
+  .sl label b{color:var(--ink); font-weight:600;}
+  .sl label .v{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+    font-variant-numeric:tabular-nums; color:var(--accent); font-size:0.8571rem;}
+  .sl input[type=range]{width:100%; accent-color:var(--accent); margin:0;}
+  .sl.sil input[type=range]{accent-color:var(--c-sil);}
+  .sl .hint{font-size:0.75rem; color:var(--ink-faint); margin-top:3px; line-height:1.45;}
+
+  /* ---------- buttons ---------- */
+  .runbar{display:flex; gap:7px; margin-top:12px; flex-wrap:wrap;}
+  .rb{flex:1 1 6rem; background:var(--panel2); border:1px solid var(--edge); color:var(--ink);
+    border-radius:7px; padding:9px 6px; cursor:pointer; font-size:0.8929rem; font-weight:600;
+    transition:.13s;}
+  .rb:hover{border-color:var(--accent);}
+  .rb.primary{background:#1d3a5f; border-color:var(--accent); color:#cfe6ff;}
+  .rb.warnb{background:#3a2a10; border-color:var(--warn); color:#f0d9a0;}
+
+  .pbtn{background:var(--panel2); border:1px solid var(--edge); color:var(--ink-dim);
+    border-radius:7px; padding:8px 9px; cursor:pointer; font-size:0.8214rem; transition:.13s;
+    line-height:1.35; text-align:left;}
+  .pbtn:hover{border-color:var(--ink-faint); color:var(--ink);}
+  .pbtn.on{background:#1d2b3f; border-color:var(--accent); color:var(--ink);}
+  .pbtn small{display:block; color:var(--ink-faint); font-size:0.7143rem;
+    font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;}
+  .pbtn.on small{color:var(--accent);}
+  .streams{display:grid; grid-template-columns:repeat(3,1fr); gap:6px; margin-bottom:14px;}
+  @media (max-width:820px){ .streams{grid-template-columns:1fr 1fr;} }
+
+  /* ---------- counters ---------- */
+  .counters{display:flex; gap:8px; flex-wrap:wrap; margin-top:12px;}
+  .chip2{border:1px solid var(--edge); border-radius:7px; padding:7px 11px; font-size:0.8214rem;
+    background:var(--panel2); color:var(--ink-faint); min-width:8rem; flex:1 1 8rem;}
+  .chip2 b{display:block; font-size:1.1429rem; color:var(--ink); margin-bottom:1px;
+    font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+    font-variant-numeric:tabular-nums;}
+  .chip2.agg b{color:var(--c-agg);}
+  .chip2.ttfb b{color:var(--c-ttfb);}
+  .chip2.sil b{color:var(--c-sil);}
+  .chip2.ttfa b{color:var(--c-audio);}
+  .chip2.bad b{color:var(--danger);}
+
+  /* ---------- canvas ---------- */
+  /* height는 JS의 CANVAS_H_* 상수와 반드시 같은 값 — 레이아웃 점프 방지 */
+  canvas{width:100%; display:block; border-radius:8px; background:#10151d;
+    border:1px solid var(--edge);}
+  #cvTtfa{height:280px;}
+  #cvClock{height:250px;}
+  .legend{display:flex; gap:14px; font-size:0.7857rem; color:var(--ink-dim); margin-top:9px;
+    flex-wrap:wrap;}
+  .legend i{display:inline-block; width:16px; height:10px; border-radius:3px;
+    vertical-align:middle; margin-right:5px;}
+
+  /* ---------- code / walk ---------- */
+  pre{background:#10151d; border:1px solid var(--edge); border-radius:8px; padding:13px;
+    overflow-x:auto; font-size:0.8214rem; line-height:1.7; margin:0;
+    font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; white-space:pre;}
+  pre .cm{color:var(--ink-faint);} pre .kw{color:var(--c-ins);} pre .st{color:var(--accent2);}
+  pre .ins{color:var(--c-ins); font-weight:700;} pre .ln{color:var(--ink-faint);}
+  pre .bad{color:var(--danger);} pre .dim{color:var(--ink-faint);}
+
+  .walk{background:#10151d; border:1px solid var(--edge); border-radius:8px; padding:12px;
+    font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:0.7857rem;
+    line-height:1.7; overflow-x:auto; min-height:15rem;}
+  .walk .row{white-space:nowrap; opacity:.28; transition:.18s;}
+  .walk .row.on{opacity:1;}
+  .walk .row.cur{background:rgba(88,166,255,.10); border-radius:4px;}
+  .walk .row.emit{background:rgba(63,185,80,.12); border-radius:4px;}
+  .walk .row.hold{background:rgba(210,153,34,.10); border-radius:4px;}
+  .walk .idx{display:inline-block; width:2.1rem; color:var(--ink-faint); text-align:right;
+    margin-right:8px;}
+  .walk .tok{color:var(--ink); background:#1c2230; border:1px solid var(--edge);
+    border-radius:4px; padding:0 4px;}
+  .walk .buf{color:var(--ink-dim);}
+  .walk .em{color:var(--accent2); font-weight:700;}
+  .walk .hd{color:var(--warn);}
+  .walk .no{color:var(--ink-faint);}
+  .walk .gd{color:var(--c-ins);}
+
+  .toks{display:flex; flex-wrap:wrap; gap:4px; margin:10px 0 4px;}
+  .toks span{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+    font-size:0.7857rem; border:1px solid var(--edge); border-radius:5px; padding:2px 6px;
+    color:var(--ink-faint); background:#10151d; transition:.15s; white-space:pre;}
+  .toks span.seen{color:var(--ink); border-color:var(--ink-faint);}
+  .toks span.cut{border-color:var(--accent2); color:var(--accent2); background:rgba(63,185,80,.10);}
+  .toks span.cutp{border-color:var(--c-ins); color:var(--c-ins); background:rgba(247,120,186,.10);}
+
+  /* ---------- phase counter ---------- */
+  .phases{display:grid; grid-template-columns:repeat(3,1fr); gap:8px; margin:10px 0;}
+  .ph{border:1px solid var(--edge); border-radius:8px; padding:9px 10px; background:var(--panel2);
+    font-size:0.7857rem; color:var(--ink-faint); line-height:1.45;}
+  .ph b{display:block; color:var(--ink-dim); font-size:0.8214rem; margin-bottom:3px;
+    font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;}
+  .ph.on{border-color:var(--c-ins); background:rgba(247,120,186,.09);}
+  .ph.on b{color:var(--c-ins);}
+  .emits{display:flex; flex-direction:column; gap:5px; margin-top:8px;}
+  .emit{border:1px solid var(--edge); border-left:3px solid var(--accent2); border-radius:0 6px 6px 0;
+    background:#10151d; padding:6px 9px; font-size:0.7857rem; line-height:1.5;}
+  .emit .k{color:var(--ink-faint); font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+    margin-right:7px;}
+  .emit.p0{border-left-color:var(--accent2);}
+  .emit.p1{border-left-color:var(--warn);}
+  .emit.p2{border-left-color:var(--c-ins);}
+  .emit.pend{border-left-color:var(--ink-faint); color:var(--ink-faint);}
+
+  /* ---------- table ---------- */
+  table{width:100%; border-collapse:collapse; font-size:0.7857rem; margin-top:6px;}
+  th,td{padding:5px 7px; text-align:left; border-bottom:1px solid var(--edge); vertical-align:top;}
+  th{color:var(--ink-faint); font-weight:600; font-size:0.7143rem; text-transform:uppercase;
+    letter-spacing:.5px;}
+  td.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;}
+  tr.dim td{opacity:.3;}
+  tr.hit td{background:rgba(63,185,80,.09);}
+  tr.rime td{background:rgba(248,81,73,.10);}
+  .yes{color:var(--accent2); font-weight:700;}
+  .no{color:var(--ink-faint);}
+  .gate{color:var(--warn);}
+
+  .filters{display:flex; gap:7px; flex-wrap:wrap; margin-bottom:10px;}
+  .filters .pbtn{flex:1 1 11rem;}
+
+  .verdict{border-radius:8px; padding:12px 14px; font-size:0.8929rem; margin-top:12px;
+    border:1px solid var(--edge); background:var(--panel2); line-height:1.6;}
+  .verdict.ok{border-color:var(--accent2); background:rgba(63,185,80,.08);}
+  .verdict.bad{border-color:var(--danger); background:rgba(248,81,73,.08);}
+  .verdict b{font-size:1rem;}
+
+  .callout{border-left:3px solid var(--warn); background:rgba(210,153,34,.07);
+    padding:11px 14px; border-radius:0 7px 7px 0; font-size:0.8571rem; color:var(--ink-dim);
+    margin-top:14px; line-height:1.65;}
+  .callout b{color:var(--ink);}
+  .callout.ok{border-left-color:var(--accent2); background:rgba(63,185,80,.07);}
+  .callout.bad{border-left-color:var(--danger); background:rgba(248,81,73,.07);}
+  .callout.grep{border-left-color:var(--c-ins); background:rgba(247,120,186,.07);}
+  .callout code{color:var(--accent);}
+  .foot{color:var(--ink-faint); font-size:0.8214rem; margin-top:26px; line-height:1.8;}
+  .foot code{color:var(--ink-dim);}
+</style>
+</head>
+<body>
+
+<h1>TTFA bench — <span class="mono">첫 들리는 샘플</span>까지 걸리는 시간</h1>
+<p class="sub">
+  ch-07 §1 · §4 · §6 · §7 · §9 companion · TTS는 text-in-audio-out이 아니라
+  <b>하나의 숫자</b>를 위해 설계된 reordering buffer다. 그 숫자는 TTFB가 아니라
+  <code>TTFAMetricsData.ttfa</code>이고, 나머지 합성 throughput은 재생이 1×라서 리스너에게 공짜다.
+</p>
+
+<!-- ===================== 1. TTFA vs TTFB ===================== -->
+<div class="panel">
+  <h2>1 · <span class="mono">ttfa = ttfb + leading_silence</span> — 두 개의 mark가 갈라지는 지점</h2>
+  <div class="wrap">
+    <div>
+      <div class="sl">
+        <label><b>(b) provider TTFB</b><span class="v" id="vTtfb">240 ms</span></label>
+        <input type="range" id="sTtfb" min="60" max="500" step="10" value="240">
+        <div class="hint">§1.4 표의 typical 100–400 ms. <span class="mono">TTFBMetricsData.value</span> —
+          첫 <b>byte</b>가 도착한 시각.</div>
+      </div>
+      <div class="sl sil">
+        <label><b>(c) leading_silence</b><span class="v" id="vSil">0 ms</span></label>
+        <input type="range" id="sSil" min="0" max="400" step="10" value="0">
+        <div class="hint">provider가 응답 앞에 붙이는 무음 padding. §1.3 —
+          <span class="mono">process_ttfa_metrics</span>가 energy onset detector로
+          <b>측정</b>한다. provider가 신고하는 값이 아니다.</div>
+      </div>
+      <div class="sl">
+        <label><b>LLM token 간격</b><span class="v" id="vTok">55 ms</span></label>
+        <input type="range" id="sTok" min="20" max="140" step="5" value="55">
+        <div class="hint">첫 문장이 완성되기까지의 속도. (a) aggregation delay는
+          이 간격 × lookahead 토큰 수로 나온다.</div>
+      </div>
+      <div class="runbar">
+        <button class="rb warnb" id="bPadBad">📢 padding 나쁜 provider</button>
+        <button class="rb" id="bPadReset">↺ 리셋</button>
+      </div>
+      <div class="counters" id="ttfaCounters"></div>
+    </div>
+    <div>
+      <canvas id="cvTtfa"></canvas>
+      <div class="legend">
+        <span><i style="background:var(--c-agg)"></i>(a) aggregation delay</span>
+        <span><i style="background:var(--c-ttfb)"></i>(b) provider TTFB</span>
+        <span><i style="background:var(--c-sil)"></i>(c) leading_silence</span>
+        <span><i style="background:var(--c-audio)"></i>들리는 오디오 (1× 재생)</span>
+        <span><i style="background:#8b949e;height:2px"></i>◯ TTFB mark &nbsp; ● TTFA mark</span>
+      </div>
+      <div class="verdict" id="ttfaVerdict"></div>
+    </div>
+  </div>
+  <div class="callout">
+    <b>세 번째 lane이 요점이다.</b> full-response buffering은 응답 전체를 모아 한 번에 합성하는
+    baseline이다. 뒤쪽 문장들은 어차피 재생 <b>밑에서</b> 만들어지므로
+    (<span class="mono">base_output.py:130-136</span>, 10 ms × CHUNKS로 페이싱) 총 합성 시간은
+    리스너에게 노출되지 않는다. 노출되는 건 오직 첫 구간 — 그래서 SENTENCE lane이 TOKEN lane보다
+    딱 lookahead 하나만큼 늦고, full-response lane은 문장 수만큼 늦다.
+  </div>
+</div>
+
+<!-- ===================== 2. 같은 한국어 문장, 두 알고리즘 ===================== -->
+<div class="panel">
+  <h2>2 · <span class="mono">SimpleTextAggregator</span> vs <span class="mono">KoreanPhraseChunker</span>
+    — 어디서 자르고, 무엇을 안 자르나</h2>
+  <div class="streams" id="streamPicker"></div>
+  <div class="runbar" style="margin-top:0;margin-bottom:12px">
+    <button class="rb primary" id="bTokStep">▶ token 1개</button>
+    <button class="rb" id="bTokAll">▶▶ 끝까지</button>
+    <button class="rb" id="bTokReset">↺ 리셋</button>
+  </div>
+  <div class="toks" id="tokStrip"></div>
+  <div class="grid2" style="margin-top:12px">
+    <div>
+      <h3 style="margin-top:0">pipecat — <span class="mono">SimpleTextAggregator</span>
+        <span style="color:var(--ink-faint);font-weight:400">(utils/text/simple_text_aggregator.py:78)</span></h3>
+      <div class="walk" id="walkPipecat"></div>
+    </div>
+    <div>
+      <h3 style="margin-top:0">realtime_voice — <span class="mono">KoreanPhraseChunker</span>
+        <span style="color:var(--ink-faint);font-weight:400">(283 L, pipecat 대응물 없음)</span></h3>
+      <div class="walk" id="walkRtv"></div>
+    </div>
+  </div>
+  <div class="verdict" id="cutVerdict"></div>
+
+  <h3>1 → 2 → tail — <span class="mono">_batch_phase</span> (L115-149), pipecat에는 없는 축</h3>
+  <div class="phases" id="phaseBoxes"></div>
+  <div class="runbar" style="margin-top:0">
+    <button class="rb primary" id="bPhaseNext">▶ 문장 하나 더 완성</button>
+    <button class="rb" id="bPhaseFlush">flush()</button>
+    <button class="rb" id="bPhaseReset">↺ 리셋</button>
+  </div>
+  <div class="emits" id="phaseEmits"></div>
+  <div class="callout">
+    <b>pipecat에는 phase counter가 없다.</b> <span class="mono">TextAggregationMode</span>는
+    서비스 수명 내내 상수다 — <span class="mono">SENTENCE</span> 아니면
+    <span class="mono">TOKEN</span> (tts_service.py:82-96, 기본값 :296-299) — 문장 1번에도
+    문장 9번에도 같은 boundary rule이 적용된다. 반대로
+    <span class="mono">KoreanPhraseChunker</span>는 첫 문장만 critical path에 있다는 사실을
+    스케줄로 못박았다.
+  </div>
+  <div class="callout bad">
+    <b>decoy 주의.</b> <span class="mono">processors/aggregators/sentence.py:18</span>의
+    <span class="mono">SentenceAggregator</span>는 별개의 <span class="mono">FrameProcessor</span>이고
+    <span class="mono">TTSService</span>는 이걸 <b>건드리지 않는다</b> (tts_service.py:59는
+    <span class="mono">simple_text_aggregator</span>만 import). lookahead 상태가 없어서
+    (:54-58) <span class="mono">$29.</span>를 가격 한가운데서 자른다. TTS 앞에 끼워 넣으라는 코드를
+    받으면 지워라.
+  </div>
+</div>
+
+<!-- ===================== 3. clock queue ===================== -->
+<div class="panel">
+  <h2>3 · <span class="mono">TTSTextFrame.pts</span>와 output transport의 clock queue —
+    ch-08이 쓰는 hook</h2>
+  <div class="wrap">
+    <div>
+<pre><span class="cm"># transports/base_output.py:394-398</span>
+<span class="kw">elif</span> frame.<span class="ins">pts</span>:
+    <span class="kw">await</span> sender.handle_timed_frame(frame)
+<span class="kw">else</span>:
+    <span class="kw">await</span> sender.handle_sync_frame(frame)
+
+<span class="cm"># :642-656</span>
+<span class="kw">await</span> self.<span class="ins">_clock_queue</span>.put(
+    (frame.pts, next(self._clock_queue_counter), frame))
+
+<span class="cm"># :1079-1100  _clock_task_handler</span>
+timestamp, _, frame = <span class="kw">await</span> self._clock_queue.get()
+current_time = self._transport.get_clock().get_time()
+<span class="kw">if</span> timestamp &gt; current_time:
+    wait_time = nanoseconds_to_seconds(timestamp - current_time)
+    <span class="kw">await</span> asyncio.<span class="ins">sleep</span>(wait_time)
+<span class="kw">await</span> self._transport.push_frame(frame)</pre>
+      <div class="sl" style="margin-top:14px">
+        <label><b>barge-in 시각</b><span class="v" id="vBarge">1.40 s</span></label>
+        <input type="range" id="sBarge" min="0" max="4200" step="20" value="1400">
+        <div class="hint">4.2 s짜리 문장 도중에 고객이 끼어든 시각. context에 남는 건
+          <span class="mono">pts &lt;= t</span>인 단어들뿐이다.</div>
+      </div>
+      <div class="runbar">
+        <button class="rb primary" id="bClockPlay">▶ 재생</button>
+        <button class="rb" id="bClockReset">↺ 리셋</button>
+      </div>
+      <div class="counters" id="clockCounters"></div>
+    </div>
+    <div>
+      <canvas id="cvClock"></canvas>
+      <div class="legend">
+        <span><i style="background:var(--c-ttfb)"></i>PriorityQueue 대기 중</span>
+        <span><i style="background:var(--c-audio)"></i>pts 도달 → push_frame</span>
+        <span><i style="background:var(--danger)"></i>barge-in 이후 (전달 안 됨)</span>
+      </div>
+      <div class="verdict" id="clockVerdict"></div>
+    </div>
+  </div>
+  <div class="callout ok">
+    <b>truncation이 계산이 아니라 그냥 '멈춤'인 이유.</b> canonical pipeline의 position 7 —
+    assistant context aggregator — 는 <span class="mono">transport.output()</span>
+    <b>아래쪽</b>에 있다. 그래서 word frame은 합성된 시각이 아니라 <b>들린 시각</b>에 도착한다.
+    t=1.4 s의 barge-in은 구조상 <span class="mono">pts &lt;= 1.4 s</span>인 단어만 이미 배달한
+    상태다. 단, PTS가 없는 frame은 audio queue로 가서 word frame을 추월할 수 있으므로
+    <span class="mono">aggregation_frame.pts = self._word_last_pts + 1</span> 처럼
+    <b>pts를 queue selector로</b> 쓰는 자리가 두 군데 있다.
+  </div>
+</div>
+
+<!-- ===================== 4. provider matrix ===================== -->
+<div class="panel">
+  <h2>4 · Korean map ∩ word timestamps = <span class="mono">6</span></h2>
+<pre style="margin-bottom:12px"><span class="cm">$ grep -rn "Language.KO" src/pipecat/services/*/  |  cut -d/ -f4 | sort -u</span>
+Korean:      aws azure camb cartesia elevenlabs google inworld lmnt minimax soniox xai xtts
+<span class="cm">$ grep -rn "add_word_timestamps" src/pipecat/services/*/tts*.py | cut -d: -f1 | sort -u</span>
+Timestamps:  azure cartesia elevenlabs gradium hume inworld resembleai rime smallest speechify soniox xai
+             <span class="dim">────────────────────────────────────────────────────────────────</span>
+Intersection: <span class="ins">azure  cartesia  elevenlabs  inworld  soniox  xai</span></pre>
+  <div class="filters" id="matrixFilters"></div>
+  <div style="overflow-x:auto">
+    <table id="matrixTable"></table>
+  </div>
+  <div class="counters" id="matrixCounters"></div>
+  <div class="callout grep" id="grepCaption">
+    <b>이 숫자의 출처는 grep 두 번이다.</b> language map에 <code>Language.KO</code>가 있는 서비스,
+    그리고 <code>add_word_timestamps</code>를 호출하는 서비스 — 그 교집합이다.
+    <b>코드가 무엇을 선언하는가에 대한 주장이고, 출력을 들어 본 결과가 아니다.</b>
+    이 repo의 어떤 테스트도 오디오를 듣지 않는다. 여섯 중 둘이 한국어를 형편없이 합성하거나
+    timestamp가 긴 발화에서 drift해도 이 tree는 모른다. <b>테스트할 shortlist</b>지,
+    동작하는 6개 목록이 아니다.
+  </div>
+  <div class="runbar">
+    <button class="rb warnb" id="bRime">💥 Rime을 고른다 (word ts 있고 저지연이라길래)</button>
+    <button class="rb" id="bRimeReset">↺ 리셋</button>
+  </div>
+  <div id="rimeBox"></div>
+</div>
+
+<div class="foot">
+  companion to <code>wiki/courses/pipecat/ch-07/read.md</code> —
+  Panel 1 → §1.2/§1.4, Panel 2 → §4.5 + §9.1-9.3, Panel 3 → §6.5/§6.6, Panel 4 → §7.1/§7.3/§7.4/§7.8.<br>
+  Panel 1의 ms 값은 슬라이더가 만드는 시뮬레이션이다. 구간의 이름·소유자·docstring이 적어 둔 크기만 실제다.<br>
+  Panel 2의 EMIT 토큰 번호와 EMIT 문자열은 §4.5가 실제로 스크립트를 돌려 얻은 출력 그대로다.
+</div>
+
+<script>
+"use strict";
+
+/* ================= 공용 ================= */
+const CANVAS_H_TTFA  = 280;
+const CANVAS_H_CLOCK = 250;
+
+function setupCanvas(cv, H){
+  const r = window.devicePixelRatio || 1;
+  const w = Math.max(cv.clientWidth, 200), h = H;
+  if (cv.width !== Math.round(w*r) || cv.height !== Math.round(h*r)){
+    cv.width = Math.round(w*r); cv.height = Math.round(h*r);
+  }
+  cv.style.height = h + "px";
+  const c = cv.getContext("2d");
+  c.setTransform(r,0,0,r,0,0);
+  c.clearRect(0,0,w,h);
+  return {c:c, w:w, h:h};
+}
+
+const CSSV = (n) => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+const COL = {
+  agg:"#d29922", ttfb:"#58a6ff", sil:"#f85149", audio:"#3fb950",
+  ink:"#e6edf3", dim:"#9aa7b4", faint:"#6b7686", edge:"#2b3242", ins:"#f778ba",
+  danger:"#f85149"
+};
+const MONO = '11px ui-monospace,SFMono-Regular,Menlo,Consolas,monospace';
+const MONO_S = '10px ui-monospace,SFMono-Regular,Menlo,Consolas,monospace';
+const SANS = '11px -apple-system,BlinkMacSystemFont,"Apple SD Gothic Neo","Noto Sans KR",sans-serif';
+const SANS_B = '600 11px -apple-system,BlinkMacSystemFont,"Apple SD Gothic Neo","Noto Sans KR",sans-serif';
+
+function el(id){ return document.getElementById(id); }
+function roundRect(c,x,y,w,h,r){
+  if (w < 2*r) r = w/2; if (h < 2*r) r = h/2; if (r < 0) r = 0;
+  c.beginPath();
+  c.moveTo(x+r,y); c.arcTo(x+w,y,x+w,y+h,r); c.arcTo(x+w,y+h,x,y+h,r);
+  c.arcTo(x,y+h,x,y,r); c.arcTo(x,y,x+w,y,r); c.closePath();
+}
+
+/* ===== PANEL 1 : ttfa = ttfb + leading_silence ===== */
+/* 첫 문장이 sentence-final punctuation까지 8 token, lookahead 1 token 더.
+   응답 전체는 3문장 24 token. token 간격은 슬라이더. */
+const TOK_FIRST_SENT = 8;   // '.' 이 도착하는 토큰 번호
+const TOK_LOOKAHEAD  = 1;   // 비공백 lookahead 1개 (§4.2)
+const TOK_TOTAL      = 24;  // 3문장 전체
+const AUDIO_TAIL_MS  = 1100;
+
+const LANES = [
+  { key:"token", name:"TextAggregationMode.TOKEN",
+    sub:"첫 token 즉시 run_tts — cartesia/tts.py:312-319의 TODO가 가리키는 모드",
+    aggTok:0 },
+  { key:"sent",  name:"TextAggregationMode.SENTENCE   (기본값 :296-299)",
+    sub:"문장 경계 확인 + 비공백 lookahead 1 token — docstring 예산 200-300 ms",
+    aggTok:TOK_FIRST_SENT + TOK_LOOKAHEAD - 1 },
+  { key:"full",  name:"full-response buffering (streaming 아님, baseline)",
+    sub:"응답 24 token을 다 모은 뒤 한 번에 합성",
+    aggTok:TOK_TOTAL - 1 }
+];
+
+const P1 = { ttfb:240, sil:0, tok:55 };
+
+function p1Model(){
+  const out = LANES.map(function(L){
+    const agg = L.aggTok * P1.tok;
+    const bMark = agg + P1.ttfb;
+    const aMark = bMark + P1.sil;
+    return { key:L.key, name:L.name, sub:L.sub, agg:agg, ttfb:P1.ttfb, sil:P1.sil,
+             bMark:bMark, ttfa:aMark };
+  });
+  return out;
+}
+
+function drawP1(){
+  const cv = el("cvTtfa");
+  const g = setupCanvas(cv, CANVAS_H_TTFA);
+  const c = g.c, w = g.w, h = g.h;
+  const rows = p1Model();
+  const x0 = 12, x1 = w - 12;
+  const tMax = Math.max(1500, rows[2].ttfa + AUDIO_TAIL_MS * 0.55);
+  const X = (t) => x0 + (t / tMax) * (x1 - x0);
+
+  // --- token tick row -------------------------------------------------
+  c.font = MONO_S; c.fillStyle = COL.faint; c.textAlign = "left";
+  c.fillText("LLM token 도착  (t0 = 첫 token)", x0, 16);
+  const tickY = 30;
+  for (let i = 0; i < TOK_TOTAL; i++){
+    const xt = X(i * P1.tok);
+    if (xt > x1) break;
+    const boundary = (i === TOK_FIRST_SENT - 1);
+    const look     = (i === TOK_FIRST_SENT);
+    c.strokeStyle = boundary ? COL.agg : (look ? COL.ins : COL.edge);
+    c.lineWidth = boundary || look ? 2 : 1;
+    c.beginPath(); c.moveTo(xt, tickY); c.lineTo(xt, tickY + (boundary||look ? 13 : 8)); c.stroke();
+  }
+  c.font = MONO_S; c.textAlign = "center";
+  const xb = X((TOK_FIRST_SENT - 1) * P1.tok), xl = X(TOK_FIRST_SENT * P1.tok);
+  if (xb < x1 - 30){ c.fillStyle = COL.agg; c.fillText("'.'", xb, tickY + 24); }
+  if (xl < x1 - 40){ c.fillStyle = COL.ins; c.fillText("lookahead", xl + 22, tickY + 24); }
+
+  // --- lanes ----------------------------------------------------------
+  const laneY = [70, 136, 202], BH = 26;
+  rows.forEach(function(r, i){
+    const y = laneY[i];
+    c.textAlign = "left";
+    c.font = SANS_B; c.fillStyle = COL.ink;
+    c.fillText(r.name, x0, y - 14);
+    c.font = MONO_S; c.fillStyle = COL.faint;
+    c.fillText(r.sub, x0, y - 2);
+
+    // 배경 트랙
+    c.fillStyle = "#151b25";
+    roundRect(c, x0, y + 6, x1 - x0, BH, 5); c.fill();
+
+    const segs = [
+      { t0:0,        t1:r.agg,           col:COL.agg,   lab:"(a) agg " + r.agg + "ms" },
+      { t0:r.agg,    t1:r.bMark,         col:COL.ttfb,  lab:"(b) ttfb " + r.ttfb + "ms" },
+      { t0:r.bMark,  t1:r.ttfa,          col:COL.sil,   lab:"(c) " + r.sil + "ms" },
+      { t0:r.ttfa,   t1:r.ttfa + AUDIO_TAIL_MS, col:COL.audio, lab:"오디오 재생 1×" }
+    ];
+    segs.forEach(function(s){
+      if (s.t1 <= s.t0) return;
+      const xa = X(s.t0), xbx = Math.min(X(s.t1), x1);
+      if (xbx - xa < 0.6) return;
+      c.fillStyle = s.col;
+      c.globalAlpha = (s.col === COL.audio) ? 0.34 : 0.62;
+      roundRect(c, xa, y + 6, xbx - xa, BH, 3); c.fill();
+      c.globalAlpha = 1;
+      c.strokeStyle = s.col; c.lineWidth = 1;
+      roundRect(c, xa + .5, y + 6.5, Math.max(1, xbx - xa - 1), BH - 1, 3); c.stroke();
+      if (xbx - xa > 62){
+        c.font = MONO_S; c.fillStyle = (s.col === COL.audio) ? COL.audio : "#0e1117";
+        if (s.col === COL.audio) c.fillStyle = COL.audio;
+        c.textAlign = "center";
+        c.fillText(s.lab, (xa + xbx) / 2, y + 6 + BH / 2 + 4);
+      }
+    });
+
+    // marks
+    const xB = X(r.bMark), xA = X(r.ttfa), my = y + 2;
+    c.strokeStyle = COL.ttfb; c.lineWidth = 1.5;
+    c.beginPath(); c.arc(xB, my, 4.5, 0, Math.PI * 2); c.stroke();
+    c.fillStyle = COL.audio;
+    c.beginPath(); c.arc(xA, my, 4.5, 0, Math.PI * 2); c.fill();
+    if (xA - xB > 8){
+      c.strokeStyle = COL.sil; c.lineWidth = 1; c.setLineDash([3,3]);
+      c.beginPath(); c.moveTo(xB, my); c.lineTo(xA, my); c.stroke(); c.setLineDash([]);
+    }
+    c.font = MONO_S; c.textAlign = "left"; c.fillStyle = COL.audio;
+    const lab = "TTFA " + (r.ttfa / 1000).toFixed(2) + "s";
+    c.fillText(lab, Math.min(xA + 8, x1 - 62), my + 4);
+  });
+
+  // --- axis -----------------------------------------------------------
+  const ay = 248;
+  c.strokeStyle = COL.edge; c.lineWidth = 1;
+  c.beginPath(); c.moveTo(x0, ay); c.lineTo(x1, ay); c.stroke();
+  const step = tMax > 4000 ? 1000 : (tMax > 2000 ? 500 : 250);
+  c.font = MONO_S; c.fillStyle = COL.faint; c.textAlign = "center";
+  for (let t = 0; t <= tMax; t += step){
+    const xt = X(t); if (xt > x1) break;
+    c.beginPath(); c.moveTo(xt, ay); c.lineTo(xt, ay + 4); c.stroke();
+    c.fillText((t / 1000).toFixed(t >= 1000 ? 1 : 2) + "s", xt, ay + 15);
+  }
+  c.textAlign = "left"; c.fillStyle = COL.faint;
+  c.fillText("리스너에게 노출되는 구간 = t0 → ● 뿐. ● 이후는 재생 밑에서 만들어진다.", x0, h - 6);
+}
+
+function renderP1(){
+  const rows = p1Model(), s = rows[1], tk = rows[0];
+  el("vTtfb").textContent = P1.ttfb + " ms";
+  el("vSil").textContent  = P1.sil + " ms";
+  el("vTok").textContent  = P1.tok + " ms";
+  el("ttfaCounters").innerHTML =
+    '<div class="chip2 agg"><b>' + s.agg + ' ms</b>(a) aggregation delay<br>' +
+      '<span class="mono" style="font-size:.9em">TextAggregationMetricsData</span></div>' +
+    '<div class="chip2 ttfb"><b>' + s.ttfb + ' ms</b>(b) TTFBMetricsData.value</div>' +
+    '<div class="chip2 sil"><b>' + s.sil + ' ms</b>(c) leading_silence</div>' +
+    '<div class="chip2 ttfa"><b>' + (s.ttfa/1000).toFixed(2) + ' s</b>TTFAMetricsData.ttfa</div>';
+  const bad = P1.sil >= 150;
+  el("ttfaVerdict").className = "verdict " + (bad ? "bad" : "ok");
+  el("ttfaVerdict").innerHTML = bad
+    ? '<b>byte 모니터링은 완벽하다고 말한다.</b> <span class="mono">ttfb=' + P1.ttfb +
+      'ms</span> — 슬라이더를 아무리 올려도 이 값은 그대로다. 그런데 고객이 첫 소리를 듣는 시각은 ' +
+      '<span class="mono">ttfa=' + (s.ttfa/1000).toFixed(2) + 's</span>로 밀렸다. 차이 ' +
+      '<span class="mono">' + P1.sil + 'ms</span>가 <span class="mono">leading_silence</span>이고, ' +
+      'TTFB만 보는 대시보드에는 <b>어디에도 나타나지 않는다</b>. ' +
+      'metrics_log_observer.py:153-157의 괄호 안 숫자가 그것이다.'
+    : '<b>SENTENCE는 TOKEN보다 lookahead 하나만큼 늦다.</b> ' +
+      '차이 <span class="mono">' + (s.ttfa - tk.ttfa) + 'ms</span> = ' +
+      (TOK_FIRST_SENT + TOK_LOOKAHEAD - 1) + ' token × ' + P1.tok + 'ms. ' +
+      'docstring이 적어 둔 200-300 ms 예산이 이것이다. ' +
+      'leading_silence 슬라이더를 올려 봐라 — ◯는 고정, ●만 오른쪽으로 움직인다.';
+  drawP1();
+}
+
+(function initP1(){
+  const bind = function(id, key, unit){
+    el(id).addEventListener("input", function(e){
+      P1[key] = parseInt(e.target.value, 10); renderP1();
+    });
+  };
+  bind("sTtfb","ttfb"); bind("sSil","sil"); bind("sTok","tok");
+  el("bPadBad").addEventListener("click", function(){
+    P1.sil = 200; el("sSil").value = 200; renderP1();
+  });
+  el("bPadReset").addEventListener("click", function(){
+    P1.ttfb = 240; P1.sil = 0; P1.tok = 55;
+    el("sTtfb").value = 240; el("sSil").value = 0; el("sTok").value = 55; renderP1();
+  });
+})();
+
+/* ===== PANEL 2 : 같은 입력, 두 알고리즘 =====
+   emitAt(토큰 번호)과 emit 문자열은 read.md §4.5가 스크립트를 실제로 돌려 얻은 출력.
+   첫 스트림의 토큰 분할은 §4.5에 그대로 실려 있고, 나머지는 그 출력과 일치하도록 재구성했다. */
+const STREAMS = [
+  { id:"dec2999", label:"decimal 29.99", sub:"§4.5 그대로",
+    tokens:["월","보험","료는"," 29",".","99","만","원입니다","."," 다","음","은"],
+    emitAt:10, emit:"월보험료는 29.99만원입니다.", punctAt:9,
+    rtvEmitAt:9, guard:"_is_safe_period",
+    verdict:"pipecat: 분할 없음 — 문장 전체를 emit. realtime_voice: <span class='mono'>_is_safe_period</span>가 같은 dot을 거부. <b>결과 동일.</b>" },
+  { id:"greet", label:"greeting", sub:"짧은 첫 문장",
+    tokens:["안녕하세요",".", " 리나","입니다","."],
+    emitAt:3, emit:"안녕하세요.", punctAt:2,
+    rtvEmitAt:5, guard:"min_chars=12",
+    verdict:"pipecat: token 3에서 <span class='mono'>'안녕하세요.'</span> emit — TTFA에 유리. realtime_voice: 6자라 <span class='mono'>min_chars=12</span> 미만이라 단독으로 내보내지 않고 다음 문장까지 붙인다. <b>여기선 pipecat이 더 빠르다.</b>" },
+  { id:"dec15", label:"korean decimal 1.5", sub:"§4.5 그대로",
+    tokens:["월"," 1",".","5","만원입니다","."," 가","입"],
+    emitAt:7, emit:"월 1.5만원입니다.", punctAt:6,
+    rtvEmitAt:6, guard:"_is_safe_period",
+    verdict:"pipecat: <span class='mono'>1.5</span>를 자르지 않는다 — dot 뒤에 비공백이 오기 전엔 <span class='mono'>match_endofsentence</span>를 부르지도 않고, 부를 때쯤엔 버퍼가 <span class='mono'>1.5</span>라 Punkt가 0을 준다. <b>guard가 없어서가 아니라 우연히 안전한 것.</b>" },
+  { id:"gpt41", label:"gpt-4.1", sub:"§4.5 그대로",
+    tokens:["저는"," gpt","-4",".","1","을"," 씁니다","."," 네"],
+    emitAt:9, emit:"저는 gpt-4.1을 씁니다.", punctAt:8,
+    rtvEmitAt:8, guard:"_is_safe_period",
+    verdict:"realtime_voice의 주석이 명시적이다 — <i>\"A dot between ASCII token characters belongs to a model name, hostname, abbreviation, or identifier rather than ending a Korean sentence.\"</i> (L266-269). pipecat은 같은 결론에 <b>NLTK Punkt로</b> 도달한다." },
+  { id:"comma1000", label:"1,000", sub:"§4.5 그대로",
+    tokens:["보험","료는"," 1",",000","원입니다","."," 다"],
+    emitAt:7, emit:"보험료는 1,000원입니다.", punctAt:6,
+    rtvEmitAt:6, guard:"_is_numeric_separator",
+    verdict:"realtime_voice는 <span class='mono'>_SOFT_END = frozenset(\",，;；:\")</span>를 쓰기 때문에 <span class='mono'>_is_numeric_separator</span>(L277)라는 <b>전용 guard가 필요했다</b>. pipecat은 comma를 boundary로 안 봐서 애초에 문제가 안 된다." },
+  { id:"fullwidth", label:"fullwidth 。", sub:"§4.5 그대로",
+    tokens:["안녕하세요。","고객님"],
+    emitAt:2, emit:"안녕하세요。", punctAt:1,
+    rtvEmitAt:null, guard:"UNAMBIGUOUS_… fallback",
+    verdict:"pipecat이 <b>1 token 싸다</b> — <span class='mono'>。</span>는 <span class='mono'>UNAMBIGUOUS_SENTENCE_ENDING_PUNCTUATION</span> (utils/string.py:125) fallback 스캔에 걸려 Punkt의 동의가 필요 없다. 이 fallback이 존재하는 이유가 <b>NLTK가 한국어를 지원하지 않아서</b>다." },
+  { id:"contrived", label:"29. 000원 ⚠", sub:"§4.5 counterexample",
+    tokens:["월"," 보험료는"," 29","."," 000","원"],
+    emitAt:5, emit:"월 보험료는 29.", punctAt:4,
+    rtvEmitAt:null, guard:"_is_safe_period", derived:true,
+    verdict:"<b>여기서 갈린다.</b> <span class='mono'>match_endofsentence(\"월 보험료는 29. 000원\") == 10</span> — pipecat은 <span class='mono'>29.</span> 뒤에서 자른다. <span class='mono'>_is_safe_period</span>는 거부한다. digit-space-digit라는 인위적 입력이 필요하지만, <b>차이가 존재한다는 증거</b>이고 pipecat 쪽은 손댈 수 있는 함수가 아니라 학습된 모델이다." }
+];
+
+let P2 = { stream:0, step:0 };
+
+function rtvRows(S){
+  const rows = [];
+  rows.push({ at:1, cls:"", txt:"_accept_adaptive: _batch_phase=0 — 첫 문장은 단독 emit 대상" });
+  if (S.guard === "_is_safe_period" || S.guard === "_is_numeric_separator"){
+    const call = S.guard === "_is_safe_period" ? "_is_safe_period(i)  (L255)" : "_is_numeric_separator(i)  (L277)";
+    rows.push({ at:S.punctAt, cls:"gd", txt:call + " → False   ⟹ 분할 거부" });
+  }
+  if (S.id === "fullwidth"){
+    rows.push({ at:1, cls:"gd", txt:"_STRONG_END 에 '。' 포함 → 문장 경계 확정" });
+  }
+  if (S.rtvEmitAt === null){
+    rows.push({ at:S.tokens.length, cls:"hd",
+      txt:(S.id === "contrived"
+        ? "경계 없음 — flush() 까지 보류 (hard_max_chars=120 미달)"
+        : "min_chars=12 미만 (6자) — 단독 emit 안 함, 다음 문장을 기다린다") });
+  } else if (S.id === "greet"){
+    rows.push({ at:2, cls:"hd", txt:"'안녕하세요.' = 6자 < min_chars=12 → 보류" });
+    rows.push({ at:5, cls:"em", txt:"EMIT ['안녕하세요. 리나입니다.']   (lookahead 없음)" });
+  } else {
+    rows.push({ at:S.rtvEmitAt, cls:"em", txt:"EMIT ['" + S.emit + "']   (lookahead 없음 — punctuation 토큰에서 바로)" });
+  }
+  return rows;
+}
+
+function renderP2(){
+  const S = STREAMS[P2.stream], n = P2.step;
+
+  el("streamPicker").innerHTML = STREAMS.map(function(s, i){
+    return '<button class="pbtn' + (i === P2.stream ? ' on' : '') + '" data-i="' + i + '">' +
+      s.label + '<small>' + s.sub + '</small></button>';
+  }).join("");
+  Array.prototype.forEach.call(el("streamPicker").children, function(b){
+    b.addEventListener("click", function(){
+      P2.stream = parseInt(b.getAttribute("data-i"), 10); P2.step = 0; renderP2();
+    });
+  });
+
+  el("tokStrip").innerHTML = S.tokens.map(function(t, i){
+    const k = i + 1;
+    let cls = k <= n ? "seen" : "";
+    if (k === S.emitAt && n >= k) cls += " cut";
+    if (k === S.rtvEmitAt && n >= k) cls += " cutp";
+    return '<span class="' + cls + '">' + (k) + ' ' + t.replace(/ /g, "␣") + '</span>';
+  }).join("");
+
+  // --- pipecat walk ---
+  const pw = [];
+  for (let i = 1; i <= S.tokens.length; i++){
+    const buf = S.tokens.slice(0, i).join("");
+    const on = i <= n, cur = i === n;
+    let cls = "row" + (on ? " on" : "") + (cur ? " cur" : "");
+    let body;
+    if (i === S.emitAt){
+      const resid = buf.slice(S.emit.length).replace(/^\s+/, "");
+      cls += " emit";
+      body = '<span class="em">EMIT [\'' + S.emit + '\']</span>  buffer=\'' + resid + '\'';
+    } else if (i === S.punctAt){
+      cls += " hold";
+      body = '<span class="hd">경계 문자 도착 — 비공백 lookahead 대기</span>';
+    } else if (i > S.emitAt){
+      const resid = buf.slice(S.emit.length).replace(/^\s+/, "");
+      body = '<span class="buf">buffer=\'' + resid + '\'</span>';
+    } else {
+      body = '<span class="buf">buffer=\'' + buf + '\'</span>  <span class="no">→ 0</span>';
+    }
+    pw.push('<div class="' + cls + '"><span class="idx">' + i + '</span>' +
+            '<span class="tok">' + S.tokens[i-1].replace(/ /g, "␣") + '</span>  ' + body + '</div>');
+  }
+  if (n >= S.tokens.length){
+    const rest = S.tokens.join("").slice(S.emit.length).replace(/^\s+/, "");
+    pw.push('<div class="row on"><span class="idx">↳</span><span class="hd">flush → \'' +
+            rest + '\'</span></div>');
+  }
+  el("walkPipecat").innerHTML = pw.join("");
+
+  // --- realtime_voice walk ---
+  const rr = rtvRows(S);
+  el("walkRtv").innerHTML = rr.map(function(r){
+    const on = n >= r.at;
+    return '<div class="row' + (on ? " on" : "") + (r.cls === "em" ? " emit" : "") +
+      (r.cls === "hd" ? " hold" : "") + '"><span class="idx">' + r.at + '</span>' +
+      '<span class="' + (r.cls || "buf") + '">' + r.txt + '</span></div>';
+  }).join("") +
+  (S.guard === "_is_safe_period" && n >= S.punctAt
+    ? '<div class="row on"><span class="idx"></span><span class="no">' +
+      '# "A dot between ASCII token characters belongs to a model<br>' +
+      '<span class="idx"></span># name, hostname, abbreviation, or identifier<br>' +
+      '<span class="idx"></span># rather than ending a Korean sentence."  L266-269</span></div>'
+    : "");
+
+  el("cutVerdict").className = "verdict" + (n >= S.tokens.length ? (S.id === "contrived" ? " bad" : " ok") : "");
+  el("cutVerdict").innerHTML = (n >= Math.max(S.emitAt, S.punctAt))
+    ? S.verdict + (S.derived
+        ? '<br><span style="color:var(--ink-faint);font-size:.92em">※ 이 스트림의 토큰 경계는 재구성이다. 실제로 read.md에 실린 것은 <span class="mono">match_endofsentence(...) == 10</span>이라는 반환값이다.</span>'
+        : "")
+    : '<span style="color:var(--ink-faint)">token을 진행시켜라 — 두 알고리즘이 언제 자르는지, 그리고 무엇을 <b>안</b> 자르는지 비교하는 패널이다.</span>';
+}
+
+(function initP2(){
+  el("bTokStep").addEventListener("click", function(){
+    const S = STREAMS[P2.stream];
+    if (P2.step < S.tokens.length) P2.step++;
+    renderP2();
+  });
+  el("bTokAll").addEventListener("click", function(){
+    P2.step = STREAMS[P2.stream].tokens.length; renderP2();
+  });
+  el("bTokReset").addEventListener("click", function(){ P2.step = 0; renderP2(); });
+})();
+
+/* --- 1 → 2 → tail (_batch_phase 0/1/2, L115-149) --- */
+const SENTS = [
+  "안녕하세요, 리나입니다.",
+  "지금 가입 가능한 상품 하나 안내드릴게요.",
+  "월 보험료는 1,000원부터 시작합니다.",
+  "가입 연령은 만 20세부터 65세까지입니다.",
+  "지금 신청하시면 첫 달은 면제됩니다."
+];
+let P2b = { arrived:0, flushed:false };
+
+function phaseOf(k){ return k <= 1 ? 0 : (k <= 3 ? 1 : 2); }
+
+function renderPhases(){
+  const k = P2b.arrived;
+  const cur = k === 0 ? 0 : phaseOf(k);
+  const defs = [
+    { n:"_batch_phase = 0", t:"첫 문장 하나만 즉시 emit. 이 문장만 critical path 위에 있다 — TTFA에 노출되는 유일한 구간." },
+    { n:"_batch_phase = 1", t:"다음 두 문장을 pair로 묶는다. 문장 1의 재생이 이미 돌고 있으므로 그 밑에서 만들어지고, request overhead를 상각한다." },
+    { n:"_batch_phase = 2", t:"나머지는 flush()까지 한 그룹으로 보류. 고객이 듣기 시작한 뒤에는 더 이상 쪼개지 않는다." }
+  ];
+  el("phaseBoxes").innerHTML = defs.map(function(d, i){
+    return '<div class="ph' + (i === cur ? " on" : "") + '"><b>' + d.n + '</b>' + d.t + '</div>';
+  }).join("");
+
+  const out = [];
+  if (k >= 1) out.push({ p:0, k:"phase 0", v:SENTS[0] });
+  if (k >= 3) out.push({ p:1, k:"phase 1 (pair)", v:SENTS[1] + " " + SENTS[2] });
+  else if (k === 2) out.push({ p:"pend", k:"phase 1 buffer", v:SENTS[1] + "   … pair 1/2, 보류" });
+  if (k >= 4){
+    const tail = SENTS.slice(3, k).join(" ");
+    if (P2b.flushed) out.push({ p:2, k:"flush() → phase 2", v:tail });
+    else out.push({ p:"pend", k:"phase 2 buffer", v:tail + "   … flush() 대기" });
+  }
+  el("phaseEmits").innerHTML = out.map(function(o){
+    const cls = (typeof o.p === "number") ? ("p" + o.p) : o.p;
+    return '<div class="emit ' + cls + '"><span class="k">' + o.k + '</span>' + o.v + '</div>';
+  }).join("") || '<div class="emit pend"><span class="k">—</span>아직 완성된 문장이 없다.</div>';
+}
+
+(function initP2b(){
+  el("bPhaseNext").addEventListener("click", function(){
+    if (P2b.arrived < SENTS.length){ P2b.arrived++; P2b.flushed = false; }
+    renderPhases();
+  });
+  el("bPhaseFlush").addEventListener("click", function(){ P2b.flushed = true; renderPhases(); });
+  el("bPhaseReset").addEventListener("click", function(){
+    P2b.arrived = 0; P2b.flushed = false; renderPhases();
+  });
+})();
+
+/* ===== PANEL 3 : pts + output transport clock queue =====
+   ElevenLabs/Cartesia는 base_lang in {"zh","ja"} 만 CJK 묶음 처리하므로 한국어는
+   space-separated 분기로 떨어진다 → 어절 단위 TTSTextFrame (§8.2). */
+const WORD_BASE_NS = 1500000000;              // _initial_word_timestamp (§6.5)
+const SENT_LEN_MS  = 4200;
+const WORDS = [
+  { w:"고객님",     s:0.00 },
+  { w:"지금",       s:0.42 },
+  { w:"가입하시면", s:0.86 },
+  { w:"첫",         s:1.52 },
+  { w:"달",         s:1.80 },
+  { w:"보험료는",   s:2.10 },
+  { w:"전액",       s:2.78 },
+  { w:"면제됩니다", s:3.20 }
+].map(function(o){ return { w:o.w, s:o.s, pts:WORD_BASE_NS + Math.round(o.s * 1e9) }; });
+
+let P3 = { t:SENT_LEN_MS, barge:1400, playing:false, raf:0, last:0 };
+
+function drawP3(){
+  const cv = el("cvClock");
+  const g = setupCanvas(cv, CANVAS_H_CLOCK);
+  const c = g.c, w = g.w, h = g.h;
+  const x0 = 12, x1 = w - 12;
+  const X = (ms) => x0 + (ms / SENT_LEN_MS) * (x1 - x0);
+  const tNow = Math.min(P3.t, P3.barge);
+  const cut = P3.barge;
+
+  c.textAlign = "left"; c.font = MONO_S; c.fillStyle = COL.faint;
+  c.fillText("_clock_queue  —  asyncio.PriorityQueue((pts, counter, frame))", x0, 15);
+  c.fillText("downstream of transport.output()  —  position 7 assistant context aggregator", x0, 172);
+
+  const QY = 26, DY = 184, BH = 24, axisY = 130;
+
+  c.font = SANS;
+  WORDS.forEach(function(o, i){
+    const ms = o.s * 1000;
+    const x = X(ms);
+    const released = ms <= tNow;
+    const killed = ms > cut;
+    const tw = Math.max(34, c.measureText(o.w).width + 22);
+    const bx = Math.min(Math.max(x - tw / 2, x0), x1 - tw);
+    const stag = (i % 2) * 28;
+    const qy = QY + stag, dy = DY + stag;
+
+    // 대기 중 (아직 pts 미도달) — 위쪽 queue
+    if (!released){
+      c.fillStyle = killed ? "rgba(248,81,73,.10)" : "rgba(88,166,255,.13)";
+      roundRect(c, bx, qy, tw, BH, 5); c.fill();
+      c.strokeStyle = killed ? COL.danger : COL.ttfb; c.lineWidth = 1;
+      c.setLineDash(killed ? [3,3] : []);
+      roundRect(c, bx + .5, qy + .5, tw - 1, BH - 1, 5); c.stroke(); c.setLineDash([]);
+      c.font = SANS; c.fillStyle = killed ? COL.danger : COL.ttfb; c.textAlign = "center";
+      c.fillText(o.w, bx + tw / 2, qy + 16);
+      c.strokeStyle = COL.edge; c.lineWidth = 1; c.setLineDash([2,3]);
+      c.beginPath(); c.moveTo(x, qy + BH); c.lineTo(x, axisY - 6); c.stroke(); c.setLineDash([]);
+    } else {
+      // 릴리스됨 — 아래쪽 downstream 라인
+      c.fillStyle = "rgba(63,185,80,.15)";
+      roundRect(c, bx, dy, tw, BH, 5); c.fill();
+      c.strokeStyle = COL.audio; c.lineWidth = 1;
+      roundRect(c, bx + .5, dy + .5, tw - 1, BH - 1, 5); c.stroke();
+      c.font = SANS; c.fillStyle = COL.audio; c.textAlign = "center";
+      c.fillText(o.w, bx + tw / 2, dy + 16);
+      c.strokeStyle = "rgba(63,185,80,.35)"; c.lineWidth = 1; c.setLineDash([2,3]);
+      c.beginPath(); c.moveTo(x, axisY + 6); c.lineTo(x, dy); c.stroke(); c.setLineDash([]);
+    }
+
+    // 축 위 pts 눈금
+    c.strokeStyle = released ? COL.audio : (killed ? COL.danger : COL.ttfb);
+    c.lineWidth = 2;
+    c.beginPath(); c.moveTo(x, axisY - 5); c.lineTo(x, axisY + 5); c.stroke();
+    c.font = MONO_S; c.fillStyle = COL.faint; c.textAlign = "center";
+    if (i % 2 === 0) c.fillText(o.s.toFixed(2), x, axisY - 10);
+  });
+
+  // 축
+  c.strokeStyle = COL.edge; c.lineWidth = 1;
+  c.beginPath(); c.moveTo(x0, axisY); c.lineTo(x1, axisY); c.stroke();
+
+  // playhead (get_clock().get_time())
+  const xh = X(tNow);
+  c.strokeStyle = COL.ink; c.lineWidth = 1.5;
+  c.beginPath(); c.moveTo(xh, axisY - 26); c.lineTo(xh, axisY + 26); c.stroke();
+  c.font = MONO_S; c.fillStyle = COL.ink; c.textAlign = "left";
+  c.fillText("clock " + (tNow / 1000).toFixed(2) + "s", Math.min(xh + 5, x1 - 62), axisY + 20);
+
+  // barge-in
+  const xc = X(cut);
+  c.strokeStyle = COL.danger; c.lineWidth = 2; c.setLineDash([5,4]);
+  c.beginPath(); c.moveTo(xc, 24); c.lineTo(xc, h - 8); c.stroke(); c.setLineDash([]);
+  c.font = SANS_B; c.fillStyle = COL.danger; c.textAlign = "right";
+  if (xc > 90) c.fillText("barge-in " + (cut / 1000).toFixed(2) + "s", xc - 6, 20);
+  else { c.textAlign = "left"; c.fillText("barge-in", xc + 6, 20); }
+}
+
+function renderP3(){
+  const cut = P3.barge, tNow = Math.min(P3.t, cut);
+  const kept = WORDS.filter(function(o){ return o.s * 1000 <= tNow; });
+  const lost = WORDS.length - kept.length;
+  const lastPts = kept.length ? kept[kept.length - 1].pts : WORD_BASE_NS;
+  el("vBarge").textContent = (cut / 1000).toFixed(2) + " s";
+  el("clockCounters").innerHTML =
+    '<div class="chip2 ttfa"><b>' + kept.length + ' / ' + WORDS.length + '</b>context에 도착한 어절</div>' +
+    '<div class="chip2 ' + (lost ? "bad" : "") + '"><b>' + lost + '</b>합성됐지만 안 들린 어절</div>' +
+    '<div class="chip2"><b style="font-size:.86rem">' + lastPts.toLocaleString("en-US") + '</b>' +
+      '마지막 pts (ns) = <span class="mono">_initial_word_timestamp + ts_ns</span></div>';
+  el("clockVerdict").className = "verdict " + (lost ? "bad" : "ok");
+  el("clockVerdict").innerHTML = lost
+    ? 'assistant context에 남는 문자열: <b class="mono">"' +
+      kept.map(function(o){ return o.w; }).join(" ") + '"</b><br>' +
+      '<span style="color:var(--ink-faint)">잘린 부분: ' +
+      WORDS.slice(kept.length).map(function(o){ return o.w; }).join(" ") +
+      ' — 오디오는 합성됐지만 clock queue에서 <span class="mono">asyncio.sleep</span> 중이었고, ' +
+      'push_frame이 호출되지 않았으므로 <b>context에 들어간 적이 없다</b>. 지우는 게 아니라 안 넣는 것.</span>'
+    : '전체 문장이 재생됐다. barge-in 슬라이더를 문장 중간으로 끌어서 ' +
+      '<span class="mono">pts &lt;= t</span>인 단어만 남는 걸 확인해라 — ' +
+      'ch-08의 context truncation이 계산 없이 성립하는 이유다.';
+  drawP3();
+}
+
+function tickP3(ts){
+  if (!P3.playing) return;
+  if (!P3.last) P3.last = ts;
+  const dt = ts - P3.last; P3.last = ts;
+  P3.t += dt;
+  if (P3.t >= Math.min(P3.barge, SENT_LEN_MS)){
+    P3.t = Math.min(P3.barge, SENT_LEN_MS); P3.playing = false;
+  }
+  renderP3();
+  if (P3.playing) P3.raf = requestAnimationFrame(tickP3);
+}
+
+(function initP3(){
+  el("sBarge").addEventListener("input", function(e){
+    P3.barge = parseInt(e.target.value, 10);
+    if (!P3.playing) P3.t = SENT_LEN_MS;
+    renderP3();
+  });
+  el("bClockPlay").addEventListener("click", function(){
+    cancelAnimationFrame(P3.raf);
+    P3.t = 0; P3.last = 0; P3.playing = true;
+    P3.raf = requestAnimationFrame(tickP3);
+  });
+  el("bClockReset").addEventListener("click", function(){
+    cancelAnimationFrame(P3.raf); P3.playing = false;
+    P3.t = SENT_LEN_MS; P3.barge = 1400; el("sBarge").value = 1400; renderP3();
+  });
+})();
+
+/* ===== PANEL 4 : provider matrix (§7.1 표를 class 단위로 옮긴 것) ===== */
+const MROWS = [
+  { m:"azure", ko:true, cls:"AzureTTSService", loc:"azure/tts.py:271", code:"ko-KR", tr:"SDK push-stream", ts:2 },
+  { m:"azure", ko:true, cls:"AzureHttpTTSService", loc:":832", code:"ko-KR", tr:"HTTP", ts:0 },
+  { m:"cartesia", ko:true, cls:"CartesiaTTSService", loc:"cartesia/tts.py:219", code:"ko", tr:"WS", ts:2 },
+  { m:"cartesia", ko:true, cls:"CartesiaHttpTTSService", loc:":786", code:"ko", tr:"HTTP", ts:0 },
+  { m:"elevenlabs", ko:true, cls:"ElevenLabsTTSService", loc:"elevenlabs/tts.py:200", code:"ko", tr:"WS", ts:2 },
+  { m:"elevenlabs", ko:true, cls:"ElevenLabsHttpTTSService", loc:":637", code:"ko", tr:"HTTP", ts:1 },
+  { m:"inworld", ko:true, cls:"InworldTTSService", loc:"inworld/tts.py:554", code:"ko-KR", tr:"WS", ts:2 },
+  { m:"inworld", ko:true, cls:"InworldHttpTTSService", loc:":123", code:"ko-KR", tr:"HTTP", ts:1 },
+  { m:"soniox", ko:true, cls:"SonioxTTSService", loc:"soniox/tts.py:143", code:"ko", tr:"WS", ts:2 },
+  { m:"xai", ko:true, cls:"XAITTSService", loc:"xai/tts.py:323", code:"ko", tr:"WS", ts:3 },
+  { m:"xai", ko:true, cls:"XAIHttpTTSService", loc:":150", code:"ko", tr:"HTTP", ts:0 },
+  { m:"google", ko:true, cls:"GoogleTTSService", loc:"google/tts.py:1023", code:"ko-KR", tr:"gRPC streaming", ts:0 },
+  { m:"google", ko:true, cls:"GoogleHttpTTSService / GeminiTTSService", loc:":550 / :1205", code:"ko-KR", tr:"HTTP", ts:0 },
+  { m:"lmnt", ko:true, cls:"LmntTTSService (InterruptibleTTSService)", loc:"lmnt/tts.py:78", code:"ko", tr:"WS", ts:0 },
+  { m:"minimax", ko:true, cls:"MiniMaxHttpTTSService", loc:"minimax/tts.py:137", code:'"Korean" (language_boost)', tr:"HTTP", ts:0 },
+  { m:"aws", ko:true, cls:"AWSPollyTTSService", loc:"aws/tts.py:148", code:"ko-KR", tr:"HTTP", ts:0 },
+  { m:"camb", ko:true, cls:"CambTTSService", loc:"camb/tts.py:157", code:"ko-kr", tr:"HTTP", ts:0 },
+  { m:"xtts", ko:true, cls:"XTTSService — deprecated 1.7.0, “No replacement”", loc:"xtts/tts.py:93", code:"ko", tr:"local HTTP (self-hosted)", ts:0 },
+  { m:"rime", ko:false, cls:"RimeTTSService", loc:"rime/tts.py:46", code:"— (de/fr/en/es/hi)", tr:"WS", ts:2 },
+  { m:"gradium", ko:false, cls:"Gradium", loc:"gradium/tts.py", code:"—", tr:"—", ts:2 },
+  { m:"hume", ko:false, cls:"Hume", loc:"hume/tts.py", code:"—", tr:"—", ts:2 },
+  { m:"resembleai", ko:false, cls:"ResembleAI", loc:"resembleai/tts.py", code:"—", tr:"—", ts:2 },
+  { m:"smallest", ko:false, cls:"Smallest", loc:"smallest/tts.py", code:"—", tr:"—", ts:2 },
+  { m:"speechify", ko:false, cls:"Speechify", loc:"speechify/tts.py", code:"—", tr:"—", ts:2 }
+];
+const MVIEWS = [
+  { k:"ko",   t:"Language.KO 를 선언하는 module", s:"12 module" },
+  { k:"both", t:"+ add_word_timestamps 도 호출",  s:"교집합 = 6 module" },
+  { k:"nok",  t:"word ts 는 있는데 한국어가 없다", s:"Rime 이 여기 있다" }
+];
+let P4 = { view:"ko", rime:false };
+
+function mVisible(r){
+  if (P4.view === "ko")   return r.ko;
+  if (P4.view === "both") return r.ko && r.ts > 0;
+  return !r.ko;
+}
+function tsCell(ts){
+  if (ts === 3) return '<span class="gate">yes (gated)</span>';
+  if (ts === 2) return '<span class="yes">yes</span>';
+  if (ts === 1) return '<span class="yes" style="opacity:.75">yes</span>';
+  return '<span class="no">no</span>';
+}
+
+function renderP4(){
+  el("matrixFilters").innerHTML = MVIEWS.map(function(v){
+    return '<button class="pbtn' + (P4.view === v.k ? " on" : "") + '" data-k="' + v.k + '">' +
+      v.t + '<small>' + v.s + '</small></button>';
+  }).join("");
+  Array.prototype.forEach.call(el("matrixFilters").children, function(b){
+    b.addEventListener("click", function(){
+      P4.view = b.getAttribute("data-k"); renderP4();
+    });
+  });
+
+  const head = '<tr><th>module</th><th>class</th><th>Korean code</th><th>transport</th>' +
+               '<th>word ts</th></tr>';
+  const body = MROWS.map(function(r){
+    const vis = mVisible(r);
+    const hit = r.ko && r.ts > 0;
+    let cls = vis ? (hit ? "hit" : "") : "dim";
+    if (P4.rime && r.m === "rime") cls = "rime";
+    return '<tr class="' + cls + '"><td class="mono">' + r.m + '</td>' +
+      '<td class="mono">' + r.cls + '<br><span style="color:var(--ink-faint)">' + r.loc + '</span></td>' +
+      '<td class="mono">' + r.code + '</td><td>' + r.tr + '</td>' +
+      '<td>' + tsCell(r.ts) + '</td></tr>';
+  }).join("");
+  el("matrixTable").innerHTML = head + body;
+
+  const koMods = {}, bothMods = {};
+  MROWS.forEach(function(r){ if (r.ko){ koMods[r.m] = 1; if (r.ts > 0) bothMods[r.m] = 1; } });
+  el("matrixCounters").innerHTML =
+    '<div class="chip2 ttfb"><b>' + Object.keys(koMods).length + '</b>Language.KO 선언 module</div>' +
+    '<div class="chip2 ttfa"><b>' + Object.keys(bothMods).length + '</b>∩ word timestamps</div>' +
+    '<div class="chip2 bad"><b>0</b>오디오를 듣는 테스트 / 한국어 eval 시나리오</div>' +
+    '<div class="chip2 bad"><b>0</b>유지되는 self-hosted 한국어 TTS<br>' +
+      '<span class="mono" style="font-size:.9em">XTTS deprecated · Kokoro/Piper 한국어 없음</span></div>';
+
+  el("rimeBox").innerHTML = P4.rime ? RIME_HTML : "";
+}
+
+const RIME_HTML =
+  '<div class="verdict bad" style="margin-top:12px">' +
+  '<b>Rime을 골랐다. 설정은 완벽하게 통과한다.</b> word timestamp를 emit하고 저지연을 표방하니 ' +
+  'shortlist에 올라올 자격이 있다 — 한국어만 없다.</div>' +
+  '<pre style="margin-top:10px"><span class="cm"># src/pipecat/services/rime/tts.py:46-63</span>\n' +
+  'LANGUAGE_MAP = {\n' +
+  '    Language.DE: "ger", Language.FR: "fra", Language.EN: "eng",\n' +
+  '    Language.ES: "spa", Language.HI: "hin",\n' +
+  '}\n' +
+  'return resolve_language(language, LANGUAGE_MAP, <span class="ins">use_base_code=False</span>)\n\n' +
+  '<span class="cm"># src/pipecat/services/tts_service.py:273-276  — 생성 시점에 변환된다</span>\n' +
+  'if isinstance(self._settings.language, Language):\n' +
+  '    converted = self.language_to_service_language(self._settings.language)\n' +
+  '    if converted is not None:\n' +
+  '        self._settings.language = converted\n\n' +
+  '<span class="bad">WARNING  Language ko not verified. Using \'ko\'.</span>   ' +
+  '<span class="dim">← raise 가 아니다. 로그 한 줄이다.</span></pre>' +
+  '<div class="phases" style="grid-template-columns:repeat(4,1fr);margin-top:12px">' +
+  '<div class="ph on"><b>t = 0 s</b>고객이 "여보세요". LLM이 한국어를 낸다. run_tts가 ' +
+    '<span class="mono">"ko"</span>로 요청. Rime은 <span class="mono">eng/ger/fra/spa/hin</span>만 안다.</div>' +
+  '<div class="ph on"><b>t ≈ 3 s</b>context 1이 오디오 0으로 종료 — <span class="mono">_stop_frame_timeout_s = 3.0</span>이 지나야 "끝났다"고 판정된다. ' +
+    '<span class="mono">consecutive_zero_audio_contexts = 1</span></div>' +
+  '<div class="ph on"><b>t ≈ 6 s</b><span class="mono">= 2</span> — 여전히 아무 에러도 올라가지 않는다. ' +
+    'health check는 전부 통과 중이다.</div>' +
+  '<div class="ph on" style="border-color:var(--danger);background:rgba(248,81,73,.10)">' +
+    '<b style="color:var(--danger)">t ≈ 9 s</b><span class="mono">= 3 &gt;= max_consecutive_zero_audio_contexts</span> → ' +
+    '<span class="mono">push_error(force_treat_as_permanent=True)</span>. 이제서야 ' +
+    '<span class="mono">ProcessorUnusablePolicy</span>가 움직인다.</div></div>' +
+  '<div class="callout bad">' +
+  '<b>콜드 아웃바운드에서 9초는 통화 전체다.</b> 실패의 모양이 그것이다 — ' +
+  '한국어 봇을 비한국어 provider에 물려도 <b>설정은 멀쩡히 된다</b>. ' +
+  '<span class="mono">max_consecutive_zero_audio_contexts=1</span>로 낮추면 3초로 줄지만, ' +
+  'function call만 있는 정당한 무음 턴이 이걸 밟는다. ' +
+  '<b>빠르면서 동시에 안전한 중간값은 없다.</b> ' +
+  '(<span class="mono">tests/test_tts_zero_audio_contexts.py</span> 8 케이스가 이 동작을 잠가 둔다.)</div>';
+
+(function initP4(){
+  el("bRime").addEventListener("click", function(){
+    P4.rime = true; P4.view = "nok"; renderP4();
+    el("rimeBox").scrollIntoView({ behavior:"smooth", block:"nearest" });
+  });
+  el("bRimeReset").addEventListener("click", function(){
+    P4.rime = false; P4.view = "ko"; renderP4();
+  });
+})();
+
+/* ===== boot ===== */
+renderP1();
+renderP2();
+renderPhases();
+renderP3();
+renderP4();
+window.addEventListener("resize", function(){ drawP1(); drawP3(); });
+
+</script>
+</body>
+</html>
