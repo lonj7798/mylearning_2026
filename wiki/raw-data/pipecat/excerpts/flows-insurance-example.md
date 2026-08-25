@@ -18,7 +18,7 @@
                                    --end_quote()------------------------> end
   create_end_node()                post_actions=[{"type": "end_conversation"}]
   ```
-  Every handler is a **direct function** returning `tuple[Result, NodeConfig]` — e.g. `async def collect_age(flow_manager: FlowManager, age: int) -> tuple[AgeCollectionResult, NodeConfig]` (L114). The schema comes from the docstring; `types.py` requires the first param be named `flow_manager` (`FlowsDirectFunctionWrapper.special_first_param_name()` returns `"flow_manager"`).
+  Every handler is a **direct function** returning `tuple[Result, NodeConfig]` — e.g. `async def collect_age(flow_manager: FlowManager, age: int) -> tuple[AgeCollectionResult, NodeConfig]` (L114). The schema comes from the docstring; `types.py` requires the first param be named `flow_manager` (`FlowsDirectFunctionWrapper.special_first_param_name()` returns `"flow_manager"`). See [[flows-node-types]] for the `NodeConfig` / `ConsolidatedFunctionResult` contract and [[flows-state-machine]] for how `_set_node` consumes it.
 - **What goes in `messages` vs `functions` — verbatim.** The whole persona is one string on node 1 (L215): `role_message="You are a friendly insurance agent. Your responses will be converted to audio, so avoid special characters. Always use the available functions to progress the conversation naturally."` Every later node writes only a task: `"Ask about the customer's marital status for premium calculation."` (L233). The terminal-branch node is where the two blend, and it is the most instructive block in the file (L262-281):
   ```python
   def create_quote_results_node(quote) -> NodeConfig:
