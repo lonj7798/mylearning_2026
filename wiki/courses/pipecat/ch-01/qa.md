@@ -423,6 +423,49 @@ kill-switch로")가 흥미로우면서 동시에 정당화 부담이 큰 제안�
 
 ---
 
+## Q11. 그러면 `NullFilter`는 디버깅 전용인가?
+
+**Kernel.** 아니다. "X는 Y 전용"은 **"X에 Y라는 직업이 있다"**는 주장이므로 Y에 쓰인 자리가
+있어야 하는데, 없다. 그리고 **디버깅이라는 직업은 이미 `FrameLogger`가 갖고 있다.**
+
+| | `src/` | `tests/` | `examples/` | 선언된 직업 |
+|---|---:|---:|---:|---|
+| `FrameLogger` | 1 | 0 | **3** | *"for debugging and monitoring frame flow"* (모듈 docstring) |
+| `IdentityFilter` | 1 | **75** | 0 | 테스트 탐침 |
+| `NullFilter` | 1 | **0** | **0** | — |
+
+`FrameLogger`는 실제로 파이프에 끼워 쓴다(`examples/audio/audio-sound-effects.py:133-134`):
+```python
+fl  = FrameLogger("LLM Out")
+fl2 = FrameLogger("Transcription In")
+```
+이름이 곧 **위치**다.
+
+**방법론이 답보다 중요하다.** 학습자의 가설은 docstring(*"useful for testing or temporarily
+stopping frame flow"*)에 근거한 정당한 독해였다. 문제는 **docstring이 의도이지 기록이 아니라는
+점**이다. 검증 절차:
+
+> 가설 "X는 Y 전용이다" → **Y에 쓰인 자리를 찾는다** → 없으면 틀렸거나 최소한 미입증.
+
+`NullFilter`는 후자다. 쓰일 수는 있고, 쓰인 적이 없을 뿐이다. ([[Q10]]과 같은 결론.)
+
+**여기서 나온 진짜 통찰.** `FrameLogger`는 로깅하고 **전부 그대로 통과시킨다** — 즉
+**`IdentityFilter` + 부작용**이다. 항등원의 정의("넣어도 아무것도 변하지 않는다")가 곧
+관측 도구의 요구사항이다. 관찰하려고 넣은 것 때문에 동작이 바뀌면 관찰이 무의미하기 때문이다.
+
+> **항등원은 "아무 데나 안전하게 끼워넣을 수 있는 것"이고, 그래서 관측 도구는 전부 항등원
+> 모양으로 만들어진다.**
+
+이 한 문장이 세 가지를 동시에 설명한다: `IdentityFilter`가 observer 테스트에서 75번 쓰이는
+이유, `FrameLogger`가 파이프 어디에나 꽂히는 이유, `BaseObserver` 계열([[Q8]])이 아예 파이프
+밖에서 지켜보는 이유 — **관측은 관측 대상을 바꾸면 안 된다.**
+
+→ [[ch-11/read]] 함의: latency 계측기 자체가 지연을 만들면 안 된다. pipecat이 metric을
+`FrameProcessor` 기반 클래스에 박아넣은(54개 public 메서드 중 19개, [[Q8]]) 이유가 이것이다 —
+**끼워넣는 대신 이미 안에 있게** 했다. read.md §5.1이 여기서 실용적 의미를 얻는다.
+
+---
+
 ## 진단 — ch-01 자가점검 (2026-08-25)
 
 학습자가 ch-02 진입 전 검증을 요청 → 인과 강제형 probe 5문. 학습자가 스스로 "아직 넘어갈
