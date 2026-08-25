@@ -1,0 +1,1342 @@
+<!--
+  Figure: rule-processor-placement.html — "derivation bench: 두 블록을 직접 놓아라"
+  Chapter: pipecat ch-12 (Rule Layers as Middleware)
+  Back to: ../read.md  (STEP 3 §figure, §5 seam, §6 collapse, §7 mapping, §8 pipeline,
+                        §9 code, §11 latency, §14 risk 2)
+
+  Fully self-contained: inline CSS + vanilla JS. No CDN, no fetch, no external fonts.
+  Opens directly from file:// .
+
+  이 figure는 ANSWER KEY가 아니라 DERIVATION BENCH다.
+  - PANEL ONE의 reveal 버튼은 두 블록을 모두 배치하기 전까지 disabled.
+  - PANEL FOUR의 code view는 PANEL TWO에서 veto 판정을 한 번 이상 계산하기 전까지 locked.
+  - 도구는 절대 "correct"라고 말하지 않는다. 한국어 발화 하나를 replay하고,
+    그 자리에서 각 processor가 실제로 무엇을 RECEIVED 했는지만 보고한다.
+
+  아래 식별자 / 파일 / 라인 번호는 전부 read.md 안에서 소스로 검증된 것:
+    llm_response_universal.py  push_aggregation add_message :863,
+                               push_context_frame :866,
+                               on_user_turn_message_added :871
+    services/openai/base_llm.py  isinstance(frame, LLMContextFrame) :601,
+                               push_frame(LLMFullResponseStartFrame()) :603,
+                               start_processing_metrics() :604,
+                               _process_context(frame.context) :605
+    aggregators/llm_context.py add_message :361, get_messages :244-260,
+                               set_messages :377, body :383
+    processors/frame_processor.py  push_frame/enqueue :1004-1015,
+                               can_generate_metrics -> False :488-494,
+                               start_ttfb_metrics guard :511, stop :528,
+                               start_processing_metrics guard :570,
+                               metrics_enabled :419, interruption reset :839-841
+    observers/user_bot_latency_observer.py  metrics arms :322-341,
+                               LatencyBreakdown fields :107-111,
+                               chronological_events :113-140
+    services/stt_latency.py    DEFAULT_TTFS_P99 1.0 :38, DEEPGRAM_TTFS_P99 0.35 :45,
+                               docstring 0.45 :27 (예시일 뿐, 상수 아님)
+    flows/manager.py           set_node_from_config :588, global_functions kwarg :100,
+                               mix-in :654, queue_frames(frames) :838-841,
+                               respond_immediately/LLMRunFrame :707-709,
+                               summary timeout 5.0s :801-822, flow_manager.state :157
+    flows/actions.py           function action needs_wait=True :279-285, tts_say :104
+    frames.py                  InterimTranscriptionFrame(TextFrame) :476,
+                               TTSSpeakFrame :795-809
+    aggregators/sentence.py    bare return :50-51
+    filters/function_filter.py FunctionFilter :21
+    boson (excerpt 경유): gateway/layers/pipeline.py process() :87-94,
+                               user msg 보관 :154-156, identity delete :205-239,
+                               _merge_system_reminder :341-372
+                               rules/engine.py short-circuit :68-69, gather :74-80
+                               01-filler-filter/rules/korean_fillers.py :53-75, status gate :66
+                               layers/context.py :40,54 · status.py :59 · signals.py :63
+                               registry/registry.py watch :80, :100-102
+
+  replay되는 발화는 read.md §2(c)에 나오는 그 문장 하나다:
+    "네 그런데 제가 지난번에 여쭤본 게…"
+  frame 종류와 누가 무엇을 받는지는 실제 mechanics다. 타이밍(ms)은 단순화되어 있다.
+-->
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>derivation bench — rule processor placement (pipecat ch-12)</title>
+<style>
+  /* --- 반응형 타이포 스케일: 태블릿에서 root를 키운다 ------------------- */
+  html{font-size:14px;}
+  @media (pointer:coarse){ html{font-size:17px;} }
+  @media (min-width:1500px){ html{font-size:15.5px;} }
+
+  :root{
+    --bg:#0e1117; --panel:#161b22; --panel2:#1c2230; --edge:#2b3242;
+    --ink:#e6edf3; --ink-dim:#9aa7b4; --ink-faint:#6b7686;
+    --accent:#58a6ff; --accent2:#3fb950; --danger:#f85149; --warn:#d29922;
+    --c-sys:#58a6ff;    /* SystemFrame  */
+    --c-data:#3fb950;   /* DataFrame    */
+    --c-ctrl:#d29922;   /* ControlFrame */
+    --c-bare:#bc8cff;   /* Frame 직속   */
+    --c-ins:#f778ba;    /* 학습자가 끼워 넣은 processor */
+  }
+  *{box-sizing:border-box;}
+  html,body{margin:0;padding:0;}
+  body{
+    background:var(--bg); color:var(--ink);
+    font:1rem/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Apple SD Gothic Neo",
+         "Noto Sans KR",Helvetica,Arial,sans-serif;
+    padding:22px; max-width:88rem; margin:0 auto;
+  }
+  h1{font-size:1.5rem; margin:0 0 3px; letter-spacing:.2px;}
+  .sub{color:var(--ink-dim); font-size:0.9286rem; margin:0 0 20px;}
+  .sub code{color:var(--accent);}
+  .panel{background:var(--panel); border:1px solid var(--edge); border-radius:10px;
+    padding:16px; margin-bottom:18px;}
+  .panel h2{font-size:0.8571rem; text-transform:uppercase; letter-spacing:.9px; color:var(--ink-dim);
+    margin:0 0 14px; font-weight:600;}
+  .panel h3{font-size:0.8571rem; color:var(--ink); margin:18px 0 8px; font-weight:600;}
+  .mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+    font-variant-numeric:tabular-nums;}
+  code{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:0.9em;}
+
+  .grid2{display:grid; grid-template-columns:1fr 1fr; gap:18px;}
+  .wrap{display:grid; grid-template-columns:20rem 1fr; gap:18px; align-items:start;}
+  @media (max-width:1000px){ .wrap{grid-template-columns:1fr;} .grid2{grid-template-columns:1fr;} }
+
+  /* ---------- palette ---------- */
+  .pal{display:flex; flex-direction:column; gap:6px;}
+  .pitem{background:var(--panel2); border:1px solid var(--edge); color:var(--ink-dim);
+    border-radius:8px; padding:8px 10px; cursor:pointer; text-align:left; font-size:0.8571rem;
+    transition:.13s; line-height:1.35; width:100%;}
+  .pitem:hover{border-color:var(--ink-faint); color:var(--ink);}
+  .pitem.on{background:#2a1c2a; border-color:var(--c-ins); color:var(--ink);}
+  .pitem.done{opacity:.45;}
+  .pitem b{display:block; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+    font-size:0.8571rem; color:var(--ink); margin-bottom:1px;}
+  .pitem span{font-size:0.7857rem; color:var(--ink-faint); display:block;}
+  .pitem.on span{color:var(--c-ins);}
+
+  /* ---------- chain ---------- */
+  .chain{display:flex; flex-wrap:wrap; align-items:stretch; gap:0; margin-bottom:12px;}
+  .slot{flex:0 0 auto; width:1.6rem; align-self:center; height:3.4rem; border:1px dashed var(--edge);
+    border-radius:6px; color:var(--ink-faint); background:transparent; cursor:pointer;
+    font-size:1rem; line-height:1; margin:0 3px; transition:.13s; padding:0;}
+  .slot:hover{border-color:var(--c-ins); color:var(--c-ins); background:rgba(247,120,186,.08);}
+  .slot.armed{border-color:var(--c-ins); color:var(--c-ins); background:rgba(247,120,186,.10);}
+  .chip{flex:0 0 auto; background:var(--panel2); border:1px solid var(--edge); border-radius:8px;
+    padding:6px 8px; min-width:8.4rem; position:relative; margin:6px 0;}
+  .chip.ins{border-color:var(--c-ins);}
+  .chip .v{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+    font-size:0.8214rem; color:var(--ink); display:block; white-space:nowrap;}
+  .chip .c{font-size:0.7143rem; color:var(--ink-faint); display:block; white-space:nowrap;}
+  .chip .bar{display:flex; gap:3px; margin-top:4px;}
+  .chip .bar button{background:transparent; border:1px solid var(--edge); color:var(--ink-faint);
+    border-radius:4px; font-size:0.7143rem; line-height:1.2; padding:1px 5px; cursor:pointer;}
+  .chip .bar button.x:hover{border-color:var(--danger); color:var(--danger);}
+  .chip .n{position:absolute; top:-.55rem; left:6px; font-size:0.6786rem; color:var(--ink-faint);
+    background:var(--panel); padding:0 4px; border-radius:3px;}
+
+  .runbar{display:flex; gap:7px; margin-top:14px; flex-wrap:wrap;}
+  .rb{flex:1 1 6rem; background:var(--panel2); border:1px solid var(--edge); color:var(--ink);
+    border-radius:7px; padding:9px 6px; cursor:pointer; font-size:0.8929rem; font-weight:600;
+    transition:.13s;}
+  .rb:hover{border-color:var(--accent);}
+  .rb.primary{background:#1d3a5f; border-color:var(--accent); color:#cfe6ff;}
+  .rb.on{background:#1d3a5f; border-color:var(--accent); color:#cfe6ff;}
+  .rb:disabled{opacity:.38; cursor:not-allowed; background:var(--panel2);
+    border-color:var(--edge); color:var(--ink-faint);}
+  .rb:disabled:hover{border-color:var(--edge);}
+
+  pre{background:#10151d; border:1px solid var(--edge); border-radius:8px; padding:13px;
+    overflow-x:auto; font-size:0.8571rem; line-height:1.7; margin:0;
+    font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; white-space:pre;}
+  pre .cm{color:var(--ink-faint);} pre .kw{color:var(--c-bare);} pre .st{color:var(--accent2);}
+  pre .ins{color:var(--c-ins); font-weight:700;} pre .ln{color:var(--ink-faint);}
+  pre .bad{color:var(--danger);} pre .dim{color:var(--ink-faint);}
+  pre .fn{color:var(--accent);}
+
+  .code{background:#10151d; border:1px solid var(--edge); border-radius:8px; padding:11px 8px;
+    font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:0.7857rem;
+    line-height:1.62; overflow-x:auto; max-height:34rem; overflow-y:auto;}
+  .code .row{white-space:pre; padding:0 6px; border-radius:4px; border-left:2px solid transparent;}
+  .code .row.cur{background:rgba(88,166,255,.13); border-left-color:var(--accent);}
+  .code .row.hit{background:rgba(88,166,255,.05);}
+  .code .row.dead{opacity:.28;}
+  .code .row.blk{background:rgba(248,81,73,.10); border-left-color:var(--danger);}
+  .code .gut{color:var(--ink-faint); display:inline-block; width:2.1rem; text-align:right;
+    margin-right:.7rem;}
+
+  .counters{display:flex; gap:8px; flex-wrap:wrap; margin-top:12px;}
+  .chip2{border:1px solid var(--edge); border-radius:7px; padding:7px 11px; font-size:0.8571rem;
+    background:var(--panel2); color:var(--ink-faint); min-width:7.5rem;}
+  .chip2 b{display:block; font-size:1.2143rem; color:var(--ink); margin-bottom:1px;}
+  .chip2.zero b{color:var(--danger);}
+  .chip2.good b{color:var(--accent2);}
+  .chip2.warnv b{color:var(--warn);}
+
+  /* height는 JS의 CANVAS_H_* 상수와 반드시 같은 값 — 레이아웃 점프 방지 */
+  canvas{width:100%; display:block; border-radius:8px; background:#10151d;
+    border:1px solid var(--edge);}
+  #cvSeam{height:260px;}
+  #cvBill{height:230px;}
+  .legend{display:flex; gap:14px; font-size:0.8214rem; color:var(--ink-dim); margin-top:9px;
+    flex-wrap:wrap;}
+  .legend i{display:inline-block; width:16px; height:10px; border-radius:3px;
+    vertical-align:middle; margin-right:5px;}
+
+  .stream{background:#10151d; border:1px solid var(--edge); border-radius:8px; padding:10px;
+    max-height:22rem; overflow-y:auto; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+    font-size:0.7857rem; line-height:1.7;}
+  .stream div{white-space:nowrap;}
+  .stream .esc{color:var(--danger);}
+  .stream .ok{color:var(--accent2);}
+  .stream .dim{color:var(--ink-faint);}
+  .fdot{display:inline-block; width:8px; height:8px; border-radius:2px; margin-right:6px;
+    vertical-align:middle;}
+
+  .verdict{border-radius:8px; padding:12px 14px; font-size:0.9286rem; margin-top:12px;
+    border:1px solid var(--edge); background:var(--panel2); line-height:1.6;}
+  .verdict.ok{border-color:var(--accent2); background:rgba(63,185,80,.08);}
+  .verdict.no{border-color:var(--danger); background:rgba(248,81,73,.08);}
+  .verdict b{font-size:1.0714rem;}
+  .verdict .why{display:block; margin-top:6px; font-size:0.8214rem; color:var(--ink-dim);}
+
+  .rep{display:flex; flex-direction:column; gap:10px;}
+  .repcard{border:1px solid var(--edge); border-radius:8px; background:#10151d; padding:11px 13px;}
+  .repcard.ins{border-color:var(--c-ins);}
+  .repcard .h{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+    font-size:0.8571rem; color:var(--ink); margin-bottom:6px;}
+  .repcard .h small{color:var(--ink-faint); font-family:inherit; font-size:0.75rem;
+    margin-left:8px; font-weight:400;}
+  .repcard ul{margin:4px 0 0; padding-left:1.1rem; font-size:0.7857rem; color:var(--ink-dim);
+    line-height:1.65;}
+  .repcard ul li code{color:var(--c-data);}
+  .repcard .got{font-size:0.8214rem; color:var(--ink-dim); margin-top:8px; line-height:1.6;
+    border-top:1px solid var(--edge); padding-top:8px;}
+  .repcard .got b{color:var(--ink);}
+
+  .opts{display:flex; flex-direction:column; gap:7px; margin-top:12px;}
+  .opt{display:flex; align-items:flex-start; gap:8px; font-size:0.8214rem; color:var(--ink-dim);
+    cursor:pointer; line-height:1.45;}
+  .opt input{margin:4px 0 0; accent-color:var(--danger); flex:none; width:1rem; height:1rem;}
+  .opt b{color:var(--ink); font-weight:600;}
+
+  input[type=range]{width:100%; accent-color:var(--c-ins); margin:10px 0 2px;}
+
+  .gate{border:1px dashed var(--edge); border-radius:8px; padding:14px 16px; color:var(--ink-faint);
+    font-size:0.8571rem; line-height:1.7; background:rgba(107,118,134,.05);}
+  .gate b{color:var(--ink-dim);}
+  .checkhdr{display:inline-block; font-size:0.7143rem; letter-spacing:1.1px; font-weight:700;
+    color:#0e1117; background:var(--c-ins); border-radius:4px; padding:2px 8px; margin-bottom:10px;}
+
+  .callout{border-left:3px solid var(--warn); background:rgba(210,153,34,.07);
+    padding:11px 14px; border-radius:0 7px 7px 0; font-size:0.8929rem; color:var(--ink-dim);
+    margin-top:14px; line-height:1.65;}
+  .callout b{color:var(--ink);}
+  .callout.ok{border-left-color:var(--accent2); background:rgba(63,185,80,.07);}
+  .callout.bad{border-left-color:var(--danger); background:rgba(248,81,73,.07);}
+  .callout code{color:var(--accent);}
+
+  .tblwrap{overflow-x:auto;}
+  table{width:100%; border-collapse:collapse; font-size:0.8214rem; margin-top:6px;}
+  th,td{padding:6px 8px; text-align:left; border-bottom:1px solid var(--edge); vertical-align:top;}
+  th{color:var(--ink-faint); font-weight:600; font-size:0.75rem; text-transform:uppercase;
+    letter-spacing:.5px;}
+  td.num{text-align:right; font-variant-numeric:tabular-nums;}
+  td code{color:var(--accent);}
+  td.src{color:var(--ink-faint); font-size:0.7857rem;}
+  .foot{color:var(--ink-faint); font-size:0.8214rem; margin-top:26px; line-height:1.8;}
+  .foot a{color:var(--accent); text-decoration:none;}
+  .hide{display:none;}
+</style>
+</head>
+<body>
+
+<h1>derivation bench — <span class="mono">BosonRuleProcessor</span>를 어디에 놓을 것인가</h1>
+<p class="sub">
+  ch-12 STEP 3 companion · 이 도구는 <b>정답표가 아니다</b>. 절대 "correct"라고 말하지 않는다.
+  네가 고른 자리에서 각 processor가 <b>실제로 무엇을 RECEIVED 했는지</b>만 replay해서 보고한다.
+  발화는 하나: <code>"네 그런데 제가 지난번에 여쭤본 게…"</code>
+  <span class="mono" style="color:var(--ink-faint)">gated surfaces: PANEL ONE의 table, PANEL FOUR의 code</span>
+</p>
+
+<!-- ===================== PANEL ONE ===================== -->
+<div class="panel">
+  <h2>1 · placement bench — 빈 pipeline에 두 블록을 직접 놓아라</h2>
+  <div class="wrap">
+    <div>
+      <div class="pal" id="palette"></div>
+      <div class="runbar">
+        <button class="rb" id="bReset">전부 빼기</button>
+      </div>
+      <div class="callout" style="margin-top:14px">
+        블록을 누른 뒤 <b>점선 slot</b>을 눌러 끼워 넣어라. 자리는 8군데 전부 열려 있다.
+        <b>틀린 자리가 더 많은 것을 가르쳐 준다</b> — 최소 네 자리는 시도해라.
+      </div>
+      <div class="callout bad" id="gateNote">
+        <b>reveal 버튼은 두 블록을 모두 배치하기 전까지 잠겨 있다.</b>
+        우회 단축키는 없다. 도출을 먼저 해라.
+      </div>
+    </div>
+    <div>
+      <div class="chain" id="chain"></div>
+      <div class="rep" id="report"></div>
+      <div class="runbar">
+        <button class="rb primary" id="bReveal" disabled>매핑 테이블 열기 — 0/2 배치됨</button>
+      </div>
+      <div id="revealBox" class="hide"></div>
+    </div>
+  </div>
+</div>
+
+<!-- ===================== PANEL TWO ===================== -->
+<div class="panel">
+  <h2>2 · the seam — interception marker를 직접 놓고 CAN VETO / CANNOT VETO를 계산해라</h2>
+  <canvas id="cvSeam"></canvas>
+  <div class="legend">
+    <span><i style="background:var(--c-data)"></i>context 쓰기</span>
+    <span><i style="background:var(--c-ins)"></i>interception marker</span>
+    <span><i style="background:var(--danger)"></i>이미 downstream으로 탈출한 frame</span>
+    <span><i style="background:var(--accent)"></i>inference 시작</span>
+  </div>
+  <input type="range" id="seamRange" min="0" max="6" step="1" value="0">
+  <div class="runbar">
+    <button class="rb primary" id="bSeam">이 자리로 판정하기</button>
+    <button class="rb" id="bSeamPrev">◀ 앞으로</button>
+    <button class="rb" id="bSeamNext">뒤로 ▶</button>
+  </div>
+  <div id="seamVerdict" class="verdict">marker를 놓고 <b>판정</b>을 눌러라. PANEL FOUR는 이 판정을 최소 한 번 계산해야 열린다.</div>
+</div>
+
+<!-- ===================== PANEL THREE ===================== -->
+<div class="panel">
+  <h2>3 · two-phase commit — 같은 round를 두 번 돌린다</h2>
+  <div class="runbar" style="margin-top:0">
+    <button class="rb primary" id="bTpc">round 실행 — <span class="mono">04-committer</span>가 <span class="mono">Filter</span></button>
+    <button class="rb" id="bTpcReset">리셋</button>
+  </div>
+  <div class="grid2" style="margin-top:14px">
+    <div>
+      <h3 style="margin-top:0">A · boson — 한 객체 안의 4 layers</h3>
+      <div class="stream" id="tpcBoson"></div>
+    </div>
+    <div>
+      <h3 style="margin-top:0">B · Pipecat — 4개의 인접 <span class="mono">FrameProcessor</span></h3>
+      <div class="stream" id="tpcPipecat"></div>
+    </div>
+  </div>
+  <div class="counters" id="tpcCount"></div>
+</div>
+
+<!-- ===================== PANEL FOUR ===================== -->
+<div class="panel">
+  <h2>4 · <span class="mono">BosonRuleProcessor.process_frame</span> — live code view</h2>
+  <div id="p4lock" class="gate">
+    <b>잠김.</b> PANEL TWO에서 interception marker를 놓고 <b>CAN VETO / CANNOT VETO 판정을 최소 한 번</b>
+    계산하면 열린다. 코드가 seam을 먼저 알려주면 PANEL TWO의 질문이 사라진다.
+  </div>
+  <div id="p4body" class="hide">
+    <span class="checkhdr">CHECK YOUR DERIVATION</span>
+    <div class="wrap">
+      <div>
+        <div class="pal" id="p4scen"></div>
+        <div class="runbar">
+          <button class="rb primary" id="bStep">한 줄 진행 ▶</button>
+          <button class="rb" id="bAll">끝까지</button>
+          <button class="rb" id="bRewind">처음으로</button>
+        </div>
+        <div class="opts">
+          <label class="opt"><input type="checkbox" id="optNoSuper">
+            <span><b><span class="mono">super()</span> 호출 지우기</span> — 1번 줄
+            <span class="mono">await super().process_frame(frame, direction)</span>를 삭제한다
+            (ch-01의 black hole)</span></label>
+        </div>
+        <div id="p4note" class="verdict"></div>
+      </div>
+      <div>
+        <div class="code" id="codeBox"></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ===================== PANEL FIVE ===================== -->
+<div class="panel">
+  <h2>5 · the latency bill — ch-11이 비워 둔 slot에 떨어뜨린다</h2>
+  <canvas id="cvBill"></canvas>
+  <div class="legend">
+    <span><i style="background:var(--accent)"></i>STT finalisation</span>
+    <span><i style="background:var(--accent2)"></i>Tier 1 — 11 deterministic checks</span>
+    <span><i style="background:var(--warn)"></i>Tier 2 — 2 <span class="mono">check_type="llm"</span>, gathered</span>
+  </div>
+  <div class="opts">
+    <label class="opt"><input type="checkbox" id="optNextTurn">
+      <span><b>next-turn transition으로 전환</b> — Tier 2를 LLM 첫 토큰과 <b>동시에</b> 돌리고
+      끝나면 <span class="mono">set_node_from_config()</span>. stage change가 한 turn 늦게 착지하고,
+      <span class="mono">Filter</span>/<span class="mono">Respond</span>는 포기한다 (§11.5)</span></label>
+    <label class="opt"><input type="checkbox" id="optMetrics" checked>
+      <span><b><span class="mono">can_generate_metrics()</span> → True</b> +
+      <span class="mono">enable_metrics=True</span> — 끄면 <span class="mono">start_ttfb_metrics()</span>가
+      silent no-op이 된다 (<span class="mono">frame_processor.py:494, :511</span>)</span></label>
+  </div>
+  <div id="billNote" class="verdict"></div>
+</div>
+
+<!-- ===================== PANEL SIX ===================== -->
+<div class="panel">
+  <h2>6 · the transition race — <span class="mono">llm</span> input에 도착한 inference trigger를 센다</h2>
+  <div class="runbar" style="margin-top:0" id="raceBtns"></div>
+  <div class="grid2" style="margin-top:14px">
+    <div>
+      <div class="stream" id="raceTrace"></div>
+    </div>
+    <div>
+      <div class="counters" id="raceCount"></div>
+      <div id="raceNote" class="verdict"></div>
+    </div>
+  </div>
+</div>
+
+<p class="foot">
+  ← <a href="../read.md">ch-12 read.md</a> ·
+  PANEL ONE → §8 · PANEL TWO → §5 / §5.1 / §5.2 · PANEL THREE → §6 · PANEL FOUR → §9.2 ·
+  PANEL FIVE → §11 · PANEL SIX → §8.4 / §14 Risk 2<br>
+  라인 번호는 전부 read.md가 소스에서 검증한 값이다. frame 종류와 순서는 실제 mechanics이고,
+  ms 단위 타이밍만 단순화되어 있다.
+</p>
+
+<script>
+"use strict";
+function $(id){ return document.getElementById(id); }
+function el(tag, cls, html){
+  const e = document.createElement(tag);
+  if (cls) e.className = cls;
+  if (html !== undefined) e.innerHTML = html;
+  return e;
+}
+function esc(s){
+  return String(s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
+}
+
+/* ---- canvas 높이는 상수로 붙잡는다. cv.height를 다시 읽으면 매 프레임 2배가 된다 ---- */
+const CANVAS_H_SEAM = 260;
+const CANVAS_H_BILL = 230;
+
+function setupCanvas(cv, H){
+  const r = window.devicePixelRatio || 1;
+  const w = Math.max(cv.clientWidth, 200), h = H;
+  if (cv.width !== Math.round(w*r) || cv.height !== Math.round(h*r)){
+    cv.width = Math.round(w*r); cv.height = Math.round(h*r);
+  }
+  cv.style.height = h + "px";
+  const c = cv.getContext("2d");
+  c.setTransform(r,0,0,r,0,0);
+  c.clearRect(0,0,w,h);
+  return {c:c, w:w, h:h};
+}
+
+const CSSV = getComputedStyle(document.documentElement);
+function V(n){ return CSSV.getPropertyValue(n).trim() || "#888"; }
+const COL = {
+  ink:"#e6edf3", dim:"#9aa7b4", faint:"#6b7686", edge:"#2b3242",
+  accent:"#58a6ff", green:"#3fb950", danger:"#f85149", warn:"#d29922",
+  ins:"#f778ba", bare:"#bc8cff", panel2:"#1c2230"
+};
+const MONO = 'ui-monospace,SFMono-Regular,Menlo,Consolas,monospace';
+
+function rr(c, x, y, w, h, r){
+  c.beginPath();
+  c.moveTo(x+r, y); c.lineTo(x+w-r, y); c.quadraticCurveTo(x+w, y, x+w, y+r);
+  c.lineTo(x+w, y+h-r); c.quadraticCurveTo(x+w, y+h, x+w-r, y+h);
+  c.lineTo(x+r, y+h); c.quadraticCurveTo(x, y+h, x, y+h-r);
+  c.lineTo(x, y+r); c.quadraticCurveTo(x, y, x+r, y);
+  c.closePath();
+}
+
+/* =========================================================================
+   전역 gate 상태 — 이 두 개가 figure의 계약이다
+   ========================================================================= */
+const GATE = { placed:0, seamComputed:false };
+
+/* =========================================================================
+   PANEL ONE — placement bench
+   ========================================================================= */
+const BASE = [
+  {v:"transport.input()",   c:"DailyTransport / WebsocketTransport"},
+  {v:"stt",                 c:"Korean 8 kHz telephony STT"},
+  {v:"user_aggregator",     c:"LLMContextAggregatorPair(context).user()"},
+  {v:"llm",                 c:"OpenAI-compatible, base_llm.py:601"},
+  {v:"tts",                 c:"TTSService"},
+  {v:"transport.output()",  c:"bot audio out"},
+  {v:"assistant_aggregator",c:"LLMContextAggregatorPair(context).assistant()"}
+];
+
+const BLOCKS = {
+  gate: {key:"gate", v:"BosonFillerGate()", c:"boson layer 01 — korean_fillers.py:53-75"},
+  rule: {key:"rule", v:"BosonRuleProcessor(...)", c:"boson layers 02 / 03 / 04 — Tier 1 + Tier 2"}
+};
+
+/* idx = BASE 리스트의 삽입 위치 (0 .. 7). 각 자리에서 downstream으로 실제로 지나가는 frame들. */
+const POS = [
+  { at:"transport.input() 앞",
+    frames:["StartFrame", "EndFrame / CancelFrame"],
+    gate:"받은 text frame <b>0개</b>. <code>_is_filler_text()</code>는 <code>str</code>을 받는데 넘길 문자열 자체가 없다. rule은 degraded가 아니라 <b>dead</b>다.",
+    rule:"받은 <code>LLMContextFrame</code> <b>0개</b>. context frame은 <code>user_aggregator</code>가 <code>:866</code>에서 만들어 <b>downstream</b>으로 밀어낸다 — 이 자리는 그 상류다. <code>isinstance(frame, LLMContextFrame)</code> 분기는 한 번도 참이 되지 않는다."},
+  { at:"transport.input() → stt",
+    frames:["InputAudioRawFrame × N", "UserStartedSpeakingFrame", "UserStoppedSpeakingFrame"],
+    gate:"받은 text frame <b>0개</b>. <code>InputAudioRawFrame.audio</code>는 <code>bytes</code>다. 이 자리에서 <code>\"네\"</code>는 아직 <b>소리</b>이지 문자열이 아니다.",
+    rule:"받은 <code>LLMContextFrame</code> <b>0개</b>. 위와 같은 이유 — aggregator보다 상류다."},
+  { at:"stt → user_aggregator",
+    frames:["InterimTranscriptionFrame(\"네\")", "InterimTranscriptionFrame(\"네 그런데\")", "TranscriptionFrame(\"네 그런데 제가 지난번에 여쭤본 게…\")", "UserStoppedSpeakingFrame"],
+    gate:"받은 text: interim <b>2개</b> + final <b>1개</b>. <code>pre_turn_status</code> gate(<code>korean_fillers.py:66</code>)에 넘길 재료가 다 있고, aggregator가 <code>:863</code>에서 commit하기 <b>전</b>이다. 여기서 drop은 그냥 <b>push하지 않는 것</b>이다. 단 <code>InterimTranscriptionFrame</code>을 무조건 버리지 않으면 interim <code>\"네\"</code>가 backchannel로 걸려 손님 질문이 통째로 사라진다 (<code>frames.py:476</code>).",
+    rule:"받은 것은 <code>TranscriptionFrame</code> / <code>InterimTranscriptionFrame</code>. <code>kw in user_message.lower()</code>가 fragment(<code>\"네\"</code>, <code>\"네 그런데\"</code>)에 대해 돈다 — <code>end_signal.py</code>는 whole-string 매칭이라 error가 아니라 <b>틀린 답</b>을 낸다. 그리고 <code>frame.context</code>가 없으니 snapshot도 rollback도 없다."},
+  { at:"user_aggregator → llm",
+    frames:["LLMContextFrame(context)", "  context.get_messages()[-1] = {\"role\":\"user\", \"content\":\"네 그런데 제가 지난번에 여쭤본 게…\"}"],
+    gate:"여기 도착했다는 것은 <code>:863</code>이 <b>이미</b> 돌았다는 뜻이다 — <code>\"네\"</code>는 shared <code>LLMContext</code>에 <code>add_message</code>되어 있다. 한 줄짜리 문자열 membership 검사가 <code>set_messages(snapshot[:-1])</code> rollback + frame swallow로 승격되었다. 같은 결과를 가장 비싼 방법으로 얻는다.",
+    rule:"받은 것: <code>LLMContextFrame</code> <b>1개</b>. 완성된 turn이 <code>ctx.get_messages()[-1]</code>에 있고, <code>base_llm.py:601</code>은 이 frame을 아직 보지 못했다. push하지 않으면 inference는 시작되지 않는다."},
+  { at:"llm → tts",
+    frames:["LLMFullResponseStartFrame", "LLMTextFrame(chunk) × k", "LLMFullResponseEndFrame"],
+    gate:"여기 흐르는 text는 손님이 아니라 <b>model의 출력</b>이다. filler filter가 봐야 할 문장은 두 processor 뒤에 있다.",
+    rule:"받은 것: <code>LLMFullResponseStartFrame</code> + model이 <b>이미 생성한</b> <code>LLMTextFrame</code> chunk들. <code>Inject</code>는 생성을 steer하려고 존재하는데 생성이 끝났다. <code>Filter</code>도 소용없다 — 다음 processor가 <code>tts</code>다."},
+  { at:"tts → transport.output()",
+    frames:["TTSStartedFrame", "TTSAudioRawFrame × N", "TTSStoppedFrame"],
+    gate:"text frame 없음 — TTS audio다. 손님 발화는 이 지점을 지나가지 않는다.",
+    rule:"받은 <code>LLMContextFrame</code> <b>0개</b>. 여기는 bot audio 경로다."},
+  { at:"transport.output() → assistant_aggregator",
+    frames:["TTSStartedFrame", "TTSAudioRawFrame × N", "TTSStoppedFrame"],
+    gate:"text frame 없음 — 이미 손님 귀에 들어간 오디오 뒤다.",
+    rule:"받은 <code>LLMContextFrame</code> <b>0개</b>. 그리고 여기보다 뒤로 가면 <code>assistant_aggregator</code>가 turn을 history에 기록한 뒤가 된다."},
+  { at:"assistant_aggregator 뒤 (pipeline 꼬리)",
+    frames:["TTSStoppedFrame", "EndFrame"],
+    gate:"text frame 없음.",
+    rule:"받은 <code>LLMContextFrame</code> <b>0개</b>. 이 turn은 이미 끝났다."}
+];
+
+const P1 = { armed:null, slots:{} };   /* slots: {idx: "gate"|"rule"} */
+
+function p1Chain(){
+  /* 실제 배치 순서를 계산: BASE 항목 사이사이에 삽입된 블록 */
+  const out = [];
+  for (let i = 0; i <= BASE.length; i++){
+    out.push({kind:"slot", idx:i});
+    const here = [];
+    for (const key in BLOCKS){ if (P1.slots[key] === i) here.push(key); }
+    here.sort();
+    for (const key of here) out.push({kind:"ins", key:key, idx:i});
+    if (i < BASE.length) out.push({kind:"base", i:i});
+  }
+  return out;
+}
+
+function renderPalette(){
+  const box = $("palette"); box.innerHTML = "";
+  for (const key in BLOCKS){
+    const b = BLOCKS[key];
+    const placed = P1.slots[key] !== undefined;
+    const btn = el("button", "pitem" + (P1.armed === key ? " on" : "") + (placed ? " done" : ""),
+      "<b>" + esc(b.v) + "</b><span>" + esc(b.c) + (placed ? " · 배치됨 → " + POS[P1.slots[key]].at : " · 미배치") + "</span>");
+    btn.onclick = function(){ P1.armed = (P1.armed === key ? null : key); p1Refresh(); };
+    box.appendChild(btn);
+  }
+}
+
+function renderChain(){
+  const box = $("chain"); box.innerHTML = "";
+  const items = p1Chain();
+  for (const it of items){
+    if (it.kind === "slot"){
+      const s = el("button", "slot" + (P1.armed ? " armed" : ""), "+");
+      s.title = "position " + it.idx;
+      s.onclick = (function(idx){ return function(){
+        if (!P1.armed) return;
+        P1.slots[P1.armed] = idx; P1.armed = null; p1Refresh();
+      };})(it.idx);
+      box.appendChild(s);
+    } else if (it.kind === "base"){
+      const b = BASE[it.i];
+      const chip = el("div", "chip",
+        "<span class='v'>" + esc(b.v) + "</span><span class='c'>" + esc(b.c) + "</span>");
+      box.appendChild(chip);
+    } else {
+      const b = BLOCKS[it.key];
+      const chip = el("div", "chip ins",
+        "<span class='n'>position " + it.idx + "</span>" +
+        "<span class='v'>" + esc(b.v) + "</span><span class='c'>" + esc(b.c) + "</span>" +
+        "<div class='bar'><button class='x'>빼기</button></div>");
+      chip.querySelector("button").onclick = (function(key){ return function(){
+        delete P1.slots[key]; p1Refresh();
+      };})(it.key);
+      box.appendChild(chip);
+    }
+  }
+}
+
+function renderReport(){
+  const box = $("report"); box.innerHTML = "";
+  const order = ["gate","rule"];
+  let any = false;
+  for (const key of order){
+    const idx = P1.slots[key];
+    if (idx === undefined) continue;
+    any = true;
+    const p = POS[idx], b = BLOCKS[key];
+    const card = el("div", "repcard ins");
+    let h = "<div class='h'>" + esc(b.v) + "<small>position " + idx + " · " + esc(p.at) + "</small></div>";
+    h += "<ul>";
+    for (const f of p.frames) h += "<li><code>" + esc(f) + "</code></li>";
+    h += "</ul>";
+    h += "<div class='got'><b>이 자리에서 rule code가 손에 쥔 것:</b><br>" + (key === "gate" ? p.gate : p.rule) + "</div>";
+    card.innerHTML = h;
+    box.appendChild(card);
+  }
+  if (!any){
+    box.appendChild(el("div", "gate",
+      "아직 배치된 블록이 없다. <b>왼쪽에서 블록을 누르고 점선 slot을 눌러라.</b><br>" +
+      "이 도구는 자리가 맞았는지 말해 주지 않는다 — 그 자리에서 <b>실제로 어떤 frame이 도착했는지</b>만 replay한다."));
+  } else {
+    box.appendChild(el("div", "callout",
+      "위 목록은 판정이 아니다. <b>수신 내역</b>이다. 결론은 네가 내려라: " +
+      "<code>_is_filler_text()</code>가 돌 수 있는 자리인가? " +
+      "<code>frame.context</code>가 존재하고 <code>base_llm.py:601</code>이 아직 그것을 보지 않은 자리인가?"));
+  }
+}
+
+function renderRevealBtn(){
+  const n = (P1.slots.gate !== undefined ? 1 : 0) + (P1.slots.rule !== undefined ? 1 : 0);
+  GATE.placed = n;
+  const btn = $("bReveal");
+  btn.disabled = (n < 2);
+  btn.textContent = n < 2
+    ? "매핑 테이블 열기 — " + n + "/2 배치됨"
+    : "매핑 테이블 열기 — CHECK YOUR DERIVATION";
+  $("gateNote").className = n < 2 ? "callout bad" : "callout ok";
+  $("gateNote").innerHTML = n < 2
+    ? "<b>reveal 버튼은 두 블록을 모두 배치하기 전까지 잠겨 있다.</b> 우회 단축키는 없다. 도출을 먼저 해라."
+    : "<b>gate 해제.</b> 두 블록을 다 놓았다. 이제 매핑 테이블은 <b>수업</b>이 아니라 네 도출에 대한 <b>검산</b>이다 — 한 행이 네 답과 어긋나면 둘 중 하나가 틀린 것이고, 그 행이 어느 source line이 그것을 결정하는지 알려준다.";
+}
+
+function p1Refresh(){ renderPalette(); renderChain(); renderReport(); renderRevealBtn(); }
+
+$("bReset").onclick = function(){ P1.slots = {}; P1.armed = null; $("revealBox").className = "hide"; p1Refresh(); };
+
+/* ---- 매핑 테이블: 11행. gate가 열린 뒤에만 DOM에 들어간다 ---- */
+const MAP_ROWS = [
+  [1, '<code>@check(mode="sequential")</code> + 첫 non-continue short-circuit',
+      'processor 내부, <b>그대로 이식</b>', '없음',
+      'Pipecat에는 rule scheduler가 아예 없다 — 싸울 상대가 없다. <code>rules/engine.py:68-69</code>가 <code>process_frame</code> 안에서 그대로 돈다.'],
+  [2, '<code>@check(mode="parallel")</code> 하나의 <code>asyncio.gather</code>',
+      '같은 processor, <b>같은 <code>asyncio.gather</code></b>', '없음',
+      '<code>rules/engine.py:74-80</code>. 너는 coroutine 안에 있고 <code>gather</code>는 전과 똑같이 동작한다.'],
+  [3, '<code>Respond(text)</code>',
+      '<code>TTSSpeakFrame(text)</code>를 push하고 context frame은 <b>swallow</b>', '없음',
+      '<code>frames.py:795-809</code>. Flows의 <code>tts_say</code> action은 틀린 도구다 — node-set 시점에만 발화한다(<code>actions.py:104</code>). turn 단위 스크립트 대사에는 너무 거칠다.'],
+  [4, '<code>Inject(content)</code>',
+      'push 전에 <code>context.add_message({...})</code>', 'last user message에 <b>merge</b>하는 선택지',
+      '<code>llm_context.py:361</code> <code>add_message</code>는 append다. boson의 <code>_merge_system_reminder</code>(<code>layers/pipeline.py:341-372</code>)는 <code>&lt;system-reminder&gt;</code>를 최근 user message <b>안으로</b> 접어 넣는다 — 대응하는 frame도 context verb도 없다.'],
+  [5, '<code>PreTool(name, args, preamble)</code>',
+      '<code>pre_actions</code>의 Flows <code>function</code> action — <b>정확히 맞는다</b>', 'preamble을 첫 stream chunk로 흘리는 것',
+      '<code>actions.py:279-285</code>: <code>elif previous_action_type == "function": … needs_wait = True</code>, 무조건. <code>function</code> action은 <b>항상</b> 기다린다 = boson의 synchronous-before-generation. preamble(<code>["감사합니다!"]</code>)은 앞에 배치된 별도 <code>tts_say</code>로 강등.'],
+  [6, '<code>Compact()</code>',
+      '<b>boson의</b> compactor를 호출하는 <code>function</code> pre-action', '백그라운드 async compaction — pre-action은 blocking',
+      'Flows summary 경로를 쓰지 마라. <code>manager.py:801-822</code>: <code>asyncio.wait_for(..., timeout=5.0)</code>, <code>TimeoutError</code>면 경고 로그 후 <code>ContextStrategy.APPEND</code>로 <b>조용히 강등</b>된다. 조용히 안 되는 compaction은 없는 것보다 나쁘다.'],
+  [7, '<code>_GLOBAL_TOOLS</code>',
+      '<code>FlowManager(global_functions=[...])</code>', '없음 — 정확히 일치',
+      '<code>manager.py:100</code>이 kwarg를 선언하고 <code>manager.py:654</code>가 섞는다: <code>functions_list = self._global_functions + node_config.get("functions", [])</code>. 모든 node에서 global-then-node.'],
+  [8, '<code>ScriptEngine.process_turn(state, msg, registry)</code>',
+      'processor 안에서 <b>그대로</b> 실행', '없음 — 시스템에서 가장 깔끔한 port',
+      '전부 <code>@staticmethod</code>, dict를 받아 <code>(new_state, Action)</code>을 돌려주고 입력을 mutate하지 않는다. gateway 결합 0. <code>script_state</code>를 processor(또는 <code>flow_manager.state</code>, <code>manager.py:157</code>)에 얹고 호출하면 끝.'],
+  [9, '<code>Continue()</code>',
+      '<b>action으로서 갈 곳이 없다</b>', '—',
+      'action은 round가 끝난 <i>뒤</i>에 실행되고, 그때는 user message가 이미 context에 있다(<code>:863</code>). "계속 진행"은 effect가 아니라 effect의 부재다 — action list가 아니라 processor의 control flow에 속한다.'],
+  [10, '<code>Pass()</code>',
+      '<b>action으로서 갈 곳이 없다</b>', '—',
+      '9행과 같은 이유. <code>Pass()</code>는 이 layer가 투표를 기권한다는 뜻이다. "기권"을 뜻하는 frame은 없다 — 분기하지 않음으로 표현한다.'],
+  [11, '<code>Filter(reason)</code>',
+      '<b>action이 아니라 processor의 verdict</b>', '이미 나간 VAD interruption broadcast는 취소 불가',
+      '이 행이 중요하다. <code>Filter</code>는 <i>pre-LLM routing verdict</i>다: push하지 말고, snapshot을 복원하고, return. action으로 모델링하면 round 뒤에 실행되고 <code>:863</code>에 의해 메시지는 이미 commit된 뒤다. 그리고 <code>FunctionFilter</code>(<code>filters/function_filter.py:21</code>)로 손을 뻗지 마라 — predicate로 pass/block만 하고 context rollback 수단이 없다.']
+];
+
+$("bReveal").onclick = function(){
+  if (GATE.placed < 2) return;
+  const box = $("revealBox");
+  box.className = "";
+  let h = "<span class='checkhdr'>CHECK YOUR DERIVATION</span>";
+  h += "<div class='callout'>이것은 <b>수업이 아니라 검산</b>이다. 어떤 행이 네 도출과 어긋나면 " +
+       "둘 중 하나가 틀린 것이고, 그 행의 마지막 칸이 <b>어느 source line이 그것을 결정하는지</b> 말해 준다. 그 줄로 가라.</div>";
+  h += "<div class='tblwrap'><table><thead><tr><th>#</th><th>boson mechanism</th><th>Pipecat home</th>" +
+       "<th>잃는 것</th><th>결정하는 line</th></tr></thead><tbody>";
+  for (const r of MAP_ROWS){
+    h += "<tr><td class='num'>" + r[0] + "</td><td>" + r[1] + "</td><td>" + r[2] +
+         "</td><td>" + r[3] + "</td><td class='src'>" + r[4] + "</td></tr>";
+  }
+  h += "</tbody></table></div>";
+  box.innerHTML = h;
+};
+
+p1Refresh();
+
+/* =========================================================================
+   PANEL TWO — the seam
+   ========================================================================= */
+const TICKS = [
+  {x:0.12, ln:":863", d:"add_message(...)",            col:COL.green,  zone:"agg"},
+  {x:0.25, ln:":866", d:"push_context_frame()",        col:COL.warn,   zone:"agg"},
+  {x:0.38, ln:":871", d:"on_user_turn_message_added",  col:COL.faint,  zone:"agg"},
+  {x:0.60, ln:":601", d:"isinstance(frame, ...)",      col:COL.dim,    zone:"svc"},
+  {x:0.72, ln:":603", d:"push_frame(LLMFullRes...)",   col:COL.danger, zone:"svc"},
+  {x:0.81, ln:":604", d:"start_processing_metrics",    col:COL.faint,  zone:"svc"},
+  {x:0.91, ln:":605", d:"_process_context(...)",       col:COL.accent, zone:"svc"}
+];
+
+const STOPS = [
+  { x:0.055, label:"`:863` 이전", can:false,
+    t:"CANNOT VETO — 도달 불가",
+    why:"aggregation이 아직 commit되지 않았고, pipeline에는 가로챌 frame이 없다. 이 지점은 <code>push_aggregation()</code> 내부다." },
+  { x:0.185, label:"`:863` → `:866` 사이", can:false,
+    t:"CANNOT VETO — 도달 불가",
+    why:"두 statement 사이다. <code>FrameProcessor</code>가 앉을 수 있는 자리가 아니다 — 앉으려면 aggregator 자체를 fork해야 한다. user message는 이미 <code>ctx</code>에 있지만 그것을 볼 수 있는 코드가 없다." },
+  { x:0.38,  label:"`:871` — on_user_turn_message_added handler", can:false,
+    t:"CANNOT VETO — 여기서 한 rival이 죽는다",
+    why:"handler는 <code>:866</code>의 <code>push_context_frame()</code> <b>뒤</b>에 fire한다. frame은 이미 나갔다. 이것은 veto가 아니라 <b>notification</b>이다. 여기서 <code>set_messages()</code>를 불러도 downstream으로 간 frame은 돌아오지 않는다." },
+  { x:0.485, label:"`:866` → `:601` 구간 — frame이 아직 이동 중", can:true,
+    t:"CAN VETO",
+    why:"완성된 turn이 <code>ctx</code>에 있고(<code>:863</code>), inference는 시작되지 않았다 — <code>:601</code>이 아직 이 frame을 보지 못했다. 되돌리는 방법이 <b>실재</b>한다: <code>snapshot = list(ctx.get_messages())</code> → <code>ctx.set_messages(snapshot[:-1])</code> → push하지 않고 <code>return</code>. 나간 frame이 <b>0개</b>이므로 취소할 것이 없다." },
+  { x:0.66,  label:"`:601` → `:603` 사이", can:false,
+    t:"CANNOT VETO — 도달 불가",
+    why:"<code>base_llm.process_frame</code> 내부다. 여기 앉으려면 service를 subclass해야 하고, 그 순간 너는 processor를 끼워 넣은 것이 아니라 LLM service를 fork한 것이다." },
+  { x:0.855, label:"`:603` → `:605` 사이", can:false,
+    t:"CANNOT VETO — Constraint Two",
+    why:"<code>:603</code>에서 <code>await self.push_frame(LLMFullResponseStartFrame())</code>가 <b>이미 실행됐다</b>. <code>tts</code>와 assistant aggregator는 이미 turn의 시작을 봤다. 그래서 <code>:601 → :605</code>는 손 넣을 수 있는 <b>빈 창이 아니다</b> — 되돌릴 수 없는 push가 이미 일어난 창이다. (<code>:604</code>는 metrics clock 시작.)" },
+  { x:0.955, label:"`:605` 이후 — 생성 시작 후 취소", can:false,
+    t:"CANNOT VETO — 두 번 낸다",
+    why:"completion이 시작됐다. 취소하면 첫 TTFT를 <b>두 번</b> 지불하고, 이미 오디오가 손님에게 나갔을 수도 있다. 이것은 veto가 아니라 사후 수습이다." }
+];
+
+const SEAM = { i:0 };
+
+function drawSeam(){
+  const cv = $("cvSeam"); if (!cv) return;
+  const g = setupCanvas(cv, CANVAS_H_SEAM);
+  const c = g.c, w = g.w, h = g.h;
+  const AX = 150;
+
+  c.font = "600 11px " + MONO;
+  c.textAlign = "left";
+  c.fillStyle = COL.dim;
+  c.fillText("push_aggregation()  ·  llm_response_universal.py", 10, 18);
+  c.textAlign = "right";
+  c.fillText("base_llm.process_frame()  ·  openai/base_llm.py", w-10, 18);
+
+  /* zones */
+  c.fillStyle = "rgba(63,185,80,.05)";
+  rr(c, w*0.06, 74, w*0.36, 62, 8); c.fill();
+  c.strokeStyle = COL.edge; c.lineWidth = 1; c.stroke();
+  c.fillStyle = "rgba(88,166,255,.05)";
+  rr(c, w*0.545, 74, w*0.425, 62, 8); c.fill();
+  c.strokeStyle = COL.edge; c.stroke();
+
+  /* the wire between :866 and :601 */
+  const wx0 = w*0.25, wx1 = w*0.60;
+  c.strokeStyle = COL.green; c.lineWidth = 3;
+  c.setLineDash([6,4]);
+  c.beginPath(); c.moveTo(wx0, AX); c.lineTo(wx1, AX); c.stroke();
+  c.setLineDash([]);
+  c.font = "10px " + MONO; c.textAlign = "center"; c.fillStyle = COL.green;
+  c.fillText("LLMContextFrame in flight", (wx0+wx1)/2, AX+20);
+
+  /* axis */
+  c.strokeStyle = COL.edge; c.lineWidth = 2;
+  c.beginPath(); c.moveTo(w*0.03, AX); c.lineTo(w*0.98, AX); c.stroke();
+
+  /* ticks */
+  for (const t of TICKS){
+    const x = w*t.x;
+    c.strokeStyle = t.col; c.lineWidth = 2;
+    c.beginPath(); c.moveTo(x, AX-52); c.lineTo(x, AX+6); c.stroke();
+    c.fillStyle = t.col;
+    c.beginPath(); c.arc(x, AX, 4.5, 0, Math.PI*2); c.fill();
+    c.font = "700 11px " + MONO; c.textAlign = "center";
+    c.fillText(t.ln, x, AX-58);
+    c.font = "9px " + MONO; c.fillStyle = COL.faint;
+    c.fillText(t.d, x, AX-44);
+  }
+
+  /* the frame that already escaped at :603 */
+  const ew = Math.min(w*0.26, 200);
+  const ex = Math.min(w*0.72, w - ew - 8);
+  c.fillStyle = "rgba(248,81,73,.14)";
+  rr(c, ex, AX+30, ew, 32, 6); c.fill();
+  c.strokeStyle = COL.danger; c.lineWidth = 1; c.stroke();
+  c.fillStyle = COL.danger; c.font = "700 10px " + MONO; c.textAlign = "left";
+  c.fillText("이미 downstream 탈출 ↓", ex+8, AX+44);
+  c.font = "9px " + MONO;
+  c.fillText("LLMFullResponseStartFrame", ex+8, AX+56);
+
+  /* marker */
+  const s = STOPS[SEAM.i], mx = w*s.x;
+  c.strokeStyle = COL.ins; c.lineWidth = 2;
+  c.beginPath(); c.moveTo(mx, AX-14); c.lineTo(mx, AX+92); c.stroke();
+  c.fillStyle = COL.ins;
+  c.beginPath();
+  c.moveTo(mx, AX-14); c.lineTo(mx-9, AX-30); c.lineTo(mx+9, AX-30); c.closePath(); c.fill();
+  c.font = "700 10px " + MONO;
+  c.textAlign = mx > w*0.70 ? "right" : "left";
+  c.fillText("interception marker", mx + (mx > w*0.70 ? -8 : 8), AX+88);
+
+  /* footer */
+  c.textAlign = "left"; c.fillStyle = COL.faint; c.font = "10px " + MONO;
+  c.fillText("stop " + SEAM.i + " / " + (STOPS.length-1) + "  ·  " + s.label.replace(/`/g, ""), 10, h-10);
+}
+
+function seamRender(){
+  $("seamRange").value = String(SEAM.i);
+  drawSeam();
+}
+
+function seamJudge(){
+  GATE.seamComputed = true;
+  const s = STOPS[SEAM.i];
+  const box = $("seamVerdict");
+  box.className = "verdict " + (s.can ? "ok" : "no");
+  box.innerHTML = "<b>" + s.t + "</b> — " + s.label.replace(/`([^`]+)`/g, "<code>$1</code>") +
+    "<span class='why'>" + s.why + "</span>";
+  p4Unlock();
+}
+
+$("seamRange").oninput = function(){ SEAM.i = parseInt(this.value, 10) || 0; drawSeam(); };
+$("bSeam").onclick = seamJudge;
+$("bSeamPrev").onclick = function(){ SEAM.i = Math.max(0, SEAM.i-1); seamRender(); };
+$("bSeamNext").onclick = function(){ SEAM.i = Math.min(STOPS.length-1, SEAM.i+1); seamRender(); };
+
+seamRender();
+
+/* =========================================================================
+   PANEL THREE — two-phase commit
+   ========================================================================= */
+const TPC_A = [
+  {k:"dim", t:"session.messages.append(pipeline_user_message)   # layers/pipeline.py:154-156"},
+  {k:"dim", t:"  ↳ 객체 참조를 보관해 둔다 (identity handle)"},
+  {k:"ok",  t:"01-filler-filter   → Pass()          # status != generating"},
+  {k:"ok",  t:"02-analyzer        → stage Signal(...)          [Phase 1: staged]"},
+  {k:"ok",  t:"03-orchestrator    → stage Inject('<system-reminder>…')  [staged]"},
+  {k:"ok",  t:"03-orchestrator    → stage PreTool('lookup_policy', preamble='감사합니다!')  [staged]"},
+  {k:"esc", t:"04-committer       → Filter(reason='off_topic')"},
+  {k:"dim", t:"resolve: ACTION_PRIORITY['filter'] == 0 → 승리. Phase 2에 들어가지 않는다."},
+  {k:"ok",  t:"rollback: session.messages를 뒤에서부터 걸어 pipeline_user_message를"},
+  {k:"ok",  t:"          OBJECT IDENTITY로 삭제               # layers/pipeline.py:205-239"},
+  {k:"ok",  t:"staged Inject / PreTool: 적용된 적이 없다 → 그냥 버린다"},
+  {k:"ok",  t:"── 탈출한 것: 0 ────────────────────────────────"}
+];
+
+const TPC_B = [
+  {k:"dim", t:"user_aggregator → LLMContextFrame 도착"},
+  {k:"dim", t:"P01: snapshot = list(ctx.get_messages())   # P01의 지역 변수다"},
+  {k:"ok",  t:"P01 FillerFilterProcessor  → Pass()"},
+  {k:"esc", t:"P01: await self.push_frame(frame)   ESCAPED #1"},
+  {k:"dim", t:"     frame_processor.py:1004-1015 — 이웃 queue에 enqueue. un-push는 없다."},
+  {k:"ok",  t:"P02 AnalyzerProcessor      → Signal 기록"},
+  {k:"esc", t:"P02: await self.push_frame(frame)   ESCAPED #2"},
+  {k:"esc", t:"P03: Inject → ctx.add_message({...})   ESCAPED #3"},
+  {k:"dim", t:"     llm_context.py:361 — 공유 객체 mutation. frame이 아니라서"},
+  {k:"dim", t:"     withhold할 push조차 없다. 모든 holder가 즉시 본다."},
+  {k:"esc", t:"P03: push_frame(TTSSpeakFrame('감사합니다!'))   ESCAPED #4"},
+  {k:"esc", t:"P03: await self.push_frame(frame)   ESCAPED #5"},
+  {k:"esc", t:"P04 CommitterProcessor     → Filter(reason='off_topic')"},
+  {k:"dim", t:"손에 있는 rollback verb: ctx.set_messages(list)  # llm_context.py:377, body :383"},
+  {k:"dim", t:"identity handle 없음. 그리고 P04는 P01의 snapshot을 갖고 있지도 않다."},
+  {k:"esc", t:"── 탈출한 것: 5 · set_messages가 되돌리는 것: 0 ──"}
+];
+
+const TPC = { i:0, timer:null };
+
+function tpcRender(){
+  const A = $("tpcBoson"), B = $("tpcPipecat");
+  A.innerHTML = ""; B.innerHTML = "";
+  const nA = Math.min(TPC.i, TPC_A.length), nB = Math.min(TPC.i, TPC_B.length);
+  for (let i = 0; i < nA; i++){
+    A.appendChild(el("div", TPC_A[i].k === "esc" ? "esc" : (TPC_A[i].k === "ok" ? "ok" : "dim"), esc(TPC_A[i].t)));
+  }
+  for (let i = 0; i < nB; i++){
+    B.appendChild(el("div", TPC_B[i].k === "esc" ? "esc" : (TPC_B[i].k === "ok" ? "ok" : "dim"), esc(TPC_B[i].t)));
+  }
+  A.scrollTop = A.scrollHeight; B.scrollTop = B.scrollHeight;
+
+  const escA = TPC_A.slice(0, nA).filter(function(r){ return r.k === "esc" && r.t.indexOf("ESCAPED") >= 0; }).length;
+  const escB = TPC_B.slice(0, nB).filter(function(r){ return r.t.indexOf("ESCAPED") >= 0; }).length;
+  const done = TPC.i >= Math.max(TPC_A.length, TPC_B.length);
+  const cnt = $("tpcCount");
+  cnt.innerHTML =
+    "<div class='chip2 good'><b>" + escA + "</b>A · 되돌릴 수 없이 나간 것</div>" +
+    "<div class='chip2 " + (escB > 0 ? "zero" : "") + "'><b>" + escB + "</b>B · 되돌릴 수 없이 나간 것</div>" +
+    "<div class='chip2'><b>identity</b>A의 삭제 단위</div>" +
+    "<div class='chip2 warnv'><b>whole list</b>B의 삭제 단위</div>";
+  if (done){
+    cnt.appendChild(el("div", "callout bad",
+      "<b>5는 의견이 아니라 개수다.</b> <code>set_messages(list)</code>는 <i>리스트 전체 교체</i>다 — " +
+      "\"이 스냅샷으로 복원하라\"로는 표현되지만 \"이 객체를 지워라\"보다 <b>거친</b> 연산이고, " +
+      "snapshot과 restore 사이에 <b>한 명만</b> mutate할 때에만 두 연산이 동치다. " +
+      "processor 네 개로 펼치면 그 사이에 processor 셋, 같은 context 객체를 이미 쥐고 있을 수 있는 LLM service, " +
+      "그리고 assistant aggregator가 들어온다. 거기서의 whole-list 복원은 layer 04의 실수를 되돌리는 게 아니라 " +
+      "<b>모두의 쓰기를 의미 없는 시점으로 짓밟는다</b>."));
+  }
+}
+
+function tpcStop(){ if (TPC.timer){ clearInterval(TPC.timer); TPC.timer = null; } }
+
+$("bTpc").onclick = function(){
+  tpcStop();
+  TPC.i = 0; tpcRender();
+  TPC.timer = setInterval(function(){
+    TPC.i++;
+    tpcRender();
+    if (TPC.i >= Math.max(TPC_A.length, TPC_B.length)) tpcStop();
+  }, 340);
+};
+$("bTpcReset").onclick = function(){ tpcStop(); TPC.i = 0; tpcRender(); };
+
+tpcRender();
+
+/* =========================================================================
+   PANEL FOUR — live code view (PANEL TWO의 판정 뒤에만 열린다)
+   ========================================================================= */
+const CODE = [
+"class BosonRuleProcessor(FrameProcessor):",
+"",
+"    def can_generate_metrics(self) -> bool:                      # see §11.4 — not optional",
+"        return True",
+"",
+"    async def process_frame(self, frame: Frame, direction: FrameDirection):",
+"        await super().process_frame(frame, direction)            #  1  literally first",
+"",
+"        if not isinstance(frame, LLMContextFrame):               #  2  the only frame we own",
+"            await self.push_frame(frame, direction)              #     everything else passes",
+"            return",
+"",
+"        ctx = frame.context                                      #  3  the SAME object :863 wrote",
+"        snapshot = list(ctx.get_messages())                      #  4  COPY — see §9.3",
+"        user_message = _text_of(snapshot[-1])                    #  5  the turn :863 appended",
+"",
+"        await self.start_ttfb_metrics()                          #  6  the bill — see §11.4",
+"",
+"        staged: list[Action] = []                                #  7  boson Phase 1",
+"        for engine in self._engines:                             #     02-analyzer, 03, 04",
+"            decision = await engine.evaluate_sequential(         #  8  TIER 1: 11 checks",
+"                snapshot, user_message, self._ctx_for(engine),   #     pure Python, sub-ms",
+"            )",
+"            staged.extend(decision.actions)",
+"            if decision.short_circuit:                           #  9  engine.py:68-69, verbatim",
+"                break",
+"",
+"        if not _has_veto(staged):                                # 10  TIER 2: the 2 llm checks",
+"            results = await asyncio.gather(*[                    # 11  engine.py:74-80, verbatim",
+"                check(snapshot, user_message, self._ctx_for(check))",
+"                for check in self._llm_checks                    #     intent_rules, sentiment",
+"            ])                                                   #     wall clock = max, not sum",
+"            staged.extend(_flatten(results))",
+"",
+"        await self.stop_ttfb_metrics()",
+"        verdict = resolve_actions(staged)                        # 12  ACTION_PRIORITY, unchanged",
+"",
+"        if verdict.filter is not None:                           # 13  THE VETO",
+"            ctx.set_messages(snapshot[:-1])                      # 14  rollback — see §9.3",
+"            self._signals.add(Signal(reason=verdict.filter.reason))",
+"            return                                               # 15  no push == no inference",
+"",
+"        if verdict.respond is not None:                          # 16  script text, verbatim",
+"            ctx.set_messages(snapshot[:-1])                      #     the LLM never sees this turn",
+"            ctx.add_message({\"role\": \"assistant\", \"content\": verdict.respond.text})",
+"            await self.push_frame(TTSSpeakFrame(verdict.respond.text,",
+"                                                append_to_context=False))",
+"            return                                               # 17  swallow the context frame",
+"",
+"        for inject in verdict.injects:                           # 18  mutate in place, then fall",
+"            ctx.add_message({\"role\": \"developer\", \"content\": inject.content})",
+"",
+"        if verdict.transition is not None:                       # 19  Fact Zero, cashed",
+"            result = self._stage_machine.transition(             # 20  boson legality PRE-CHECK",
+"                self._session.active_stage, verdict.transition.target,",
+"            )",
+"            if result.success:",
+"                self._session.active_stage = result.new_stage.name",
+"                await self._flow_manager.set_node_from_config(   # 21  manager.py:588",
+"                    self._node_for(result.new_stage.name),",
+"                )",
+"                return                                           # 22  SWALLOW — see §8.4",
+"            logger.warning(f\"illegal transition rejected: {result.error}\")",
+"",
+"        await self.push_frame(frame, direction)                  # 23  the ordinary turn"
+];
+
+const HLRE = /("(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*')|\b(async|await|def|class|if|not|for|in|return|break|is|None|True|False|elif|else)\b|\b([A-Za-z_][A-Za-z0-9_]*)(?=\()/g;
+
+function hlCode(src){
+  let cut = src.indexOf("#");
+  if (cut >= 0 && src.slice(0, cut).split('"').length % 2 === 0) cut = -1;
+  const body = cut >= 0 ? src.slice(0, cut) : src;
+  const cmt  = cut >= 0 ? src.slice(cut) : "";
+  let out = "", last = 0, m;
+  HLRE.lastIndex = 0;
+  while ((m = HLRE.exec(body)) !== null){
+    out += esc(body.slice(last, m.index));
+    if (m[1])      out += "<span class='st'>"  + esc(m[1]) + "</span>";
+    else if (m[2]) out += "<span class='kw'>"  + esc(m[2]) + "</span>";
+    else           out += "<span class='fn'>"  + esc(m[3]) + "</span>";
+    last = m.index + m[0].length;
+  }
+  out += esc(body.slice(last));
+  if (cmt) out += "<span class='cm'>" + esc(cmt) + "</span>";
+  return out;
+}
+
+const SCEN = {
+  ordinary: {
+    v:"ordinary turn", c:"LLMContextFrame · Inject 하나, transition 없음",
+    seq:[5,6,8,12,13,14,16,18,19,20,21,22,23,24,27,28,29,30,31,32,34,35,37,42,49,50,52,64],
+    end:"<b>context frame이 <code>llm</code>으로 push됐다.</b> inference는 여기서 시작한다. " +
+        "<code>Inject</code>는 push 전에 <code>ctx.add_message()</code>로 들어갔으므로 model이 본다."
+  },
+  passthru: {
+    v:"TranscriptionFrame 도착", c:"우리 frame이 아니다",
+    seq:[5,6,8,9,10],
+    end:"<b>2번 줄의 else 모양 분기.</b> <code>super()</code>는 frame을 push해 주지 않는다 — " +
+        "forwarding은 전부 네 몫이고, 그래서 이 분기가 존재한다."
+  },
+  veto: {
+    v:"Filter — THE VETO", c:"Tier 1에서 short-circuit, Tier 2 건너뜀",
+    seq:[5,6,8,12,13,14,16,18,19,20,21,22,23,24,25,27,34,35,37,38,39,40],
+    end:"<b>탈출한 frame: 0.</b> <code>ctx</code>는 <code>snapshot[:-1]</code>로 복원됐고 " +
+        "push하지 않았으므로 inference는 시작되지 않는다. 이것이 PANEL TWO의 CAN VETO가 " +
+        "코드로 쓰인 모습이다. 27번 줄이 False라 Tier 2의 250-400 ms를 아예 내지 않았다."
+  },
+  respond: {
+    v:"Respond — 스크립트 대사", c:"TTSSpeakFrame만 나가고 context frame은 swallow",
+    seq:[5,6,8,12,13,14,16,18,19,20,21,22,23,24,25,27,34,35,37,42,43,44,45,46,47],
+    end:"<b><code>TTSSpeakFrame</code>만 나갔다.</b> context frame은 swallow — LLM은 이 turn을 보지 않는다. " +
+        "<code>append_to_context=False</code>이므로 history 기록은 위의 <code>add_message</code>가 담당한다."
+  },
+  transition: {
+    v:"transition turn — SWALLOW", c:"set_node_from_config 후 push 없이 return",
+    seq:[5,6,8,12,13,14,16,18,19,20,21,22,23,24,27,28,29,30,31,32,34,35,37,42,49,52,53,54,55,56,57,58,59,60,61],
+    end:"<b>context frame을 push하지 않고 return했다.</b> 이제 시스템 안의 inference trigger는 " +
+        "node의 <code>LLMRunFrame</code>(<code>manager.py:707-709</code>) 하나뿐이다. " +
+        "순서를 바꾸는 것으로는 race가 해결되지 않는다 — 두 frame은 이동 거리가 다르다. PANEL SIX가 센다."
+  }
+};
+
+const P4 = { scen:"ordinary", k:0 };
+
+function p4Unlock(){
+  if (!GATE.seamComputed) return;
+  $("p4lock").className = "gate hide";
+  $("p4body").className = "";
+  p4Render();
+}
+
+function p4Scen(){
+  const box = $("p4scen"); box.innerHTML = "";
+  for (const key in SCEN){
+    const s = SCEN[key];
+    const b = el("button", "pitem" + (P4.scen === key ? " on" : ""),
+      "<b>" + esc(s.v) + "</b><span>" + esc(s.c) + "</span>");
+    b.onclick = (function(k){ return function(){ P4.scen = k; P4.k = 0; p4Render(); }; })(key);
+    box.appendChild(b);
+  }
+}
+
+function p4Seq(){
+  if ($("optNoSuper").checked) return [5, 6];
+  return SCEN[P4.scen].seq;
+}
+
+function p4Render(){
+  if (!GATE.seamComputed) return;
+  p4Scen();
+  const noSuper = $("optNoSuper").checked;
+  const seq = p4Seq();
+  const visited = {};
+  for (let i = 0; i < P4.k; i++) visited[seq[i]] = true;
+  const cur = (P4.k > 0 && P4.k <= seq.length) ? seq[P4.k-1] : -1;
+
+  const box = $("codeBox"); box.innerHTML = "";
+  for (let i = 0; i < CODE.length; i++){
+    let cls = "row";
+    if (noSuper && i === 6) cls += " blk";
+    else if (i === cur) cls += " cur";
+    else if (visited[i]) cls += " hit";
+    const gut = String(i+1);
+    let body = hlCode(CODE[i]);
+    if (noSuper && i === 6){
+      body = "<span class='bad'>" + esc("        # await super().process_frame(frame, direction)   ← 삭제됨") + "</span>";
+    }
+    box.appendChild(el("div", cls, "<span class='gut'>" + gut + "</span>" + body));
+  }
+  const curEl = box.querySelector(".row.cur");
+  if (curEl && curEl.scrollIntoView) curEl.scrollIntoView({block:"nearest"});
+
+  const note = $("p4note");
+  if (noSuper){
+    note.className = "verdict no";
+    note.innerHTML = "<b>black hole 재현됨.</b>" +
+      "<span class='why'><code>frame_processor.py:827-847</code>의 base 구현은 no-op이 아니다. " +
+      "지우면: <code>StartFrame</code> → <code>__start()</code>가 돌지 않아 processor의 내부 task가 시작되지 않고, " +
+      "<code>InterruptionFrame</code> → <code>_start_interruption()</code>이 돌지 않아 barge-in에 state가 정리되지 않으며, " +
+      "<code>stop_all_metrics()</code>도 없고, <code>observer.on_process_frame(data)</code>가 호출되지 않아 " +
+      "이 processor는 ch-11의 observability plane 전체에 대해 <b>보이지 않는다</b>. " +
+      "그리고 base는 frame을 push해 주지도 <b>않는다</b> — forwarding은 원래부터 네 몫이다.</span>";
+    return;
+  }
+  const s = SCEN[P4.scen];
+  if (P4.k >= seq.length && P4.k > 0){
+    note.className = "verdict ok";
+    note.innerHTML = "<b>" + esc(s.v) + " — 종료</b><span class='why'>" + s.end + "</span>";
+  } else {
+    note.className = "verdict";
+    note.innerHTML = "<b>" + esc(s.v) + "</b><span class='why'>" + P4.k + " / " + seq.length +
+      " 줄 진행됨. <code>한 줄 진행</code>을 눌러 frame이 어느 줄에 닿는지 따라가라.</span>";
+  }
+}
+
+$("bStep").onclick   = function(){ P4.k = Math.min(P4.k+1, p4Seq().length); p4Render(); };
+$("bAll").onclick    = function(){ P4.k = p4Seq().length; p4Render(); };
+$("bRewind").onclick = function(){ P4.k = 0; p4Render(); };
+$("optNoSuper").onchange = function(){ P4.k = 0; p4Render(); };
+
+/* =========================================================================
+   PANEL FIVE — the latency bill
+   ========================================================================= */
+const STT_DEEPGRAM = 0.35;   /* stt_latency.py:45 — DEEPGRAM_TTFS_P99 */
+const TIER1        = 0.001;  /* 11 pure-Python checks, sub-ms */
+const TIER2_LO     = 0.25;   /* one Qwen3.6-27B-FP8 TTFB, gathered */
+const TIER2_HI     = 0.40;
+const SCALE_MAX    = 0.9;
+
+function drawBill(){
+  const cv = $("cvBill"); if (!cv) return;
+  const g = setupCanvas(cv, CANVAS_H_BILL);
+  const c = g.c, w = g.w, h = g.h;
+  const x0 = Math.min(140, w*0.28), x1 = w - 22, AX = 190;
+  const sx = function(v){ return x0 + (x1-x0) * (v / SCALE_MAX); };
+  const nextTurn = $("optNextTurn").checked;
+
+  c.font = "600 11px " + MONO; c.textAlign = "left"; c.fillStyle = COL.dim;
+  c.fillText("pre-LLM budget  ·  seconds  ·  ch-11의 'rule evaluation' slot", 12, 18);
+
+  /* grid */
+  c.font = "10px " + MONO; c.textAlign = "center";
+  for (let v = 0; v <= SCALE_MAX + 1e-9; v += 0.25){
+    const x = sx(v);
+    c.strokeStyle = COL.edge; c.lineWidth = 1;
+    c.beginPath(); c.moveTo(x, 34); c.lineTo(x, AX); c.stroke();
+    c.fillStyle = COL.faint;
+    c.fillText(v.toFixed(2) + "s", x, AX+16);
+  }
+  c.strokeStyle = COL.edge; c.lineWidth = 2;
+  c.beginPath(); c.moveTo(x0, AX); c.lineTo(x1, AX); c.stroke();
+
+  const rows = [
+    {y:52,  name:"in-turn veto",       sub:"오늘의 boson",        t2:true,  live:!nextTurn},
+    {y:118, name:"next-turn transition", sub:"veto / Respond 포기", t2:false, live:nextTurn}
+  ];
+
+  for (const r of rows){
+    const a = r.live ? 1 : 0.32;
+    c.globalAlpha = a;
+    c.textAlign = "right"; c.fillStyle = r.live ? COL.ink : COL.faint;
+    c.font = "700 11px " + MONO;
+    c.fillText(r.name, x0-10, r.y+18);
+    c.font = "9px " + MONO; c.fillStyle = COL.faint;
+    c.fillText(r.sub, x0-10, r.y+31);
+
+    let cx = x0;
+    /* STT */
+    let wpx = sx(STT_DEEPGRAM) - x0;
+    c.fillStyle = COL.accent; rr(c, cx, r.y, wpx, 30, 4); c.fill();
+    c.fillStyle = "#0e1117"; c.font = "700 10px " + MONO; c.textAlign = "center";
+    if (wpx > 74) c.fillText("stt 0.35", cx + wpx/2, r.y+19);
+    cx += wpx;
+    /* Tier 1 — sub-ms sliver, 최소 폭 3px로 그린다 */
+    const t1px = Math.max(sx(TIER1) - x0, 3);
+    c.fillStyle = COL.green; rr(c, cx, r.y, t1px, 30, 1); c.fill();
+    cx += t1px;
+    /* Tier 2 */
+    if (r.t2){
+      const lo = sx(TIER2_LO) - x0, hi = sx(TIER2_HI) - x0;
+      c.fillStyle = COL.warn; rr(c, cx, r.y, lo, 30, 4); c.fill();
+      c.fillStyle = "rgba(210,153,34,.32)";
+      c.fillRect(cx+lo, r.y, hi-lo, 30);
+      c.strokeStyle = COL.warn; c.lineWidth = 1;
+      c.strokeRect(cx+lo, r.y, hi-lo, 30);
+      c.fillStyle = "#0e1117"; c.font = "700 10px " + MONO; c.textAlign = "center";
+      if (lo > 80) c.fillText("Tier 2  0.25–0.40", cx + (lo+hi)/2, r.y+19);
+      cx += hi;
+    } else {
+      c.fillStyle = COL.faint; c.font = "700 10px " + MONO; c.textAlign = "left";
+      c.fillText("Tier 2 = 0 ms  (LLM 첫 토큰과 동시 실행 → stage change는 한 turn 뒤)", cx+8, r.y+19);
+    }
+    /* total */
+    const tot = STT_DEEPGRAM + TIER1 + (r.t2 ? TIER2_LO : 0);
+    const totHi = STT_DEEPGRAM + TIER1 + (r.t2 ? TIER2_HI : 0);
+    c.textAlign = "left"; c.fillStyle = r.live ? COL.ink : COL.faint;
+    c.font = "10px " + MONO;
+    c.fillText("총 " + tot.toFixed(3) + (r.t2 ? " – " + totHi.toFixed(3) : "") + " s", x0, r.y+45);
+    c.globalAlpha = 1;
+  }
+
+  c.textAlign = "left"; c.fillStyle = COL.faint; c.font = "10px " + MONO;
+  c.fillText("Tier 1 = 초록색 얇은 조각 (0.001 s). 눈에 안 보이는 것이 정답이다.", 12, h-8);
+}
+
+function billRender(){
+  drawBill();
+  const nextTurn = $("optNextTurn").checked;
+  const metrics  = $("optMetrics").checked;
+  const box = $("billNote");
+  box.className = "verdict " + (nextTurn ? "" : "ok");
+  let h = "<div class='tblwrap'><table><thead><tr><th>leg</th><th>cost</th><th>source</th></tr></thead><tbody>";
+  h += "<tr><td>STT finalisation (Deepgram reference)</td><td class='num'>0.35 s</td>" +
+       "<td class='src'><code>stt_latency.py:45</code> — <code>DEEPGRAM_TTFS_P99 = 0.35</code>. " +
+       "excerpt가 인용한 <code>0.45</code>는 <code>:27</code> docstring 예시일 뿐 상수가 아니다.</td></tr>";
+  h += "<tr><td>Korean 8 kHz telephony STT</td><td class='num'>표에 없음</td>" +
+       "<td class='src'>직접 벤치마크해야 한다 — ch-06 §19</td></tr>";
+  h += "<tr><td>Tier 1 — 11 deterministic checks</td><td class='num'>&lt; 0.001 s</td>" +
+       "<td class='src'>순수 Python. 수백 ms 단위 예산에서는 보이지 않는다.</td></tr>";
+  h += "<tr><td><b>Tier 2 — <code>intent_rules</code> + <code>sentiment_tracker</code></b></td>" +
+       "<td class='num'><b>" + (nextTurn ? "0 s" : "0.25 – 0.40 s") + "</b></td>" +
+       "<td class='src'>둘 다 <code>mode=\"parallel\"</code>, 하나의 <code>asyncio.gather</code> → wall clock은 " +
+       "<b>max</b>이지 sum이 아니다. Qwen3.6-27B-FP8 TTFB 한 번 + 출력 토큰 몇 개.</td></tr>";
+  h += "</tbody></table></div>";
+  h += "<span class='why'><b>제품 오너에게 줄 한 문장:</b> " +
+       "in-turn veto와 in-turn steering은 <b>매 turn 250-400 ms</b>다. next-turn transition은 <b>0 ms</b>이고 " +
+       "veto를 포기한다. boson은 오늘 250-400 ms를 낸다." +
+       (nextTurn ? " <b>지금 선택: next-turn</b> — bar는 0이 되었지만 <code>Filter</code>와 <code>Respond</code>가 사라졌다. 이미 답한 turn을 veto할 수는 없다."
+                 : " <b>지금 선택: in-turn</b> — 0.35 s STT 옆에 0.25-0.40 s를 얹었으니 예산의 pre-LLM 절반이 대략 두 배가 된다.") +
+       "</span>";
+  h += "<div class='callout " + (metrics ? "ok" : "bad") + "'>";
+  if (metrics){
+    h += "<b>청구서가 실제로 보인다.</b> <code>can_generate_metrics() → True</code> + " +
+         "<code>enable_metrics=True</code>(<code>PipelineParams</code>) + " +
+         "<code>start_ttfb_metrics()</code>/<code>stop_ttfb_metrics()</code>. " +
+         "<code>chronological_events()</code>(<code>user_bot_latency_observer.py:113-140</code>)에 " +
+         "<code>stt</code> / <code>BosonRuleProcessor</code> / <code>llm</code> / <code>tts</code>가 시작 시각 순으로 뜬다.<br>" +
+         "<span class='mono' style='color:var(--ink-faint)'>processing pair가 아니라 <b>ttfb</b> pair여야 한다 — " +
+         "<code>LatencyBreakdown</code>은 <code>TTFBMetricsData</code>와 <code>TextAggregationMetricsData</code>만 읽는다(<code>:322-341</code>)." +
+         " <code>ProcessingMetricsData</code>는 존재하지만(<code>metrics/metrics.py:99</code>) 이 observer가 읽지 않고, " +
+         "<code>LatencyBreakdown</code>에는 processing slot 자체가 없다(<code>:107-111</code>).</span>";
+  } else {
+    h += "<b>청구서가 사라졌다.</b> <code>FrameProcessor.can_generate_metrics()</code>는 " +
+         "<code>False</code>를 돌려준다(<code>frame_processor.py:488-494</code>). 모든 metrics 메서드가 " +
+         "<code>if self.can_generate_metrics() and self.metrics_enabled:</code>로 가드되어 있어 " +
+         "(<code>start_ttfb_metrics :511</code>, <code>stop_ttfb_metrics :528</code>, " +
+         "<code>start_processing_metrics :570</code>) 네 호출은 <b>silent no-op</b>이다. " +
+         "250-400 ms는 여전히 지불되지만 어디에도 나타나지 않는다.";
+  }
+  h += "</div>";
+  box.innerHTML = h;
+}
+
+$("optNextTurn").onchange = billRender;
+$("optMetrics").onchange  = billRender;
+billRender();
+
+/* =========================================================================
+   PANEL SIX — the transition race
+   ========================================================================= */
+const RACE = {
+  both: {
+    v:"push the context frame AND set_node_from_config", c:"둘 다 한다",
+    trace:[
+      ["esc","llm input ← LLMContextFrame            [TRIGGER]  네가 push한 것"],
+      ["dim","            인접 processor라 즉시 도착한다"],
+      ["dim","llm input ← LLMMessagesAppendFrame                node · head에서 진입"],
+      ["dim","            transport.input() → stt → BosonFillerGate → user_aggregator 를 거쳐 왔다"],
+      ["dim","llm input ← LLMSetToolsFrame                      node · manager.py:838-841"],
+      ["esc","llm input ← LLMRunFrame                [TRIGGER]  node · manager.py:707-709"]
+    ],
+    n:2, cls:"zero",
+    note:"<b>봇이 자기 말에 대답한다.</b> TTFB 두 번, 비용 두 배. 그리고 " +
+         "<code>LLMSetToolsFrame</code>이 <b>첫 번째</b> trigger보다 <b>뒤</b>에 도착했다 — " +
+         "첫 generation은 옛 tool set으로 돈다. ordering assertion 실패.",
+    ok:false
+  },
+  none: {
+    v:"swallow both paths", c:"둘 다 삼킨다",
+    trace:[
+      ["dim","llm input ← (없음)"],
+      ["dim","            inference-triggering frame 0개"],
+      ["dim","            에러도 예외도 로그도 없다"]
+    ],
+    n:0, cls:"zero",
+    note:"<b>봇이 통화 도중 조용해지고 아무 것도 에러를 내지 않는다.</b> " +
+         "0과 2를 <b>양쪽 다</b> 감시해야 하는 이유다 — 한쪽만 보면 이 실패는 조용히 지나간다.",
+    ok:false
+  },
+  ctx: {
+    v:"swallow only the context frame", c:"§8.4 — node가 유일한 trigger",
+    trace:[
+      ["dim","llm input ← LLMMessagesAppendFrame                node · head에서 진입"],
+      ["ok" ,"llm input ← LLMSetToolsFrame                      node · manager.py:838-841"],
+      ["ok" ,"llm input ← LLMRunFrame                [TRIGGER]  node · manager.py:707-709"],
+      ["dim","            (네 LLMContextFrame은 push되지 않았다)"]
+    ],
+    n:1, cls:"good",
+    note:"<b>정확히 하나.</b> 그리고 <code>LLMSetToolsFrame</code>이 유일한 trigger보다 <b>앞</b>에 도착했다 — " +
+         "ordering assertion 통과. 순서를 바꾸는 것으로는 이 race가 풀리지 않는다. " +
+         "두 frame은 <b>이동 거리</b>가 다르다: node의 frame들은 pipeline HEAD에서 들어와 " +
+         "<code>stt</code> → <code>BosonFillerGate</code> → <code>user_aggregator</code>를 통과해야 하고, " +
+         "네가 push한 frame은 <code>llm</code> 바로 옆이다. <b>삼키는 것</b>이 race를 구조적으로 없앤다.",
+    ok:true
+  }
+};
+
+let RACE_SEL = null;
+
+function raceRender(){
+  const btns = $("raceBtns"); btns.innerHTML = "";
+  for (const key in RACE){
+    const r = RACE[key];
+    const b = el("button", "rb" + (RACE_SEL === key ? " on" : ""), esc(r.v));
+    b.onclick = (function(k){ return function(){ RACE_SEL = k; raceRender(); }; })(key);
+    btns.appendChild(b);
+  }
+  if (RACE_SEL === null){
+    $("raceTrace").innerHTML = "";
+    $("raceTrace").appendChild(el("div", "dim",
+      esc("FrameLogger(prefix='@llm-in')  ·  세 가지 중 하나를 골라라")));
+    $("raceCount").innerHTML =
+      "<div class='chip2'><b>?</b>inference trigger</div>" +
+      "<div class='chip2'><b>?</b>LLMSetToolsFrame 이 trigger보다 앞?</div>";
+    const n0 = $("raceNote");
+    n0.className = "verdict";
+    n0.innerHTML = "<b>transition turn 하나를 rule이 발동시켰다.</b>" +
+      "<span class='why'>세 가지 중 무엇을 할지 먼저 정하고 누르면, <code>llm</code> input에 " +
+      "실제로 도착한 frame을 순서대로 세어 보여준다. 예측을 먼저 적어라 — " +
+      "<b>0</b>과 <b>2</b>가 각각 어떤 증상으로 나타날지도 함께.</span>";
+    return;
+  }
+  const r = RACE[RACE_SEL];
+  const tr = $("raceTrace"); tr.innerHTML = "";
+  tr.appendChild(el("div", "dim", esc("FrameLogger(prefix='@llm-in')  ·  transition turn 1회")));
+  tr.appendChild(el("div", "dim", esc("─────────────────────────────────────────────")));
+  for (const line of r.trace) tr.appendChild(el("div", line[0], esc(line[1])));
+
+  $("raceCount").innerHTML =
+    "<div class='chip2 " + r.cls + "'><b>" + r.n + "</b>inference trigger</div>" +
+    "<div class='chip2 " + (r.ok ? "good" : "zero") + "'><b>" + (r.ok ? "PASS" : "FAIL") +
+    "</b>LLMSetToolsFrame 이 trigger보다 앞?</div>";
+
+  const note = $("raceNote");
+  note.className = "verdict " + (r.ok ? "ok" : "no");
+  note.innerHTML = "<b>" + esc(r.c) + "</b><span class='why'>" + r.note +
+    "<br><br>§14 Risk 2의 prototype: <code>llm</code> input에 <code>FrameLogger</code>를 붙여 " +
+    "turn당 inference-triggering frame이 <b>정확히 하나</b>이고 <code>LLMSetToolsFrame</code>이 " +
+    "그보다 앞선다는 것을 assert해라. <b>0과 2를 양쪽 다</b> 본다.</span>";
+}
+
+raceRender();
+
+/* ---- resize ---- */
+let RZ = null;
+window.addEventListener("resize", function(){
+  if (RZ) clearTimeout(RZ);
+  RZ = setTimeout(function(){ drawSeam(); drawBill(); }, 120);
+});
+</script>
+</body>
+</html>

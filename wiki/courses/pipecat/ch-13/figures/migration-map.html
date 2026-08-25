@@ -1,0 +1,1400 @@
+<!--
+  Figure: migration-map.html — "SEVENTEEN-row decision ledger: keep / adopt / hybrid-wrap"
+  Chapter: pipecat ch-13 (Capstone — Keep or Replace, Subsystem by Subsystem)
+  Back to: ../read.md  (§1 three rules, §2 the one measurement, §3 the seventeen rows,
+                        §4 the two collisions, §7 deployment topology, §10 watchlist)
+
+  Fully self-contained: inline CSS + vanilla JS. No CDN, no fetch, no external fonts.
+  Opens directly from file://. The MEASUREMENT panel does NO network I/O of any kind —
+  it shows the command for ../tier2-probe.py and accepts pasted numbers.
+
+  THE FIGURE NEVER CASTS A VOTE. No row is pre-selected, defaulted or highlighted.
+  Every KEEP / ADOPT / HYBRID-WRAP label on this page is one the learner clicked.
+
+  Every number and identifier below was read out of ../read.md:
+    seventeen-row ledger table            read.md:490-508
+    row 1  VAD  min_volume AND-gate       read.md:544 ; audio_idle_timeout=1.0 read.md:601
+    row 2  Korean-verified STT shortlist  read.md:663-670 ; stt_latency.py 23 consts read.md:467-469
+           Deepgram/Soniox 0.35 (NOT .45) read.md:454-465
+    row 3  twelve Language.KO             read.md:695-696
+           six word-timestamp services    read.md:702-706 ; grep-not-behaviour caveat read.md:708-712
+    row 4  KoreanPhraseChunker 283 lines  read.md:759
+    row 6  transport 1,276 not ~960       read.md:872-875, 902
+    row 7  six serializers + sizes        read.md:914-925 ; new serializer 250-300 L read.md:935
+    row 8  WebRTCSessionManager 248 L     read.md:984
+    row 9  ControlEvent 64 KiB cap        read.md:1012
+    row 10 three costed resolutions       read.md:1077-1079, 1520-1521
+    row 11 22 tool signatures             read.md:1114
+    row 13 Tier-2 bill 250-400 ms         read.md:277-278 ; 13 checks read.md:1586
+    row 14 ScriptEngine 517 LOC           read.md:1301
+    row 15 compaction parameter map       read.md:1360-1361
+    row 17 BaseWorker 1,565 / PipelineWorker 1,506 / WorkerRunner 550   read.md:1812-1814
+           min_agents = 1                 read.md:1908-1911
+    ch-11 worked P50 waterfall            ../ch-11/read.md:974-982
+    probe usage + flags                   ../tier2-probe.py:23, :131-138 ; 149 lines read.md:301
+    watchlist of three unrun measurements read.md:2018-2022
+-->
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>migration map — 17-row decision ledger (pipecat ch-13)</title>
+<style>
+  /* --- 반응형 타이포 스케일: 태블릿에서 root를 키운다 ------------------- */
+  html{font-size:14px;}
+  @media (pointer:coarse){ html{font-size:17px;} }
+  @media (min-width:1500px){ html{font-size:15.5px;} }
+
+  :root{
+    --bg:#0e1117; --panel:#161b22; --panel2:#1c2230; --edge:#2b3242;
+    --ink:#e6edf3; --ink-dim:#9aa7b4; --ink-faint:#6b7686;
+    --accent:#58a6ff; --accent2:#3fb950; --danger:#f85149; --warn:#d29922;
+    --c-keep:#d29922;    /* keep realtime_voice */
+    --c-adopt:#58a6ff;   /* adopt Pipecat       */
+    --c-hyb:#bc8cff;     /* hybrid-wrap         */
+    --c-ins:#f778ba;
+  }
+  *{box-sizing:border-box;}
+  html,body{margin:0;padding:0;}
+  body{
+    background:var(--bg); color:var(--ink);
+    font:1rem/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Apple SD Gothic Neo",
+         "Noto Sans KR",Helvetica,Arial,sans-serif;
+    padding:22px; max-width:92rem; margin:0 auto;
+  }
+  h1{font-size:1.5rem; margin:0 0 3px; letter-spacing:.2px;}
+  .sub{color:var(--ink-dim); font-size:0.9286rem; margin:0 0 20px;}
+  .sub code{color:var(--accent);}
+  .panel{background:var(--panel); border:1px solid var(--edge); border-radius:10px;
+    padding:16px; margin-bottom:18px;}
+  .panel h2{font-size:0.8571rem; text-transform:uppercase; letter-spacing:.9px; color:var(--ink-dim);
+    margin:0 0 14px; font-weight:600;}
+  .panel h3{font-size:0.8571rem; color:var(--ink); margin:18px 0 8px; font-weight:600;}
+  .mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+    font-variant-numeric:tabular-nums;}
+  code{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:0.9em;}
+  .grid2{display:grid; grid-template-columns:1fr 1fr; gap:18px;}
+  @media (max-width:1000px){ .grid2{grid-template-columns:1fr;} }
+
+  /* ---------- 규칙 배너 ---------- */
+  .rules{display:grid; grid-template-columns:repeat(3,1fr); gap:10px;}
+  @media (max-width:900px){ .rules{grid-template-columns:1fr;} }
+  .rule{background:var(--panel2); border:1px solid var(--edge); border-radius:8px; padding:11px 13px;
+    font-size:0.8571rem; color:var(--ink-dim); line-height:1.6;}
+  .rule b{display:block; color:var(--ink); font-size:0.8214rem; letter-spacing:.5px;
+    text-transform:uppercase; margin-bottom:4px;}
+
+  /* ---------- ledger ---------- */
+  .row{border:1px solid var(--edge); border-radius:9px; background:var(--panel2);
+    padding:11px 12px; margin-bottom:9px;}
+  .row.incomplete{border-color:var(--danger); background:rgba(248,81,73,.05);}
+  .row.done{border-color:var(--accent2); background:rgba(63,185,80,.05);}
+  .rhead{display:flex; align-items:baseline; gap:9px; flex-wrap:wrap;}
+  .rnum{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:0.8571rem;
+    color:var(--ink-faint); min-width:1.7rem;}
+  .rname{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:0.9286rem;
+    color:var(--ink); font-weight:600;}
+  .rev{font-size:0.75rem; color:var(--ink-faint);}
+  .rev a{color:var(--accent); text-decoration:none;}
+  .rstat{margin-left:auto; font-size:0.75rem; border-radius:4px; padding:1px 7px;
+    border:1px solid var(--edge); color:var(--ink-faint); white-space:nowrap;}
+  .rstat.bad{border-color:var(--danger); color:var(--danger);}
+  .rstat.ok{border-color:var(--accent2); color:var(--accent2);}
+  .digest{font-size:0.8214rem; color:var(--ink-dim); line-height:1.65; margin:7px 0 2px;}
+  .digest code{color:var(--accent);}
+  .turns{font-size:0.7857rem; color:var(--ink-faint); line-height:1.6; margin:5px 0 9px;}
+  .turns b{color:var(--ink-dim); font-weight:600;}
+
+  .cells{display:grid; grid-template-columns:19rem 1fr 1fr; gap:9px; align-items:start;}
+  @media (max-width:1100px){ .cells{grid-template-columns:1fr;} }
+  .cellhd{font-size:0.7143rem; text-transform:uppercase; letter-spacing:.6px;
+    color:var(--ink-faint); margin-bottom:4px;}
+  .votes{display:flex; flex-direction:column; gap:4px;}
+  .vb{background:transparent; border:1px solid var(--edge); color:var(--ink-dim); border-radius:6px;
+    padding:6px 8px; cursor:pointer; text-align:left; font-size:0.7857rem; transition:.12s;
+    font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;}
+  .vb:hover{border-color:var(--ink-faint); color:var(--ink);}
+  .vb.on.keep{border-color:var(--c-keep); color:var(--c-keep); background:rgba(210,153,34,.10);}
+  .vb.on.adopt{border-color:var(--c-adopt); color:var(--c-adopt); background:rgba(88,166,255,.10);}
+  .vb.on.hyb{border-color:var(--c-hyb); color:var(--c-hyb); background:rgba(188,140,255,.10);}
+  textarea{width:100%; background:#10151d; border:1px solid var(--edge); color:var(--ink);
+    border-radius:6px; padding:7px 8px; font:0.8214rem/1.55 -apple-system,BlinkMacSystemFont,
+    "Apple SD Gothic Neo","Noto Sans KR",Helvetica,Arial,sans-serif; resize:vertical; min-height:4.6rem;}
+  textarea:focus{outline:none; border-color:var(--accent);}
+  textarea.empty{border-color:var(--danger);}
+  .obs{display:flex; gap:6px; margin-top:5px; flex-wrap:wrap;}
+  select{background:#10151d; border:1px solid var(--edge); color:var(--ink-dim); border-radius:6px;
+    padding:5px 7px; font-size:0.75rem; font-family:inherit;}
+  select:focus{outline:none; border-color:var(--accent);}
+  input[type=text],input[type=number]{background:#10151d; border:1px solid var(--edge);
+    color:var(--ink); border-radius:6px; padding:6px 8px; font-size:0.8214rem;
+    font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;}
+  input:focus{outline:none; border-color:var(--accent);}
+
+  /* ---------- generic bits ---------- */
+  .counters{display:flex; gap:8px; flex-wrap:wrap; margin-top:12px;}
+  .chip2{border:1px solid var(--edge); border-radius:7px; padding:7px 11px; font-size:0.8571rem;
+    background:var(--panel2); color:var(--ink-faint); min-width:7.5rem;}
+  .chip2 b{display:block; font-size:1.2143rem; color:var(--ink); margin-bottom:1px;}
+  .chip2.bad b{color:var(--danger);}
+  .chip2.good b{color:var(--accent2);}
+  .callout{border-left:3px solid var(--warn); background:rgba(210,153,34,.07);
+    padding:11px 14px; border-radius:0 7px 7px 0; font-size:0.8571rem; color:var(--ink-dim);
+    margin-top:14px; line-height:1.65;}
+  .callout b{color:var(--ink);}
+  .callout.ok{border-left-color:var(--accent2); background:rgba(63,185,80,.07);}
+  .callout.bad{border-left-color:var(--danger); background:rgba(248,81,73,.07);}
+  .callout code{color:var(--accent);}
+  .runbar{display:flex; gap:7px; margin-top:14px; flex-wrap:wrap;}
+  .rb{background:var(--panel2); border:1px solid var(--edge); color:var(--ink);
+    border-radius:7px; padding:9px 13px; cursor:pointer; font-size:0.8929rem; font-weight:600;
+    transition:.13s;}
+  .rb:hover{border-color:var(--accent);}
+  .rb.primary{background:#1d3a5f; border-color:var(--accent); color:#cfe6ff;}
+  .rb:disabled{opacity:.38; cursor:not-allowed; background:var(--panel2);
+    border-color:var(--edge); color:var(--ink-faint);}
+  .rb:disabled:hover{border-color:var(--edge);}
+  pre{background:#10151d; border:1px solid var(--edge); border-radius:8px; padding:13px;
+    overflow-x:auto; font-size:0.8214rem; line-height:1.7; margin:0;
+    font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; white-space:pre;}
+  pre .cm{color:var(--ink-faint);} pre .st{color:var(--accent2);} pre .kw{color:var(--c-hyb);}
+  table{width:100%; border-collapse:collapse; font-size:0.8214rem; margin-top:6px;}
+  th,td{padding:6px 7px; text-align:left; border-bottom:1px solid var(--edge); vertical-align:top;}
+  th{color:var(--ink-faint); font-weight:600; font-size:0.75rem; text-transform:uppercase;
+    letter-spacing:.5px;}
+  td.num{text-align:right; font-variant-numeric:tabular-nums;}
+
+  /* ---------- conflicts ---------- */
+  .conf{border:1px solid var(--edge); border-radius:8px; padding:11px 13px; margin-bottom:8px;
+    background:var(--panel2); font-size:0.8571rem; color:var(--ink-faint); line-height:1.6;}
+  .conf.hot{border-color:var(--danger); background:rgba(248,81,73,.08); color:var(--ink-dim);}
+  .conf b{color:var(--ink); display:block; margin-bottom:3px; font-size:0.8214rem;}
+  .conf.hot b{color:var(--danger);}
+  .conf .why{font-size:0.7857rem;}
+
+  /* ---------- measurement ---------- */
+  .meas{border:1px dashed var(--edge); border-radius:9px; padding:14px; background:#10151d;}
+  .meas.unmeasured{opacity:.72;}
+  .meas.measured{border-style:solid; border-color:var(--accent2); opacity:1;}
+  .measbadge{display:inline-block; font-size:0.75rem; letter-spacing:.7px; text-transform:uppercase;
+    border:1px solid var(--edge); color:var(--ink-faint); border-radius:4px; padding:2px 8px;
+    margin-bottom:10px;}
+  .measbadge.on{border-color:var(--accent2); color:var(--accent2);}
+  .fields{display:flex; gap:12px; flex-wrap:wrap; align-items:flex-end; margin-top:12px;}
+  .field label{display:block; font-size:0.75rem; color:var(--ink-faint); margin-bottom:4px;
+    text-transform:uppercase; letter-spacing:.6px;}
+  .field input{width:8.5rem;}
+
+  /* height는 JS의 CANVAS_H_* 상수와 반드시 같은 값 — 레이아웃 점프 방지 */
+  canvas{width:100%; display:block; border-radius:8px; background:#10151d;
+    border:1px solid var(--edge);}
+  #cvArch{height:330px;}
+  #cvMeas{height:170px;}
+  #cvBudget{height:250px;}
+  .legend{display:flex; gap:14px; font-size:0.7857rem; color:var(--ink-dim); margin-top:9px;
+    flex-wrap:wrap;}
+  .legend i{display:inline-block; width:16px; height:10px; border-radius:3px;
+    vertical-align:middle; margin-right:5px;}
+
+  .seq{display:flex; flex-direction:column; gap:7px;}
+  .step{display:grid; grid-template-columns:2.2rem 1fr auto; gap:8px; align-items:center;
+    background:var(--panel2); border:1px solid var(--edge); border-radius:7px; padding:7px 9px;}
+  .step .k{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:0.8214rem;
+    color:var(--ink-faint);}
+  .step input[type=text]{width:100%;}
+  .step .mv{display:flex; gap:4px;}
+  .step .mv button{background:transparent; border:1px solid var(--edge); color:var(--ink-faint);
+    border-radius:4px; font-size:0.75rem; padding:2px 7px; cursor:pointer;}
+  .step .mv button:hover{border-color:var(--accent); color:var(--ink);}
+  .steplab{font-size:0.75rem; color:var(--ink-faint); margin-top:2px; line-height:1.5;}
+
+  #exportOut{margin-top:14px;}
+  .foot{color:var(--ink-faint); font-size:0.8214rem; margin-top:26px; line-height:1.8;}
+  .foot a{color:var(--accent); text-decoration:none;}
+</style>
+</head>
+<body>
+
+<h1>migration map — <span class="mono">17 rows</span>, 각 row는 vote + assumption + falsifier</h1>
+<p class="sub">
+  pipecat <b>ch-13</b> capstone. 이 figure는 <b>vote를 제안하지 않는다</b> — 기본 선택도, 추천 하이라이트도 없다.
+  화면에 보이는 모든 <span class="mono">KEEP</span> / <span class="mono">ADOPT</span> /
+  <span class="mono">HYBRID-WRAP</span> 라벨은 당신이 누른 것이다.
+  export 버튼은 17개 row 전부가 vote + assumption + falsifier를 채울 때까지 비활성이다 —
+  그래서 "it depends"는 구조적으로 선택 불가능하다.
+  <span class="mono" style="color:var(--ink-faint)">evidence: ../read.md §3</span>
+</p>
+
+<div class="panel">
+  <h2>0 · 세 가지 규칙 (read.md §1)</h2>
+  <div class="rules">
+    <div class="rule"><b>rule one — commitment</b>
+      모든 row는 <b>vote</b>를 받는다. "depends"가 아니라 vote 하나 + "나는 X를 가정한다" 문장 하나.</div>
+    <div class="rule"><b>rule two — falsifier</b>
+      모든 row는 그 vote를 뒤집을 <b>observation</b>을 적는다. 선호가 아니라 관측이어야 한다.
+      어떤 관측으로도 뒤집을 수 없으면 그 row는 잘못 서술된 것이다.</div>
+    <div class="rule"><b>rule three — one measurement</b>
+      실제로 <b>실행하는</b> measurement는 정확히 하나 — ch-12의 Tier-2 rule latency probe.
+      나머지 셋은 owner가 붙은 watchlist로 남는다.</div>
+  </div>
+  <div class="counters" id="progress"></div>
+</div>
+
+<div class="panel">
+  <h2>1 · seventeen-row decision ledger — evidence는 채워져 있고, vote cell은 비어 있다</h2>
+  <div id="ledger"></div>
+  <div class="callout">
+    <b>17.</b> read.md가 17개를 세고 이 figure도 17개를 그린다 (<span class="mono">read.md:490-508</span>).
+    어느 쪽에서든 16 또는 18을 세게 되면 한쪽이 drift한 것이고, ledger는 더 이상 ledger가 아니다.
+  </div>
+</div>
+
+<div class="panel">
+  <h2>2 · 동시에 참일 수 없는 조합 — 이유를 붙여 flag한다 (read.md §8)</h2>
+  <div style="margin-bottom:10px; font-size:0.8214rem; color:var(--ink-dim);">
+    row 3에서 고른 TTS가 word-timestamp 6종
+    (<span class="mono">azure, cartesia, elevenlabs, inworld, soniox, xai</span>) 안에 있는가?
+    <select id="ttsWT">
+      <option value="">— 미선택 —</option>
+      <option value="in">그렇다 (6종 안)</option>
+      <option value="out">아니다 (6종 밖)</option>
+    </select>
+    <span style="color:var(--ink-faint); font-size:0.7857rem;">
+      — 그 6은 <b>grep over declared capability</b>이지 behavioural test가 아니다 (read.md:708-712).</span>
+  </div>
+  <div id="conflicts"></div>
+</div>
+
+<div class="panel">
+  <h2>3 · target architecture — vote가 바뀌면 즉시 다시 그려진다</h2>
+  <canvas id="cvArch"></canvas>
+  <div class="legend">
+    <span><i style="background:#d29922"></i>keep realtime_voice</span>
+    <span><i style="background:#58a6ff"></i>adopt Pipecat</span>
+    <span><i style="background:#bc8cff"></i>hybrid-wrap</span>
+    <span><i style="background:#2b3242"></i>vote 없음</span>
+  </div>
+  <div class="grid2" style="margin-top:14px;">
+    <div>
+      <h3>양쪽 line count (검증된 숫자만 합산)</h3>
+      <div id="locTable"></div>
+    </div>
+    <div>
+      <h3>target processor list — <span class="mono">FlowManager</span>는 밖에</h3>
+      <pre id="procList"></pre>
+    </div>
+  </div>
+</div>
+
+<div class="panel">
+  <h2>4 · measurement — network I/O 없음. 스크립트를 돌리고 숫자를 붙여넣는다</h2>
+  <div class="meas unmeasured" id="measBox">
+    <span class="measbadge" id="measBadge">unmeasured</span>
+    <div id="measBody"></div>
+  </div>
+  <div class="grid2" style="margin-top:16px;">
+    <div>
+      <h3>measured vs ch-12 ghost estimate (250–400 ms)</h3>
+      <canvas id="cvMeas"></canvas>
+    </div>
+    <div>
+      <h3>ch-11 worked P50 waterfall — <span class="mono">rule evaluation</span> slot</h3>
+      <canvas id="cvBudget"></canvas>
+    </div>
+  </div>
+  <div id="measVerdict"></div>
+</div>
+
+<div class="panel">
+  <h2>5 · watchlist — 실행하지 않은 세 measurement. blocker가 아니라 falsifier다 (read.md §10)</h2>
+  <div id="watchlist"></div>
+  <div class="callout">
+    <b>owner 없는 falsifier는 소원이다.</b> export할 때 모든 owner cell에 이름을 넣고 —
+    당신 이름을 포함해서 — precondition 옆에 날짜를 적어라.
+    owner는 있고 날짜는 없는 falsifier는 이름 붙은 소원일 뿐이다.
+  </div>
+</div>
+
+<div class="panel">
+  <h2>6 · migration sequence — 매 step마다 배포 가능해야 한다. 순서와 한 문장 방어는 당신 몫</h2>
+  <div class="seq" id="seq"></div>
+  <div class="steplab">
+    제약이 핵심이다: <b>shippable at every step</b>은 어떤 step도 Lina가 전화를 못 받는 상태로
+    남겨서는 안 된다는 뜻이다. 한 문장은 그 step이 무엇을 <b>de-risk</b> 하는지를 말해야 한다 —
+    무엇을 달성하는지가 아니라.
+  </div>
+</div>
+
+<div class="panel">
+  <h2>7 · export — 네 개의 artifact</h2>
+  <div id="exportGate" class="callout bad"></div>
+  <div class="runbar">
+    <button class="rb primary" id="bExport" disabled>⤓ 네 artifact 내보내기</button>
+    <button class="rb" id="bCopy" disabled>복사</button>
+    <button class="rb" id="bReset">↺ 전부 지우기</button>
+  </div>
+  <pre id="exportOut" style="display:none;"></pre>
+</div>
+
+<p class="foot">
+  본문: <a href="../read.md">ch-13/read.md</a> ·
+  probe: <a href="../tier2-probe.py">ch-13/tier2-probe.py</a> (149 lines, 표준 라이브러리만).<br>
+  이 페이지는 <span class="mono">localStorage</span>에 votes / assumptions / falsifiers /
+  측정값 / migration sequence를 저장한다. 새로고침해도 이 capstone이 채점받는 그 한 개의
+  measurement는 사라지지 않는다.
+</p>
+
+<script>
+/* ============================================================================
+   상수 — 모든 숫자와 identifier는 ../read.md 에서 읽어온 실제 값이다.
+   ========================================================================== */
+const CANVAS_H_ARCH   = 330;
+const CANVAS_H_MEAS   = 170;
+const CANVAS_H_BUDGET = 250;
+
+const LS_KEY = "pipecat-ch13-migration-map-v1";
+
+/* ch-12가 낸 Tier-2 견적 (read.md:277-278) */
+const GHOST_LO = 250, GHOST_HI = 400;
+
+/* ch-11 §5.1의 worked P50 — rule evaluation은 오늘 비어 있다 (../ch-11/read.md:974-982) */
+const BUDGET = [
+  {k:"stop_secs",         ms:200, src:"VADParams, ch-06 §2 (192 ms of actual audio)"},
+  {k:"STT safety net",    ms:0,   src:"ch-06 §15.3 — finalized transcript cancels the timer"},
+  {k:"rule evaluation",   ms:null,src:"§3.2 — TBD, 이 panel이 채운다"},
+  {k:"LLM ttfat",         ms:350, src:"vendor-measured; no repo constant exists"},
+  {k:"text aggregation",  ms:250, src:"TextAggregationMode docstring, ch-07 §4.1"},
+  {k:"TTS ttfa",          ms:300, src:"ttfb ~0.18 + leading_silence ~0.12, ch-07 §1.1"},
+  {k:"transport",         ms:60,  src:"40 ms chunk + serializer + local network"}
+];
+const BUDGET_TARGET_P50 = 1000;   /* rtv-vs-pipecat-gap: "P50 at or below 1.0 seconds" */
+
+const VOTES = [
+  {id:"keep",  cls:"keep",  label:"keep realtime_voice"},
+  {id:"adopt", cls:"adopt", label:"adopt Pipecat"},
+  {id:"hyb",   cls:"hyb",   label:"hybrid-wrap"}
+];
+
+const OBS_TYPES = ["corpus", "probe", "benchmark", "code assertion"];
+
+/* 17 rows. digest = 어느 chapter가 어떤 mechanism fact를 공급했는가.
+   비교 형용사 없음: better / wins / should use / the right choice 없음.
+   loc = 검증된 boson·realtime_voice 쪽 LOC (없으면 null). */
+const ROWS = [
+  { n:1, name:"VAD", ev:["ch-06"], loc:null,
+    digest:"ch-06이 양쪽 mechanism을 전부 공급했다. Pipecat: 4-state analyzer, "+
+      "<code>confidence >= params.confidence AND volume >= params.min_volume</code> 게이트(read.md:544), "+
+      "<code>STARTING → QUIET</code> 경로, native 8 kHz (16 kHz/512와 8 kHz/256에서 six-chunk count 동일), "+
+      "<code>audio_idle_timeout = 1.0</code>(read.md:601). realtime_voice: two-state bool at "+
+      "<code>threshold=0.5</code>, volume gate 없음, idle timeout 없음, 16 kHz 전용 hard "+
+      "<code>ValueError</code>. 관측된 two-frame-blip divergence.",
+    turns:"Lina의 실제 audio에서 lone short burst가 얼마나 자주 나오는지, 그리고 8 kHz가 각 machine에 무엇을 하는지." },
+
+  { n:2, name:"ASR / streaming STT", ev:["ch-03","ch-06","ch-11"], loc:null,
+    digest:"ch-03: <code>OpenAICompatibleUnaryASR</code>가 WAV로 buffering 후 blocking "+
+      "<code>finalize()</code> 1회. ch-06: streaming STT + <code>stt_latency.py</code>의 23개 "+
+      "<code>*_TTFS_P99</code> 상수 (0.35 Deepgram/Soniox … 2.14 xAI, <code>DEFAULT_TTFS_P99=1.0</code>) "+
+      "+ smart-turn default. ch-11: unary transcription RTT가 VAD stop 뒤 critical path에 통째로 앉는다는 산수. "+
+      "Korean-verified shortlist는 9종 (Soniox 0.35 / Speechmatics 0.74 / Gladia 1.49 / Google 1.57 / "+
+      "Azure 1.80 / AWS 1.90 / ElevenLabs 2.01 / Fal 2.07 / xAI 2.14). 학습자 자신의 라인은 P50 1.0 s / P95 1.5 s.",
+    turns:"streaming interface가 budget에서 serial term 하나를 의미 있게 걷어내는지, 그리고 telephony-band Korean에서 그 swap의 accuracy 비용이 얼마인지." },
+
+  { n:3, name:"TTS + Korean word timestamps", ev:["ch-07"], loc:null,
+    digest:"ch-07이 전부 공급했다. <code>Language.KO</code>를 매핑하는 12개 service "+
+      "(Cartesia, ElevenLabs, Azure, Google, Inworld, Soniox, xAI, LMNT, MiniMax, AWS Polly, Camb, XTTS). "+
+      "그중 word timestamp를 emit하는 교집합은 6개 — <code>azure, cartesia, elevenlabs, inworld, soniox, xai</code>. "+
+      "provenance caveat: 그 6은 <code>add_word_timestamps</code> caller에 대한 grep이지 behavioural verification이 아니다. "+
+      "<code>resolve_language</code>의 silent fallback, 유지되는 self-hosted Korean TTS 부재.",
+    turns:"word-timestamp를 emit하는 Korean provider에 당신 조건으로 닿을 수 있는지 — row 5가 정확히 여기에 coupling된다." },
+
+  { n:4, name:"KoreanPhraseChunker", ev:["ch-03","ch-07"], loc:283,
+    digest:"ch-03: 283-line algorithm (1→2→tail adaptive). ch-07: 그 자리에 Pipecat이 놓는 것은 "+
+      "<code>SimpleTextAggregator</code> + <code>UNAMBIGUOUS_SENTENCE_ENDING_PUNCTUATION</code>이며, "+
+      "Korean은 CJK branch로 떨어지고 그 branch는 테스트되지 않았다.",
+    turns:"그 guard들이 Lina의 실제 text가 필요로 하는 지식을 encode하는지 — 이번 주에 당신 transcript archive로 답할 수 있는 corpus 질문." },
+
+  { n:5, name:"AudioTextPlayoutLedger", ev:["ch-03","ch-07","ch-08"], loc:null,
+    digest:"ch-03: <code>audible_text()</code>와 <code>playout_complete()</code>. ch-08: Pipecat의 "+
+      "position-based 대안과 untagged-partial gap. ch-07: 그 대안이 애초에 사용 가능한지를 결정하는 "+
+      "six-service word-timestamp 의존성 (<code>TTSTextFrame.pts</code>).",
+    turns:"row 3이 어느 TTS에 안착하는지, 그리고 history 안의 untagged truncated turn이 downstream consumer(compaction summariser, evaluation set)에 문제인지." },
+
+  { n:6, name:"Transport", ev:["ch-05"], loc:1276,
+    digest:"ch-05: realtime_voice의 aiortc transport가 <code>SmallWebRTCTransport</code>와 "+
+      "동일한 library 위에 앉는다. <b>source correction</b> — 원본은 \"~960 LOC\"라 적었지만 자체 표의 합은 "+
+      "<b>1,276</b>이다(316줄, 약 33% 차이). 1,276을 쓰고 ~960은 unverified로 취급한다. "+
+      "renegotiation과 ICE restart는 한쪽에만 있다.",
+    turns:"두 번째 client type이나 두 번째 transport가 roadmap에 있는지 — aiortc loopback test를 통과한 1,276줄은 이미 지불됐고, 쓰지 않는 11개 transport는 비용도 이득도 0이다." },
+
+  { n:7, name:"Telephony serializer", ev:["ch-05","ch-06"], loc:null,
+    digest:"ch-05: telephony transport라는 것 자체가 없다. 전화 통화는 "+
+      "<code>FastAPIWebsocketTransport</code> + 6개 telephony serializer 중 하나 "+
+      "(<code>exotel</code> 171, <code>vonage</code> 188, <code>plivo</code> 256, <code>telnyx</code> 292, "+
+      "<code>twilio</code> 314, <code>genesys</code> 964; ABC <code>base_serializer.py</code> 106줄 4 method). "+
+      "두 stack 모두 telephony path가 없다. 그 6 밖의 한국 carrier면 "+
+      "<code>FrameSerializer</code> 250–300줄. ch-06: 8 kHz 쪽은 VAD 재튜닝 비용이 0이고, "+
+      "8 kHz Korean STT 숫자는 tree 어디에도 없다.",
+    turns:"어느 carrier인가, 그리고 언제인가." },
+
+  { n:8, name:"Session auth (WebRTCSessionManager)", ev:["ch-03","ch-05"], loc:248,
+    digest:"ch-03 / ch-05: HMAC digest, 15분 TTL, one-live-peer <code>SessionConflictError</code>. "+
+      "Pipecat은 대응물을 싣지 않는다. 당신이 소유한 248줄.",
+    turns:"row 6이 움직이는지 — 이건 row 6이 안착하는 connection object를 감싸는 policy layer다." },
+
+  { n:9, name:"Control protocol (ControlEvent)", ev:["ch-03","ch-05"], loc:null,
+    digest:"ch-03 / ch-05: <code>ControlEvent</code> v1의 dotted-type validation, strict in-order "+
+      "sequence checking, <code>max_control_message_bytes = 64 KiB</code> cap, recursive audio rejection. "+
+      "Pipecat은 대응물을 싣지 않는다.",
+    turns:"debug client와 ops tooling이 이미 말하는 wire contract를 transport 교체를 가로질러 byte-identical하게 유지할 가치가 있는지." },
+
+  { n:10, name:"The LLM loop", ev:["ch-09"], loc:561,
+    digest:"ch-09가 전부 공급했다: live-list <code>get_messages()</code> vs boson의 <code>deepcopy</code>, "+
+      "<code>LLMContextFrame</code>당 inference 1회, <code>max_turns</code> 부재, topology로 닫히는 loop, "+
+      "그리고 세 가지 costed resolution — <b>adopt</b> (~30 L cap + gates + reminder processor, "+
+      "<code>run_agent_loop</code> 561 L 삭제, 22 tool signature 변경), <b>wrap</b> (~200–300 L 한 processor, "+
+      "삭제 0, signature 변경 0), <b>bypass</b> (~120–170 L bridge, 삭제 0, signature 변경 0). "+
+      "ch-09는 셋 중 아무것도 고르지 않았다.",
+    turns:"§4.1. 첫 번째 irreducible collision의 절반." },
+
+  { n:11, name:"Tools", ev:["ch-09"], loc:null,
+    digest:"ch-09: 세 가지 registration route, <code>result_callback</code> contract, "+
+      "<code>run_in_parallel=True</code>, <b>22개 tool signature</b> (<code>agents/*/tools/</code>), "+
+      "boson <code>Message.role</code>에 tool role 부재, 그리고 Pipecat registry에 슬롯이 없는 boson의 별도 gate 3개.",
+    turns:"§4.1. 같은 collision의 나머지 절반. ch-09 §12 Move 1 (catch-all as permission kernel)이 한쪽 vote를 싸게 만드는 framework-extension sketch다." },
+
+  { n:12, name:"The stage machine", ev:["ch-10"], loc:null,
+    digest:"ch-10: <code>FlowManager</code>는 pipeline 밖의 평범한 class, <code>FlowConfig</code> 부재, "+
+      "<code>NodeConfig</code> producer 2개, transition-legality validation 부재, node registry 부재, "+
+      "<code>stage_config.py</code>의 direct mapping에서 <code>transitions</code>와 <code>skills</code>는 unmapped.",
+    turns:"edge whitelist가 Lina가 의존하는 safety property인지, 아니면 잡은 버그보다 만든 버그가 많은 config 파일인지 — 당신 issue history로 답할 수 있다." },
+
+  { n:13, name:"The rule layers", ev:["ch-12"], loc:null,
+    digest:"ch-12: 세 constraint, seam derivation, collapse argument, 11-row mapping table, 그리고 "+
+      "이 chapter가 지금 재는 Tier-2 latency bill — <i>\"~250-400 ms of added pre-LLM latency on every turn\"</i> "+
+      "(one Qwen3.6-27B TTFT + ~5 output tokens). 후보 shape: <code>user_aggregator</code>와 "+
+      "<code>llm</code> 사이의 <code>BosonRuleProcessor</code> 하나가 13개 check 전부 + "+
+      "<code>RuleEngine</code> + <code>SignalQueue</code> + 실제 <code>SessionState</code>를 든다.",
+    turns:"§4.2, 그리고 방금 잰 숫자." },
+
+  { n:14, name:"ScriptEngine", ev:["ch-12"], loc:517,
+    digest:"ch-12: <code>process_turn</code>이 processor 안에서 변경 없이 돈다. "+
+      "517 LOC (<code>engine.py</code> 284 + <code>schema.py</code> 233).",
+    turns:"\"processor 안에서 변경 없이 돈다\"가 interrupt re-driving과의 접촉에서 살아남는지 — 이 row에서 공짜가 아닌 유일한 부분." },
+
+  { n:15, name:"Compaction", ev:["boson-compact-session"], loc:null,
+    digest:"excerpt: <code>LLMContextSummarizer</code> + <code>LLMAutoContextSummarizationConfig</code> vs "+
+      "<code>gateway/compact/</code>. 3-way parameter correspondence — "+
+      "<code>threshold_messages=30 → max_unsummarized_messages</code>, "+
+      "<code>keep_recent=10 → min_messages_after_summary</code>, 그리고 boson에 없던 token trigger. "+
+      "명명된 손실 2개: pre/post compact hook 대응물 없음, "+
+      "<code>&lt;system-reminder&gt;Active stage: ...&lt;/system-reminder&gt;</code> re-injection을 "+
+      "명시적으로 다시 붙이지 않으면 stage identity가 매 compaction마다 조용히 사라진다.",
+    turns:"deferred-to-next-turn application이 Lina가 의존하는 property인지, 그리고 위 두 손실이 compliance recording에 load-bearing인지." },
+
+  { n:16, name:"Observability", ev:["ch-11"], loc:null,
+    digest:"ch-11: observer plane, <code>LatencyBreakdown</code>, <code>can_generate_metrics()</code> gating, "+
+      "그리고 aggregation은 당신 몫이라는 사실 (observer plane 어디에도 P50/P95는 없다). "+
+      "맞은편 두 stack의 metric은 trace decorator 하나, ad-hoc <code>elapsed_ms</code> 하나, "+
+      "아무도 읽지 않는 counter 하나가 전부다.",
+    turns:"\"aggregation is application code\"가 작은 일인지, 아니면 맨땅에서 하는 같은 일인지 — <code>LatencyBreakdown</code>에 대고 aggregator를 한 번 써 보면 정해진다." },
+
+  { n:17, name:"Deployment and process topology", ev:["ch-04"], loc:null,
+    digest:"ch-04가 host shape를 공급했다: <code>WorkerRunner(auto_end=False)</code>. §7이 나머지를 공급한다 — "+
+      "Pipecat이 싣는 건 <b>development</b> runner(자체 banner가 그렇게 말하고, repo에 deployment 문서가 없다), "+
+      "<code>main()</code>은 <code>workers=</code> 없는 <code>uvicorn.run(app, ...)</code> 하나로 끝나고, "+
+      "모든 session은 admission control도 per-session CPU isolation도 없이 한 loop 위의 "+
+      "<code>asyncio.Task</code>다. 실 runtime 단위는 worker "+
+      "(<code>BaseWorker</code> 1,565 L, <code>PipelineWorker</code> 1,506 L, <code>WorkerRunner</code> 550 L), "+
+      "cross-process scale-out은 runner가 아니라 bus, cold start는 <code>StartFrame</code>이 아니라 "+
+      "<code>setup()</code> (<code>StartupTimingObserver</code>가 잰다; processor가 동시에 setup되므로 총합이 아니라 span), "+
+      "그리고 scaling configuration surface 전체는 생성된 <code>pcc-deploy.toml</code>의 "+
+      "<code>min_agents = 1</code> 한 줄이다. <code>GatewayCore</code>의 process-scoped MCP subprocess는 "+
+      "worker 위로 재배치해야 session마다 respawn되지 않는다.",
+    turns:"long-lived process 하나 vs container-per-call + concurrent-call peak로 사이징한 warm pool. 다른 row와 똑같이 vote·assumption·falsifier 3칸." }
+];
+
+const WATCH = [
+  { n:1, obs:"Korean WER on 8 kHz μ-law, per candidate STT", type:"benchmark",
+    rows:"2, 그리고 coupling으로 1과 7",
+    pre:"Korean STT contract + labelled Lina corpus + telephony-band audio",
+    note:"harness는 있다 — <code>github.com/pipecat-ai/stt-benchmark</code>. 없는 건 당신의 labelled corpus이고, 그건 engineering이 아니라 data-labelling 작업이다." },
+  { n:2, obs:"interruption-broadcast → TranscriptionFrame gap, over lone Korean backchannels", type:"corpus",
+    rows:"1, 5, 그리고 §4.2의 filler-gate 위치",
+    pre:"recorded 8 kHz telephony audio + 돌고 있는 Pipecat pipeline",
+    note:"기대 부호가 미리 명시돼 있다: <i>\"If the gap is positive (it will be, ~always).\"</i> boson은 <code>\"네\"</code>를 content와 <code>pre_turn_status</code>로 거르고, Pipecat은 STT 상류에서 VAD energy로 interrupt한다. 다만 text-only detector의 정확한 대응물이 <code>TranscriptionUserTurnStartStrategy</code>로 이미 상류에 존재한다." },
+  { n:3, obs:"turn당 inference-triggering frame이 정확히 하나라는 assertion", type:"code assertion",
+    rows:"10, 12, 13",
+    pre:"만들어진 <code>BosonRuleProcessor</code> prototype + <code>llm</code> input의 <code>FrameLogger</code>",
+    note:"셋 중 가장 싸다 — audio도 vendor도 필요 없다. 다만 아직 존재하지 않는 prototype이 필요해서 §2가 아니라 watchlist에 있다. 명명된 실패 모드 2개: 생성 0회(양쪽 경로가 다 swallow), 2회(node도 돌고 context도 push)." }
+];
+
+const SEQ_DEFAULT = [
+  "row 16 observability를 먼저 켠다",
+  "row 14 ScriptEngine을 processor 안으로",
+  "row 13 BosonRuleProcessor 하나로 접는다",
+  "row 12 stage machine / FlowManager",
+  "row 10+11 agent boundary (collision 1)",
+  "row 15 compaction",
+  "row 4+5 chunker / playout ledger",
+  "row 2+3 ASR / TTS",
+  "row 1 VAD",
+  "row 6+8+9 transport / auth / control protocol",
+  "row 7 telephony serializer",
+  "row 17 deployment topology"
+];
+
+/* ---------------------------------------------------------------- state */
+const state = {
+  votes: {},       /* rowN -> "keep" | "adopt" | "hyb" */
+  assume: {},      /* rowN -> string */
+  falsify: {},     /* rowN -> string */
+  obsType: {},     /* rowN -> string */
+  obsAvail: {},    /* rowN -> "yes" | "no" */
+  p50: "", p95: "",
+  ttsWT: "",
+  owners: {},      /* watch n -> string */
+  seq: SEQ_DEFAULT.slice(),
+  defence: {}      /* step text -> one sentence */
+};
+
+function save(){
+  try { localStorage.setItem(LS_KEY, JSON.stringify(state)); } catch(e){}
+}
+function load(){
+  try {
+    const raw = localStorage.getItem(LS_KEY);
+    if (!raw) return;
+    const o = JSON.parse(raw);
+    for (const k of Object.keys(state)) if (o[k] !== undefined) state[k] = o[k];
+  } catch(e){}
+}
+
+/* ---------------------------------------------------- canvas (버그 방지) */
+function setupCanvas(cv, CANVAS_H){
+  const r = window.devicePixelRatio || 1;
+  const w = Math.max(cv.clientWidth, 200), h = CANVAS_H;
+  if (cv.width !== Math.round(w*r) || cv.height !== Math.round(h*r)){
+    cv.width = Math.round(w*r); cv.height = Math.round(h*r);
+  }
+  cv.style.height = h + "px";
+  const c = cv.getContext("2d"); c.setTransform(r,0,0,r,0,0); c.clearRect(0,0,w,h);
+  return {c, w, h};
+}
+
+function esc(s){
+  return String(s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
+}
+function voteLabel(v){
+  const f = VOTES.find(x => x.id === v);
+  return f ? f.label : "";
+}
+function rowComplete(n){
+  return !!state.votes[n] && !!(state.assume[n]||"").trim() && !!(state.falsify[n]||"").trim();
+}
+function completeCount(){
+  let k = 0; for (const r of ROWS) if (rowComplete(r.n)) k++; return k;
+}
+
+/* ============================================================================
+   PANEL 1 — 17-row ledger
+   ========================================================================== */
+const elLedger = document.getElementById("ledger");
+
+function buildLedger(){
+  let h = "";
+  for (const r of ROWS){
+    const ev = r.ev.map(c => c.indexOf("ch-") === 0
+      ? '<a href="../../' + c + '/read.md">' + c + '</a>'
+      : '<a href="../../../../raw-data/pipecat/excerpts/' + c + '.md">' + c + '</a>').join(", ");
+    h += '<div class="row" id="row' + r.n + '">';
+    h += '<div class="rhead">';
+    h += '<span class="rnum">' + r.n + '</span>';
+    h += '<span class="rname">' + esc(r.name) + '</span>';
+    h += '<span class="rev">evidence: ' + ev + '</span>';
+    h += '<span class="rstat" id="stat' + r.n + '">—</span>';
+    h += '</div>';
+    h += '<div class="digest">' + r.digest + '</div>';
+    h += '<div class="turns"><b>이 row가 걸린 지점:</b> ' + r.turns + '</div>';
+    h += '<div class="cells">';
+
+    /* vote cell — 어떤 버튼도 미리 선택되지 않는다 */
+    h += '<div><div class="cellhd">vote</div><div class="votes">';
+    for (const v of VOTES){
+      h += '<button class="vb ' + v.cls + '" data-row="' + r.n + '" data-vote="' + v.id + '">'
+         + v.label + '</button>';
+    }
+    h += '</div></div>';
+
+    h += '<div><div class="cellhd">assumption — "나는 X를 가정한다"</div>'
+       + '<textarea data-row="' + r.n + '" data-kind="assume" '
+       + 'placeholder="이 vote가 참이 되기 위해 참이어야 하는 것."></textarea></div>';
+
+    h += '<div><div class="cellhd">falsifier — 이 vote를 뒤집을 관측</div>'
+       + '<textarea data-row="' + r.n + '" data-kind="falsify" '
+       + 'placeholder="선호가 아니라 관측. 관측 불가능하면 row가 잘못 서술된 것이다."></textarea>';
+    h += '<div class="obs">'
+       + '<select data-row="' + r.n + '" data-kind="obsType"><option value="">— observation type —</option>';
+    for (const t of OBS_TYPES) h += '<option value="' + t + '">' + t + '</option>';
+    h += '</select>'
+       + '<select data-row="' + r.n + '" data-kind="obsAvail">'
+       + '<option value="">— 오늘 확보 가능? —</option>'
+       + '<option value="yes">오늘 가능</option>'
+       + '<option value="no">오늘 불가 (precondition 필요)</option>'
+       + '</select></div></div>';
+
+    h += '</div></div>';
+  }
+  elLedger.innerHTML = h;
+
+  elLedger.querySelectorAll("button.vb").forEach(b => {
+    b.addEventListener("click", () => {
+      const n = +b.dataset.row;
+      state.votes[n] = (state.votes[n] === b.dataset.vote) ? undefined : b.dataset.vote;
+      if (!state.votes[n]) delete state.votes[n];
+      save(); renderAll();
+    });
+  });
+  elLedger.querySelectorAll("textarea").forEach(t => {
+    t.addEventListener("input", () => {
+      const n = +t.dataset.row;
+      if (t.dataset.kind === "assume") state.assume[n] = t.value;
+      else state.falsify[n] = t.value;
+      save(); renderRowStatus(); renderProgress(); renderExportGate();
+    });
+  });
+  elLedger.querySelectorAll("select[data-row]").forEach(s => {
+    s.addEventListener("change", () => {
+      const n = +s.dataset.row;
+      if (s.dataset.kind === "obsType") state.obsType[n] = s.value;
+      else state.obsAvail[n] = s.value;
+      save();
+    });
+  });
+}
+
+function syncLedgerInputs(){
+  elLedger.querySelectorAll("button.vb").forEach(b => {
+    b.classList.toggle("on", state.votes[+b.dataset.row] === b.dataset.vote);
+  });
+  elLedger.querySelectorAll("textarea").forEach(t => {
+    const n = +t.dataset.row;
+    const v = (t.dataset.kind === "assume" ? state.assume[n] : state.falsify[n]) || "";
+    if (t.value !== v) t.value = v;
+    t.classList.toggle("empty", !v.trim());
+  });
+  elLedger.querySelectorAll("select[data-row]").forEach(s => {
+    const n = +s.dataset.row;
+    const v = (s.dataset.kind === "obsType" ? state.obsType[n] : state.obsAvail[n]) || "";
+    if (s.value !== v) s.value = v;
+  });
+}
+
+function renderRowStatus(){
+  for (const r of ROWS){
+    const box  = document.getElementById("row" + r.n);
+    const stat = document.getElementById("stat" + r.n);
+    if (!box || !stat) continue;
+    const hasV = !!state.votes[r.n];
+    const hasA = !!(state.assume[r.n]||"").trim();
+    const hasF = !!(state.falsify[r.n]||"").trim();
+    if (hasV && hasA && hasF){
+      box.classList.remove("incomplete"); box.classList.add("done");
+      stat.className = "rstat ok"; stat.textContent = "complete · " + voteLabel(state.votes[r.n]);
+    } else {
+      box.classList.add("incomplete"); box.classList.remove("done");
+      const miss = [];
+      if (!hasV) miss.push("vote");
+      if (!hasA) miss.push("assumption");
+      if (!hasF) miss.push("falsifier");
+      stat.className = "rstat bad"; stat.textContent = "incomplete — " + miss.join(" + ") + " 없음";
+    }
+  }
+  syncLedgerInputs();
+}
+
+function renderProgress(){
+  const done = completeCount();
+  let voted = 0; for (const r of ROWS) if (state.votes[r.n]) voted++;
+  const meas = (state.p50 !== "" && state.p95 !== "");
+  const el = document.getElementById("progress");
+  el.innerHTML =
+      '<div class="chip2 ' + (done === ROWS.length ? "good" : "bad") + '"><b>' + done + ' / 17</b>완성된 row</div>'
+    + '<div class="chip2"><b>' + voted + ' / 17</b>vote가 있는 row</div>'
+    + '<div class="chip2 ' + (meas ? "good" : "bad") + '"><b>' + (meas ? "1 / 1" : "0 / 1")
+    + '</b>실행된 measurement</div>'
+    + '<div class="chip2"><b>3</b>watchlist falsifier</div>';
+}
+
+/* ============================================================================
+   PANEL 2 — 동시에 참일 수 없는 조합 (read.md §8)
+   ========================================================================== */
+const elConf = document.getElementById("conflicts");
+const elTtsWT = document.getElementById("ttsWT");
+
+function conflictList(){
+  const v = state.votes;
+  return [
+    {
+      hot: v[10] === "adopt" && !!v[11] && v[11] !== "adopt",
+      title: "row 10 adopt Pipecat + row 11이 text-native Gateway tool을 유지",
+      why: "Pipecat의 pipeline을 adopt한다는 건 Pipecat이 LLM call과 tool loop를 소유한다는 뜻이다 — "
+         + "Basement와 Gateway가 text-native로 남는다는 당신 계약과 정면으로 부딪힌다. "
+         + "ch-09는 shape 세 개(adopt / wrap / bypass)를 costing만 하고 아무것도 고르지 않았다. "
+         + "adopt를 고르면 붙는 청구서: 사라진 turn ceiling(<code>FunctionCallsStartedFrame</code>를 세는 "
+         + "counting processor로 재건 가능)과 22개 signature에 걸친 <code>{\"role\": \"tool\"}</code> schema rewrite. (§4.1)",
+      idle: "row 10과 row 11에 vote가 들어오면 여기서 검사한다."
+    },
+    {
+      hot: v[1] === "keep" && (v[7] === "adopt" || v[7] === "hyb"),
+      title: "row 1 keep realtime_voice(Silero) + row 7이 telephony를 추가",
+      why: "realtime_voice의 <code>SileroVAD</code>는 16 kHz 전용이고 8 kHz를 hard <code>ValueError</code>로 "
+         + "거절한다. telephony는 8 kHz μ-law로 들어온다. 두 vote는 같은 배포에서 동시에 참일 수 없다. "
+         + "(§3.1, §3.7 — Pipecat 쪽 analyzer는 native 8 kHz이고 8 kHz/256에서 six-chunk count가 동일하다.)",
+      idle: "row 1과 row 7에 vote가 들어오면 여기서 검사한다."
+    },
+    {
+      hot: v[5] === "adopt" && state.ttsWT === "out",
+      title: "row 5에서 AudioTextPlayoutLedger를 버림 + row 3이 word-timestamp 6종 밖의 TTS",
+      why: "Pipecat의 position-based 대안은 <code>TTSTextFrame.pts</code>에 실려 오는 word timestamp에 "
+         + "의존한다. 그걸 emit하는 교집합은 <code>azure, cartesia, elevenlabs, inworld, soniox, xai</code> "
+         + "6개뿐이다. 그 밖의 TTS를 고르면 ledger를 버린 자리에 아무것도 남지 않는다. "
+         + "그리고 그 6은 <code>add_word_timestamps</code> caller에 대한 <b>grep</b>이지 behavioural test가 "
+         + "아니다 — 한국어 word timestamp가 실제로 도착하는 걸 이 course의 누구도 본 적 없다. (§3.3, §3.5)",
+      idle: "row 5에 vote가 있고 위의 TTS 질문에 답하면 여기서 검사한다."
+    }
+  ];
+}
+
+function renderConflicts(){
+  const list = conflictList();
+  let h = "";
+  for (const c of list){
+    h += '<div class="conf' + (c.hot ? " hot" : "") + '">';
+    h += '<b>' + (c.hot ? "⚠ 충돌 — " : "· ") + c.title + '</b>';
+    h += '<div class="why">' + (c.hot ? c.why : c.idle) + '</div>';
+    h += '</div>';
+  }
+  elConf.innerHTML = h;
+}
+
+/* ============================================================================
+   PANEL 3 — target architecture
+   ========================================================================== */
+const COLOR = {keep:"#d29922", adopt:"#58a6ff", hyb:"#bc8cff", none:"#2b3242"};
+function colorOf(n){ return COLOR[state.votes[n]] || COLOR.none; }
+
+/* 다이어그램 배치: 실제 turn 경로 순서 */
+const ARCH_LANES = [
+  {y:0, label:"ingress",    items:[{n:6,t:"transport"},{n:7,t:"telephony serializer"},{n:8,t:"session auth"},{n:9,t:"ControlEvent"}]},
+  {y:1, label:"user turn",  items:[{n:1,t:"VAD / turn analyzer"},{n:2,t:"STT"},{n:13,t:"BosonRuleProcessor"},{n:14,t:"ScriptEngine"}]},
+  {y:2, label:"reasoning",  items:[{n:10,t:"LLM"},{n:11,t:"tools"},{n:15,t:"compaction"},{n:12,t:"stage machine"}]},
+  {y:3, label:"bot turn",   items:[{n:4,t:"KoreanPhraseChunker"},{n:3,t:"TTS"},{n:5,t:"playout ledger"},{n:16,t:"observer plane"}]}
+];
+
+function drawArch(){
+  const cv = document.getElementById("cvArch");
+  const {c, w, h} = setupCanvas(cv, CANVAS_H_ARCH);
+  c.font = "11px ui-monospace,SFMono-Regular,Menlo,monospace";
+  c.textBaseline = "middle";
+
+  const padL = 92, padR = 14, padT = 16;
+  const laneH = 52;
+  const trackW = Math.max(w - padL - padR, 120);
+
+  for (let li = 0; li < ARCH_LANES.length; li++){
+    const lane = ARCH_LANES[li];
+    const y = padT + li * laneH + 18;
+    c.fillStyle = "#6b7686";
+    c.textAlign = "right";
+    c.fillText(lane.label, padL - 12, y);
+    c.textAlign = "left";
+
+    const k = lane.items.length;
+    const gap = 8;
+    const bw = (trackW - gap * (k - 1)) / k;
+    for (let i = 0; i < k; i++){
+      const it = lane.items[i];
+      const x = padL + i * (bw + gap);
+      const col = colorOf(it.n);
+      c.fillStyle = state.votes[it.n] ? col + "22" : "#161b22";
+      c.strokeStyle = col;
+      c.lineWidth = 1;
+      c.beginPath();
+      if (c.roundRect) c.roundRect(x, y - 15, bw, 30, 6);
+      else c.rect(x, y - 15, bw, 30);
+      c.fill(); c.stroke();
+      c.fillStyle = state.votes[it.n] ? "#e6edf3" : "#6b7686";
+      let label = it.t;
+      while (c.measureText(label).width > bw - 22 && label.length > 3){
+        label = label.slice(0, -2);
+      }
+      c.fillText(label, x + 8, y - 3);
+      c.fillStyle = "#6b7686";
+      c.fillText("row " + it.n, x + 8, y + 9);
+    }
+  }
+
+  /* FlowManager — processor list 밖 (read.md §3.12, 배달물 #2) */
+  const fy = padT + ARCH_LANES.length * laneH + 26;
+  c.setLineDash([5,4]);
+  c.strokeStyle = "#f778ba"; c.lineWidth = 1;
+  c.beginPath();
+  if (c.roundRect) c.roundRect(padL, fy - 16, trackW, 34, 7);
+  else c.rect(padL, fy - 16, trackW, 34);
+  c.stroke();
+  c.setLineDash([]);
+  c.fillStyle = "#f778ba";
+  c.fillText("FlowManager — pipeline 밖의 평범한 class. worker.queue_frames / set_node_from_config로 밖에서 구동한다.",
+             padL + 10, fy + 1);
+  c.fillStyle = "#6b7686";
+  c.textAlign = "right";
+  c.fillText("outside", padL - 12, fy + 1);
+  c.textAlign = "left";
+}
+
+function renderLoc(){
+  let sum = 0, rows = "";
+  for (const r of ROWS){
+    if (r.loc === null) continue;
+    const v = state.votes[r.n];
+    const side = v ? voteLabel(v) : "—";
+    const fate = !v ? "미결정"
+      : v === "keep"  ? "그대로 유지"
+      : v === "adopt" ? "삭제 대상"
+      : "processor로 감쌈 (삭제 0)";
+    if (v === "adopt") sum += r.loc;
+    rows += '<tr><td>' + r.n + '</td><td class="mono">' + esc(r.name) + '</td>'
+          + '<td class="num mono">' + r.loc.toLocaleString() + '</td>'
+          + '<td>' + side + '</td><td>' + fate + '</td></tr>';
+  }
+  document.getElementById("locTable").innerHTML =
+      '<table><thead><tr><th>#</th><th>subsystem</th><th>검증된 LOC</th><th>vote</th><th>결과</th></tr></thead>'
+    + '<tbody>' + rows + '</tbody></table>'
+    + '<div class="turns" style="margin-top:8px;">adopt로 표시된 row의 합: <b class="mono">'
+    + sum.toLocaleString() + ' L</b> — 검증된 숫자만 더한 것이고, LOC이 확인되지 않은 row는 빠져 있다. '
+    + 'read.md §0: 이 ledger는 floor이지 현재 판독값이 아니다. transport는 <b>1,276</b>을 쓴다 — '
+    + '원본 headline의 ~960은 자체 표(합 1,276)와 316줄 어긋난다.</div>';
+}
+
+function renderProcList(){
+  const pick = (n, keepTxt, adoptTxt, hybTxt) => {
+    const v = state.votes[n];
+    if (!v) return "    # row " + n + " — vote 없음";
+    return "    " + (v === "keep" ? keepTxt : v === "adopt" ? adoptTxt : hybTxt);
+  };
+  const L = [];
+  L.push('<span class="cm"># target pipeline — vote가 결정한 processor list</span>');
+  L.push('pipeline = Pipeline([');
+  L.push(pick(6,  "rtv_aiortc_transport.input(),   # keep (1,276 L)",
+                  "transport.input(),              # adopt SmallWebRTCTransport",
+                  "WrappedTransportInput(),        # hybrid-wrap"));
+  L.push(pick(1,  "# VAD: rtv two-state bool @ threshold=0.5 (16 kHz only)",
+                  "# VAD: 4-state analyzer, min_volume AND-gate, native 8 kHz",
+                  "# VAD: hybrid — rtv gate 유지, analyzer는 Pipecat"));
+  L.push(pick(2,  "unary_asr,                      # OpenAICompatibleUnaryASR",
+                  "stt,                            # streaming STT",
+                  "stt_bridge,                     # hybrid-wrap"));
+  L.push("    context_aggregator.user(),");
+  L.push(pick(13, "# rules: boson 밖에서 그대로",
+                  "BosonRuleProcessor(),           # 13 checks + RuleEngine + SignalQueue",
+                  "BosonRuleProcessor(),           # hybrid: Tier-1만 안으로"));
+  L.push(pick(14, "# ScriptEngine: boson 안에 유지 (517 L)",
+                  "ScriptProcessor(),              # process_turn 변경 없이",
+                  "ScriptProcessor(),              # wrap"));
+  L.push(pick(10, "# LLM: boson run_agent_loop (561 L)",
+                  "llm,                            # Pipecat이 loop를 소유",
+                  "GatewayBridgeProcessor(),       # ~120-170 L bridge"));
+  L.push(pick(15, "# compaction: gateway/compact/",
+                  "LLMContextSummarizer(),         # threshold_messages=30 → max_unsummarized_messages",
+                  "LLMContextSummarizer(),         # + &lt;system-reminder&gt; 재주입 직접"));
+  L.push(pick(4,  "KoreanPhraseChunker(),          # 283 L",
+                  "SimpleTextAggregator(),         # CJK branch, 미검증",
+                  "KoreanPhraseChunker(),          # aggregator 자리에 끼워 넣음"));
+  L.push(pick(3,  "# TTS: 현행 유지",
+                  "tts,                            # Language.KO 12종 중 하나",
+                  "tts,                            # wrap"));
+  L.push(pick(5,  "AudioTextPlayoutLedger(),       # audible_text() / playout_complete()",
+                  "# playout: position-based (TTSTextFrame.pts에 의존)",
+                  "AudioTextPlayoutLedger(),       # pts가 있을 때만 위임"));
+  L.push(pick(6,  "rtv_aiortc_transport.output(),", "transport.output(),", "WrappedTransportOutput(),"));
+  L.push("    context_aggregator.assistant(),");
+  L.push('])');
+  L.push("");
+  L.push('<span class="cm"># --- pipeline 밖 -------------------------------------------------</span>');
+  L.push(pick(12, "stage_machine = StageMachine(...)   # boson 소유, 밖",
+                  '<span class="kw">flow_manager</span> = FlowManager(task=task, llm=llm, context_aggregator=...)',
+                  '<span class="kw">flow_manager</span> = FlowManager(...)   # StageMachine은 legality pre-check로'));
+  L.push(pick(16, "# observability: trace decorator + ad-hoc elapsed_ms",
+                  "task = PipelineTask(pipeline, observers=[LatencyBreakdownObserver()])",
+                  "task = PipelineTask(pipeline, observers=[...])  # 집계는 직접"));
+  L.push(pick(17, "runner = WorkerRunner(auto_end=False)   # 한 프로세스, min_agents = 1",
+                  "runner = WorkerRunner(auto_end=False)   # container-per-call + warm pool",
+                  "runner = WorkerRunner(auto_end=False)   # 혼합"));
+  L.push('<span class="cm"># GatewayCore의 process-scoped MCP subprocess는 worker 위로 재배치 — session마다 respawn 금지</span>');
+  document.getElementById("procList").innerHTML = L.join("\n");
+}
+
+/* ============================================================================
+   PANEL 4 — MEASUREMENT. network I/O 없음. 명령을 보여주고, 숫자를 받는다.
+   ========================================================================== */
+const CMD_HTML =
+    '<span class="cm">$ cd wiki/courses/pipecat/ch-13</span>\n'
+  + '$ export TIER2_ENDPOINT=<span class="st">"http://localhost:8000/v1/chat/completions"</span>\n'
+  + '$ export TIER2_MODEL=<span class="st">"Qwen3.6-27B-FP8"</span>\n'
+  + '$ export TIER2_API_KEY=<span class="st">"..."</span>           <span class="cm"># endpoint가 무인증이면 생략</span>\n'
+  + '$ python3 tier2-probe.py --iterations 40\n'
+  + '<span class="cm">  P50   ... ms\n  P95   ... ms      ← 이 두 숫자를 아래에 붙여 넣는다</span>';
+
+function measured(){
+  const a = parseFloat(state.p50), b = parseFloat(state.p95);
+  if (!isFinite(a) || !isFinite(b) || a <= 0 || b <= 0) return null;
+  return {p50:a, p95:b};
+}
+
+let measBuilt = false;
+
+function buildMeasPanel(){
+  const body = document.getElementById("measBody");
+  let h = '<pre>' + CMD_HTML + '</pre>';
+  h += '<div class="turns" style="margin-top:9px;">'
+     + '<b>이 panel은 network I/O를 하지 않는다.</b> 이 페이지는 <code>file://</code>에서 열리는 '
+     + '자기완결 HTML이라 model endpoint를 호출할 수 없고, 할 수 없는 일을 맡아서도 안 된다. '
+     + '측정은 <code>../tier2-probe.py</code>(149줄, 표준 라이브러리만)가 하고, 그 스크립트는 '
+     + '<code>intent_rules</code>(priority 30)와 <code>sentiment_tracker</code>(priority 10) — '
+     + '둘 다 <code>@check(..., mode="parallel", check_type="llm")</code> — 를 '
+     + '<code>asyncio.gather</code> 하나로 묶어 돌린다. 측정 단위는 completion 두 개의 '
+     + 'gather이지 순차 두 개가 아니다. 순차로 재면 진실의 약 두 배를 보고하게 된다. '
+     + 'N=40 이상으로 돌려라 — N=9에서 nearest-rank P95는 최댓값 그 자체다.</div>';
+  h += '<div class="fields">'
+     + '<div class="field"><label>P50 (ms)</label>'
+     + '<input type="number" id="inP50" step="0.1" min="0" placeholder="붙여넣기"></div>'
+     + '<div class="field"><label>P95 (ms)</label>'
+     + '<input type="number" id="inP95" step="0.1" min="0" placeholder="붙여넣기"></div>'
+     + '<button class="rb" id="bClearMeas">측정값 지우기</button></div>';
+  body.innerHTML = h;
+
+  const i50 = document.getElementById("inP50"), i95 = document.getElementById("inP95");
+  i50.addEventListener("input", () => { state.p50 = i50.value; save(); renderMeasAll(); });
+  i95.addEventListener("input", () => { state.p95 = i95.value; save(); renderMeasAll(); });
+  document.getElementById("bClearMeas").addEventListener("click", () => {
+    state.p50 = ""; state.p95 = ""; save(); renderMeasAll();
+  });
+  measBuilt = true;
+}
+
+/* innerHTML을 다시 쓰지 않는다 — 타이핑 중 focus가 날아가면 안 되니까 */
+function updateMeasState(){
+  const box = document.getElementById("measBox");
+  const badge = document.getElementById("measBadge");
+  const i50 = document.getElementById("inP50"), i95 = document.getElementById("inP95");
+  if (i50 && i50.value !== state.p50) i50.value = state.p50;
+  if (i95 && i95.value !== state.p95) i95.value = state.p95;
+  const m = measured();
+  if (!m){
+    box.className = "meas unmeasured";
+    badge.className = "measbadge";
+    badge.textContent = "unmeasured — 두 값이 다 들어올 때까지 이 상태";
+  } else {
+    box.className = "meas measured";
+    badge.className = "measbadge on";
+    badge.textContent = "measured — P50 " + m.p50.toFixed(1) + " ms / P95 " + m.p95.toFixed(1) + " ms";
+  }
+}
+
+function renderMeasAll(){
+  if (!measBuilt) buildMeasPanel();
+  updateMeasState();
+  drawMeas(); drawBudget(); renderMeasVerdict(); renderProgress(); renderExportGate();
+}
+
+function drawMeas(){
+  const cv = document.getElementById("cvMeas");
+  const {c, w, h} = setupCanvas(cv, CANVAS_H_MEAS);
+  const m = measured();
+  const padL = 66, padR = 56, padT = 24;
+  const trackW = Math.max(w - padL - padR, 100);
+  const maxMs = Math.max(GHOST_HI * 1.35, m ? m.p95 * 1.20 : 0, 500);
+  const sx = ms => padL + (ms / maxMs) * trackW;
+
+  c.font = "11px ui-monospace,SFMono-Regular,Menlo,monospace";
+  c.textBaseline = "middle";
+
+  /* ghost: ch-12의 250-400 ms 견적 */
+  c.fillStyle = "rgba(210,153,34,.16)";
+  c.fillRect(sx(GHOST_LO), padT - 8, sx(GHOST_HI) - sx(GHOST_LO), 104);
+  c.strokeStyle = "#d29922"; c.setLineDash([4,4]); c.lineWidth = 1;
+  c.beginPath(); c.moveTo(sx(GHOST_LO), padT - 8); c.lineTo(sx(GHOST_LO), padT + 96); c.stroke();
+  c.beginPath(); c.moveTo(sx(GHOST_HI), padT - 8); c.lineTo(sx(GHOST_HI), padT + 96); c.stroke();
+  c.setLineDash([]);
+  c.fillStyle = "#d29922"; c.textAlign = "left";
+  c.fillText("ch-12 ghost estimate 250–400 ms", sx(GHOST_LO) + 4, padT - 16);
+
+  const bars = [
+    {lab:"P50", ms: m ? m.p50 : null, y: padT + 14, col:"#3fb950"},
+    {lab:"P95", ms: m ? m.p95 : null, y: padT + 58, col:"#58a6ff"}
+  ];
+  for (const b of bars){
+    c.fillStyle = "#6b7686"; c.textAlign = "right";
+    c.fillText(b.lab, padL - 10, b.y + 11);
+    c.textAlign = "left";
+    c.strokeStyle = "#2b3242";
+    c.strokeRect(padL, b.y, trackW, 22);
+    if (b.ms === null){
+      c.fillStyle = "#6b7686";
+      c.fillText("미측정 — ../tier2-probe.py 를 돌리고 숫자를 붙여넣어라", padL + 8, b.y + 11);
+    } else {
+      const bw = Math.max(Math.min(sx(b.ms) - padL, trackW), 2);
+      c.fillStyle = b.col + "33"; c.fillRect(padL, b.y, bw, 22);
+      c.strokeStyle = b.col; c.strokeRect(padL, b.y, bw, 22);
+      c.fillStyle = "#e6edf3";
+      c.fillText(b.ms.toFixed(1) + " ms", Math.min(padL + bw + 6, w - padR + 44), b.y + 11);
+    }
+  }
+  /* 축 */
+  c.strokeStyle = "#2b3242"; c.beginPath();
+  c.moveTo(padL, padT + 100); c.lineTo(padL + trackW, padT + 100); c.stroke();
+  c.fillStyle = "#6b7686"; c.textAlign = "center";
+  for (let t = 0; t <= maxMs; t += 200){
+    const x = sx(t);
+    c.beginPath(); c.moveTo(x, padT + 100); c.lineTo(x, padT + 105); c.stroke();
+    c.fillText(t + "", x, padT + 116);
+  }
+  c.textAlign = "left";
+  c.fillText("ms (asyncio.gather 하나의 wall clock)", padL, padT + 134);
+}
+
+function drawBudget(){
+  const cv = document.getElementById("cvBudget");
+  const {c, w, h} = setupCanvas(cv, CANVAS_H_BUDGET);
+  const m = measured();
+  const rule = m ? m.p50 : null;
+
+  const terms = BUDGET.map(t => ({
+    k: t.k,
+    ms: (t.k === "rule evaluation") ? rule : t.ms,
+    pending: (t.k === "rule evaluation") && rule === null
+  }));
+  const total = terms.reduce((a,t) => a + (t.ms || 0), 0);
+
+  const padL = 118, padR = 62, padT = 16, rowH = 24;
+  const trackW = Math.max(w - padL - padR, 100);
+  const maxMs = Math.max(total * 1.08, BUDGET_TARGET_P50 * 1.08);
+  const sx = ms => (ms / maxMs) * trackW;
+
+  c.font = "11px ui-monospace,SFMono-Regular,Menlo,monospace";
+  c.textBaseline = "middle";
+
+  let acc = 0;
+  for (let i = 0; i < terms.length; i++){
+    const t = terms[i];
+    const y = padT + i * rowH;
+    c.fillStyle = "#9aa7b4"; c.textAlign = "right";
+    c.fillText(t.k, padL - 10, y + 10);
+    c.textAlign = "left";
+    const x0 = padL + sx(acc);
+    if (t.pending){
+      c.strokeStyle = "#f85149"; c.setLineDash([4,3]);
+      c.strokeRect(x0, y + 1, 54, 18); c.setLineDash([]);
+      c.fillStyle = "#f85149";
+      c.fillText("TBD — 위에서 측정", x0 + 60, y + 10);
+    } else {
+      const bw = Math.max(sx(t.ms), 1.5);
+      const isRule = (t.k === "rule evaluation");
+      c.fillStyle = isRule ? "rgba(63,185,80,.30)" : "rgba(88,166,255,.22)";
+      c.fillRect(x0, y + 1, bw, 18);
+      c.strokeStyle = isRule ? "#3fb950" : "#58a6ff";
+      c.strokeRect(x0, y + 1, bw, 18);
+      c.fillStyle = isRule ? "#3fb950" : "#9aa7b4";
+      c.fillText((t.ms).toFixed(0) + " ms", x0 + bw + 6, y + 10);
+      acc += t.ms;
+    }
+  }
+
+  /* P50 = 1.0 s 목표선 */
+  const gx = padL + sx(BUDGET_TARGET_P50);
+  c.strokeStyle = "#d29922"; c.setLineDash([5,4]);
+  c.beginPath(); c.moveTo(gx, padT - 6); c.lineTo(gx, padT + terms.length * rowH + 16); c.stroke();
+  c.setLineDash([]);
+  c.fillStyle = "#d29922"; c.textAlign = "center";
+  c.fillText("P50 목표 1.0 s", gx, padT + terms.length * rowH + 28);
+  c.textAlign = "left";
+
+  /* 합계 */
+  const ty = padT + terms.length * rowH + 6;
+  c.fillStyle = "#6b7686"; c.textAlign = "right";
+  c.fillText(rule === null ? "total (rules 제외)" : "total (측정된 rules 포함)", padL - 10, ty + 10);
+  c.textAlign = "left";
+  const bw = Math.max(sx(total), 2);
+  c.fillStyle = total > BUDGET_TARGET_P50 ? "rgba(248,81,73,.22)" : "rgba(63,185,80,.22)";
+  c.fillRect(padL, ty + 1, bw, 18);
+  c.strokeStyle = total > BUDGET_TARGET_P50 ? "#f85149" : "#3fb950";
+  c.strokeRect(padL, ty + 1, bw, 18);
+  c.fillStyle = "#e6edf3";
+  c.fillText((total/1000).toFixed(2) + " s", padL + bw + 6, ty + 10);
+}
+
+function renderMeasVerdict(){
+  const el = document.getElementById("measVerdict");
+  const m = measured();
+  if (!m){
+    el.className = "callout";
+    el.innerHTML = '<b>row 13은 pending이다.</b> 그리고 그건 정직한 상태다 — '
+      + 'unrun probe가 measured zero로 오인되지 않도록 이 panel은 명시적 UNMEASURED로 앉아 있다. '
+      + 'read.md §2.4의 예시 출력에 적힌 숫자는 <b>출력 모양을 보여주려고 지어낸 것</b>이니 '
+      + '붙여 넣지 마라. row 13은 <i>당신</i> endpoint가 <i>당신</i> 두 숫자를 찍을 때까지 pending이다.';
+    return;
+  }
+  const p = m.p50;
+  let verdict, cls;
+  if (p >= GHOST_LO && p <= GHOST_HI){
+    cls = "callout ok";
+    verdict = '<b>250–400 ms 안쪽 — ch-12의 견적이 버텼다.</b> row 13의 latency term은 설계가 가정한 그 값이고, '
+      + 'in-turn veto vs next-turn transition 거래는 적힌 대로 가격이 매겨져 있다. '
+      + '이제 이 row는 budget이 아니라 <b>구조</b> 질문으로 넘어간다 — boson이 각 vote 아래서 얼마나 무수정으로 살아남는가. '
+      + 'row 13의 falsifier는 열린 질문이 아니라 재측정 트리거가 된다: "model이나 serving stack이 바뀌면 다시 돌린다".';
+  } else if (p < GHOST_LO){
+    cls = "callout";
+    verdict = '<b>250 ms 아래 — 견적이 비관적이었다.</b> 쓰기 전에 여유가 어디서 왔는지부터 확인해라: '
+      + 'warmed KV cache, quantised checkpoint, network hop 없는 local endpoint — 셋 다 실재하고 셋 다 다르게 깨진다. '
+      + 'probe는 <code>TIER2_ENDPOINT</code>가 가리키는 것과 말한다. 그게 <code>localhost</code>라면 '
+      + '당신은 운영하지 않는 배포를 측정한 것이다. production path의 hop count가 probe와 같은지 물어라.';
+  } else {
+    cls = "callout bad";
+    verdict = '<b>400 ms 위 — 견적이 낙관적이었고, ch-11 budget line 하나가 이제 이름 붙일 수 있는 만큼 초과됐다.</b> '
+      + '비교 기준을 정확히 잡아라: <code>stt_latency.py</code>의 <code>DEEPGRAM_TTFS_P99 = 0.35</code>이지 '
+      + '0.45가 아니다 (23개 상수, 0.35 Deepgram/Soniox … 2.14 xAI). 0.35 s 기준에 대고 400 ms Tier-2는 '
+      + 'tree에서 가장 빠른 provider의 STT P99 전체보다 크다 — "Tier-2가 budget의 pre-LLM 절반을 대략 두 배로 만든다"는 '
+      + '표현은 오히려 과소평가다. 그리고 <code>stt_latency.py</code>는 latency만 기록하고 benchmark audio의 '
+      + 'language와 sample rate에는 침묵한다. 0.35 s는 English-assumed 숫자다 — row 2의 falsifier가 그 문장 안에 산다.';
+  }
+  const terms = BUDGET.map(t => (t.k === "rule evaluation") ? m.p50 : t.ms);
+  const total = terms.reduce((a,b) => a + b, 0);
+  el.className = cls;
+  el.innerHTML = verdict + '<br><br>ch-11 waterfall은 이제 실제 숫자를 하나 담고 다시 그려졌다: '
+    + '<b class="mono">' + (total/1000).toFixed(2) + ' s</b> '
+    + (total > BUDGET_TARGET_P50
+        ? '— P50 ≤ 1.0 s 라인 <b>바깥</b>이다.'
+        : '— P50 ≤ 1.0 s 라인 <b>안쪽</b>이다.')
+    + ' 배달물 #4가 요구하는 건 probe를 돌린 사실이 아니라 바로 이 문장이다.';
+}
+
+/* ============================================================================
+   PANEL 5 — watchlist (falsifier이지 blocker가 아니다)
+   ========================================================================== */
+function renderWatchlist(){
+  let rows = "";
+  for (const wsl of WATCH){
+    rows += '<tr>'
+      + '<td class="num mono">' + wsl.n + '</td>'
+      + '<td>' + wsl.obs + '<div class="turns" style="margin:4px 0 0;">' + wsl.note + '</div></td>'
+      + '<td class="mono">' + wsl.type + '</td>'
+      + '<td class="mono">' + wsl.rows + '</td>'
+      + '<td>' + wsl.pre + '</td>'
+      + '<td><input type="text" data-owner="' + wsl.n + '" placeholder="이름 + 날짜" style="width:9rem;"></td>'
+      + '</tr>';
+  }
+  document.getElementById("watchlist").innerHTML =
+      '<table><thead><tr><th>#</th><th>observation</th><th>type</th>'
+    + '<th>뒤집을 row</th><th>precondition</th><th>owner</th></tr></thead><tbody>'
+    + rows + '</tbody></table>';
+  document.querySelectorAll("input[data-owner]").forEach(i => {
+    i.value = state.owners[i.dataset.owner] || "";
+    i.addEventListener("input", () => {
+      state.owners[i.dataset.owner] = i.value; save();
+    });
+  });
+}
+
+/* ============================================================================
+   PANEL 6 — migration sequence
+   ========================================================================== */
+function renderSeq(){
+  const el = document.getElementById("seq");
+  let h = "";
+  for (let i = 0; i < state.seq.length; i++){
+    const step = state.seq[i];
+    h += '<div class="step">'
+       + '<span class="k">' + (i+1) + '.</span>'
+       + '<div><div class="mono" style="font-size:0.8214rem; color:var(--ink);">' + esc(step) + '</div>'
+       + '<input type="text" data-step="' + i + '" placeholder="이 step이 무엇을 de-risk 하는지 한 문장 — 무엇을 달성하는지가 아니라." '
+       + 'style="width:100%; margin-top:5px;"></div>'
+       + '<div class="mv"><button data-mv="up" data-i="' + i + '">▲</button>'
+       + '<button data-mv="down" data-i="' + i + '">▼</button></div>'
+       + '</div>';
+  }
+  el.innerHTML = h;
+  el.querySelectorAll("input[data-step]").forEach(inp => {
+    const key = state.seq[+inp.dataset.step];
+    inp.value = state.defence[key] || "";
+    inp.addEventListener("input", () => {
+      state.defence[state.seq[+inp.dataset.step]] = inp.value; save();
+    });
+  });
+  el.querySelectorAll("button[data-mv]").forEach(b => {
+    b.addEventListener("click", () => {
+      const i = +b.dataset.i;
+      const j = b.dataset.mv === "up" ? i - 1 : i + 1;
+      if (j < 0 || j >= state.seq.length) return;
+      const t = state.seq[i]; state.seq[i] = state.seq[j]; state.seq[j] = t;
+      save(); renderSeq();
+    });
+  });
+}
+
+/* ============================================================================
+   PANEL 7 — export gate + 네 artifact
+   ========================================================================== */
+function renderExportGate(){
+  const missing = ROWS.filter(r => !rowComplete(r.n));
+  const gate = document.getElementById("exportGate");
+  const bE = document.getElementById("bExport");
+  const bC = document.getElementById("bCopy");
+  if (missing.length === 0){
+    gate.className = "callout ok";
+    gate.innerHTML = '<b>17개 row 전부 vote + assumption + falsifier를 갖췄다.</b> export가 열렸다. '
+      + (measured() ? '측정값도 들어와 있다.' :
+         'measurement는 아직 비어 있다 — export는 되지만 배달물 #4는 미완이다.');
+    bE.disabled = false; bC.disabled = false;
+  } else {
+    gate.className = "callout bad";
+    gate.innerHTML = '<b>export 비활성 — ' + missing.length + '개 row가 미완이다.</b> '
+      + '미완 row: ' + missing.map(r => r.n + " (" + esc(r.name) + ")").join(", ")
+      + '. 세 칸이 다 차야 열린다. 이게 "it depends"를 구조적으로 불가능하게 만드는 장치다.';
+    bE.disabled = true; bC.disabled = true;
+    document.getElementById("exportOut").style.display = "none";
+  }
+}
+
+function buildExport(){
+  const L = [];
+  const m = measured();
+  L.push("# pipecat ch-13 — capstone deliverables");
+  L.push("# 생성: figures/migration-map.html · 모든 vote는 학습자가 직접 클릭한 것이다.");
+  L.push("");
+  L.push("## artifact 1 — the completed seventeen-row vote table");
+  L.push("");
+  L.push("| # | subsystem | vote | assumption | falsifier | observation type | 오늘 확보 |");
+  L.push("|---|---|---|---|---|---|---|");
+  for (const r of ROWS){
+    const one = s => (s || "").replace(/\s*\n\s*/g, " ").replace(/\|/g, "\\|").trim();
+    L.push("| " + r.n + " | " + r.name + " | " + voteLabel(state.votes[r.n]) + " | "
+      + one(state.assume[r.n]) + " | " + one(state.falsify[r.n]) + " | "
+      + (state.obsType[r.n] || "—") + " | "
+      + (state.obsAvail[r.n] === "yes" ? "가능" : state.obsAvail[r.n] === "no" ? "불가" : "—") + " |");
+  }
+  const conf = conflictList().filter(c => c.hot);
+  L.push("");
+  L.push("### 미해결 충돌: " + (conf.length ? conf.length + "건" : "없음"));
+  for (const c of conf) L.push("- ⚠ " + c.title);
+  L.push("");
+  L.push("## artifact 2 — target architecture (processor list, FlowManager는 밖)");
+  L.push("");
+  L.push("```python");
+  const pre = document.getElementById("procList");
+  L.push(pre.textContent);
+  L.push("```");
+  L.push("");
+  L.push("## artifact 3 — deployment topology (row 17에서 투표된 대로)");
+  const v17 = state.votes[17];
+  L.push("");
+  L.push("- vote: " + voteLabel(v17));
+  L.push("- 형태: " + (v17 === "keep"
+      ? "long-lived process 하나 — WorkerRunner(auto_end=False), 모든 session이 한 loop 위 asyncio.Task, min_agents = 1"
+      : v17 === "adopt"
+      ? "container-per-call — warm pool을 concurrent-call peak로 사이징; min_agents = 1이 warm-pool floor"
+      : "혼합 — long-lived worker 위에 per-call container를 얹고 admission control은 직접"));
+  L.push("- assumption: " + (state.assume[17] || ""));
+  L.push("- falsifier: " + (state.falsify[17] || ""));
+  L.push("- 필수: GatewayCore의 process-scoped MCP subprocess를 worker 위로 재배치 (session마다 respawn 금지).");
+  L.push("");
+  L.push("## artifact 4 — migration sequence (매 step 배포 가능, 한 문장 방어)");
+  L.push("");
+  for (let i = 0; i < state.seq.length; i++){
+    L.push((i+1) + ". " + state.seq[i] + " — " + (state.defence[state.seq[i]] || "(방어 문장 없음)"));
+  }
+  L.push("");
+  L.push("## measurement — tier2-probe.py (실제로 실행한 유일한 측정)");
+  L.push("");
+  if (m){
+    const total = BUDGET.reduce((a,t) => a + (t.k === "rule evaluation" ? m.p50 : t.ms), 0);
+    L.push("- P50: " + m.p50.toFixed(1) + " ms · P95: " + m.p95.toFixed(1) + " ms");
+    L.push("- ch-12 ghost estimate: " + GHOST_LO + "–" + GHOST_HI + " ms → "
+      + (m.p50 >= GHOST_LO && m.p50 <= GHOST_HI ? "안쪽 (견적 유지)"
+        : m.p50 < GHOST_LO ? "아래 (견적이 비관적)" : "위 (견적이 낙관적)"));
+    L.push("- ch-11 worked P50 waterfall, rule evaluation slot 채운 뒤 총합: "
+      + (total/1000).toFixed(2) + " s (목표 P50 ≤ 1.00 s → "
+      + (total > BUDGET_TARGET_P50 ? "초과" : "충족") + ")");
+  } else {
+    L.push("- UNMEASURED. `python3 ch-13/tier2-probe.py --iterations 40`을 돌리고 P50/P95를 붙여 넣어라.");
+  }
+  L.push("");
+  L.push("## watchlist — 실행하지 않은 세 falsifier (blocker 아님)");
+  L.push("");
+  L.push("| # | observation | type | 뒤집을 row | precondition | owner |");
+  L.push("|---|---|---|---|---|---|");
+  for (const wsl of WATCH){
+    L.push("| " + wsl.n + " | " + wsl.obs + " | " + wsl.type + " | " + wsl.rows + " | "
+      + wsl.pre.replace(/<[^>]+>/g, "") + " | " + (state.owners[wsl.n] || "(비어 있음 — 이름 없는 falsifier는 소원이다)") + " |");
+  }
+  return L.join("\n");
+}
+
+/* ============================================================================
+   boot
+   ========================================================================== */
+function renderAll(){
+  renderRowStatus();
+  renderProgress();
+  renderConflicts();
+  drawArch();
+  renderLoc();
+  renderProcList();
+  renderExportGate();
+}
+
+load();
+buildLedger();
+renderWatchlist();
+renderSeq();
+renderAll();
+renderMeasAll();
+
+elTtsWT.value = state.ttsWT || "";
+elTtsWT.addEventListener("change", () => {
+  state.ttsWT = elTtsWT.value; save(); renderConflicts();
+});
+
+document.getElementById("bExport").addEventListener("click", () => {
+  const out = document.getElementById("exportOut");
+  out.textContent = buildExport();
+  out.style.display = "block";
+});
+document.getElementById("bCopy").addEventListener("click", () => {
+  const txt = buildExport();
+  const ta = document.createElement("textarea");
+  ta.value = txt; document.body.appendChild(ta); ta.select();
+  try { document.execCommand("copy"); } catch(e){}
+  document.body.removeChild(ta);
+  const b = document.getElementById("bCopy");
+  const old = b.textContent; b.textContent = "복사됨";
+  setTimeout(() => { b.textContent = old; }, 1200);
+});
+document.getElementById("bReset").addEventListener("click", () => {
+  state.votes = {}; state.assume = {}; state.falsify = {};
+  state.obsType = {}; state.obsAvail = {};
+  state.p50 = ""; state.p95 = ""; state.ttsWT = ""; state.owners = {};
+  state.seq = SEQ_DEFAULT.slice(); state.defence = {};
+  save();
+  elTtsWT.value = "";
+  renderWatchlist(); renderSeq(); renderAll(); renderMeasAll();
+});
+
+let rz;
+window.addEventListener("resize", () => {
+  clearTimeout(rz);
+  rz = setTimeout(() => { drawArch(); drawMeas(); drawBudget(); }, 120);
+});
+</script>
+</body>
+</html>

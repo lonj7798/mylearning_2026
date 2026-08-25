@@ -1,0 +1,1160 @@
+<!--
+  Figure: latency-waterfall.html — "voice-to-voice 예산과 그것을 재는 observer plane"
+  Chapter: pipecat ch-11 (The Latency Budget and the Observer Plane)
+  Back to: ../read.md  (§3 공식, §5 worked budget, §6 observer plane, §7 LatencyBreakdown,
+                        §11 두 boson 스택, §12 ch-12 handoff)
+
+  Fully self-contained: inline CSS + vanilla JS. No CDN, no fetch, no external fonts.
+  Opens directly from file:// .
+
+  모든 상수는 pinned tree(commit 0cbf9c5b031eef06e53f0a193b9a67d60230e6be)에서 읽은 값:
+    services/stt_latency.py          DEFAULT_TTFS_P99=1.0 :38, 측정 상수 23개 :41-64,
+                                     NVIDIA/WHISPER = DEFAULT :67-68,
+                                     "measured with VADParams.stop_secs=0.2" :16-18
+    processors/frame_processor.py    can_generate_metrics() -> False :488-494
+    observers/base_observer.py       BaseObserver :90, 훅 4개 :99 / :111 / :123 / :136,
+                                     FrameProcessed / FramePushed / ProcessorSetUp dataclass
+                                     (read.md §6.2-6.3이 세 클래스 전문을 인용한다)
+    observers/user_bot_latency_observer.py   :143 (350 L), _reset_accumulators :343-350,
+                                     InterruptionFrame arm :257-259,
+                                     _user_stopped_time = None :238,
+                                     first-bot-speech 측정 포기 :244,
+                                     LatencyBreakdown :83
+    services/tts_service.py          text-aggregation window :766-772 / :1099-1101
+    services/openai/base_llm.py      start/stop_processing_metrics :601-613
+    pipeline/pipeline.py             processors_with_metrics :153-167
+    pipeline/worker.py               enable_turn_tracking=True / enable_rtvi=True /
+                                     enable_tracing=False (read.md §0.2, §9)
+    evals/harness.py                 DEFAULT_EVENT_TIMEOUT_MS = 60000 :110-113
+  예산 숫자(0.35 LLM, 0.25 aggregation, 0.18+0.12 TTS, 0.06 transport)는 read.md §5.1의
+  worked P50 표에서 그대로 가져왔다. P50 1.0 s / P95 1.5 s 라인은 Pipecat이 아니라
+  학습자 본인 CLAUDE.md의 목표다 (read.md §2.2-2.3). Pipecat 트리에는 지각 목표 숫자가 없다.
+-->
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>latency waterfall + observer plane (pipecat ch-11)</title>
+<style>
+  /* --- 반응형 타이포 스케일: 태블릿에서 root를 키운다 ------------------- */
+  html{font-size:14px;}
+  @media (pointer:coarse){ html{font-size:17px;} }
+  @media (min-width:1500px){ html{font-size:15.5px;} }
+
+  :root{
+    --bg:#0e1117; --panel:#161b22; --panel2:#1c2230; --edge:#2b3242;
+    --ink:#e6edf3; --ink-dim:#9aa7b4; --ink-faint:#6b7686;
+    --accent:#58a6ff; --accent2:#3fb950; --danger:#f85149; --warn:#d29922;
+    --c-vad:#58a6ff;    /* endpointing            */
+    --c-stt:#3fb950;    /* STT finalization       */
+    --c-rule:#f778ba;   /* rule evaluation (TBD)  */
+    --c-llm:#bc8cff;    /* LLM TTFT / thinking    */
+    --c-agg:#d29922;    /* text aggregation       */
+    --c-tts:#ff9e64;    /* TTS TTFA               */
+    --c-net:#6b7686;    /* transport              */
+  }
+  *{box-sizing:border-box;}
+  html,body{margin:0;padding:0;}
+  body{
+    background:var(--bg); color:var(--ink);
+    font:1rem/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Apple SD Gothic Neo",
+         "Noto Sans KR",Helvetica,Arial,sans-serif;
+    padding:22px; max-width:88rem; margin:0 auto;
+  }
+  h1{font-size:1.5rem; margin:0 0 3px; letter-spacing:.2px;}
+  .sub{color:var(--ink-dim); font-size:0.9286rem; margin:0 0 20px;}
+  .sub code{color:var(--accent);}
+  .panel{background:var(--panel); border:1px solid var(--edge); border-radius:10px;
+    padding:16px; margin-bottom:18px;}
+  .panel h2{font-size:0.8571rem; text-transform:uppercase; letter-spacing:.9px; color:var(--ink-dim);
+    margin:0 0 14px; font-weight:600;}
+  .panel h3{font-size:0.8571rem; color:var(--ink); margin:18px 0 8px; font-weight:600;}
+  .mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+    font-variant-numeric:tabular-nums;}
+  code{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:0.9em;}
+
+  .wrap{display:grid; grid-template-columns:21rem 1fr; gap:18px; align-items:start;}
+  .grid2{display:grid; grid-template-columns:1fr 1fr; gap:18px; align-items:start;}
+  @media (max-width:1000px){ .wrap{grid-template-columns:1fr;} .grid2{grid-template-columns:1fr;} }
+
+  /* ---------- presets ---------- */
+  .presets{display:flex; flex-direction:column; gap:6px; margin-bottom:14px;}
+  .pbtn{background:var(--panel2); border:1px solid var(--edge); color:var(--ink-dim);
+    border-radius:7px; padding:8px 9px; cursor:pointer; font-size:0.8214rem; transition:.13s;
+    line-height:1.35; text-align:left;}
+  .pbtn:hover{border-color:var(--ink-faint); color:var(--ink);}
+  .pbtn.on{background:#1d2b3f; border-color:var(--accent); color:var(--ink);}
+  .pbtn small{display:block; color:var(--ink-faint); font-size:0.7143rem;}
+  .pbtn.on small{color:var(--accent);}
+
+  /* ---------- knobs ---------- */
+  .knob{margin-bottom:11px;}
+  .knob label{display:flex; justify-content:space-between; align-items:baseline;
+    font-size:0.8214rem; color:var(--ink-dim); margin-bottom:3px; gap:6px;}
+  .knob label b{color:var(--ink); font-weight:600;
+    font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:0.8214rem;}
+  .knob label .v{color:var(--accent); font-variant-numeric:tabular-nums;
+    font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; white-space:nowrap;}
+  .knob input[type=range]{width:100%; accent-color:var(--accent); margin:0;}
+  .knob .hint{font-size:0.7143rem; color:var(--ink-faint); line-height:1.45; margin-top:2px;}
+  .knob.tbd label b{color:var(--c-rule);}
+  .knob.tbd input[type=range]{accent-color:var(--c-rule);}
+  .knob .swatch{display:inline-block; width:9px; height:9px; border-radius:2px; margin-right:5px;
+    vertical-align:middle;}
+
+  select{width:100%; background:var(--panel2); color:var(--ink); border:1px solid var(--edge);
+    border-radius:7px; padding:7px 8px; font-size:0.8214rem;
+    font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;}
+  select:focus{outline:none; border-color:var(--accent);}
+
+  .opts{display:flex; flex-direction:column; gap:7px; margin-top:10px;}
+  .opt{display:flex; align-items:flex-start; gap:8px; font-size:0.8214rem; color:var(--ink-dim);
+    cursor:pointer; line-height:1.4;}
+  .opt input{margin:3px 0 0; accent-color:var(--warn); flex:none;}
+  .opt b{color:var(--ink); font-weight:600;}
+
+  .seg{display:flex; gap:5px; margin-top:4px;}
+  .seg button{flex:1 1 auto; background:var(--panel2); border:1px solid var(--edge);
+    color:var(--ink-dim); border-radius:6px; padding:5px 4px; cursor:pointer;
+    font-size:0.7857rem; transition:.13s;
+    font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;}
+  .seg button:hover{border-color:var(--ink-faint); color:var(--ink);}
+  .seg button.on{background:#1d3a5f; border-color:var(--accent); color:#cfe6ff;}
+
+  .runbar{display:flex; gap:7px; margin-top:12px; flex-wrap:wrap;}
+  .rb{flex:1 1 6rem; background:var(--panel2); border:1px solid var(--edge); color:var(--ink);
+    border-radius:7px; padding:9px 6px; cursor:pointer; font-size:0.8571rem; font-weight:600;
+    transition:.13s;}
+  .rb:hover{border-color:var(--accent);}
+  .rb.primary{background:#1d3a5f; border-color:var(--accent); color:#cfe6ff;}
+  .rb.danger{border-color:var(--danger); color:#ffb3ae;}
+
+  /* height는 JS의 CANVAS_H_* 상수와 반드시 같은 값 — 레이아웃 점프 방지 */
+  canvas{width:100%; display:block; border-radius:8px; background:#10151d;
+    border:1px solid var(--edge);}
+  #cvWF{height:320px;}
+  #cvOBS{height:250px;}
+  .legend{display:flex; gap:14px; font-size:0.7857rem; color:var(--ink-dim); margin-top:9px;
+    flex-wrap:wrap;}
+  .legend i{display:inline-block; width:16px; height:10px; border-radius:3px;
+    vertical-align:middle; margin-right:5px;}
+
+  .counters{display:flex; gap:8px; flex-wrap:wrap; margin-top:12px;}
+  .chip2{border:1px solid var(--edge); border-radius:7px; padding:7px 11px; font-size:0.8571rem;
+    background:var(--panel2); color:var(--ink-faint); min-width:8.4rem;}
+  .chip2 b{display:block; font-size:1.2143rem; color:var(--ink); margin-bottom:1px;
+    font-variant-numeric:tabular-nums;
+    font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;}
+  .chip2.bad b{color:var(--danger);}
+  .chip2.good b{color:var(--accent2);}
+  .chip2.warn b{color:var(--warn);}
+
+  pre{background:#10151d; border:1px solid var(--edge); border-radius:8px; padding:13px;
+    overflow-x:auto; font-size:0.8214rem; line-height:1.7; margin:0;
+    font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; white-space:pre;}
+  pre .cm{color:var(--ink-faint);} pre .kw{color:var(--c-llm);} pre .st{color:var(--accent2);}
+  pre .hi{color:var(--c-rule); font-weight:700;} pre .dim{color:var(--ink-faint);}
+  pre .bad{color:var(--danger);} pre .num{color:var(--accent);}
+
+  .evlog{background:#10151d; border:1px solid var(--edge); border-radius:8px; padding:10px;
+    height:15rem; overflow-y:auto; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+    font-size:0.7143rem; line-height:1.7;}
+  .evlog div{white-space:nowrap;}
+  .evlog .push{color:var(--accent);} .evlog .proc{color:var(--ink-faint);}
+  .evlog .met{color:var(--accent2);} .evlog .int{color:var(--danger);}
+  .evlog .skip{color:#4a5361;}
+
+  .callout{border-left:3px solid var(--warn); background:rgba(210,153,34,.07);
+    padding:11px 14px; border-radius:0 7px 7px 0; font-size:0.8929rem; color:var(--ink-dim);
+    margin-top:14px; line-height:1.65;}
+  .callout b{color:var(--ink);}
+  .callout.ok{border-left-color:var(--accent2); background:rgba(63,185,80,.07);}
+  .callout.bad{border-left-color:var(--danger); background:rgba(248,81,73,.07);}
+  .callout.pink{border-left-color:var(--c-rule); background:rgba(247,120,186,.07);}
+  .callout code{color:var(--accent);}
+
+  table{width:100%; border-collapse:collapse; font-size:0.8214rem; margin-top:6px;}
+  th,td{padding:5px 7px; text-align:left; border-bottom:1px solid var(--edge); vertical-align:top;}
+  th{color:var(--ink-faint); font-weight:600; font-size:0.75rem; text-transform:uppercase;
+    letter-spacing:.5px;}
+  td.num{text-align:right; font-variant-numeric:tabular-nums;
+    font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;}
+  td.mono2{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:0.7857rem;}
+  tr.tbd td{color:var(--c-rule);}
+  tr.off td{color:var(--ink-faint);}
+
+  .empty-bar{position:relative; height:2.6rem; border:1px dashed var(--danger); border-radius:7px;
+    background:repeating-linear-gradient(45deg,transparent,transparent 7px,
+      rgba(248,81,73,.07) 7px,rgba(248,81,73,.07) 14px);
+    display:flex; align-items:center; padding:0 12px; font-size:0.8214rem; color:var(--danger);
+    margin-top:8px;}
+  .overlay-note{border:1px dashed var(--ink-faint); border-radius:8px; padding:12px 14px;
+    font-size:0.8214rem; color:var(--ink-dim); line-height:1.6; margin-top:10px;
+    background:rgba(107,118,134,.06);}
+  .overlay-note b{color:var(--ink);}
+
+  .foot{color:var(--ink-faint); font-size:0.8214rem; margin-top:26px; line-height:1.8;}
+  .foot a{color:var(--accent); text-decoration:none;}
+  .foot code{color:var(--ink-dim);}
+</style>
+</head>
+<body>
+
+<h1>voice-to-voice 예산 &amp; observer plane</h1>
+<p class="sub">pipecat <b>ch-11</b> · 왼쪽에서 각 stage를 돌리면 총합이 내
+<code>P50 ≤ 1.0 s</code> / <code>P95 ≤ 1.5 s</code> 라인에 대해 움직인다. rule 노브는 <b>비어 있다</b> —
+그 값은 ch-12에서 네가 매긴다. 오른쪽 아래는 그 예산을 <i>알 수 있게</i> 해 주는 read-only plane.</p>
+
+<!-- ==================== PANEL 1 : WATERFALL ==================== -->
+<div class="panel">
+  <h2>1 · the budget — <code>stop_secs + max(0, TTFS_p99 − stop_secs) + rule + LLM TTFB(+thinking) + text-aggregation + TTS TTFA + transport</code></h2>
+  <div class="wrap">
+    <div>
+      <div class="presets" id="presets"></div>
+
+      <div class="knob">
+        <label><b>STT provider</b> <span class="v" id="vProv">0.35 s</span></label>
+        <select id="selProv"></select>
+        <div class="hint">read-only 참조. 23개 측정 상수의 전체 표·막대그래프·external-endpointing
+          strip은 <b>ch-06 <code>turn-boundary.html</code></b>에 있고 여기서 다시 만들지 않는다.
+          이 figure는 그 표를 <i>한 항</i>으로만 소비한다.</div>
+      </div>
+
+      <div class="knob">
+        <label><b>VADParams.stop_secs</b> <span class="v" id="vStop">0.200 s</span></label>
+        <input type="range" id="rStop" min="0" max="2" step="0.02" value="0.2">
+        <div class="hint">stt_latency.py:16-18 — 모든 상수는 <code>stop_secs=0.2</code>에서 측정됐다.
+          여기서 벗어나면 상수는 네 것이 아니다.</div>
+      </div>
+
+      <div class="knob tbd">
+        <label><b>rule evaluation</b> <span class="v" id="vRule">TBD</span></label>
+        <input type="range" id="rRule" min="0" max="0.6" step="0.005" value="0">
+        <div class="hint">기본값 없음. ch-12가 값을 매긴다. 배치도 ch-12의 결정이다:</div>
+        <div class="seg" id="segRule">
+          <button data-v="blocking" class="on">blocking</button>
+          <button data-v="concurrent">concurrent</button>
+        </div>
+      </div>
+
+      <div class="knob">
+        <label><b>LLM TTFB</b> <span class="v" id="vLLM">0.350 s</span></label>
+        <input type="range" id="rLLM" min="0.05" max="1.5" step="0.005" value="0.35">
+        <div class="hint">repo 상수 없음 — vendor 측정치. read.md §5.1</div>
+      </div>
+
+      <div class="knob">
+        <label><b>text aggregation</b> <span class="v" id="vAgg">0.250 s</span></label>
+        <input type="range" id="rAgg" min="0" max="0.6" step="0.005" value="0.25">
+        <div class="seg" id="segAgg">
+          <button data-v="SENTENCE" class="on">SENTENCE</button>
+          <button data-v="TOKEN">TOKEN</button>
+        </div>
+        <div class="hint">TTS가 여는 window (<code>tts_service.py:766-772 → :1099-1101</code>).
+          턴의 <b>첫 aggregation만</b> 예산에 오른다.</div>
+      </div>
+
+      <div class="knob">
+        <label><b>TTS ttfb</b> <span class="v" id="vTTSb">0.180 s</span></label>
+        <input type="range" id="rTTSb" min="0" max="0.8" step="0.005" value="0.18">
+      </div>
+      <div class="knob">
+        <label><b>leading_silence</b> <span class="v" id="vLead">0.120 s</span></label>
+        <input type="range" id="rLead" min="0" max="0.9" step="0.005" value="0.12">
+        <div class="hint"><code>detect_speech_onset</code>로 잰다.
+          <code>_TTFA_MAX_BUFFER_SECONDS = 3.0</code>를 넘으면 보고를 포기한다.</div>
+      </div>
+
+      <div class="knob">
+        <label><b>transport</b> <span class="v" id="vNet">0.060 s</span></label>
+        <input type="range" id="rNet" min="0" max="0.3" step="0.005" value="0.06">
+      </div>
+
+      <div class="opts">
+        <label class="opt"><input type="checkbox" id="cbTail">
+          <span><b>P95 꼬리</b> — transcript가 safety net 만료 전에 finalize되지 <i>않는</i> 경우.
+            STT 항 = <code>max(0, TTFS_p99 − stop_secs)</code></span></label>
+        <label class="opt"><input type="checkbox" id="cbReason">
+          <span><b>reasoning model</b> — <code>thinking_time = 0.9 s</code>, <code>ttfb = 0.22 s</code>.
+            <code>stop_ttfb_metrics</code>는 reasoning token에서 멈춘다.</span></label>
+        <label class="opt"><input type="checkbox" id="cbTTFA" checked>
+          <span><b>TTFA로 보기</b> — 끄면 <code>leading_silence</code>가 사라진다 (byte-level
+            monitoring이 숨기는 항).</span></label>
+        <label class="opt"><input type="checkbox" id="cbTTFAT" checked>
+          <span><b>TTFAT로 보기</b> — 끄면 <code>ttfb</code>만 센다.
+            reasoning이 켜져 있으면 회귀가 <i>개선</i>처럼 보인다.</span></label>
+      </div>
+    </div>
+
+    <div>
+      <canvas id="cvWF"></canvas>
+      <div class="legend">
+        <span><i style="background:var(--c-vad)"></i>endpointing</span>
+        <span><i style="background:var(--c-stt)"></i>STT finalization</span>
+        <span><i style="background:var(--c-rule)"></i>rule (TBD)</span>
+        <span><i style="background:var(--c-llm)"></i>LLM</span>
+        <span><i style="background:var(--c-agg)"></i>aggregation</span>
+        <span><i style="background:var(--c-tts)"></i>TTS TTFA</span>
+        <span><i style="background:var(--c-net)"></i>transport</span>
+      </div>
+      <div class="counters" id="counters"></div>
+      <div id="verdict"></div>
+      <table id="tblStages">
+        <thead><tr><th>term</th><th>metric class</th><th style="text-align:right">value</th><th>serial?</th></tr></thead>
+        <tbody id="tbStages"></tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+<!-- ==================== PANEL 2 : OBSERVER PLANE ==================== -->
+<div class="panel">
+  <h2>2 · the observer plane — 파이프에 끼어들지 않고 모든 frame 이동을 본다</h2>
+  <div class="wrap">
+    <div>
+      <div class="runbar">
+        <button class="rb primary" id="bPlay">▶ 재생</button>
+        <button class="rb" id="bStep">한 스텝</button>
+      </div>
+      <div class="runbar">
+        <button class="rb danger" id="bInt">InterruptionFrame 주입</button>
+        <button class="rb" id="bReset">리셋</button>
+      </div>
+      <div class="opts">
+        <label class="opt"><input type="checkbox" id="cbRuleProc">
+          <span><b><code>BosonRuleProcessor</code> 삽입</b> — transcript와 LLM 사이,
+            serial. ch-12의 자리.</span></label>
+        <label class="opt"><input type="checkbox" id="cbWrap">
+          <span><b>metrics로 감싸기</b> — <code>can_generate_metrics() → True</code> +
+            <code>start/stop_processing_metrics()</code>
+            (<code>base_llm.py:601-613</code>과 같은 두 줄).</span></label>
+      </div>
+      <div class="callout" style="margin-top:14px">
+        <b><code>can_generate_metrics()</code>는 base에서 <code>False</code></b>
+        (<code>frame_processor.py:488-494</code>). 회색 박스는 frame은 지나가지만 아무것도
+        보고하지 않는 processor다. 트리 전체에서 정의 97개 중 <b>96개가 True</b>, 1개가 False —
+        그 1개가 base class다.
+      </div>
+    </div>
+    <div>
+      <canvas id="cvOBS"></canvas>
+      <div id="obsNote"></div>
+      <div class="grid2" style="margin-top:12px">
+        <div>
+          <h3 style="margin-top:0">observer 이벤트</h3>
+          <div class="evlog" id="evlog"></div>
+        </div>
+        <div>
+          <h3 style="margin-top:0">조립 중인 <code>LatencyBreakdown</code></h3>
+          <pre id="lbOut"></pre>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ==================== PANEL 3 : THE EMPTY ROW ==================== -->
+<div class="panel">
+  <h2>3 · 이 트리에 없는 두 개의 숫자</h2>
+  <div class="grid2">
+    <div>
+      <h3 style="margin-top:0">한국어 STT · 8 kHz μ-law telephony</h3>
+      <div class="empty-bar" id="korBar">항목 없음 — 나쁜 항목이 아니라, <b style="margin:0 4px">없는</b> 항목</div>
+      <div class="overlay-note">
+        <code>stt_latency.py</code>의 23개 상수 중 어느 것도 한국어도, 8 kHz μ-law도 아니다.
+        이 막대는 비어 있는 것이 맞고, 채우는 방법은 하나뿐이다 — <b>재고
+        <code>ttfs_p99_latency=</code>로 넘긴다.</b> 넘기지 않으면 서비스는 경고 후
+        <code>DEFAULT_TTFS_P99 = 1.0</code>으로 떨어진다.
+        <div style="margin-top:8px"><code class="mono">stt = DeepgramSTTService(api_key="...", ttfs_p99_latency=0.45)</code></div>
+      </div>
+    </div>
+    <div>
+      <h3 style="margin-top:0">Pipecat의 지각 목표 숫자</h3>
+      <div class="overlay-note">
+        <b>트리 전체에 없다.</b> <code>README.md:29</code>는 "Ultra-low latency interaction" 한 줄이고,
+        eval harness의 유일한 latency 상수는 <code>DEFAULT_EVENT_TIMEOUT_MS = 60000</code> —
+        latency로 <i>실패하지 않게</i> 일부러 넉넉히 잡은 test timeout이다
+        (<code>evals/harness.py:110-113</code>). release-eval scenario 38개 중
+        <code>within_ms</code>를 쓰는 건 2개뿐이고 둘 다 40 s 이상이다.
+        <div style="margin-top:8px">그래서 이 figure의 두 세로선은 Pipecat이 아니라
+        <b>네 CLAUDE.md</b>에서 왔다: P50 ≤ 1.0 s, P95 ≤ 1.5 s, 마지막 유성 sample →
+        첫 가청 assistant sample.</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<p class="foot">
+  ← <a href="../read.md">ch-11 read.md</a> ·
+  provider 표 원본: <a href="../../ch-06/figures/turn-boundary.html">ch-06 turn-boundary.html</a> ·
+  다음: <a href="../../ch-12/read.md">ch-12</a>가 <code>rule evaluation</code> 칸을 채운다.<br>
+  숫자 출처: <code>src/pipecat/services/stt_latency.py</code>(23 measured constants + <code>DEFAULT_TTFS_P99</code>),
+  read.md §5.1의 worked P50 표, <code>observers/user_bot_latency_observer.py</code>,
+  <code>processors/frame_processor.py:488-494</code>. pinned commit <code>0cbf9c5b</code>.
+</p>
+
+<script>
+"use strict";
+/* ===================== 상수 ===================== */
+/* canvas 논리 높이는 절대 캔버스에서 되읽지 않는다 — 상수로만 잡는다 */
+const CANVAS_H_WF  = 320;
+const CANVAS_H_OBS = 250;
+
+/* stt_latency.py :38, :41-64, :67-68 — 측정 23개 + DEFAULT + 로컬 2개 */
+const DEFAULT_TTFS_P99 = 1.0;
+const TTFS = [
+  {k:"ASSEMBLYAI",          v:0.42, ln:41},
+  {k:"AWS_TRANSCRIBE",      v:1.90, ln:42},
+  {k:"AZURE",               v:1.80, ln:43},
+  {k:"CARTESIA",            v:0.81, ln:44},
+  {k:"DEEPGRAM",            v:0.35, ln:45},
+  {k:"DEEPGRAM_SAGEMAKER",  v:0.35, ln:46},
+  {k:"ELEVENLABS",          v:2.01, ln:47},
+  {k:"ELEVENLABS_REALTIME", v:0.41, ln:48},
+  {k:"FAL",                 v:2.07, ln:49},
+  {k:"GLADIA",              v:1.49, ln:50},
+  {k:"GOOGLE",              v:1.57, ln:51},
+  {k:"GRADIUM",             v:0.62, ln:52},
+  {k:"GROQ",                v:1.54, ln:53},
+  {k:"MISTRAL",             v:1.89, ln:54},
+  {k:"OPENAI",              v:2.01, ln:55},
+  {k:"OPENAI_REALTIME",     v:1.66, ln:56},
+  {k:"SARVAM",              v:1.17, ln:57},
+  {k:"SARVAM_REALTIME",     v:1.00, ln:59, note:"provisional"},
+  {k:"SMALLEST",            v:1.59, ln:60},
+  {k:"SONIOX",              v:0.35, ln:61},
+  {k:"SPEECHMATICS",        v:0.74, ln:62},
+  {k:"XAI",                 v:2.14, ln:63},
+  {k:"TOGETHER",            v:1.00, ln:64},
+  {k:"NVIDIA",              v:DEFAULT_TTFS_P99, ln:67, note:"= DEFAULT, local"},
+  {k:"WHISPER",             v:DEFAULT_TTFS_P99, ln:68, note:"= DEFAULT, local"}
+];
+
+const P50_LINE = 1.0, P95_LINE = 1.5;   /* 학습자 CLAUDE.md. Pipecat 아님. */
+
+const PRESETS = [
+  {id:"pipecat", name:"Pipecat + streaming STT",
+   sub:"read.md §5.1의 worked P50 — 총 1.16 s, rule 칸은 빈 채로",
+   s:{mode:"pipecat", prov:"DEEPGRAM", stop:0.2, tail:false, rule:0, ruleMode:"blocking",
+      llm:0.35, reason:false, agg:0.25, aggMode:"SENTENCE", ttsb:0.18, lead:0.12, net:0.06}},
+  {id:"rtv", name:"realtime_voice + unary ASR",
+   sub:"transcription RTT 전체가 VAD stop 뒤 critical path에 — short-circuit 없음",
+   s:{mode:"rtv", prov:"DEEPGRAM", stop:0.2, tail:false, rule:0, ruleMode:"blocking",
+      llm:0.35, reason:false, agg:0.25, aggMode:"SENTENCE", ttsb:0.18, lead:0.12, net:0.06}},
+  {id:"boson", name:"boson 현재 text path",
+   sub:"server-side STT/TTS/VAD 없음 · end-of-turn은 2000 ms text-silence timer",
+   s:{mode:"boson", prov:"DEEPGRAM", stop:2.0, tail:false, rule:0, ruleMode:"blocking",
+      llm:0.35, reason:false, agg:0, aggMode:"SENTENCE", ttsb:0, lead:0, net:0.06}}
+];
+
+/* realtime_voice: openai_compat.py L194-242 — timeout_seconds=1.5 는 상한이지 측정값이 아니다 */
+const UNARY_TIMEOUT = 1.5;
+/* read.md §5.3 — reasoning trap */
+const REASON_TTFB = 0.22, REASON_THINKING = 0.9;
+
+const S = {
+  mode:"pipecat", prov:"DEEPGRAM", stop:0.2, tail:false,
+  rule:0, ruleMode:"blocking",
+  llm:0.35, reason:false,
+  agg:0.25, aggMode:"SENTENCE",
+  ttsb:0.18, lead:0.12, net:0.06,
+  showTTFA:true, showTTFAT:true,
+  preset:"pipecat"
+};
+
+/* ===================== canvas 셋업 ===================== */
+function setupCanvas(cv, CH){
+  const r = window.devicePixelRatio || 1;
+  const w = Math.max(cv.clientWidth, 200), h = CH;
+  if (cv.width !== Math.round(w*r) || cv.height !== Math.round(h*r)){
+    cv.width = Math.round(w*r); cv.height = Math.round(h*r);
+  }
+  cv.style.height = h + "px";
+  const c = cv.getContext("2d");
+  c.setTransform(r,0,0,r,0,0);
+  c.clearRect(0,0,w,h);
+  return {c, w, h};
+}
+function css(n){ return getComputedStyle(document.documentElement).getPropertyValue(n).trim(); }
+function fmt(v){ return v.toFixed(3) + " s"; }
+function ms(v){ return Math.round(v*1000) + " ms"; }
+function ttfsOf(key){ const e = TTFS.find(x => x.k === key); return e ? e.v : DEFAULT_TTFS_P99; }
+
+/* ===================== 예산 모델 ===================== */
+function stages(){
+  const ttfs = ttfsOf(S.prov), out = [];
+
+  out.push({
+    id:"vad", col:"--c-vad",
+    label: S.mode === "boson" ? "text-silence timer" : "endpointing",
+    ident: S.mode === "boson" ? "PartialDetector.should_finalize(elapsed) >= 2000"
+                              : "VADParams.stop_secs",
+    metric:"user_turn_secs 안에 융합",
+    v:S.stop, serial:true
+  });
+
+  if (S.mode === "boson"){
+    out.push({id:"stt", col:"--c-stt", label:"STT finalization",
+      ident:"server-side STT 없음 — client가 text partial을 보낸다",
+      metric:"—", v:0, serial:true, off:true});
+  } else if (S.mode === "rtv"){
+    out.push({id:"stt", col:"--c-stt", label:"unary transcription RTT",
+      ident:"OpenAICompatibleUnaryASR.finalize() — 매 턴 전액 지불, short-circuit 없음",
+      metric:"측정값 없음 · timeout_seconds=1.5 는 상한",
+      v:UNARY_TIMEOUT, serial:true, hatch:true});
+  } else {
+    out.push({id:"stt", col:"--c-stt", label:"STT finalization",
+      ident:"max(0, " + S.prov + "_TTFS_P99 " + ttfs.toFixed(2) + " − stop_secs)",
+      metric:"TTFBMetricsData(processor=STT)",
+      v: S.tail ? Math.max(0, ttfs - S.stop) : 0, serial:true,
+      note: S.tail ? null : "P50: 확정 transcript가 타이머를 취소한다"});
+  }
+
+  out.push({id:"rule", col:"--c-rule", label:"rule evaluation",
+    ident: S.ruleMode === "blocking" ? "ch-12 — TBD, 네가 매긴다"
+                                     : "concurrent: 예산 0, 대신 stage 전환이 한 턴 늦는다",
+    metric:"ProcessingMetricsData",
+    v:S.rule, serial:(S.ruleMode === "blocking"), tbd:true});
+
+  if (S.reason && S.showTTFAT){
+    out.push({id:"llm", col:"--c-llm", label:"LLM ttfat",
+      ident:"ttfb " + REASON_TTFB.toFixed(2) + " + thinking_time " + REASON_THINKING.toFixed(2),
+      metric:"TTFATMetricsData(ttfat, ttfb, thinking_time)",
+      v:REASON_TTFB + REASON_THINKING, serial:true});
+  } else if (S.reason){
+    out.push({id:"llm", col:"--c-llm", label:"LLM ttfb",
+      ident:"stop_ttfb_metrics 가 reasoning token에서 멈췄다 — thinking 0.90 s는 안 보인다",
+      metric:"TTFBMetricsData(processor=LLM)",
+      v:REASON_TTFB, serial:true, lying:true});
+  } else {
+    out.push({id:"llm", col:"--c-llm", label:"LLM TTFB",
+      ident:"repo 상수 없음 — vendor 측정치",
+      metric:"TTFBMetricsData(processor=LLM)", v:S.llm, serial:true});
+  }
+
+  out.push({id:"agg", col:"--c-agg", label:"text aggregation",
+    ident:"TextAggregationMode." + S.aggMode + " · 턴의 첫 aggregation만",
+    metric:"TextAggregationBreakdownMetrics",
+    v: S.mode === "boson" ? 0 : S.agg, serial:true, off:(S.mode === "boson")});
+
+  const ttfa = S.showTTFA ? S.ttsb + S.lead : S.ttsb;
+  out.push({id:"tts", col:"--c-tts",
+    label: S.showTTFA ? "TTS ttfa" : "TTS ttfb",
+    ident: S.mode === "boson" ? "server-side TTS 없음"
+         : (S.showTTFA ? "ttfb " + S.ttsb.toFixed(2) + " + leading_silence " + S.lead.toFixed(2)
+                       : "leading_silence " + S.lead.toFixed(2) + " s 를 안 세고 있다"),
+    metric: S.showTTFA ? "TTFAMetricsData" : "TTFBMetricsData(processor=TTS)",
+    v: S.mode === "boson" ? 0 : ttfa, serial:true,
+    off:(S.mode === "boson"), lying:(!S.showTTFA && S.lead > 0 && S.mode !== "boson")});
+
+  out.push({id:"net", col:"--c-net", label:"transport",
+    ident:"40 ms chunk + serializer + network",
+    metric:"측정 안 됨 — resample 지점 둘 다 blind",
+    v:S.net, serial:true});
+
+  return out;
+}
+function totalOf(st){ return st.reduce((a,x) => a + (x.serial ? x.v : 0), 0); }
+
+/* ===================== waterfall 그리기 ===================== */
+function drawWF(){
+  const cv = document.getElementById("cvWF");
+  const {c, w} = setupCanvas(cv, CANVAS_H_WF);
+  const st = stages(), total = totalOf(st);
+  const padL = 138, padR = 14;
+  const sMax = Math.max(total * 1.12, P95_LINE * 1.18, 1.8);
+  const x = t => padL + (t / sMax) * (w - padL - padR);
+  const mono = "11px ui-monospace,SFMono-Regular,Menlo,Consolas,monospace";
+
+  /* --- 축 --- */
+  c.strokeStyle = css("--edge"); c.lineWidth = 1;
+  c.beginPath(); c.moveTo(padL, 22.5); c.lineTo(w - padR, 22.5); c.stroke();
+  c.font = "10px ui-monospace,SFMono-Regular,Menlo,Consolas,monospace";
+  c.fillStyle = css("--ink-faint"); c.textAlign = "center";
+  for (let t = 0; t <= sMax + 1e-9; t += 0.5){
+    c.beginPath(); c.moveTo(x(t), 18); c.lineTo(x(t), 22.5); c.stroke();
+    c.fillText(t.toFixed(1) + "s", x(t), 13);
+  }
+
+  const y0 = 32, rowH = 25, bodyBottom = y0 + st.length * rowH;
+
+  /* --- P50 / P95 세로선 --- */
+  [[P50_LINE, "--accent2", "P50 1.0"], [P95_LINE, "--warn", "P95 1.5"]].forEach(([t, col, lab]) => {
+    if (t > sMax) return;
+    c.save(); c.setLineDash([4,3]); c.strokeStyle = css(col); c.lineWidth = 1.5;
+    c.beginPath(); c.moveTo(x(t), 24); c.lineTo(x(t), CANVAS_H_WF - 26); c.stroke(); c.restore();
+    c.fillStyle = css(col); c.font = "10px ui-monospace,SFMono-Regular,Menlo,Consolas,monospace";
+    c.textAlign = "left"; c.fillText(lab, x(t) + 4, CANVAS_H_WF - 15);
+  });
+
+  /* --- stage 행 (진짜 waterfall: 각 행이 누적 offset에서 시작) --- */
+  let cum = 0;
+  st.forEach((s, i) => {
+    const y = y0 + i * rowH;
+    c.textAlign = "right"; c.font = mono;
+    c.fillStyle = s.tbd ? css("--c-rule") : (s.off ? css("--ink-faint") : css("--ink-dim"));
+    c.fillText(s.label, padL - 8, y + 13);
+
+    /* 지나온 시간 = 얇은 회색 rail */
+    if (cum > 0){
+      c.fillStyle = "rgba(107,118,134,.18)";
+      c.fillRect(x(0), y + 6, x(cum) - x(0), 11);
+    }
+    const wpx = Math.max(x(cum + s.v) - x(cum), s.v > 0 ? 2 : 0);
+    if (s.serial && s.v > 0){
+      c.fillStyle = css(s.col);
+      c.globalAlpha = s.hatch ? 0.35 : 1;
+      c.fillRect(x(cum), y + 4, wpx, 15);
+      c.globalAlpha = 1;
+      if (s.hatch){
+        c.save(); c.strokeStyle = css(s.col); c.lineWidth = 1;
+        c.beginPath();
+        for (let px = x(cum); px < x(cum) + wpx; px += 6){
+          c.moveTo(px, y + 19); c.lineTo(Math.min(px + 9, x(cum) + wpx), y + 4);
+        }
+        c.stroke(); c.restore();
+      }
+      if (s.lying){
+        c.strokeStyle = css("--danger"); c.setLineDash([3,2]); c.lineWidth = 1.4;
+        c.strokeRect(x(cum) + .5, y + 4.5, wpx - 1, 14); c.setLineDash([]);
+      }
+      cum += s.v;
+    } else if (!s.serial && s.v > 0){
+      c.save(); c.setLineDash([3,3]); c.strokeStyle = css(s.col); c.lineWidth = 1.2;
+      c.strokeRect(x(cum) + .5, y + 4.5, Math.max(wpx, 3), 14); c.restore();
+    } else if (s.v === 0){
+      c.strokeStyle = css("--edge"); c.setLineDash([2,3]);
+      c.beginPath(); c.moveTo(x(cum), y + 11.5); c.lineTo(x(cum) + 26, y + 11.5); c.stroke();
+      c.setLineDash([]);
+    }
+
+    c.textAlign = "left";
+    c.font = "10px ui-monospace,SFMono-Regular,Menlo,Consolas,monospace";
+    c.fillStyle = s.v === 0 ? css("--ink-faint") : css("--ink");
+    const tag = (s.tbd && s.v === 0) ? "TBD" : ms(s.v);
+    c.fillText(tag, Math.max(x(cum) + 6, padL + 30), y + 14);
+  });
+
+  /* --- 합계 막대 --- */
+  const ty = bodyBottom + 8;
+  c.strokeStyle = css("--edge");
+  c.beginPath(); c.moveTo(padL - 130, ty - 5.5); c.lineTo(w - padR, ty - 5.5); c.stroke();
+  c.textAlign = "right"; c.font = "bold " + mono; c.fillStyle = css("--ink");
+  c.fillText("voice-to-voice", padL - 8, ty + 15);
+  let cx = 0;
+  st.forEach(s => {
+    if (!s.serial || s.v <= 0) return;
+    c.fillStyle = css(s.col);
+    c.fillRect(x(cx), ty + 3, Math.max(x(cx + s.v) - x(cx), 1), 17);
+    cx += s.v;
+  });
+  c.strokeStyle = total <= P50_LINE ? css("--accent2") : (total <= P95_LINE ? css("--warn") : css("--danger"));
+  c.lineWidth = 1.5; c.strokeRect(x(0) + .5, ty + 3.5, Math.max(x(total) - x(0) - 1, 1), 16);
+  c.textAlign = "left"; c.fillStyle = c.strokeStyle; c.font = "bold " + mono;
+  c.fillText(total.toFixed(3) + " s", x(total) + 7, ty + 16);
+
+  /* --- overlap band: 예산에 오르지 않는 겹치는 작업 --- */
+  const oy = ty + 34;
+  c.textAlign = "right"; c.font = "10px ui-monospace,SFMono-Regular,Menlo,Consolas,monospace";
+  c.fillStyle = css("--ink-faint");
+  c.fillText("overlap (미계상)", padL - 8, oy + 11);
+  const ov = [];
+  if (!st[2].serial && st[2].v > 0)
+    ov.push(["rule (concurrent) — 전환은 한 턴 늦게", "--c-rule"]);
+  ov.push(["LLM 나머지 token", "--c-llm"]);
+  ov.push(["TTS 2번째 문장 이후", "--c-tts"]);
+  ov.push(["aggregation 2회차 이후", "--c-agg"]);
+  let ox = padL + 4;
+  c.textAlign = "left";
+  ov.forEach(([lab, col]) => {
+    const bw = c.measureText(lab).width + 12;
+    if (ox + bw > w - padR) return;
+    c.save(); c.setLineDash([2,2]); c.strokeStyle = css(col); c.lineWidth = 1;
+    c.strokeRect(ox + .5, oy + 2.5, bw, 13); c.restore();
+    c.fillStyle = css("--ink-faint");
+    c.fillText(lab, ox + 6, oy + 12);
+    ox += bw + 8;
+  });
+  c.fillStyle = css("--ink-faint"); c.textAlign = "left";
+  c.font = "10px -apple-system,BlinkMacSystemFont,'Noto Sans KR',sans-serif";
+  c.fillText("첫 가청 sample까지의 경로만 예산이다. 나머지 생성/합성은 재생과 겹쳐서 흐르므로 세지 않는다.",
+             padL - 130, CANVAS_H_WF - 36);
+}
+
+/* ===================== waterfall 옆 DOM ===================== */
+function renderWFDom(){
+  const st = stages(), total = totalOf(st);
+  const llm = st.find(s => s.id === "llm").v;
+  const head = st[0].v + st[1].v, tail3 = st[4].v + st[5].v;
+
+  const box = document.getElementById("counters");
+  const cls = total <= P50_LINE ? "good" : (total <= P95_LINE ? "warn" : "bad");
+  box.innerHTML =
+    '<div class="chip2 ' + cls + '"><b>' + total.toFixed(3) + ' s</b>voice-to-voice</div>' +
+    '<div class="chip2 ' + (total <= P50_LINE ? "good" : "bad") + '"><b>' +
+      (total - P50_LINE >= 0 ? "+" : "−") + Math.abs(total - P50_LINE).toFixed(3) +
+      '</b>vs P50 1.0 s</div>' +
+    '<div class="chip2 ' + (total <= P95_LINE ? "good" : "bad") + '"><b>' +
+      (total - P95_LINE >= 0 ? "+" : "−") + Math.abs(total - P95_LINE).toFixed(3) +
+      '</b>vs P95 1.5 s</div>' +
+    '<div class="chip2"><b>' + (total > 0 ? Math.round(llm / total * 100) : 0) +
+      ' %</b>LLM 지분</div>' +
+    '<div class="chip2"><b>' + (total > 0 ? Math.round((head + tail3) / total * 100) : 0) +
+      ' %</b>endpointing+STT+agg+TTS</div>';
+
+  const v = document.getElementById("verdict");
+  let cl = "callout", txt;
+  if (st[2].v === 0){
+    cl = "callout pink";
+    txt = "<b>rule 칸은 비어 있다.</b> 이 총합은 <i>rule 값이 0일 때의</i> 총합이다. " +
+          "ch-12에서 blocking rule 하나가 붙으면 이 막대는 그만큼 오른쪽으로 밀린다. " +
+          "지금 네가 가진 것은 답이 아니라 <b>분모</b>다.";
+  } else if (total <= P50_LINE){
+    cl = "callout ok";
+    txt = "<b>P50 안.</b> rule에 " + ms(st[2].v) + "를 실었는데도 1.0 s 아래다. " +
+          (S.tail ? "꼬리까지 켠 상태라면 이건 진짜다."
+                  : "단, 지금은 P50 가정이다 — <b>P95 꼬리</b>를 켜고 다시 봐라.");
+  } else if (total <= P95_LINE){
+    cl = "callout";
+    txt = "<b>P50은 넘었고 P95는 안쪽.</b> 단일 라인만 봤으면 이 상태를 놓친다 — " +
+          "그래서 이 figure는 선을 두 개 긋는다.";
+  } else {
+    cl = "callout bad";
+    txt = "<b>P95도 넘었다.</b> 어느 항이 밀었는지 표에서 확인해라. " +
+          "LLM은 지금 " + Math.round(llm / total * 100) + " % 다.";
+  }
+  if (S.mode === "rtv"){
+    cl = "callout bad";
+    txt = "<b>unary ASR:</b> <code>max(0, TTFS_p99 − stop_secs)</code>라는 <i>꼬리</i> 항이 " +
+          "매 턴 전액 지불되는 <b>전사 round-trip</b>으로 바뀐다. interim 결과가 없으니 " +
+          "short-circuit도 없다. 막대에 그려진 1.5 s는 측정값이 아니라 " +
+          "<code>timeout_seconds</code> 상한이다 — 그래서 빗금이다.";
+  } else if (S.mode === "boson" && st[2].v === 0){
+    cl = "callout pink";
+    txt = "<b>boson 현재 text path:</b> endpointing이 2000 ms 고정 text-silence timer 하나다. " +
+          "그 자리를 <code>stop_secs 0.2 + max(0, TTFS_p99 − 0.2)</code>로 바꾸면 빠른 provider 기준 " +
+          "약 0.35 s — <i>줄어든다</i>. 대신 server-side STT/TTS가 새 항으로 <i>추가된다</i>. " +
+          "그리고 1,206 LOC의 layer/rule은 지금 완전히 untimed다.";
+  }
+  v.innerHTML = '<div class="' + cl + '">' + txt + '</div>';
+
+  const tb = document.getElementById("tbStages");
+  tb.innerHTML = st.map(s =>
+    '<tr class="' + (s.tbd && s.v === 0 ? "tbd" : (s.off ? "off" : "")) + '">' +
+    '<td><b>' + s.label + '</b><br><span style="color:var(--ink-faint);font-size:0.7857rem">' +
+      s.ident + (s.note ? " · " + s.note : "") + '</span></td>' +
+    '<td class="mono2">' + s.metric + '</td>' +
+    '<td class="num">' + ((s.tbd && s.v === 0) ? "TBD" : ms(s.v)) + '</td>' +
+    '<td class="mono2">' + (s.v === 0 ? "—" : (s.serial ? "serial" : "overlap")) + '</td></tr>'
+  ).join("") +
+  '<tr><td colspan="2" style="text-align:right"><b>total (serial only)</b></td>' +
+  '<td class="num"><b>' + ms(total) + '</b></td><td></td></tr>';
+
+  document.getElementById("vStop").textContent = fmt(S.stop);
+  document.getElementById("vRule").textContent = S.rule === 0 ? "TBD — ch-12에서 매긴다" : ms(S.rule);
+  document.getElementById("vLLM").textContent  = S.reason ? "reasoning 모드" : fmt(S.llm);
+  document.getElementById("vAgg").textContent  = fmt(S.agg);
+  document.getElementById("vTTSb").textContent = fmt(S.ttsb);
+  document.getElementById("vLead").textContent = fmt(S.lead);
+  document.getElementById("vNet").textContent  = fmt(S.net);
+  const e = TTFS.find(z => z.k === S.prov);
+  document.getElementById("vProv").textContent =
+    e.v.toFixed(2) + " s · :" + e.ln + (e.note ? " (" + e.note + ")" : "");
+}
+function redrawWF(){ drawWF(); renderWFDom(); }
+
+/* ===================== observer plane ===================== */
+/* can_generate_metrics(): base FrameProcessor는 False(:488-494).
+   service들만 override해서 True를 돌려준다 — 그래서 aggregator/transport는 회색. */
+function procs(){
+  const p = [
+    {n:"transport_in",  cls:"BaseInputTransport",   m:false},
+    {n:"stt",           cls:"DeepgramSTTService",   m:true},
+    {n:"user_agg",      cls:"LLMUserAggregator",    m:false},
+    {n:"llm",           cls:"OpenAILLMService",     m:true},
+    {n:"tts",           cls:"CartesiaTTSService",   m:true},
+    {n:"transport_out", cls:"BaseOutputTransport",  m:false},
+    {n:"asst_agg",      cls:"LLMAssistantAggregator", m:false}
+  ];
+  if (OBS.rule) p.splice(3, 0, {n:"rules", cls:"BosonRuleProcessor", m:OBS.wrap, ins:true});
+  return p;
+}
+
+/* 한 스텝 = FramePushed(from→to) + 도착 processor의 FrameProcessed */
+function script(){
+  const s = [];
+  const push = (f, from, to, fx) => s.push({f, from, to, fx});
+  push("VADUserStoppedSpeakingFrame", "transport_in", "stt",      "turn_start");
+  push("TranscriptionFrame",          "stt",          "user_agg", "stt_ttfb");
+  if (OBS.rule){
+    push("LLMContextFrame",           "user_agg",     "rules",    "rule_start");
+    push("LLMContextFrame",           "rules",        "llm",      "rule_stop");
+  } else {
+    push("LLMContextFrame",           "user_agg",     "llm",      null);
+  }
+  push("LLMFullResponseStartFrame",   "llm",          "tts",      null);
+  push("LLMTextFrame",                "llm",          "tts",      "llm_ttfb");
+  push("TextFrame",                   "llm",          "tts",      "agg_open");
+  push("TTSAudioRawFrame",            "tts",          "transport_out", "tts_ttfb");
+  push("BotStartedSpeakingFrame",     "transport_out","asst_agg", "emit");
+  return s;
+}
+
+const OBS = {
+  i:0, rule:false, wrap:false, playing:false, timer:null,
+  lb:null, log:[], flash:null
+};
+function freshLB(){
+  return {user_turn_secs:null, ttfb:[], text_aggregation:null,
+          function_calls:[], _aggOpen:false, _ruleOpen:false, _proc:[], done:false};
+}
+OBS.lb = freshLB();
+
+function logLine(kind, txt){
+  OBS.log.push({kind, txt});
+  if (OBS.log.length > 90) OBS.log.shift();
+}
+function renderLog(){
+  const el = document.getElementById("evlog");
+  el.innerHTML = OBS.log.map(l => '<div class="' + l.kind + '">' + l.txt + '</div>').join("");
+  el.scrollTop = el.scrollHeight;
+}
+function renderLB(){
+  const b = OBS.lb, st = stages();
+  const num = v => '<span class="num">' + v + '</span>';
+  const nil = '<span class="dim">None</span>';
+  let s = '<span class="kw">LatencyBreakdown</span>(\n';
+  s += '  user_turn_secs=' + (b.user_turn_secs === null ? nil : num(b.user_turn_secs.toFixed(3))) + ',\n';
+  s += '  ttfb=[' + (b.ttfb.length === 0 ? '' : '\n') +
+       b.ttfb.map(t => '    TTFBBreakdownMetrics(processor=<span class="st">"' + t.p +
+                       '"</span>, value=' + num(t.v.toFixed(3)) + '),').join('\n') +
+       (b.ttfb.length ? '\n  ' : '') + '],\n';
+  s += '  text_aggregation=' + (b.text_aggregation === null ? nil :
+       '<span class="kw">TextAggregationBreakdownMetrics</span>(value=' +
+       num(b.text_aggregation.toFixed(3)) + ')') + ',\n';
+  s += '  function_calls=[],   <span class="cm"># tool result로 답하는 턴이면 여기가 채워지고</span>\n';
+  s += '                       <span class="cm"># LLM은 추론을 두 번 돌려 ttfat를 두 번 보고한다</span>\n';
+  s += ')\n';
+  if (b._proc.length){
+    s += '\n<span class="cm"># LatencyBreakdown이 아니라 console log / RTVI "processing" 으로 간다</span>\n';
+    s += b._proc.map(p => '<span class="hi">ProcessingMetricsData</span>(processor=<span class="st">"' +
+         p.p + '"</span>, value=' + num(p.v.toFixed(3)) + ')').join('\n') + '\n';
+  } else if (OBS.rule && !OBS.wrap){
+    s += '\n<span class="bad"># rules 의 비용이 여기 없다. ttfb["stt"] 와 ttfb["llm"] 사이의</span>\n';
+    s += '<span class="bad"># 설명되지 않는 gap으로 나타나고, 너는 하루를 network 탓하며 쓴다.</span>\n';
+  }
+  if (b.done){
+    const tot = totalOf(st);
+    s += '\n<span class="cm"># on_latency_measured / on_latency_breakdown 발화</span>\n';
+    s += '<span class="cm"># VADUserStoppedSpeakingFrame → BotStartedSpeakingFrame = </span>' +
+         num(tot.toFixed(3)) + '\n';
+    s += '<span class="bad"># 주의: 이 끝점은 첫 가청 sample이 아니라 첫 audio frame이다 —</span>\n';
+    s += '<span class="bad"># leading_silence ' + S.lead.toFixed(3) + ' s 만큼 낙관적이다.</span>\n';
+  }
+  document.getElementById("lbOut").innerHTML = s;
+}
+
+function obsApply(fx, ev){
+  const st = stages(), val = id => { const x = st.find(z => z.id === id); return x ? x.v : 0; };
+  const b = OBS.lb;
+  if (fx === "turn_start"){
+    b.user_turn_secs = null;
+    logLine("proc", "  └ 시계 시작: _user_stopped_time = obj_start_time()");
+  } else if (fx === "stt_ttfb"){
+    b.user_turn_secs = val("vad") + val("stt");
+    b.ttfb.push({p:"DeepgramSTTService#0", v:val("stt")});
+    logLine("met", "  └ TTFBMetricsData(stt) + user_turn_secs  ← stop_secs + STT finalization 융합");
+  } else if (fx === "rule_start"){
+    if (OBS.wrap){ b._ruleOpen = true; logLine("met", "  └ start_processing_metrics()  <BosonRuleProcessor>"); }
+    else logLine("skip", "  └ (window 안 엶 — can_generate_metrics()가 False라 두 호출 모두 no-op)");
+  } else if (fx === "rule_stop"){
+    if (OBS.wrap){
+      b._ruleOpen = false;
+      b._proc.push({p:"BosonRuleProcessor#0", v:val("rule")});
+      logLine("met", "  └ stop_processing_metrics() → ProcessingMetricsData " + ms(val("rule")));
+    } else {
+      logLine("skip", "  └ " + ms(val("rule")) + " 가 사라졌다 — 아무 metric에도 안 잡힘");
+    }
+  } else if (fx === "llm_ttfb"){
+    b.ttfb.push({p:"OpenAILLMService#0", v:val("llm")});
+    logLine("met", "  └ TTFBMetricsData(llm)" +
+      (S.reason ? "  ← reasoning token에서 멈춘 시계. ttfat는 TTFATMetricsData에만 있다" : ""));
+  } else if (fx === "agg_open"){
+    b._aggOpen = true;
+    logLine("proc", "  └ tts_service.py:766 start_text_aggregation_metrics()");
+  } else if (fx === "tts_ttfb"){
+    if (b._aggOpen){ b.text_aggregation = val("agg"); b._aggOpen = false;
+      logLine("met", "  └ tts_service.py:1099 첫 non-TOKEN aggregate → text_aggregation 확정"); }
+    b.ttfb.push({p:"CartesiaTTSService#0", v:val("tts")});
+    logLine("met", "  └ TTFBMetricsData(tts)");
+  } else if (fx === "emit"){
+    b.done = true;
+    logLine("met", "★ on_latency_measured + on_latency_breakdown → _reset_accumulators()");
+  }
+}
+
+function obsStep(){
+  const sc = script();
+  if (OBS.i >= sc.length){ obsStop(); return; }
+  const ev = sc[OBS.i];
+  const pl = procs();
+  const dest = pl.find(p => p.n === ev.to);
+  logLine("push", "on_push_frame(FramePushed(src=" + ev.from + ", dst=" + ev.to +
+                  ", frame=" + ev.f + "))");
+  logLine("proc", "on_process_frame(FrameProcessed(processor=" + ev.to + ", frame=" + ev.f + "))" +
+                  (dest && !dest.m ? "   [can_generate_metrics()=False]" : ""));
+  obsApply(ev.fx, ev);
+  OBS.flash = {from:ev.from, to:ev.to, f:ev.f};
+  OBS.i++;
+  drawOBS(); renderLog(); renderLB();
+}
+function obsInterrupt(){
+  logLine("int", "on_push_frame(FramePushed(frame=InterruptionFrame))  ← 9개 originator 중 하나");
+  logLine("int", "  └ user_bot_latency_observer.py:257-259  _reset_accumulators()");
+  OBS.lb = freshLB();
+  logLine("int", "  └ 지운 것: _ttfb, _text_aggregation, _user_turn_start_time, _user_turn," +
+                 " _function_call_starts, _function_call_metrics");
+  logLine("int", "  └ 지우지 않은 것: _user_stopped_time  (:238 VADUserStartedSpeakingFrame만 지운다)");
+  logLine("int", "  └ 취소된 cycle의 낡은 숫자가 다음 breakdown을 오염시키지 않는다");
+  OBS.i = 0; OBS.flash = null;
+  drawOBS(); renderLog(); renderLB();
+}
+function obsReset(){
+  obsStop(); OBS.i = 0; OBS.lb = freshLB(); OBS.log = []; OBS.flash = null;
+  logLine("proc", "on_pipeline_started()   BaseObserver 훅 4개 중 하나 — 나머지는 pass");
+  const pl = procs().filter(p => p.m).map(p => p.n);
+  logLine("met", "processors_with_metrics() → [" + pl.join(", ") + "]" +
+                 "   (pipeline.py:153-167, 첫 턴 전에 RTVI로 한 번 전송)");
+  drawOBS(); renderLog(); renderLB();
+}
+function obsStop(){
+  OBS.playing = false;
+  if (OBS.timer){ clearInterval(OBS.timer); OBS.timer = null; }
+  const b = document.getElementById("bPlay");
+  if (b) b.textContent = "▶ 재생";
+}
+function obsPlay(){
+  if (OBS.playing){ obsStop(); return; }
+  if (OBS.i >= script().length){ obsReset(); }
+  OBS.playing = true;
+  document.getElementById("bPlay").textContent = "❚❚ 정지";
+  OBS.timer = setInterval(() => {
+    if (OBS.i >= script().length){ obsStop(); return; }
+    obsStep();
+  }, 780);
+}
+
+function drawOBS(){
+  const cv = document.getElementById("cvOBS");
+  const {c, w} = setupCanvas(cv, CANVAS_H_OBS);
+  const pl = procs(), n = pl.length;
+  const gap = 7, padX = 10;
+  const bw = (w - padX * 2 - gap * (n - 1)) / n;
+  const rowY = 156, bh = 46;
+  const planeTop = 16, planeH = 62;
+
+  /* --- observer plane --- */
+  c.save(); c.setLineDash([5,4]); c.strokeStyle = css("--accent"); c.lineWidth = 1.2;
+  c.strokeRect(padX + .5, planeTop + .5, w - padX * 2, planeH); c.restore();
+  c.fillStyle = "rgba(88,166,255,.05)"; c.fillRect(padX, planeTop, w - padX * 2, planeH);
+  c.textAlign = "left"; c.fillStyle = css("--accent");
+  c.font = "bold 11px ui-monospace,SFMono-Regular,Menlo,Consolas,monospace";
+  c.fillText("BaseObserver   observers/base_observer.py:90   — read-only, 파이프에 splice되지 않음",
+             padX + 9, planeTop + 17);
+  c.font = "10px ui-monospace,SFMono-Regular,Menlo,Consolas,monospace";
+  const hooks = [
+    ["on_process_frame(FrameProcessed)", ":99"],
+    ["on_push_frame(FramePushed)", ":111"],
+    ["on_processor_setup(ProcessorSetUp)", ":123"],
+    ["on_pipeline_started()", ":136"]
+  ];
+  let hx = padX + 9;
+  hooks.forEach(([h, ln], i) => {
+    const active = OBS.flash && (i === 0 || i === 1);
+    c.fillStyle = active ? css("--ink") : css("--ink-faint");
+    c.fillText(h + " " + ln, hx, planeTop + 34 + (i % 2) * 14);
+    if (i % 2 === 1) hx += Math.max(c.measureText(h).width, 190) + 26;
+  });
+  c.fillStyle = css("--ink-faint"); c.textAlign = "right";
+  c.fillText("frame은 통과하지 않는다 — 비-인접 관측", w - padX - 9, planeTop + 52);
+  c.textAlign = "left";
+
+  /* --- pipeline --- */
+  pl.forEach((p, i) => {
+    const x = padX + i * (bw + gap);
+    const on = OBS.flash && (OBS.flash.to === p.n || OBS.flash.from === p.n);
+    c.fillStyle = p.m ? "#1c2230" : "#151a22";
+    c.strokeStyle = p.ins ? css("--c-rule") : (p.m ? css("--edge") : "#242a36");
+    if (on) c.strokeStyle = css("--accent");
+    c.lineWidth = on ? 1.8 : 1;
+    c.beginPath();
+    if (c.roundRect) c.roundRect(x + .5, rowY + .5, bw - 1, bh, 7);
+    else c.rect(x + .5, rowY + .5, bw - 1, bh);
+    c.fill(); c.stroke();
+
+    c.textAlign = "center";
+    c.font = "bold 10px ui-monospace,SFMono-Regular,Menlo,Consolas,monospace";
+    c.fillStyle = p.m ? css("--ink") : css("--ink-faint");
+    c.fillText(p.n, x + bw / 2, rowY + 17);
+    c.font = "8px ui-monospace,SFMono-Regular,Menlo,Consolas,monospace";
+    c.fillStyle = p.m ? css("--ink-dim") : "#4a5361";
+    let cls = p.cls;
+    while (c.measureText(cls).width > bw - 8 && cls.length > 4) cls = cls.slice(0, -1);
+    c.fillText(cls, x + bw / 2, rowY + 29);
+    c.font = "8px ui-monospace,SFMono-Regular,Menlo,Consolas,monospace";
+    c.fillStyle = p.m ? css("--accent2") : css("--danger");
+    c.fillText(p.m ? "metrics ✓" : "metrics ✗", x + bw / 2, rowY + 41);
+
+    /* plane으로 올라가는 관측선 */
+    if (i < n - 1){
+      const ex = x + bw + gap / 2;
+      c.save();
+      const hot = OBS.flash && OBS.flash.from === p.n && OBS.flash.to === pl[i + 1].n;
+      c.setLineDash(hot ? [] : [2,4]);
+      c.strokeStyle = hot ? css("--accent") : "#2b3242";
+      c.lineWidth = hot ? 1.6 : 1;
+      c.beginPath(); c.moveTo(ex, rowY + bh / 2); c.lineTo(ex, planeTop + planeH); c.stroke();
+      c.restore();
+      /* edge 화살표 */
+      c.strokeStyle = hot ? css("--accent") : css("--edge"); c.lineWidth = hot ? 1.8 : 1;
+      c.beginPath();
+      c.moveTo(x + bw, rowY + bh / 2); c.lineTo(x + bw + gap, rowY + bh / 2);
+      c.moveTo(x + bw + gap - 3, rowY + bh / 2 - 3); c.lineTo(x + bw + gap, rowY + bh / 2);
+      c.lineTo(x + bw + gap - 3, rowY + bh / 2 + 3); c.stroke();
+      if (hot){
+        c.fillStyle = css("--accent");
+        c.font = "bold 10px ui-monospace,SFMono-Regular,Menlo,Consolas,monospace";
+        c.textAlign = "center";
+        c.fillText(OBS.flash.f, ex, planeTop + planeH + 22);
+      }
+    }
+  });
+
+  /* --- 진행 표시 --- */
+  const sc = script();
+  c.textAlign = "left"; c.fillStyle = css("--ink-faint");
+  c.font = "10px ui-monospace,SFMono-Regular,Menlo,Consolas,monospace";
+  c.fillText("step " + Math.min(OBS.i, sc.length) + " / " + sc.length, padX + 2, CANVAS_H_OBS - 10);
+  c.textAlign = "right";
+  c.fillText(OBS.rule
+      ? (OBS.wrap ? "rules: start/stop_processing_metrics() 로 감쌈"
+                  : "rules: untimed — 비용은 설명되지 않는 gap이 된다")
+      : "rules 미삽입", w - padX - 2, CANVAS_H_OBS - 10);
+}
+
+function renderObsNote(){
+  const el = document.getElementById("obsNote");
+  if (S.mode === "rtv"){
+    el.innerHTML = '<div class="overlay-note" style="border-color:var(--danger);color:var(--ink-dim)">' +
+      '<b>realtime_voice에는 이 plane 자체가 없다.</b> <code>Frame</code> base class도, processor ' +
+      'abstraction도 없으니 <code>FramePushed</code>가 기술할 <b>edge</b>가 존재하지 않는다. ' +
+      '있는 것은 <code>VoiceEvent</code> 스트림(14개 <code>VoiceEventKind</code>) — event log이지 ' +
+      'metrics plane이 아니다. 그리고 <code>BoundedAudioOutput.discarded_frames</code>는 ' +
+      '노출돼 있지만 아무도 읽지 않는다.</div>';
+  } else if (S.mode === "boson"){
+    el.innerHTML = '<div class="overlay-note" style="border-color:var(--warn)">' +
+      '<b>boson gateway의 timing 코드는 두 개뿐이고 둘 다 예산이 아니다.</b> ' +
+      '<code>log_decorator.py</code>의 <code>[TRACE …] EXIT (…ms)</code>는 per-call·비집계·비타입이고, ' +
+      '<code>elapsed_ms</code>는 <code>DurationPolicy(min_ms=500)</code>에 한 번 비교되고 버려지는 ' +
+      '<i>policy input</i>이다. <code>gateway/layers/</code> + <code>gateway/rules/</code> 1,206 LOC는 ' +
+      'transcript와 LLM 사이에 serial하게 앉아 <b>완전히 untimed</b>다.</div>';
+  } else {
+    el.innerHTML = '<div class="overlay-note">' +
+      '<b>PipelineWorker가 자동으로 붙이는 것:</b> <code>enable_turn_tracking=True</code>(기본) → ' +
+      '<code>TurnTrackingObserver</code>, <code>enable_rtvi=True</code>(기본) → ' +
+      '<code>RTVIProcessor</code> + 그 observer. 하지만 <code>enable_tracing</code>은 ' +
+      '<b>기본 False</b>이고 OpenTelemetry가 없으면 조용히 False로 강등된다 — 즉 ' +
+      '<code>UserBotLatencyObserver</code>는 <b>직접 만들어 넘겨야</b> 온다.</div>';
+  }
+}
+
+/* ===================== 배선 ===================== */
+function setPreset(id){
+  const p = PRESETS.find(z => z.id === id); if (!p) return;
+  Object.assign(S, p.s); S.preset = id;
+  S.showTTFA = true; S.showTTFAT = true;
+  document.getElementById("cbTTFA").checked  = true;
+  document.getElementById("cbTTFAT").checked = true;
+  document.getElementById("rStop").value = S.stop;
+  document.getElementById("rRule").value = S.rule;
+  document.getElementById("rLLM").value  = S.llm;
+  document.getElementById("rAgg").value  = S.agg;
+  document.getElementById("rTTSb").value = S.ttsb;
+  document.getElementById("rLead").value = S.lead;
+  document.getElementById("rNet").value  = S.net;
+  document.getElementById("selProv").value = S.prov;
+  document.getElementById("cbTail").checked   = S.tail;
+  document.getElementById("cbReason").checked = S.reason;
+  syncSeg("segRule", S.ruleMode);
+  syncSeg("segAgg",  S.aggMode);
+  document.querySelectorAll("#presets .pbtn").forEach(b =>
+    b.classList.toggle("on", b.dataset.id === id));
+  redrawAll();
+}
+function syncSeg(wrapId, val){
+  document.querySelectorAll("#" + wrapId + " button").forEach(b =>
+    b.classList.toggle("on", b.dataset.v === val));
+}
+function redrawAll(){ redrawWF(); drawOBS(); renderObsNote(); renderLB(); }
+
+function init(){
+  document.getElementById("presets").innerHTML = PRESETS.map(p =>
+    '<button class="pbtn' + (p.id === "pipecat" ? " on" : "") + '" data-id="' + p.id + '">' +
+    p.name + '<small>' + p.sub + '</small></button>').join("");
+  document.querySelectorAll("#presets .pbtn").forEach(b =>
+    b.addEventListener("click", () => setPreset(b.dataset.id)));
+
+  document.getElementById("selProv").innerHTML = TTFS.map(e =>
+    '<option value="' + e.k + '">' + e.k + "_TTFS_P99 = " + e.v.toFixed(2) +
+    "   (:" + e.ln + (e.note ? ", " + e.note : "") + ")</option>").join("");
+  document.getElementById("selProv").value = S.prov;
+  document.getElementById("selProv").addEventListener("change", ev => {
+    S.prov = ev.target.value; redrawAll();
+  });
+
+  const bind = (id, key) => document.getElementById(id).addEventListener("input", ev => {
+    S[key] = parseFloat(ev.target.value); redrawAll();
+  });
+  bind("rStop","stop"); bind("rRule","rule"); bind("rLLM","llm");
+  bind("rAgg","agg");   bind("rTTSb","ttsb"); bind("rLead","lead"); bind("rNet","net");
+
+  document.querySelectorAll("#segRule button").forEach(b => b.addEventListener("click", () => {
+    S.ruleMode = b.dataset.v; syncSeg("segRule", S.ruleMode); redrawAll();
+  }));
+  document.querySelectorAll("#segAgg button").forEach(b => b.addEventListener("click", () => {
+    S.aggMode = b.dataset.v;
+    /* SENTENCE 0.250 s(기본) vs TOKEN — read.md §5.1: TOKEN 전환이 LLM 반토막과 비슷한 0.175 s를 번다 */
+    S.agg = (S.aggMode === "SENTENCE") ? 0.25 : 0.075;
+    document.getElementById("rAgg").value = S.agg;
+    syncSeg("segAgg", S.aggMode); redrawAll();
+  }));
+
+  const cb = (id, fn) => document.getElementById(id).addEventListener("change", ev => {
+    fn(ev.target.checked); redrawAll();
+  });
+  cb("cbTail",   v => S.tail = v);
+  cb("cbReason", v => S.reason = v);
+  cb("cbTTFA",   v => S.showTTFA = v);
+  cb("cbTTFAT",  v => S.showTTFAT = v);
+  cb("cbRuleProc", v => { OBS.rule = v; obsReset(); });
+  cb("cbWrap",     v => { OBS.wrap = v; obsReset(); });
+
+  document.getElementById("bPlay").addEventListener("click", obsPlay);
+  document.getElementById("bStep").addEventListener("click", () => { obsStop(); obsStep(); });
+  document.getElementById("bInt").addEventListener("click", () => { obsStop(); obsInterrupt(); });
+  document.getElementById("bReset").addEventListener("click", obsReset);
+
+  let rt = null;
+  window.addEventListener("resize", () => {
+    clearTimeout(rt); rt = setTimeout(redrawAll, 120);
+  });
+
+  obsReset();
+  redrawAll();
+}
+init();
+
+</script>
+</body>
+</html>

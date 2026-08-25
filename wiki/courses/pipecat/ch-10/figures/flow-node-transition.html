@@ -1,0 +1,1345 @@
+<!--
+  Figure: flow-node-transition.html — "_set_node emitter: NodeConfig 하나가 내보내는 frame batch 전부"
+  Chapter: pipecat ch-10 (Pipecat Flows: a state machine OUTSIDE the pipeline)
+  Back to: ../read.md  (§2 outside, §3 head-entry trace, §4.4 frame batch, §6.3 edge tuple,
+                        §10.1 _validate_node_config, §0.4 _current_functions)
+
+  Fully self-contained: inline CSS + vanilla JS. No CDN, no fetch, no external fonts.
+  Opens directly from file:// .
+
+  Every identifier / line number below was read out of read.md's quoted source blocks:
+    manager.py:80           FlowManager(...) — plain class, not a FrameProcessor
+    manager.py:148/149      self._current_functions: set[str] / self._current_node: str | None
+    manager.py:602-723      _set_node
+    manager.py:702-719      self._current_node = node_id (:703), _current_functions (:704),
+                            respond_immediately → queue_frames([LLMRunFrame()]) (:709)
+    manager.py:762-771      LLMUpdateSettingsFrame(delta=LLMSettings(system_instruction=...))
+    manager.py:773-777      legacy role_messages prepended into messages
+    manager.py:824-845      frame_type = Update if RESET/RESET_WITH_SUMMARY else Append (:831-836),
+                            LLMSetToolsFrame(tools=functions) (:839), queue_frames(frames) (:841)
+    manager.py:867-898      _validate_node_config — exactly two checks
+    manager.py:1234         node_config.get("name", str(uuid.uuid4()))
+    manager.py:496/498/504  edge tuple dispatch, "node function" / "edge function"
+    types.py:134            ContextStrategy APPEND / RESET / RESET_WITH_SUMMARY
+    types.py:155-179        ContextStrategyConfig — a @dataclass
+    types.py:182-237        NodeConfig — a TypedDict(total=False)
+    types.py:247            NO_RESPONSE = _NoResponse()
+    types.py:266            ConsolidatedFunctionResult = tuple[Any, NodeConfig | None | _NoResponse]
+    worker.py:810-829       queue_frames — plain loop, downstream enters at the head
+    hello_world.py:135-167  the 7-processor Pipeline + FlowManager built AFTER add_workers
+    insurance_quote.py:211-237, 258-281, 284-298  the five node factories
+    tests/test_flows_manager.py:191,319,758,759,1174,1203  _current_functions assertion sites
+
+  Frame ordering, entry point and consumed-at processor are real. Timing is not.
+-->
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>_set_node emitter — NodeConfig → frame batch (pipecat ch-10)</title>
+<style>
+  /* --- 반응형 타이포 스케일: 태블릿에서 root를 키운다 ------------------- */
+  html{font-size:14px;}
+  @media (pointer:coarse){ html{font-size:17px;} }
+  @media (min-width:1500px){ html{font-size:15.5px;} }
+
+  :root{
+    --bg:#0e1117; --panel:#161b22; --panel2:#1c2230; --edge:#2b3242;
+    --ink:#e6edf3; --ink-dim:#9aa7b4; --ink-faint:#6b7686;
+    --accent:#58a6ff; --accent2:#3fb950; --danger:#f85149; --warn:#d29922;
+    --c-settings:#bc8cff;  /* LLMUpdateSettingsFrame */
+    --c-msg:#3fb950;       /* LLMMessagesAppend/UpdateFrame */
+    --c-tools:#d29922;     /* LLMSetToolsFrame */
+    --c-run:#58a6ff;       /* LLMRunFrame */
+    --c-ins:#f778ba;       /* FlowManager — pipeline 밖 */
+  }
+  *{box-sizing:border-box;}
+  html,body{margin:0;padding:0;}
+  body{
+    background:var(--bg); color:var(--ink);
+    font:1rem/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Apple SD Gothic Neo",
+         "Noto Sans KR",Helvetica,Arial,sans-serif;
+    padding:22px; max-width:88rem; margin:0 auto;
+  }
+  h1{font-size:1.5rem; margin:0 0 3px; letter-spacing:.2px;}
+  .sub{color:var(--ink-dim); font-size:0.9286rem; margin:0 0 20px;}
+  .sub code{color:var(--accent);}
+  .panel{background:var(--panel); border:1px solid var(--edge); border-radius:10px;
+    padding:16px; margin-bottom:18px;}
+  .panel h2{font-size:0.8571rem; text-transform:uppercase; letter-spacing:.9px; color:var(--ink-dim);
+    margin:0 0 14px; font-weight:600;}
+  .panel h3{font-size:0.8571rem; color:var(--ink); margin:18px 0 8px; font-weight:600;}
+  .mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+    font-variant-numeric:tabular-nums;}
+  code{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:0.9em;}
+
+  .grid2{display:grid; grid-template-columns:1fr 1fr; gap:18px;}
+  .wrap{display:grid; grid-template-columns:20rem 1fr; gap:18px; align-items:start;}
+  @media (max-width:1000px){ .wrap{grid-template-columns:1fr;} .grid2{grid-template-columns:1fr;} }
+
+  /* ---------- key toggles ---------- */
+  .keys{display:flex; flex-direction:column; gap:6px;}
+  .kitem{background:var(--panel2); border:1px solid var(--edge); color:var(--ink-dim);
+    border-radius:8px; padding:7px 10px; cursor:pointer; text-align:left; font-size:0.8571rem;
+    transition:.13s; line-height:1.35; width:100%;}
+  .kitem:hover{border-color:var(--ink-faint); color:var(--ink);}
+  .kitem.on{background:#2a1c2a; border-color:var(--c-ins); color:var(--ink);}
+  .kitem.req{border-color:var(--accent2); background:#16241b; color:var(--ink); cursor:default;}
+  .kitem.dep.on{background:#2b2412; border-color:var(--warn);}
+  .kitem b{display:block; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+    font-size:0.8571rem; color:var(--ink); margin-bottom:1px;}
+  .kitem span{font-size:0.7857rem; color:var(--ink-faint); display:block;}
+  .kitem.on span{color:var(--c-ins);}
+  .kitem.req span{color:var(--accent2);}
+  .kitem.dep.on span{color:var(--warn);}
+
+  .seg{display:flex; gap:5px; margin-top:4px;}
+  .seg button{flex:1; background:var(--panel2); border:1px solid var(--edge); color:var(--ink-faint);
+    border-radius:6px; padding:5px 4px; font-size:0.7857rem; cursor:pointer;
+    font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; transition:.13s;}
+  .seg button:hover{border-color:var(--ink-faint); color:var(--ink);}
+  .seg button.on{background:#1d3a5f; border-color:var(--accent); color:#cfe6ff;}
+  .seg button.warnon{background:#2b2412; border-color:var(--warn); color:var(--warn);}
+
+  .runbar{display:flex; gap:7px; margin-top:14px; flex-wrap:wrap;}
+  .rb{flex:1 1 6rem; background:var(--panel2); border:1px solid var(--edge); color:var(--ink);
+    border-radius:7px; padding:9px 6px; cursor:pointer; font-size:0.8929rem; font-weight:600;
+    transition:.13s;}
+  .rb:hover{border-color:var(--accent);}
+  .rb.primary{background:#1d3a5f; border-color:var(--accent); color:#cfe6ff;}
+  .rb.ghost{font-weight:400; color:var(--ink-dim);}
+
+  pre{background:#10151d; border:1px solid var(--edge); border-radius:8px; padding:13px;
+    overflow-x:auto; font-size:0.8571rem; line-height:1.7; margin:0;
+    font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; white-space:pre;}
+  pre .cm{color:var(--ink-faint);} pre .kw{color:var(--c-settings);} pre .st{color:var(--accent2);}
+  pre .ins{color:var(--c-ins); font-weight:700;} pre .ln{color:var(--ink-faint);}
+  pre .bad{color:var(--danger);} pre .dim{color:var(--ink-faint);}
+  pre .on{color:var(--ink);} pre .off{color:var(--ink-faint); opacity:.45;}
+
+  /* ---------- frame batch ---------- */
+  .batch{display:flex; flex-direction:column; gap:7px;}
+  .fr{border:1px solid var(--edge); border-left-width:3px; border-radius:7px; background:var(--panel2);
+    padding:8px 11px; font-size:0.8214rem; line-height:1.5;}
+  .fr .h{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:0.8571rem;
+    color:var(--ink); display:flex; justify-content:space-between; gap:10px; flex-wrap:wrap;}
+  .fr .h em{font-style:normal; color:var(--ink-faint); font-size:0.75rem;}
+  .fr .d{color:var(--ink-dim); font-size:0.7857rem; margin-top:3px;}
+  .fr.skip{opacity:.34; border-left-color:var(--edge) !important; border-style:dashed;}
+  .fr.skip .d{color:var(--ink-faint);}
+  .qsplit{font-size:0.75rem; color:var(--ink-faint); text-align:center; padding:2px 0;
+    font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;}
+
+  .counters{display:flex; gap:8px; flex-wrap:wrap; margin-top:12px;}
+  .chip2{border:1px solid var(--edge); border-radius:7px; padding:7px 11px; font-size:0.8571rem;
+    background:var(--panel2); color:var(--ink-faint); min-width:7.5rem;}
+  .chip2 b{display:block; font-size:1.0714rem; color:var(--ink); margin-bottom:1px;
+    font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; word-break:break-all;}
+  .chip2.zero b{color:var(--danger);}
+  .chip2.good b{color:var(--accent2);}
+
+  /* height는 JS의 CANVAS_H_* 상수와 반드시 같은 값 — 레이아웃 점프 방지 */
+  canvas{width:100%; display:block; border-radius:8px; background:#10151d;
+    border:1px solid var(--edge);}
+  #cvPipe{height:300px;}
+  #cvGraph{height:270px;}
+  .legend{display:flex; gap:14px; font-size:0.8214rem; color:var(--ink-dim); margin-top:9px;
+    flex-wrap:wrap;}
+  .legend i{display:inline-block; width:16px; height:10px; border-radius:3px;
+    vertical-align:middle; margin-right:5px;}
+
+  .stream{background:#10151d; border:1px solid var(--edge); border-radius:8px; padding:10px;
+    max-height:19rem; overflow-y:auto; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+    font-size:0.7857rem; line-height:1.65;}
+  .stream div{white-space:pre; overflow-x:auto;}
+  .stream .add{color:var(--accent2);} .stream .del{color:var(--danger);}
+  .stream .same{color:var(--ink-faint);} .stream .hd{color:var(--accent);}
+
+  .verdict{border-radius:8px; padding:12px 14px; font-size:0.9286rem; margin-top:12px;
+    border:1px solid var(--edge); background:var(--panel2); line-height:1.6;}
+  .verdict.ok{border-color:var(--accent2); background:rgba(63,185,80,.08);}
+  .verdict.silent{border-color:var(--danger); background:rgba(248,81,73,.08);}
+  .verdict.warn{border-color:var(--warn); background:rgba(210,153,34,.08);}
+  .verdict b{font-size:1.0714rem;}
+
+  .tag{font-size:0.7143rem; border-radius:4px; padding:1px 6px; margin-left:6px;
+    border:1px solid var(--edge); color:var(--ink-faint); white-space:nowrap;
+    font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;}
+  .tag.td{border-color:var(--accent); color:var(--accent);}
+  .tag.dc{border-color:var(--warn); color:var(--warn);}
+  .tag.ok{border-color:var(--accent2); color:var(--accent2);}
+  .tag.bad{border-color:var(--danger); color:var(--danger);}
+
+  .callout{border-left:3px solid var(--warn); background:rgba(210,153,34,.07);
+    padding:11px 14px; border-radius:0 7px 7px 0; font-size:0.8929rem; color:var(--ink-dim);
+    margin-top:14px; line-height:1.65;}
+  .callout b{color:var(--ink);}
+  .callout.ok{border-left-color:var(--accent2); background:rgba(63,185,80,.07);}
+  .callout.bad{border-left-color:var(--danger); background:rgba(248,81,73,.07);}
+  .callout code{color:var(--accent);}
+
+  table{width:100%; border-collapse:collapse; font-size:0.8214rem; margin-top:6px;}
+  th,td{padding:5px 7px; text-align:left; border-bottom:1px solid var(--edge); vertical-align:top;}
+  th{color:var(--ink-faint); font-weight:600; font-size:0.75rem; text-transform:uppercase;
+    letter-spacing:.5px;}
+
+  /* ---------- graph handler buttons ---------- */
+  .hbtns{display:flex; flex-direction:column; gap:6px;}
+  .hb{background:var(--panel2); border:1px solid var(--edge); color:var(--ink-dim);
+    border-radius:7px; padding:8px 10px; cursor:pointer; font-size:0.8214rem; text-align:left;
+    transition:.13s; line-height:1.4;}
+  .hb:hover{border-color:var(--accent); color:var(--ink);}
+  .hb b{display:block; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+    color:var(--ink); font-size:0.8571rem;}
+  .hb small{color:var(--ink-faint); font-size:0.75rem;}
+  .hb.real{border-color:var(--accent2);}
+  .hb.real small{color:var(--accent2);}
+  .hb.illegal{border-color:var(--danger); border-style:dashed;}
+  .hb.illegal small{color:var(--danger);}
+
+  .foot{color:var(--ink-faint); font-size:0.8214rem; margin-top:26px; line-height:1.8;}
+  .foot a{color:var(--accent); text-decoration:none;}
+  .foot code{color:var(--ink-dim);}
+</style>
+</head>
+<body>
+
+<h1><span class="mono">_set_node</span> emitter — <span class="mono">NodeConfig</span> 하나가 내보내는 frame batch</h1>
+<p class="sub">
+  ch-10 §4.4 / §3.4 / §6.3 / §10.1 companion · <code>FlowManager</code>는 <b>Pipeline 밖</b>에 있다.
+  key를 켜고 꺼서 <code>worker.queue_frames</code>를 떠나는 정확한 순서를 확인해라 —
+  <code>LLMSetToolsFrame</code>은 조건이 없고, <code>LLMRunFrame</code>은 batch에 없다.
+  <span class="mono" style="color:var(--ink-faint)">manager.py:602-723, 762-845</span>
+</p>
+
+<!-- ===================== 1. _set_node EMITTER ===================== -->
+<div class="panel">
+  <h2>1 · <span class="mono">NodeConfig</span> composer → <span class="mono">_set_node</span>가 내보내는 frame batch</h2>
+  <div class="wrap">
+    <div>
+      <div class="keys" id="keys"></div>
+      <div class="runbar">
+        <button class="rb primary" id="bSet">_set_node 실행</button>
+        <button class="rb ghost" id="bReset">session reset</button>
+      </div>
+      <div class="runbar">
+        <button class="rb ghost" id="bPlay">▶ frame 흐름 재생</button>
+      </div>
+      <div class="counters" id="inspector"></div>
+    </div>
+    <div>
+      <canvas id="cvPipe"></canvas>
+      <div class="legend" id="legend"></div>
+      <div class="grid2" style="margin-top:14px;">
+        <div>
+          <h3>queue_frames를 떠나는 순서</h3>
+          <div class="batch" id="batch"></div>
+        </div>
+        <div>
+          <h3>공유 context / tool set (session 누적)</h3>
+          <div class="stream" id="ctxView"></div>
+        </div>
+      </div>
+      <div id="rules"></div>
+      <h3>_set_node 본문 — 실행되는 줄만 밝게</h3>
+      <pre id="codeView"></pre>
+    </div>
+  </div>
+</div>
+
+<!-- ===================== 2. insurance_quote GRAPH ===================== -->
+<div class="panel">
+  <h2>2 · <span class="mono">insurance_quote.py</span>의 실제 5-node graph — edge는 tuple의 두 번째 원소다</h2>
+  <div class="wrap">
+    <div>
+      <div class="counters" id="gState"></div>
+      <h3>이 node가 advertise한 function</h3>
+      <div class="hbtns" id="handlers"></div>
+      <div class="runbar">
+        <button class="rb ghost" id="bGReset">graph reset</button>
+      </div>
+      <div id="outcome"></div>
+    </div>
+    <div>
+      <canvas id="cvGraph"></canvas>
+      <div class="legend" id="glegend"></div>
+      <div class="grid2" style="margin-top:14px;">
+        <div>
+          <h3>handler가 반환한 tuple</h3>
+          <pre id="gCode"></pre>
+        </div>
+        <div>
+          <h3>transition log</h3>
+          <div class="stream" id="gLog"></div>
+        </div>
+      </div>
+      <div id="gVerdict"></div>
+    </div>
+  </div>
+</div>
+
+<!-- ===================== 3. MISSING GUARDRAIL ===================== -->
+<div class="panel">
+  <h2>3 · 없는 guardrail — <span class="mono">_validate_node_config</span>는 두 가지만 본다</h2>
+  <div class="grid2">
+    <div>
+      <div class="hbtns" id="illegal"></div>
+      <div id="valView"></div>
+    </div>
+    <div>
+      <pre id="valCode"></pre>
+      <div id="deadView"></div>
+    </div>
+  </div>
+</div>
+
+<p class="foot" id="foot"></p>
+
+<script>
+"use strict";
+function $(id){ return document.getElementById(id); }
+function esc(s){ return String(s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;"); }
+
+/* ===== canvas 높이는 상수로만 잡는다. cv.height를 다시 읽으면 매 프레임 두 배가 된다. ===== */
+const CANVAS_H_PIPE  = 300;
+const CANVAS_H_GRAPH = 270;
+
+function setupCanvas(cv, CANVAS_H){
+  const r = window.devicePixelRatio || 1;
+  const w = Math.max(cv.clientWidth, 200), h = CANVAS_H;
+  if (cv.width !== Math.round(w*r) || cv.height !== Math.round(h*r)){
+    cv.width = Math.round(w*r); cv.height = Math.round(h*r);
+  }
+  cv.style.height = h + "px";
+  const c = cv.getContext("2d"); c.setTransform(r,0,0,r,0,0); c.clearRect(0,0,w,h);
+  return {c, w, h};
+}
+
+/* ===== hello_world.py:135-167 — 일곱 개, 순서 그대로 ===== */
+const PIPELINE = [
+  {id:0, label:"transport.input()", note:"proc 1"},
+  {id:1, label:"stt",               note:"proc 2"},
+  {id:2, label:"ctx.user()",        note:"proc 3"},
+  {id:3, label:"llm",               note:"proc 4"},
+  {id:4, label:"tts",               note:"proc 5"},
+  {id:5, label:"transport.output()",note:"proc 6"},
+  {id:6, label:"ctx.assistant()",   note:"proc 7"}
+];
+
+/* ===== NodeConfig 키 — types.py:182-237, TypedDict(total=False) ===== */
+const KEYS = [
+  {k:"task_messages",     req:true,  label:"task_messages",
+   desc:"유일한 Required 키 · manager.py:824 messages.extend"},
+  {k:"name",              label:"name",
+   desc:"없으면 str(uuid.uuid4()) · manager.py:1234"},
+  {k:"role_message",      label:"role_message",
+   desc:"str · system instruction, 다음 node까지 persist"},
+  {k:"role_messages",     dep:true, label:"role_messages",
+   desc:"deprecated 1.5.0 · messages 앞에 그냥 붙는다 :773-777"},
+  {k:"functions",         label:"functions",
+   desc:"끄면 NOT_GIVEN이 나가서 tool set이 지워진다"},
+  {k:"pre_actions",       label:"pre_actions",
+   desc:"_update_llm_context 앞 · raise하면 node가 중단된다"},
+  {k:"post_actions",      label:"post_actions",
+   desc:"실패해도 _current_node를 되돌리지 못한다"},
+  {k:"respond_immediately", label:"respond_immediately",
+   desc:"default True · 이것만이 LLMRunFrame :709를 만든다"},
+  {k:"typo",              label:"respond_immediatly  ← 오타",
+   desc:"TypedDict는 런타임 검사가 없다 · 조용히 무시된다"}
+];
+
+/* ===== ContextStrategy — types.py:134 ===== */
+const STRATS = [
+  {v:"APPEND",             frame:"LLMMessagesAppendFrame", dep:false},
+  {v:"RESET",              frame:"LLMMessagesUpdateFrame", dep:false},
+  {v:"RESET_WITH_SUMMARY", frame:"LLMMessagesUpdateFrame", dep:true}
+];
+
+/* ===== frame 별 도착지 — read.md §3.4 표 ===== */
+const FRAME_INFO = {
+  LLMUpdateSettingsFrame: {stop:3, color:"--c-settings", src:"manager.py:768",
+    did:"llm service에 system_instruction을 세팅 (llm_service.py:692)"},
+  LLMMessagesAppendFrame: {stop:2, color:"--c-msg", src:"manager.py:838",
+    did:"공유 context에 add_messages — 기존 메시지 유지"},
+  LLMMessagesUpdateFrame: {stop:2, color:"--c-msg", src:"manager.py:838",
+    did:"공유 context에 set_messages — 기존 메시지 전부 교체"},
+  LLMSetToolsFrame:       {stop:6, color:"--c-tools", src:"manager.py:839",
+    did:"공유 context에 set_tools — ctx.user()와 ctx.assistant() 양쪽에서 두 번, idempotent"},
+  LLMRunFrame:            {stop:2, color:"--c-run", src:"manager.py:709",
+    did:"ctx.user()가 LLMContextFrame을 downstream으로 밀어 inference 시작"}
+};
+
+/* ===== insurance_quote.py — 다섯 개의 node factory ===== */
+const NODES = {
+  initial: {
+    name:"initial", factory:"create_initial_node()", src:"insurance_quote.py:211-237",
+    role:true, task:"Start by asking for the customer's age.",
+    fns:[{n:"collect_age", args:"age: int", real:"marital_status",
+          ret:"create_marital_status_node()", kind:"edge",
+          note:'flow_manager.state["age"] = age (:124) — 파일의 유일한 state 쓰기'}]
+  },
+  marital_status: {
+    name:"marital_status", factory:"create_marital_status_node()", src:"insurance_quote.py:239-256",
+    role:false, task:"Ask about the customer's marital status for premium calculation.",
+    fns:[{n:"collect_marital_status", args:"marital_status: str", real:"quote_calculation",
+          ret:'create_quote_calculation_node(flow_manager.state["age"], marital_status)',
+          kind:"edge", note:'state["age"]를 읽어 다음 node의 f-string 인자로 굽는다 (:144)'}]
+  },
+  quote_calculation: {
+    name:"quote_calculation", factory:"create_quote_calculation_node(age, marital_status)",
+    src:"insurance_quote.py:258 이전", role:false,
+    task:"First, call calculate_quote with their information.",
+    fns:[{n:"calculate_quote", args:"age: int, marital_status: str", real:"quote_results",
+          ret:"create_quote_results_node(quote)", kind:"edge",
+          note:"age/status가 LLM이 채워 준 argument로 되돌아온다 — 모델을 한 번 통과하는 왕복"}]
+  },
+  quote_results: {
+    name:"quote_results", factory:"create_quote_results_node(quote)", src:"insurance_quote.py:258-281",
+    role:false,
+    task:"Quote details:\\nMonthly Premium: ${quote['monthly_premium']:.2f} ...",
+    fns:[{n:"update_coverage", args:"coverage_amount: int, deductible: int", real:"quote_results",
+          ret:"create_quote_results_node(result)", kind:"self",
+          note:"self-loop — 같은 name의 새 NodeConfig를 만들어 f-string만 갈아 끼운다"},
+         {n:"end_quote", args:"()", real:"end", ret:"create_end_node()", kind:"edge",
+          note:"이 node의 legal edge는 정확히 둘 — functions 목록이 rail guard다"}]
+  },
+  end: {
+    name:"end", factory:"create_end_node()", src:"insurance_quote.py:284-298",
+    role:false, task:"Thank the customer for their time and end the conversation.",
+    fns:[]
+  }
+};
+const GRAPH_ORDER = ["initial","marital_status","quote_calculation","quote_results","end"];
+
+/* ===== panel 1 state ===== */
+const ST = {
+  cfg:{ task_messages:true, name:true, role_message:true, role_messages:false,
+        functions:true, pre_actions:false, post_actions:false,
+        respond_immediately:true, typo:false },
+  strategy:"APPEND",
+  sess:{ current_node:null, current_functions:[], sys:null, messages:[], tools:[], setNodeCount:0 },
+  lastBatch:[], lastLog:[]
+};
+
+/* ===== panel 2 state ===== */
+const G = { cur:"initial", log:[], lastRet:null, sel:null, illegalDone:false };
+
+/* ===== animation state ===== */
+const ANIM = { on:false, i:0, t:0, raf:null, parked:[] };
+
+/* =====================================================================
+   PANEL 1 — composer / batch / inspector
+   ===================================================================== */
+
+function strategyFrame(){
+  const s = STRATS.find(function(x){ return x.v === ST.strategy; });
+  return s ? s.frame : "LLMMessagesAppendFrame";
+}
+
+/* manager.py:762-845 를 그대로 따라간다 */
+function computeBatch(){
+  const c = ST.cfg, out = [];
+  const roleMsg = c.role_message ? "You are a friendly insurance agent. …" : null;
+
+  out.push({
+    name:"LLMUpdateSettingsFrame",
+    arg:"delta=LLMSettings(system_instruction=…)",
+    emitted: !!roleMsg,
+    why: roleMsg ? "role_message가 있다 → :768"
+                 : "role_message가 없다 → 이 frame은 만들어지지 않는다 (:767 if role_message)"
+  });
+
+  const msgs = [];
+  if (c.role_messages) msgs.push("{role:'system', …}  ← role_messages, deprecated 1.5.0");
+  msgs.push("{role:'developer', content:'…'}  ← task_messages");
+
+  out.push({
+    name: strategyFrame(),
+    arg:"messages=[" + msgs.length + "]",
+    emitted:true,
+    payload: msgs,
+    why:"frame_type = Update if strategy in [RESET, RESET_WITH_SUMMARY] else Append (:831-836)"
+  });
+
+  out.push({
+    name:"LLMSetToolsFrame",
+    arg: c.functions ? "tools=[update_coverage, end_quote]" : "tools=NOT_GIVEN",
+    emitted:true,
+    why: c.functions ? "무조건이다 — if가 없다 (:839)"
+                     : "무조건이다. functions가 없으면 NOT_GIVEN이 나가고 tool set이 지워진다 (:839)"
+  });
+
+  out.push({
+    name:"__QUEUE_SPLIT__",
+    emitted:true
+  });
+
+  out.push({
+    name:"LLMRunFrame",
+    arg:"()",
+    emitted: !!c.respond_immediately,
+    why: c.respond_immediately
+      ? "respond_immediately가 True → 별도의 queue_frames 호출 (:709)"
+      : "respond_immediately=False → inference를 시작하는 유일한 frame이 나가지 않는다"
+  });
+
+  return out;
+}
+
+function applySetNode(){
+  const c = ST.cfg, s = ST.sess, log = [];
+  const nodeId = c.name ? "quote_results" : "3f9c1e2a-…-uuid4";
+  log.push({t:"hd", s:"_set_node(node_id=" + JSON.stringify(nodeId) + ", node_config=…)"});
+
+  if (c.role_message){
+    s.sys = "You are a friendly insurance agent. …";
+    log.push({t:"add", s:"  sys ← system_instruction 세팅 (LLMUpdateSettingsFrame)"});
+  } else if (s.sys){
+    log.push({t:"same", s:"  sys 그대로 유지 — 아무 frame도 나가지 않았는데 persist한다"});
+  } else {
+    log.push({t:"same", s:"  sys 없음 — persona가 한 번도 세팅된 적이 없다"});
+  }
+
+  const msgs = [];
+  if (c.role_messages) msgs.push("role_messages[0]  (deprecated)");
+  msgs.push("task_messages[0]  @ " + nodeId);
+
+  if (strategyFrame() === "LLMMessagesUpdateFrame"){
+    const before = s.messages.length;
+    s.messages = msgs.slice();
+    log.push({t:"del", s:"  set_messages — 이전 " + before + "개를 버리고 " + msgs.length + "개로 교체"});
+  } else {
+    s.messages = s.messages.concat(msgs);
+    log.push({t:"add", s:"  add_messages — " + msgs.length + "개 추가, 총 " + s.messages.length + "개"});
+  }
+
+  const before = s.tools.slice();
+  s.tools = c.functions ? ["update_coverage","end_quote"] : [];
+  if (s.tools.length === 0 && before.length > 0){
+    log.push({t:"del", s:"  set_tools(NOT_GIVEN) — tool " + before.length + "개가 조용히 사라졌다"});
+  } else {
+    log.push({t:"add", s:"  set_tools([" + s.tools.join(", ") + "])"});
+  }
+
+  s.current_node = nodeId;                       /* manager.py:703 */
+  s.current_functions = s.tools.slice();         /* manager.py:704 — 그리고 src/ 어디서도 읽지 않는다 */
+  s.setNodeCount += 1;
+
+  if (c.respond_immediately){
+    log.push({t:"hd", s:"  queue_frames([LLMRunFrame()])  → inference 시작 (:709)"});
+  } else {
+    log.push({t:"del", s:"  LLMRunFrame 없음 — context만 바뀌고 모델은 침묵한다"});
+  }
+  if (c.typo){
+    log.push({t:"del", s:"  respond_immediatly(오타)는 .get(\"respond_immediately\", True)에 걸리지 않는다"});
+  }
+  ST.lastLog = log;
+}
+
+function renderKeys(){
+  const host = $("keys");
+  host.innerHTML = "";
+  KEYS.forEach(function(K){
+    const b = document.createElement("button");
+    const on = K.req ? true : !!ST.cfg[K.k];
+    b.className = "kitem" + (K.req ? " req" : (on ? " on" : "")) + (K.dep ? " dep" : "");
+    b.innerHTML = "<b>" + esc(K.label) + (K.req ? "  ✓ Required" : "") + "</b><span>" + esc(K.desc) + "</span>";
+    if (!K.req){
+      b.onclick = function(){ ST.cfg[K.k] = !ST.cfg[K.k]; stopAnim(); refresh1(); };
+    }
+    host.appendChild(b);
+  });
+
+  const wrapS = document.createElement("div");
+  wrapS.className = "kitem on";
+  wrapS.style.cursor = "default";
+  wrapS.innerHTML = "<b>context_strategy</b><span>types.py:134 · ContextStrategyConfig는 @dataclass</span>";
+  const seg = document.createElement("div");
+  seg.className = "seg";
+  STRATS.forEach(function(S){
+    const sb = document.createElement("button");
+    sb.textContent = S.v;
+    sb.className = (ST.strategy === S.v) ? (S.dep ? "warnon" : "on") : "";
+    sb.onclick = function(){ ST.strategy = S.v; stopAnim(); refresh1(); };
+    seg.appendChild(sb);
+  });
+  wrapS.appendChild(seg);
+  host.appendChild(wrapS);
+}
+
+function renderBatch(){
+  const host = $("batch");
+  host.innerHTML = "";
+  ST.lastBatch.forEach(function(F){
+    if (F.name === "__QUEUE_SPLIT__"){
+      const d = document.createElement("div");
+      d.className = "qsplit";
+      d.textContent = "── await worker.queue_frames(frames)  :841 ── 여기서 한 번 끊긴다 ──";
+      host.appendChild(d);
+      return;
+    }
+    const info = FRAME_INFO[F.name];
+    const d = document.createElement("div");
+    d.className = "fr" + (F.emitted ? "" : " skip");
+    if (F.emitted && info) d.style.borderLeftColor = "var(" + info.color + ")";
+    const stopLabel = info ? PIPELINE[info.stop].label : "—";
+    d.innerHTML =
+      "<div class='h'><span>" + (F.emitted ? "" : "✗ ") + esc(F.name) + "(" + esc(F.arg || "") + ")</span>" +
+      "<em>" + (info ? esc(info.src) : "") + "</em></div>" +
+      "<div class='d'>" + esc(F.why) + "</div>" +
+      (F.emitted && info
+        ? "<div class='d'>head 진입 → <span class='mono'>" + esc(stopLabel) + "</span> 에서 소비 · " + esc(info.did) + "</div>"
+        : "");
+    host.appendChild(d);
+  });
+}
+
+function renderInspector(){
+  const s = ST.sess;
+  const items = [
+    {l:"self._current_node  (manager.py:149)", v: s.current_node === null ? "None" : "\"" + s.current_node + "\"",
+     cls: s.current_node === null ? "zero" : "good"},
+    {l:"타입", v:"str | None — NodeConfig가 아니다", cls:""},
+    {l:"self._current_functions :148", v: s.current_functions.length ? "{" + s.current_functions.join(", ") + "}" : "set()", cls:""},
+    {l:"_set_node 호출 횟수", v:String(s.setNodeCount), cls:""},
+    {l:"system_instruction", v: s.sys ? "set (persist 중)" : "None", cls: s.sys ? "good" : "zero"},
+    {l:"context messages", v:String(s.messages.length), cls:""}
+  ];
+  $("inspector").innerHTML = items.map(function(i){
+    return "<div class='chip2 " + i.cls + "'><b>" + esc(i.v) + "</b>" + esc(i.l) + "</div>";
+  }).join("");
+}
+
+function renderCtx(){
+  const s = ST.sess;
+  const lines = [];
+  lines.push("<div class='hd'>NodeConfig  →  TypedDict(total=False)   types.py:182-237</div>");
+  lines.push("<div class='hd'>ContextStrategyConfig  →  @dataclass    types.py:155-179</div>");
+  lines.push("<div class='same'>─────────────────────────────────────────</div>");
+  ST.lastLog.forEach(function(L){
+    lines.push("<div class='" + L.t + "'>" + esc(L.s) + "</div>");
+  });
+  lines.push("<div class='same'>─── 공유 context 현재 상태 ───</div>");
+  if (!s.messages.length) lines.push("<div class='same'>  (messages 비어 있음)</div>");
+  s.messages.forEach(function(m, i){
+    lines.push("<div class='same'>  [" + i + "] " + esc(m) + "</div>");
+  });
+  lines.push("<div class='" + (s.tools.length ? "add" : "del") + "'>  tools = [" +
+             esc(s.tools.join(", ")) + "]" + (s.tools.length ? "" : "   ← 비었다") + "</div>");
+  $("ctxView").innerHTML = lines.join("");
+}
+
+function renderRules(){
+  const c = ST.cfg, out = [];
+  if (!c.role_message && ST.sess.sys){
+    out.push({k:"ok", t:"Rule 1 — 이번 node는 role_message가 없어서 LLMUpdateSettingsFrame이 안 나갔다. " +
+      "그런데 system instruction은 살아 있다. 이건 frame이 아니라 llm service에 남은 설정이다. " +
+      "insurance_quote.py에서 persona를 세팅하는 node는 initial 하나뿐인 이유."});
+  }
+  if (strategyFrame() === "LLMMessagesUpdateFrame"){
+    out.push({k:"warn", t:"Rule 2 — strategy가 " + ST.strategy + "라서 frame이 LLMMessagesUpdateFrame으로 바뀌었다. " +
+      "이건 set_messages(교체)다. 이전 node들의 task_messages가 전부 사라진다." +
+      (ST.strategy === "RESET_WITH_SUMMARY"
+        ? " RESET_WITH_SUMMARY는 1.5.0에서 deprecated이고, 요약에 5.0초 asyncio.wait_for가 걸려 있으며 실패/타임아웃이면 조용히 APPEND로 떨어진다 (manager.py:799-822)."
+        : "")});
+  }
+  if (!c.functions){
+    out.push({k:"bad", t:"Rule 3 — functions를 껐는데도 LLMSetToolsFrame은 나갔다. tools=NOT_GIVEN이 " +
+      "공유 context의 tool set을 지운다. 'function을 안 쓰는 node'는 없다 — '있던 function을 지우는 node'가 있을 뿐이다."});
+  }
+  if (!c.respond_immediately){
+    out.push({k:"bad", t:"Rule 4 — LLMRunFrame은 frames 리스트에 들어 있지 않다. :709에서 별도의 queue_frames로 나간다. " +
+      "그래서 respond_immediately=False면 context와 tool은 전부 갱신되는데 모델은 한 마디도 하지 않는다 " +
+      "(restaurant_reservation.py의 inbound/outbound 스위치가 정확히 이 한 플래그)."});
+  }
+  if (c.typo){
+    out.push({k:"bad", t:"NodeConfig는 TypedDict다 — 런타임 검사가 없다. respond_immediatly는 그냥 무시되고, " +
+      ".get(\"respond_immediately\", True)가 default True를 돌려준다. 오타는 에러가 아니라 '아무 일도 안 일어남'으로 나타난다."});
+  }
+  if (c.role_messages){
+    out.push({k:"warn", t:"role_messages(복수)는 deprecated 1.5.0이고 settings frame이 아니라 " +
+      "messages 앞에 그냥 붙는 평범한 context message다 (:773-777). 즉 RESET이 걸리면 persona도 같이 날아간다."});
+  }
+  if (!out.length){
+    out.push({k:"ok", t:"기본형이다 — 네 개의 frame, 두 번의 queue_frames 호출. key를 하나씩 꺼 보면 무엇이 조건부고 무엇이 무조건인지 갈린다."});
+  }
+  $("rules").innerHTML = out.map(function(o){
+    return "<div class='callout " + (o.k === "ok" ? "ok" : (o.k === "bad" ? "bad" : "")) + "'>" + esc(o.t) + "</div>";
+  }).join("");
+}
+
+function renderCode(){
+  const c = ST.cfg;
+  function ln(n, on, txt){
+    return "<span class='ln'>" + n + "</span>  <span class='" + (on ? "on" : "off") + "'>" + txt + "</span>";
+  }
+  const isUpd = strategyFrame() === "LLMMessagesUpdateFrame";
+  const rows = [
+    "<span class='cm'># src/pipecat/flows/manager.py — _set_node :602-723 / _update_llm_context :762-845</span>",
+    ln("762", true,  "frames = []"),
+    ln("767", true,  "if role_message:"),
+    ln("768", c.role_message, "    frames.append(LLMUpdateSettingsFrame(delta=LLMSettings(system_instruction=role_message)))"),
+    ln("773", true,  "if role_messages:"),
+    ln("775", c.role_messages, "    messages.extend(role_messages)"),
+    ln("825", true,  "messages.extend(task_messages)"),
+    ln("831", true,  "frame_type = ("),
+    ln("832", isUpd, "    LLMMessagesUpdateFrame"),
+    ln("833", true,  "    if update_config.strategy in [ContextStrategy.RESET, ContextStrategy.RESET_WITH_SUMMARY]"),
+    ln("835", !isUpd,"    else LLMMessagesAppendFrame"),
+    ln("836", true,  ")"),
+    ln("838", true,  "frames.append(frame_type(messages=messages))"),
+    ln("839", true,  "frames.append(LLMSetToolsFrame(tools=functions))   <span class='bad'># if가 없다</span>"),
+    ln("841", true,  "await self._worker.queue_frames(frames)"),
+    "",
+    ln("703", true,  "self._current_node = node_id            <span class='cm'># str 하나. NodeConfig가 아니다.</span>"),
+    ln("704", true,  "self._current_functions = new_functions <span class='cm'># src/ 어디서도 읽지 않는다.</span>"),
+    ln("707", true,  "respond_immediately = node_config.get(\"respond_immediately\", True)"),
+    ln("708", true,  "if respond_immediately:"),
+    ln("709", c.respond_immediately, "    await self._worker.queue_frames([LLMRunFrame()])")
+  ];
+  $("codeView").innerHTML = rows.join("\n");
+}
+
+/* ---------- canvas: FlowManager는 Pipeline 박스 밖에 그린다 ---------- */
+function procGeom(w){
+  const pad = 14, gap = 6;
+  const boxW = (w - pad*2 - gap*6) / 7;
+  return {pad:pad, gap:gap, boxW:boxW, top:170, boxH:44,
+          x:function(i){ return pad + i*(boxW+gap); },
+          cx:function(i){ return pad + i*(boxW+gap) + boxW/2; }};
+}
+
+function emittedFrames(){
+  return ST.lastBatch.filter(function(F){
+    return F.emitted && F.name !== "__QUEUE_SPLIT__";
+  });
+}
+
+function drawPipe(){
+  const cv = $("cvPipe");
+  const S = setupCanvas(cv, CANVAS_H_PIPE);
+  const c = S.c, w = S.w;
+  const g = procGeom(w);
+  const css = getComputedStyle(document.documentElement);
+  function C(v){ return css.getPropertyValue(v).trim() || "#888"; }
+
+  /* Pipeline 박스 */
+  c.strokeStyle = C("--edge"); c.lineWidth = 1;
+  c.fillStyle = "rgba(88,166,255,.04)";
+  const pbY = g.top - 30, pbH = g.boxH + 76;
+  c.beginPath(); c.roundRect(6, pbY, w-12, pbH, 9); c.fill(); c.stroke();
+  c.fillStyle = C("--ink-faint"); c.font = "600 10px ui-monospace,Menlo,monospace";
+  c.fillText("Pipeline([...])   hello_world.py:135-145   — 7개, state machine을 붙여도 하나도 안 바뀐다", 14, pbY + 14);
+
+  /* FlowManager 박스 — 밖 */
+  const fmW = Math.min(300, w*0.42), fmX = 10, fmY = 16, fmH = 60;
+  c.strokeStyle = C("--c-ins"); c.lineWidth = 1.5;
+  c.fillStyle = "rgba(247,120,186,.07)";
+  c.beginPath(); c.roundRect(fmX, fmY, fmW, fmH, 9); c.fill(); c.stroke();
+  c.fillStyle = C("--c-ins"); c.font = "700 12px ui-monospace,Menlo,monospace";
+  c.fillText("FlowManager", fmX+12, fmY+20);
+  c.fillStyle = C("--ink-dim"); c.font = "10px ui-monospace,Menlo,monospace";
+  c.fillText("plain class · manager.py:80", fmX+12, fmY+36);
+  c.fillText("FrameProcessor 아님 · 리스트 밖", fmX+12, fmY+50);
+
+  /* queue_frames 화살표: FlowManager → head */
+  const headX = g.cx(0), headY = g.top;
+  c.strokeStyle = C("--c-ins"); c.setLineDash([4,3]); c.lineWidth = 1.5;
+  c.beginPath();
+  c.moveTo(fmX + fmW/2, fmY + fmH);
+  c.bezierCurveTo(fmX + fmW/2, fmY + fmH + 40, headX - 40, headY - 60, headX, headY - 8);
+  c.stroke(); c.setLineDash([]);
+  c.fillStyle = C("--c-ins"); c.font = "10px ui-monospace,Menlo,monospace";
+  c.fillText("worker.queue_frames(...) → DOWNSTREAM → head 진입 (worker.py:810-829)",
+             fmX + 8, fmY + fmH + 26);
+
+  /* processor 박스 */
+  for (let i = 0; i < 7; i++){
+    const x = g.x(i);
+    const isStop = ANIM.on && ANIM.i < emittedFrames().length &&
+      FRAME_INFO[emittedFrames()[ANIM.i].name] &&
+      FRAME_INFO[emittedFrames()[ANIM.i].name].stop === i;
+    c.fillStyle = isStop ? "rgba(88,166,255,.14)" : C("--panel2");
+    c.strokeStyle = isStop ? C("--accent") : C("--edge");
+    c.lineWidth = isStop ? 1.6 : 1;
+    c.beginPath(); c.roundRect(x, g.top, g.boxW, g.boxH, 7); c.fill(); c.stroke();
+    c.fillStyle = C("--ink");
+    c.font = "9px ui-monospace,Menlo,monospace";
+    c.textAlign = "center";
+    c.fillText(PIPELINE[i].label, x + g.boxW/2, g.top + 20, g.boxW - 6);
+    c.fillStyle = C("--ink-faint");
+    c.font = "8px ui-monospace,Menlo,monospace";
+    c.fillText(PIPELINE[i].note, x + g.boxW/2, g.top + 34);
+    c.textAlign = "left";
+    if (i < 6){
+      c.strokeStyle = C("--edge");
+      c.beginPath(); c.moveTo(x + g.boxW, g.top + g.boxH/2);
+      c.lineTo(x + g.boxW + g.gap, g.top + g.boxH/2); c.stroke();
+    }
+  }
+
+  /* 이미 도착한 frame들 */
+  const laneY = g.top + g.boxH + 16;
+  ANIM.parked.forEach(function(p, k){
+    const col = C(FRAME_INFO[p.name].color);
+    const px = g.cx(FRAME_INFO[p.name].stop) + (p.off || 0);
+    c.fillStyle = col;
+    c.beginPath(); c.arc(px, laneY, 5, 0, Math.PI*2); c.fill();
+    c.font = "8px ui-monospace,Menlo,monospace"; c.textAlign = "center";
+    c.fillText("소비됨", px, laneY + 16);
+    c.textAlign = "left";
+  });
+
+  /* 이동 중인 frame */
+  const ef = emittedFrames();
+  if (ANIM.on && ANIM.i < ef.length){
+    const F = ef[ANIM.i], fi = FRAME_INFO[F.name];
+    const x0 = g.x(0) - 4, x1 = g.cx(fi.stop);
+    const x = x0 + (x1 - x0) * ANIM.t;
+    const y = g.top + g.boxH/2;
+    c.fillStyle = C(fi.color);
+    c.beginPath(); c.arc(x, y, 7, 0, Math.PI*2); c.fill();
+    c.font = "700 10px ui-monospace,Menlo,monospace";
+    c.textAlign = "center";
+    c.fillText(F.name, Math.min(Math.max(x, 70), w-70), g.top - 12);
+    c.textAlign = "left";
+  } else if (!ANIM.on){
+    c.fillStyle = C("--ink-faint");
+    c.font = "10px ui-monospace,Menlo,monospace";
+    c.fillText("▶ frame 흐름 재생 — 각 frame이 head에서 들어와 stt / ctx.user() 를 지나 도착지까지 간다",
+               14, g.top + g.boxH + 40);
+  }
+
+  /* upstream 표시 */
+  c.fillStyle = C("--ink-faint"); c.font = "9px ui-monospace,Menlo,monospace";
+  c.fillText("head", g.x(0), g.top - 4);
+  c.textAlign = "right";
+  c.fillText("tail", g.x(6) + g.boxW, g.top - 4);
+  c.textAlign = "left";
+}
+
+function stopAnim(){
+  ANIM.on = false; ANIM.i = 0; ANIM.t = 0; ANIM.parked = [];
+  if (ANIM.raf){ cancelAnimationFrame(ANIM.raf); ANIM.raf = null; }
+}
+
+function startAnim(){
+  stopAnim();
+  const ef = emittedFrames();
+  if (!ef.length) return;
+  ANIM.on = true;
+  let last = performance.now();
+  function step(now){
+    const dt = Math.min(now - last, 60); last = now;
+    ANIM.t += dt / 900;
+    if (ANIM.t >= 1){
+      const F = ef[ANIM.i];
+      const same = ANIM.parked.filter(function(p){
+        return FRAME_INFO[p.name].stop === FRAME_INFO[F.name].stop;
+      }).length;
+      ANIM.parked.push({name:F.name, off: same * 13});
+      ANIM.i += 1; ANIM.t = 0;
+      if (ANIM.i >= ef.length){
+        ANIM.on = false; drawPipe();
+        ANIM.raf = null;
+        return;
+      }
+    }
+    drawPipe();
+    ANIM.raf = requestAnimationFrame(step);
+  }
+  ANIM.raf = requestAnimationFrame(step);
+}
+
+function renderLegend(){
+  const items = [
+    ["--c-settings","LLMUpdateSettingsFrame → llm"],
+    ["--c-msg","LLMMessages*Frame → ctx.user()"],
+    ["--c-tools","LLMSetToolsFrame → ctx.assistant()"],
+    ["--c-run","LLMRunFrame → ctx.user()"],
+    ["--c-ins","FlowManager (pipeline 밖)"]
+  ];
+  $("legend").innerHTML = items.map(function(i){
+    return "<span><i style='background:var(" + i[0] + ")'></i>" + esc(i[1]) + "</span>";
+  }).join("");
+}
+
+function refresh1(){
+  ST.lastBatch = computeBatch();
+  renderKeys(); renderBatch(); renderRules(); renderCode(); renderInspector(); renderCtx();
+  drawPipe();
+}
+
+/* =====================================================================
+   PANEL 2 — insurance_quote.py 의 실제 graph
+   ===================================================================== */
+
+function graphGeom(w){
+  const pad = 16;
+  const boxW = Math.min(150, (w - pad*2 - 5*4) / 5);
+  const gap = (w - pad*2 - boxW*5) / 4;
+  return {pad:pad, boxW:boxW, boxH:56, gap:gap, top:110,
+          x:function(i){ return pad + i*(boxW+gap); },
+          cx:function(i){ return pad + i*(boxW+gap) + boxW/2; }};
+}
+
+function drawGraph(){
+  const cv = $("cvGraph");
+  const S = setupCanvas(cv, CANVAS_H_GRAPH);
+  const c = S.c, w = S.w;
+  const g = graphGeom(w);
+  const css = getComputedStyle(document.documentElement);
+  function C(v){ return css.getPropertyValue(v).trim() || "#888"; }
+
+  c.fillStyle = C("--ink-faint"); c.font = "10px ui-monospace,Menlo,monospace";
+  c.fillText("examples/flows/insurance_quote.py — node factory 5개, tool edge 4개 + self-loop 1개. " +
+             "edge는 handler가 돌려준 tuple의 두 번째 원소일 뿐이다 (types.py:266).", 14, 20);
+
+  /* edges */
+  for (let i = 0; i < 4; i++){
+    const from = GRAPH_ORDER[i], to = GRAPH_ORDER[i+1];
+    const fn = NODES[from].fns.find(function(f){ return f.real === to; });
+    const x0 = g.x(i) + g.boxW, x1 = g.x(i+1), y = g.top + g.boxH/2;
+    const used = G.log.some(function(L){ return L.from === from && L.to === to; });
+    c.strokeStyle = used ? C("--accent2") : C("--edge");
+    c.lineWidth = used ? 2 : 1;
+    c.beginPath(); c.moveTo(x0, y); c.lineTo(x1 - 6, y); c.stroke();
+    c.beginPath(); c.moveTo(x1 - 6, y); c.lineTo(x1 - 12, y - 4); c.lineTo(x1 - 12, y + 4);
+    c.closePath(); c.fillStyle = used ? C("--accent2") : C("--edge"); c.fill();
+    if (fn){
+      c.fillStyle = used ? C("--accent2") : C("--ink-faint");
+      c.font = "8px ui-monospace,Menlo,monospace"; c.textAlign = "center";
+      c.fillText(fn.n, (x0 + x1)/2, y - 9);
+      c.textAlign = "left";
+    }
+  }
+
+  /* self-loop on quote_results (index 3) */
+  {
+    const i = 3, cx = g.cx(i), yTop = g.top;
+    const used = G.log.some(function(L){ return L.from === "quote_results" && L.to === "quote_results"; });
+    c.strokeStyle = used ? C("--warn") : C("--edge");
+    c.lineWidth = used ? 2 : 1;
+    c.beginPath();
+    c.moveTo(cx - 22, yTop);
+    c.bezierCurveTo(cx - 34, yTop - 44, cx + 34, yTop - 44, cx + 22, yTop - 3);
+    c.stroke();
+    c.beginPath(); c.moveTo(cx + 22, yTop - 3); c.lineTo(cx + 17, yTop - 11);
+    c.lineTo(cx + 27, yTop - 11); c.closePath();
+    c.fillStyle = used ? C("--warn") : C("--edge"); c.fill();
+    c.fillStyle = used ? C("--warn") : C("--ink-faint");
+    c.font = "8px ui-monospace,Menlo,monospace"; c.textAlign = "center";
+    c.fillText("update_coverage  (self-loop)", cx, yTop - 46);
+    c.textAlign = "left";
+  }
+
+  /* illegal edge: end → initial */
+  if (G.illegalDone){
+    const y = g.top + g.boxH + 34;
+    c.strokeStyle = C("--danger"); c.lineWidth = 2; c.setLineDash([5,4]);
+    c.beginPath();
+    c.moveTo(g.cx(4), g.top + g.boxH);
+    c.bezierCurveTo(g.cx(4), y + 20, g.cx(0), y + 20, g.cx(0), g.top + g.boxH + 6);
+    c.stroke(); c.setLineDash([]);
+    c.fillStyle = C("--danger"); c.font = "9px ui-monospace,Menlo,monospace";
+    c.textAlign = "center";
+    c.fillText("end → create_initial_node()  ·  검사 없이 통과했다", (g.cx(0)+g.cx(4))/2, y + 30);
+    c.textAlign = "left";
+  }
+
+  /* nodes */
+  GRAPH_ORDER.forEach(function(id, i){
+    const N = NODES[id], cur = (G.cur === id);
+    const x = g.x(i);
+    c.fillStyle = cur ? "rgba(63,185,80,.14)" : C("--panel2");
+    c.strokeStyle = cur ? C("--accent2") : C("--edge");
+    c.lineWidth = cur ? 1.8 : 1;
+    c.beginPath(); c.roundRect(x, g.top, g.boxW, g.boxH, 8); c.fill(); c.stroke();
+    c.textAlign = "center";
+    c.fillStyle = C("--ink"); c.font = "700 10px ui-monospace,Menlo,monospace";
+    c.fillText('"' + N.name + '"', x + g.boxW/2, g.top + 20, g.boxW - 8);
+    c.fillStyle = C("--ink-faint"); c.font = "8px ui-monospace,Menlo,monospace";
+    c.fillText(N.factory.length > 30 ? N.factory.slice(0,28) + "…" : N.factory,
+               x + g.boxW/2, g.top + 34, g.boxW - 6);
+    c.fillStyle = N.role ? C("--c-settings") : C("--ink-faint");
+    c.fillText(N.role ? "role_message ✓" : "role_message 없음 (상속)", x + g.boxW/2, g.top + 47, g.boxW - 6);
+    c.textAlign = "left";
+  });
+
+  c.fillStyle = C("--ink-faint"); c.font = "9px ui-monospace,Menlo,monospace";
+  c.fillText("self._current_node = \"" + G.cur + "\"   ← str 하나 (manager.py:703)", 14, S.h - 12);
+}
+
+function renderGState(){
+  const N = NODES[G.cur];
+  const items = [
+    {l:"self._current_node", v:'"' + G.cur + '"', cls:"good"},
+    {l:"advertise된 function 수", v:String(N.fns.length), cls:N.fns.length ? "" : "zero"},
+    {l:"transition 횟수", v:String(G.log.length), cls:""}
+  ];
+  $("gState").innerHTML = items.map(function(i){
+    return "<div class='chip2 " + i.cls + "'><b>" + esc(i.v) + "</b>" + esc(i.l) + "</div>";
+  }).join("");
+}
+
+function renderHandlers(){
+  const host = $("handlers");
+  host.innerHTML = "";
+  const N = NODES[G.cur];
+  if (!N.fns.length){
+    host.innerHTML = "<div class='verdict silent'><b>functions 없음</b><br>" +
+      "terminal node다. LLMSetToolsFrame은 그래도 나갔고, tools=NOT_GIVEN이 tool set을 지웠다. " +
+      "모델이 부를 수 있는 게 없으니 여기서 대화가 끝난다 — post_actions=[{type:\"end_conversation\"}]가 그 뒤를 맡는다.</div>";
+    return;
+  }
+  N.fns.forEach(function(f, idx){
+    const b = document.createElement("button");
+    b.className = "hb" + (G.sel === idx ? " real" : "");
+    b.innerHTML = "<b>" + esc(f.n) + "(" + esc(f.args) + ")</b><small>" + esc(f.note) + "</small>";
+    b.onclick = function(){ G.sel = idx; renderHandlers(); renderOutcome(); renderGCode(); };
+    host.appendChild(b);
+  });
+}
+
+function renderOutcome(){
+  const host = $("outcome");
+  if (G.sel === null || !NODES[G.cur].fns[G.sel]){
+    host.innerHTML = "<div class='callout'>function을 하나 고르면 반환 tuple의 세 가지 결말을 고를 수 있다. " +
+      "<code>ConsolidatedFunctionResult = tuple[Any, NodeConfig | None | _NoResponse]</code> — types.py:266.</div>";
+    return;
+  }
+  const f = NODES[G.cur].fns[G.sel];
+  const opts = [
+    {k:"node", lab:"(result, " + f.ret + ")", sub:"edge function — transition. run_llm=False (새 node가 :709에서 돌린다)", real:true},
+    {k:"none", lab:"(result, None)", sub:"node function — 제자리. run_llm=True. 모델이 결과를 말한다", real:false},
+    {k:"nores", lab:"(result, NO_RESPONSE)", sub:"제자리 + run_llm=False. 결과는 context에 들어가고 모델은 침묵한다", real:false}
+  ];
+  host.innerHTML = "<h3 style='margin-top:14px'>handler가 무엇을 돌려주느냐가 edge다</h3>";
+  const box = document.createElement("div");
+  box.className = "hbtns";
+  opts.forEach(function(o){
+    const b = document.createElement("button");
+    b.className = "hb" + (o.real ? " real" : "");
+    b.innerHTML = "<b>return " + esc(o.lab) + "</b><small>" +
+      (o.real ? "insurance_quote.py가 실제로 하는 것 · " : "") + esc(o.sub) + "</small>";
+    b.onclick = function(){ applyOutcome(f, o.k); };
+    box.appendChild(b);
+  });
+  host.appendChild(box);
+}
+
+function applyOutcome(f, kind){
+  if (kind === "node"){
+    G.log.push({from:G.cur, to:f.real, fn:f.n, kind:"edge"});
+    G.lastRet = {f:f, kind:kind};
+    G.cur = f.real;
+    G.sel = null;
+  } else {
+    G.log.push({from:G.cur, to:G.cur, fn:f.n, kind:kind});
+    G.lastRet = {f:f, kind:kind};
+  }
+  refresh2();
+}
+
+function renderGCode(){
+  const N = NODES[G.cur];
+  const f = (G.sel !== null && N.fns[G.sel]) ? N.fns[G.sel] : null;
+  const R = G.lastRet;
+  const L = [];
+  L.push("<span class='cm'># " + esc(N.src) + "</span>");
+  L.push("<span class='kw'>def</span> " + esc(N.factory.split("(")[0]) + "(...) -> <span class='kw'>NodeConfig</span>:");
+  L.push("    <span class='kw'>return</span> NodeConfig(");
+  L.push("        name=<span class='st'>\"" + esc(N.name) + "\"</span>,");
+  if (N.role) L.push("        role_message=<span class='st'>\"You are a friendly insurance agent. …\"</span>,  <span class='cm'># 파일 전체에서 여기 한 번</span>");
+  L.push("        task_messages=[{<span class='st'>\"role\"</span>: <span class='st'>\"developer\"</span>, <span class='st'>\"content\"</span>: <span class='st'>\"" + esc(N.task) + "\"</span>}],");
+  L.push("        functions=[" + N.fns.map(function(x){ return x.n; }).join(", ") + "],");
+  if (N.name === "end") L.push("        post_actions=[{<span class='st'>\"type\"</span>: <span class='st'>\"end_conversation\"</span>}],");
+  L.push("    )");
+  L.push("");
+  if (f){
+    L.push("<span class='cm'># 선택한 handler</span>");
+    L.push("<span class='kw'>async def</span> <span class='ins'>" + esc(f.n) + "</span>(flow_manager: FlowManager, " + esc(f.args) + "):");
+    L.push("    <span class='cm'># " + esc(f.note) + "</span>");
+    L.push("    <span class='kw'>return</span> result, <span class='ins'>" + esc(f.ret) + "</span>");
+  }
+  if (R){
+    L.push("");
+    L.push("<span class='cm'># 방금 반환한 것 → manager.py:496 의 분기</span>");
+    if (R.kind === "node"){
+      L.push("    next_node = <span class='ins'>" + esc(R.f.ret) + "</span>   <span class='cm'># NodeConfig → _set_node 재실행</span>");
+      L.push("    run_llm=<span class='bad'>False</span>  <span class='cm'># 새 node의 :709가 대신 돌린다</span>");
+    } else if (R.kind === "none"){
+      L.push("    next_node = <span class='kw'>None</span>   <span class='cm'># node function — 제자리</span>");
+      L.push("    run_llm=<span class='st'>True</span>   <span class='cm'># 모델이 결과를 이어서 말한다</span>");
+    } else {
+      L.push("    is_no_response = (next_node <span class='kw'>is</span> NO_RESPONSE)  <span class='cm'># manager.py:1475 — 항등 비교</span>");
+      L.push("    run_llm=<span class='bad'>False</span>  <span class='cm'># 결과는 context에, 발화는 없음</span>");
+    }
+  }
+  $("gCode").innerHTML = L.join("\n");
+}
+
+function renderGLog(){
+  const L = ["<div class='hd'>transition log</div>"];
+  if (!G.log.length) L.push("<div class='same'>  (아직 없음 — initial에서 시작)</div>");
+  G.log.forEach(function(e, i){
+    if (e.kind === "edge"){
+      L.push("<div class='add'>  " + (i+1) + ". " + esc(e.fn) + "()  →  _set_node(\"" + esc(e.to) + "\")</div>");
+    } else if (e.kind === "none"){
+      L.push("<div class='same'>  " + (i+1) + ". " + esc(e.fn) + "()  →  제자리, run_llm=True</div>");
+    } else {
+      L.push("<div class='del'>  " + (i+1) + ". " + esc(e.fn) + "()  →  NO_RESPONSE · 침묵</div>");
+    }
+  });
+  $("gLog").innerHTML = L.join("");
+}
+
+function renderGVerdict(){
+  const R = G.lastRet;
+  let html = "";
+  if (!R){
+    html = "<div class='callout'>node factory는 함수다. edge는 데이터가 아니라 <b>handler의 return문</b>이다. " +
+      "선언형 flow 문서도, JSON edge 표도 없다 — <code>grep -rn \"FlowConfig\"</code>는 0건이다.</div>";
+  } else if (R.kind === "node"){
+    html = "<div class='verdict ok'><b>transition</b><br>" +
+      "<span class='mono'>_set_node(\"" + esc(G.cur) + "\")</span>가 다시 돌았다. panel 1의 네 frame이 그대로 또 나간다. " +
+      "role_message가 없는 node라서 <span class='mono'>LLMUpdateSettingsFrame</span>은 이번엔 나가지 않았고, persona는 그대로 살아 있다.</div>";
+  } else if (R.kind === "none"){
+    html = "<div class='verdict warn'><b>node function — 제자리</b><br>" +
+      "<span class='mono'>_set_node</span>는 돌지 않는다. context에 결과만 들어가고 <span class='mono'>run_llm=True</span>라서 모델이 말을 잇는다. " +
+      "tool set도 그대로다.</div>";
+  } else {
+    html = "<div class='verdict silent'><b>NO_RESPONSE — 결과는 들어갔고, 모델은 조용하다</b><br>" +
+      "<span class='mono'>NO_RESPONSE = _NoResponse()</span> (types.py:247) 는 모듈 레벨 싱글턴이고 " +
+      "<span class='mono'>next_node is NO_RESPONSE</span> (manager.py:1475) 로 <b>항등 비교</b>된다. " +
+      "같은 모양의 객체를 새로 만들어 돌려주면 이 분기에 걸리지 않는다. warm_transfer.py가 " +
+      "<span class='mono'>return {\"status\": \"transferred\"}, NO_RESPONSE</span> 로 쓰는 그 자리다.</div>";
+  }
+  $("gVerdict").innerHTML = html;
+}
+
+function renderGLegend(){
+  $("glegend").innerHTML =
+    "<span><i style='background:var(--accent2)'></i>지나온 edge</span>" +
+    "<span><i style='background:var(--warn)'></i>self-loop (update_coverage)</span>" +
+    "<span><i style='background:var(--danger)'></i>불법 점프 (panel 3에서 실행)</span>" +
+    "<span><i style='background:var(--edge)'></i>아직 안 지난 edge</span>";
+}
+
+function refresh2(){
+  renderGState(); renderHandlers(); renderOutcome(); renderGCode(); renderGLog();
+  renderGVerdict(); drawGraph();
+}
+
+/* =====================================================================
+   PANEL 3 — 없는 guardrail
+   ===================================================================== */
+
+const V = { ran:null };
+
+const ILLEGAL = [
+  {id:"jump", cls:"illegal",
+   t:'end 에서 create_initial_node() 를 반환한다',
+   s:'terminal node → 대화 처음으로. 어떤 from→to 검사에도 걸리지 않는다.',
+   task:true, fns:true, result:"pass"},
+  {id:"empty", cls:"illegal",
+   t:'task_messages=[] 인 node로 간다',
+   s:'"task_messages" 키가 있기만 하면 통과한다. 비어 있는지는 보지 않는다.',
+   task:true, fns:true, result:"pass"},
+  {id:"noname", cls:"illegal",
+   t:'name 을 빼먹은 node로 간다',
+   s:'node id가 str(uuid.uuid4())가 되고 current_node 비교 가드가 전부 죽는다.',
+   task:true, fns:true, result:"pass"},
+  {id:"missing", cls:"",
+   t:'task_messages 를 아예 빼고 간다',
+   s:'유일하게 진짜로 막히는 것. FlowError가 난다.',
+   task:false, fns:true, result:"fail-task"},
+  {id:"badfn", cls:"",
+   t:'functions=["collect_age"] — 문자열을 넣는다',
+   s:'callable도 FlowsFunctionSchema도 아니다 → InvalidFunctionError.',
+   task:true, fns:false, result:"fail-fn"}
+];
+
+function renderIllegal(){
+  const host = $("illegal");
+  host.innerHTML = "";
+  ILLEGAL.forEach(function(I){
+    const b = document.createElement("button");
+    b.className = "hb " + I.cls + (V.ran === I.id ? " real" : "");
+    b.innerHTML = "<b>" + esc(I.t) + "</b><small>" + esc(I.s) + "</small>";
+    b.onclick = function(){
+      V.ran = I.id;
+      if (I.id === "jump" && I.result === "pass"){
+        G.illegalDone = true;
+        G.log.push({from:"end", to:"initial", fn:"(handler)", kind:"edge"});
+        G.cur = "initial"; G.sel = null;
+        refresh2();
+      }
+      refresh3();
+    };
+    host.appendChild(b);
+  });
+}
+
+function renderValView(){
+  const I = ILLEGAL.find(function(x){ return x.id === V.ran; });
+  if (!I){
+    $("valView").innerHTML = "<div class='callout'>왼쪽에서 하나 눌러 봐라. " +
+      "<code>_validate_node_config</code> (manager.py:867-898) 가 실제로 도는 검사는 정확히 두 개다.</div>";
+    return;
+  }
+  const rows = [
+    {c:'if "task_messages" not in config:', ok:I.task,
+     msg: I.task ? "키가 있다 → 통과 (빈 리스트여도 통과)" : 'FlowError: Node \'...\' missing required \'task_messages\' field'},
+    {c:'for func in config.get("functions", []): callable(func) or FlowsFunctionSchema', ok:I.fns,
+     msg: I.fns ? "전부 callable → 통과" : "InvalidFunctionError: Invalid function format in node '...'"},
+    {c:'if <b>from → to 가 legal한가</b>', ok:null,
+     msg: "이런 줄은 없다. grep -rn \"not allowed|illegal transition|invalid transition\" src/pipecat/flows/ → 0건"}
+  ];
+  let html = "<h3>돌아간 검사</h3><table><tr><th>검사</th><th>결과</th></tr>";
+  rows.forEach(function(r){
+    const mark = r.ok === null ? "<span class='tag bad'>존재하지 않음</span>"
+               : (r.ok ? "<span class='tag ok'>pass</span>" : "<span class='tag bad'>raise</span>");
+    html += "<tr><td class='mono'>" + r.c + "</td><td>" + mark + "<br><span style='color:var(--ink-dim)'>" + esc(r.msg) + "</span></td></tr>";
+  });
+  html += "</table>";
+
+  if (I.result === "pass"){
+    html += "<div class='verdict silent'><b>통과했다</b><br>";
+    if (I.id === "jump"){
+      html += "end 에서 introduction 으로 돌아갔다. 에러도, 경고도, debug 위의 로그 한 줄도 없다. " +
+        "위 graph에 빨간 점선으로 그려진 게 그 점프다. <b>transition legality를 지키는 것은 " +
+        "오직 그 node의 functions 목록뿐이다</b> — 그래서 node마다 무엇을 advertise하느냐가 rail guard다.";
+    } else if (I.id === "empty"){
+      html += "task_messages=[] 는 통과한다. messages.extend([]) 가 돌고, " +
+        "LLMMessagesAppendFrame(messages=[])이 나가고, LLMRunFrame이 나가고, 모델은 아무 지시 없이 말을 시작한다.";
+    } else {
+      html += 'node id가 <span class="mono">str(uuid.uuid4())</span> 가 된다 (manager.py:1234). ' +
+        '<span class="mono">flow_manager.current_node == "quote_results"</span> 같은 가드는 이후 전부 False다. ' +
+        'name은 optional인데 name에 의존하는 코드는 optional이 아니다.';
+    }
+    html += "</div>";
+  } else {
+    html += "<div class='verdict ok'><b>여기서 막힌다</b><br>" +
+      (I.result === "fail-task" ? "FlowError — 이게 Flows가 막아 주는 두 가지 중 하나다."
+                                : "InvalidFunctionError — 두 가지 중 나머지 하나다.") +
+      " Flows가 검사하는 것의 전부다.</div>";
+  }
+  $("valView").innerHTML = html;
+}
+
+function renderValCode(){
+  $("valCode").innerHTML = [
+    "<span class='cm'># src/pipecat/flows/manager.py:867-898 — 검증 표면의 전부</span>",
+    "<span class='kw'>def</span> _validate_node_config(self, node_id: str, config: NodeConfig) -> <span class='kw'>None</span>:",
+    "    <span class='cm'># 1. 필수 필드</span>",
+    "    <span class='kw'>if</span> <span class='st'>\"task_messages\"</span> <span class='kw'>not in</span> config:",
+    "        <span class='kw'>raise</span> <span class='bad'>FlowError</span>(f<span class='st'>\"Node '{node_id}' missing required 'task_messages' field\"</span>)",
+    "",
+    "    functions_list = config.get(<span class='st'>\"functions\"</span>, [])",
+    "",
+    "    <span class='cm'># 2. function 형식</span>",
+    "    <span class='kw'>for</span> func <span class='kw'>in</span> functions_list:",
+    "        <span class='kw'>if</span> callable(func):",
+    "            FlowsDirectFunctionWrapper.validate_function(func)",
+    "        <span class='kw'>elif not</span> isinstance(func, FlowsFunctionSchema):",
+    "            <span class='kw'>raise</span> <span class='bad'>InvalidFunctionError</span>(...)",
+    "",
+    "    <span class='cm'># 3. ... 없음. from→to 검사는 이 파일 어디에도 없다.</span>"
+  ].join("\n");
+}
+
+function renderDeadView(){
+  $("deadView").innerHTML =
+    "<h3 style='margin-top:18px'><span class='mono'>self._current_functions</span> — 어디까지 죽었는가</h3>" +
+    "<div class='callout bad'>" +
+    "<span class='tag bad'>dead in src/, asserted at 6 sites in tests/test_flows_manager.py</span><br><br>" +
+    "<b>정확히 말하면:</b> <span class='mono'>manager.py:148</span> 에서 <span class='mono'>set[str]</span> 로 초기화되고 " +
+    "<span class='mono'>manager.py:704</span> 에서 매 transition마다 대입된다. 그리고 <span class='mono'>src/</span> 안에서 " +
+    "이 값을 <b>읽는 코드는 없다</b> — function dispatch는 이걸 게이트로 쓰지 않는다. " +
+    "하지만 '아무 데서도 안 읽는다'는 과장이다. 테스트가 읽는다:" +
+    "<pre style='margin-top:9px'>tests/test_flows_manager.py:191   assertEqual(flow_manager._current_functions, set())\n" +
+    "tests/test_flows_manager.py:319   assertEqual(len(flow_manager._current_functions), 3)\n" +
+    "tests/test_flows_manager.py:758   assertIn(\"test1\", flow_manager._current_functions)\n" +
+    "tests/test_flows_manager.py:759   assertIn(\"test2\", flow_manager._current_functions)\n" +
+    "tests/test_flows_manager.py:1174  assertEqual(flow_manager._current_functions, set())\n" +
+    "tests/test_flows_manager.py:1203  assertEqual(flow_manager._current_functions, set())</pre>" +
+    "런타임 게이트로는 죽었고, 테스트 assertion surface로는 살아 있다. " +
+    "이게 'nowhere' 보다 약하지만 더 정확한 문장이다." +
+    "</div>" +
+    "<div class='callout'>" +
+    "<b>node registry도 없다.</b> node id는 <span class='mono'>node_config.get(\"name\", str(uuid.uuid4()))</span> " +
+    "(manager.py:1234) 로 그 자리에서 만들어진다. 이름의 전역 목록이 없으니 오타난 name은 그냥 새 node다. " +
+    "<span class='mono'>_current_node</span> 도 <span class='mono'>str | None</span> 하나일 뿐이라 " +
+    "(manager.py:149) 'node A에서 왔는지' 를 물어볼 수 있는 히스토리도 없다." +
+    "</div>";
+}
+
+function refresh3(){
+  renderIllegal(); renderValView(); renderValCode(); renderDeadView();
+}
+
+/* =====================================================================
+   BOOT
+   ===================================================================== */
+
+/* roundRect 폴백 (구형 Safari) */
+if (!CanvasRenderingContext2D.prototype.roundRect){
+  CanvasRenderingContext2D.prototype.roundRect = function(x, y, w, h, r){
+    const rr = Math.min(r, w/2, h/2);
+    this.beginPath();
+    this.moveTo(x+rr, y);
+    this.lineTo(x+w-rr, y); this.quadraticCurveTo(x+w, y, x+w, y+rr);
+    this.lineTo(x+w, y+h-rr); this.quadraticCurveTo(x+w, y+h, x+w-rr, y+h);
+    this.lineTo(x+rr, y+h); this.quadraticCurveTo(x, y+h, x, y+h-rr);
+    this.lineTo(x, y+rr); this.quadraticCurveTo(x, y, x+rr, y);
+    this.closePath();
+    return this;
+  };
+}
+
+$("bSet").onclick = function(){
+  ST.lastBatch = computeBatch();
+  applySetNode();
+  refresh1();
+  startAnim();
+};
+$("bReset").onclick = function(){
+  ST.sess = {current_node:null, current_functions:[], sys:null, messages:[], tools:[], setNodeCount:0};
+  ST.lastLog = [];
+  stopAnim();
+  refresh1();
+};
+$("bPlay").onclick = function(){
+  if (ANIM.on){ stopAnim(); drawPipe(); } else { startAnim(); }
+};
+$("bGReset").onclick = function(){
+  G.cur = "initial"; G.log = []; G.lastRet = null; G.sel = null; G.illegalDone = false;
+  V.ran = null;
+  refresh2(); refresh3();
+};
+
+$("foot").innerHTML =
+  "ch-10 <a href='../read.md'>read.md</a> §2 (밖에 있다는 것) · §3.4 (frame 도착지 표) · " +
+  "§4.4 (frame batch 네 규칙) · §6.3 (edge tuple) · §10.1 (검증 두 가지) · §0.4 (_current_functions) 로 돌아가라.<br>" +
+  "표시된 줄 번호는 전부 read.md가 인용한 소스 블록에서 그대로 가져왔다: " +
+  "<code>manager.py:80, 148, 149, 703, 704, 709, 768, 773-777, 831-836, 838, 839, 841, 867-898, 1234, 1475</code> · " +
+  "<code>types.py:134, 155-179, 182-237, 247, 266</code> · <code>worker.py:810-829</code> · " +
+  "<code>hello_world.py:135-167</code> · <code>insurance_quote.py:211-237, 258-281, 284-298</code>.<br>" +
+  "frame의 순서 · 진입 지점 · 소비 지점은 전부 실제 코드다. 애니메이션의 속도만 가짜다.";
+
+let rz = null;
+window.addEventListener("resize", function(){
+  if (rz) clearTimeout(rz);
+  rz = setTimeout(function(){ drawPipe(); drawGraph(); }, 120);
+});
+
+renderLegend();
+renderGLegend();
+refresh1();
+refresh2();
+refresh3();
+</script>
+</body>
+</html>
