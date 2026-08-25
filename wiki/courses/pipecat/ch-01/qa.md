@@ -379,3 +379,61 @@ for curr in self._processors[1:]:
 않는다 — 아무 일도 하지 않고 넘기기만 하므로 큐를 둘 이유가 없고, `queue_frame`의 direct-mode
 분기(`frame_processor.py:717-719`)로 곧장 `__process_frame`을 부른다. **구조를 만드는 비용이
 0에 가깝다**는 뜻이며, 그래서 중첩을 마음껏 해도 된다.
+
+---
+
+## Q10. `NullFilter`는 왜 있는가? 목적이 뭔가
+
+**Kernel.** 선언된 목적은 docstring에 있다 — *"useful for testing or temporarily stopping
+frame flow in a pipeline."* **실제 사용량은 0이다.**
+
+| | `src/` | `tests/` | `examples/` |
+|---|---:|---:|---:|
+| `NullFilter` | 1 (자기 정의) | **0** | **0** |
+| `IdentityFilter` | 1 (자기 정의) | **75** | 0 |
+| `FrameFilter` | 1 | 9 | 0 |
+| `FunctionFilter` | 4 | 7 | **7** |
+
+**이 데이터가 두 형제를 갈라놓는다 — read.md §5의 "대수를 닫는다" 해석은 `IdentityFilter`
+쪽에서 훨씬 강하다.** `IdentityFilter`에는 진짜 직업이 있다: **측정용 탐침**. docstring이
+*"useful when testing ParallelPipeline ... (no frames should be repeated)"*라 말하고, 실제
+사용처가 `test_turn_tracking_observer.py`·`test_user_bot_latency_observer.py`다 — observer를
+붙일 processor가 파이프에 하나 필요한데 **그것이 아무것도 바꾸면 안 되는** 상황. "넣어도 영향이
+없다"는 성질 자체가 용도가 된다. `NullFilter`에는 그런 직업이 없다.
+
+**왜 아무도 안 쓰는가 — 같은 동작을 내는 방법이 셋이다:**
+```python
+NullFilter()                      # 모두 차단
+FrameFilter(types=())             # 통과 목록이 비었으므로 모두 차단
+FunctionFilter(lambda f: False)   # 술어가 항상 False
+```
+뒤의 둘은 **조건을 바꿀 수 있고**, 그래서 `FunctionFilter`가 `examples/`에서 7번 쓰이는
+유일한 필터다. 아이러니: 선언된 목적이 "temporarily stopping"인데 **`NullFilter`에는 토글이
+없다.** 항상 막는다. "일시적으로"를 하려면 결국 `FunctionFilter`를 써야 한다.
+
+**정직한 답:** `NullFilter`가 사는 이유는 **가독성 하나**다 —
+`FunctionFilter(lambda f: False)`보다 `NullFilter()`가 의도를 말해준다. 기능적으로는 잉여이고,
+대수적 완결성은 목적이라기보다 **결과**일 가능성이 높다. (교사의 앞선 단정 "대수를 닫으려고
+존재한다"는 과했다. 그 논거는 `IdentityFilter`에만 강하게 선다.)
+
+**진짜 배울 점.** 레포에 있다고 다 쓰이는 것이 아니다. 클래스의 **존재**와 **살아있는 API**는
+다른 사실이고, `grep` 개수가 그 구분을 준다. 프레임워크를 처음 읽을 때 이를 구분하지 못하면
+죽은 API 위에 설계를 세우게 된다. read.md §11의 두 번째 수("near-zero를 compliance
+kill-switch로")가 흥미로우면서 동시에 정당화 부담이 큰 제안인 이유가 이것이다.
+
+---
+
+## 진단 — ch-01 자가점검 (2026-08-25)
+
+학습자가 ch-02 진입 전 검증을 요청 → 인과 강제형 probe 5문. 학습자가 스스로 "아직 넘어갈
+수준이 아니다"라 판단하고 재학습 선택. probe가 겨냥한 절:
+
+| probe | 겨냥 | 상태 |
+|---|---|---|
+| 1 push vs return 시그니처 반박 | §2 | [[Q2]]로 이미 단단 |
+| 2 순서를 타입에 안 넣은 이유 | **§8** | 미확인 |
+| 3 절단 불가능성의 실무 대가 | **§5.2**, §11 | 미확인 |
+| 4 rule을 세 자리 중 어디에 | §6 + [[Q7]][[Q8]] | 부분 |
+| 5 동시성 하 순서 보장 | **§7.2–7.3**, `FrameProcessorQueue:132-143` | 미확인 |
+
+**§5·§7·§8이 반복 등장 = 현재 공백.** §1–§4는 Q1–Q9로 확보됨.
