@@ -17,6 +17,14 @@
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>Ch-06 — Attention Kernel Zoo: Activation Memory vs. Sequence Length</title>
 <style>
+  /* --- 반응형 타이포 스케일 -------------------------------------------
+     모든 크기는 rem 기준(1rem = 14px 기본). 태블릿 등 터치 기기는
+     뷰포트가 좁은데 DPI가 높고 가까이서 보므로 root를 키워 전체를 확대한다.
+     max-width도 rem이라 본문 폭이 글자와 함께 커진다. ------------------- */
+  html{font-size:14px;}
+  @media (pointer:coarse){ html{font-size:17px;} }
+  @media (min-width:1500px){ html{font-size:15.5px;} }
+
   :root {
     --bg: #0f1115; --panel: #171a21; --panel2: #1c2029; --text: #e6e8eb;
     --muted: #8a95a4; --accent: #5ec8ff; --warn: #ffb86b;
@@ -28,28 +36,28 @@
   body {
     margin: 0; padding: 20px; background: var(--bg); color: var(--text);
     font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-    font-size: 13px; line-height: 1.45;
+    font-size:0.9286rem; line-height: 1.45;
   }
-  h1 { font-size: 17px; margin: 0 0 4px 0; }
-  p.sub { color: var(--muted); margin: 0 0 16px 0; font-size: 12px; max-width: 980px; }
-  code { background: #232833; padding: 1px 5px; border-radius: 3px; font-size: 11px; color: var(--accent); }
+  h1 { font-size:1.2143rem; margin: 0 0 4px 0; }
+  p.sub { color: var(--muted); margin: 0 0 16px 0; font-size:0.8571rem; max-width: 70rem; }
+  code { background: #232833; padding: 1px 5px; border-radius: 3px; font-size:0.7857rem; color: var(--accent); }
   .controls {
     background: var(--panel); padding: 12px 16px; border-radius: 8px;
     margin-bottom: 16px; display: flex; flex-wrap: wrap; gap: 20px; align-items: flex-end;
   }
   .control { display: flex; flex-direction: column; gap: 5px; min-width: 190px; }
-  .control label { font-size: 11px; color: var(--muted); display: flex; justify-content: space-between; gap: 10px; }
+  .control label { font-size:0.7857rem; color: var(--muted); display: flex; justify-content: space-between; gap: 10px; }
   .control .val { font-variant-numeric: tabular-nums; color: var(--accent); font-weight: 600; }
   input[type=range] { width: 100%; accent-color: var(--accent); }
   .toggle { display: flex; gap: 4px; }
   .toggle button {
     background: #232833; border: 1px solid #2a2f3a; color: var(--text);
-    padding: 5px 11px; border-radius: 4px; cursor: pointer; font-size: 11px;
+    padding: 5px 11px; border-radius: 4px; cursor: pointer; font-size:0.7857rem;
   }
   .toggle button.active { background: var(--accent); color: #0f1115; border-color: var(--accent); font-weight: 600; }
   .plotwrap { background: var(--panel); padding: 14px 16px 10px; border-radius: 8px; }
   canvas#plot { width: 100%; height: 440px; background: #0b0d11; border-radius: 6px; display: block; }
-  .legend { display: flex; flex-wrap: wrap; gap: 16px; font-size: 11px; color: var(--muted); margin-top: 10px; align-items: center; }
+  .legend { display: flex; flex-wrap: wrap; gap: 16px; font-size:0.7857rem; color: var(--muted); margin-top: 10px; align-items: center; }
   .legend .item { display: flex; align-items: center; gap: 5px; }
   .legend .sw { display: inline-block; width: 14px; height: 3px; border-radius: 2px; }
   .legend .sw.dash { height: 0; border-top: 2px dashed; width: 16px; }
@@ -62,14 +70,14 @@
   .card.oflash { border-left-color: var(--oflash); }
   .card.sage { border-left-color: var(--sage); }
   .card.cross { border-left-color: var(--warn); }
-  .card h3 { margin: 0 0 6px; font-size: 12px; font-weight: 600; }
-  .card .big { font-size: 18px; font-variant-numeric: tabular-nums; }
-  .card .lbl { color: var(--muted); font-size: 10.5px; }
-  table { border-collapse: collapse; width: 100%; margin-top: 14px; font-size: 11.5px; }
+  .card h3 { margin: 0 0 6px; font-size:0.8571rem; font-weight: 600; }
+  .card .big { font-size:1.2857rem; font-variant-numeric: tabular-nums; }
+  .card .lbl { color: var(--muted); font-size:0.75rem; }
+  table { border-collapse: collapse; width: 100%; margin-top: 14px; font-size:0.8214rem; }
   th, td { text-align: left; padding: 7px 9px; border-bottom: 1px solid var(--grid); vertical-align: top; }
   thead th { color: var(--accent); font-weight: 600; border-bottom: 1px solid #33404f; position: sticky; top: 0; background: var(--panel); }
   tbody tr:hover { background: #1a1e27; }
-  .pill { display: inline-block; padding: 1px 7px; border-radius: 10px; font-size: 10px; font-weight: 600; }
+  .pill { display: inline-block; padding: 1px 7px; border-radius: 10px; font-size:0.7143rem; font-weight: 600; }
   .pill.exact { background: rgba(125,216,125,0.16); color: var(--good); }
   .pill.quant { background: rgba(198,155,255,0.18); color: var(--violet); }
   .pill.na { background: rgba(138,149,164,0.16); color: var(--muted); }
@@ -79,7 +87,7 @@
   .mem.n2 { color: var(--naive); }
   .mem.n { color: var(--oflash); }
   .mem.shard { color: var(--accent); }
-  .foot { color: var(--muted); font-size: 11px; margin-top: 14px; line-height: 1.6; max-width: 980px; }
+  .foot { color: var(--muted); font-size:0.7857rem; margin-top: 14px; line-height: 1.6; max-width: 70rem; }
   .tag { color: var(--warn); }
   a { color: var(--accent); }
 </style>

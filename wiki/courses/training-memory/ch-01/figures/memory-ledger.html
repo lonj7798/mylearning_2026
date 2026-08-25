@@ -20,6 +20,14 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>The Memory Ledger — What Fills a GPU (ch-01)</title>
 <style>
+  /* --- 반응형 타이포 스케일 -------------------------------------------
+     모든 크기는 rem 기준(1rem = 14px 기본). 태블릿 등 터치 기기는
+     뷰포트가 좁은데 DPI가 높고 가까이서 보므로 root를 키워 전체를 확대한다.
+     max-width도 rem이라 본문 폭이 글자와 함께 커진다. ------------------- */
+  html{font-size:14px;}
+  @media (pointer:coarse){ html{font-size:17px;} }
+  @media (min-width:1500px){ html{font-size:15.5px;} }
+
   :root{
     --bg:#0e1117; --panel:#161b22; --panel2:#1c2230; --edge:#2b3242;
     --ink:#e6edf3; --ink-dim:#9aa7b4; --ink-faint:#6b7686;
@@ -35,17 +43,17 @@
   html,body{margin:0;padding:0;}
   body{
     background:var(--bg); color:var(--ink);
-    font:14px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
-    padding:22px; max-width:1180px; margin:0 auto;
+    font:1rem/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+    padding:22px; max-width:84rem; margin:0 auto;
   }
-  h1{font-size:20px; margin:0 0 2px; letter-spacing:.2px;}
-  .sub{color:var(--ink-dim); font-size:13px; margin:0 0 18px;}
+  h1{font-size:1.4286rem; margin:0 0 2px; letter-spacing:.2px;}
+  .sub{color:var(--ink-dim); font-size:0.9286rem; margin:0 0 18px;}
   .sub code{color:var(--accent);}
   .wrap{display:grid; grid-template-columns:340px 1fr; gap:20px; align-items:start;}
   @media (max-width:900px){ .wrap{grid-template-columns:1fr;} }
 
   .panel{background:var(--panel); border:1px solid var(--edge); border-radius:10px; padding:16px;}
-  .panel h2{font-size:13px; text-transform:uppercase; letter-spacing:.8px; color:var(--ink-dim);
+  .panel h2{font-size:0.9286rem; text-transform:uppercase; letter-spacing:.8px; color:var(--ink-dim);
     margin:0 0 12px; font-weight:600;}
 
   /* ---- controls ---- */
@@ -64,24 +72,24 @@
 
   .seg{display:flex; border:1px solid var(--edge); border-radius:8px; overflow:hidden;}
   .seg button{flex:1; background:var(--panel2); color:var(--ink-dim); border:none; padding:9px 6px;
-    font-size:13px; font-weight:600; cursor:pointer; transition:.12s;}
+    font-size:0.9286rem; font-weight:600; cursor:pointer; transition:.12s;}
   .seg button + button{border-left:1px solid var(--edge);}
   .seg button.on{background:var(--accent); color:#04121f;}
   .seg button:hover:not(.on){background:#222a38; color:var(--ink);}
 
   .presetrow{display:flex; gap:8px; flex-wrap:wrap; margin-top:4px;}
   .presetrow button{flex:1 1 auto; background:var(--panel2); color:var(--ink-dim); border:1px solid var(--edge);
-    border-radius:7px; padding:7px 8px; font-size:12px; cursor:pointer; white-space:nowrap;}
+    border-radius:7px; padding:7px 8px; font-size:0.8571rem; cursor:pointer; white-space:nowrap;}
   .presetrow button:hover{background:#222a38; color:var(--ink); border-color:var(--accent);}
 
-  .hint{font-size:11.5px; color:var(--ink-faint); margin-top:6px; line-height:1.45;}
+  .hint{font-size:0.8214rem; color:var(--ink-faint); margin-top:6px; line-height:1.45;}
 
   /* ---- chart ---- */
   .chartcard{position:relative;}
-  .capnote{display:flex; gap:16px; align-items:center; margin-bottom:10px; font-size:12px; color:var(--ink-dim);
+  .capnote{display:flex; gap:16px; align-items:center; margin-bottom:10px; font-size:0.8571rem; color:var(--ink-dim);
     flex-wrap:wrap;}
   .capnote b{color:var(--ink); font-variant-numeric:tabular-nums;}
-  .badge{padding:2px 9px; border-radius:999px; font-size:12px; font-weight:700; letter-spacing:.3px;}
+  .badge{padding:2px 9px; border-radius:999px; font-size:0.8571rem; font-weight:700; letter-spacing:.3px;}
   .badge.ok{background:rgba(63,185,80,.16); color:var(--accent2); border:1px solid rgba(63,185,80,.4);}
   .badge.bad{background:rgba(248,81,73,.16); color:var(--danger); border:1px solid rgba(248,81,73,.45);}
 
@@ -92,40 +100,40 @@
   .bar.over{box-shadow:0 0 0 2px var(--danger), 0 0 18px rgba(248,81,73,.55);}
   .seg-fill{height:100%; position:relative; transition:width .18s ease, background .18s;}
   .seg-fill span{position:absolute; inset:0; display:flex; align-items:center; justify-content:center;
-    font-size:11px; font-weight:700; color:#08131f; text-shadow:0 1px 1px rgba(255,255,255,.25);
+    font-size:0.7857rem; font-weight:700; color:#08131f; text-shadow:0 1px 1px rgba(255,255,255,.25);
     white-space:nowrap; overflow:hidden;}
   .bar.over .seg-fill{filter:saturate(.55) brightness(.82);}
-  .totaltag{position:absolute; top:4px; font-size:11px; font-weight:700; color:var(--ink);
+  .totaltag{position:absolute; top:4px; font-size:0.7857rem; font-weight:700; color:var(--ink);
     background:#0b111a; border:1px solid var(--edge); border-radius:5px; padding:1px 6px; transform:translateX(-50%);
     white-space:nowrap; transition:left .18s;}
 
   /* capacity lines */
   .capline{position:absolute; top:18px; height:72px; width:0; border-left:2px dashed; }
-  .capline .lbl{position:absolute; top:-15px; left:4px; font-size:10.5px; font-weight:700; white-space:nowrap;}
+  .capline .lbl{position:absolute; top:-15px; left:4px; font-size:0.75rem; font-weight:700; white-space:nowrap;}
   .capline.c40{border-color:var(--warn); color:var(--warn);}
   .capline.c80{border-color:var(--accent2); color:var(--accent2);}
   .axis{position:absolute; bottom:4px; left:0; right:0; display:flex; justify-content:space-between;
-    padding:0 2px; font-size:10px; color:var(--ink-faint); font-variant-numeric:tabular-nums;}
+    padding:0 2px; font-size:0.7143rem; color:var(--ink-faint); font-variant-numeric:tabular-nums;}
 
   /* legend + table */
   .legend{display:flex; flex-wrap:wrap; gap:6px 14px; margin:12px 0 4px;}
-  .legend .item{display:flex; align-items:center; gap:6px; font-size:12px; color:var(--ink-dim);}
+  .legend .item{display:flex; align-items:center; gap:6px; font-size:0.8571rem; color:var(--ink-dim);}
   .legend .sw{width:12px; height:12px; border-radius:3px; flex:none;}
 
-  table{width:100%; border-collapse:collapse; margin-top:8px; font-size:12.5px;}
+  table{width:100%; border-collapse:collapse; margin-top:8px; font-size:0.8929rem;}
   th,td{text-align:right; padding:6px 8px; border-bottom:1px solid var(--edge); font-variant-numeric:tabular-nums;}
   th:first-child,td:first-child{text-align:left;}
-  th{color:var(--ink-faint); font-weight:600; text-transform:uppercase; font-size:10.5px; letter-spacing:.6px;}
+  th{color:var(--ink-faint); font-weight:600; text-transform:uppercase; font-size:0.75rem; letter-spacing:.6px;}
   td.dim{color:var(--ink-faint);}
   td .dot{display:inline-block; width:9px; height:9px; border-radius:2px; margin-right:7px; vertical-align:middle;}
   tr.tot td{font-weight:700; color:var(--ink); border-top:2px solid var(--edge); border-bottom:none;}
   tr.tot td.red{color:var(--danger);}
 
   .callout{margin-top:14px; background:var(--panel2); border:1px solid var(--edge);
-    border-left:3px solid var(--accent); border-radius:8px; padding:11px 13px; font-size:12.5px; color:var(--ink-dim);}
+    border-left:3px solid var(--accent); border-radius:8px; padding:11px 13px; font-size:0.8929rem; color:var(--ink-dim);}
   .callout b{color:var(--ink);}
   .callout .flip{color:var(--c-adam); font-weight:700;}
-  .foot{color:var(--ink-faint); font-size:11px; margin-top:14px; line-height:1.5;}
+  .foot{color:var(--ink-faint); font-size:0.7857rem; margin-top:14px; line-height:1.5;}
   .foot code{color:var(--ink-dim);}
   .kbd{font-family:ui-monospace,SFMono-Regular,Menlo,monospace; background:#0b111a; border:1px solid var(--edge);
     border-radius:4px; padding:0 5px; color:var(--ink-dim);}
