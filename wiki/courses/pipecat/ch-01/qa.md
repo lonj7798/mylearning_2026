@@ -466,6 +466,54 @@ stopping frame flow"*)에 근거한 정당한 독해였다. 문제는 **docstrin
 
 ---
 
+## Q12. 항등원/대수 얘기가 왜 여기서 나오나?
+
+**Kernel.** 정당한 의심이고, **부분적으로 맞다.** 레포는 대수 용어를 한 번도 쓰지 않는다:
+
+```
+monoid 0 · algebra 0 · associativ 0 · "identity element" 0 · commutat 0 · composab 3
+```
+
+`identity`는 `IdentityFilter`라는 **클래스 이름**으로만 등장하며 docstring은
+*"transparent frame passthrough"* — "항등원"이 아니라 평범한 영어다.
+
+**교사 정정:** 첫 설명에서 "저자들이 pipeline을 대수로 생각한 증거"라고 단정한 것은 틀렸다.
+그것은 read.md의 렌즈이지 저자들의 언어가 아니다. 렌즈와 저자 의도를 섞어 말한 오류다.
+
+**그럼에도 렌즈가 값을 한 지점 둘:**
+1. **검증 가능한 예측을 낳았다.** "항등원은 아무 데나 안전하다" → *관측 도구는 항등원 모양일
+   것이다* → `FrameLogger`가 정확히 그 모양이고 `IdentityFilter`는 테스트 75회([[Q11]]).
+   예측 없이 이름만 붙였다면 장식이다.
+2. **용어가 탐색을 유도했다.** "identity가 있으면 zero도 있나?" → `NullFilter` 발견 → 진짜
+   zero가 아님 → **"control plane은 절단 불가능"**이라는 실무 사실 도출([[Q10]]). 대칭성을
+   의식할 때만 걸어지는 경로다.
+
+**어디까지만 믿을 것인가 — 이 대수는 성립하지 않는다:**
+- **zero가 zero가 아니다** — `NullFilter`가 `SystemFrame`·`EndFrame`을 흘린다.
+- **결합법칙도 근사다** — `Pipeline([B, C])`는 실제로 `[PipelineSource, B, C, PipelineSink]`가
+  되므로([[Q9]]) `Pipeline([A, Pipeline([B,C]), D])`는 `Pipeline([A,B,C,D])`보다 processor가
+  **2개 많다.** direct mode라 지연은 없지만 `process_frame` 호출이 2회 늘고 observer가 보는
+  `FramePushed`도 는다. **동작상 투명하되 수학적으로 동일하지는 않다.**
+
+**대수 없이 같은 말 하기:**
+
+| 대수 용어 | 그냥 말하면 |
+|---|---|
+| 항등원 | 넣어도 아무것도 안 변하는 processor |
+| near-zero | 다 막지만 제어 신호는 흘리는 processor |
+| 결합법칙 | 연속 구간을 sub-pipeline으로 묶어도 동작이 같음 |
+| 병렬 결합자 | 갈래를 만드는 방법 |
+
+오른쪽만 알아도 실무엔 지장 없다. 왼쪽은 압축과 예측을 위한 것이다.
+
+**실제로 쓰이는 자리는 하나.** [[ch-12/read]]의 "모든 rule layer를 하나의 processor로
+합쳐라"가 정당한지 묻는 것이 곧 "묶으면 동작이 바뀌나?"이고 그것이 결합법칙 질문이다. 그리고
+답이 요점이다 — **거기서는 결합법칙이 성립하지 않기 때문에** 합치는 것이다(layer들이 rollback
+으로 얽혀 있어 못 나눈다). 대수는 **"여기는 자유롭게 묶어도 된다 / 여기는 안 된다"를 구분하는
+도구**이지 우아함을 위한 장식이 아니다.
+
+---
+
 ## 진단 — ch-01 자가점검 (2026-08-25)
 
 학습자가 ch-02 진입 전 검증을 요청 → 인과 강제형 probe 5문. 학습자가 스스로 "아직 넘어갈
