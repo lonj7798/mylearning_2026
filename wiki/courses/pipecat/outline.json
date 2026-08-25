@@ -1,0 +1,133 @@
+{
+  "slug": "pipecat",
+  "title": "Pipecat for a Production Voice Agent: Frame Pipelines, Server-Side Voice, and Migrating boson-agent",
+  "kind": "draft",
+  "created": "2026-08-24",
+  "scope": "A migration-oriented systems course on Pipecat, the real-time voice-agent framework, aimed squarely at moving the learner's boson-agent (Lina TMR Korean insurance tele-sales agent, 47k LOC across the basement core and the gateway orchestrator) onto it with server-side voice. Covers the frame-pipeline paradigm (Frame / FrameProcessor / Pipeline, upstream vs downstream, SystemFrame priority) and how it differs from a turn-based agent framework; pipeline construction and runtime (PipelineTask, PipelineRunner, ParallelPipeline, filters); the transport layer (Daily/WebRTC, WebSocket, Twilio/Telnyx/SIP) that replaces the existing 1,404-line WebSocket server; streaming STT with interim transcripts and endpointing, including Korean-specific accuracy; streaming TTS with word and sentence boundaries; VAD-driven barge-in and in-flight cancellation, which re-founds the existing 581-line text-transcript interrupt subsystem on real audio; the collision between Pipecat's LLM service plus context aggregator and boson's own 561-line agent loop with its meta-tool router, and the adopt / wrap / bypass strategies for resolving it; writing custom FrameProcessors so the stage machine, rule layers, and script engine (1,645 lines with no Pipecat equivalent) survive the move; the voice-to-voice latency budget and observability; and a capstone that produces the actual subsystem-by-subsystem migration design. Every chapter ships one interactive HTML figure. Note: the learner's current architecture has no server-side audio at all -- voice is handled client-side and barge-in operates on text partial transcripts -- so this course is as much about what Pipecat forces to change as about Pipecat itself.",
+  "tactic_blind": true,
+  "figure_contract": "Every chapter ships exactly one self-contained interactive HTML figure under ch-XX/figures/. No chapter may be authored without it. Figures are vanilla JS + inline CSS, render offline from file://, use the dark palette established in wiki/courses/training-memory/ch-01/figures/adamw-derivation.html, are written in Korean with CS/ML terms kept in English, and must show real mechanics rather than decorative diagrams.",
+  "phases": [
+    {
+      "id": "paradigm",
+      "title": "The Frame Pipeline Paradigm",
+      "chapters": ["ch-01", "ch-02"]
+    },
+    {
+      "id": "voice-io",
+      "title": "Server-Side Voice I/O",
+      "chapters": ["ch-03", "ch-04", "ch-05"]
+    },
+    {
+      "id": "collision",
+      "title": "Where Pipecat Collides With boson-agent",
+      "chapters": ["ch-06", "ch-07", "ch-08"]
+    },
+    {
+      "id": "production",
+      "title": "Production and Migration",
+      "chapters": ["ch-09", "ch-10"]
+    }
+  ],
+  "chapters": [
+    {
+      "id": "ch-01",
+      "title": "Frames, Processors, Pipelines: Why Streaming Beats Turns",
+      "phase": "paradigm",
+      "summary": "Pipecat's core abstraction. Frame as the unit of data, FrameProcessor as the unit of work, Pipeline as the composition. Downstream vs upstream flow. The three frame base classes (SystemFrame, DataFrame, ControlFrame) and why SystemFrames jump the queue -- the mechanism that makes sub-second interruption possible at all. Contrasted throughout with boson-agent's message/turn unit, where a turn is atomic and cannot be pre-empted mid-flight.",
+      "deps": [],
+      "sources": [],
+      "figure": "figures/frame-flow.html",
+      "figure_spec": "Animated frames traveling a processor chain, colour-coded by frame class, with step/auto/reset controls. The payoff view: a SystemFrame injected mid-stream overtakes queued DataFrames, making frame priority visible as the physical basis of barge-in."
+    },
+    {
+      "id": "ch-02",
+      "title": "Building and Running a Pipeline: Task, Runner, Parallel Branches",
+      "phase": "paradigm",
+      "summary": "From a processor list to a running bot. PipelineTask and PipelineRunner, the lifecycle and shutdown path, ParallelPipeline branches with filters, and the canonical voice-bot pipeline (transport.input -> STT -> context aggregator -> LLM -> TTS -> transport.output -> context aggregator). Where a turn actually begins and ends when nothing is turn-shaped.",
+      "deps": ["ch-01"],
+      "sources": [],
+      "figure": "figures/pipeline-anatomy.html",
+      "figure_spec": "Assemble the canonical voice pipeline one processor at a time, toggling ParallelPipeline branches and filters on and off, then trace a single utterance end to end and watch which processors it touches and which it bypasses."
+    },
+    {
+      "id": "ch-03",
+      "title": "Transports: WebRTC, WebSocket, and Telephony",
+      "phase": "voice-io",
+      "summary": "The layer that replaces gateway/server/ (1,404 lines: websocket.py, protocol.py, access.py, history.py, interruption.py). Daily/WebRTC, raw WebSocket, and Twilio/Telnyx/SIP for real phone calls -- which matters because Lina TMR is a tele-sales agent. What the transport abstraction gives (media handling, jitter, reconnection, telephony codecs) and what boson loses that it must rebuild (its own protocol envelope, access control, session history endpoints).",
+      "deps": ["ch-02"],
+      "sources": [],
+      "figure": "figures/transport-comparison.html",
+      "figure_spec": "The same bot behind WebRTC, WebSocket, and Twilio/SIP side by side: packet path, where the jitter buffer and codec sit, added latency per hop, and an explicit mapping of boson's current WS protocol messages onto each transport, marking what has no equivalent."
+    },
+    {
+      "id": "ch-04",
+      "title": "Streaming STT, Interim Transcripts, and Endpointing in Korean",
+      "phase": "voice-io",
+      "summary": "Server-side speech recognition as a frame source. Streaming vs batch, interim vs final transcripts, and endpointing -- the decision of when the user stopped talking, which is what actually defines a turn boundary in a voice agent. Korean-specific accuracy and provider choice. This chapter re-founds boson's text-partial-transcript assumption on real audio: today the client hands the gateway text, and interrupt/detector.py reasons over it; after the move, the transcript is something the pipeline produces, with its own latency and its own uncertainty.",
+      "deps": ["ch-03"],
+      "sources": [],
+      "figure": "figures/stt-streaming.html",
+      "figure_spec": "Audio streams in while interim transcripts appear, get revised, and finalize, with timestamps. An endpointing threshold slider moves the turn boundary live. Decisive view: the same Korean utterance processed as a client-supplied text partial (boson today) versus real streaming STT, with the latency and revision differences shown."
+    },
+    {
+      "id": "ch-05",
+      "title": "Streaming TTS: First Audio, Boundaries, and Fillers",
+      "phase": "voice-io",
+      "summary": "Speech synthesis as a frame sink. Streaming TTS that begins speaking before the LLM has finished writing, word and sentence boundary frames, and why time-to-first-audio dominates perceived latency far more than total generation time. Korean prosody and provider trade-offs. Maps boson's existing interrupt/fillers.py onto Pipecat's model, where a filler is no longer a message but an audio stream that must itself be interruptible.",
+      "deps": ["ch-04"],
+      "sources": [],
+      "figure": "figures/tts-streaming.html",
+      "figure_spec": "LLM text arrives in chunks and TTS emits audio ahead of completion. Compare time-to-first-audio against full-sentence buffering on the same response, and show where boundary frames land and why they are the hooks fillers and interruption need."
+    },
+    {
+      "id": "ch-06",
+      "title": "VAD, Barge-In, and In-Flight Cancellation",
+      "phase": "collision",
+      "summary": "The first of the two central chapters. Voice activity detection, StartInterruptionFrame, and the cancellation cascade: stop TTS mid-utterance, abort the in-flight LLM generation, and truncate the context so the assistant does not believe it said words the user never heard. Compared directly against boson's 581-line interrupt subsystem (detector, policy, handler, cancellation, fillers), which decides on text and therefore cannot fire until a transcript exists. The context-truncation problem is the subtle one and gets the most space.",
+      "deps": ["ch-05"],
+      "sources": [],
+      "figure": "figures/bargein-timeline.html",
+      "figure_spec": "A draggable timeline of one barge-in: user speech onset, VAD detection, StartInterruptionFrame, TTS cancel, LLM abort, context truncation. Drag the interruption point and watch what gets discarded. Below it, the same event under boson's text-based detector, so the latency gap and the different truncation semantics are directly readable."
+    },
+    {
+      "id": "ch-07",
+      "title": "Two Agent Loops: Context Aggregators, Function Calling, and boson's Loop",
+      "phase": "collision",
+      "summary": "The second central chapter and the hardest migration decision. Pipecat's LLM service owns the context via aggregator processors and performs its own function calling; boson's agent_loop.py (561 lines) runs its own think-act-observe cycle with a ToolRouter and meta-tool dispatch (use_tool, use_skill). Both want to own the context, the tool dispatch, and the judgement that a turn is complete. Three resolutions are developed and costed: adopt Pipecat's loop and port tools to its function-calling interface; wrap boson's loop inside a single custom FrameProcessor; or bypass Pipecat's LLM service entirely and use it only for voice I/O.",
+      "deps": ["ch-06"],
+      "sources": [],
+      "figure": "figures/two-loops.html",
+      "figure_spec": "Run Pipecat's context-aggregator loop and boson's agent_loop side by side on the same turn, stepping both, with the collision points highlighted as they occur: who owns the context, who dispatches a tool, who decides the turn ended. Then toggle adopt / wrap / bypass and show concretely what breaks under each."
+    },
+    {
+      "id": "ch-08",
+      "title": "Custom Processors: Keeping the Stage Machine and Rule Layers",
+      "phase": "collision",
+      "summary": "The 1,645 lines Pipecat has no answer for: the stage machine, the layer pipeline and rule engine, and the script engine. Writing FrameProcessors that gate, inject, filter, and transform frames; where a StageTransition action lands in a frame stream; how a rule layer that today inspects a whole turn is expressed over a stream that has not finished arriving yet. This is where boson's actual product logic survives or dies.",
+      "deps": ["ch-07"],
+      "sources": [],
+      "figure": "figures/stage-machine-processor.html",
+      "figure_spec": "The stage machine and rule layers rendered as FrameProcessors in a live pipeline. Watch a frame get gated, injected into, and filtered, and watch a StageTransition propagate. Includes the awkward case: a rule that needs the complete user turn, running over a stream that is still arriving."
+    },
+    {
+      "id": "ch-09",
+      "title": "The Latency Budget and Observability",
+      "phase": "production",
+      "summary": "Voice-to-voice latency as an accounting problem, in the same spirit as the training-memory ledger. Every millisecond from user speech offset to first agent audio: endpointing wait, STT finalization, rule-layer evaluation, LLM time-to-first-token, TTS time-to-first-byte, network and jitter. Which stages are serial and which can overlap, what the perceptual thresholds actually are, and how boson's compact pipeline and rule layers spend from this budget. Metrics, tracing, and what to instrument before migrating rather than after.",
+      "deps": ["ch-08"],
+      "sources": [],
+      "figure": "figures/latency-waterfall.html",
+      "figure_spec": "A voice-to-voice waterfall with a draggable knob per stage (endpointing, STT, rules, LLM TTFT, TTS TTFB, network). Total updates live against perceptual target lines, serial versus overlappable stages are visually distinguished, and a preset reproduces boson's current text-path budget for comparison."
+    },
+    {
+      "id": "ch-10",
+      "title": "Capstone: The boson-agent to Pipecat Migration Design",
+      "phase": "production",
+      "summary": "The deliverable. A subsystem-by-subsystem replace / wrap / keep decision for every part of basement and gateway, with the reasoning and the cost of each choice; the resulting target architecture; a migration sequence that keeps the agent shippable at every step rather than requiring a big-bang cutover; the open risks (Korean STT accuracy on telephony audio, the context-truncation semantics from ch-06, the loop ownership decision from ch-07); and what must be measured before committing.",
+      "deps": ["ch-09"],
+      "sources": [],
+      "figure": "figures/migration-map.html",
+      "figure_spec": "An interactive decision tool: choose replace / wrap / keep per boson subsystem and watch the target architecture diagram and the affected line counts update live, with incompatible combinations flagged and the resulting migration sequence generated."
+    }
+  ]
+}
