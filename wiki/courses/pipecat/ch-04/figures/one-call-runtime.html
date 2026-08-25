@@ -1,0 +1,1299 @@
+<!--
+  Figure: one-call-runtime.html — "리나 통화 한 통이 실제로 돌아가는 모습"
+  Chapter: ch-04 (phase: mechanics) — pipecat
+  Back to: ../read.md
+    §3  WorkerRunner / auto_end=False
+    §4  한 processor 안의 두 queue · 두 task
+    §5.1 control latency = N / r
+    §6~§9 네 개의 출구
+    §6.3 runtime envelope (RTVIProcessor + Source/Sink re-wrap)
+
+  Fully self-contained: inline CSS + vanilla JS. No CDN, no fetch, no external
+  fonts/images. file:// 로 그냥 열면 그대로 동작한다.
+
+  이 그림이 보여주려는 것:
+    1. auto_end=True 는 "첫 고객이 끊으면 host가 죽는다"는 뜻이다 (runner.py:213-220).
+    2. SystemFrame 은 두 번 앞지른다 — priority(10 vs 20)로 한 번,
+       느린 __process_queue 에 아예 안 들어가서 또 한 번.
+    3. control latency 는 코드 속도가 아니라 N/r 이다.
+    4. 난폭한 경로(CancelFrame)는 20 s 로 bound 되어 있고,
+       우아한 경로(EndFrame)는 timeout 이 아예 없다. 직관과 반대다.
+
+  모든 line number / 상수 / class 이름은 pipecat commit
+  0cbf9c5b031eef06e53f0a193b9a67d60230e6be 트리에서 직접 확인했다.
+-->
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>worker.run() 이 실제로 돌리는 것 (ch-04)</title>
+<style>
+  /* --- 반응형 타이포 스케일 (태블릿에서 읽는다) ----------------------- */
+  html{font-size:14px;}
+  @media (pointer:coarse){ html{font-size:17px;} }
+  @media (min-width:1500px){ html{font-size:15.5px;} }
+
+  :root{
+    --bg:#0e1117; --panel:#161b22; --panel2:#1c2230; --edge:#2b3242;
+    --ink:#e6edf3; --ink-dim:#9aa7b4; --ink-faint:#6b7686;
+    --accent:#58a6ff; --accent2:#3fb950; --danger:#f85149; --warn:#d29922;
+    --c-sys:#f778ba;    /* SystemFrame        */
+    --c-data:#58a6ff;   /* DataFrame          */
+    --c-ctrl:#bc8cff;   /* ControlFrame       */
+    --c-start:#d29922;  /* StartFrame         */
+  }
+  *{box-sizing:border-box;}
+  html,body{margin:0;padding:0;}
+  body{
+    background:var(--bg); color:var(--ink);
+    font:1rem/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Apple SD Gothic Neo",
+         "Noto Sans KR",Helvetica,Arial,sans-serif;
+    padding:22px; max-width:86rem; margin:0 auto;
+  }
+  h1{font-size:1.5rem; margin:0 0 3px; letter-spacing:.2px;}
+  .sub{color:var(--ink-dim); font-size:0.9286rem; margin:0 0 20px;}
+  .sub code{color:var(--accent);}
+  .panel{background:var(--panel); border:1px solid var(--edge); border-radius:10px;
+    padding:16px; margin-bottom:18px;}
+  .panel h2{font-size:0.8571rem; text-transform:uppercase; letter-spacing:.9px; color:var(--ink-dim);
+    margin:0 0 6px; font-weight:600;}
+  .panel .lead{font-size:0.9286rem; color:var(--ink-dim); margin:0 0 14px;}
+  .panel .lead code, .lead code{color:var(--accent);}
+  .mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+    font-variant-numeric:tabular-nums;}
+  code{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:0.92em;}
+
+  /* ---------- 공통 컨트롤 ---------- */
+  .row{display:flex; gap:8px; flex-wrap:wrap; align-items:center;}
+  .btn{background:var(--panel2); border:1px solid var(--edge); color:var(--ink);
+    border-radius:7px; padding:8px 11px; cursor:pointer; font-size:0.8571rem;
+    transition:.13s; line-height:1.3; font-family:inherit;}
+  .btn:hover{border-color:var(--accent); }
+  .btn.primary{background:#1d3a5f; border-color:var(--accent); color:#cfe6ff;}
+  .btn.danger{background:#3a1d1d; border-color:var(--danger); color:#ffd0cd;}
+  .btn.ghost{color:var(--ink-dim);}
+  .btn small{display:block; color:var(--ink-faint); font-size:0.7143rem;}
+  .btn.on{background:#1d2b3f; border-color:var(--accent); color:var(--ink);}
+  .tglwrap{display:inline-flex; align-items:center; gap:7px; background:var(--panel2);
+    border:1px solid var(--edge); border-radius:7px; padding:7px 11px; font-size:0.8571rem;}
+  .tglwrap input{accent-color:var(--accent); width:15px; height:15px;}
+  select{background:var(--panel2); border:1px solid var(--edge); color:var(--ink);
+    border-radius:7px; padding:7px 9px; font-size:0.8571rem; font-family:inherit;}
+  .ctrl{margin:12px 0 0;}
+  .ctrl label{display:flex; justify-content:space-between; align-items:baseline; margin-bottom:3px;}
+  .ctrl .name{font-weight:600; font-size:0.8571rem;}
+  .ctrl .val{color:var(--accent); font-weight:600; font-size:0.8571rem;}
+  input[type=range]{-webkit-appearance:none; appearance:none; width:100%; height:5px;
+    border-radius:5px; background:var(--edge); outline:none; margin:3px 0;}
+  input[type=range]::-webkit-slider-thumb{-webkit-appearance:none; appearance:none;
+    width:15px; height:15px; border-radius:50%; background:var(--accent); cursor:pointer;}
+  input[type=range]::-moz-range-thumb{width:15px; height:15px; border:0; border-radius:50%;
+    background:var(--accent); cursor:pointer;}
+
+  .grid2{display:grid; grid-template-columns:1fr 1fr; gap:16px;}
+  .gridA{display:grid; grid-template-columns:1.15fr 1fr; gap:16px; align-items:start;}
+  .gridB{display:grid; grid-template-columns:270px 1fr; gap:16px; align-items:start;}
+  @media (max-width:980px){ .grid2,.gridA,.gridB{grid-template-columns:1fr;} }
+
+  .box{background:#10151d; border:1px solid var(--edge); border-radius:8px; padding:12px;}
+  .box h3{margin:0 0 9px; font-size:0.75rem; letter-spacing:.7px; text-transform:uppercase;
+    color:var(--ink-faint); font-weight:600;}
+
+  /* ---------- host strip ---------- */
+  .hostbadge{display:inline-block; border-radius:6px; padding:4px 10px; font-size:0.8214rem;
+    font-weight:700; letter-spacing:.4px;}
+  .hostbadge.up{background:rgba(63,185,80,.13); color:var(--accent2); border:1px solid var(--accent2);}
+  .hostbadge.down{background:rgba(248,81,73,.13); color:var(--danger); border:1px solid var(--danger);}
+  .wlist{display:flex; flex-wrap:wrap; gap:7px; min-height:44px; margin-top:4px;}
+  .wchip{border:1px solid var(--edge); border-radius:7px; padding:6px 9px; font-size:0.7857rem;
+    background:var(--panel2); line-height:1.35;}
+  .wchip b{display:block; font-size:0.8214rem;}
+  .wchip.run{border-color:var(--accent2);} .wchip.run b{color:var(--accent2);}
+  .wchip.fin{opacity:.5; border-style:dashed;} .wchip.fin b{color:var(--ink-faint);}
+  .wchip .st{color:var(--ink-faint); font-size:0.7143rem;}
+  .logbox{background:#0b0f15; border:1px solid var(--edge); border-radius:8px; padding:10px 12px;
+    height:210px; overflow-y:auto; font-size:0.7857rem; line-height:1.75;
+    font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;}
+  .logbox div{white-space:pre-wrap; word-break:break-all;}
+  .lg-dim{color:var(--ink-faint);} .lg-ok{color:var(--accent2);}
+  .lg-warn{color:var(--warn);} .lg-bad{color:var(--danger);} .lg-acc{color:var(--accent);}
+
+  /* ---------- queues ---------- */
+  .qcol{background:#10151d; border:1px solid var(--edge); border-radius:8px; padding:11px;}
+  .qcol .qh{display:flex; justify-content:space-between; align-items:baseline; margin-bottom:8px;}
+  .qcol .qh .t{font-size:0.8214rem; font-weight:600;}
+  .qcol .qh .n{font-size:0.75rem; color:var(--ink-faint);}
+  .qitems{min-height:150px; display:flex; flex-direction:column; gap:5px;}
+  .fitem{display:grid; grid-template-columns:26px 30px 1fr; gap:8px; align-items:center;
+    border:1px solid var(--edge); border-radius:6px; padding:5px 8px; background:var(--panel2);
+    font-size:0.7857rem; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;}
+  .fitem .p{font-weight:700; text-align:right;}
+  .fitem .c{color:var(--ink-faint); text-align:right;}
+  .fitem .nm{overflow:hidden; text-overflow:ellipsis; white-space:nowrap;}
+  .fitem.sys{border-color:var(--c-sys);} .fitem.sys .p{color:var(--c-sys);}
+  .fitem.data .p{color:var(--c-data);}
+  .fitem.ctrl{border-color:var(--c-ctrl);} .fitem.ctrl .p{color:var(--c-ctrl);}
+  .fitem.start{border-color:var(--c-start);} .fitem.start .p{color:var(--c-start);}
+  .fitem.head{box-shadow:0 0 0 1px var(--accent) inset;}
+  .fitem .un{color:var(--warn); font-size:0.6786rem;}
+  .taskbox{border:1px dashed var(--edge); border-radius:7px; padding:9px 11px; margin-top:9px;
+    font-size:0.7857rem; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+    color:var(--ink-dim); min-height:56px;}
+  .taskbox .lbl{color:var(--ink-faint); font-size:0.7143rem; letter-spacing:.5px;
+    text-transform:uppercase; display:block; margin-bottom:4px; font-family:inherit;}
+  .taskbox.busy{border-style:solid; border-color:var(--accent);}
+  .taskbox.inline{border-style:solid; border-color:var(--c-sys); color:var(--ink);}
+  .taskbox.killed{border-color:var(--danger); color:#ffc9c6;}
+  .flag{display:inline-block; border-radius:5px; padding:2px 7px; font-size:0.7143rem;
+    border:1px solid var(--edge); color:var(--ink-faint); margin-right:5px;}
+  .flag.on{border-color:var(--danger); color:var(--danger); background:rgba(248,81,73,.1);}
+  .flag.acc{border-color:var(--accent); color:var(--accent); background:rgba(88,166,255,.08);}
+
+  .kv{display:grid; grid-template-columns:auto 1fr; gap:4px 12px; font-size:0.8214rem;
+    margin-top:2px;}
+  .kv .k{color:var(--ink-faint);}
+  .kv .v{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; color:var(--ink);}
+  .big{font-size:1.4286rem; font-weight:700;}
+
+  /* ---------- canvas ---------- */
+  /* height 는 JS 의 CANVAS_H_* 상수와 반드시 같은 값 — 레이아웃 점프 방지 */
+  canvas{width:100%; display:block; border-radius:8px; background:#0b0f15;
+    border:1px solid var(--edge);}
+  #cvExits{height:260px;}
+  #cvIdle{height:180px;}
+  .legend{display:flex; gap:15px; font-size:0.7857rem; color:var(--ink-dim); margin-top:8px;
+    flex-wrap:wrap;}
+  .legend i{display:inline-block; width:18px; height:3px; border-radius:2px;
+    vertical-align:middle; margin-right:6px;}
+
+  .callout{border-left:3px solid var(--warn); background:rgba(210,153,34,.07);
+    padding:10px 13px; border-radius:0 7px 7px 0; font-size:0.8929rem; color:var(--ink-dim);
+    margin-top:13px;}
+  .callout b{color:var(--ink);}
+  .callout.ok{border-left-color:var(--accent2); background:rgba(63,185,80,.07);}
+  .callout.bad{border-left-color:var(--danger); background:rgba(248,81,73,.07);}
+  .callout code{color:var(--accent);}
+
+  pre{background:#0b0f15; border:1px solid var(--edge); border-radius:8px; padding:12px;
+    overflow-x:auto; font-size:0.8214rem; line-height:1.7; margin:0;
+    font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; color:var(--ink-dim);}
+  pre .cm{color:var(--ink-faint);}
+  pre .kw{color:var(--c-ctrl);}
+  pre .hi{color:var(--accent2); font-weight:600;}
+  pre .bad{color:var(--danger); font-weight:600;}
+  .srcref{font-size:0.75rem; color:var(--ink-faint); margin-top:7px;
+    font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;}
+  .foot{color:var(--ink-faint); font-size:0.8571rem; margin-top:26px; line-height:1.8;}
+  .foot a{color:var(--accent); text-decoration:none;}
+  .hide{display:none;}
+</style>
+</head>
+<body>
+
+<h1>리나 통화 한 통 · <span class="mono">worker.run()</span> 안에서 실제로 도는 것</h1>
+<p class="sub">
+  pipecat <code>0cbf9c5b</code> · ch-04 figure ·
+  세 개의 층 — <b>host</b>(<code>WorkerRunner</code>) → <b>processor</b>(두 queue · 두 task) →
+  <b>네 개의 출구</b>(cancel / end / idle / setup). 모든 line number 와 상수는 트리에서 직접 확인한 값이다.
+</p>
+
+<!-- ==================================================================
+     PANEL A — HOST
+     ================================================================== -->
+<div class="panel">
+  <h2>A · 호스트: 하나의 WorkerRunner, 통화마다 하나의 PipelineWorker</h2>
+  <p class="lead">
+    리나는 데모 봇이 아니라 아침부터 저녁까지 살아 있어야 하는 FastAPI process 다.
+    고객을 연결/해제해 보고, <code>auto_end</code> 를 뒤집어 봐라.
+    <code>auto_end=True</code> 면 <b>첫 고객이 끊는 순간 host 전체가 종료된다</b>
+    (<code>runner.py:213-220</code>).
+  </p>
+
+  <div class="row" style="margin-bottom:12px;">
+    <button class="btn primary" id="btnConnect">고객 연결 <small>add_workers(worker)</small></button>
+    <button class="btn" id="btnDisconnect">고객이 끊음 <small>worker.cancel(reason=…)</small></button>
+    <button class="btn danger" id="btnRunnerCancel">runner.cancel() <small>host 전체 — §3.2 함정</small></button>
+    <button class="btn ghost" id="btnHostReset">reset</button>
+    <label class="tglwrap"><input type="checkbox" id="autoEndTgl"> <span><code>auto_end=True</code></span></label>
+    <select id="nameMode">
+      <option value="default">worker name: 기본값 (PipelineWorker#N)</option>
+      <option value="phone">worker name: 고객 전화번호 (010-2222-3333)</option>
+    </select>
+  </div>
+
+  <div class="gridA">
+    <div>
+      <div class="box">
+        <h3>process 상태</h3>
+        <div class="row" style="justify-content:space-between; align-items:center;">
+          <span id="hostBadge" class="hostbadge up">HOST RUNNING</span>
+          <span class="mono" style="font-size:0.7857rem; color:var(--ink-dim);">
+            <span id="runCount">0</span> running ·
+            <code>_entries</code> = <span id="entriesCount">0</span> (never shrinks)
+          </span>
+        </div>
+        <div class="wlist" id="workerList"></div>
+      </div>
+      <div class="callout bad" id="hostNote">
+        <b>지금 상태:</b> <code>auto_end=False</code> — worker 가 0 개가 되어도 runner 는 계속 blocked 되어 있다.
+      </div>
+      <div class="srcref">
+        runner.py:199 <code>add_workers</code> · :237 <code>run(worker=None, *, auto_end=True)</code> ·
+        :332 <code>end</code> · :350 <code>cancel</code> · :441 <code>_run_worker</code> ·
+        :529 <code>_sig_handler</code> (기본값: <code>handle_sigint=True</code>, <code>handle_sigterm=False</code>)
+      </div>
+    </div>
+    <div>
+      <div class="box"><h3>runner log</h3>
+        <div class="logbox" id="hostLog"></div>
+      </div>
+      <div class="callout">
+        <b><code>remove_workers</code> 는 존재하지 않는다.</b> 끝난 worker 의 entry 는
+        <code>self._entries</code> 에 그대로 남아 <code>PipelineWorker</code> → <code>Pipeline</code> →
+        모든 processor 를 계속 붙잡는다. 위 카운터가 줄지 않는 것이 그 사실이다 (read.md §3.1c).
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ==================================================================
+     PANEL B — ONE PROCESSOR
+     ================================================================== -->
+<div class="panel">
+  <h2>B · processor 하나를 열어보기: queue 두 개, task 두 개</h2>
+  <p class="lead">
+    frame 을 넣고 <b>tick</b> 을 눌러라. <code>__input_queue</code> 는
+    <code>FrameProcessorQueue(asyncio.PriorityQueue)</code> 로 tier <b>1 / 10 / 20</b> 을 쓰고,
+    같은 tier 안에서는 monotonic <code>__counter</code> 가 도착 순서를 지킨다.
+    <code>SystemFrame</code> 은 input task 위에서 <b>INLINE</b> 실행되고, 나머지만
+    취소 가능한 <code>__process_queue</code> 로 넘어간다.
+  </p>
+
+  <div class="gridB">
+    <div>
+      <div class="box">
+        <h3>frame 넣기 (queue_frame)</h3>
+        <div class="row">
+          <button class="btn" id="btnFStart">StartFrame<small>SystemFrame · tier 1</small></button>
+          <button class="btn" id="btnFAudio">TTSAudioRawFrame<small>DataFrame · tier 20</small></button>
+          <button class="btn" id="btnFText">TranscriptionFrame<small>DataFrame · tier 20</small></button>
+          <button class="btn" id="btnFInt">InterruptionFrame<small>SystemFrame · tier 10</small></button>
+          <button class="btn" id="btnFCancel">CancelFrame<small>SystemFrame · tier 10</small></button>
+          <button class="btn" id="btnFEnd">EndFrame<small>ControlFrame · tier 20 · Uninterruptible</small></button>
+        </div>
+      </div>
+
+      <div class="box" style="margin-top:12px;">
+        <h3>runtime 스위치</h3>
+        <div class="row">
+          <button class="btn primary" id="btnTick">tick ▸</button>
+          <button class="btn" id="btnAuto">auto ▶</button>
+          <button class="btn" id="btnQReset">FrameQueue.reset()</button>
+          <button class="btn ghost" id="btnBReset">reset</button>
+        </div>
+        <label class="tglwrap" style="margin-top:9px;">
+          <input type="checkbox" id="directTgl"> <span><code>_enable_direct_mode=True</code></span>
+        </label>
+        <div class="ctrl">
+          <label><span class="name">process_frame() 한 개 처리 비용</span>
+            <span class="val" id="costVal">3 tick</span></label>
+          <input type="range" id="costRange" min="1" max="6" step="1" value="3">
+        </div>
+        <div style="margin-top:10px;">
+          <span class="flag" id="flgCancel">_cancelling = False</span>
+          <span class="flag" id="flgDirect">direct mode off</span>
+        </div>
+        <div class="srcref" style="margin-top:8px;">
+          frame_processor.py:132 <code>FrameProcessorQueue</code> · :141-143 tiers ·
+          :700 <code>queue_frame</code> · :1287 <code>__input_frame_task_handler</code> ·
+          :1315 <code>__process_frame_task_handler</code> · :1099 <code>__cancel</code> ·
+          :1130 <code>_start_interruption</code> · :1222 <code>__create_process_task</code> ·
+          frame_queue.py:84 <code>reset()</code>
+        </div>
+      </div>
+    </div>
+
+    <div>
+      <div class="grid2">
+        <div class="qcol">
+          <div class="qh"><span class="t" style="color:var(--c-sys);">__input_queue</span>
+            <span class="n">PriorityQueue · (tier, counter)</span></div>
+          <div class="qitems" id="qInput"></div>
+          <div class="taskbox" id="inTaskBox"><span class="lbl">__input_frame_task_handler</span>idle</div>
+        </div>
+        <div class="qcol">
+          <div class="qh"><span class="t" style="color:var(--c-data);">__process_queue</span>
+            <span class="n">FrameQueue · FIFO · 취소 가능</span></div>
+          <div class="qitems" id="qProcess"></div>
+          <div class="taskbox" id="prTaskBox"><span class="lbl">__process_frame_task_handler</span>idle</div>
+        </div>
+      </div>
+
+      <div class="box" style="margin-top:12px;">
+        <h3>앞지르기 회계 (overtaking)</h3>
+        <div id="overtakeBox" style="font-size:0.8571rem; color:var(--ink-dim);">
+          아직 <code>SystemFrame</code> 이 실행되지 않았다. audio frame 을 여러 개 쌓고
+          <code>InterruptionFrame</code> 을 던진 뒤 tick 해봐라.
+        </div>
+      </div>
+      <div class="box" style="margin-top:12px;">
+        <h3>processor event log</h3>
+        <div class="logbox" id="procLog" style="height:150px;"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- N / r -->
+  <div class="grid2" style="margin-top:16px;">
+    <div class="box">
+      <h3>control latency = N / r  (read.md §5.1)</h3>
+      <div class="ctrl">
+        <label><span class="name">output queue 에 쌓인 한국어 TTS 오디오</span>
+          <span class="val" id="nrAudioVal">3.0 s</span></label>
+        <input type="range" id="nrAudio" min="2" max="60" step="1" value="30">
+      </div>
+      <div class="ctrl">
+        <label><span class="name"><code>audio_out_10ms_chunks</code>
+          <span style="color:var(--ink-faint);">(base_transport.py:72, 기본 4)</span></span>
+          <span class="val" id="nrChunksVal">4</span></label>
+        <input type="range" id="nrChunks" min="1" max="10" step="1" value="4">
+      </div>
+      <div class="kv" style="margin-top:12px;" id="nrOut"></div>
+      <div class="callout" style="margin-top:10px;">
+        <code>audio_out_10ms_chunks</code> 는 buffering 손잡이가 아니라
+        <b>interrupt 해상도</b> 손잡이다 — 소스 주석이 직접 그렇게 말한다
+        ("This will help with interruption handling", base_output.py:132-136).
+      </div>
+    </div>
+    <div class="box">
+      <h3>runtime envelope — 내가 넘긴 pipeline 은 실행되는 pipeline 이 아니다</h3>
+      <div class="row" style="margin-bottom:10px;">
+        <button class="btn" id="btnEnvPlain">내가 쓴 그대로</button>
+        <button class="btn on" id="btnEnvRtvi">enable_rtvi=True (기본값)</button>
+        <button class="btn" id="btnEnvBridged">+ bridged</button>
+      </div>
+      <pre id="envBox"></pre>
+      <div class="srcref">worker.py:537 <code>Pipeline([edge_source, pipeline, edge_sink])</code> ·
+        :548 <code>processors = [self._rtvi, pipeline]</code> ·
+        :549 <code>Pipeline(processors, source=source, sink=self._sink)</code></div>
+      <div class="callout ok" style="margin-top:10px;">
+        중첩이 공짜인 이유: <code>Pipeline</code> 자신이
+        <code>super().__init__(enable_direct_mode=True)</code> 로 만들어져서
+        (pipeline.py:113) <b>container 는 queue 를 하나도 추가하지 않는다.</b>
+        모든 queue 는 실제 일을 하는 leaf processor 것이다.
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ==================================================================
+     PANEL C — FOUR EXITS
+     ================================================================== -->
+<div class="panel">
+  <h2>C · 통화 하나에서 나가는 네 개의 출구 — 같은 시계 위에서</h2>
+  <p class="lead">
+    리나가 <i>"그럼 제가 자세한 안내를 문자로…"</i> 를 말하는 중이고, output queue 에는
+    <b>3.0 초</b>의 한국어 TTS 오디오가 남아 있다. 여기서 나가는 길은 네 개고, 전부 다르다.
+  </p>
+
+  <div class="row" style="margin-bottom:12px;">
+    <button class="btn danger" id="btnExitCancel">고객이 말 중간에 끊음<small>CancelFrame · bounded 20 s</small></button>
+    <button class="btn primary" id="btnExitEnd">봇이 마무리 멘트를 끝냄<small>EndFrame · unbounded</small></button>
+    <button class="btn" id="btnExitIdle">고객이 아무 말도 안 함<small>IDLE_TIMEOUT_SECS = 300</small></button>
+    <button class="btn" id="btnExitSetup">provider handshake 가 멈춤<small>SETUP / START = 20.0</small></button>
+    <label class="tglwrap"><input type="checkbox" id="wedgeTgl"> <span>processor 가 물려버린 경우</span></label>
+  </div>
+
+  <canvas id="cvExits"></canvas>
+  <div class="legend">
+    <span><i style="background:var(--danger);"></i>CancelFrame 경로 (SystemFrame, tier 10, inline)</span>
+    <span><i style="background:var(--accent2);"></i>EndFrame 경로 (ControlFrame, tier 20, 오디오 뒤에 줄섬)</span>
+    <span><i style="background:var(--warn);"></i>bound / timeout</span>
+  </div>
+  <div class="callout" id="exitNote"></div>
+
+  <div class="gridA" style="margin-top:16px;">
+    <div>
+      <canvas id="cvIdle"></canvas>
+      <div class="legend">
+        <span><i style="background:var(--c-ctrl);"></i>봇이 말하는 구간 (BotSpeakingFrame, 0.2 s 주기)</span>
+        <span><i style="background:var(--danger);"></i>idle timeout 발화</span>
+      </div>
+    </div>
+    <div>
+      <div class="box">
+        <h3>idle timer 재조정</h3>
+        <div class="ctrl">
+          <label><span class="name"><code>idle_timeout_secs</code></span>
+            <span class="val" id="idleSecsVal">300 s</span></label>
+          <input type="range" id="idleSecs" min="10" max="300" step="5" value="300">
+        </div>
+        <div class="ctrl">
+          <label><span class="name"><code>idle_timeout_frames</code></span><span></span></label>
+          <select id="idleFrames" style="width:100%;">
+            <option value="both">(BotSpeakingFrame, UserSpeakingFrame) — 기본값</option>
+            <option value="user">(UserSpeakingFrame,) — "고객이 응답을 멈췄다"</option>
+          </select>
+        </div>
+        <div class="ctrl">
+          <label><span class="name"><code>cancel_runner_on_idle_timeout</code></span><span></span></label>
+          <select id="idleRunner" style="width:100%;">
+            <option value="false">False — 이 통화만 끊는다 (다중 세션 host 필수)</option>
+            <option value="true">True — 프레임워크 기본값</option>
+          </select>
+        </div>
+        <div class="callout" id="idleNote" style="margin-top:12px;"></div>
+        <div class="srcref">
+          worker.py:94 <code>IDLE_TIMEOUT_SECS = 300</code> ·
+          :106 <code>IdleFrameObserver</code> · :1401 <code>_idle_monitor_handler</code> ·
+          :1417 <code>_idle_timeout_detected</code> ·
+          base_output.py:464 <code>_bot_speaking_frame_period = 0.2</code> ·
+          vad_processor.py:45 <code>speech_activity_period = 0.2</code>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<p class="foot">
+  ← 돌아가기: <a href="../read.md">ch-04 read.md</a> — §3 host · §4 두 queue/두 task ·
+  §5.1 N/r · §6~§9 네 출구 · §13 리나 topology<br>
+  출처: pipecat commit <code>0cbf9c5b031eef06e53f0a193b9a67d60230e6be</code> —
+  <code>src/pipecat/pipeline/worker.py</code>, <code>src/pipecat/workers/runner.py</code>,
+  <code>src/pipecat/processors/frame_processor.py</code>,
+  <code>src/pipecat/utils/frame_queue.py</code>,
+  <code>src/pipecat/transports/base_output.py</code>,
+  <code>src/pipecat/transports/base_transport.py</code>,
+  <code>src/pipecat/frames/frames.py</code>.
+  이 그림에 나오는 모든 API 이름은 그 트리에 실제로 존재한다.
+</p>
+
+<script>
+"use strict";
+
+/* ==================================================================
+   0. 공통 유틸
+   ================================================================== */
+const $ = (id) => document.getElementById(id);
+
+function logInto(el, text, cls){
+  const d = document.createElement("div");
+  if (cls) d.className = cls;
+  d.textContent = text;
+  el.appendChild(d);
+  el.scrollTop = el.scrollHeight;
+  while (el.childNodes.length > 220) el.removeChild(el.firstChild);
+}
+
+/* canvas 헬퍼.
+   *** 논리 높이는 반드시 아래 상수에서만 읽는다. cv.height / getAttribute("height")
+   를 다시 읽으면 devicePixelRatio 가 곱해진 값이 새 논리 높이가 되어
+   매 프레임 canvas 가 두 배씩 커지다 죽는다. ***                              */
+const CANVAS_H_EXITS = 260;
+const CANVAS_H_IDLE  = 180;
+const CFS = (window.matchMedia && window.matchMedia("(pointer:coarse)").matches) ? 13 : 11.5;
+
+function setupCanvas(cv, H){
+  const r = window.devicePixelRatio || 1;
+  const w = Math.max(cv.clientWidth, 200), h = H;
+  if (cv.width !== Math.round(w * r) || cv.height !== Math.round(h * r)){
+    cv.width = Math.round(w * r);
+    cv.height = Math.round(h * r);
+  }
+  cv.style.height = h + "px";
+  const c = cv.getContext("2d");
+  c.setTransform(r, 0, 0, r, 0, 0);
+  c.clearRect(0, 0, w, h);
+  return { c, w, h };
+}
+
+const COL = {
+  ink:"#e6edf3", dim:"#9aa7b4", faint:"#6b7686", edge:"#2b3242",
+  accent:"#58a6ff", ok:"#3fb950", bad:"#f85149", warn:"#d29922",
+  sys:"#f778ba", ctrl:"#bc8cff"
+};
+
+function roundRect(c, x, y, w, h, r){
+  const rr = Math.min(r, Math.abs(w)/2, Math.abs(h)/2);
+  c.beginPath();
+  c.moveTo(x+rr, y);
+  c.lineTo(x+w-rr, y); c.quadraticCurveTo(x+w, y, x+w, y+rr);
+  c.lineTo(x+w, y+h-rr); c.quadraticCurveTo(x+w, y+h, x+w-rr, y+h);
+  c.lineTo(x+rr, y+h); c.quadraticCurveTo(x, y+h, x, y+h-rr);
+  c.lineTo(x, y+rr); c.quadraticCurveTo(x, y, x+rr, y);
+  c.closePath();
+}
+
+function dashLine(c, x1, y1, x2, y2, col, dash){
+  c.save();
+  c.setLineDash(dash || [4,4]);
+  c.strokeStyle = col; c.lineWidth = 1;
+  c.beginPath(); c.moveTo(x1,y1); c.lineTo(x2,y2); c.stroke();
+  c.restore();
+}
+
+/* ==================================================================
+   1. PANEL A — WorkerRunner / auto_end
+   ================================================================== */
+const HOST = { up:true, autoEnd:false, counter:0, entries:[], nameMode:"default" };
+
+function hostReset(){
+  HOST.up = true; HOST.counter = 0; HOST.entries = [];
+  $("hostLog").innerHTML = "";
+  hlog("WorkerRunner 'WorkerRunner#0' created  ·  handle_sigint=True, handle_sigterm=False", "lg-dim");
+  hlog("await runner.run(auto_end=" + (HOST.autoEnd ? "True" : "False") + ")   # runner.py:237", "lg-acc");
+  renderHost();
+}
+function hlog(t, cls){ logInto($("hostLog"), t, cls); }
+
+function nextWorkerName(){
+  // BaseObject.__init__: self._name = name or f"{cls}#{obj_count(self)}"  (base_object.py:72)
+  if (HOST.nameMode === "phone") return "010-2222-3333";
+  return "PipelineWorker#" + (HOST.counter++);
+}
+
+function hostConnect(){
+  if (!HOST.up){ hlog("! host 가 이미 종료됐다 — 이 socket 은 죽은 port 에 닿는다", "lg-bad"); return; }
+  const name = nextWorkerName();
+  if (HOST.entries.some(e => e.name === name)){
+    // runner.py:234-238 — 이름 충돌은 조용한 no-op 다.
+    hlog("WorkerRunner 'WorkerRunner#0': worker '" + name + "' already exists, skipping", "lg-bad");
+    hlog("   ↑ 재다이얼이 시작조차 되지 않았다. worker 이름에 전화번호를 쓰면 안 되는 이유 (§3.1a)", "lg-warn");
+    renderHost();
+    return;
+  }
+  HOST.entries.push({ name, state:"running" });
+  hlog("WorkerRunner 'WorkerRunner#0': added worker '" + name + "'   # runner.py:247", "lg-ok");
+  hlog("   if self._running: await self._start_worker(entry)   # 즉시 시작", "lg-dim");
+  renderHost();
+}
+
+function hostDisconnect(){
+  const w = HOST.entries.find(e => e.state === "running");
+  if (!w){ hlog("running 중인 worker 가 없다", "lg-dim"); return; }
+  w.state = "finished";
+  hlog("Cancelling pipeline worker " + w.name + "   # worker.py:986 (worker.cancel)", "lg-warn");
+  hlog("Pipeline worker " + w.name + " has finished   # worker.py:787", "lg-dim");
+  checkAutoEnd(w.name);
+  renderHost();
+}
+
+function checkAutoEnd(justFinished){
+  if (!HOST.autoEnd || !HOST.up) return;
+  // runner.py:213-220 — _run_worker 의 finally
+  const others = HOST.entries.some(e => e.state === "running" && e.name !== justFinished);
+  hlog("_run_worker finally: others_running = " + (others ? "True" : "False") + "   # runner.py:214-218", "lg-dim");
+  if (!others){
+    hlog("self._shutdown_event.set()   # runner.py:220", "lg-bad");
+    hlog("runner.run() 이 리턴 → cleanup() → bus 종료 → PROCESS EXIT", "lg-bad");
+    HOST.up = false;
+  }
+}
+
+function hostRunnerCancel(){
+  if (!HOST.up){ hlog("이미 종료됨", "lg-dim"); return; }
+  hlog("WorkerRunner 'WorkerRunner#0': cancelling (reason=None)   # runner.py:304", "lg-bad");
+  let n = 0;
+  HOST.entries.forEach(e => {
+    if (e.state === "running"){
+      e.state = "finished"; n++;
+      hlog("  → BusCancelWorkerMessage(target='" + e.name + "')", "lg-bad");
+    }
+  });
+  hlog("한 명이 끊었는데 " + n + "개의 통화가 전부 죽었다. per-call verb 는 worker.cancel() 이다 (§3.2)", "lg-warn");
+  HOST.up = false;
+  renderHost();
+}
+
+function renderHost(){
+  const badge = $("hostBadge");
+  badge.className = "hostbadge " + (HOST.up ? "up" : "down");
+  badge.textContent = HOST.up ? "HOST RUNNING" : "HOST EXITED";
+
+  const running = HOST.entries.filter(e => e.state === "running").length;
+  $("runCount").textContent = running;
+  $("entriesCount").textContent = HOST.entries.length;
+
+  const list = $("workerList");
+  list.innerHTML = "";
+  if (HOST.entries.length === 0){
+    const d = document.createElement("div");
+    d.style.cssText = "color:var(--ink-faint);font-size:0.8214rem;padding:8px 2px;";
+    d.textContent = "worker 없음 — " + (HOST.autoEnd ? "auto_end=True 라면 이 상태가 곧 process 종료다."
+                                                     : "auto_end=False 라 runner 는 계속 blocked 상태.");
+    list.appendChild(d);
+  }
+  HOST.entries.forEach(e => {
+    const d = document.createElement("div");
+    d.className = "wchip " + (e.state === "running" ? "run" : "fin");
+    d.innerHTML = "<b>" + e.name + "</b><span class='st'>" +
+      (e.state === "running" ? "running · Pipeline(7)" : "finished · entry 잔존") + "</span>";
+    list.appendChild(d);
+  });
+
+  const note = $("hostNote");
+  if (HOST.autoEnd){
+    note.className = "callout bad";
+    note.innerHTML = "<b>지금 상태:</b> <code>auto_end=True</code> — 마지막 root worker 가 끝나는 순간 " +
+      "<code>_shutdown_event.set()</code> 이 호출되고 <b>FastAPI process 가 종료된다.</b> " +
+      "docstring 이 경고하는 바로 그 경우다 (runner.py:250-253).";
+  } else {
+    note.className = "callout ok";
+    note.innerHTML = "<b>지금 상태:</b> <code>auto_end=False</code> — worker 가 0 개가 되어도 runner 는 " +
+      "<code>end</code>/<code>cancel</code> 이 불릴 때까지 blocked 다. 리나 host 에 필요한 설정이다.";
+  }
+}
+
+$("btnConnect").addEventListener("click", hostConnect);
+$("btnDisconnect").addEventListener("click", hostDisconnect);
+$("btnRunnerCancel").addEventListener("click", hostRunnerCancel);
+$("btnHostReset").addEventListener("click", hostReset);
+$("autoEndTgl").addEventListener("change", (e) => {
+  HOST.autoEnd = e.target.checked;
+  hlog("auto_end = " + (HOST.autoEnd ? "True" : "False"), "lg-acc");
+  renderHost();
+});
+$("nameMode").addEventListener("change", (e) => { HOST.nameMode = e.target.value; });
+
+/* ==================================================================
+   2. PANEL B — 한 processor 안의 두 queue / 두 task
+   ================================================================== */
+const FRAMES = {
+  start:     { cls:"StartFrame",         kind:"start", tier:1,  base:"SystemFrame",  src:"frames.py:924",  un:false },
+  audio:     { cls:"TTSAudioRawFrame",   kind:"data",  tier:20, base:"DataFrame",    src:"frames.py:241",  un:false },
+  text:      { cls:"TranscriptionFrame", kind:"data",  tier:20, base:"DataFrame",    src:"frames.py:450",  un:false },
+  interrupt: { cls:"InterruptionFrame",  kind:"sys",   tier:10, base:"SystemFrame",  src:"frames.py:1142", un:false },
+  cancel:    { cls:"CancelFrame",        kind:"sys",   tier:10, base:"SystemFrame",  src:"frames.py:999",  un:false },
+  end:       { cls:"EndFrame",           kind:"ctrl",  tier:20, base:"ControlFrame, UninterruptibleFrame",
+               src:"frames.py:1899", un:true }
+};
+
+const B = {
+  counter: 0,
+  inQ: [],            // {f, tier, counter}
+  procQ: [],
+  inTask: null,       // {f, mode:'inline'}
+  procTask: null,     // {f, left}
+  cancelling: false,
+  direct: false,
+  cost: 3,
+  dropped: 0,
+  auto: null,
+  lastOvertake: null,
+  inputStarted: false,  // __create_input_task() 는 StartFrame 이 와야 불린다 (:427-428)
+  procStarted: false    // __create_process_task() 는 __start() 안에서 불린다 (:1091 → :1097)
+};
+
+function plog(t, cls){ logInto($("procLog"), t, cls); }
+
+function bReset(){
+  B.counter = 0; B.inQ = []; B.procQ = []; B.inTask = null; B.procTask = null;
+  B.cancelling = false; B.dropped = 0; B.lastOvertake = null;
+  B.inputStarted = false; B.procStarted = false;
+  $("procLog").innerHTML = "";
+  plog("processor reset — 아직 어떤 task 도 없다. 실험: audio 를 3~4개 먼저 넣고", "lg-dim");
+  plog("그 다음 StartFrame 을 넣어라. 늦게 도착했는데도 tier 1 이라 먼저 dequeue 된다.", "lg-dim");
+  renderB();
+}
+
+function queueFrame(key){
+  const f = FRAMES[key];
+  // frame_processor.py:700-728 queue_frame
+  if (B.cancelling){
+    B.dropped++;
+    plog("queue_frame(" + f.cls + ") → self._cancelling 이라 조용히 return. 누적 drop=" + B.dropped, "lg-bad");
+    renderB();
+    return;
+  }
+  if (B.direct){
+    plog("_enable_direct_mode → __process_frame(" + f.cls + ") 를 그 자리에서 실행. queue 를 둘 다 건너뛴다.", "lg-acc");
+    applyEffect(f, "direct");
+    renderB();
+    return;
+  }
+  B.counter++;
+  B.inQ.push({ f, tier:f.tier, counter:B.counter });
+  sortInQ();
+  plog("__input_queue.put((" + f.tier + ", " + B.counter + ", " + f.cls + "))", "lg-dim");
+  if (f.kind === "start"){
+    B.inputStarted = true;
+    plog("isinstance(frame, StartFrame) → __create_input_task()  # :427-428", "lg-acc");
+    plog("   ↑ 이 순간까지 __input_queue 를 배수하는 것은 아무것도 없었다.", "lg-acc");
+  }
+  renderB();
+}
+
+function sortInQ(){
+  B.inQ.sort((a,b) => (a.tier - b.tier) || (a.counter - b.counter));
+}
+
+function applyEffect(f, how){
+  // SystemFrame 이 base process_frame 에서 하는 일
+  if (f.cls === "CancelFrame"){
+    B.cancelling = true;
+    B.procTask = null;
+    B.procQ = [];
+    B.procStarted = false;
+    plog("__cancel(): self._cancelling = True; await self.__cancel_process_task()  # :1099-1106", "lg-bad");
+    plog("   → process task 가 await 한복판에서 죽는다. queue 에 있던 한국어 오디오는 재생되지 않는다.", "lg-bad");
+  } else if (f.cls === "InterruptionFrame"){
+    const kept = B.procQ.filter(it => it.f.un);
+    const killed = B.procQ.length - kept.length;
+    B.procQ = kept;
+    const curUn = B.procTask && B.procTask.f.un;
+    if (curUn){
+      plog("_start_interruption(): 현재 frame 이 UninterruptibleFrame → task 는 살리고 queue 만 reset  # :1130-1140", "lg-warn");
+    } else {
+      B.procTask = null;
+      plog("_start_interruption(): __cancel_process_task() → __create_process_task()  # :1135-1136", "lg-warn");
+    }
+    plog("   FrameQueue.reset(): " + killed + "개 폐기, UninterruptibleFrame " + kept.length + "개 보존  # frame_queue.py:84-95", "lg-warn");
+  } else if (f.cls === "StartFrame"){
+    B.procStarted = true;
+    plog("__start() → __create_process_task()  # :1091 → :1097. 이제서야 __process_queue 가 배수된다.", "lg-ok");
+  }
+}
+
+function bTick(){
+  if (B.direct){ plog("direct mode 에서는 배수할 queue 자체가 없다.", "lg-dim"); return; }
+
+  /* --- process task (느린 쪽) --- */
+  if (B.procTask){
+    B.procTask.left--;
+    if (B.procTask.left <= 0){
+      plog("__process_frame(" + B.procTask.f.cls + ") 완료 → push_frame(다음 processor)", "lg-dim");
+      B.procTask = null;
+    }
+  }
+  if (!B.procTask && B.procQ.length && B.procStarted){
+    const it = B.procQ.shift();
+    B.procTask = { f: it.f, left: B.cost };
+  }
+
+  /* --- input task (빠른 쪽) --- */
+  B.inTask = null;
+  if (!B.inputStarted){
+    if (B.inQ.length) plog("__input_queue 에 " + B.inQ.length + "개가 대기 중이지만 배수하는 task 가 없다 — StartFrame 을 넣어라.", "lg-warn");
+    renderB();
+    return;
+  }
+  if (B.inQ.length){
+    const it = B.inQ.shift();     // 이미 (tier, counter) 로 정렬돼 있음
+    const f = it.f;
+    if (f.kind === "sys" || f.kind === "start"){
+      // frame_processor.py:1300-1301 — SystemFrame 은 여기서 바로 실행된다
+      const byPriority = B.inQ.filter(x => x.tier > it.tier && x.counter < it.counter).length;
+      const bySkip = B.procQ.length + (B.procTask ? 1 : 0);
+      B.lastOvertake = { name:f.cls, byPriority, bySkip, counter:it.counter };
+      B.inTask = { f, mode:"inline" };
+      plog("isinstance(frame, SystemFrame) → await self.__process_frame(...)  # INLINE, :1300-1301", "lg-acc");
+      applyEffect(f, "inline");
+    } else {
+      if (B.cancelling){
+        B.dropped++;
+        plog(f.cls + " 는 _cancelling 상태라 사라진다", "lg-bad");
+      } else {
+        B.procQ.push(it);
+        B.inTask = { f, mode:"relay" };
+        plog("await self.__process_queue.put((" + f.cls + ", …))  # 느린 줄에 세운다, :1302-1303", "lg-dim");
+      }
+    }
+  }
+  renderB();
+}
+
+function frameItemHTML(it, head){
+  const f = it.f;
+  return "<div class='fitem " + f.kind + (head ? " head" : "") + "'>" +
+    "<span class='p'>" + it.tier + "</span>" +
+    "<span class='c'>#" + it.counter + "</span>" +
+    "<span class='nm'>" + f.cls + (f.un ? " <span class='un'>·U</span>" : "") + "</span></div>";
+}
+
+function renderB(){
+  const qi = $("qInput"), qp = $("qProcess");
+  qi.innerHTML = B.inQ.length
+    ? B.inQ.map((it,i) => frameItemHTML(it, i===0)).join("")
+    : "<div style='color:var(--ink-faint);font-size:0.7857rem;padding:6px 2px;'>비어 있음</div>";
+  qp.innerHTML = B.procQ.length
+    ? B.procQ.map((it,i) => frameItemHTML(it, i===0)).join("")
+    : "<div style='color:var(--ink-faint);font-size:0.7857rem;padding:6px 2px;'>비어 있음</div>";
+
+  const ib = $("inTaskBox");
+  if (!B.inputStarted){
+    ib.className = "taskbox killed";
+    ib.innerHTML = "<span class='lbl'>__input_frame_task_handler</span>task 없음 — " +
+      "__create_input_task() 는 StartFrame 이 queue 될 때만 불린다 (:427-428)";
+  } else if (!B.inTask){
+    ib.className = "taskbox";
+    ib.innerHTML = "<span class='lbl'>__input_frame_task_handler</span>idle — pop 하고 라우팅만 한다";
+  } else if (B.inTask.mode === "inline"){
+    ib.className = "taskbox inline";
+    ib.innerHTML = "<span class='lbl'>__input_frame_task_handler</span>INLINE 실행: " +
+      B.inTask.f.cls + "  ← 느린 queue 에 들어가지 않았다";
+  } else {
+    ib.className = "taskbox";
+    ib.innerHTML = "<span class='lbl'>__input_frame_task_handler</span>relay → __process_queue: " + B.inTask.f.cls;
+  }
+
+  const pb = $("prTaskBox");
+  if (!B.procStarted){
+    pb.className = "taskbox killed";
+    pb.innerHTML = "<span class='lbl'>__process_frame_task_handler</span>task 없음 — " +
+      (B.cancelling ? "CancelFrame 이 await 한복판에서 죽였다" : "StartFrame 이 아직 안 왔다");
+  } else if (B.procTask){
+    pb.className = "taskbox busy";
+    pb.innerHTML = "<span class='lbl'>__process_frame_task_handler</span>await 중: " +
+      B.procTask.f.cls + "  (남은 " + B.procTask.left + " tick)";
+  } else {
+    pb.className = "taskbox";
+    pb.innerHTML = "<span class='lbl'>__process_frame_task_handler</span>idle";
+  }
+
+  const fc = $("flgCancel");
+  fc.className = "flag" + (B.cancelling ? " on" : "");
+  fc.textContent = "_cancelling = " + (B.cancelling ? "True · drop " + B.dropped + "개" : "False");
+  const fd = $("flgDirect");
+  fd.className = "flag" + (B.direct ? " acc" : "");
+  fd.textContent = B.direct ? "direct mode ON — queue 0개" : "direct mode off";
+
+  const ov = $("overtakeBox");
+  if (!B.lastOvertake){
+    ov.innerHTML = "아직 <code>SystemFrame</code> 이 실행되지 않았다. audio frame 을 여러 개 쌓고 " +
+      "<code>InterruptionFrame</code> 을 던진 뒤 tick 해봐라.";
+  } else {
+    const o = B.lastOvertake;
+    ov.innerHTML =
+      "<b style='color:var(--c-sys)'>" + o.name + "</b> (#" + o.counter + ") 이 방금 INLINE 실행됐다. " +
+      "이 frame 이 앞지른 data frame:<div class='kv' style='margin-top:8px'>" +
+      "<span class='k'>① priority 로 (tier 10 &lt; 20)</span><span class='v big' style='color:var(--c-sys)'>" + o.byPriority + "</span>" +
+      "<span class='k'>② 느린 __process_queue 에 아예 안 들어가서</span><span class='v big' style='color:var(--c-sys)'>" + o.bySkip + "</span>" +
+      "<span class='k'>합계</span><span class='v'>" + (o.byPriority + o.bySkip) + "개를 건너뛰었다</span></div>" +
+      "<div style='margin-top:8px;color:var(--ink-faint);font-size:0.8214rem'>" +
+      "이건 덧붙인 fast path 가 아니라 <b>다른 task</b> 다. input task 는 pop/route 만 하므로 항상 한가하다.</div>";
+  }
+}
+
+$("btnFStart").addEventListener("click", () => queueFrame("start"));
+$("btnFAudio").addEventListener("click", () => queueFrame("audio"));
+$("btnFText").addEventListener("click", () => queueFrame("text"));
+$("btnFInt").addEventListener("click", () => queueFrame("interrupt"));
+$("btnFCancel").addEventListener("click", () => queueFrame("cancel"));
+$("btnFEnd").addEventListener("click", () => queueFrame("end"));
+$("btnTick").addEventListener("click", bTick);
+$("btnBReset").addEventListener("click", bReset);
+$("btnQReset").addEventListener("click", () => {
+  const kept = B.procQ.filter(it => it.f.un);
+  const killed = B.procQ.length - kept.length;
+  B.procQ = kept;
+  plog("FrameQueue.reset(): " + killed + "개 폐기, UninterruptibleFrame " + kept.length + "개 보존  # frame_queue.py:84-95", "lg-warn");
+  renderB();
+});
+$("directTgl").addEventListener("change", (e) => {
+  B.direct = e.target.checked;
+  plog(B.direct
+    ? "_enable_direct_mode=True → __create_process_task() 가 즉시 return 한다  # :1222-1224"
+    : "_enable_direct_mode=False → 두 queue 가 다시 살아난다", "lg-acc");
+  renderB();
+});
+$("costRange").addEventListener("input", (e) => {
+  B.cost = parseInt(e.target.value, 10);
+  $("costVal").textContent = B.cost + " tick";
+});
+$("btnAuto").addEventListener("click", () => {
+  const btn = $("btnAuto");
+  if (B.auto){
+    clearInterval(B.auto); B.auto = null;
+    btn.textContent = "auto ▶"; btn.classList.remove("on");
+  } else {
+    B.auto = setInterval(bTick, 420);
+    btn.textContent = "auto ⏸"; btn.classList.add("on");
+  }
+});
+
+/* ---------- N / r 계산기 ---------- */
+function renderNR(){
+  const secs = parseInt($("nrAudio").value, 10) / 10;      // 0.2 … 6.0 s
+  const chunks10 = parseInt($("nrChunks").value, 10);      // audio_out_10ms_chunks
+  const chunkMs = chunks10 * 10;
+  const N = Math.round(secs * 1000 / chunkMs);
+  $("nrAudioVal").textContent = secs.toFixed(1) + " s";
+  $("nrChunksVal").textContent = chunks10 + "  (= " + chunkMs + " ms/chunk)";
+  $("nrOut").innerHTML =
+    "<span class='k'>N (queue 에 남은 chunk 수)</span><span class='v'>" + N + " chunk</span>" +
+    "<span class='k'>r (배수 속도)</span><span class='v'>realtime — 스피커에서 소리가 나가는 속도</span>" +
+    "<span class='k'>in-band 정지 신호 (DataFrame 뒤에 줄섬)</span>" +
+      "<span class='v big' style='color:var(--danger)'>" + (secs * 1000).toFixed(0) + " ms</span>" +
+    "<span class='k'>out-of-band (SystemFrame, inline)</span>" +
+      "<span class='v big' style='color:var(--accent2)'>~수 ms</span>" +
+    "<span class='k'>handler 를 빠르게 만들면?</span><span class='v'>안 변한다. N/r 에 코드 속도 항이 없다.</span>";
+}
+$("nrAudio").addEventListener("input", renderNR);
+$("nrChunks").addEventListener("input", renderNR);
+
+/* ---------- runtime envelope ---------- */
+const ENV = {
+  plain:
+"<span class='cm'># 내가 PipelineWorker 에 넘긴 것</span>\n" +
+"Pipeline([\n" +
+"    transport.input(), stt, user_aggregator,\n" +
+"    llm, tts, transport.output(), assistant_aggregator,\n" +
+"])",
+  rtvi:
+"<span class='cm'># enable_rtvi=True (worker.py:289 기본값) 일 때 실제로 도는 것</span>\n" +
+"Pipeline(\n" +
+"    [ <span class='hi'>RTVIProcessor</span>,            <span class='cm'># worker.py:548 — 내가 만든 적 없다</span>\n" +
+"      Pipeline([ 내 7개 ]) ],\n" +
+"    source=<span class='hi'>PipelineSource</span>,       <span class='cm'># worker.py:543</span>\n" +
+"    sink=<span class='hi'>PipelineSink</span>,           <span class='cm'># worker.py:544, :549</span>\n" +
+")",
+  bridged:
+"<span class='cm'># bridged 까지 켜면 봉투가 하나 더 (worker.py:522-537)</span>\n" +
+"Pipeline(\n" +
+"    [ RTVIProcessor,\n" +
+"      Pipeline([ <span class='hi'>_BusEdgeProcessor</span>(UPSTREAM),\n" +
+"                 Pipeline([ 내 7개 ]),\n" +
+"                 <span class='hi'>_BusEdgeProcessor</span>(DOWNSTREAM) ]) ],\n" +
+"    source=PipelineSource, sink=PipelineSink,\n" +
+")\n\n" +
+"<span class='cm'># 내 pipeline 은 runtime 에서 3단계 깊이에 있다.\n" +
+"# 그런데 hop 지연은 0 이다 — container 는 direct mode 라 queue 가 없다.</span>"
+};
+function setEnv(which){
+  $("envBox").innerHTML = ENV[which];
+  [["btnEnvPlain","plain"],["btnEnvRtvi","rtvi"],["btnEnvBridged","bridged"]].forEach(([id,k]) => {
+    $(id).classList.toggle("on", k === which);
+  });
+}
+$("btnEnvPlain").addEventListener("click", () => setEnv("plain"));
+$("btnEnvRtvi").addEventListener("click", () => setEnv("rtvi"));
+$("btnEnvBridged").addEventListener("click", () => setEnv("bridged"));
+
+/* ==================================================================
+   3. PANEL C — 네 개의 출구
+   ================================================================== */
+const AUDIO_SECS = 3.0;      // output queue 에 남은 한국어 TTS
+const TMAX = 24;             // x축 최대 초
+const CANCEL_TIMEOUT = 20.0; // worker.py:96  CANCEL_TIMEOUT_SECS
+const SETUP_TIMEOUT  = 20.0; // worker.py:98  SETUP_TIMEOUT_SECS
+const START_TIMEOUT  = 20.0; // worker.py:100 START_TIMEOUT_SECS
+
+const EX = { mode:"cancel", wedged:false, playT:TMAX, anim:null, t0:0 };
+
+function xOf(t, w){
+  const padL = 128, padR = 22;
+  return padL + Math.max(0, Math.min(t, TMAX)) / TMAX * (w - padL - padR);
+}
+
+function drawExits(){
+  const cv = $("cvExits");
+  const { c, w, h } = setupCanvas(cv, CANVAS_H_EXITS);
+  const padL = 128;
+  const axisY = h - 30;
+
+  c.font = CFS + "px ui-monospace,SFMono-Regular,Menlo,Consolas,monospace";
+  c.textBaseline = "middle";
+
+  // --- 축 ---
+  c.strokeStyle = COL.edge; c.lineWidth = 1;
+  c.beginPath(); c.moveTo(padL, axisY); c.lineTo(w - 18, axisY); c.stroke();
+  c.fillStyle = COL.faint; c.textAlign = "center";
+  for (let t = 0; t <= TMAX; t += 4){
+    const x = xOf(t, w);
+    c.beginPath(); c.moveTo(x, axisY); c.lineTo(x, axisY + 4); c.stroke();
+    c.fillText(t + "s", x, axisY + 14);
+  }
+  c.textAlign = "left";
+  c.fillText("공유 시계 (초)", padL, axisY + 26);
+
+  // --- 20 s bound 선 ---
+  dashLine(c, xOf(CANCEL_TIMEOUT, w), 26, xOf(CANCEL_TIMEOUT, w), axisY, COL.warn, [5,5]);
+  c.fillStyle = COL.warn; c.textAlign = "right";
+  c.fillText("20.0 s", xOf(CANCEL_TIMEOUT, w) - 5, 20);
+  c.textAlign = "left";
+
+  const rows = [
+    { y: 58,  label: "cancel()",        sub: "CancelFrame" },
+    { y: 152, label: "stop_when_done()", sub: "EndFrame" }
+  ];
+  rows.forEach(r => {
+    c.fillStyle = EX.mode === "cancel" && r.y === 58 ? COL.ink :
+                  EX.mode === "end" && r.y === 152 ? COL.ink : COL.dim;
+    c.fillText(r.label, 8, r.y + 8);
+    c.fillStyle = COL.faint;
+    c.fillText(r.sub, 8, r.y + 24);
+  });
+
+  const BH = 26;
+
+  /* ---------- ROW 1: CancelFrame ---------- */
+  const y1 = 58;
+  const dim1 = (EX.mode === "end");
+  c.globalAlpha = dim1 ? 0.32 : 1;
+
+  // 폐기되는 오디오 블록
+  const ax0 = xOf(0, w), ax1 = xOf(AUDIO_SECS, w);
+  c.fillStyle = "rgba(248,81,73,0.13)";
+  roundRect(c, ax0, y1, ax1 - ax0, BH, 5); c.fill();
+  c.strokeStyle = COL.bad; c.setLineDash([4,3]); c.lineWidth = 1;
+  roundRect(c, ax0, y1, ax1 - ax0, BH, 5); c.stroke(); c.setLineDash([]);
+  c.fillStyle = COL.bad; c.textAlign = "left";
+  c.fillText("queued TTS 3.0 s → 폐기", ax0 + 7, y1 + BH/2);
+  // 취소선
+  c.strokeStyle = COL.bad; c.beginPath();
+  c.moveTo(ax0 + 3, y1 + BH/2); c.lineTo(ax1 - 3, y1 + BH/2); c.stroke();
+
+  // CancelFrame 도착 (inline, ~즉시)
+  const cArr = xOf(0.05, w);
+  c.strokeStyle = COL.bad; c.lineWidth = 2;
+  c.beginPath(); c.moveTo(cArr, y1 - 12); c.lineTo(cArr, y1 + BH + 8); c.stroke();
+  c.fillStyle = COL.bad; c.beginPath(); c.arc(cArr, y1 - 12, 3.5, 0, Math.PI*2); c.fill();
+  c.fillText("CancelFrame — SystemFrame, tier 10, INLINE (오디오를 앞지른다)", cArr + 7, y1 - 12);
+
+  const tearEnd = EX.wedged ? CANCEL_TIMEOUT : 0.35;
+  const tx = xOf(tearEnd, w);
+  c.strokeStyle = EX.wedged ? COL.warn : COL.ok; c.lineWidth = 2;
+  c.beginPath(); c.moveTo(tx, y1 + BH + 8); c.lineTo(tx, y1 + BH + 22); c.stroke();
+  c.fillStyle = EX.wedged ? COL.warn : COL.ok;
+  c.fillText(EX.wedged
+      ? "20.0 s 에 포기 → on_pipeline_timeout, 그래도 on_pipeline_finished 는 발화"
+      : "teardown 완료 (~0.35 s)",
+    tx + 7, y1 + BH + 22);
+
+  // bound 브래킷
+  const bx0 = xOf(0, w), bx1 = xOf(CANCEL_TIMEOUT, w), by = y1 + BH + 34;
+  c.strokeStyle = COL.warn; c.lineWidth = 1;
+  c.beginPath();
+  c.moveTo(bx0, by - 4); c.lineTo(bx0, by); c.lineTo(bx1, by); c.lineTo(bx1, by - 4);
+  c.stroke();
+  c.fillStyle = COL.warn;
+  c.fillText("bounded — cancel_timeout_secs = CANCEL_TIMEOUT_SECS = 20.0 (worker.py:96)", bx0 + 6, by + 9);
+  c.globalAlpha = 1;
+
+  /* ---------- ROW 2: EndFrame ---------- */
+  const y2 = 152;
+  const dim2 = (EX.mode === "cancel");
+  c.globalAlpha = dim2 ? 0.32 : 1;
+
+  c.fillStyle = "rgba(63,185,80,0.13)";
+  roundRect(c, ax0, y2, ax1 - ax0, BH, 5); c.fill();
+  c.strokeStyle = COL.ok; c.lineWidth = 1;
+  roundRect(c, ax0, y2, ax1 - ax0, BH, 5); c.stroke();
+  c.fillStyle = COL.ok;
+  c.fillText("3.0 s 전부 재생됨 (realtime 배수)", ax0 + 7, y2 + BH/2);
+
+  // EndFrame 은 tier 20 이라 오디오 뒤에 줄선다
+  c.fillStyle = COL.ctrl;
+  c.fillText("EndFrame queued (tier 20)", ax0 + 2, y2 - 12);
+  dashLine(c, ax0, y2 - 4, ax1, y2 - 4, COL.ctrl, [3,3]);
+
+  if (EX.wedged){
+    c.strokeStyle = COL.bad; c.lineWidth = 2;
+    dashLine(c, ax1, y2 + BH/2, w - 20, y2 + BH/2, COL.bad, [6,4]);
+    c.fillStyle = COL.bad;
+    c.fillText("TTS 가 vendor socket 에 물림 → EndFrame 이 끝에 도달하지 않는다 → 영원히 hang", ax1 + 8, y2 + BH + 16);
+  } else {
+    const ex = xOf(AUDIO_SECS, w);
+    c.strokeStyle = COL.ok; c.lineWidth = 2;
+    c.beginPath(); c.moveTo(ex, y2 - 12); c.lineTo(ex, y2 + BH + 10); c.stroke();
+    c.fillStyle = COL.ok; c.beginPath(); c.arc(ex, y2 - 12, 3.5, 0, Math.PI*2); c.fill();
+    c.fillText("마지막 sample 이후에야 pipeline 끝에 도달 → 종료 (3.0 s)", ex + 7, y2 + BH + 10);
+  }
+
+  // unbounded 표시
+  const uy = y2 + BH + 34;
+  c.strokeStyle = COL.faint; c.lineWidth = 1;
+  dashLine(c, ax0, uy, w - 34, uy, COL.faint, [2,4]);
+  c.beginPath(); c.moveTo(w - 34, uy - 4); c.lineTo(w - 26, uy); c.lineTo(w - 34, uy + 4); c.stroke();
+  c.fillStyle = COL.faint;
+  c.fillText("unbounded — await self._pipeline_end_event.wait()  (worker.py:1088, timeout 없음)", ax0 + 6, uy + 10);
+  c.globalAlpha = 1;
+
+  /* ---------- playhead ---------- */
+  if (EX.playT < TMAX){
+    const px = xOf(EX.playT, w);
+    c.strokeStyle = COL.accent; c.lineWidth = 1.5;
+    c.beginPath(); c.moveTo(px, 26); c.lineTo(px, axisY); c.stroke();
+    c.fillStyle = COL.accent; c.textAlign = "left";
+    c.fillText("t = " + EX.playT.toFixed(2) + " s", px + 5, 20);
+  }
+}
+
+function sweep(mode){
+  EX.mode = mode;
+  if (EX.anim) cancelAnimationFrame(EX.anim);
+  EX.t0 = performance.now();
+  EX.playT = 0;
+  const step = () => {
+    const el = (performance.now() - EX.t0) / 1000;
+    EX.playT = el * 4;                 // 4x 배속
+    if (EX.playT >= TMAX){ EX.playT = TMAX; drawExits(); EX.anim = null; return; }
+    drawExits();
+    EX.anim = requestAnimationFrame(step);
+  };
+  EX.anim = requestAnimationFrame(step);
+  updateExitNote();
+}
+
+function updateExitNote(){
+  const n = $("exitNote");
+  if (EX.mode === "cancel"){
+    n.className = "callout bad";
+    n.innerHTML = "<b>난폭한 경로.</b> <code>worker.cancel(reason=…)</code> → <code>_cancel()</code> 이 " +
+      "<code>_pipeline_start_event</code> 를 먼저 풀어주고 (handshake 중에 끊은 고객을 위해) " +
+      "<code>CancelFrame</code> 을 queue 한다. <code>SystemFrame</code> 이므로 3.0 초 오디오를 앞질러 " +
+      "각 processor 에서 INLINE 실행되고, 거기서 <code>_cancelling = True</code> 가 되어 이후 frame 은 " +
+      "<b>조용히 사라진다</b>. 대기는 20 s 로 잘린다 — 물린 teardown 이 하루 종일 통화를 받는 host 를 " +
+      "영구히 붙잡으면 안 되니까. 참고: <code>cancel</code> 의 <code>reason</code> 은 keyword-only 라 " +
+      "<code>cancel(\"hangup\")</code> 은 <code>TypeError</code> 다.";
+  } else if (EX.mode === "end"){
+    n.className = "callout ok";
+    n.innerHTML = "<b>우아한 경로.</b> <code>EndFrame(ControlFrame, UninterruptibleFrame)</code> 은 " +
+      "<code>DEFAULT_PRIORITY = 20</code> 을 받아 <b>오디오 뒤에 줄선다.</b> in-band 인 게 버그가 아니라 " +
+      "기능이다 — 앞질렀다면 리나가 말하는 도중에 transport 가 닫히고 고객은 '딱' 소리를 듣는다. " +
+      "그리고 대기에는 <b>timeout 이 없다</b>: 자르면 <code>EndFrame</code> 이 존재하는 이유인 그 오디오를 " +
+      "버리는 셈이니까. 대가는 <code>stop_when_done()</code> 이 영원히 hang 할 수 있다는 것 — " +
+      "watchdog 은 네가 짜야 한다 (read.md §13.3.1).";
+  } else if (EX.mode === "idle"){
+    n.className = "callout";
+    n.innerHTML = "<b>침묵.</b> 아래 두 번째 시계를 봐라. <code>IdleFrameObserver</code> 가 " +
+      "<code>idle_timeout_frames</code> 를 볼 때마다 event 를 set 하고, " +
+      "<code>_idle_monitor_handler</code> 는 그 event 를 <code>idle_timeout_secs</code> timeout 으로 기다린다. " +
+      "기본 300 초 = 5 분이다.";
+  } else {
+    n.className = "callout";
+    n.innerHTML = "<b>frame 이 하나도 없는 출구.</b> " +
+      "<code>_setup_within_timeout</code> 이 <code>SETUP_TIMEOUT_SECS = 20.0</code> 안에 끝나지 못하면 " +
+      "<code>on_setup_timeout</code> 을 쏘고 <code>_cleanup(cleanup_pipeline=True)</code> 로 직행한다 — " +
+      "<code>StartFrame</code> 조차 만들어지지 않는다. setup 은 통과했는데 어떤 processor 가 " +
+      "<code>StartFrame</code> 을 20 초 안에 넘기지 못하면 <code>START_TIMEOUT_SECS</code> 가 걸리고 " +
+      "로그에 <code>\"being blocked somewhere?\"</code> 가 찍힌다. " +
+      "<b>리나에게는 20 초가 너무 길다</b> — '여보세요' 뒤 20 초 무음이면 통화는 이미 끝났다. " +
+      "<code>setup_timeout_secs=5.0</code> 을 생각해라.";
+  }
+}
+
+$("btnExitCancel").addEventListener("click", () => sweep("cancel"));
+$("btnExitEnd").addEventListener("click", () => sweep("end"));
+$("btnExitIdle").addEventListener("click", () => { EX.mode = "idle"; updateExitNote(); drawExits(); drawIdle(); });
+$("btnExitSetup").addEventListener("click", () => { EX.mode = "setup"; updateExitNote(); drawExits(); });
+$("wedgeTgl").addEventListener("change", (e) => { EX.wedged = e.target.checked; drawExits(); updateExitNote(); });
+
+/* ---------- idle 시계 ---------- */
+const BOT_MONOLOGUE = 90;   // 리나가 90초 독백하는 시나리오
+
+function drawIdle(){
+  const cv = $("cvIdle");
+  const { c, w, h } = setupCanvas(cv, CANVAS_H_IDLE);
+  const secs = parseInt($("idleSecs").value, 10);
+  const includeBot = $("idleFrames").value === "both";
+  const fireAt = (includeBot ? BOT_MONOLOGUE : 0) + secs;
+  const tmax = Math.max(200, fireAt + 25);
+
+  const padL = 14, padR = 18, axisY = h - 26;
+  const X = (t) => padL + Math.max(0, Math.min(t, tmax)) / tmax * (w - padL - padR);
+
+  c.font = CFS + "px ui-monospace,SFMono-Regular,Menlo,Consolas,monospace";
+  c.textBaseline = "middle"; c.textAlign = "left";
+
+  // 축
+  c.strokeStyle = COL.edge; c.lineWidth = 1;
+  c.beginPath(); c.moveTo(padL, axisY); c.lineTo(w - 14, axisY); c.stroke();
+  c.fillStyle = COL.faint; c.textAlign = "center";
+  const stepT = tmax > 260 ? 60 : 30;
+  for (let t = 0; t <= tmax; t += stepT){
+    const x = X(t);
+    c.beginPath(); c.moveTo(x, axisY); c.lineTo(x, axisY + 4); c.stroke();
+    c.fillText(t + "s", x, axisY + 13);
+  }
+  c.textAlign = "left";
+
+  // 봇 독백 구간
+  const by = 46, BHH = 24;
+  c.fillStyle = "rgba(188,140,255,0.15)";
+  roundRect(c, X(0), by, X(BOT_MONOLOGUE) - X(0), BHH, 5); c.fill();
+  c.strokeStyle = COL.ctrl; c.lineWidth = 1;
+  roundRect(c, X(0), by, X(BOT_MONOLOGUE) - X(0), BHH, 5); c.stroke();
+  c.fillStyle = COL.ctrl;
+  c.fillText("리나가 90 s 독백 · BotSpeakingFrame 0.2 s 주기", X(0) + 6, by + BHH/2);
+
+  // 0.2s 주기 tick 표시 (샘플링해서 그린다)
+  c.strokeStyle = includeBot ? COL.ctrl : COL.faint;
+  c.globalAlpha = includeBot ? 0.8 : 0.25;
+  for (let t = 0; t < BOT_MONOLOGUE; t += 2){
+    const x = X(t);
+    c.beginPath(); c.moveTo(x, by + BHH); c.lineTo(x, by + BHH + 5); c.stroke();
+  }
+  c.globalAlpha = 1;
+
+  // 고객: 무음
+  c.fillStyle = COL.faint;
+  c.fillText("고객: 처음부터 끝까지 무음 (UserSpeakingFrame 0개)", X(0) + 6, by + BHH + 20);
+
+  // idle clock 시작점
+  const clockStart = includeBot ? BOT_MONOLOGUE : 0;
+  const cy = by + BHH + 42;
+  c.fillStyle = "rgba(210,153,34,0.12)";
+  roundRect(c, X(clockStart), cy, X(fireAt) - X(clockStart), 20, 5); c.fill();
+  c.strokeStyle = COL.warn; c.setLineDash([4,3]);
+  roundRect(c, X(clockStart), cy, X(fireAt) - X(clockStart), 20, 5); c.stroke(); c.setLineDash([]);
+  c.fillStyle = COL.warn;
+  c.fillText("idle clock: " + secs + " s", X(clockStart) + 6, cy + 10);
+
+  // 발화 지점
+  const fx = X(fireAt);
+  c.strokeStyle = COL.bad; c.lineWidth = 2;
+  c.beginPath(); c.moveTo(fx, 26); c.lineTo(fx, axisY); c.stroke();
+  c.fillStyle = COL.bad;
+  const lbl = "idle timeout @ " + fireAt + " s";
+  c.textAlign = fx > w - 150 ? "right" : "left";
+  c.fillText(lbl, fx + (fx > w - 150 ? -6 : 6), 20);
+  c.textAlign = "left";
+
+  // 30초 영업 주석
+  const sx = X(30);
+  dashLine(c, sx, 26, sx, axisY, COL.faint, [2,4]);
+  c.fillStyle = COL.faint;
+  c.fillText("30 s — 영업콜에서는 이미 잃은 고객", sx + 5, axisY - 12);
+
+  // note
+  const note = $("idleNote");
+  const runnerKill = $("idleRunner").value === "true";
+  note.className = "callout " + (runnerKill ? "bad" : (secs > 120 ? "" : "ok"));
+  note.innerHTML =
+    "<b>지금 설정이면</b> 이 통화는 <b>" + fireAt + " s</b> 에 끊긴다. " +
+    (includeBot
+      ? "<code>BotSpeakingFrame</code> 이 포함돼 있어서 리나가 말하는 90 초 내내 시계가 초기화된다 — " +
+        "즉 이 timer 는 <b>양쪽 모두의 침묵</b>을 잰다."
+      : "<code>(UserSpeakingFrame,)</code> 로 좁혔으니 리나의 독백은 시계를 초기화하지 못한다 — " +
+        "이 timer 는 <b>고객이 응답을 멈췄다</b>를 잰다.") +
+    "<br><br>" +
+    (runnerKill
+      ? "<b style='color:var(--danger)'>위험:</b> <code>cancel_runner_on_idle_timeout=True</code> 는 " +
+        "<code>BaseWorker.cancel()</code> → <code>BusCancelMessage</code> 로 이어져 " +
+        "<b>같은 host 의 다른 모든 통화까지 취소한다.</b> 침묵한 고객 한 명이 동시 통화 29 건을 죽인다."
+      : "<code>cancel_runner_on_idle_timeout=False</code> — 이 통화만 끊는다. 다중 세션 host 에서는 필수다.");
+}
+$("idleSecs").addEventListener("input", () => {
+  $("idleSecsVal").textContent = $("idleSecs").value + " s";
+  drawIdle();
+});
+$("idleFrames").addEventListener("change", drawIdle);
+$("idleRunner").addEventListener("change", drawIdle);
+
+/* ==================================================================
+   4. 초기화
+   ================================================================== */
+function redrawCanvases(){ drawExits(); drawIdle(); }
+window.addEventListener("resize", redrawCanvases);
+
+hostReset();
+bReset();
+renderNR();
+setEnv("rtvi");
+updateExitNote();
+redrawCanvases();
+</script>
+</body>
+</html>

@@ -1,0 +1,1640 @@
+<!--
+  Figure: rtv-baseline.html — "realtime_voice baseline viewer — mechanism only, no verdict"
+  Chapter: ch-03 (phase: composition)
+  Back to: ../read.md  (§2.7 headline panel, §3.2 runtime, §4.4 VAD blip, §7.2 ledger, §7 no-equivalent list)
+
+  이 도구에는 keep/replace/hybrid 투표 UI가 없다. 점수도 배지도 추천도 없다.
+  두 설계를 나란히 읽히게 만드는 것이 전부이고, 평결은 ch-13의 일이다.
+
+  전부 self-contained: inline CSS + vanilla JS. CDN 없음, fetch 없음, 외부 폰트/이미지 없음.
+  file:// 로 열어도 그대로 동작한다.
+
+  표시되는 모든 숫자/식별자의 출처
+  ---------------------------------------------------------------------------
+  Pipecat 측 — pipecat-ai/pipecat @ 0cbf9c5b031eef06e53f0a193b9a67d60230e6be,
+    wiki/raw-data/pipecat/pipecat-src 에서 2026-08-25 재측정:
+      ast.walk(frames.py): 133 classes / 131 *Frame / 123 Frame descendants /
+        SystemFrame 48, DataFrame 33, ControlFrame 39 (합 120) / union 119 /
+        UninterruptibleFrame 상속 13 / frames.py 2,415 L
+      grep -rn "isinstance(frame," src | wc -l = 577,  -rln ... = 136
+      ls -d src/pipecat/services/*/ | wc -l = 62,  transports/*/ = 11
+      process_frame else-branch 유무는 AST로 클래스별 확인 (LLMService L679 = else 없음)
+  realtime_voice 측 — boson-agent(private) branch voice-chat-dev @ 034ce4ca (2026-07-29),
+    wiki/raw-data/pipecat/excerpts/rtv-*.md 로만 attested. 이 wiki에서 재검증 불가.
+
+  Panel 3/4 에서 "설명용 모델"이라고 표시한 부분(합성 confidence 시퀀스,
+  가상의 char-alignment)은 측정값이 아니라 설명용 시뮬레이션이다. 라벨에 명시했다.
+-->
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>realtime_voice baseline viewer — mechanism only (ch-03)</title>
+<style>
+  /* --- 반응형 타이포 스케일 (태블릿 우선) --- */
+  html{font-size:14px;}
+  @media (pointer:coarse){ html{font-size:17px;} }
+  @media (min-width:1500px){ html{font-size:15.5px;} }
+
+  :root{
+    --bg:#0e1117; --panel:#161b22; --panel2:#1c2230; --edge:#2b3242;
+    --ink:#e6edf3; --ink-dim:#9aa7b4; --ink-faint:#6b7686;
+    --accent:#58a6ff; --accent2:#3fb950; --danger:#f85149; --warn:#d29922;
+    --c-open:#bc8cff;    /* Pipecat / open sum type */
+    --c-closed:#f778ba;  /* realtime_voice / closed union */
+    --c-neutral:#8b949e;
+  }
+  *{box-sizing:border-box;}
+  html,body{margin:0;padding:0;}
+  body{
+    background:var(--bg); color:var(--ink);
+    font:1rem/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Apple SD Gothic Neo",
+         "Noto Sans KR",Helvetica,Arial,sans-serif;
+    padding:22px; max-width:88rem; margin:0 auto;
+  }
+  h1{font-size:1.5rem; margin:0 0 3px; letter-spacing:.2px;}
+  .sub{color:var(--ink-dim); font-size:0.9286rem; margin:0 0 14px;}
+  .sub code{color:var(--accent);}
+  .noverdict{border:1px dashed var(--edge); border-left:3px solid var(--warn);
+    background:rgba(210,153,34,.06); border-radius:0 8px 8px 0; padding:10px 14px;
+    font-size:0.8929rem; color:var(--ink-dim); margin:0 0 20px;}
+  .noverdict b{color:var(--ink);}
+
+  .panel{background:var(--panel); border:1px solid var(--edge); border-radius:10px;
+    padding:16px; margin-bottom:18px;}
+  .panel h2{font-size:0.8571rem; text-transform:uppercase; letter-spacing:.9px; color:var(--ink-dim);
+    margin:0 0 4px; font-weight:600;}
+  .panel .lede{font-size:0.9286rem; color:var(--ink-dim); margin:0 0 14px;}
+  .mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+    font-variant-numeric:tabular-nums;}
+  code{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:0.8571rem;
+    color:var(--accent);}
+
+  /* ---------- 2-column mechanism viewer ---------- */
+  .cols{display:grid; grid-template-columns:1fr 1fr; gap:16px; align-items:start;}
+  @media (max-width:1000px){ .cols{grid-template-columns:1fr;} }
+  .col{background:var(--panel2); border:1px solid var(--edge); border-radius:9px; padding:14px;}
+  .col.open{border-top:3px solid var(--c-open);}
+  .col.closed{border-top:3px solid var(--c-closed);}
+  .col h3{margin:0 0 2px; font-size:1.0714rem;}
+  .col .who{font-size:0.7857rem; color:var(--ink-faint); margin:0 0 12px; letter-spacing:.4px;}
+  .col.open h3{color:var(--c-open);} .col.closed h3{color:var(--c-closed);}
+
+  .decl{background:#10151d; border:1px solid var(--edge); border-radius:8px; padding:11px 12px;
+    font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:0.8214rem;
+    line-height:1.85; overflow-x:auto; white-space:pre; margin-bottom:10px;}
+  .decl .cm{color:var(--ink-faint);}
+  .decl .kw{color:var(--c-open);}
+  .decl .added{color:var(--warn); font-weight:700;}
+
+  .chain{display:flex; flex-direction:column; gap:4px; margin-top:10px;}
+  .step{display:grid; grid-template-columns:22px 1fr; gap:9px; align-items:start;
+    background:#10151d; border:1px solid var(--edge); border-radius:7px; padding:7px 9px;
+    font-size:0.8214rem;}
+  .step .num{color:var(--ink-faint); font-size:0.75rem; text-align:right; padding-top:2px;}
+  .step .nm{font-weight:600;}
+  .step .loc{color:var(--ink-faint); font-size:0.75rem; word-break:break-all;}
+  .step .tail{color:var(--ink-dim); font-size:0.7857rem;
+    font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;}
+  .step.lit{animation:fadein .3s ease-out both;}
+  .step.pass{border-color:#2f5d3a;}
+  .step.pass .nm{color:var(--accent2);}
+  .step.drop{border-color:var(--danger); background:rgba(248,81,73,.08);}
+  .step.drop .nm{color:var(--danger);}
+  .step.dead{opacity:.35;}
+  @keyframes fadein{from{opacity:0; transform:translateY(-4px);}to{opacity:1; transform:none;}}
+  .verdictless{font-size:0.7857rem; color:var(--ink-faint); margin-top:6px;}
+
+  .checker{margin-top:12px; border-radius:8px; padding:10px 12px; font-size:0.8214rem;
+    line-height:1.65;}
+  .checker .ck{font-size:0.75rem; letter-spacing:.7px; text-transform:uppercase;
+    color:var(--ink-faint); display:block; margin-bottom:4px;}
+  .checker.cannot{background:rgba(248,81,73,.07); border:1px solid #4a2b2b;}
+  .checker.can{background:rgba(63,185,80,.07); border:1px solid #23472e;}
+  .checker b{color:var(--ink);}
+
+  .rowbtn{display:flex; gap:7px; flex-wrap:wrap; align-items:center; margin-top:10px;}
+  .btn{background:#1c2230; border:1px solid var(--edge); color:var(--ink);
+    border-radius:7px; padding:8px 12px; cursor:pointer; font-size:0.8571rem; font-weight:600;
+    transition:.13s; font-family:inherit;}
+  .btn:hover{border-color:var(--accent);}
+  .btn.primary{background:#1d3a5f; border-color:var(--accent); color:#cfe6ff;}
+  .btn.ghost{color:var(--ink-dim); font-weight:400;}
+  input[type=text]{background:#10151d; border:1px solid var(--edge); color:var(--ink);
+    border-radius:7px; padding:8px 10px; font-size:0.8571rem; width:11rem;
+    font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;}
+  input[type=text]:focus{outline:none; border-color:var(--c-closed);}
+  select{background:#10151d; border:1px solid var(--edge); color:var(--ink); border-radius:7px;
+    padding:7px 9px; font-size:0.8571rem; font-family:inherit;}
+
+  .counts{display:flex; gap:7px; flex-wrap:wrap; margin:10px 0 0;}
+  .cnt{border:1px solid var(--edge); border-radius:7px; padding:6px 10px; background:#10151d;
+    font-size:0.7857rem; color:var(--ink-faint); min-width:6.5rem;}
+  .cnt b{display:block; font-size:1.0714rem; color:var(--ink); font-variant-numeric:tabular-nums;}
+  .cnt.warnv b{color:var(--warn);}
+
+  .edits{list-style:none; padding:0; margin:10px 0 0;}
+  .edits li{background:#10151d; border:1px solid var(--edge); border-left:3px solid var(--c-closed);
+    border-radius:0 7px 7px 0; padding:8px 10px; margin-bottom:5px; font-size:0.8214rem;}
+  .edits li.raise{border-left-color:var(--danger);}
+  .edits li.impossible{border-left-color:var(--ink-faint); opacity:.75;}
+  .edits li b{display:block; font-size:0.8571rem;}
+  .edits li span{color:var(--ink-faint); font-size:0.7857rem;}
+
+  /* ---------- open question footer per panel ---------- */
+  .oq{margin-top:15px; border-left:3px solid var(--warn); background:rgba(210,153,34,.06);
+    padding:10px 14px; border-radius:0 7px 7px 0; font-size:0.8929rem; color:var(--ink-dim);}
+  .oq b{color:var(--warn); font-size:0.7857rem; letter-spacing:.7px; text-transform:uppercase;
+    display:block; margin-bottom:3px;}
+
+  /* ---------- runtime panel ---------- */
+  .runtime{display:grid; grid-template-columns:1.15fr .85fr; gap:16px; align-items:start;}
+  @media (max-width:1000px){ .runtime{grid-template-columns:1fr;} }
+  .tg{background:#10151d; border:1px dashed var(--c-closed); border-radius:9px; padding:12px;}
+  .tg .tglbl{font-size:0.75rem; color:var(--c-closed); letter-spacing:.6px; margin-bottom:8px;
+    font-family:ui-monospace,monospace;}
+  .task{background:var(--panel2); border:1px solid var(--edge); border-radius:7px;
+    padding:7px 10px; margin-bottom:5px; font-size:0.8214rem;
+    font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;}
+  .task.longlived{border-color:#2f5d3a;}
+  .task.longlived::before{content:"long-lived · "; color:var(--accent2); font-size:0.75rem;}
+  .task.turn{border-color:#3a4a68;}
+  .task.turn::before{content:"per-turn · "; color:var(--accent); font-size:0.75rem;}
+  .task.stale{opacity:.4; text-decoration:line-through; border-color:var(--danger);}
+  .nest{margin-left:16px; border-left:2px solid var(--edge); padding-left:9px;}
+  .placeholder{background:repeating-linear-gradient(135deg,#10151d,#10151d 9px,#141a24 9px,#141a24 18px);
+    border:1px dashed var(--ink-faint); border-radius:9px; padding:16px; text-align:center;
+    color:var(--ink-faint); font-size:0.8571rem; line-height:1.7;}
+  .placeholder b{display:block; color:var(--ink-dim); font-size:0.9286rem; margin-bottom:4px;}
+  .sites{display:flex; flex-wrap:wrap; gap:5px; margin-top:10px;}
+  .site{border:1px solid var(--edge); border-radius:6px; padding:4px 8px; font-size:0.75rem;
+    color:var(--ink-faint); background:#10151d;
+    font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;}
+  .site.hot{border-color:var(--danger); color:#ffb4b0; background:rgba(248,81,73,.1);}
+  .log{background:#10151d; border:1px solid var(--edge); border-radius:8px; padding:10px 12px;
+    font-size:0.7857rem; line-height:1.8; max-height:12rem; overflow-y:auto; margin-top:10px;
+    font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; color:var(--ink-dim);}
+  .log .g{color:var(--accent2);} .log .r{color:var(--danger);} .log .y{color:var(--warn);}
+  .log .d{color:var(--ink-faint);}
+
+  /* ---------- controls ---------- */
+  .ctrl{margin-bottom:13px;}
+  .ctrl label{display:flex; justify-content:space-between; align-items:baseline; margin-bottom:4px;}
+  .ctrl .name{font-weight:600; font-size:0.8571rem;}
+  .ctrl .val{color:var(--accent); font-weight:600; font-size:0.8571rem;}
+  .ctrl .hint{display:block; color:var(--ink-faint); font-size:0.75rem; font-weight:400;}
+  input[type=range]{-webkit-appearance:none; appearance:none; width:100%; height:5px;
+    border-radius:5px; background:var(--edge); outline:none; margin:3px 0;}
+  input[type=range]::-webkit-slider-thumb{-webkit-appearance:none; appearance:none;
+    width:15px; height:15px; border-radius:50%; background:var(--accent); cursor:pointer;}
+  input[type=range]::-moz-range-thumb{width:15px; height:15px; border:0; border-radius:50%;
+    background:var(--accent); cursor:pointer;}
+  .chk{display:flex; align-items:flex-start; gap:8px; font-size:0.8214rem; color:var(--ink-dim);
+    margin-bottom:10px; cursor:pointer;}
+  .chk input{margin-top:3px; accent-color:var(--accent);}
+
+  .wrap{display:grid; grid-template-columns:17rem 1fr; gap:18px; align-items:start;}
+  @media (max-width:1000px){ .wrap{grid-template-columns:1fr;} }
+
+  /* height는 JS의 CANVAS_H_* 상수와 반드시 같은 값 — 레이아웃 점프 방지 */
+  canvas{width:100%; display:block; border-radius:8px; background:#10151d;
+    border:1px solid var(--edge);}
+  #cvVad{height:250px;}
+  #cvLedger{height:230px;}
+  .legend{display:flex; gap:14px; font-size:0.7857rem; color:var(--ink-dim); margin-top:8px;
+    flex-wrap:wrap;}
+  .legend i{display:inline-block; width:14px; height:10px; border-radius:3px;
+    vertical-align:middle; margin-right:5px;}
+
+  .report{display:grid; grid-template-columns:1fr 1fr; gap:12px; margin-top:12px;}
+  @media (max-width:760px){ .report{grid-template-columns:1fr;} }
+  .rep{background:#10151d; border:1px solid var(--edge); border-radius:8px; padding:11px 12px;
+    font-size:0.8214rem; line-height:1.7;}
+  .rep h4{margin:0 0 6px; font-size:0.8571rem;}
+  .rep.open h4{color:var(--c-open);} .rep.closed h4{color:var(--c-closed);}
+  .rep .ev{font-family:ui-monospace,monospace; font-size:0.7857rem; color:var(--ink);
+    display:block; margin:3px 0;}
+  .rep .none{color:var(--ink-faint);}
+
+  table{width:100%; border-collapse:collapse; font-size:0.8214rem; margin-top:6px;}
+  th,td{padding:6px 8px; text-align:left; border-bottom:1px solid var(--edge); vertical-align:top;}
+  th{color:var(--ink-faint); font-weight:600; font-size:0.75rem; text-transform:uppercase;
+    letter-spacing:.5px;}
+  td.num{text-align:right; font-variant-numeric:tabular-nums;
+    font-family:ui-monospace,monospace;}
+
+  details{background:#10151d; border:1px solid var(--edge); border-radius:8px; margin-bottom:7px;}
+  details[open]{border-color:var(--c-closed);}
+  summary{cursor:pointer; padding:10px 13px; font-size:0.9286rem; font-weight:600;
+    list-style:none; display:flex; justify-content:space-between; gap:10px; align-items:baseline;}
+  summary::-webkit-details-marker{display:none;}
+  summary::after{content:"▾"; color:var(--ink-faint); font-size:0.8571rem;}
+  details[open] summary::after{content:"▴";}
+  summary .sz{color:var(--ink-faint); font-size:0.7857rem; font-weight:400;
+    font-family:ui-monospace,monospace;}
+  .dbody{padding:0 13px 13px; font-size:0.8571rem; line-height:1.75; color:var(--ink-dim);}
+  .dbody b{color:var(--ink);}
+  .dbody pre{background:#0b0f16; border:1px solid var(--edge); border-radius:7px; padding:11px;
+    overflow-x:auto; font-size:0.7857rem; line-height:1.7; margin:9px 0; color:var(--ink-dim);
+    font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;}
+  .dbody pre .cm{color:var(--ink-faint);}
+  .dbody pre .st{color:var(--accent2);}
+  .dbody pre .kw{color:var(--c-open);}
+  .pcside{margin-top:9px; border-left:3px solid var(--c-open); background:rgba(188,140,255,.06);
+    padding:8px 11px; border-radius:0 6px 6px 0; font-size:0.8214rem;}
+  .pcside b{color:var(--c-open);}
+
+  .guardgrid{display:flex; gap:6px; flex-wrap:wrap; margin:9px 0;}
+  .gb{background:var(--panel2); border:1px solid var(--edge); color:var(--ink-dim);
+    border-radius:6px; padding:6px 9px; cursor:pointer; font-size:0.7857rem; font-family:inherit;}
+  .gb:hover{border-color:var(--ink-faint); color:var(--ink);}
+  .gb.on{background:#2a1e33; border-color:var(--c-closed); color:var(--ink);}
+
+  /* ---------- scale strip ---------- */
+  .scale{display:grid; grid-template-columns:1fr 1fr; gap:16px;}
+  @media (max-width:1000px){ .scale{grid-template-columns:1fr;} }
+  .bignum{display:flex; gap:8px; flex-wrap:wrap; margin-bottom:10px;}
+  .tnames{list-style:none; padding:0; margin:8px 0 0;}
+  .tnames li{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:0.75rem;
+    color:var(--ink-dim); padding:3px 0 3px 12px; border-left:2px solid var(--edge); margin-bottom:2px;
+    word-break:break-all;}
+  .tnames li:hover{border-left-color:var(--c-closed); color:var(--ink);}
+
+  .foot{color:var(--ink-faint); font-size:0.8214rem; margin-top:26px; line-height:1.9;}
+  .foot a{color:var(--accent); text-decoration:none;}
+  .foot b{color:var(--ink-dim);}
+</style>
+</head>
+<body>
+
+<h1>realtime_voice baseline viewer — mechanism only</h1>
+<p class="sub">
+  ch-03 companion · 왼쪽은 <b>Pipecat</b>(code-verified @ <code>0cbf9c5b</code>), 오른쪽은
+  <b>realtime_voice</b>(excerpt-attested @ <code>034ce4ca</code>). 같은 문제, 반대쪽 bet.
+</p>
+<div class="noverdict">
+  <b>이 도구에는 verdict column이 없다.</b> vote 버튼도, keep/replace toggle도, 추천 badge도 없다.
+  한쪽 열이 더 길다는 사실은 점수가 아니다. 채점은 <b>ch-13</b>의 일이고, 여기서 미루는 것은 의도적이다 —
+  아직 mechanism을 보지 못한 subsystem이 여덟 개 남아 있다(ch-04 … ch-12).
+  각 panel은 <b>답이 없는 열린 질문</b>으로 끝난다.
+</div>
+
+<!-- ==================== PANEL 1 — HEADLINE: sum type ==================== -->
+<div class="panel">
+  <h2>1 · headline — open sum type vs closed union</h2>
+  <p class="lede">
+    같은 질문을 양쪽에 던진다: <b>새 datum 하나를 추가하면 무슨 일이 벌어지는가.</b>
+    왼쪽 버튼은 즉시 성공하고, 오른쪽 버튼은 한 줄을 강제로 고치게 만든다. 둘 다 눌러보기 전에는
+    의견을 만들지 마라.
+  </p>
+
+  <div class="cols">
+    <!-- ---------- LEFT: Pipecat ---------- -->
+    <div class="col open">
+      <h3>Pipecat — open sum type</h3>
+      <p class="who">확장자 = 만난 적 없는 외부 author (62 service directories 분량의 vendor)</p>
+
+      <div class="decl" id="pcDecl"></div>
+
+      <div class="counts" id="pcCounts"></div>
+      <p class="verdictless">
+        AST walk over <code>src/pipecat/frames/frames.py</code> (2,415 L) @ <code>0cbf9c5b</code>.
+        subtree 합 48+33+39 = 120인데 union이 119인 이유는
+        <code>InputTextRawFrame(SystemFrame, TextFrame)</code>(L1481)가 두 번 세어지기 때문이고,
+        <code>LLMContextFrame</code>(L551)은 어느 branch에도 없이 <code>Frame</code>을 직접 상속한다.
+        119 + 1 + 3(roots) = 123.
+      </p>
+
+      <div class="rowbtn">
+        <button class="btn primary" id="pcAddBtn">＋ frame type 추가</button>
+        <button class="btn ghost" id="pcResetBtn">↺ 리셋</button>
+      </div>
+
+      <div class="chain" id="pcWalk"></div>
+
+      <div class="checker cannot" id="pcChecker">
+        <span class="ck">type checker가 증명할 수 있는 것</span>
+      </div>
+    </div>
+
+    <!-- ---------- RIGHT: realtime_voice ---------- -->
+    <div class="col closed">
+      <h3>realtime_voice — closed union</h3>
+      <p class="who">확장자 = 파일 전체를 소유한 한 팀 (너)</p>
+
+      <div class="decl" id="rtvDecl"></div>
+
+      <div class="counts" id="rtvCounts"></div>
+      <p class="verdictless">
+        <code>packages/realtime_voice/realtime_voice/types.py:201</code> — PEP 604 union,
+        멤버는 전부 <code>@dataclass(frozen=True, slots=True)</code>.
+        모든 payload가 <code>CorrelationIds(session_id, turn_id, generation_id)</code>(L27)을 들고 다닌다.
+      </p>
+
+      <div class="rowbtn">
+        <input type="text" id="rtvName" value="RuleViolation" spellcheck="false"
+               aria-label="새 event type 이름">
+        <button class="btn primary" id="rtvAddBtn">＋ event type 추가</button>
+        <button class="btn ghost" id="rtvResetBtn">↺ 리셋</button>
+      </div>
+
+      <ul class="edits" id="rtvEdits"></ul>
+
+      <div class="checker can" id="rtvChecker">
+        <span class="ck">type checker가 증명할 수 있는 것</span>
+      </div>
+    </div>
+  </div>
+
+  <div class="oq">
+    <b>열린 질문</b>
+    앞으로 네 분기 동안, <code>types.py</code>를 편집할 수 없는 사람이 작성할 voice-stack component는
+    몇 개인가? 그 수가 0이면 open sum type은 무엇을 사준 것인가? 0이 아니면 closed union은 무엇을 청구하는가?
+    (답하지 말고 적어만 둬라 — ch-13에서 다시 묻는다.)
+  </div>
+</div>
+
+<!-- ==================== PANEL 2 — runtime shape ==================== -->
+<div class="panel">
+  <h2>2 · runtime shape — 세션 하나에 task 두 개</h2>
+  <p class="lede">
+    <code>VoiceSession._supervise()</code>(session.py L257)는 <b>하나의</b> <code>asyncio.TaskGroup</code>을
+    열고 세션 전체에 대해 long-lived task를 <b>정확히 두 개</b> 만든다. turn마다 nested task가 생겼다 사라진다.
+    Pipecat의 per-processor runtime은 ch-04의 주제이므로 여기서는 <b>쓰지 않는다</b> — placeholder로 둔다.
+  </p>
+
+  <div class="runtime">
+    <div>
+      <div class="tg">
+        <div class="tglbl">async with asyncio.TaskGroup() as tg:  <span style="color:#6b7686">
+          # _supervise() L257</span></div>
+        <div id="p2Tasks"></div>
+      </div>
+      <div class="rowbtn">
+        <button class="btn primary" id="p2TurnBtn">turn 시작</button>
+        <button class="btn" id="p2BargeBtn">barge-in (_on_speech_started L284)</button>
+        <button class="btn" id="p2CloseBtn">close() L231</button>
+        <button class="btn ghost" id="p2ResetBtn">↺ 리셋</button>
+      </div>
+      <div class="sites" id="p2Sites"></div>
+      <div class="log" id="p2Log"></div>
+    </div>
+
+    <div>
+      <div class="placeholder">
+        <b>per-processor runtime</b>
+        processor 하나가 몇 개의 task와 queue를 소유하는지,
+        <code>FrameProcessorQueue</code>의 세 priority tier가 어떻게 동작하는지는
+        <b>ch-04</b>에서 다룬다.<br>
+        이 챕터는 아직 배우지 않은 mechanism을 쓰지 않는다.
+      </div>
+
+      <table>
+        <thead><tr><th>queue (size)</th><th>overflow policy</th><th>mechanism</th></tr></thead>
+        <tbody>
+          <tr><td class="mono">ingress (64)</td><td style="color:#f85149">reject</td>
+              <td class="mono" style="font-size:0.75rem">push_audio L164 →
+                  QueueOverflowError</td></tr>
+          <tr><td class="mono">phrase (8)</td><td style="color:#d29922">backpressure</td>
+              <td>producer awaits</td></tr>
+          <tr><td class="mono">audio (32)</td><td style="color:#d29922">backpressure</td>
+              <td>producer awaits</td></tr>
+          <tr><td class="mono">event (256)</td><td style="color:#9aa7b4">사실상 unbounded</td>
+              <td class="mono" style="font-size:0.75rem">_emit awaits</td></tr>
+        </tbody>
+      </table>
+      <p class="verdictless">
+        docstring L92–94: <i>"Ingress uses reject-on-overflow so a transport cannot silently extend
+        user turn latency."</i> priority가 datum의 type에 없으니, 어느 queue에 넣느냐가 그 자리를 대신한다.
+      </p>
+    </div>
+  </div>
+
+  <div class="oq">
+    <b>열린 질문</b>
+    "barge-in 확인 지연 250 ms"를 넣고 싶다. realtime_voice에서는 위 그림의 어느 method가 바뀌고,
+    그것은 <b>삽입</b>인가 <b>편집</b>인가? 그리고 turn logic이 들어 있는 파일을 건드리지 않고
+    두 경로를 A/B 할 수 있는 쪽은 어느 쪽인가?
+  </div>
+</div>
+
+<!-- ==================== PANEL 3 — VAD ==================== -->
+<div class="panel">
+  <h2>3 · VAD — 같은 blip, 두 기계</h2>
+  <p class="lede">
+    동일한 입력(기침 · 의자 소리 · "네" 같은 backchannel)을 두 machine에 넣고 <b>각자 무엇을 하는지만</b>
+    보고한다. 순위는 매기지 않는다.
+    Pipecat은 <code>confidence≥0.7 AND volume≥0.6</code>에 4-state <code>VADState</code>,
+    realtime_voice는 <code>threshold=0.5</code>에 2-state <code>self._speaking</code> bool이다.
+  </p>
+
+  <div class="wrap">
+    <div>
+      <div class="ctrl">
+        <label><span class="name">blip 길이<span class="hint">speech-like 구간</span></span>
+               <span class="val mono" id="vBlip">80 ms</span></label>
+        <input type="range" id="blip" min="20" max="480" step="20" value="80">
+      </div>
+      <div class="ctrl">
+        <label><span class="name">model confidence<span class="hint">blip 구간의 값 (설명용 모델)</span></span>
+               <span class="val mono" id="vConf">0.85</span></label>
+        <input type="range" id="conf" min="0" max="1" step="0.01" value="0.85">
+      </div>
+      <div class="ctrl">
+        <label><span class="name">smoothed volume<span class="hint">Pipecat의 AND-gate 입력</span></span>
+               <span class="val mono" id="vVol">0.72</span></label>
+        <input type="range" id="vol" min="0" max="1" step="0.01" value="0.72">
+      </div>
+      <div class="ctrl">
+        <label><span class="name">transport frame 길이<span class="hint">realtime_voice가 받는 그대로</span></span></label>
+        <select id="rtvFrameMs">
+          <option value="20">20 ms / frame</option>
+          <option value="40">40 ms / frame</option>
+          <option value="100">100 ms / frame</option>
+        </select>
+      </div>
+      <label class="chk"><input type="checkbox" id="minVolToggle">
+        <span>Pipecat의 <code>min_volume</code> AND-gate 끄기<br>
+        <span style="color:#6b7686;font-size:0.75rem">반사실 실험용 — 실제 코드에는 항상 켜져 있다
+        (vad_analyzer.py L782)</span></span></label>
+      <p class="verdictless" id="vadArith"></p>
+    </div>
+
+    <div>
+      <canvas id="cvVad" height="250"></canvas>
+      <div class="legend">
+        <span><i style="background:#3fb950"></i>SPEAKING / _speaking=True</span>
+        <span><i style="background:#d29922"></i>STARTING</span>
+        <span><i style="background:#f778ba"></i>STOPPING</span>
+        <span><i style="background:#2b3242"></i>QUIET / False</span>
+        <span><i style="background:rgba(88,166,255,.35)"></i>speech-like 입력 구간</span>
+      </div>
+      <div class="report">
+        <div class="rep open"><h4>Pipecat · vad_analyzer.py L202–246</h4>
+          <div id="repPipe"></div></div>
+        <div class="rep closed"><h4>realtime_voice · vad/silero.py</h4>
+          <div id="repRtv"></div></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="oq">
+    <b>열린 질문</b>
+    <code>min_silence_frames = 6</code>은 <b>지금 네 production traffic에서</b> 몇 ms인가?
+    원칙이 아니라 실측으로 — 브라우저가 실제로 보내는 frame 크기에 대해. 녹취는 네가 갖고 있다.
+  </div>
+</div>
+
+<!-- ==================== PANEL 4 — truncation / ledger ==================== -->
+<div class="panel">
+  <h2>4 · truncation — audible_text()의 sample-ratio 근사</h2>
+  <p class="lede">
+    <code>AudioTextPlayoutLedger.audible_text()</code>(ledger.py L74)는 cursor가 걸친 phrase에 대해
+    <code>ratio = (cursor − sample_start) / (sample_end − sample_start)</code>,
+    <code>heard = text[: int(len(text) * ratio)]</code>를 계산한다.
+    TTS에서 <b>sample 개수 말고는 아무것도 요구하지 않는</b> 대신, 단어 중간에서는 선형 근사가 어긋난다.
+  </p>
+
+  <div class="wrap">
+    <div>
+      <div class="ctrl">
+        <label><span class="name">played_sample<span class="hint">client가 ack한 cursor · 24 kHz</span></span>
+               <span class="val mono" id="vCursor">0</span></label>
+        <input type="range" id="cursor" min="0" max="76800" step="240" value="30000">
+      </div>
+      <label class="chk"><input type="checkbox" id="tsToggle">
+        <span>TTS가 word timestamp를 <b>내지 않는다</b>고 가정<br>
+        <span style="color:#6b7686;font-size:0.75rem">둘 중 어느 mechanism이 여전히 input을 갖는지 본다</span></span></label>
+      <div class="rep" id="ledgerNums" style="margin-top:4px"></div>
+    </div>
+
+    <div>
+      <canvas id="cvLedger" height="230"></canvas>
+      <div class="legend">
+        <span><i style="background:#f778ba"></i>들린 것으로 계산된 prefix</span>
+        <span><i style="background:#2b3242"></i>아직 안 들린 부분</span>
+        <span><i style="background:#58a6ff"></i>cursor (played_sample)</span>
+      </div>
+      <div class="report">
+        <div class="rep closed"><h4>realtime_voice · ledger (선형 근사)</h4>
+          <div id="repLedger"></div></div>
+        <div class="rep open"><h4>Pipecat · aggregator 배치 + word-timestamped TTSTextFrame</h4>
+          <div id="repPipeLedger"></div></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="oq">
+    <b>열린 질문</b>
+    네 TTS는 word timestamp를 내는가? 그 한 줄짜리 확인이 §7.2의 선형 근사가
+    <b>유일한 선택지</b>인지 <b>둘 중 하나</b>인지를 결정하고, ch-08 논의의 모양을 통째로 바꾼다.
+  </div>
+</div>
+
+<!-- ==================== PANEL 5 — no-equivalent list ==================== -->
+<div class="panel">
+  <h2>5 · Pipecat에 대응물이 없는 것들 — 체크마크가 아니라 algorithm으로</h2>
+  <p class="lede">
+    "없음"은 <b>commit <code>0cbf9c5b</code>에서 찾아봤고 발견하지 못했다</b>는 뜻이지,
+    만들 수 없다는 뜻이 아니다. 각 항목은 체크마크가 아니라 <b>실제 algorithm</b>으로 펼쳐진다 —
+    체크마크였다면 중요한 부분을 건너뛰게 된다.
+  </p>
+
+  <details>
+    <summary><span>KoreanPhraseChunker — 1 → 2 → bounded-tail schedule</span>
+             <span class="sz">chunking.py · 283 L</span></summary>
+    <div class="dbody">
+      <pre><span class="cm"># __init__ 기본값 (L56-60): hard_max_chars is None 이면 min(batch_max_chars, max_chars*2)</span>
+min_chars=<span class="st">12</span>  max_chars=<span class="st">60</span>  hard_max_chars=<span class="st">None</span>  batch_max_chars=<span class="st">320</span>  adaptive_batching=<span class="st">True</span>
+
+<span class="cm"># _accept_adaptive L115-149 — _batch_phase</span>
+phase <span class="kw">0</span> → 완성된 첫 문장을 <span class="st">즉시</span> 방출        <span class="cm"># time-to-first-audio를 산다</span>
+phase <span class="kw">1</span> → 다음 두 문장을 <span class="st">묶어서</span> 방출        <span class="cm"># TTS request overhead를 분산</span>
+phase <span class="kw">2</span> → 나머지는 <span class="st">flush까지 하나의 tail</span>로 보류  <span class="cm"># 이미 듣고 있으니 더 쪼갤 이유가 없다</span>
+
+_STRONG_END = frozenset(<span class="st">".!?。！？\n"</span>)      <span class="cm"># CJK-aware</span>
+_SOFT_END   = frozenset(<span class="st">",，;；:"</span>)
+_CLOSING_PUNCTUATION = frozenset(<span class="st">"\"'”’)]}」』】"</span>)
+_BoundaryKind = SENTENCE / SOFT / OVERLONG / FINAL_TAIL</pre>
+      docstring L28–34: <i>"Adaptive mode emits the first complete sentence immediately, batches the
+      next two complete sentences, then holds the remaining response as one final group until
+      <code>flush</code>. <code>max_chars</code> is a soft latency target rather than an immediate cut
+      point."</i>
+      <p style="margin:10px 0 4px"><b>guard를 직접 돌려봐라.</b> 아래는 excerpt에 기술된 두 규칙
+      (<code>_is_safe_period</code> L255, <code>_is_numeric_separator</code> L277)을 그대로 재구성한 것이다.
+      결과는 재구성 결과이지 원본 코드의 출력이 아니다.</p>
+      <div class="guardgrid" id="guardBtns"></div>
+      <div class="rep" id="guardOut"></div>
+      <div class="pcside"><b>Pipecat 쪽, 확인함.</b> TTS service들이 각자 generic한 sentence 휴리스틱으로
+        나눈다. 1→2→tail schedule 없음, 한국어 숫자/identifier guard 없음,
+        source span을 보존하는 tag strip 없음. ([[tts-service-interface]], ch-07)</div>
+      <p style="margin-top:9px"><b>왜 span 보존이 같이 붙어 있는가:</b>
+      <code>_INTERNAL_TAG = re.compile(r"\[(?:interruption|system|tool|objection|customer|assistant)[^\]]*\]")</code>
+      가 gateway control tag를 <b>말할 텍스트에서만</b> 지우고 <code>start_char</code>/<code>end_char</code>는
+      원문 기준으로 남긴다 — 아래 ledger가 "원문의 어느 글자까지 들렸나"에 답해야 하기 때문이다.</p>
+    </div>
+  </details>
+
+  <details>
+    <summary><span>AudioTextPlayoutLedger — text span ↔ sample position</span>
+             <span class="sz">ledger.py · 110 L</span></summary>
+    <div class="dbody">
+      <pre><span class="cm"># GenerationId를 key로 하는 dict 넷</span>
+_phrases[gen]      : list[PhrasePlayout(request, sample_start, sample_end, complete)]
+_by_phrase[gen]    : PhraseId → PhrasePlayout
+_next_sample[gen]  : 다음 phrase가 시작할 sample offset
+_played_sample[gen]: client가 ack한 cursor
+
+begin(request) / append(request, sample_count) -> (start, end) / finish(request)
+acknowledge(gen, played_sample):  cursor = <span class="st">max</span>(cursor, played_sample)   <span class="cm"># monotonic — 늦은 ack가 되감지 못한다</span>
+
+<span class="cm"># audible_text() L74 — cursor가 걸친 phrase에 대해서만</span>
+ratio = (cursor - sample_start) / (sample_end - sample_start)
+heard = text[: <span class="st">int</span>(len(text) * ratio)]
+
+<span class="cm"># playout_complete() L98</span>
+all(p.complete <span class="kw">for</span> p <span class="kw">in</span> phrases) <span class="kw">and</span> played_sample &gt;= queued_samples</pre>
+      <b>playout_complete()</b>가 <code>_cancel_generation</code>(session.py L502–507)의
+      <code>semantic_interrupt</code> flag를 결정한다 — "고객이 내 말을 끊었다"와 "내 차례가 끝났고 고객이
+      대답했다"를 가르는 predicate다. 둘은 서로 다른 conversation history와 서로 다른 stage transition을 만든다.
+      <div class="pcside"><b>Pipecat 쪽, 확인함.</b> 같은 보장을 산술이 아니라 <b>구조</b>로 얻는다:
+        assistant context aggregator가 <code>transport.output()</code> <b>뒤에</b> 앉아 있어서 실제로
+        방출된 텍스트만 보고, word-timestamped <code>TTSTextFrame</code>이 그 pace를 만든다. tree에 ledger
+        object는 없다. 두 mechanism의 <b>입력 요구</b>가 다르다 — 하나는 timestamp를 내는 TTS, 하나는
+        sample counter.</div>
+    </div>
+  </details>
+
+  <details>
+    <summary><span>WebRTCSessionManager — token 기반 session 인가</span>
+             <span class="sz">manager.py · 248 L</span></summary>
+    <div class="dbody">
+      <pre>create_session(customer_id, *, session_id=None, metadata=None)
+    -> VoiceSessionTicket(session_id, token, expires_at, customer_id)
+
+token       = secrets.token_urlsafe(<span class="st">32</span>)
+저장되는 것 = hashlib.sha256(token).digest()      <span class="cm"># 원문 token은 저장하지 않는다</span>
+_authorize(L227): 만료 확인 → hmac.compare_digest(...)
+session_token_ttl_seconds = <span class="st">15 * 60</span>
+
+accept_offer(..., reconnect=<span class="st">False</span>)
+    → SessionConflictError(<span class="st">"this voice session already has a live peer"</span>)   <span class="cm"># reconnect=True 아니면</span>
+accept_offer(sdp, type=<span class="st">"offer"</span>)
+    → SignalingError(<span class="st">"only an SDP offer may be accepted"</span>)                 <span class="cm"># answer-only, 서버가 먼저 걸지 않는다</span></pre>
+      per-session 동시성은 <code>_ManagedSession</code>의 <code>asyncio.Lock</code>이고
+      <b>lock을 잡는 것은 <code>accept_offer</code>뿐</b>이다 — <code>send_audio</code>,
+      <code>activate_generation</code>, <code>send_control</code>은 <code>session.peer</code>를 lock 없이 읽고
+      <code>None</code>이면 <code>False</code>/<code>0</code>을 반환한다. "media path를 signaling으로 절대
+      막지 않는다"는 의도적 선택.
+      <div class="pcside"><b>Pipecat 쪽, 명령까지 찍어서 확인함.</b>
+        <code>grep -rn "token_urlsafe\|compare_digest" src</code> → 두 hit 모두 webhook 서명 검사
+        (<code>runner/run.py:324</code>, <code>transports/whatsapp/client.py:181</code>)이지 voice-session
+        인가가 아니다. <code>SmallWebRTCConnection.__init__</code>(connection.py L245–248)은
+        <code>ice_servers</code>와 <code>connection_timeout_secs</code>만 받는다. Pipecat 설계에서 이건
+        application layer의 영역이고, realtime_voice는 그것을 transport package 안에 넣었다.</div>
+    </div>
+  </details>
+
+  <details>
+    <summary><span>ControlEvent v1 — 검증되고 순서가 강제되고 audio가 금지된 control plane</span>
+             <span class="sz">control.py · 226 L</span></summary>
+    <div class="dbody">
+      <pre>@dataclass(frozen=<span class="st">True</span>, slots=<span class="st">True</span>)  <span class="cm"># L25</span>
+ControlEvent(session_id, type, sequence, payload, turn_id, generation_id,
+             version=CONTROL_PROTOCOL_VERSION)      <span class="cm"># CONTROL_PROTOCOL_VERSION = 1</span>
+
+from_json(L64)  → unknown top-level field / non-object payload / version mismatch 전부 SignalingError
+_reject_audio_payload(L117)  <span class="cm"># payload를 재귀적으로 훑는다</span>
+    key ∈ {<span class="st">"audio","audio_base64","audio_data","base64_audio","pcm","pcm16","wav"</span>}  → raise
+    str.startswith(<span class="st">"data:audio/"</span>)                                        → raise
+    bytes / bytearray / memoryview                                          → raise
+
+OrderedControlChannel(L136)  <span class="cm"># 생성 시점에 partially-reliable channel을 거부</span>
+    ordered=False | maxRetransmits is not None | maxPacketLifeTime is not None → SignalingError
+    receive(): <span class="st">"out-of-order control event: expected {n}, received {m}"</span>
+    send():    max_control_message_bytes = <span class="st">64 * 1024</span> 초과 거부
+    outbound sequence는 private counter → <b>순서를 소유하는 쪽은 서버</b></pre>
+      docstring L28–30: <i>"Audio bytes are intentionally prohibited. Microphone and assistant audio
+      belong on RTP tracks, never in JSON or base64."</i> 문서가 아니라 <b>강제</b>다.
+      <div class="pcside"><b>Pipecat 쪽, 확인함.</b> data channel은 application event handler까지
+        untyped passthrough다 — <code>on_app_message(message: Any, sender: str)</code>
+        (transports/smallwebrtc/transport.py L71, L1047). schema 없음, sequence 검사 없음, size cap 없음,
+        audio 금지 없음. typed client protocol인 RTVI는 있지만 다른 layer를 타고 data channel에서
+        강제되지 않는다.</div>
+      <p style="margin-top:9px">이 항목과 바로 위 항목은 <b>같은 모양의 발견</b>이다: 둘 다
+      <b>policy</b>이지 plumbing이 아니다. plumbing(aiortc, SDP, data channel)은 양쪽이 같다.
+      다른 것은 policy가 transport package 안에 강제되는 코드로 적혔는가, application에 맡겨졌는가다.</p>
+    </div>
+  </details>
+
+  <details>
+    <summary><span>GenerationAudioQueue.discard_generation() — lock 아래의 atomic 필터 재구축</span>
+             <span class="sz">queues.py · 66 L</span></summary>
+    <div class="dbody">
+      <pre><span class="cm"># deque + asyncio.Condition 을 손으로 짠 이유는 단 하나의 연산 때문이다</span>
+discard_generation(generation_id) -> <span class="st">int</span>          <span class="cm"># L42</span>
+    condition lock 아래에서 deque를 <span class="st">통째로 다시 만든다</span> (해당 generation만 제거)
+    → 버린 개수를 반환
+
+<span class="cm"># asyncio.Queue로는 불가능:</span>
+<span class="cm">#   선택적 제거 API가 없다. drain 후 re-put은 concurrent consumer에 대해 atomic하지 않다.</span>
+close(): 비우고 모든 waiter를 깨움 · get() on closed+empty → QueueClosedError</pre>
+      transport 쪽 쌍둥이는 <code>BoundedAudioOutput</code>(buffer.py L21):
+      <code>asyncio.Queue(maxsize=64)</code>, <code>activate_generation()</code>(L53)이 더 오래된 것을
+      동기적으로 전부 흘려버리고 drop count를 반환한다. <code>put()</code>은 stale generation에 대해
+      <code>False</code>를 반환하고, live peer가 <code>backpressure_ms = 250</code> 안에 빼가지 않으면
+      <code>AudioBufferFull</code>을 던진다.
+      <div class="pcside"><b>Pipecat 쪽.</b> 같은 문제를 filtered rebuild가 아니라
+        <b>priority queue + task cancellation</b>으로 푼다 — <code>InterruptionFrame(SystemFrame)</code>이
+        queue를 앞질러 가고 각 processor가 <i>자기</i> task를 취소한다. 상세 cascade는 ch-08.</div>
+      <p style="margin-top:9px"><b>ch-13으로 그대로 들고 갈 발견 하나:</b>
+      <code>WebRTCVoiceTransport</code> — Protocol을 만족하는 adapter — 는
+      <code>activate_generation()</code>을 <b>한 번도 호출하지 않는다</b>. dental
+      <code>voice_server.py</code>가 manager callback을 직접 배선한다. 즉 abstraction을 만족하는 경로가
+      두 live path 중 덜 유능한 쪽이고, 유능한 쪽은 abstraction을 우회한다.</p>
+    </div>
+  </details>
+
+  <details>
+    <summary><span>StreamingConversationAgent — tool을 알 수 없도록 계약된 slot</span>
+             <span class="sz">protocols.py · 5 Protocol 중 하나</span></summary>
+    <div class="dbody">
+      <pre><span class="kw">class</span> StreamingConversationAgent(Protocol):
+    <span class="kw">def</span> stream(request) -> AsyncIterator[<span class="st">AgentTextDelta</span>]   <span class="cm"># 오직 text delta만</span>
+    <span class="kw">async def</span> cancel / close</pre>
+      tool call도, context object도, message도 아니고 <b>text delta</b>다. tool은
+      <code>packages/basement</code> + <code>packages/gateway</code>에 살고
+      <code>GatewayConversationAgent.stream()</code> → <code>bridge.dispatch_transcript()</code>
+      (<code>agents/dental-w-tool-gateway/voice_server.py</code> L163–205)로 닿는다.
+      boson <code>CLAUDE.md</code>가 이 slot이 존재하는 이유인 제약을 명시한다:
+      <i>"Keep Basement and the dental business logic text-native"</i>,
+      <i>"Basement and Gateway must not import provider-specific audio code."</i>
+      <br><br>voice package가 brain과 맺은 계약: <b>text를 달라, 내 text를 가져가라, 그리고 나에게
+      tool이 무엇인지 절대 알게 하지 마라.</b>
+      <div class="pcside"><b>Pipecat 쪽.</b> LLM service가 context를 소유하고 tool loop를 pipeline 안에서
+        닫는다 — <code>LLMContext(tools=[...])</code>, <code>register_function</code>,
+        <code>params.result_callback(...)</code>, 그리고 loop는 <code>LLMContextFrame</code>을
+        <b>upstream</b>으로 밀어 닫힌다. "tool을 소유하는 것이 금지된 text-only agent slot"에 대응하는
+        것은 없다. 두 계약이 공존 가능한지는 <b>ch-09</b>의 주제다 — 여기서 풀지 마라.</div>
+    </div>
+  </details>
+
+  <div class="oq">
+    <b>열린 질문</b>
+    이 여섯 개 중 <b>포팅되면 사라지는 것</b>과 <b>어느 framework 위에서든 다시 써야 하는 것</b>은
+    각각 무엇인가? "Pipecat에 없다"와 "Pipecat 위에 못 올린다"는 같은 문장이 아니다.
+  </div>
+</div>
+
+<!-- ==================== PANEL 6 — scale strip ==================== -->
+<div class="panel">
+  <h2>6 · scale strip — 그리고 증거로 제시되는 것은 ratio가 아니라 test 이름</h2>
+  <div class="scale">
+    <div>
+      <div class="bignum">
+        <div class="cnt"><b>3,886</b>source lines</div>
+        <div class="cnt"><b>1,504</b>test lines</div>
+        <div class="cnt"><b>60</b>test functions</div>
+        <div class="cnt"><b>6</b>test files</div>
+        <div class="cnt"><b>0.39</b>test : src</div>
+      </div>
+      <p class="verdictless">realtime_voice · excerpt-attested @ <code>034ce4ca</code> (2026-07-29).
+        네 repo에서 직접 재측정해야 한다 — 이 wiki에서는 확인 불가이고, 6주 지난 값이라 <b>하한</b>이다.</p>
+      <p style="font-size:0.8571rem;color:var(--ink-dim);margin:12px 0 2px">
+        <b>이름이 곧 명세다.</b> test <i>개수</i>는 약한 신호지만 test <i>이름</i>은 강한 신호다 —
+        이름은 author가 못 박을 가치가 있다고 믿은 invariant를 진술한다.</p>
+      <ul class="tnames">
+        <li>test_confirmed_barge_in_purges_server_audio_and_cancels_old_work</li>
+        <li>test_barge_in_event_precedes_slow_provider_cancellation</li>
+        <li>test_late_stale_asr_final_is_dropped</li>
+        <li>test_playout_acknowledgement_returns_only_heard_prefix</li>
+        <li>test_late_playout_ack_cannot_extend_interrupted_audible_prefix</li>
+        <li>test_next_turn_after_completed_playout_is_not_an_interruption</li>
+        <li>test_each_generation_has_exactly_one_terminal_event</li>
+        <li>test_ingress_overflow_rejects_frame_instead_of_growing_latency</li>
+        <li>test_two_sessions_do_not_share_generation_or_provider_state</li>
+        <li>test_interim_asr_is_observable_but_never_calls_agent</li>
+        <li>test_dots_inside_ascii_identifier_are_not_sentence_boundaries</li>
+        <li>test_safety_split_never_breaks_a_long_latin_token</li>
+        <li>test_overlong_token_waits_across_streamed_deltas_for_whitespace</li>
+        <li>test_playout_ledgers_are_generation_isolated</li>
+        <li>test_aiortc_loopback_negotiates_ordered_control_channel</li>
+        <li>test_outbound_track_underflow_is_explicit_zero_pcm_silence</li>
+      </ul>
+      <p class="verdictless" style="margin-top:9px">
+        마지막 줄은 <code>tracks.py</code> L201의 주석을 못 박은 regression test다 —
+        <i>"PyAV does not guarantee zero-initialized AudioFrame storage. Sending a fresh allocation as
+        'silence' can therefore produce full-scale random PCM."</i>
+        즉 <b>고객 귀에 무음 대신 full-scale noise가 나갔던</b> 버그이고, 이름으로 고정되어 있다.
+        <code>testing/fakes.py</code>(271 L)는 결정론적 double 여섯 개를 <b>public API</b>로 내보낸다:
+        <code>ScriptedVAD</code>, <code>FakeStreamingASR</code>, <code>FakeStreamingConversationAgent</code>,
+        <code>FakeStreamingTTS</code>, <code>FakeVoiceTransport</code>, <code>FakeMonotonicClock</code>.
+      </p>
+    </div>
+
+    <div>
+      <div class="bignum">
+        <div class="cnt"><b>168,847</b>source lines</div>
+        <div class="cnt"><b>92,538</b>test lines</div>
+        <div class="cnt"><b>4,236</b>def test_ matches</div>
+        <div class="cnt"><b>236</b>test files</div>
+        <div class="cnt"><b>0.55</b>test : src</div>
+      </div>
+      <p class="verdictless">Pipecat · <code>0cbf9c5b</code>에서 2026-08-25 재측정. 명령은 read.md §1에 있고
+        그대로 다시 돌릴 수 있다.</p>
+
+      <table>
+        <thead><tr><th>breadth</th><th class="num">rtv</th><th class="num">Pipecat</th></tr></thead>
+        <tbody>
+          <tr><td>service directories / providers</td><td class="num">2</td><td class="num">62</td></tr>
+          <tr><td>transport packages</td><td class="num">1</td><td class="num">11</td></tr>
+          <tr><td>telephony serializers</td><td class="num">0</td><td class="num">6</td></tr>
+          <tr><td>isinstance(frame, …) 호출 지점</td><td class="num">—</td><td class="num">577</td></tr>
+          <tr><td>그 지점이 흩어져 있는 파일 수</td><td class="num">—</td><td class="num">136</td></tr>
+        </tbody>
+      </table>
+
+      <p class="verdictless" style="margin-top:12px">
+        <b>표시해 둔 불일치.</b> excerpt <code>rtv-vs-pipecat-gap</code>은 Pipecat을
+        "226 test files / 92,538 L / 3,959 test functions"로 적었다. 같은 commit에서 재측정한 값은
+        <b>236 files / 4,236 matches</b>이고 line 수는 92,538로 정확히 일치한다.
+        읽는 쪽은 재측정값을 쓰고, excerpt의 두 숫자는 다른 tree state 혹은 다른 matcher로 취급하라.
+        <br><br>168,847 / 3,886 ≈ <b>43×</b>. 이 비율은 사실이고 그 자체로는 거의 정보가 없다 —
+        두 숫자가 같은 대상을 재고 있지 않기 때문이다. Pipecat의 lines 중 큰 몫은
+        <b>breadth</b>(62 service directory, 11 transport, serializer, CLI, registry, template)이고,
+        realtime_voice는 ASR 하나 · TTS 하나 · transport 하나 · 언어 하나를 향해 쓰였다.
+      </p>
+    </div>
+  </div>
+
+  <div class="oq">
+    <b>열린 질문</b>
+    저 60개 test 이름 중, Pipecat으로 옮겼을 때 <b>framework가 대신 보장해 주는 것</b>은 몇 개이고,
+    <b>여전히 네가 직접 써야 하는 것</b>은 몇 개인가? 옮겨 적을 수 없는 이름이 하나라도 있다면,
+    그것은 ch-13이 알아야 할 사실이다.
+  </div>
+</div>
+
+<p class="foot">
+  ← 돌아가기: <a href="../read.md">ch-03 read.md</a>
+  (§2.7 headline · §3.2 runtime · §4.4 blip · §7.2 ledger · §7 no-equivalent list · §9 test names)<br>
+  <b>Pipecat 측</b> 전부 <code>wiki/raw-data/pipecat/pipecat-src</code> @
+  <code>0cbf9c5b031eef06e53f0a193b9a67d60230e6be</code>에서 2026-08-25 재측정 —
+  파일을 열어 직접 확인할 수 있다.<br>
+  <b>realtime_voice 측</b> 전부 <code>wiki/raw-data/pipecat/excerpts/rtv-*.md</code> 경유,
+  boson-agent(private) branch <code>voice-chat-dev</code> @ <code>034ce4ca</code> (2026-07-29) —
+  이 wiki에서는 검증 불가이고, 그렇게 표시해 두었다.<br>
+  panel 3의 confidence/volume 시퀀스와 panel 4의 "실제 alignment"는 <b>설명용 모델</b>이지 측정값이 아니다.
+</p>
+
+<script>
+"use strict";
+
+const $ = id => document.getElementById(id);
+const esc = s => String(s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
+
+/* ==================================================================
+   PANEL 1 — open sum type vs closed union
+   ================================================================== */
+
+/* frames.py @ 0cbf9c5b, ast.walk 기준. read.md §2.2와 동일한 방법·동일한 수치. */
+const PC_COUNTS = [
+  {k:"file 내 class 선언",       v:"133", note:"ast.walk · nested 4개 포함"},
+  {k:"이름이 Frame으로 끝남",     v:"131", note:""},
+  {k:"Frame의 transitive 자손",  v:"123", note:"= 119 + LLMContextFrame + 3 roots"},
+  {k:"세 branch subtree의 union",v:"119", note:"48 + 33 + 39 = 120, 중복 1"},
+  {k:"UninterruptibleFrame mixin",v:"13", note:"EndFrame 등"},
+];
+
+/* 정본 7-processor pipeline. 각 원소의 process_frame 말단 분기를 AST로 확인한 결과.
+   forwards=false 인 곳이 "아무도 처리하지 않는 datum"이 실제로 사라지는 지점이다. */
+const PIPE_CHAIN = [
+  {n:"transport.input()", cls:"BaseInputTransport",
+   loc:"transports/base_input.py L215",
+   tail:"else: await self.push_frame(frame, direction)", fwd:true},
+  {n:"stt", cls:"DeepgramSTTService → STTService",
+   loc:"services/stt_service.py L465",
+   tail:"else: await self.push_frame(frame, direction)", fwd:true},
+  {n:"user_aggregator", cls:"LLMUserAggregator",
+   loc:"processors/aggregators/llm_response_universal.py L785",
+   tail:"else: await self.push_frame(frame, direction)", fwd:true},
+  {n:"llm", cls:"OpenAILLMService → LLMService",
+   loc:"services/llm_service.py L679",
+   tail:"if / elif 체인 끝 — else 가 없다", fwd:false},
+  {n:"tts", cls:"CartesiaTTSService → TTSService",
+   loc:"services/tts_service.py L747",
+   tail:"else: await self.push_frame(frame, direction)", fwd:true},
+  {n:"transport.output()", cls:"BaseOutputTransport",
+   loc:"transports/base_output.py L338",
+   tail:"else: await self._handle_frame(frame) → handle_sync_frame L651 → _audio_queue.put(frame)",
+   fwd:true},
+  {n:"assistant_aggregator", cls:"LLMAssistantAggregator",
+   loc:"processors/aggregators/llm_response_universal.py L1538",
+   tail:"else: await self.push_frame(frame, direction)", fwd:true},
+];
+
+let pcAdded = false;      // Pipecat 쪽에 frame type을 추가했는가
+let rtvAdded = null;      // realtime_voice 쪽에 추가한 event type 이름 (없으면 null)
+
+function renderPcDecl(){
+  const base =
+`<span class="cm"># src/pipecat/frames/frames.py — core 파일. 건드리지 않는다.</span>
+@dataclass
+<span class="kw">class</span> Frame:                      <span class="cm"># L65</span>
+<span class="kw">class</span> SystemFrame(Frame): ...      <span class="cm"># L105 — 즉시 처리, interruption 무관</span>
+<span class="kw">class</span> DataFrame(Frame):   ...      <span class="cm"># L116 — 순서대로, interruption에 취소됨</span>
+<span class="kw">class</span> ControlFrame(Frame):...      <span class="cm"># L128 — 순서대로, interruption에 취소됨</span>`;
+  const add = pcAdded ?
+`
+
+<span class="cm"># boson_rules/frames.py — 남의 package. core에 PR 없이.</span>
+@dataclass
+<span class="added">class RuleViolationFrame(ControlFrame): ...</span>   <span class="cm">✔ 즉시 성공</span>` : "";
+  $("pcDecl").innerHTML = base + add;
+}
+
+function renderPcCounts(){
+  let html = PC_COUNTS.map(c =>
+    `<div class="cnt"><b>${c.v}</b>${esc(c.k)}${c.note?`<br><span style="opacity:.7">${esc(c.note)}</span>`:""}</div>`
+  ).join("");
+  if (pcAdded){
+    html += `<div class="cnt warnv"><b>123 + N</b>실제 case set<br>
+             <span style="opacity:.7">measurable하지 않음</span></div>`;
+  }
+  $("pcCounts").innerHTML = html;
+}
+
+function renderPcWalk(){
+  if (!pcAdded){
+    $("pcWalk").innerHTML =
+      `<p class="verdictless">버튼을 누르면 정본 7-processor pipeline
+       (<code>examples/getting-started/06-voice-agent.py</code> L81–91)을 따라 걸으며,
+       새 frame이 <b>어디까지 가고 어디서 사라지는지</b> 각 processor의
+       <code>process_frame</code> 말단 분기를 근거로 표시한다.</p>`;
+    return;
+  }
+  let dead = false;
+  const rows = PIPE_CHAIN.map((p,i) => {
+    let cls, verdict;
+    if (dead){ cls = "dead"; verdict = "도달하지 않음"; }
+    else if (p.fwd){ cls = "pass"; verdict = "forward — 모르는 frame도 그대로 밀어준다"; }
+    else { cls = "drop"; verdict = "여기서 조용히 사라진다 — exception 없음, error log 없음"; dead = true; }
+    return `<div class="step lit ${cls}" style="animation-delay:${(i*0.11).toFixed(2)}s">
+      <div class="num">${i+1}</div>
+      <div>
+        <div class="nm">${esc(p.n)} <span style="color:var(--ink-faint);font-weight:400">
+          · ${esc(p.cls)}</span></div>
+        <div class="loc">${esc(p.loc)}</div>
+        <div class="tail">${esc(p.tail)}</div>
+        <div style="margin-top:3px">${esc(verdict)}</div>
+      </div></div>`;
+  }).join("");
+  $("pcWalk").innerHTML = rows +
+    `<p class="verdictless">근본 원인은 base class에 있다:
+     <code>FrameProcessor.process_frame</code>(frame_processor.py L820–847)은 다섯 가지 frame 모양만
+     처리하고 <b>fallthrough 분기가 없다</b>. 전달은 subclass가 각자 <code>else:
+     await self.push_frame(...)</code>를 쓸 때만 일어난다. 그 <code>else</code>를 안 쓴 processor가
+     하나만 있어도 frame은 거기서 끝난다.</p>`;
+}
+
+function renderPcChecker(){
+  $("pcChecker").innerHTML =
+    `<span class="ck">type checker가 증명할 수 있는 것</span>` +
+    `<b>없다.</b> case set이 compile time에 알려지지 않으므로, "모든 processor가 모든 frame을 처리한다"는
+     명제는 어디서도 증명될 수 없다. 확인 가능한 것은 grep뿐이다 —
+     <code>grep -rn "isinstance(frame," src | wc -l</code> → <b>577</b>,
+     <code>-rln</code> → <b>136</b> files. 그리고 그 577개 중 <b>어느 것이</b> 네 새 class와 관계있는지는
+     grep도 말해주지 않는다.` +
+    (pcAdded ? `<br><br><b>방금 일어난 일:</b> core 파일은 그대로이고 <code>frames.py</code>의 123은
+      변하지 않았는데, 실제 case set은 늘었다. 이 둘이 갈라지는 것이 open sum type의 정의다.` : "");
+}
+
+function renderRtvDecl(){
+  const members = ["VADEvent","ASREvent","AgentTextDelta","VoiceEvent"];
+  const line = members.join(" | ") + (rtvAdded ? ` | <span class="added">${esc(rtvAdded)}</span>` : "");
+  $("rtvDecl").innerHTML =
+`<span class="cm"># packages/realtime_voice/realtime_voice/types.py:201 — 편집 가능한 단 한 줄</span>
+VoiceRuntimeEvent = ${line}`;
+}
+
+function renderRtvCounts(){
+  const arr = [
+    {k:"union 멤버", v: rtvAdded ? "5" : "4", w: !!rtvAdded},
+    {k:"union이 차지하는 줄", v:"1", w:false},
+    {k:"frozen dataclass payload", v:"9", w:false},
+    {k:"correlation ID를 든 payload", v:"전부", w:false},
+  ];
+  $("rtvCounts").innerHTML = arr.map(c =>
+    `<div class="cnt ${c.w?"warnv":""}"><b>${c.v}</b>${esc(c.k)}</div>`).join("");
+}
+
+function renderRtvEdits(){
+  if (!rtvAdded){
+    $("rtvEdits").innerHTML =
+      `<p class="verdictless">이름을 정하고 버튼을 누르면, 그 한 줄을 고친 뒤
+       <b>따라서 반드시 바뀌어야 하는 곳</b>을 순서대로 걷는다. 마지막은
+       <code>_control_event</code>가 <code>TypeError</code>를 던지는 지점이다.</p>`;
+    return;
+  }
+  const n = esc(rtvAdded);
+  const items = [
+    {c:"", b:`1 · types.py:201 — union 선언`,
+     s:`한 줄 편집. <code>VoiceRuntimeEvent</code>에 <code>${n}</code>을 추가하고,
+        <code>@dataclass(frozen=True, slots=True)</code> payload와
+        <code>CorrelationIds</code> 필드를 정의한다.`},
+    {c:"raise", b:`2 · transport/webrtc/transport.py — _control_event() L118–156`,
+     s:`wire 매핑을 손으로 추가해야 한다. 추가하지 않으면 여기서
+        <code>TypeError(f"unsupported voice event: {type(event).__name__}")</code>가
+        <b>큰 소리로</b> 터진다 — frame이 사라지는 게 아니라 이름 붙은 boundary에서 멈춘다.`},
+    {c:"", b:`3 · 이 union을 소비하는 나머지 isinstance chain`,
+     s:`excerpt는 <i>"editing this line plus every isinstance chain"</i>이라고만 적는다.
+        정확한 개수는 이 wiki에서 <b>측정할 수 없다</b>(private repo) — 그렇게 표시해 둔다.
+        다만 그 목록을 <b>찾아주는 주체는 있다</b>: 아래 checker strip을 봐라.`},
+    {c:"impossible", b:`4 · 제3자가 pip 패키지로 추가하기`,
+     s:`불가능하다. package에 patch를 내지 않고서는 core를 벗어난 확장 지점이 없다.`},
+  ];
+  $("rtvEdits").innerHTML = items.map((it,i) =>
+    `<li class="${it.c}" style="animation:fadein .3s ease-out both;animation-delay:${(i*0.11).toFixed(2)}s">
+       <b>${it.b}</b><span>${it.s}</span></li>`).join("");
+}
+
+function renderRtvChecker(){
+  $("rtvChecker").innerHTML =
+    `<span class="ck">type checker가 증명할 수 있는 것</span>` +
+    `<b>exhaustiveness.</b> case 집합이 한 줄에 적혀 있으므로, <code>VoiceRuntimeEvent</code>를 훑는
+     <code>match</code>에서 빠진 arm을 type checker가 <b>check time에</b> 지목한다.
+     runtime에 모르는 event가 도착하면 이름 붙은 boundary에서 <code>TypeError</code>다.` +
+    (rtvAdded ? `<br><br><b>방금 일어난 일:</b> 위 목록 3번의 "나머지 chain"을 손으로 찾을 필요가 없다 —
+      union을 넓히는 순간 exhaustive하지 않게 된 site를 checker가 열거해 준다. 대신 그 편집 권한은
+      package를 소유한 사람에게만 있다.` : "") +
+    `<br><br><span style="color:var(--ink-faint)">단, 한계도 정확히: exhaustiveness는 case가
+     <b>존재한다</b>는 것만 말한다. 아무도 그 case를 <b>생성하지 않는다</b>는 사실은 말해주지 못한다 —
+     <code>ASREventKind.INTERIM</code>이 선언·처리·wire 매핑·테스트까지 되고도 real provider가
+     한 번도 만들지 않는 것이 그 예다(read.md §5.2).</span>`;
+}
+
+function renderP1(){
+  renderPcDecl(); renderPcCounts(); renderPcWalk(); renderPcChecker();
+  renderRtvDecl(); renderRtvCounts(); renderRtvEdits(); renderRtvChecker();
+}
+
+$("pcAddBtn").onclick   = () => { pcAdded = true;  renderP1(); };
+$("pcResetBtn").onclick = () => { pcAdded = false; renderP1(); };
+$("rtvAddBtn").onclick  = () => {
+  const raw = ($("rtvName").value || "").trim();
+  rtvAdded = raw.replace(/[^A-Za-z0-9_]/g, "") || "NewEvent";
+  renderP1();
+};
+$("rtvResetBtn").onclick = () => { rtvAdded = null; renderP1(); };
+
+/* ==================================================================
+   PANEL 2 — runtime shape
+   ================================================================== */
+const GEN_SITES = [
+  "next_audio L180", "_asr_loop L328", "_produce_phrases L410",
+  "_consume_phrases L447", "_consume_phrases L456", "acknowledge_playout L199",
+  "discard_generation() queues.py L42", "activate_generation() buffer.py L53",
+];
+
+let p2Gen = 0;          // 현재 active generation 번호 (0 = turn 없음)
+let p2Turns = [];       // [{gen, stale}]
+let p2Closed = false;
+let p2Hot = false;      // 방금 barge-in이 있었는가
+let p2LogLines = [];
+
+function p2log(cls, text){
+  p2LogLines.push(`<div><span class="${cls}">${esc(text)}</span></div>`);
+  if (p2LogLines.length > 40) p2LogLines.shift();
+}
+
+function renderP2(){
+  let html = "";
+  if (p2Closed){
+    html += `<div class="task longlived stale">tg.create_task(_input_loop(), name="voice-input")</div>`;
+    html += `<div class="task longlived stale">tg.create_task(_asr_loop(), name="voice-asr-events")</div>`;
+  } else {
+    html += `<div class="task longlived">tg.create_task(_input_loop(), name="voice-input")</div>`;
+    html += `<div class="task longlived">tg.create_task(_asr_loop(), name="voice-asr-events")</div>`;
+  }
+  p2Turns.forEach(t => {
+    const st = (t.stale || p2Closed) ? " stale" : "";
+    html += `<div class="task turn${st}">asr-finalize:${t.gen}</div>`;
+    html += `<div class="task turn${st}">voice-generation:${t.gen}</div>`;
+    html += `<div class="nest">
+       <div class="task turn${st}">agent-text:${t.gen}</div>
+       <div class="task turn${st}">tts:${t.gen}</div>
+       <div style="font-size:0.75rem;color:var(--ink-faint);margin:2px 0 6px">
+         ↑ _run_generation 안의 내부 TaskGroup</div>
+     </div>`;
+  });
+  if (!p2Turns.length && !p2Closed){
+    html += `<div style="font-size:0.8214rem;color:var(--ink-faint);margin-top:8px">
+      turn이 없으면 세션 전체에 살아 있는 task는 <b>이 둘뿐</b>이다.</div>`;
+  }
+  $("p2Tasks").innerHTML = html;
+
+  $("p2Sites").innerHTML =
+    `<div style="width:100%;font-size:0.75rem;color:var(--ink-faint);margin-bottom:2px">
+       generation-ID 동등성 비교 지점 — 6 sites + 2 buffers</div>` +
+    GEN_SITES.map(s => `<span class="site${p2Hot?" hot":""}">${esc(s)}</span>`).join("");
+
+  $("p2Log").innerHTML = p2LogLines.length ? p2LogLines.join("") :
+    `<div class="d">버튼을 눌러 turn / barge-in / close 를 돌려봐라.</div>`;
+}
+
+$("p2TurnBtn").onclick = () => {
+  if (p2Closed){ p2log("r", "SessionClosedError — close() 이후에는 turn을 시작할 수 없다"); renderP2(); return; }
+  p2Gen += 1;
+  p2Turns.forEach(t => { t.stale = true; });
+  p2Turns.push({gen:`gen-${p2Gen}`, stale:false});
+  p2Hot = false;
+  p2log("g", `turn 시작 → _active_generation = gen-${p2Gen} · nested task 4개 생성`);
+  p2log("d", `long-lived task 두 개는 그대로다 — TaskGroup은 세션당 하나`);
+  renderP2();
+};
+
+$("p2BargeBtn").onclick = () => {
+  if (p2Closed){ p2log("r", "close() 이후 — barge-in 없음"); renderP2(); return; }
+  if (!p2Turns.length){ p2log("y", "진행 중인 turn이 없다 — 먼저 turn을 시작해라"); renderP2(); return; }
+  const old = p2Gen;
+  p2Gen += 1;
+  p2Turns.forEach(t => { t.stale = true; });
+  p2Turns.push({gen:`gen-${p2Gen}`, stale:false});
+  p2Hot = true;
+  p2log("y", `_on_speech_started L284 → generation 전진: gen-${old} → gen-${p2Gen}`);
+  p2log("d", `comment L290-292: "Publish media invalidation before awaiting provider/Gateway cancellation"`);
+  p2log("r", `gen-${old}의 작업은 위 8개 지점에서 각각 비교되어 GENERATION_DROPPED로 버려진다`);
+  p2log("d", `Pipecat이라면 InterruptionFrame 하나가 chain을 타고 각 processor가 자기 task를 취소한다 — ch-08`);
+  renderP2();
+};
+
+$("p2CloseBtn").onclick = () => {
+  if (p2Closed){ renderP2(); return; }
+  p2Closed = true; p2Hot = false;
+  [
+    ["y","close() L231 — EndFrame이 없으므로 24줄의 손수 정한 순서"],
+    ["d","emit SESSION_CLOSING"],
+    ["d","cancel active generation (semantic_interrupt=False)"],
+    ["d",'  comment L239-241: "Closing a transport is lifecycle cleanup, not a customer interruption"'],
+    ["d","_ingress.put(_STOP)  ← _STOP = object() (L37)"],
+    ["d","asr.close() → await supervisor → vad.close() → agent.close() → tts.close() → _audio.close()"],
+    ["d","emit SESSION_CLOSED → _events.put(_STOP)"],
+    ["r","_STOP 때문에 모든 queue가 asyncio.Queue[X | object]로 넓어지고 consumer마다 cast(...)가 붙는다"],
+    ["d","closed union의 exhaustiveness가 queue boundary에서 멈추는 지점이 바로 여기다"],
+  ].forEach(([c,t]) => p2log(c,t));
+  renderP2();
+};
+
+$("p2ResetBtn").onclick = () => {
+  p2Gen = 0; p2Turns = []; p2Closed = false; p2Hot = false; p2LogLines = [];
+  renderP2();
+};
+
+/* ==================================================================
+   canvas 공통
+   주의: 논리 높이는 상수에서만 읽는다. cv.height / cv.getAttribute("height")를
+   되읽으면 직전에 써 넣은 h*devicePixelRatio 값을 새 논리 높이로 삼아
+   redraw 때마다 canvas가 배로 커지고 결국 죽는다.
+   ================================================================== */
+const CANVAS_H_VAD = 250;
+const CANVAS_H_LEDGER = 230;
+
+function setupCanvas(cv, H){
+  const r = window.devicePixelRatio || 1;
+  const w = Math.max(cv.clientWidth, 200), h = H;
+  if (cv.width !== Math.round(w*r) || cv.height !== Math.round(h*r)){
+    cv.width  = Math.round(w*r);
+    cv.height = Math.round(h*r);
+  }
+  cv.style.height = h + "px";
+  const c = cv.getContext("2d");
+  c.setTransform(r,0,0,r,0,0);
+  c.clearRect(0,0,w,h);
+  return {c, w, h};
+}
+
+/* ==================================================================
+   PANEL 3 — VAD
+   ================================================================== */
+/* Pipecat: silero.py L191-197 → num_frames_required() = 512 @16 kHz
+   vad_analyzer.py L159-165 → chunk 초 = 512/16000 = 0.032 s
+   start/stop frames = round(0.2 / 0.032) = 6                          */
+const PC_CHUNK_MS   = 512 / 16000 * 1000;   // 32
+const PC_START_CHUNKS = Math.round(0.2 / (512/16000));  // 6
+const PC_STOP_CHUNKS  = Math.round(0.2 / (512/16000));  // 6
+const PC_CONF = 0.7, PC_MINVOL = 0.6;
+/* realtime_voice: vad/silero.py L21 */
+const RTV_THRESH = 0.5, RTV_MIN_SPEECH = 2, RTV_MIN_SILENCE = 6;
+
+const SPEECH_START_MS = 100;
+
+function vadParams(){
+  return {
+    blip: +$("blip").value,
+    conf: +$("conf").value,
+    vol:  +$("vol").value,
+    frameMs: +$("rtvFrameMs").value,
+    noVol: $("minVolToggle").checked,
+  };
+}
+
+function simulate(){
+  const p = vadParams();
+  const speechEnd = SPEECH_START_MS + p.blip;
+  const total = Math.max(speechEnd + Math.max(RTV_MIN_SILENCE*p.frameMs, PC_STOP_CHUNKS*PC_CHUNK_MS) + 140,
+                         SPEECH_START_MS + p.blip + 260);
+
+  const inSpeech = ms => (ms >= SPEECH_START_MS && ms < speechEnd);
+
+  /* --- Pipecat: 4-state, 32 ms chunk --- */
+  const pc = {chunks:[], events:[]};
+  let st = "QUIET", startCount = 0, stopCount = 0;
+  for (let i = 0; i*PC_CHUNK_MS < total; i++){
+    const t0 = i*PC_CHUNK_MS, mid = t0 + PC_CHUNK_MS/2;
+    const on = inSpeech(mid);
+    const conf = on ? p.conf : 0.02;
+    const vol  = on ? p.vol  : 0.02;
+    const speaking = p.noVol ? (conf >= PC_CONF) : (conf >= PC_CONF && vol >= PC_MINVOL);
+    if (speaking){
+      if (st === "QUIET"){ st = "STARTING"; startCount = 1; }
+      else if (st === "STARTING"){ startCount += 1; }
+      else if (st === "STOPPING"){ st = "SPEAKING"; stopCount = 0;
+        pc.events.push({t:t0, txt:"STOPPING → SPEAKING (복귀)"}); }
+    } else {
+      if (st === "STARTING"){ st = "QUIET"; startCount = 0;
+        pc.events.push({t:t0, txt:"STARTING → QUIET · 아무것도 방출하지 않음"}); }
+      else if (st === "SPEAKING"){ st = "STOPPING"; stopCount = 1; }
+      else if (st === "STOPPING"){ stopCount += 1; }
+    }
+    if (st === "STARTING" && startCount >= PC_START_CHUNKS){
+      st = "SPEAKING"; startCount = 0;
+      pc.events.push({t:t0+PC_CHUNK_MS, txt:"→ SPEAKING (확정)"});
+    }
+    if (st === "STOPPING" && stopCount >= PC_STOP_CHUNKS){
+      st = "QUIET"; stopCount = 0;
+      pc.events.push({t:t0+PC_CHUNK_MS, txt:"→ QUIET (turn 종료)"});
+    }
+    pc.chunks.push({t0, t1:t0+PC_CHUNK_MS, st, speaking});
+  }
+
+  /* --- realtime_voice: 2-state bool, transport frame --- */
+  const rt = {chunks:[], events:[]};
+  let sp = false, sc = 0, sil = 0;
+  for (let i = 0; i*p.frameMs < total; i++){
+    const t0 = i*p.frameMs, mid = t0 + p.frameMs/2;
+    const on = inSpeech(mid);
+    const conf = on ? p.conf : 0.02;
+    const speaking = conf >= RTV_THRESH;         // volume AND-gate 없음
+    if (speaking){
+      sc += 1; sil = 0;
+      if (!sp && sc >= RTV_MIN_SPEECH){
+        sp = true;
+        rt.events.push({t:t0+p.frameMs, txt:"SPEECH_STARTED → generation 전진 + assistant 취소"});
+      }
+    } else {
+      sil += 1; sc = 0;
+      if (sp && sil >= RTV_MIN_SILENCE){
+        sp = false;
+        rt.events.push({t:t0+p.frameMs,
+          txt:`SPEECH_STOPPED · endpoint_latency_ms = ${RTV_MIN_SILENCE} × ${p.frameMs} = ${RTV_MIN_SILENCE*p.frameMs}`});
+      }
+    }
+    rt.chunks.push({t0, t1:t0+p.frameMs, sp, speaking});
+  }
+  return {p, total, speechEnd, pc, rt};
+}
+
+const ST_COLOR = {QUIET:"#2b3242", STARTING:"#d29922", SPEAKING:"#3fb950", STOPPING:"#f778ba"};
+
+function drawVad(){
+  const cv = $("cvVad"); const {c,w,h} = setupCanvas(cv, CANVAS_H_VAD);
+  const S = simulate();
+  const L = 92, R = 12, T = 26, PW = w - L - R;
+  const X = ms => L + PW * (ms / S.total);
+
+  c.font = "10px ui-monospace,monospace";
+
+  /* speech-like 입력 구간 */
+  c.fillStyle = "rgba(88,166,255,.16)";
+  c.fillRect(X(SPEECH_START_MS), T-12, X(S.speechEnd)-X(SPEECH_START_MS), h-T-34);
+  c.strokeStyle = "rgba(88,166,255,.6)"; c.lineWidth = 1;
+  c.beginPath(); c.moveTo(X(SPEECH_START_MS), T-12); c.lineTo(X(SPEECH_START_MS), h-46); c.stroke();
+  c.beginPath(); c.moveTo(X(S.speechEnd), T-12); c.lineTo(X(S.speechEnd), h-46); c.stroke();
+
+  /* ms ruler */
+  c.fillStyle = "#6b7686"; c.textAlign = "center";
+  const tick = S.total > 900 ? 200 : 100;
+  for (let ms = 0; ms <= S.total; ms += tick){
+    c.fillText(ms + (ms===0?" ms":""), X(ms), 14);
+    c.strokeStyle = "#20262f";
+    c.beginPath(); c.moveTo(X(ms), 18); c.lineTo(X(ms), h-46); c.stroke();
+  }
+
+  const rowY = [T+6, T+92];
+  const rowH = 30;
+
+  /* row A — Pipecat */
+  c.textAlign = "right"; c.fillStyle = "#bc8cff"; c.font = "11px ui-monospace,monospace";
+  c.fillText("Pipecat", L-8, rowY[0]+13);
+  c.fillStyle = "#6b7686"; c.font = "9px ui-monospace,monospace";
+  c.fillText("32 ms chunk", L-8, rowY[0]+25);
+  S.pc.chunks.forEach(k => {
+    c.fillStyle = ST_COLOR[k.st];
+    const x0 = X(k.t0), x1 = X(k.t1);
+    c.fillRect(x0+0.5, rowY[0], Math.max(x1-x0-1, 1), rowH);
+  });
+  c.strokeStyle = "#2b3242"; c.strokeRect(L, rowY[0], PW, rowH);
+
+  /* row B — realtime_voice */
+  c.textAlign = "right"; c.fillStyle = "#f778ba"; c.font = "11px ui-monospace,monospace";
+  c.fillText("realtime_voice", L-8, rowY[1]+13);
+  c.fillStyle = "#6b7686"; c.font = "9px ui-monospace,monospace";
+  c.fillText(S.p.frameMs + " ms frame", L-8, rowY[1]+25);
+  S.rt.chunks.forEach(k => {
+    c.fillStyle = k.sp ? "#3fb950" : "#2b3242";
+    const x0 = X(k.t0), x1 = X(k.t1);
+    c.fillRect(x0+0.5, rowY[1], Math.max(x1-x0-1, 1), rowH);
+  });
+  c.strokeStyle = "#2b3242"; c.strokeRect(L, rowY[1], PW, rowH);
+
+  /* event markers */
+  c.font = "9.5px ui-monospace,monospace"; c.textAlign = "left";
+  const drawEvents = (evts, y, color) => {
+    evts.slice(0, 4).forEach((e, i) => {
+      const x = X(e.t);
+      c.strokeStyle = color; c.lineWidth = 1.4;
+      c.beginPath(); c.moveTo(x, y); c.lineTo(x, y+rowH+8+i*11); c.stroke();
+      c.fillStyle = color;
+      c.beginPath(); c.arc(x, y+rowH+8+i*11, 2.6, 0, 7); c.fill();
+      const label = e.txt;
+      const tw = c.measureText(label).width;
+      const flip = x + 7 + tw > w - R;
+      c.textAlign = flip ? "right" : "left";
+      c.fillText(label, x + (flip ? -7 : 7), y+rowH+11+i*11);
+      c.textAlign = "left";
+    });
+  };
+  drawEvents(S.pc.events, rowY[0], "#bc8cff");
+  drawEvents(S.rt.events, rowY[1], "#f778ba");
+
+  renderVadReport(S);
+}
+
+function renderVadReport(S){
+  const p = S.p;
+  $("vBlip").textContent = p.blip + " ms";
+  $("vConf").textContent = p.conf.toFixed(2);
+  $("vVol").textContent  = p.vol.toFixed(2);
+
+  const pcSpeakingChunks = S.pc.chunks.filter(k => k.speaking).length;
+  const rtSpeakingFrames = S.rt.chunks.filter(k => k.speaking).length;
+  const pcConfirmed = S.pc.events.some(e => e.txt.indexOf("SPEAKING (확정)") >= 0);
+  const rtFired = S.rt.events.some(e => e.txt.indexOf("SPEECH_STARTED") >= 0);
+
+  const gate = p.noVol
+    ? `speaking = confidence ≥ 0.7 <span style="color:var(--danger)">(min_volume AND-gate를 껐다 — 반사실)</span>`
+    : `speaking = confidence ≥ 0.7 <b>AND</b> volume ≥ 0.6`;
+
+  let pcTxt = `<div>${gate}</div>
+    <div>gate를 통과한 chunk: <b>${pcSpeakingChunks}</b> / 확정에 필요한 수:
+      <b>${PC_START_CHUNKS}</b> <span class="none">(round(0.2 / 0.032))</span></div>`;
+  if (!pcConfirmed){
+    pcTxt += `<div style="margin-top:5px">4-state machine이 <b>STARTING</b>에 들어갔다가
+      <code>else</code> 분기의 <code>case VADState.STARTING: → QUIET</code>로 되돌아갔다.
+      <b>아무것도 방출되지 않았다.</b></div>`;
+  } else {
+    pcTxt += `<div style="margin-top:5px"><b>SPEAKING으로 확정됐다.</b> 상위 layer가
+      user-started-speaking을 낼 수 있는 지점이 여기다.</div>`;
+  }
+  S.pc.events.slice(0,4).forEach(e => { pcTxt += `<span class="ev">· ${esc(e.txt)}</span>`; });
+  if (!S.pc.events.length) pcTxt += `<span class="ev none">· 상태 전이 이벤트 없음</span>`;
+  $("repPipe").innerHTML = pcTxt;
+
+  let rtTxt = `<div>speaking = confidence ≥ 0.5 <span class="none">(volume gate 없음)</span></div>
+    <div>gate를 통과한 frame: <b>${rtSpeakingFrames}</b> / 필요한 수:
+      <b>${RTV_MIN_SPEECH}</b> <span class="none">(min_speech_frames)</span></div>`;
+  if (rtFired){
+    rtTxt += `<div style="margin-top:5px"><code>self._speaking</code>이 <b>True</b>로 뒤집혔고
+      진짜 <code>SPEECH_STARTED</code>가 나갔다. <code>VoiceSession._on_speech_started</code>(L284)가
+      generation을 전진시키고 <b>assistant를 취소한다.</b></div>`;
+  } else {
+    rtTxt += `<div style="margin-top:5px">2-state bool은 뒤집히지 않았다.
+      다만 이 machine에는 "아마도 speech"를 담을 상태가 <b>없다</b> — 카운터가 채워지는 순간 곧바로 확정이다.</div>`;
+  }
+  S.rt.events.slice(0,4).forEach(e => { rtTxt += `<span class="ev">· ${esc(e.txt)}</span>`; });
+  if (!S.rt.events.length) rtTxt += `<span class="ev none">· 이벤트 없음</span>`;
+  $("repRtv").innerHTML = rtTxt;
+
+  $("vadArith").innerHTML =
+    `<b>end-of-turn 대기 시간, 같은 상수 다른 결과</b><br>
+     realtime_voice: <code>min_silence_frames × frame_duration</code> =
+       ${RTV_MIN_SILENCE} × ${p.frameMs} ms = <b>${RTV_MIN_SILENCE*p.frameMs} ms</b><br>
+     Pipecat: <code>stop_secs</code> = <b>200 ms</b> — transport의 framing이 상태 기계에 닿지 않는다
+       (analyzer가 <code>num_frames_required()</code>로 자체 re-chunk).<br>
+     <span style="color:var(--ink-faint)">frame 길이를 20 → 100 ms로 바꿔보면 오른쪽 식만 480 ms 움직인다.
+     VAD가 한 번도 들여다보지 않는 transport 속성이 그 차이를 정한다.</span>`;
+}
+
+["blip","conf","vol"].forEach(id => { $(id).oninput = drawVad; });
+$("rtvFrameMs").onchange = drawVad;
+$("minVolToggle").onchange = drawVad;
+
+/* ==================================================================
+   PANEL 4 — playout ledger
+   ================================================================== */
+/* BosonTTSConfig.sample_rate = 24_000 (rtv-webrtc-transport). phrase 하나를 가정:
+   sample_start = 0, sample_end = 76,800  →  3.20 s @24 kHz.
+   아래 "실제 alignment"의 글자별 길이는 측정값이 아니라 설명용 모델이다. */
+const LEDGER_TEXT = "네, 말씀하신 치아 보험은 다음 주 월요일부터 적용됩니다.";
+const SR = 24000, S_START = 0, S_END = 76800;
+
+function charWeight(ch){
+  if (ch === " ") return 0.35;
+  if (ch === ",") return 1.5;
+  if (ch === ".") return 1.7;
+  if (/[0-9A-Za-z]/.test(ch)) return 0.8;
+  return 1.0;                       // 한글 음절
+}
+const WEIGHTS = [...LEDGER_TEXT].map(charWeight);
+const WSUM = WEIGHTS.reduce((a,b)=>a+b, 0);
+const CUM = (() => { const o = [0]; let s = 0;
+  WEIGHTS.forEach(w => { s += w; o.push(s); }); return o; })();
+
+function trueIndexAt(cursor){
+  const frac = (cursor - S_START) / (S_END - S_START) * WSUM;
+  let k = 0;
+  while (k < WEIGHTS.length && CUM[k+1] <= frac) k++;
+  return k;
+}
+function linearIndexAt(cursor){
+  const ratio = (cursor - S_START) / (S_END - S_START);
+  return Math.floor(LEDGER_TEXT.length * ratio);
+}
+
+function drawLedger(){
+  const cv = $("cvLedger"); const {c,w,h} = setupCanvas(cv, CANVAS_H_LEDGER);
+  const cursor = +$("cursor").value;
+  const L = 14, R = 14, PW = w - L - R;
+  const li = linearIndexAt(cursor), ti = trueIndexAt(cursor);
+  const cx = L + PW * ((cursor - S_START) / (S_END - S_START));
+
+  c.font = "10px ui-monospace,monospace"; c.textAlign = "left";
+
+  /* --- bar 1: 설명용 "실제" alignment (글자 길이가 다르다) --- */
+  const y1 = 34, bh = 34;
+  c.fillStyle = "#6b7686";
+  c.fillText("실제 발화 길이 (설명용 모델) — 글자마다 duration이 다르다", L, y1-8);
+  let x = L;
+  [...LEDGER_TEXT].forEach((ch, i) => {
+    const cw = PW * (WEIGHTS[i] / WSUM);
+    c.fillStyle = (i < ti) ? "rgba(247,120,186,.45)" : "#20262f";
+    c.fillRect(x, y1, Math.max(cw-0.7, 0.6), bh);
+    if (cw > 7){
+      c.fillStyle = (i < ti) ? "#ffd7ec" : "#8b949e";
+      c.font = "11px -apple-system,'Apple SD Gothic Neo','Noto Sans KR',sans-serif";
+      c.textAlign = "center";
+      c.fillText(ch, x + cw/2, y1 + bh/2 + 4);
+      c.textAlign = "left"; c.font = "10px ui-monospace,monospace";
+    }
+    x += cw;
+  });
+  c.strokeStyle = "#2b3242"; c.lineWidth = 1; c.strokeRect(L, y1, PW, bh);
+
+  /* --- bar 2: ledger의 선형 가정 (글자 폭 동일) --- */
+  const y2 = 122;
+  c.fillStyle = "#6b7686";
+  c.fillText("audible_text()의 가정 — 글자당 sample 수가 일정하다", L, y2-8);
+  const cw2 = PW / LEDGER_TEXT.length;
+  [...LEDGER_TEXT].forEach((ch, i) => {
+    c.fillStyle = (i < li) ? "rgba(247,120,186,.45)" : "#20262f";
+    c.fillRect(L + i*cw2, y2, Math.max(cw2-0.7, 0.6), bh);
+    if (cw2 > 7){
+      c.fillStyle = (i < li) ? "#ffd7ec" : "#8b949e";
+      c.font = "11px -apple-system,'Apple SD Gothic Neo','Noto Sans KR',sans-serif";
+      c.textAlign = "center";
+      c.fillText(ch, L + i*cw2 + cw2/2, y2 + bh/2 + 4);
+      c.textAlign = "left"; c.font = "10px ui-monospace,monospace";
+    }
+  });
+  c.strokeStyle = "#2b3242"; c.strokeRect(L, y2, PW, bh);
+
+  /* --- cursor --- */
+  c.strokeStyle = "#58a6ff"; c.lineWidth = 2;
+  c.beginPath(); c.moveTo(cx, y1-4); c.lineTo(cx, y2+bh+4); c.stroke();
+  c.fillStyle = "#58a6ff";
+  c.beginPath(); c.arc(cx, y1-4, 3.2, 0, 7); c.fill();
+  c.font = "10px ui-monospace,monospace";
+  const lbl = `played_sample = ${cursor.toLocaleString()}`;
+  const tw = c.measureText(lbl).width;
+  const flip = cx + 8 + tw > w - R;
+  c.textAlign = flip ? "right" : "left";
+  c.fillText(lbl, cx + (flip ? -8 : 8), y2 + bh + 18);
+  c.textAlign = "left";
+
+  /* --- drift 표시 --- */
+  const drift = li - ti;
+  c.fillStyle = drift === 0 ? "#3fb950" : (Math.abs(drift) >= 3 ? "#f85149" : "#d29922");
+  c.font = "11px ui-monospace,monospace";
+  c.fillText(`drift = 선형 ${li} − 실제 ${ti} = ${drift > 0 ? "+" : ""}${drift} chars`,
+             L, y2 + bh + 34);
+
+  renderLedgerReport(cursor, li, ti);
+}
+
+function renderLedgerReport(cursor, li, ti){
+  const ratio = (cursor - S_START) / (S_END - S_START);
+  const heard = LEDGER_TEXT.slice(0, li);
+  const heardTrue = LEDGER_TEXT.slice(0, ti);
+  const noTs = $("tsToggle").checked;
+  $("vCursor").textContent = cursor.toLocaleString();
+
+  $("ledgerNums").innerHTML =
+    `<div class="mono" style="font-size:0.7857rem;line-height:1.9">
+      sample_start = ${S_START.toLocaleString()}<br>
+      sample_end&nbsp;&nbsp; = ${S_END.toLocaleString()} <span style="color:#6b7686">
+        (3.20 s @ 24 kHz)</span><br>
+      cursor&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; = ${cursor.toLocaleString()}<br>
+      ratio&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; = ${ratio.toFixed(4)}<br>
+      len(text)&nbsp;&nbsp; = ${LEDGER_TEXT.length}<br>
+      int(len × ratio) = <b style="color:#f778ba">${li}</b>
+     </div>
+     <div style="margin-top:8px;font-size:0.8214rem">
+       <b>playout_complete()</b> =
+       ${cursor >= S_END
+         ? `<span style="color:#3fb950">True</span> → 이 turn의 종료는 <code>semantic_interrupt=False</code>
+            (내가 다 말했고 고객이 대답한 것)`
+         : `<span style="color:#d29922">False</span> → 지금 취소되면 <code>semantic_interrupt=True</code>
+            (고객이 내 말을 끊은 것)`}
+     </div>`;
+
+  $("repLedger").innerHTML =
+    `<div>들린 것으로 계산한 prefix:</div>
+     <div style="margin:4px 0;padding:6px 8px;background:#0b0f16;border-radius:6px">
+       "${esc(heard)}<span style="color:#6b7686">${esc(LEDGER_TEXT.slice(li))}</span>"</div>
+     <div>설명용 실제 alignment 기준: <span class="mono">${ti}</span> chars —
+       "${esc(heardTrue)}"</div>
+     <div style="margin-top:6px">입력 요구: <b>sample 개수 하나</b>.
+       word timestamp도, alignment metadata도 필요 없다.
+       ${noTs ? `<span style="color:#3fb950">timestamp 없는 TTS에서도 그대로 동작한다.</span>`
+               : `PCM을 내는 TTS면 무엇이든 된다.`}</div>
+     <div style="margin-top:6px;color:var(--ink-faint)">대가: <b>글자당 sample 수가 일정하다</b>는
+       선형 가정. 단어 중간과 발화 속도가 흔들리는 구간에서 index는 정렬이 아니라 추정이다.</div>`;
+
+  $("repPipeLedger").innerHTML = noTs
+    ? `<div style="color:#f85149"><b>입력이 없다.</b></div>
+       <div style="margin-top:4px">이 mechanism은 산술이 아니라 <b>배치</b>로 보장을 얻는다:
+         assistant aggregator가 <code>transport.output()</code> 뒤에 앉아 실제로 방출된 것만 보고,
+         word-timestamped <code>TTSTextFrame</code>이 그 pace를 만든다.
+         TTS가 timestamp를 내지 않으면 그 pacing 신호가 존재하지 않는다.</div>
+       <div style="margin-top:6px;color:var(--ink-faint)">여기서 확인되는 것은 우열이 아니라
+         <b>입력 요구가 다르다</b>는 사실이다 — 하나는 sample counter, 하나는 timestamp를 내는 TTS.</div>`
+    : `<div>aggregator가 <code>transport.output()</code> <b>뒤에</b> 있으므로, 애초에 실제로 방출된
+         텍스트만 본다. 근사가 없고 ledger object도 없다.</div>
+       <div style="margin-top:6px">barge-in 시 <code>_handle_interruptions</code>가
+         <code>_trigger_assistant_turn_stopped(interrupted=True)</code>를 호출해 assistant turn을
+         도달한 지점에서 자른다. context에 <code>[interrupted]</code> 같은 marker는 쓰지 않는다.</div>
+       <div style="margin-top:6px;color:var(--ink-faint)">단, 이것은 <b>word timestamp를 내는 TTS</b>를
+         전제한다. 위 toggle을 켜서 그 전제를 빼면 무슨 일이 벌어지는지 봐라.</div>`;
+}
+
+$("cursor").oninput = drawLedger;
+$("tsToggle").onchange = drawLedger;
+
+/* ==================================================================
+   PANEL 5 — chunker guard 재구성
+   excerpt에 기술된 두 규칙만 재구성한다:
+     _is_safe_period (L255)  · _is_numeric_separator (L277)
+   ================================================================== */
+const STRONG_END = new Set([".", "!", "?", "。", "！", "？", "\n"]);
+const SOFT_END   = new Set([",", "，", ";", "；", ":"]);
+const INTERNAL_TAG = /\[(?:interruption|system|tool|objection|customer|assistant)[^\]]*\]/g;
+const isAsciiToken = ch => /[0-9A-Za-z_\-]/.test(ch);
+
+function isSafePeriod(text, i){
+  const prev = text[i-1] || "", next = text[i+1] || "";
+  if (prev === "." || next === ".") return {ok:false, why:"연속된 dot — '...' 은 문장 끝이 아니다"};
+  if (/[0-9]/.test(prev) && /[0-9]/.test(next)) return {ok:false, why:"숫자 사이의 dot — 1.5 같은 수"};
+  if (isAsciiToken(prev) && isAsciiToken(next))
+    return {ok:false, why:"ASCII token 문자 사이의 dot — model 이름 · hostname · identifier"};
+  return {ok:true, why:"문장 경계로 인정 (SENTENCE)"};
+}
+function isNumericSeparator(text, i){
+  const prev = text[i-1] || "", next = text[i+1] || "";
+  return /[0-9]/.test(prev) && /[0-9]/.test(next);
+}
+
+const GUARD_SAMPLES = [
+  "gpt-4.1 모델을 씁니다. 확인해 드릴게요.",
+  "보험료는 1.5배입니다. 맞습니다.",
+  "음... 잠시만요. 확인할게요.",
+  "www.boson.ai 에서 확인하세요.",
+  "총 1,000원입니다. 맞으신가요?",
+  "[interruption] 네, 다시 말씀드릴게요.",
+];
+let guardIx = 0;
+
+function renderGuardBtns(){
+  $("guardBtns").innerHTML = GUARD_SAMPLES.map((s,i) =>
+    `<button class="gb ${i===guardIx?"on":""}" data-i="${i}">${esc(s.slice(0, 18))}…</button>`).join("");
+  [...$("guardBtns").children].forEach(b => {
+    b.onclick = () => { guardIx = +b.dataset.i; renderGuardBtns(); runGuards(); };
+  });
+}
+
+function runGuards(){
+  const raw = GUARD_SAMPLES[guardIx];
+  const stripped = raw.replace(INTERNAL_TAG, "");
+  const rows = [];
+  for (let i = 0; i < raw.length; i++){
+    const ch = raw[i];
+    if (STRONG_END.has(ch)){
+      if (ch === "."){
+        const r = isSafePeriod(raw, i);
+        rows.push({i, ch, split:r.ok, rule:"_is_safe_period", why:r.why});
+      } else {
+        rows.push({i, ch, split:true, rule:"_STRONG_END", why:"guard 없이 문장 경계"});
+      }
+    } else if (SOFT_END.has(ch)){
+      const num = (ch === "," || ch === "，") ? isNumericSeparator(raw, i) : false;
+      rows.push({i, ch, split:!num, rule:num ? "_is_numeric_separator" : "_SOFT_END",
+                 why: num ? "숫자 구분자 — 1,000 을 보호한다" : "SOFT 경계 후보"});
+    }
+  }
+  let html = `<div class="mono" style="font-size:0.7857rem;margin-bottom:6px">입력: "${esc(raw)}"</div>`;
+  if (stripped !== raw){
+    html += `<div style="font-size:0.8214rem;margin-bottom:6px">
+      <b>_INTERNAL_TAG strip:</b> 말할 텍스트 = "<span class="mono">${esc(stripped.trim())}</span>" ·
+      원문 span(<code>start_char</code>/<code>end_char</code>)은 <b>원문 기준으로 유지</b>된다 —
+      ledger가 "원문의 어느 글자까지 들렸나"에 답해야 하기 때문이다.</div>`;
+  }
+  html += rows.length
+    ? `<table><thead><tr><th>위치</th><th>글자</th><th>판정</th><th>규칙</th><th>이유</th></tr></thead><tbody>` +
+      rows.map(r => `<tr>
+        <td class="num">${r.i}</td>
+        <td class="mono">${esc(r.ch)}</td>
+        <td style="color:${r.split ? "#3fb950" : "#f85149"}">${r.split ? "split" : "no split"}</td>
+        <td class="mono" style="font-size:0.75rem">${esc(r.rule)}</td>
+        <td style="font-size:0.7857rem">${esc(r.why)}</td></tr>`).join("") +
+      `</tbody></table>`
+    : `<div class="none">구두점 후보가 없다.</div>`;
+  html += `<div style="font-size:0.75rem;color:var(--ink-faint);margin-top:7px">
+    이 표는 excerpt에 기술된 규칙의 <b>재구성</b> 결과이지 원본 코드의 출력이 아니다.
+    <code>chunking.py</code>는 private repo에 있다.</div>`;
+  $("guardOut").innerHTML = html;
+}
+
+/* ==================================================================
+   구동
+   ================================================================== */
+window.addEventListener("resize", () => { drawVad(); drawLedger(); });
+
+renderP1();
+renderP2();
+drawVad();
+drawLedger();
+renderGuardBtns();
+runGuards();
+</script>
+</body>
+</html>

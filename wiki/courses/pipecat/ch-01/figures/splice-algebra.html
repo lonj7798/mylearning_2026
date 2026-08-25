@@ -1,0 +1,1436 @@
+<!--
+  Figure: splice-algebra.html — "position N에 끼워 넣기: link()가 하는 일 전부"
+  Chapter: pipecat ch-01 (Pipes and Filters)
+  Back to: ../read.md  (§3 link(), §4 fold, §5 algebra, §7.3 forgot super(), §8 wrong order, §9 checklist)
+
+  Fully self-contained: inline CSS + vanilla JS. No CDN, no fetch, no external
+  fonts. Opens directly from file:// .
+
+  Every class name, file path and line number below was read out of the pinned
+  tree at commit 0cbf9c5b031eef06e53f0a193b9a67d60230e6be:
+    frame_processor.py      link() def :671, body :677/:678/:679
+                            process_frame (base) :820, __start :1091,
+                            __create_process_task() call site :1097,
+                            queue_frame input-task creation :728
+    pipeline.py             PipelineSource :21, PipelineSink :55, Pipeline :91,
+                            self._processors = [source, *processors, sink] :340,
+                            _link_processors :197-202, enable_direct_mode :113/:36/:72
+    base_pipeline.py        BasePipeline(FrameProcessor) :19
+    worker.py               pipeline = Pipeline([edge_source, pipeline, edge_sink]) :537
+    identity_filter.py      IdentityFilter :17, body :44-45
+    null_filter.py          NullFilter :18, leak arm :47-48
+    function_filter.py      FunctionFilter :21, passthrough :57-71, unconditional predicate :83
+    sentence.py             SentenceAggregator :18, bare return :50-51, bare TextFrame :56
+    llm_response_universal.py  LLMUserAggregator :563, TranscriptionFrame swallow :808,
+                            interim swallow :810-813, push_context_frame :488,
+                            transparency else-arm :850, LLMAssistantAggregator :1384
+    frames.py               category of every frame class shown (resolved through the MRO)
+    examples/getting-started/06-voice-agent.py:81-91  the canonical 7-element pipeline
+
+  The frame stream is a SIMPLIFIED single turn (direct-mode ordering, one sentence,
+  two audio frames). Frame class names and who-swallows-what are real; timing is not.
+-->
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>splice bench — position N (pipecat ch-01)</title>
+<style>
+  /* --- 반응형 타이포 스케일: 태블릿에서 root를 키운다 ------------------- */
+  html{font-size:14px;}
+  @media (pointer:coarse){ html{font-size:17px;} }
+  @media (min-width:1500px){ html{font-size:15.5px;} }
+
+  :root{
+    --bg:#0e1117; --panel:#161b22; --panel2:#1c2230; --edge:#2b3242;
+    --ink:#e6edf3; --ink-dim:#9aa7b4; --ink-faint:#6b7686;
+    --accent:#58a6ff; --accent2:#3fb950; --danger:#f85149; --warn:#d29922;
+    --c-sys:#58a6ff;    /* SystemFrame  */
+    --c-data:#3fb950;   /* DataFrame    */
+    --c-ctrl:#d29922;   /* ControlFrame */
+    --c-bare:#bc8cff;   /* Frame 직속   */
+    --c-ins:#f778ba;    /* 사용자가 끼워 넣은 processor */
+  }
+  *{box-sizing:border-box;}
+  html,body{margin:0;padding:0;}
+  body{
+    background:var(--bg); color:var(--ink);
+    font:1rem/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Apple SD Gothic Neo",
+         "Noto Sans KR",Helvetica,Arial,sans-serif;
+    padding:22px; max-width:88rem; margin:0 auto;
+  }
+  h1{font-size:1.5rem; margin:0 0 3px; letter-spacing:.2px;}
+  .sub{color:var(--ink-dim); font-size:0.9286rem; margin:0 0 20px;}
+  .sub code{color:var(--accent);}
+  .panel{background:var(--panel); border:1px solid var(--edge); border-radius:10px;
+    padding:16px; margin-bottom:18px;}
+  .panel h2{font-size:0.8571rem; text-transform:uppercase; letter-spacing:.9px; color:var(--ink-dim);
+    margin:0 0 14px; font-weight:600;}
+  .panel h3{font-size:0.8571rem; color:var(--ink); margin:18px 0 8px; font-weight:600;}
+  .mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+    font-variant-numeric:tabular-nums;}
+  code{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:0.9em;}
+
+  .grid2{display:grid; grid-template-columns:1fr 1fr; gap:18px;}
+  .wrap{display:grid; grid-template-columns:19rem 1fr; gap:18px; align-items:start;}
+  @media (max-width:1000px){ .wrap{grid-template-columns:1fr;} .grid2{grid-template-columns:1fr;} }
+
+  /* ---------- palette ---------- */
+  .pal{display:flex; flex-direction:column; gap:6px;}
+  .pitem{background:var(--panel2); border:1px solid var(--edge); color:var(--ink-dim);
+    border-radius:8px; padding:8px 10px; cursor:pointer; text-align:left; font-size:0.8571rem;
+    transition:.13s; line-height:1.35;}
+  .pitem:hover{border-color:var(--ink-faint); color:var(--ink);}
+  .pitem.on{background:#2a1c2a; border-color:var(--c-ins); color:var(--ink);}
+  .pitem b{display:block; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+    font-size:0.8571rem; color:var(--ink); margin-bottom:1px;}
+  .pitem span{font-size:0.7857rem; color:var(--ink-faint); display:block;}
+  .pitem.on span{color:var(--c-ins);}
+
+  /* ---------- chain ---------- */
+  .chain{display:flex; flex-wrap:wrap; align-items:stretch; gap:0; margin-bottom:12px;}
+  .slot{flex:0 0 auto; width:1.6rem; align-self:center; height:3.4rem; border:1px dashed var(--edge);
+    border-radius:6px; color:var(--ink-faint); background:transparent; cursor:pointer;
+    font-size:1rem; line-height:1; margin:0 3px; transition:.13s;}
+  .slot:hover{border-color:var(--c-ins); color:var(--c-ins); background:rgba(247,120,186,.08);}
+  .slot.armed{border-color:var(--c-ins); color:var(--c-ins);}
+  .chip{flex:0 0 auto; background:var(--panel2); border:1px solid var(--edge); border-radius:8px;
+    padding:6px 8px; min-width:8.4rem; position:relative;}
+  .chip.ins{border-color:var(--c-ins);}
+  .chip.bad{border-color:var(--danger); border-style:dashed;}
+  .chip .v{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+    font-size:0.8214rem; color:var(--ink); display:block; white-space:nowrap;}
+  .chip .c{font-size:0.7143rem; color:var(--ink-faint); display:block; white-space:nowrap;}
+  .chip .bar{display:flex; gap:3px; margin-top:4px;}
+  .chip .bar button{background:transparent; border:1px solid var(--edge); color:var(--ink-faint);
+    border-radius:4px; font-size:0.7143rem; line-height:1.2; padding:1px 5px; cursor:pointer;}
+  .chip .bar button:hover{border-color:var(--accent); color:var(--ink);}
+  .chip .bar button.x:hover{border-color:var(--danger); color:var(--danger);}
+  .chip .n{position:absolute; top:-.55rem; left:6px; font-size:0.6786rem; color:var(--ink-faint);
+    background:var(--panel); padding:0 4px; border-radius:3px;}
+
+  .presets{display:grid; grid-template-columns:1fr 1fr; gap:6px; margin-bottom:12px;}
+  .pbtn{background:var(--panel2); border:1px solid var(--edge); color:var(--ink-dim);
+    border-radius:7px; padding:8px 7px; cursor:pointer; font-size:0.8214rem; transition:.13s;
+    line-height:1.3; text-align:left;}
+  .pbtn:hover{border-color:var(--ink-faint); color:var(--ink);}
+  .pbtn.on{background:#1d2b3f; border-color:var(--accent); color:var(--ink);}
+  .pbtn small{display:block; color:var(--ink-faint); font-size:0.7143rem;}
+  .pbtn.on small{color:var(--accent);}
+
+  .opts{display:flex; flex-direction:column; gap:7px; margin-top:12px;}
+  .opt{display:flex; align-items:flex-start; gap:8px; font-size:0.8214rem; color:var(--ink-dim);
+    cursor:pointer; line-height:1.4;}
+  .opt input{margin:3px 0 0; accent-color:var(--danger); flex:none;}
+  .opt b{color:var(--ink); font-weight:600;}
+
+  .runbar{display:flex; gap:7px; margin-top:14px; flex-wrap:wrap;}
+  .rb{flex:1 1 6rem; background:var(--panel2); border:1px solid var(--edge); color:var(--ink);
+    border-radius:7px; padding:9px 6px; cursor:pointer; font-size:0.8929rem; font-weight:600;
+    transition:.13s;}
+  .rb:hover{border-color:var(--accent);}
+  .rb.primary{background:#1d3a5f; border-color:var(--accent); color:#cfe6ff;}
+
+  pre{background:#10151d; border:1px solid var(--edge); border-radius:8px; padding:13px;
+    overflow-x:auto; font-size:0.8571rem; line-height:1.7; margin:0;
+    font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; white-space:pre;}
+  pre .cm{color:var(--ink-faint);} pre .kw{color:var(--c-bare);} pre .st{color:var(--accent2);}
+  pre .ins{color:var(--c-ins); font-weight:700;} pre .ln{color:var(--ink-faint);}
+  pre .bad{color:var(--danger);} pre .dim{color:var(--ink-faint);}
+
+  .fold{background:#10151d; border:1px solid var(--edge); border-radius:8px; padding:13px;
+    font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:0.8214rem;
+    line-height:1.75; overflow-x:auto; max-height:26rem; overflow-y:auto;}
+  .fold .it{white-space:pre; opacity:.25; transition:.2s;}
+  .fold .it.on{opacity:1;}
+  .fold .it.cur{background:rgba(88,166,255,.09); border-radius:4px;}
+  .fold .op{color:var(--warn);} .fold .p1{color:var(--accent);} .fold .p2{color:var(--c-data);}
+  .fold .lg{color:var(--ink-faint);}
+
+  .counters{display:flex; gap:8px; flex-wrap:wrap; margin-top:12px;}
+  .chip2{border:1px solid var(--edge); border-radius:7px; padding:7px 11px; font-size:0.8571rem;
+    background:var(--panel2); color:var(--ink-faint); min-width:7.5rem;}
+  .chip2 b{display:block; font-size:1.2143rem; color:var(--ink); margin-bottom:1px;}
+  .chip2.zero b{color:var(--danger);}
+  .chip2.good b{color:var(--accent2);}
+
+  /* height는 JS의 CANVAS_H_* 상수와 반드시 같은 값 — 레이아웃 점프 방지 */
+  canvas{width:100%; display:block; border-radius:8px; background:#10151d;
+    border:1px solid var(--edge);}
+  #cvFlow{height:270px;}
+  #cvQueue{height:210px;}
+  .legend{display:flex; gap:14px; font-size:0.8214rem; color:var(--ink-dim); margin-top:9px;
+    flex-wrap:wrap;}
+  .legend i{display:inline-block; width:16px; height:10px; border-radius:3px;
+    vertical-align:middle; margin-right:5px;}
+
+  .stream{background:#10151d; border:1px solid var(--edge); border-radius:8px; padding:10px;
+    max-height:19rem; overflow-y:auto; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+    font-size:0.7857rem; line-height:1.65;}
+  .stream div{white-space:nowrap;}
+  .stream .t{display:inline-block; width:.9rem; text-align:center; font-weight:700;}
+  .stream .add{color:var(--accent2);} .stream .del{color:var(--danger);}
+  .stream .same{color:var(--ink-faint);}
+  .fdot{display:inline-block; width:8px; height:8px; border-radius:2px; margin-right:6px;
+    vertical-align:middle;}
+
+  .verdict{border-radius:8px; padding:12px 14px; font-size:0.9286rem; margin-top:12px;
+    border:1px solid var(--edge); background:var(--panel2); line-height:1.6;}
+  .verdict.ok{border-color:var(--accent2); background:rgba(63,185,80,.08);}
+  .verdict.silent{border-color:var(--danger); background:rgba(248,81,73,.08);}
+  .verdict b{font-size:1.0714rem;}
+
+  .check{display:grid; grid-template-columns:1.4rem 1fr; gap:7px 9px; font-size:0.8571rem;
+    line-height:1.5;}
+  .check .s{font-size:1rem; text-align:center;}
+  .check .body b{display:block; color:var(--ink);}
+  .check .body span{color:var(--ink-dim); font-size:0.8214rem;}
+  .tag{font-size:0.7143rem; border-radius:4px; padding:1px 6px; margin-left:6px;
+    border:1px solid var(--edge); color:var(--ink-faint); white-space:nowrap;}
+  .tag.proc{border-color:var(--warn); color:var(--warn);}
+  .tag.pos{border-color:var(--c-ins); color:var(--c-ins);}
+  .tag.ok{border-color:var(--accent2); color:var(--accent2);}
+
+  .callout{border-left:3px solid var(--warn); background:rgba(210,153,34,.07);
+    padding:11px 14px; border-radius:0 7px 7px 0; font-size:0.8929rem; color:var(--ink-dim);
+    margin-top:14px; line-height:1.65;}
+  .callout b{color:var(--ink);}
+  .callout.ok{border-left-color:var(--accent2); background:rgba(63,185,80,.07);}
+  .callout.bad{border-left-color:var(--danger); background:rgba(248,81,73,.07);}
+  .callout code{color:var(--accent);}
+  table{width:100%; border-collapse:collapse; font-size:0.8214rem; margin-top:6px;}
+  th,td{padding:5px 7px; text-align:left; border-bottom:1px solid var(--edge); vertical-align:top;}
+  th{color:var(--ink-faint); font-weight:600; font-size:0.75rem; text-transform:uppercase;
+    letter-spacing:.5px;}
+  td.num{text-align:right; font-variant-numeric:tabular-nums;}
+  .foot{color:var(--ink-faint); font-size:0.8214rem; margin-top:26px; line-height:1.8;}
+  .foot a{color:var(--accent); text-decoration:none;}
+</style>
+</head>
+<body>
+
+<h1>splice bench — <span class="mono">Pipeline([...])</span>의 position N</h1>
+<p class="sub">
+  ch-01 §3–§9 companion · processor를 골라 <b>아무 자리에나</b> 끼워 넣어 보고,
+  <code>_link_processors</code>가 실제로 실행하는 문장을 전부 펼쳐 봐라.
+  네 번째 문장 — 검증하는 문장 — 은 어디에도 없다.
+  <span class="mono" style="color:var(--ink-faint)">commit 0cbf9c5</span>
+</p>
+
+<!-- ===================== 1. SPLICE BENCH ===================== -->
+<div class="panel">
+  <h2>1 · splice bench — <span class="mono">list.insert(N, p)</span> / <span class="mono">list.pop(N)</span></h2>
+  <div class="wrap">
+    <div>
+      <div class="presets" id="presets"></div>
+      <div class="pal" id="palette"></div>
+      <div class="opts" id="opts">
+        <label class="opt"><input type="checkbox" id="optSuper">
+          <span><b>super() 생략</b> — <span class="mono">korean_honorific_rule</span>에서
+          첫 줄 <span class="mono">await super().process_frame(...)</span>를 지운다 (§7.3)</span></label>
+        <label class="opt"><input type="checkbox" id="optZero">
+          <span><b>진짜 zero로 만들기</b> — <span class="mono">NullFilter</span>가
+          <span class="mono">EndFrame</span>까지 막는다 (:47-48 arm 제거)</span></label>
+        <label class="opt"><input type="checkbox" id="optMute">
+          <span><b>compliance mute = ON</b> — <span class="mono">FunctionFilter</span> predicate가
+          <span class="mono">TextFrame</span> 계열을 차단 (§11-2)</span></label>
+        <label class="opt"><input type="checkbox" id="optNest">
+          <span><b>llm+tts를 하위 Pipeline으로 묶기</b> — 결합법칙
+          (<span class="mono">base_pipeline.py:19</span>)</span></label>
+        <label class="opt"><input type="checkbox" id="optWrap">
+          <span><b>worker.py:537처럼 한 번 더 감싸기</b> —
+          <span class="mono">Pipeline([edge_source, pipeline, edge_sink])</span></span></label>
+      </div>
+      <div class="runbar">
+        <button class="rb primary" id="bRun">▶ 한 turn 실행</button>
+        <button class="rb" id="bPlay">▶▶ 애니메이션</button>
+      </div>
+    </div>
+
+    <div>
+      <div class="chain" id="chain"></div>
+      <pre id="codeOut"></pre>
+      <div class="verdict" id="verdictBox"></div>
+    </div>
+  </div>
+</div>
+
+<!-- ===================== 2. THE FOLD ===================== -->
+<div class="panel">
+  <h2>2 · <span class="mono">_link_processors</span>는 fold다 — <span class="mono">link()</span>를 전부 펼친 모습</h2>
+  <div class="grid2">
+    <div>
+<pre><span class="cm"># src/pipecat/pipeline/pipeline.py:340  (__init__ 안)</span>
+<span class="ln">340</span>  self._processors = [self._source, *processors, self._sink]
+
+<span class="cm"># src/pipecat/pipeline/pipeline.py:197-202</span>
+<span class="ln">197</span>  def _link_processors(self):
+<span class="ln">198</span>      <span class="cm">"""Link all processors in sequence and set their parent."""</span>
+<span class="ln">199</span>      prev = self._processors[0]
+<span class="ln">200</span>      for curr in self._processors[1:]:
+<span class="ln">201</span>          prev.<span class="ins">link</span>(curr)
+<span class="ln">202</span>          prev = curr
+
+<span class="cm"># src/pipecat/processors/frame_processor.py:671-679</span>
+<span class="ln">671</span>  def link(self, processor: FrameProcessor):
+<span class="ln">677</span>      self._next = processor
+<span class="ln">678</span>      processor._prev = self
+<span class="ln">679</span>      logger.debug(f"Linking {self} -&gt; {self._next}")</pre>
+      <div class="callout">
+        <b>:198 docstring은 거짓말이다.</b> "and set their parent" — body는 parent를 설정하지 않고,
+        <code>FrameProcessor</code>에는 <code>_parent</code> 속성 자체가 없다
+        (<span class="mono">grep -c "_parent\b" → 0</span>). §4.1.
+      </div>
+      <div class="runbar">
+        <button class="rb primary" id="bFoldStep">▶ link 한 번</button>
+        <button class="rb" id="bFoldAll">전부 펼치기</button>
+        <button class="rb" id="bFoldReset">↺ 리셋</button>
+      </div>
+      <div class="counters" id="foldCount"></div>
+    </div>
+    <div>
+      <div class="fold" id="foldOut"></div>
+      <div class="callout ok">
+        <b>이게 전부다.</b> 왼쪽 fold가 실행하는 문장은 <span class="mono">pointer 2개 + log 1줄</span> ×
+        (원소 수 − 1)뿐이다. type check 0회, capability negotiation 0회, ordering assert 0회.
+        그래서 <b>어떤 p를 어떤 N에 넣어도 항상 type-check를 통과한다</b> — 그리고 §8이 그 대가다.
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ===================== 3. NESTING ===================== -->
+<div class="panel">
+  <h2>3 · 결합법칙 — pipeline은 processor다, 그래서 묶는 게 공짜다</h2>
+  <div class="grid2">
+    <div>
+      <div class="fold" id="nestOut" style="max-height:22rem;"></div>
+    </div>
+    <div>
+      <div class="counters" id="nestCount"></div>
+      <div class="callout ok">
+        <b>왜 특수 케이스가 없나.</b> <span class="mono">class BasePipeline(FrameProcessor)</span>
+        (<span class="mono">base_pipeline.py:19</span>) &rarr;
+        <span class="mono">class Pipeline(BasePipeline)</span> (<span class="mono">pipeline.py:91</span>).
+        <b>Pipeline이 곧 FrameProcessor</b>라서 position N에 그냥 들어간다.
+        pipecat 자신이 이 법칙에 의존한다 —
+        <span class="mono">worker.py:537</span>:
+        <span class="mono">pipeline = Pipeline([edge_source, pipeline, edge_sink])</span>.
+        너의 pipeline 한가운데에 framework가 processor를 끼워 넣는 방법이,
+        <b>네가 쓰는 것과 똑같은 생성자 호출</b>이다.
+      </div>
+      <div class="callout">
+        <b>비용은 link() 2회뿐, queue hop은 0이다.</b>
+        <span class="mono">Pipeline</span> / <span class="mono">PipelineSource</span> /
+        <span class="mono">PipelineSink</span>는 전부
+        <span class="mono">enable_direct_mode=True</span>로 생성된다
+        (<span class="mono">pipeline.py:113, :36, :72</span>) — <span class="mono">frame_processor.py:717-719</span>에서
+        내부 input queue를 건너뛰고 호출자 task 안에서 바로 처리한다.
+        반대로 <span class="mono">ParallelPipeline</span>은 일부러 direct mode를 쓰지 않는다
+        (<span class="mono">parallel_pipeline.py:43-44</span>: <i>"we use frame pausing and that requires queues"</i>).
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ===================== 4. FRAME FLOW ===================== -->
+<div class="panel">
+  <h2>4 · 한 turn 흘려보내기 — 어느 edge로 무엇이 지나갔나</h2>
+  <canvas id="cvFlow"></canvas>
+  <div class="legend">
+    <span><i style="background:#58a6ff"></i>SystemFrame</span>
+    <span><i style="background:#3fb950"></i>DataFrame</span>
+    <span><i style="background:#d29922"></i>ControlFrame</span>
+    <span><i style="background:#bc8cff"></i>Frame 직속 <span class="mono">(LLMContextFrame)</span></span>
+    <span style="color:var(--danger)">┈ 빨간 점선 박스 = 자기가 먹고 사는 frame을 한 번도 못 받은 processor</span>
+  </div>
+  <div id="flowNote" class="callout" style="margin-top:12px;"></div>
+</div>
+
+<!-- ===================== 5. IDENTITY / ZERO DIFF ===================== -->
+<div class="panel">
+  <h2>5 · 대수 증명 — sink에 도착한 frame stream을 baseline과 diff</h2>
+  <div class="grid2">
+    <div>
+      <h3 style="margin-top:0">baseline(정본 7원소) vs 현재 배치</h3>
+      <div class="stream" id="diffOut"></div>
+      <div class="legend">
+        <span class="add">+ 현재 배치에만 있음</span>
+        <span class="del">− baseline에만 있음</span>
+        <span class="same">· 동일</span>
+      </div>
+    </div>
+    <div>
+      <h3 style="margin-top:0">transport.output()이 wire로 내보낸 것</h3>
+      <div class="stream" id="wireOut"></div>
+      <div class="counters" id="algCount"></div>
+      <div class="callout" id="zeroOut"></div>
+    </div>
+  </div>
+  <div class="callout ok">
+    <b>identity 증명 방법.</b> palette에서 <span class="mono">IdentityFilter()</span>를 골라 아무 slot에나 넣어라 —
+    diff가 <b>전부 · 동일</b>로 남는다. 그게 <span class="mono">identity_filter.py:44-45</span>의 두 문장
+    (<span class="mono">super().process_frame(...)</span> 다음
+    <span class="mono">push_frame(frame, direction)</span>)이 증명하는 것이고,
+    §11-1의 regression harness가 바로 이 diff다.
+    <span class="mono">grep -rn "IdentityFilter" src/</span>는 자기 정의 <b>1</b>줄,
+    <span class="mono">src tests</span>는 <b>76</b>줄 — identity 원소는 오직 test가 쓴다.
+  </div>
+</div>
+
+<!-- ===================== 6. FORGOT SUPER ===================== -->
+<div class="panel">
+  <h2>6 · <span class="mono">super()</span>를 빼먹으면 — 예외 없이 조용한 black hole (§7.3)</h2>
+  <div class="grid2">
+    <div>
+<pre><span class="cm"># frame_processor.py:820  (base implementation)</span>
+<span class="ln">820</span> async def process_frame(self, frame, direction):
+<span class="ln">…</span>       if isinstance(frame, StartFrame):
+<span class="ln">…</span>           await self.<span class="ins">__start</span>(frame)     <span class="cm"># ← 여기</span>
+<span class="ln">…</span>       elif isinstance(frame, InterruptionFrame): ...
+<span class="ln">847</span>       elif ...:  await self.__resume(frame)
+
+<span class="cm"># frame_processor.py:1091 — body가 한 줄이다</span>
+<span class="ln">1091</span> async def __start(self, frame: StartFrame):
+<span class="ln">1097</span>     self.<span class="ins">__create_process_task</span>()
+
+<span class="cm"># frame_processor.py:713-728 — input task는 super()와 무관하게 생긴다</span>
+<span class="ln">722</span> await self.__input_queue.put((frame, direction, callback))
+<span class="ln">727</span> if isinstance(frame, StartFrame):
+<span class="ln">728</span>     self.__create_input_task()
+
+<span class="cm"># frame_processor.py:1287-1313 — input task가 갈라놓는다</span>
+<span class="ln">1305</span> if isinstance(frame, SystemFrame):
+<span class="ln">1306</span>     await self.__process_frame(frame, direction, callback)
+<span class="ln">1307</span> elif self.__process_queue:
+<span class="ln">1308</span>     await self.__process_queue.put(...)  <span class="bad"># ← 여기 쌓인다</span>
+<span class="ln">1309</span> else:
+<span class="ln">1311</span>     raise RuntimeError(...)  <span class="dim"># 절대 도달 못 함</span></pre>
+      <div class="callout bad">
+        <b>4단계를 봐라.</b> <span class="mono">__process_queue</span>는 <span class="mono">__init__:284</span>에서
+        만들어지고 <span class="mono">None</span>이 되는 일이 없다. 게다가
+        <span class="mono">FrameQueue(asyncio.Queue)</span>는 <span class="mono">__len__</span>도
+        <span class="mono">__bool__</span>도 정의하지 않아서
+        <span class="mono">elif self.__process_queue:</span>는 <b>항상 참</b>이다 →
+        바로 옆의 <span class="mono">RuntimeError</span>는 <b>발사될 수 없다</b>.
+        방어 코드가 일어나지 않는 조건을 지키고 있고, 실제로 일어나는 조건은 조용하다.
+      </div>
+    </div>
+    <div>
+      <canvas id="cvQueue"></canvas>
+      <div class="legend">
+        <span><i style="background:#f85149"></i><span class="mono">__process_queue</span> 깊이 (누적)</span>
+        <span><i style="background:#3fb950"></i>super() 호출 시 = 항상 0</span>
+      </div>
+      <div id="queueOut" class="callout" style="margin-top:12px;"></div>
+      <div class="callout">
+        <b>규칙을 정확히 말하면</b> "super()를 불러라"가 아니라
+        <b>"<span class="mono">FrameProcessor.process_frame</span>이 정확히 한 번, 가장 먼저 실행돼야 한다"</b>다.
+        유일한 예외가 그 증거다 —
+        <span class="mono">voicemail_detector.py:170</span>의
+        <span class="mono">await FrameProcessor.process_frame(self, frame, direction)</span>는
+        부모(<span class="mono">NotifierGate</span>)를 건너뛰고 조부모를 직접 부른다.
+        AST 집계: pipeline signature override <b>100</b>개 중 <b>99</b>는 super(), <b>1</b>은 이 unbound 호출,
+        <b>0</b>개가 누락. 그리고 repo의 <span class="mono">*.md</span> 중 이 규칙을 적어 둔 파일은 <b>0</b>개.
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ===================== 7. CHECKLIST ===================== -->
+<div class="panel">
+  <h2>7 · position-N 체크리스트 — 지금 배치에 대해 실행 (§9)</h2>
+  <div class="check" id="checkOut"></div>
+  <div class="callout">
+    <b>진단 규율.</b> 1–3에서 떨어지면 <span class="tag proc">processor bug</span>,
+    4–5에서 떨어지면 <span class="tag pos">wrong position</span>이다.
+    두 preset을 다 돌려 보고, 옆 패널을 열기 <b>전에</b> 어느 쪽인지 먼저 말해라.
+    증상은 양쪽 다 똑같이 <b>침묵</b>이고, interface는 어느 쪽도 보고하지 않는다.
+  </div>
+</div>
+
+<p class="foot">
+  ← 돌아가기: <a href="../read.md">ch-01 read.md</a> §3 · §4 · §5 · §7.3 · §8 · §9<br>
+  출처(전부 commit <span class="mono">0cbf9c5b031eef06e53f0a193b9a67d60230e6be</span>에서 직접 읽음):
+  <span class="mono">frame_processor.py</span> :671-679, :713-728, :820-847, :1091-1097, :1287-1313 ·
+  <span class="mono">pipeline/pipeline.py</span> :21, :55, :91, :113, :197-202, :340 ·
+  <span class="mono">pipeline/base_pipeline.py</span> :19 · <span class="mono">pipeline/worker.py</span> :537 ·
+  <span class="mono">filters/{identity,null,function,frame}_filter.py</span> ·
+  <span class="mono">aggregators/sentence.py</span>, <span class="mono">aggregators/llm_response_universal.py</span> ·
+  <span class="mono">examples/getting-started/06-voice-agent.py</span> :81-91<br>
+  frame stream은 <b>단순화된 한 turn</b>이다 — frame class 이름과 "누가 무엇을 삼키는가"는 실제 코드,
+  타이밍/interleaving은 아니다 (진짜 queue 구조는 <a href="../../ch-04/read.md">ch-04</a>).
+</p>
+
+<script>
+"use strict";
+
+/* ==================================================================
+   0. frame 분류 — frames.py의 MRO를 그대로 해석한 결과
+   ================================================================== */
+const CAT = {
+  StartFrame:"SystemFrame", CancelFrame:"SystemFrame", InterruptionFrame:"SystemFrame",
+  InputAudioRawFrame:"SystemFrame", UserStartedSpeakingFrame:"SystemFrame",
+  UserStoppedSpeakingFrame:"SystemFrame", BotStartedSpeakingFrame:"SystemFrame",
+  BotStoppedSpeakingFrame:"SystemFrame",
+  EndFrame:"ControlFrame", LLMFullResponseStartFrame:"ControlFrame",
+  LLMFullResponseEndFrame:"ControlFrame", TTSStartedFrame:"ControlFrame",
+  TTSStoppedFrame:"ControlFrame",
+  TextFrame:"DataFrame", LLMTextFrame:"DataFrame", TranscriptionFrame:"DataFrame",
+  InterimTranscriptionFrame:"DataFrame", TTSTextFrame:"DataFrame",
+  TTSAudioRawFrame:"DataFrame", OutputAudioRawFrame:"DataFrame", TTSSpeakFrame:"DataFrame",
+  LLMContextFrame:"Frame"      /* frames.py:551 — DataFrame이 아니라 Frame 직속이다 */
+};
+const CATCOL = {SystemFrame:"#58a6ff", DataFrame:"#3fb950", ControlFrame:"#d29922", Frame:"#bc8cff"};
+const TEXTISH = {TextFrame:1, LLMTextFrame:1, TTSTextFrame:1, TranscriptionFrame:1,
+                 InterimTranscriptionFrame:1, TTSSpeakFrame:1};
+
+let FID = 0;
+function mk(n, text){ return {n:n, cat:CAT[n] || "Frame", text:text || "", id:++FID}; }
+
+/* ==================================================================
+   1. processor 카탈로그 — 이름/클래스/좌표 전부 소스에서 확인한 값
+   ================================================================== */
+const P = {
+  input: {v:"transport.input()", cls:"BaseInputTransport",
+          src:"transports/base_input.py:36", demand:null,
+          note:"wire에서 audio를 읽어 pipeline에 밀어 넣는다"},
+  stt:   {v:"stt", cls:"DeepgramSTTService", src:"services/deepgram/stt.py:288",
+          demand:"InputAudioRawFrame", note:"audio → Interim/TranscriptionFrame"},
+  ua:    {v:"user_aggregator", cls:"LLMUserAggregator",
+          src:"aggregators/llm_response_universal.py:563", demand:"TranscriptionFrame",
+          note:"transcription 삼킴(:808) → push_context_frame(:488)"},
+  llm:   {v:"llm", cls:"OpenAILLMService", src:"services/openai/llm.py:15",
+          demand:"LLMContextFrame", note:"context → LLMTextFrame 스트림"},
+  tts:   {v:"tts", cls:"CartesiaTTSService", src:"services/cartesia/tts.py:219",
+          demand:"TextFrame*", note:"text 누적 → TTSAudioRawFrame"},
+  output:{v:"transport.output()", cls:"BaseOutputTransport",
+          src:"transports/base_output.py:60", demand:"TTSAudioRawFrame",
+          note:"audio를 wire로 내보낸다 = 봇이 말한다"},
+  aa:    {v:"assistant_aggregator", cls:"LLMAssistantAggregator",
+          src:"aggregators/llm_response_universal.py:1384", demand:"TextFrame*",
+          note:"실제로 나간 말을 assistant turn으로 기록"},
+
+  ident: {v:"IdentityFilter()", cls:"IdentityFilter",
+          src:"processors/filters/identity_filter.py:17", demand:null, ins:true,
+          note:"항등원 — body 2줄, 어디에 넣어도 no-op"},
+  nullf: {v:"NullFilter()", cls:"NullFilter",
+          src:"processors/filters/null_filter.py:18", demand:null, ins:true,
+          note:"준-영원 — SystemFrame·EndFrame만 샌다(:47-48)"},
+  func:  {v:"FunctionFilter(filter=compliance)", cls:"FunctionFilter",
+          src:"processors/filters/function_filter.py:21", demand:null, ins:true,
+          note:"조건 — lifecycle은 항상 통과(:57-71). llm과 tts 사이에 넣고 mute를 켜 봐라"},
+  sent:  {v:"SentenceAggregator()", cls:"SentenceAggregator",
+          src:"processors/aggregators/sentence.py:18", demand:null, ins:true,
+          note:"투명성 세금의 실물 — else arm(:62-63)"},
+  rule:  {v:"korean_honorific_rule", cls:"FrameProcessor (네가 쓸 코드)",
+          src:"read.md §4.2 의 예시", demand:null, ins:true,
+          note:"TextFrame을 다시 쓰는 Lina rule processor"}
+};
+const CANON = ["input","stt","ua","llm","tts","output","aa"];
+const PALETTE = ["ident","nullf","func","sent","rule"];
+
+const PRESETS = {
+  canonical:{name:"정본 7원소", sub:"06-voice-agent.py:81-91",
+             chain:CANON.slice(), o:{}},
+  identity: {name:"항등원 삽입", sub:"IdentityFilter를 stt 뒤에",
+             chain:["input","stt","ident","ua","llm","tts","output","aa"], o:{}},
+  zero:     {name:"준-영원 삽입", sub:"NullFilter를 llm 앞에",
+             chain:["input","stt","ua","nullf","llm","tts","output","aa"], o:{}},
+  rule:     {name:"Lina rule 삽입", sub:"stt와 aggregator 사이 (§4.2)",
+             chain:["input","stt","rule","ua","llm","tts","output","aa"], o:{}},
+  wrong:    {name:"⚠ 순서 뒤바꾸기", sub:"tts를 llm 앞에 (§8)",
+             chain:["input","tts","llm","output"], o:{}},
+  forgot:   {name:"⚠ super() 빼먹기", sub:"rule processor 안에서 (§7.3)",
+             chain:["input","stt","rule","ua","llm","tts","output","aa"],
+             o:{optSuper:true}}
+};
+
+/* ==================================================================
+   2. 상태
+   ================================================================== */
+const ST = {
+  chain: CANON.slice(),
+  sel: null,
+  preset: "canonical",
+  forgotSuper:false, trueZero:false, mute:false, nest:false, wrap:false,
+  foldStep: 0,
+  play: null, playIdx: 0,
+  run: null, base: null
+};
+const $ = function(id){ return document.getElementById(id); };
+const esc = function(s){ return String(s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;"); };
+
+/* ==================================================================
+   3. 시뮬레이터 — 각 processor의 실제 isinstance 분기를 옮긴 것
+   ================================================================== */
+function behave(id, fr, S){
+  const n = fr.n, cat = fr.cat;
+  const pass = {push:[fr], wire:[]};
+
+  switch(id){
+
+  case "input":
+    /* StartFrame을 내려보낸 뒤, wire에서 온 사용자 발화를 만들어 낸다 */
+    if (n === "StartFrame"){
+      return {push:[fr, mk("UserStartedSpeakingFrame"),
+                    mk("InputAudioRawFrame"), mk("InputAudioRawFrame"),
+                    mk("UserStoppedSpeakingFrame")], wire:[]};
+    }
+    return pass;
+
+  case "stt":
+    if (n === "InputAudioRawFrame"){ S.demand++;
+      return {push:[mk("InterimTranscriptionFrame","안녕하")], wire:[]}; }
+    if (n === "UserStoppedSpeakingFrame"){
+      return {push:[mk("TranscriptionFrame","안녕하세요, 보험 상담 받고 싶어요"), fr], wire:[]}; }
+    return pass;
+
+  case "ua":
+    /* :808 transcription 삼킴, :810-813 interim 삼킴, :488 context push, :850 else */
+    if (n === "TranscriptionFrame"){ S.demand++; S.agg = fr.text; return {push:[], wire:[]}; }
+    if (n === "InterimTranscriptionFrame"){ return {push:[], wire:[]}; }
+    if (n === "UserStoppedSpeakingFrame"){
+      const out = [fr];
+      if (S.agg){ out.push(mk("LLMContextFrame")); S.agg = ""; }
+      return {push:out, wire:[]};
+    }
+    return pass;
+
+  case "llm":
+    if (n === "LLMContextFrame"){ S.demand++;
+      return {push:[mk("LLMFullResponseStartFrame"), mk("LLMTextFrame","네, "),
+                    mk("LLMTextFrame","도와드릴게요."), mk("LLMFullResponseEndFrame")], wire:[]}; }
+    return pass;
+
+  case "tts":
+    if (n === "LLMTextFrame" || n === "TextFrame"){ S.demand++; S.agg = (S.agg||"") + fr.text;
+      return {push:[], wire:[]}; }
+    if (n === "LLMFullResponseEndFrame"){
+      if (S.agg){ const t = S.agg; S.agg = "";
+        return {push:[mk("TTSStartedFrame"), mk("TTSTextFrame", t),
+                      mk("TTSAudioRawFrame"), mk("TTSAudioRawFrame"),
+                      mk("TTSStoppedFrame"), fr], wire:[]}; }
+      return pass;
+    }
+    return pass;
+
+  case "output":
+    if (n === "TTSAudioRawFrame"){ S.demand++; return {push:[], wire:[fr]}; }
+    if (n === "TTSStartedFrame"){ return {push:[mk("BotStartedSpeakingFrame"), fr], wire:[]}; }
+    if (n === "TTSStoppedFrame"){ return {push:[mk("BotStoppedSpeakingFrame"), fr], wire:[]}; }
+    return pass;
+
+  case "aa":
+    if (n === "TTSTextFrame" || n === "TextFrame"){ S.demand++; return {push:[], wire:[]}; }
+    return pass;
+
+  /* ---- 끼워 넣는 것들 ---- */
+  case "ident":
+    /* identity_filter.py:44-45 — 온 방향 그대로 그대로 민다 */
+    return pass;
+
+  case "nullf":
+    /* null_filter.py:47-48 */
+    if (cat === "SystemFrame") return pass;
+    if (n === "EndFrame" && !ST.trueZero) return pass;
+    S.blocked++;
+    if (n === "EndFrame") S.ateEnd = true;
+    return {push:[], wire:[]};
+
+  case "func":
+    /* function_filter.py:83 — predicate는 무조건 호출된다. 버려질 때조차. */
+    S.pred++;
+    if (n === "StartFrame" || n === "EndFrame" || n === "CancelFrame") return pass; /* :63-64 */
+    if (cat === "SystemFrame") return pass;                                          /* :66-67 */
+    if (ST.mute && TEXTISH[n]){ S.blocked++; return {push:[], wire:[]}; }
+    return pass;
+
+  case "sent":
+    /* sentence.py:50-51 bare return / :56 bare TextFrame / :62-63 else */
+    if (n === "InterimTranscriptionFrame"){ S.swallowed++; return {push:[], wire:[]}; }
+    if (TEXTISH[n] && n !== "TTSAudioRawFrame"){
+      S.agg = (S.agg||"") + fr.text;
+      if (/[.!?]$|요$|다$/.test(fr.text)){ const t = S.agg; S.agg = ""; S.recast++;
+        return {push:[mk("TextFrame", t)], wire:[]}; }   /* subclass identity 소실 */
+      return {push:[], wire:[]};
+    }
+    if (n === "EndFrame" && S.agg){ const t = S.agg; S.agg = "";
+      return {push:[mk("TextFrame", t), fr], wire:[]}; }
+    return pass;
+
+  case "rule":
+    if (ST.forgotSuper){
+      /* super()를 안 부르면 __start → __create_process_task()가 없다.
+         input task는 :728에서 그대로 생기므로 SystemFrame만 흘러가고,
+         나머지는 __process_queue에 영원히 쌓인다. */
+      if (cat === "SystemFrame") return pass;
+      S.queued++;
+      if (n === "EndFrame") S.ateEnd = true;
+      return {push:[], wire:[]};
+    }
+    if (TEXTISH[n] && fr.text){ S.rewrote++;
+      return {push:[mk(n, fr.text.replace("도와드릴게요","도와드리겠습니다"))], wire:[]}; }
+    return pass;
+  }
+  return pass;
+}
+
+function runChain(chain){
+  FID = 0;
+  const stat = {}, log = [], sink = [], wire = [];
+  chain.forEach(function(id, i){
+    stat[i] = {id:id, demand:0, blocked:0, queued:0, pred:0, swallowed:0,
+               recast:0, rewrote:0, agg:"", ateEnd:false};
+  });
+  const edge = [];
+  for (let i = 0; i <= chain.length; i++) edge.push({SystemFrame:0, DataFrame:0, ControlFrame:0, Frame:0, total:0});
+
+  let guard = 0;
+  function feed(i, fr){
+    if (guard++ > 4000) return;
+    if (i >= chain.length){ sink.push(fr); edge[chain.length][fr.cat]++; edge[chain.length].total++; return; }
+    const res = behave(chain[i], fr, stat[i]);
+    log.push({i:i, inF:fr, out:res.push.slice(), wire:res.wire.length});
+    res.wire.forEach(function(f){ wire.push(f); });
+    res.push.forEach(function(f){
+      edge[i][f.cat]++; edge[i].total++;
+      feed(i + 1, f);
+    });
+  }
+  /* PipelineSource가 밀어 넣는 것: StartFrame, 그리고 세션 종료의 EndFrame */
+  [mk("StartFrame"), mk("EndFrame")].forEach(function(f){ feed(0, f); });
+
+  const audio = wire.filter(function(f){ return f.n === "TTSAudioRawFrame"; }).length;
+  const endReached = sink.some(function(f){ return f.n === "EndFrame"; });
+  return {stat:stat, log:log, sink:sink, wire:wire, edge:edge, audio:audio, endReached:endReached};
+}
+
+/* ==================================================================
+   4. diff (LCS)
+   ================================================================== */
+function lcsDiff(a, b){
+  const n = a.length, m = b.length;
+  const dp = [];
+  for (let i = 0; i <= n; i++) dp.push(new Int32Array(m + 1));
+  for (let i = n - 1; i >= 0; i--)
+    for (let j = m - 1; j >= 0; j--)
+      dp[i][j] = (a[i] === b[j]) ? dp[i+1][j+1] + 1 : Math.max(dp[i+1][j], dp[i][j+1]);
+  const out = []; let i = 0, j = 0;
+  while (i < n && j < m){
+    if (a[i] === b[j]){ out.push({t:"=", v:a[i]}); i++; j++; }
+    else if (dp[i+1][j] >= dp[i][j+1]){ out.push({t:"-", v:a[i]}); i++; }
+    else { out.push({t:"+", v:b[j]}); j++; }
+  }
+  while (i < n) out.push({t:"-", v:a[i++]});
+  while (j < m) out.push({t:"+", v:b[j++]});
+  return out;
+}
+
+/* ==================================================================
+   5. canvas — 절대 스케일된 크기를 다시 읽지 않는다
+   ================================================================== */
+const CANVAS_H_FLOW = 270;
+const CANVAS_H_QUEUE = 210;
+const FS = (function(){
+  const v = parseFloat(getComputedStyle(document.documentElement).fontSize);
+  return (v && v > 0 ? v : 14) / 14;
+})();
+
+function setupCanvas(cv, H){
+  const r = window.devicePixelRatio || 1;
+  const w = Math.max(cv.clientWidth, 200), h = H;
+  if (cv.width !== Math.round(w * r) || cv.height !== Math.round(h * r)){
+    cv.width = Math.round(w * r); cv.height = Math.round(h * r);
+  }
+  cv.style.height = h + "px";
+  const c = cv.getContext("2d");
+  c.setTransform(r, 0, 0, r, 0, 0);
+  c.clearRect(0, 0, w, h);
+  return {c:c, w:w, h:h};
+}
+function rrect(c, x, y, w, h, r){
+  c.beginPath();
+  c.moveTo(x + r, y); c.lineTo(x + w - r, y); c.quadraticCurveTo(x + w, y, x + w, y + r);
+  c.lineTo(x + w, y + h - r); c.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
+  c.lineTo(x + r, y + h); c.quadraticCurveTo(x, y + h, x, y + h - r);
+  c.lineTo(x, y + r); c.quadraticCurveTo(x, y, x + r, y);
+  c.closePath();
+}
+function clip(c, s, maxw){
+  let t = s;
+  while (t.length > 3 && c.measureText(t).width > maxw) t = t.slice(0, -1);
+  return t === s ? s : t + "…";
+}
+
+function drawFlow(){
+  const cv = $("cvFlow"); if (!cv) return;
+  const g = setupCanvas(cv, CANVAS_H_FLOW); const c = g.c, w = g.w, h = g.h;
+  const R = ST.run; if (!R) return;
+
+  const els = ["src"].concat(ST.chain, ["snk"]);
+  const n = els.length;
+  const colW = w / n;
+  const boxH = 42, boxY = 34;
+  const maxLoad = Math.max(1, R.edge.reduce(function(m, e){ return Math.max(m, e.total); }, 0));
+
+  c.font = (11 * FS).toFixed(1) + "px ui-monospace,Menlo,monospace";
+  c.textAlign = "center";
+
+  /* 연결선 */
+  c.strokeStyle = "#2b3242"; c.lineWidth = 1.5;
+  c.beginPath(); c.moveTo(colW * 0.5, boxY + boxH / 2); c.lineTo(colW * (n - 0.5), boxY + boxH / 2); c.stroke();
+
+  /* 박스 */
+  for (let i = 0; i < n; i++){
+    const cx = colW * (i + 0.5);
+    const bw = Math.min(colW * 0.88, 150 * FS);
+    const isEdge = (i === 0 || i === n - 1);
+    const pid = isEdge ? null : ST.chain[i - 1];
+    const st = pid ? R.stat[i - 1] : null;
+    const meta = pid ? P[pid] : null;
+    const starved = !!(meta && meta.demand && st && st.demand === 0);
+
+    c.fillStyle = isEdge ? "#141a24" : (meta && meta.ins ? "#2a1c2a" : "#1c2230");
+    rrect(c, cx - bw / 2, boxY, bw, boxH, 7); c.fill();
+    c.lineWidth = starved ? 2 : 1;
+    c.strokeStyle = starved ? "#f85149" : (meta && meta.ins ? "#f778ba" : "#2b3242");
+    if (starved) c.setLineDash([4, 3]);
+    rrect(c, cx - bw / 2, boxY, bw, boxH, 7); c.stroke();
+    c.setLineDash([]);
+
+    c.fillStyle = isEdge ? "#6b7686" : "#e6edf3";
+    const lbl = isEdge ? (i === 0 ? "Pipeline#0::Source" : "Pipeline#0::Sink")
+                       : P[pid].cls;
+    c.fillText(clip(c, lbl, bw - 8), cx, boxY + 17);
+    c.fillStyle = "#6b7686";
+    const lbl2 = isEdge ? "pipeline.py:" + (i === 0 ? "21" : "55") : P[pid].v;
+    c.fillText(clip(c, lbl2, bw - 8), cx, boxY + 32);
+  }
+
+  /* edge 부하 = 그 edge를 건넌 frame 수, 범주별 스택 */
+  const barBase = h - 26, barMax = barBase - (boxY + boxH + 26);
+  for (let i = 0; i < R.edge.length; i++){
+    const x = colW * (i + 1);
+    const e = R.edge[i];
+    if (e.total === 0){
+      c.strokeStyle = "#f85149"; c.setLineDash([3, 3]); c.lineWidth = 1;
+      c.beginPath(); c.moveTo(x, boxY + boxH + 6); c.lineTo(x, barBase); c.stroke();
+      c.setLineDash([]);
+      c.fillStyle = "#f85149"; c.fillText("0", x, barBase + 14);
+      continue;
+    }
+    let y = barBase;
+    ["SystemFrame", "DataFrame", "ControlFrame", "Frame"].forEach(function(k){
+      if (!e[k]) return;
+      const hh = (e[k] / maxLoad) * barMax;
+      c.fillStyle = CATCOL[k];
+      c.fillRect(x - 7 * FS, y - hh, 14 * FS, hh);
+      y -= hh;
+    });
+    c.fillStyle = "#9aa7b4";
+    c.fillText(String(e.total), x, barBase + 14);
+  }
+
+  /* 애니메이션 토큰 */
+  if (ST.play !== null && R.log[ST.playIdx]){
+    const L = R.log[ST.playIdx];
+    const cx = colW * (L.i + 1.5);
+    c.fillStyle = CATCOL[L.inF.cat];
+    c.beginPath(); c.arc(cx, boxY - 12, 6 * FS, 0, Math.PI * 2); c.fill();
+    c.fillStyle = "#e6edf3";
+    c.font = (11 * FS).toFixed(1) + "px ui-monospace,Menlo,monospace";
+    c.fillText(clip(c, L.inF.n, colW * 1.8), cx, boxY - 22);
+  }
+
+  c.textAlign = "left";
+  c.fillStyle = "#6b7686";
+  c.font = (10.5 * FS).toFixed(1) + "px ui-monospace,Menlo,monospace";
+  c.fillText("edge를 건넌 frame 수 (범주별 스택) — 0이면 그 아래로는 아무것도 흐르지 않았다", 8, h - 8);
+}
+
+function drawQueue(){
+  const cv = $("cvQueue"); if (!cv) return;
+  const g = setupCanvas(cv, CANVAS_H_QUEUE); const c = g.c, w = g.w, h = g.h;
+  const R = ST.run; if (!R) return;
+
+  const ri = ST.chain.indexOf("rule");
+  const pad = 34, base = h - 26, top = 22;
+  c.font = (11 * FS).toFixed(1) + "px ui-monospace,Menlo,monospace";
+
+  /* 축 */
+  c.strokeStyle = "#2b3242"; c.lineWidth = 1;
+  c.beginPath(); c.moveTo(pad, top); c.lineTo(pad, base); c.lineTo(w - 10, base); c.stroke();
+
+  if (ri < 0 || !ST.forgotSuper){
+    c.strokeStyle = "#3fb950"; c.lineWidth = 2;
+    c.beginPath(); c.moveTo(pad, base - 1); c.lineTo(w - 10, base - 1); c.stroke();
+    c.fillStyle = "#3fb950";
+    c.fillText(ri < 0 ? "korean_honorific_rule이 pipeline에 없다 — 깊이 0"
+                      : "super() 호출됨 → __create_process_task() 실행 → queue 깊이 0",
+               pad + 8, base - 10);
+    c.fillStyle = "#6b7686";
+    c.fillText("frame 도착 순서 →", pad + 8, h - 8);
+    return;
+  }
+
+  /* rule에 도착한 frame들의 누적 큐 깊이 */
+  const evs = [];
+  let depth = 0;
+  R.log.forEach(function(L){
+    if (L.i !== ri) return;
+    const stuck = (L.inF.cat !== "SystemFrame");
+    if (stuck) depth++;
+    evs.push({n:L.inF.n, cat:L.inF.cat, d:depth, stuck:stuck});
+  });
+  const maxD = Math.max(1, depth);
+  const bw = Math.max(6, Math.min(28 * FS, (w - pad - 16) / Math.max(evs.length, 1) - 4));
+
+  evs.forEach(function(e, k){
+    const x = pad + 6 + k * ((w - pad - 16) / Math.max(evs.length, 1));
+    const hh = (e.d / maxD) * (base - top - 8);
+    c.fillStyle = e.stuck ? "#f85149" : "#243040";
+    c.fillRect(x, base - hh, bw, hh);
+    c.save();
+    c.translate(x + bw / 2, base + 4);
+    c.rotate(Math.PI / 3.1);
+    c.fillStyle = e.stuck ? "#f85149" : CATCOL[e.cat];
+    c.font = (9.5 * FS).toFixed(1) + "px ui-monospace,Menlo,monospace";
+    c.fillText(e.n.replace("Frame", ""), 0, 0);
+    c.restore();
+  });
+
+  c.fillStyle = "#9aa7b4";
+  c.font = (11 * FS).toFixed(1) + "px ui-monospace,Menlo,monospace";
+  c.fillText("__process_queue 깊이", pad + 6, top - 8);
+  c.textAlign = "right";
+  c.fillStyle = "#f85149";
+  c.fillText(String(depth), w - 12, top + 4);
+  c.textAlign = "left";
+}
+
+/* ==================================================================
+   6. 렌더링
+   ================================================================== */
+function renderPresets(){
+  const el = $("presets"); el.innerHTML = "";
+  Object.keys(PRESETS).forEach(function(k){
+    const p = PRESETS[k];
+    const b = document.createElement("button");
+    b.className = "pbtn" + (ST.preset === k ? " on" : "");
+    b.innerHTML = esc(p.name) + "<small>" + esc(p.sub) + "</small>";
+    b.onclick = function(){ applyPreset(k); };
+    el.appendChild(b);
+  });
+}
+function applyPreset(k){
+  const p = PRESETS[k];
+  ST.preset = k;
+  ST.chain = p.chain.slice();
+  ST.forgotSuper = !!p.o.optSuper;
+  ST.trueZero = false; ST.mute = false;
+  $("optSuper").checked = ST.forgotSuper;
+  $("optZero").checked = false;
+  $("optMute").checked = false;
+  ST.foldStep = 0;
+  stopPlay();
+  refresh();
+}
+
+function renderPalette(){
+  const el = $("palette"); el.innerHTML = "";
+  PALETTE.forEach(function(id){
+    const p = P[id];
+    const b = document.createElement("button");
+    b.className = "pitem" + (ST.sel === id ? " on" : "");
+    b.innerHTML = "<b>" + esc(p.v) + "</b><span>" + esc(p.src) + " · " + esc(p.note) + "</span>";
+    b.onclick = function(){ ST.sel = (ST.sel === id ? null : id); renderPalette(); renderChain(); };
+    el.appendChild(b);
+  });
+  const hint = document.createElement("div");
+  hint.style.cssText = "font-size:0.7857rem;color:#6b7686;margin-top:6px;line-height:1.5;";
+  hint.innerHTML = ST.sel
+    ? "선택됨 → 오른쪽 <b style='color:#f778ba'>+</b> slot을 눌러 그 자리에 <span class='mono'>list.insert(N, p)</span>"
+    : "processor를 하나 고른 뒤 오른쪽 <b>+</b> slot을 누르면 그 position N에 끼워진다.";
+  el.appendChild(hint);
+}
+
+function renderChain(){
+  const el = $("chain"); el.innerHTML = "";
+  const R = ST.run;
+  function slot(idx){
+    const b = document.createElement("button");
+    b.className = "slot" + (ST.sel ? " armed" : "");
+    b.textContent = "+";
+    b.title = "position " + idx + "에 삽입";
+    b.onclick = function(){
+      if (!ST.sel) return;
+      ST.chain.splice(idx, 0, ST.sel);
+      ST.preset = "";
+      ST.foldStep = 0; stopPlay(); refresh();
+    };
+    el.appendChild(b);
+  }
+  slot(0);
+  ST.chain.forEach(function(id, i){
+    const p = P[id];
+    const st = R ? R.stat[i] : null;
+    const starved = !!(p.demand && st && st.demand === 0);
+    const d = document.createElement("div");
+    d.className = "chip" + (p.ins ? " ins" : "") + (starved ? " bad" : "");
+    d.innerHTML =
+      "<span class='n'>" + i + "</span>" +
+      "<span class='v'>" + esc(p.v) + "</span>" +
+      "<span class='c'>" + esc(p.cls) + "</span>";
+    const bar = document.createElement("div"); bar.className = "bar";
+    const mkb = function(txt, cls, fn){
+      const b = document.createElement("button");
+      b.className = cls || ""; b.textContent = txt; b.onclick = fn; bar.appendChild(b);
+    };
+    mkb("◀", "", function(){
+      if (i === 0) return;
+      const t = ST.chain[i - 1]; ST.chain[i - 1] = ST.chain[i]; ST.chain[i] = t;
+      ST.preset = ""; ST.foldStep = 0; stopPlay(); refresh();
+    });
+    mkb("▶", "", function(){
+      if (i === ST.chain.length - 1) return;
+      const t = ST.chain[i + 1]; ST.chain[i + 1] = ST.chain[i]; ST.chain[i] = t;
+      ST.preset = ""; ST.foldStep = 0; stopPlay(); refresh();
+    });
+    mkb("✕", "x", function(){
+      ST.chain.splice(i, 1);
+      ST.preset = ""; ST.foldStep = 0; stopPlay(); refresh();
+    });
+    d.appendChild(bar);
+    el.appendChild(d);
+    slot(i + 1);
+  });
+  if (ST.chain.length === 0){
+    const d = document.createElement("div");
+    d.style.cssText = "color:#6b7686;font-size:0.85rem;padding:8px;";
+    d.textContent = "빈 Pipeline([])도 링크되고 시작된다. 검증이 없다는 게 이런 뜻이다.";
+    el.appendChild(d);
+  }
+}
+
+function renderCode(){
+  let s = "";
+  const inner = ST.chain.map(function(id){ return P[id].v; });
+  if (ST.nest && ST.chain.indexOf("llm") >= 0 && ST.chain.indexOf("tts") >= 0){
+    const a = ST.chain.indexOf("llm"), b = ST.chain.indexOf("tts");
+    const lo = Math.min(a, b), hi = Math.max(a, b);
+    const head = inner.slice(0, lo), mid = inner.slice(lo, hi + 1), tail = inner.slice(hi + 1);
+    s = "pipeline = Pipeline([\n" +
+        head.map(function(x){ return "    " + x + ","; }).join("\n") + (head.length ? "\n" : "") +
+        "    <span class='ins'>Pipeline([" + mid.join(", ") + "])</span>,\n" +
+        tail.map(function(x){ return "    " + x + ","; }).join("\n") + (tail.length ? "\n" : "") +
+        "])";
+  } else {
+    s = "pipeline = Pipeline([\n" +
+        ST.chain.map(function(id){
+          const v = "    " + P[id].v + ",";
+          return P[id].ins ? "<span class='ins'>" + v + "</span>" : v;
+        }).join("\n") + "\n])";
+  }
+  if (ST.wrap){
+    s += "\n\n<span class='cm'># src/pipecat/pipeline/worker.py:537 — framework가 하는 일</span>\n" +
+         "pipeline = <span class='ins'>Pipeline([edge_source, pipeline, edge_sink])</span>";
+  }
+  const extra = [];
+  if (ST.forgotSuper && ST.chain.indexOf("rule") >= 0)
+    extra.push("<span class='bad'># korean_honorific_rule.process_frame: 첫 줄 super() 호출 없음</span>");
+  if (ST.trueZero && ST.chain.indexOf("nullf") >= 0)
+    extra.push("<span class='bad'># NullFilter: :47-48의 (SystemFrame, EndFrame) arm을 제거한 변형</span>");
+  if (ST.mute && ST.chain.indexOf("func") >= 0)
+    extra.push("<span class='cm'># compliance predicate: TextFrame 계열 차단 = ON</span>");
+  $("codeOut").innerHTML = (extra.length ? extra.join("\n") + "\n\n" : "") + s;
+}
+
+function renderFold(){
+  const els = [{n:"Pipeline#0::Source", src:"pipeline.py:21"}].concat(
+      ST.chain.map(function(id){ return {n:P[id].cls + "#0", src:P[id].src}; }),
+      [{n:"Pipeline#0::Sink", src:"pipeline.py:55"}]);
+  const out = $("foldOut"); out.innerHTML = "";
+  const total = els.length - 1;
+  if (ST.foldStep > total) ST.foldStep = total;
+
+  const head = document.createElement("div");
+  head.className = "it on";
+  head.innerHTML = "<span class='lg'>prev = self._processors[0]   # " + esc(els[0].n) + "</span>";
+  out.appendChild(head);
+
+  for (let k = 0; k < total; k++){
+    const a = els[k], b = els[k + 1];
+    const d = document.createElement("div");
+    d.className = "it" + (k < ST.foldStep ? " on" : "") + (k === ST.foldStep - 1 ? " cur" : "");
+    d.innerHTML =
+      "\n<span class='op'>prev.link(curr)</span>   <span class='lg'># prev=" + esc(a.n) + ", curr=" + esc(b.n) + "</span>\n" +
+      "  <span class='lg'>:677</span> <span class='p1'>" + esc(a.n) + "._next = " + esc(b.n) + "</span>\n" +
+      "  <span class='lg'>:678</span> <span class='p2'>" + esc(b.n) + "._prev = " + esc(a.n) + "</span>\n" +
+      "  <span class='lg'>:679 DEBUG | Linking " + esc(a.n) + " -> " + esc(b.n) + "</span>\n" +
+      "  <span class='lg'>       (검증 문장 없음)</span>";
+    out.appendChild(d);
+  }
+  const cc = $("foldCount");
+  cc.innerHTML =
+    "<div class='chip2'><b>" + total + "</b>link() 호출</div>" +
+    "<div class='chip2'><b>" + (total * 2) + "</b>pointer 대입</div>" +
+    "<div class='chip2'><b>" + total + "</b>logger.debug</div>" +
+    "<div class='chip2 zero'><b>0</b>type check</div>" +
+    "<div class='chip2 zero'><b>0</b>ordering assert</div>";
+}
+
+function renderNest(){
+  const out = $("nestOut");
+  let html = "", links = 0;
+  const line = function(ind, txt, cls){
+    return "<div class='it on'>" + "  ".repeat(ind) +
+      (cls ? "<span class='" + cls + "'>" : "") + esc(txt) + (cls ? "</span>" : "") + "</div>";
+  };
+  const a = ST.chain.indexOf("llm"), b = ST.chain.indexOf("tts");
+  const canNest = ST.nest && a >= 0 && b >= 0;
+  const lo = canNest ? Math.min(a, b) : -1, hi = canNest ? Math.max(a, b) : -2;
+
+  let outerCount = 0;
+  let body = "";
+  ST.chain.forEach(function(id, i){
+    if (canNest && i === lo){
+      body += line(1, "Pipeline([          ← 하위 pipeline (= 그냥 FrameProcessor 하나)", "op");
+      body += line(2, "Pipeline#1::Source", "lg");
+      for (let k = lo; k <= hi; k++) body += line(2, P[ST.chain[k]].v);
+      body += line(2, "Pipeline#1::Sink", "lg");
+      body += line(1, "]),", "op");
+      outerCount++;
+      return;
+    }
+    if (canNest && i > lo && i <= hi) return;
+    body += line(1, P[id].v + ",");
+    outerCount++;
+  });
+
+  const innerN = canNest ? (hi - lo + 1) + 2 : 0;
+  const outerN = outerCount + 2;
+  links = (outerN - 1) + (canNest ? (innerN - 1) : 0);
+
+  html += line(0, "Pipeline([", "op");
+  html += line(1, "Pipeline#0::Source", "lg");
+  html += body;
+  html += line(1, "Pipeline#0::Sink", "lg");
+  html += line(0, "])", "op");
+
+  if (ST.wrap){
+    html += "<div class='it on'>&nbsp;</div>";
+    html += line(0, "# worker.py:537", "lg");
+    html += line(0, "Pipeline([", "op");
+    html += line(1, "Pipeline#2::Source", "lg");
+    html += line(1, "_BusEdgeProcessor  (name=\"…::EdgeSource\")");
+    html += line(1, "↑ 위 Pipeline 전체가 여기 원소 하나로 들어간다");
+    html += line(1, "_BusEdgeProcessor  (name=\"…::EdgeSink\")");
+    html += line(1, "Pipeline#2::Sink", "lg");
+    html += line(0, "])", "op");
+    links += 4;
+  }
+  out.innerHTML = html;
+
+  const flatLinks = ST.chain.length + 1;
+  $("nestCount").innerHTML =
+    "<div class='chip2'><b>" + flatLinks + "</b>평평할 때 link()</div>" +
+    "<div class='chip2'><b>" + links + "</b>지금 link()</div>" +
+    "<div class='chip2 good'><b>0</b>추가 queue hop</div>" +
+    "<div class='chip2 good'><b>0</b>특수 케이스 코드</div>";
+}
+
+function renderStreams(){
+  const R = ST.run, B = ST.base;
+  const key = function(f){ return f.n + (f.text ? '  "' + f.text + '"' : ""); };
+  const a = B.sink.map(key);
+  const b = R.sink.map(key);
+  const d = lcsDiff(a, b);
+  const same = d.every(function(x){ return x.t === "="; });
+  const el = $("diffOut"); el.innerHTML = "";
+  if (same){
+    const h = document.createElement("div");
+    h.style.cssText = "color:#3fb950;font-weight:700;margin-bottom:6px;";
+    h.textContent = "▣ IDENTICAL — " + a.length + " frames, 완전히 동일한 stream";
+    el.appendChild(h);
+  }
+  d.forEach(function(x){
+    const div = document.createElement("div");
+    const cls = x.t === "+" ? "add" : (x.t === "-" ? "del" : "same");
+    div.className = cls;
+    const nm = x.v.split('  "')[0];
+    div.innerHTML = "<span class='t'>" + (x.t === "=" ? "·" : x.t) + "</span>" +
+      "<span class='fdot' style='background:" + (CATCOL[CAT[nm] || "Frame"]) + "'></span>" + esc(x.v);
+    el.appendChild(div);
+  });
+
+  const we = $("wireOut"); we.innerHTML = "";
+  if (R.wire.length === 0){
+    we.innerHTML = "<div class='del'>(비어 있음 — wire로 나간 audio가 없다)</div>";
+  } else {
+    R.wire.forEach(function(f){
+      const div = document.createElement("div");
+      div.innerHTML = "<span class='fdot' style='background:" + CATCOL[f.cat] + "'></span>" + esc(f.n);
+      we.appendChild(div);
+    });
+  }
+
+  const idx = ST.chain.indexOf("func");
+  const funcPred = idx >= 0 ? R.stat[idx].pred : 0;
+  const si = ST.chain.indexOf("sent");
+  const recast = si >= 0 ? R.stat[si].recast : 0;
+  $("algCount").innerHTML =
+    "<div class='chip2 " + (R.audio ? "good" : "zero") + "'><b>" + R.audio + "</b>TTSAudioRawFrame → wire</div>" +
+    "<div class='chip2 " + (R.endReached ? "good" : "zero") + "'><b>" + (R.endReached ? "OK" : "HANG") +
+      "</b>EndFrame이 sink 도달</div>" +
+    (idx >= 0 ? "<div class='chip2'><b>" + funcPred + "</b>predicate 호출(:83)</div>" : "") +
+    (si >= 0 ? "<div class='chip2'><b>" + recast + "</b>bare TextFrame 재생성(:56)</div>" : "");
+
+  let z = "";
+  const ni = ST.chain.indexOf("nullf");
+  if (ni >= 0){
+    const s = R.stat[ni];
+    z = "<b>NullFilter가 막은 frame: " + s.blocked + "개.</b> " +
+        (ST.trueZero
+          ? "지금은 <b>진짜 zero</b>다 — <span class='mono'>EndFrame</span>까지 삼켰고, " +
+            "그래서 transport가 종료를 배우지 못한다. crash가 아니라 <b>hang</b>이다. " +
+            "이게 <span class='mono'>null_filter.py:47-48</span>이 <span class='mono'>EndFrame</span>을 " +
+            "굳이 새게 두는 이유다."
+          : "<span class='mono'>SystemFrame</span>과 <span class='mono'>EndFrame</span>은 그대로 통과했다 " +
+            "— data plane은 절멸시키지만 control plane은 <b>투명하다</b>. " +
+            "pipecat의 합성 연산자는 <b>대수적으로 pipeline을 끊을 수 없다</b>. " +
+            "위 체크박스로 진짜 zero를 만들어 봐라.");
+  } else if (idx >= 0){
+    z = "<b>FunctionFilter predicate는 " + funcPred + "번 호출됐다</b> — " +
+        "그중 상당수는 <span class='mono'>:57-71</span>에서 이미 passthrough가 결정돼 " +
+        "<b>답이 버려지는</b> frame이다 (<span class='mono'>:83</span>은 무조건 실행된다). " +
+        "predicate에 side effect를 넣지 마라.";
+  } else {
+    z = "<span class='mono'>NullFilter()</span>나 <span class='mono'>FunctionFilter</span>를 끼워 넣으면 " +
+        "여기에 zero/조건 원소의 동작이 나온다.";
+  }
+  $("zeroOut").innerHTML = z;
+}
+
+function renderVerdict(){
+  const R = ST.run;
+  const el = $("verdictBox");
+  let cls = "verdict", txt = "";
+  if (R.audio > 0 && R.endReached){
+    cls += " ok";
+    txt = "<b>🔊 봇이 말한다.</b> wire로 <span class='mono'>TTSAudioRawFrame</span> " + R.audio +
+          "개가 나갔고, <span class='mono'>EndFrame</span>도 sink에 도달했다 (정상 종료).";
+  } else if (R.audio === 0){
+    cls += " silent";
+    txt = "<b>🔇 침묵.</b> wire로 나간 audio 0개. " +
+          "그런데 <b>raise 0회, 경고 0회, link 실패 0회</b>다 — " +
+          "<span class='mono'>_link_processors</span>는 이 배치를 기꺼이 받아들였고, " +
+          "<span class='mono'>PipelineWorker</span>도 정상적으로 시작했다. " +
+          "전화는 연결됐고 아무도 말하지 않는다.";
+  } else {
+    cls += " silent";
+    txt = "<b>⛔ 종료 hang.</b> audio는 나갔지만 <span class='mono'>EndFrame</span>이 sink에 도달하지 못했다 — " +
+          "transport가 종료를 배우지 못한다. crash 대신 hang.";
+  }
+  el.className = cls;
+  el.innerHTML = txt;
+}
+
+function renderFlowNote(){
+  const R = ST.run;
+  const starved = [];
+  ST.chain.forEach(function(id, i){
+    if (P[id].demand && R.stat[i].demand === 0) starved.push(P[id].v + " (필요: " + P[id].demand + ")");
+  });
+  let s = "";
+  if (starved.length){
+    s = "<b>굶은 processor:</b> <span class='mono'>" + esc(starved.join(", ")) + "</span>. " +
+        "전부 정상 setup됐고, 전부 frame을 받았고, 전부 자기가 모르는 frame을 성실히 통과시켰다. " +
+        "단지 <b>자기가 먹고 사는 frame이 앞에서 만들어지지 않았을 뿐</b>이다. " +
+        "이건 processor 버그가 아니라 <b>position 문제</b>다 — 그리고 type system에는 이걸 적어 둘 자리가 없다.";
+  } else {
+    s = "모든 processor가 자기 입력 frame을 최소 1개 이상 받았다. " +
+        "이건 <b>배치가 옳다는 증명이 아니라</b>, upstream supply 체크(§9-4)를 통과했다는 뜻일 뿐이다.";
+  }
+  const q = ST.chain.indexOf("rule");
+  if (q >= 0 && ST.forgotSuper){
+    s += "<br><br><span style='color:#f85149'><b>super() 생략 중:</b> " +
+         "<span class='mono'>korean_honorific_rule</span> 아래 edge를 봐라 — " +
+         "<span class='mono'>SystemFrame</span>만 건너간다. " +
+         "<span class='mono'>DataFrame</span>/<span class='mono'>ControlFrame</span>은 " +
+         "<span class='mono'>__process_queue</span>에 쌓여 영원히 나오지 않는다.</span>";
+  }
+  $("flowNote").innerHTML = s;
+}
+
+function renderQueueNote(){
+  const R = ST.run;
+  const ri = ST.chain.indexOf("rule");
+  let s = "";
+  if (ri < 0){
+    s = "<span class='mono'>korean_honorific_rule</span>을 pipeline에 넣고 위의 " +
+        "<b>super() 생략</b>을 켜라. ⚠ preset <b>super() 빼먹기</b>가 한 번에 해 준다.";
+  } else if (!ST.forgotSuper){
+    s = "지금은 <span class='mono'>await super().process_frame(frame, direction)</span>가 첫 줄에 있다 → " +
+        "<span class='mono'>StartFrame</span>이 <span class='mono'>__start()</span>(:1091)에 닿고 → " +
+        "<span class='mono'>__create_process_task()</span>(:1097)가 task를 만든다 → queue가 비워진다.";
+  } else {
+    const st = R.stat[ri];
+    s = "<b>" + st.queued + "개 frame이 갇혔다.</b> " +
+        "<span class='mono'>StartFrame</span>은 <span class='mono'>SystemFrame</span>이라 " +
+        "input task(:728에서 생성)가 직접 처리하고, 네 override도 실행된다 — " +
+        "하지만 <span class='mono'>__start()</span>는 <b>영원히 호출되지 않는다</b>. " +
+        "그래서 <span class='mono'>__process_frame_task</span>는 <span class='mono'>None</span>인 채로 남고, " +
+        "비-system frame은 전부 <span class='mono'>__process_queue</span>로 들어가 아무도 꺼내지 않는다. " +
+        (st.ateEnd ? "<span class='mono'>EndFrame</span>도 그 안에 있다 → 종료도 안 된다. " : "") +
+        "<b>예외도, 경고도, 로그 한 줄도 없다.</b>";
+  }
+  $("queueOut").innerHTML = s;
+}
+
+function renderCheck(){
+  const R = ST.run;
+  const items = [];
+  const ri = ST.chain.indexOf("rule");
+  const si = ST.chain.indexOf("sent");
+
+  /* 1. lifecycle */
+  const lifeBad = (ri >= 0 && ST.forgotSuper);
+  items.push({ok:!lifeBad, kind:"proc", t:"1. Lifecycle",
+    d: lifeBad
+      ? "<span class='mono'>korean_honorific_rule.process_frame</span>이 " +
+        "<span class='mono'>FrameProcessor.process_frame</span>에 도달하지 않는다 → " +
+        "<span class='mono'>__start</span>(:1091) 미실행 → <span class='mono'>__create_process_task()</span>(:1097) 미호출. " +
+        "silent black hole."
+      : "모든 override가 <span class='mono'>FrameProcessor.process_frame</span>을 정확히 한 번, 가장 먼저 실행한다 " +
+        "(<span class='mono'>super()</span> 또는 <span class='mono'>voicemail_detector.py:170</span>의 unbound 형태)."});
+
+  /* 2. transparency */
+  const transBad = si >= 0;
+  items.push({ok:!transBad, kind:"proc", t:"2. Transparency",
+    d: transBad
+      ? "<span class='mono'>SentenceAggregator</span>가 있다. " +
+        "(a) <span class='mono'>:50-51</span>은 <span class='mono'>InterimTranscriptionFrame</span>을 bare " +
+        "<span class='mono'>return</span>으로 삼킨다 — 이번 run에서 " + R.stat[si].swallowed + "개. " +
+        "(b) <span class='mono'>:56</span>은 <b>맨 <span class='mono'>TextFrame</span>을 새로 만든다</b> → " +
+        "<span class='mono'>LLMTextFrame</span>/<span class='mono'>TranscriptionFrame</span>의 subclass 정체성과 " +
+        "<span class='mono'>user_id</span>/<span class='mono'>timestamp</span>가 사라진다 (" + R.stat[si].recast + "회). " +
+        "의도된 동작이지만 <b>splice site에는 그 사실이 적혀 있지 않다</b>."
+      : "각 processor가 모르는 frame을 <b>온 방향 그대로</b> 다시 민다 " +
+        "(기준 구현: <span class='mono'>identity_filter.py:44-45</span>)."});
+
+  /* 3. base class identity */
+  items.push({ok:true, kind:"ok", t:"3. Base class 정체성",
+    d:"이 bench의 원소는 전부 <span class='mono'>FrameProcessor</span> 하위다. " +
+      "실전에서는 여기서 틀린다 — repo에는 이름만 같은 <span class='mono'>process_frame</span>이 " +
+      "<b>30개</b>, <b>7개</b>의 무관한 hierarchy에 있다 " +
+      "(<span class='mono'>BaseAudioFilter</span>, <span class='mono'>VADController</span>, " +
+      "<span class='mono'>BaseUserTurnStartStrategy</span>…). 어느 것도 link되지 않고, 일부는 <b>값을 return</b>한다."});
+
+  /* 4. upstream supply */
+  const starved = [];
+  ST.chain.forEach(function(id, i){
+    if (P[id].demand && R.stat[i].demand === 0) starved.push(P[id]);
+  });
+  items.push({ok:starved.length === 0, kind:"pos", t:"4. Upstream supply",
+    d: starved.length
+      ? "position N 앞에서 아무도 만들어 주지 않는 frame을 기다리는 processor: " +
+        starved.map(function(p){ return "<span class='mono'>" + esc(p.v) + "</span>(" + esc(p.demand) + ")"; }).join(", ") +
+        ". processor는 멀쩡하다. <b>자리가 틀렸다.</b>"
+      : "각 processor가 소비하는 frame이 실제로 앞쪽에서 생산됐다."});
+
+  /* 5. downstream demand */
+  const dsOk = R.audio > 0 && R.endReached;
+  let dsMsg;
+  if (dsOk){
+    dsMsg = "뒤쪽이 필요로 하는 것이 모두 도착했다 — audio " + R.audio + "개가 wire로 나갔고 " +
+            "<span class='mono'>EndFrame</span>이 sink까지 갔다.";
+  } else if (R.audio === 0 && starved.length){
+    dsMsg = "wire audio 0개. 원인은 4번과 같다 — 앞이 공급하지 않아 뒤가 굶었다. <b>position 문제.</b>";
+  } else if (R.audio === 0){
+    dsMsg = "wire audio 0개. 앞에서는 다 만들어졌는데 중간의 filter가 삼켰다 — " +
+            "<b>splice-out과 같은 종류의 사고</b>다 (§8 따름정리 1). " +
+            "의도한 것이라면 설정이고, 아니라면 그 filter의 자리가 틀렸다.";
+  } else {
+    dsMsg = "audio는 나갔지만 <span class='mono'>EndFrame</span>이 삼켜졌다 → 세션이 종료되지 않는다.";
+  }
+  items.push({ok:dsOk, kind:"pos", t:"5. Downstream demand", d:dsMsg});
+
+  const el = $("checkOut"); el.innerHTML = "";
+  items.forEach(function(it){
+    const s = document.createElement("div");
+    s.className = "s";
+    s.textContent = it.ok ? "✔" : "✘";
+    s.style.color = it.ok ? "#3fb950" : "#f85149";
+    const b = document.createElement("div");
+    b.className = "body";
+    const tag = it.ok ? "<span class='tag ok'>pass</span>"
+                      : (it.kind === "proc" ? "<span class='tag proc'>processor bug</span>"
+                                            : "<span class='tag pos'>wrong position</span>");
+    b.innerHTML = "<b>" + it.t + tag + "</b><span>" + it.d + "</span>";
+    el.appendChild(s); el.appendChild(b);
+  });
+}
+
+/* ==================================================================
+   7. 애니메이션
+   ================================================================== */
+function stopPlay(){
+  if (ST.play !== null){ clearInterval(ST.play); ST.play = null; }
+  const b = $("bPlay"); if (b) b.textContent = "▶▶ 애니메이션";
+}
+function togglePlay(){
+  if (ST.play !== null){ stopPlay(); drawFlow(); return; }
+  ST.playIdx = 0;
+  $("bPlay").textContent = "■ 정지";
+  ST.play = setInterval(function(){
+    if (!ST.run || ST.playIdx >= ST.run.log.length){ stopPlay(); drawFlow(); return; }
+    drawFlow();
+    ST.playIdx++;
+  }, 180);
+}
+
+/* ==================================================================
+   8. refresh
+   ================================================================== */
+function refresh(){
+  ST.base = runChain(CANON.slice());
+  ST.run = runChain(ST.chain.slice());
+  renderPresets();
+  renderPalette();
+  renderChain();
+  renderCode();
+  renderFold();
+  renderNest();
+  renderStreams();
+  renderVerdict();
+  renderFlowNote();
+  renderQueueNote();
+  renderCheck();
+  drawFlow();
+  drawQueue();
+}
+
+/* 이벤트 바인딩 */
+$("optSuper").onchange = function(){ ST.forgotSuper = this.checked; ST.preset = ""; stopPlay(); refresh(); };
+$("optZero").onchange  = function(){ ST.trueZero = this.checked; ST.preset = ""; stopPlay(); refresh(); };
+$("optMute").onchange  = function(){ ST.mute = this.checked; ST.preset = ""; stopPlay(); refresh(); };
+$("optNest").onchange  = function(){ ST.nest = this.checked; refresh(); };
+$("optWrap").onchange  = function(){ ST.wrap = this.checked; refresh(); };
+$("bRun").onclick      = function(){ stopPlay(); refresh(); };
+$("bPlay").onclick     = function(){ togglePlay(); };
+$("bFoldStep").onclick = function(){ ST.foldStep = Math.min(ST.foldStep + 1, ST.chain.length + 1); renderFold(); };
+$("bFoldAll").onclick  = function(){ ST.foldStep = ST.chain.length + 1; renderFold(); };
+$("bFoldReset").onclick= function(){ ST.foldStep = 0; renderFold(); };
+
+let rz = null;
+window.addEventListener("resize", function(){
+  if (rz) clearTimeout(rz);
+  rz = setTimeout(function(){ drawFlow(); drawQueue(); }, 120);
+});
+
+refresh();
+</script>
+</body>
+</html>

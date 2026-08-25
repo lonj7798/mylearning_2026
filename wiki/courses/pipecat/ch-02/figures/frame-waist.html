@@ -1,0 +1,1260 @@
+<!--
+  Figure: frame-waist.html — "The Narrow Waist: Frame 하나가 지불하는 값"
+  Chapter: pipecat ch-02 (phase: composition)
+  Back to: ../read.md  (§1 count the top/bottom/middle, §4-6 the split, §7 the AST walk,
+                        §8 Wadler's bill, §12 the three-way test)
+
+  Fully self-contained: inline CSS + vanilla JS. No CDN, no fetch, no external fonts.
+  Opens correctly from file://.
+
+  Every number and identifier here was re-measured on the clone at
+  wiki/raw-data/pipecat/pipecat-src, commit 0cbf9c5b031eef06e53f0a193b9a67d60230e6be:
+    ls -d src/pipecat/services/*/ | wc -l                       -> 62
+    ls src/pipecat/services/*.py | wc -l                        -> 11
+    ls -d src/pipecat/transports/*/ | wc -l                     -> 11
+    7 concrete FrameSerializer subclasses in src/pipecat/serializers/
+    AST walk over frames.py: 129 top-level ClassDefs, 123 Frame-descendants (incl Frame),
+      119 concrete, branch split 46/33/40, LLMContextFrame in no branch,
+      InputTextRawFrame in two
+    repo-wide AST walk: 150 concrete, 31 outside frames.py
+    grep -rn "isinstance(frame, " src/pipecat/ | wc -l          -> 577 (136 files)
+    isinstance(frame, SystemFrame) 10 / DataFrame 0 / ControlFrame 0
+  The 12 matrix columns are real processors; each column's "explicit" cells were computed
+  by walking that class's own process_frame() AST for isinstance(frame, ...) targets and
+  matching against each frame's transitive base-name closure. The per-column default
+  (forward / drop / conditional) was read off the tail of the same method.
+-->
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Frame이라는 좁은 허리 — 모래시계와 그 청구서 (pipecat ch-02)</title>
+<style>
+  /* --- 반응형 타이포 스케일 --------------------------------------------
+     모든 크기는 rem 기준(1rem = 14px 기본). tablet은 뷰포트가 좁은데 DPI가
+     높고 가까이서 보므로 root를 키운다. -------------------------------- */
+  html{font-size:14px;}
+  @media (pointer:coarse){ html{font-size:17px;} }
+  @media (min-width:1500px){ html{font-size:15.5px;} }
+
+  :root{
+    --bg:#0e1117; --panel:#161b22; --panel2:#1c2230; --edge:#2b3242;
+    --ink:#e6edf3; --ink-dim:#9aa7b4; --ink-faint:#6b7686;
+    --accent:#58a6ff; --accent2:#3fb950; --danger:#f85149; --warn:#d29922;
+    --c-sys:#f778ba;    /* SystemFrame  */
+    --c-data:#58a6ff;   /* DataFrame    */
+    --c-ctrl:#3fb950;   /* ControlFrame */
+    --c-none:#d29922;   /* no branch    */
+    --c-svc:#58a6ff;    /* services (top of the glass)     */
+    --c-tp:#3fb950;     /* transports (bottom)             */
+    --c-ser:#bc8cff;    /* serializers (bottom)            */
+  }
+  *{box-sizing:border-box;}
+  html,body{margin:0;padding:0;}
+  body{
+    background:var(--bg); color:var(--ink);
+    font:1rem/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Apple SD Gothic Neo",
+         "Noto Sans KR",Helvetica,Arial,sans-serif;
+    padding:22px; max-width:86rem; margin:0 auto;
+  }
+  h1{font-size:1.5rem; margin:0 0 3px; letter-spacing:.2px;}
+  .sub{color:var(--ink-dim); font-size:0.9286rem; margin:0 0 20px;}
+  .sub code{color:var(--accent);}
+  .panel{background:var(--panel); border:1px solid var(--edge); border-radius:10px;
+    padding:16px; margin-bottom:18px;}
+  .panel h2{font-size:0.8571rem; text-transform:uppercase; letter-spacing:.9px; color:var(--ink-dim);
+    margin:0 0 14px; font-weight:600;}
+  .mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+    font-variant-numeric:tabular-nums;}
+  code{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:0.9em;}
+
+  /* ---------- buttons / tabs ---------- */
+  .tabs{display:flex; gap:6px; flex-wrap:wrap; margin-bottom:12px;}
+  .tab{background:var(--panel2); border:1px solid var(--edge); color:var(--ink-dim);
+    border-radius:8px; padding:8px 11px; cursor:pointer; text-align:left; font-size:0.8571rem;
+    transition:.13s; line-height:1.35;}
+  .tab:hover{border-color:var(--ink-faint); color:var(--ink);}
+  .tab.on{background:#1d2b3f; border-color:var(--accent); color:var(--ink);}
+  .tab .cnt{font-family:ui-monospace,monospace; color:var(--ink-faint); margin-left:6px;}
+  .tab.on .cnt{color:var(--accent);}
+  .rb{background:var(--panel2); border:1px solid var(--edge); color:var(--ink);
+    border-radius:7px; padding:9px 13px; cursor:pointer; font-size:0.8929rem; font-weight:600;
+    transition:.13s; font-family:inherit;}
+  .rb:hover{border-color:var(--accent);}
+  .rb.primary{background:#1d3a5f; border-color:var(--accent); color:#cfe6ff;}
+  .rb.warnb{background:#3a2a12; border-color:var(--warn); color:#f2d9a0;}
+  .rb.on{background:#1d3a5f; border-color:var(--accent); color:#cfe6ff;}
+  .rb[disabled]{opacity:.4; cursor:default;}
+  .runbar{display:flex; gap:8px; flex-wrap:wrap; margin:12px 0 0;}
+
+  /* ---------- canvas ---------- */
+  /* height는 JS의 CANVAS_H_* 상수와 반드시 같은 px 값 — 레이아웃 점프 방지 */
+  canvas{width:100%; display:block; border-radius:8px; background:#10151d;
+    border:1px solid var(--edge); cursor:pointer;}
+  #cvGlass{height:430px;}
+  #cvMat{height:520px;}
+  .legend{display:flex; gap:15px; font-size:0.8214rem; color:var(--ink-dim); margin-top:9px;
+    flex-wrap:wrap;}
+  .legend i{display:inline-block; width:16px; height:9px; border-radius:2px;
+    vertical-align:middle; margin-right:6px;}
+
+  /* ---------- detail boxes ---------- */
+  .detail{background:#10151d; border:1px solid var(--edge); border-radius:8px; padding:14px;
+    margin-top:14px; font-size:0.9286rem; line-height:1.75;}
+  .detail h3{margin:0 0 8px; font-size:0.9643rem; color:var(--ink);}
+  .detail .names{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+    font-size:0.8214rem; color:var(--ink-dim); line-height:2.05; word-break:break-word;}
+  .detail .names b{color:var(--ink); font-weight:600;}
+  .nm{display:inline-block; border:1px solid var(--edge); border-radius:5px;
+    padding:1px 6px; margin:0 4px 4px 0; background:var(--panel2);}
+  .nm.hl{border-color:var(--accent); color:var(--ink);}
+  .doc{border-left:3px solid var(--edge); padding:2px 0 2px 12px; margin:8px 0;
+    color:var(--ink-dim); font-style:italic; font-size:0.8929rem;}
+  .doc.sys{border-left-color:var(--c-sys);}
+  .doc.data{border-left-color:var(--c-data);}
+  .doc.ctrl{border-left-color:var(--c-ctrl);}
+  .kv{display:grid; grid-template-columns:auto 1fr; gap:4px 12px; font-size:0.8571rem;
+    margin-top:10px;}
+  .kv .k{color:var(--ink-faint); white-space:nowrap;}
+
+  pre{background:#10151d; border:1px solid var(--edge); border-radius:8px; padding:13px;
+    overflow-x:auto; font-size:0.8571rem; line-height:1.7; margin:10px 0 0;
+    font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;}
+  pre .cm{color:var(--ink-faint);}
+  pre .kw{color:#bc8cff;}
+  pre .st{color:var(--accent2);}
+  pre .hi{color:var(--warn); font-weight:700;}
+  pre .bad{color:var(--danger); font-weight:700;}
+
+  .callout{border-left:3px solid var(--warn); background:rgba(210,153,34,.07);
+    padding:11px 14px; border-radius:0 7px 7px 0; font-size:0.9286rem; color:var(--ink-dim);
+    margin-top:14px;}
+  .callout b{color:var(--ink);}
+  .callout.ok{border-left-color:var(--accent2); background:rgba(63,185,80,.07);}
+  .callout.bad{border-left-color:var(--danger); background:rgba(248,81,73,.07);}
+
+  /* ---------- AST chain ---------- */
+  .chain{display:flex; align-items:stretch; gap:0; flex-wrap:wrap;}
+  .cnode{flex:1 1 150px; background:var(--panel2); border:1px solid var(--edge);
+    border-radius:8px; padding:11px 12px; margin:0 6px 8px 0; cursor:pointer; transition:.13s;}
+  .cnode:hover{border-color:var(--ink-faint);}
+  .cnode.on{border-color:var(--accent); background:#1d2b3f;}
+  .cnode .big{font-size:1.5714rem; font-weight:700; font-family:ui-monospace,monospace;
+    color:var(--ink); line-height:1.2;}
+  .cnode.on .big{color:var(--accent);}
+  .cnode .lbl{font-size:0.75rem; text-transform:uppercase; letter-spacing:.6px;
+    color:var(--ink-faint); margin-top:3px;}
+  .cnode .op{font-size:0.7857rem; color:var(--ink-faint); font-family:ui-monospace,monospace;}
+
+  table{width:100%; border-collapse:collapse; font-size:0.8214rem; margin-top:10px;}
+  th,td{padding:5px 8px; text-align:left; border-bottom:1px solid var(--edge);
+    vertical-align:top;}
+  th{color:var(--ink-faint); font-weight:600; font-size:0.75rem; text-transform:uppercase;
+    letter-spacing:.5px;}
+  td.n{font-family:ui-monospace,monospace; color:var(--ink); white-space:nowrap;}
+  td.l{font-family:ui-monospace,monospace; color:var(--ink-faint); text-align:right;}
+  .scroll{max-width:100%; overflow-x:auto;}
+
+  /* ---------- matrix stats ---------- */
+  .stats{display:flex; gap:8px; flex-wrap:wrap; margin-top:12px;}
+  .stat{border:1px solid var(--edge); border-radius:7px; padding:8px 12px; background:var(--panel2);
+    min-width:120px; flex:0 1 auto;}
+  .stat .sv{font-size:1.2857rem; font-weight:700; font-family:ui-monospace,monospace;
+    color:var(--ink); line-height:1.25;}
+  .stat .sk{font-size:0.7143rem; text-transform:uppercase; letter-spacing:.6px;
+    color:var(--ink-faint);}
+  .stat.good .sv{color:var(--accent2);} .stat.good{border-color:var(--accent2);}
+  .stat.bad .sv{color:var(--danger);}   .stat.bad{border-color:var(--danger);}
+  .stat.warn .sv{color:var(--warn);}    .stat.warn{border-color:var(--warn);}
+
+  .tip{position:fixed; pointer-events:none; z-index:50; display:none;
+    background:#0b0f15; border:1px solid var(--accent); border-radius:7px; padding:7px 10px;
+    font-size:0.7857rem; line-height:1.55; color:var(--ink); max-width:22rem;
+    font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+    box-shadow:0 6px 22px rgba(0,0,0,.55);}
+  .tip .d{color:var(--ink-faint);}
+
+  /* ---------- sorter ---------- */
+  .sortwrap{display:grid; grid-template-columns:minmax(0,1fr) minmax(0,1.35fr); gap:18px;
+    align-items:start;}
+  @media (max-width:980px){ .sortwrap{grid-template-columns:1fr;} }
+  .chips{display:flex; gap:7px; flex-wrap:wrap;}
+  .chip{background:var(--panel2); border:1px solid var(--edge); color:var(--ink-dim);
+    border-radius:7px; padding:7px 10px; cursor:pointer; font-size:0.8214rem; transition:.13s;
+    line-height:1.4; text-align:left;}
+  .chip:hover{border-color:var(--ink-faint); color:var(--ink);}
+  .chip.on{border-color:var(--accent); background:#1d2b3f; color:var(--ink);}
+  .chip.done{opacity:.3; cursor:default; text-decoration:line-through;}
+  .chip code{color:var(--accent);}
+  .bins{display:grid; grid-template-columns:1fr; gap:10px;}
+  .bin{border:1px dashed var(--edge); border-radius:8px; padding:10px 12px; background:#10151d;
+    min-height:66px; transition:.13s;}
+  .bin.arm{border-color:var(--accent); border-style:solid; cursor:pointer;}
+  .bin.arm:hover{background:#141b26;}
+  .bin .bh{font-size:0.8214rem; font-weight:700; color:var(--ink); margin-bottom:2px;}
+  .bin .bs{font-size:0.75rem; color:var(--ink-faint); margin-bottom:7px;}
+  .bin .items{display:flex; gap:5px; flex-wrap:wrap;}
+  .it{font-size:0.75rem; border-radius:5px; padding:3px 7px; animation:pop .4s ease-out;
+    border:1px solid var(--edge); background:var(--panel2);}
+  .it.ok{border-color:var(--accent2); color:#9ae6a8;}
+  .it.no{border-color:var(--danger); color:#ffb3ae;}
+  @keyframes pop{0%{transform:translateY(-8px) scale(.9); opacity:0;}100%{transform:none; opacity:1;}}
+  .bin.b1{border-left:3px solid var(--warn);}
+  .bin.b2{border-left:3px solid var(--accent2);}
+  .bin.b3{border-left:3px solid var(--c-sys);}
+  .budget{display:flex; align-items:baseline; gap:10px; margin-top:10px; padding:9px 12px;
+    border:1px solid var(--edge); border-radius:8px; background:var(--panel2); flex-wrap:wrap;}
+  .budget .bv{font-size:1.4286rem; font-weight:700; font-family:ui-monospace,monospace;
+    color:var(--accent2);}
+  .budget.over{border-color:var(--danger); background:rgba(248,81,73,.08);}
+  .budget.over .bv{color:var(--danger);}
+  .budget .bn{font-size:0.8214rem; color:var(--ink-dim); flex:1; min-width:180px;}
+
+  .foot{color:var(--ink-faint); font-size:0.8214rem; margin-top:26px; line-height:1.85;}
+  .foot a{color:var(--accent); text-decoration:none;}
+  .foot code{color:var(--ink-dim);}
+</style>
+</head>
+<body>
+
+<h1>Frame이라는 좁은 허리 — 모래시계와 그 청구서</h1>
+<p class="sub">
+  pipecat <b>ch-02</b> companion · 위에 62개 service, 아래에 11개 transport + 7개 serializer,
+  가운데는 <code>Frame</code> 하나. 모든 수치는 commit
+  <code>0cbf9c5</code>에서 다시 측정한 값이다.
+</p>
+
+<!-- ============================ 1. HOURGLASS ============================ -->
+<div class="panel">
+  <h2>1 · 모래시계 — 세어서 확인하기 (read.md §1, §4–6)</h2>
+  <div class="tabs" id="zoneTabs"></div>
+  <canvas id="cvGlass"></canvas>
+  <div class="legend">
+    <span><i style="background:#58a6ff"></i>service directory (62)</span>
+    <span><i style="background:#3fb950"></i>transport package (11)</span>
+    <span><i style="background:#bc8cff"></i>FrameSerializer (7)</span>
+    <span><i style="background:#d29922"></i>waist / no branch</span>
+    <span style="color:#6b7686">캔버스의 박스를 직접 눌러도 된다</span>
+  </div>
+  <div class="runbar">
+    <button class="rb" id="btnDispatch">runtime dispatch overlay: OFF</button>
+  </div>
+  <div class="detail" id="zoneDetail"></div>
+</div>
+
+<!-- ============================ 2. AST WALK ============================ -->
+<div class="panel">
+  <h2>2 · 119는 어떻게 나오는가 — AST walk (read.md §7)</h2>
+  <div class="chain" id="astChain"></div>
+  <div class="detail" id="astNote"></div>
+  <div class="runbar">
+    <button class="rb" id="btnNaive">naive walk의 함정 보기</button>
+    <button class="rb" id="btnRepo">repo-wide로 확장 (+31)</button>
+  </div>
+  <div id="naiveBox"></div>
+  <div id="repoBox"></div>
+</div>
+
+<!-- ============================ 3. WADLER MATRIX ============================ -->
+<div class="panel">
+  <h2>3 · Wadler의 행렬 — column은 싸고 row는 비싸다 (read.md §8)</h2>
+  <p style="margin:0 0 12px; color:#9aa7b4; font-size:0.9286rem;">
+    행 = <b>119개 concrete frame</b> (frames.py, 줄번호 순 · branch별로 묶음).
+    열 = <b>실제 processor 12개</b>. 각 칸은 그 processor의
+    <code>process_frame()</code>이 그 frame을 <b>이름으로 분기하는지</b>,
+    아니면 <b>기본 경로</b>로 흘려보내는지(또는 흘려보내지 않는지)를 실제 AST에서 계산한 것이다.
+  </p>
+  <canvas id="cvMat"></canvas>
+  <div class="legend">
+    <span><i style="background:#58a6ff"></i>explicit — 이 frame을 이름으로 분기한다</span>
+    <span><i style="background:#264a33"></i>forward — 기본 <code>else</code>가 forward</span>
+    <span><i style="background:#f85149"></i>drop — 매칭도 없고 기본 forward도 없다</span>
+    <span><i style="background:#d29922"></i>conditional — 사용자 predicate에 달림</span>
+    <span style="color:#6b7686">S 블록과 D 블록이 겹치는 1줄 = <code>InputTextRawFrame</code>(1481), 두 branch에 동시 소속 ·
+      맨 아래 1줄 = <code>LLMContextFrame</code>(551), 어느 branch에도 없음 · 칸에 커서를 올리면 근거가 뜬다</span>
+  </div>
+  <div class="runbar">
+    <button class="rb primary" id="btnAddCol">＋ column 추가 (processor)</button>
+    <button class="rb warnb" id="btnAddRow">＋ row 추가 (frame)</button>
+    <button class="rb" id="btnMatReset">↺ 리셋</button>
+  </div>
+  <div class="stats" id="matStats"></div>
+  <div id="matCode"></div>
+</div>
+
+<!-- ============================ 4. THREE-WAY TEST ============================ -->
+<div class="panel">
+  <h2>4 · 3-way test — boson 개념을 직접 분류해봐 (read.md §12)</h2>
+  <p style="margin:0 0 12px; color:#9aa7b4; font-size:0.9286rem;">
+    개념을 하나 고르고, 세 통 중 하나를 눌러 넣어라. 정답은 <code>flows/</code>가
+    실제로 한 선택과 read.md §12의 표에서 온다. <b>NEW 통의 예산은 2–4개</b>다.
+  </p>
+  <div class="sortwrap">
+    <div>
+      <div class="chips" id="chips"></div>
+      <div class="detail" id="sortFeed" style="min-height:5.6rem;"></div>
+    </div>
+    <div>
+      <div class="bins">
+        <div class="bin b1" id="binState">
+          <div class="bh">(a) STATE — frame이 아니다</div>
+          <div class="bs">plain manager object의 field.
+            <code>FlowManager._state: dict</code> / <code>_current_node: str</code>
+            (flows/manager.py:147–149)</div>
+          <div class="items"></div>
+        </div>
+        <div class="bin b2" id="binExisting">
+          <div class="bh">(b) EFFECT — 이미 있는 frame</div>
+          <div class="bs">frames.py에 이미 존재하는 클래스로 표현된다. 새 클래스 0개.</div>
+          <div class="items"></div>
+        </div>
+        <div class="bin b3" id="binNew">
+          <div class="bh">(c) NEW — <code>boson/frames.py</code>의 <code>ControlFrame</code></div>
+          <div class="bs">speech에 대해 순서가 있어야 하고, <b>consumer가 producer와 다른
+            processor</b>여야 한다. 두 조건 모두.</div>
+          <div class="items"></div>
+        </div>
+      </div>
+      <div class="budget" id="budget">
+        <span class="bv" id="budgetV">0 / 4</span>
+        <span class="bn" id="budgetN">NEW frame 예산.
+          <code>flows/</code>는 2개, <code>services/openclaw/</code>는 6개를 만들었다.</span>
+        <span class="mono" id="sortScore" style="color:#6b7686; font-size:0.8214rem;"></span>
+      </div>
+      <div class="runbar"><button class="rb" id="btnSortReset">↺ 리셋</button></div>
+    </div>
+  </div>
+</div>
+
+<div class="tip" id="tip"></div>
+
+<p class="foot">
+  ← 돌아가기: <a href="../read.md">ch-02 read.md</a> §1 / §7 / §8 / §12 ·
+  인접 figure: <a href="../../ch-01/figures/splice-algebra.html">ch-01 splice-algebra.html</a><br>
+  측정 대상: <code>pipecat-ai/pipecat @ 0cbf9c5b031eef06e53f0a193b9a67d60230e6be</code>
+  (<code>wiki/raw-data/pipecat/pipecat-src</code>) ·
+  근거 excerpt: <code>theory-narrow-waist</code>, <code>frame-taxonomy</code>,
+  <code>flows-actions</code>, <code>pipecat-design-philosophy</code><br>
+  문헌: CSTB/NRC <i>Realizing the Information Future</i> (1994) · Deering, ICNP '98 ·
+  Beck, <i>On the Hourglass Model</i>, CACM 62(7) 2019 · Akhshabi &amp; Dovrolis, SIGCOMM '11 ·
+  Wadler, <i>The Expression Problem</i>, 1998-11-12
+</p>
+
+<script>
+"use strict";
+const $ = id => document.getElementById(id);
+
+/* ==================================================================
+   실측 데이터 — 전부 clone에서 AST walk / grep으로 뽑은 값
+   ================================================================== */
+const SERVICES = ("anthropic assemblyai asyncai aws azure baseten bland camb cartesia cerebras "+
+"crusoe deepgram deepseek elevenlabs fal fireworks fish funasr gladia google gradium grok groq "+
+"heygen hume inception inworld keenable kokoro lmnt mem0 minimax mistral moondream moonshine "+
+"nebius neuphonic novita nvidia ollama openai openclaw openrouter perplexity piper pocket_tts "+
+"qwen resembleai rime sambanova sarvam simli smallest soniox speechify speechmatics tavus "+
+"together ultravox whisper xai xtts").split(" ");
+const SERVICE_MODULES = ("__init__.py ai_service.py image_service.py llm_service.py mcp_service.py "+
+"settings.py stt_latency.py stt_service.py tts_service.py vision_service.py websocket_service.py").split(" ");
+const TRANSPORTS = ("daily heygen lemonslice livekit local moq smallwebrtc tavus vonage websocket "+
+"whatsapp").split(" ");
+const SERIALIZERS = ["ExotelFrameSerializer","GenesysAudioHookSerializer","PlivoFrameSerializer",
+"ProtobufFrameSerializer","TelnyxFrameSerializer","TwilioFrameSerializer","VonageFrameSerializer"];
+
+/* frames.py의 119 concrete frame — [이름, 줄번호, branch]
+   branch: S=SystemFrame, D=DataFrame, C=ControlFrame, SD=둘 다, -=어느 branch도 아님
+   정렬: S 45개 → SD 1개 → D 32개 → C 40개 → '-' 1개  (합 119) */
+const FRAMES=[
+["StartFrame",924,"S"],
+["CancelFrame",999,"S"],
+["ErrorFrame",1016,"S"],
+["FatalErrorFrame",1086,"S"],
+["FrameProcessorPauseUrgentFrame",1106,"S"],
+["FrameProcessorResumeUrgentFrame",1122,"S"],
+["InterruptionFrame",1142,"S"],
+["UserStartedSpeakingFrame",1154,"S"],
+["UserStoppedSpeakingFrame",1165,"S"],
+["UserMuteStartedFrame",1176,"S"],
+["UserMuteStoppedFrame",1187,"S"],
+["UserSpeakingFrame",1198,"S"],
+["UserTurnInferenceCompletedFrame",1208,"S"],
+["VADUserStartedSpeakingFrame",1226,"S"],
+["VADUserStoppedSpeakingFrame",1241,"S"],
+["ProposedUserStartedSpeakingFrame",1256,"S"],
+["ProposedUserStoppedSpeakingFrame",1270,"S"],
+["BotStartedSpeakingFrame",1282,"S"],
+["BotStoppedSpeakingFrame",1293,"S"],
+["BotSpeakingFrame",1304,"S"],
+["MetricsFrame",1317,"S"],
+["FunctionCallsStartedFrame",1349,"S"],
+["FunctionCallCancelFrame",1363,"S"],
+["STTMuteFrame",1381,"S"],
+["InputTransportMessageFrame",1392,"S"],
+["OutputTransportMessageUrgentFrame",1406,"S"],
+["UserImageRequestFrame",1420,"S"],
+["InputAudioRawFrame",1449,"S"],
+["InputImageRawFrame",1467,"S"],
+["UserAudioRawFrame",1495,"S"],
+["UserImageRawFrame",1512,"S"],
+["InputDTMFFrame",1552,"S"],
+["OutputDTMFUrgentFrame",1566,"S"],
+["SpeechControlParamsFrame",1618,"S"],
+["ServiceMetadataFrame",1635,"S"],
+["STTMetadataFrame",1655,"S"],
+["LLMServiceMetadataFrame",1671,"S"],
+["WorkerSystemFrame",1720,"S"],
+["CancelWorkerFrame",1767,"S"],
+["InterruptionWorkerFrame",1785,"S"],
+["TaskSystemFrame",1820,"S"],
+["BotConnectedFrame",1961,"S"],
+["ClientConnectedFrame",1973,"S"],
+["FrameProcessorResumeFrame",2037,"S"],
+["UserIdleTimeoutUpdateFrame",2304,"S"],
+["InputTextRawFrame",1481,"SD"],
+["OutputAudioRawFrame",201,"D"],
+["OutputImageRawFrame",219,"D"],
+["TTSAudioRawFrame",241,"D"],
+["SpeechOutputAudioRawFrame",254,"D"],
+["URLImageRawFrame",266,"D"],
+["SpriteFrame",284,"D"],
+["TextFrame",303,"D"],
+["LLMTextFrame",343,"D"],
+["LLMMarkerFrame",353,"D"],
+["AggregatedTextFrame",387,"D"],
+["VisionTextFrame",410,"D"],
+["TTSTextFrame",417,"D"],
+["AggregatedTextProgressFrame",424,"D"],
+["TranscriptionFrame",450,"D"],
+["InterimTranscriptionFrame",476,"D"],
+["TranslationFrame",501,"D"],
+["LLMContextAssistantTimestampFrame",522,"D"],
+["LLMContextAssistantTurnFrame",533,"D"],
+["LLMThoughtTextFrame",593,"D"],
+["LLMRunFrame",634,"D"],
+["LLMMessagesAppendFrame",645,"D"],
+["LLMMessagesUpdateFrame",661,"D"],
+["LLMMessagesTransformFrame",677,"D"],
+["LLMSetToolsFrame",694,"D"],
+["LLMSetToolChoiceFrame",711,"D"],
+["LLMEnablePromptCachingFrame",722,"D"],
+["LLMConfigureOutputFrame",733,"D"],
+["FunctionCallResultFrame",770,"D"],
+["TTSSpeakFrame",795,"D"],
+["OutputTransportMessageFrame",829,"D"],
+["OutputDTMFFrame",855,"D"],
+["AssistantImageRawFrame",1535,"D"],
+["LLMThoughtStartFrame",565,"C"],
+["LLMThoughtEndFrame",617,"C"],
+["ServiceSwitcherRequestMetadataFrame",1683,"C"],
+["WorkerFrame",1704,"C"],
+["EndWorkerFrame",1735,"C"],
+["StopWorkerFrame",1754,"C"],
+["TaskFrame",1805,"C"],
+["EndFrame",1899,"C"],
+["StopFrame",1923,"C"],
+["PipelineFlushFrame",1939,"C"],
+["OutputTransportReadyFrame",1984,"C"],
+["InputTransportStartAudioStreamingFrame",1994,"C"],
+["HeartbeatFrame",2007,"C"],
+["FrameProcessorPauseFrame",2021,"C"],
+["LLMFullResponseStartFrame",2059,"C"],
+["LLMFullResponseEndFrame",2074,"C"],
+["LLMAssistantPushAggregationFrame",2085,"C"],
+["LLMSummarizeContextFrame",2095,"C"],
+["LLMContextSummaryRequestFrame",2111,"C"],
+["LLMContextSummaryResultFrame",2142,"C"],
+["FunctionCallInProgressFrame",2164,"C"],
+["VisionFullResponseStartFrame",2191,"C"],
+["VisionFullResponseEndFrame",2203,"C"],
+["TTSStartedFrame",2210,"C"],
+["TTSStoppedFrame",2231,"C"],
+["ServiceUpdateSettingsFrame",2251,"C"],
+["LLMUpdateSettingsFrame",2283,"C"],
+["TTSUpdateSettingsFrame",2290,"C"],
+["STTUpdateSettingsFrame",2297,"C"],
+["VADParamsUpdateFrame",2320,"C"],
+["FilterControlFrame",2334,"C"],
+["FilterUpdateSettingsFrame",2341,"C"],
+["FilterEnableFrame",2352,"C"],
+["AudioBufferStartRecordingFrame",2363,"C"],
+["AudioBufferStopRecordingFrame",2368,"C"],
+["MixerControlFrame",2373,"C"],
+["MixerUpdateSettingsFrame",2380,"C"],
+["MixerEnableFrame",2391,"C"],
+["ServiceSwitcherFrame",2402,"C"],
+["ManuallySwitchServiceFrame",2409,"C"],
+["LLMContextFrame",551,"-"]
+];
+
+/* 12개 실제 processor.
+   d = 이름으로 매칭되지 않은 frame의 기본 운명:
+       f = forward (terminal else가 push_frame), d = drop (기본 forward 없음),
+       c = conditional (사용자 predicate)
+   m = FRAMES와 같은 순서의 119글자 마스크. 'e'는 그 processor의 process_frame이
+       그 frame(또는 그 조상)을 isinstance로 직접 분기한다는 뜻. */
+const COLS=[
+{n:"FrameProcessor",p:"processors/frame_processor.py",l:820,d:"d",m:"eeddeeeddddddddddddddddddddddddddddddddddddedddddddddddddddddddddddddddddddddddddddddddddddeddddddddddddddddddddddddddd"},
+{n:"IdentityFilter",p:"processors/filters/identity_filter.py",l:37,d:"f",m:"fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"},
+{n:"NullFilter",p:"processors/filters/null_filter.py",l:38,d:"d",m:"eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeedddddddddddddddddddddddddddddddddddddddeddddddddddddddddddddddddddddddddd"},
+{n:"FrameFilter",p:"processors/filters/frame_filter.py",l:43,d:"d",m:"ddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"},
+{n:"FunctionFilter",p:"processors/filters/function_filter.py",l:73,d:"c",m:"eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeccccccccccccccccccccccccccccccccccccccceccccccccccccccccccccccccccccccccc"},
+{n:"BaseInputTransport",p:"transports/base_input.py",l:215,d:"f",m:"eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeefffffffffffffffffffffffffffffffffffffffeeffefffffffffffffffffffefffffffff"},
+{n:"STTService",p:"services/stt_service.py",l:465,d:"f",m:"ffffffefeffffeeffffffffefffefeffffffffffffffffefeefffffffffffffeffffffffffffffffffffffffffffffffffffffffffeffffffffffff"},
+{n:"LLMUserAggregator",p:"processors/aggregators/llm_response_universal.py",l:785,d:"f",m:"fefffffffffffffeefffffffffffffffffeeeffffffffffffffffffffffeeefffeeeeeeffffffffffffffefffffffffffffffffffffffffffffffff"},
+{n:"TTSService",p:"services/tts_service.py",l:747,d:"f",m:"eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeffffffeefeeefeeeffffffffffffeffffffffffeffffffeefffffeeffffefffffffffffff"},
+{n:"LLMAssistantAggregator",p:"processors/aggregators/llm_response_universal.py",l:1538,d:"f",m:"eeffffeeeffffffeeeeffeefffffffefffffeffffffffeffffffeeeeeefeeeffeeeeeeeffefffeeefffffeffffffeeefffeeeefffffffffffffffff"},
+{n:"AudioBufferProcessor",p:"processors/audio/audio_buffer_processor.py",l:261,d:"f",m:"eefffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffefffffffffffffffffffffffffeeffffff"},
+{n:"BaseOutputTransport",p:"transports/base_output.py",l:338,d:"f",m:"eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeefffffffffffffffffffffffffffffffffffffffefffffffffffffffffffffffffffffffff"}
+];
+
+const BRANCH_META = {
+  S:{name:"SystemFrame", line:105, count:46, color:"#f778ba", iso:10,
+     doc:"A frame that takes higher priority than other frames. System frames are handled in order and are not affected by user interruptions."},
+  D:{name:"DataFrame", line:116, count:33, color:"#58a6ff", iso:0,
+     doc:"A frame that is processed in order and usually contains data such as LLM context, text, audio or images. Data frames are cancelled by user interruptions."},
+  C:{name:"ControlFrame", line:128, count:40, color:"#3fb950", iso:0,
+     doc:"A frame that, similar to data frames, is processed in order and usually contains control information such as update settings or to end the pipeline after everything is flushed. Control frames are cancelled by user interruptions."},
+  N:{name:"no branch", line:551, count:1, color:"#d29922", iso:0,
+     doc:"class LLMContextFrame(Frame) — 어느 branch에도 속하지 않는다. FrameProcessorQueue.put()의 else로 떨어져 DEFAULT_PRIORITY=20을 받는다. 선언이 아니라 fallthrough."}
+};
+
+/* ==================================================================
+   CANVAS — 논리 높이는 반드시 상수에서만 읽는다.
+   cv.height / cv.getAttribute("height")를 되읽으면 직전 호출이 써 넣은
+   h*devicePixelRatio 값을 새 논리 높이로 삼아 redraw마다 캔버스가 배로 커진다.
+   ================================================================== */
+const CANVAS_H_GLASS = 430;
+const CANVAS_H_MAT   = 520;
+function setupCanvas(cv, H){
+  const r = window.devicePixelRatio || 1;
+  const w = Math.max(cv.clientWidth, 200), h = H;
+  if (cv.width !== Math.round(w*r) || cv.height !== Math.round(h*r)){
+    cv.width  = Math.round(w*r);
+    cv.height = Math.round(h*r);
+  }
+  cv.style.height = h + "px";
+  const c = cv.getContext("2d");
+  c.setTransform(r,0,0,r,0,0);
+  c.clearRect(0,0,w,h);
+  return {c, w, h};
+}
+function rrect(c,x,y,w,h,r){
+  c.beginPath();
+  c.moveTo(x+r,y); c.lineTo(x+w-r,y); c.quadraticCurveTo(x+w,y,x+w,y+r);
+  c.lineTo(x+w,y+h-r); c.quadraticCurveTo(x+w,y+h,x+w-r,y+h);
+  c.lineTo(x+r,y+h); c.quadraticCurveTo(x,y+h,x,y+h-r);
+  c.lineTo(x,y+r); c.quadraticCurveTo(x,y,x+r,y); c.closePath();
+}
+
+/* ==================================================================
+   PANEL 1 — 모래시계
+   ================================================================== */
+const ZONES = [
+  {id:"top",   label:"위 — service", cnt:"62"},
+  {id:"waist", label:"허리 — Frame", cnt:"1"},
+  {id:"S",     label:"SystemFrame",  cnt:"46"},
+  {id:"D",     label:"DataFrame",    cnt:"33"},
+  {id:"C",     label:"ControlFrame", cnt:"40"},
+  {id:"N",     label:"no branch",    cnt:"1"},
+  {id:"bot",   label:"아래 — transport / serializer", cnt:"11 + 7"}
+];
+let zone = "waist";
+let overlay = false;
+let glassHits = [];
+
+function buildZoneTabs(){
+  const box = $("zoneTabs"); box.innerHTML = "";
+  ZONES.forEach(z=>{
+    const b = document.createElement("button");
+    b.className = "tab" + (z.id===zone ? " on" : "");
+    b.innerHTML = z.label + '<span class="cnt">'+z.cnt+'</span>';
+    b.onclick = ()=>{ zone = z.id; buildZoneTabs(); drawGlass(); renderZoneDetail(); };
+    box.appendChild(b);
+  });
+}
+
+function drawGlass(){
+  const cv = $("cvGlass"); const {c,w,h} = setupCanvas(cv, CANVAS_H_GLASS);
+  glassHits = [];
+  const cx = w/2;
+  const yTick = 44, yTickH = 12, yFan1 = 60, yWaistT = 148, waistH = 54;
+  const yWaistB = yWaistT + waistH, yBranchT = 240, branchH = 60;
+  const yBranchB = yBranchT + branchH, yBotTick = 356;
+  const halfTop = Math.min(w*0.46, 470);
+  const waistW = Math.min(190, w*0.30);
+
+  c.font = "11px ui-monospace,SFMono-Regular,Menlo,monospace";
+
+  /* ---- 위: 62 service directory ---- */
+  c.fillStyle = zone==="top" ? "#e6edf3" : "#9aa7b4";
+  c.textAlign = "center";
+  c.fillText("62 service directories  ·  src/pipecat/services/*/", cx, 26);
+  for (let i=0;i<62;i++){
+    const x = cx - halfTop + (2*halfTop)*(i+0.5)/62;
+    c.strokeStyle = zone==="top" ? "#58a6ff" : "#2f5d8c";
+    c.lineWidth = 2;
+    c.beginPath(); c.moveTo(x, yTick); c.lineTo(x, yTick+yTickH); c.stroke();
+    const tx = cx - waistW/2 + waistW*(i+0.5)/62;
+    c.strokeStyle = zone==="top" ? "rgba(88,166,255,.45)" : "rgba(88,166,255,.16)";
+    c.lineWidth = 1;
+    c.beginPath(); c.moveTo(x, yFan1); c.lineTo(tx, yWaistT); c.stroke();
+  }
+  glassHits.push({id:"top", x:cx-halfTop-6, y:16, w:2*halfTop+12, h:yFan1-14});
+
+  /* ---- 허리: Frame ---- */
+  const wx = cx - waistW/2;
+  c.fillStyle = "#211a09";
+  rrect(c, wx, yWaistT, waistW, waistH, 8); c.fill();
+  c.strokeStyle = zone==="waist" ? "#f0c14b" : "#8a6a1c";
+  c.lineWidth = zone==="waist" ? 2.4 : 1.4; rrect(c, wx, yWaistT, waistW, waistH, 8); c.stroke();
+  c.fillStyle = "#f0c14b"; c.textAlign = "center";
+  c.font = "700 17px ui-monospace,SFMono-Regular,Menlo,monospace";
+  c.fillText("Frame", cx, yWaistT+25);
+  c.font = "10px ui-monospace,SFMono-Regular,Menlo,monospace";
+  c.fillStyle = "#9aa7b4";
+  c.fillText("frames.py:65 · payload 0", cx, yWaistT+42);
+  glassHits.push({id:"waist", x:wx, y:yWaistT, w:waistW, h:waistH});
+
+  /* ---- branch 4칸 ---- */
+  const gap = 10;
+  const rowW = Math.min(w-40, 720);
+  const unit = (rowW - 3*gap) / 3.55;
+  const bw = [unit, unit, unit, unit*0.55];
+  const keys = ["S","D","C","N"];
+  let bx = cx - rowW/2;
+  const boxes = [];
+  keys.forEach((k,i)=>{
+    boxes.push({k:k, x:bx, w:bw[i]});
+    bx += bw[i] + gap;
+  });
+  boxes.forEach(b=>{
+    const M = BRANCH_META[b.k];
+    const dim = overlay && M.iso === 0;
+    const sel = zone === b.k;
+    c.fillStyle = dim ? "#141821" : "#171d27";
+    rrect(c, b.x, yBranchT, b.w, branchH, 8); c.fill();
+    c.setLineDash(b.k==="N" ? [5,4] : []);
+    c.strokeStyle = sel ? M.color : (dim ? "#2b3242" : M.color+"88");
+    c.lineWidth = sel ? 2.4 : 1.3;
+    rrect(c, b.x, yBranchT, b.w, branchH, 8); c.stroke();
+    c.setLineDash([]);
+    const bcx = b.x + b.w/2;
+    c.textAlign = "center";
+    c.fillStyle = dim ? "#5a6270" : M.color;
+    c.font = "700 " + (b.w < 130 ? 10 : 12) + "px ui-monospace,SFMono-Regular,Menlo,monospace";
+    c.fillText(b.k==="N" ? "no branch" : M.name, bcx, yBranchT+20);
+    c.font = "700 15px ui-monospace,SFMono-Regular,Menlo,monospace";
+    c.fillStyle = dim ? "#5a6270" : "#e6edf3";
+    c.fillText(String(M.count), bcx, yBranchT+39);
+    c.font = "9.5px ui-monospace,SFMono-Regular,Menlo,monospace";
+    c.fillStyle = dim ? "#4c545f" : "#6b7686";
+    if (overlay){
+      c.fillStyle = M.iso ? "#f778ba" : "#f85149";
+      c.fillText("isinstance " + M.iso + "회", bcx, yBranchT+53);
+    } else {
+      c.fillText(b.k==="N" ? "frames.py:551" : "frames.py:"+M.line, bcx, yBranchT+53);
+    }
+    /* 허리 → branch 연결선 */
+    c.strokeStyle = b.k==="N" ? "#d2992288" : (dim ? "#2b3242" : M.color+"66");
+    c.lineWidth = b.k==="N" ? 1.2 : 1.6;
+    c.setLineDash(b.k==="N" ? [4,4] : []);
+    c.beginPath(); c.moveTo(cx, yWaistB); c.lineTo(bcx, yBranchT); c.stroke();
+    c.setLineDash([]);
+    glassHits.push({id:b.k, x:b.x, y:yBranchT, w:b.w, h:branchH});
+  });
+
+  /* overlay: priority 사다리 */
+  if (overlay){
+    c.textAlign = "left"; c.font = "10px ui-monospace,SFMono-Regular,Menlo,monospace";
+    c.fillStyle = "#9aa7b4";
+    c.fillText("FrameProcessorQueue.put()  frame_processor.py:316", 12, yWaistT-16);
+    c.fillStyle = "#f778ba"; c.fillText("START_PRIORITY   = 1   ← StartFrame", 12, yWaistT+2);
+    c.fillStyle = "#f778ba"; c.fillText("SYSTEM_PRIORITY  = 10  ← SystemFrame", 12, yWaistT+18);
+    c.fillStyle = "#6b7686"; c.fillText("DEFAULT_PRIORITY = 20  ← else (그 외 전부)", 12, yWaistT+34);
+  }
+
+  /* ---- 아래: transport + serializer ---- */
+  const halfBot = Math.min(w*0.42, 400);
+  const N = TRANSPORTS.length + SERIALIZERS.length;
+  for (let i=0;i<N;i++){
+    const x = cx - halfBot + (2*halfBot)*(i+0.5)/N;
+    const isTp = i < TRANSPORTS.length;
+    const col = isTp ? "#3fb950" : "#bc8cff";
+    c.strokeStyle = zone==="bot" ? col : col+"66";
+    c.lineWidth = 2;
+    c.beginPath(); c.moveTo(x, yBotTick); c.lineTo(x, yBotTick+12); c.stroke();
+    c.strokeStyle = zone==="bot" ? col+"66" : col+"24";
+    c.lineWidth = 1;
+    const sx = cx + (i - (N-1)/2) * (rowW*0.12/N);
+    c.beginPath(); c.moveTo(sx, yBranchB); c.lineTo(x, yBotTick); c.stroke();
+  }
+  c.textAlign = "center"; c.font = "11px ui-monospace,SFMono-Regular,Menlo,monospace";
+  c.fillStyle = zone==="bot" ? "#e6edf3" : "#9aa7b4";
+  c.fillText("11 transport packages   +   7 FrameSerializer", cx, yBotTick+30);
+  c.font = "10px ui-monospace,SFMono-Regular,Menlo,monospace"; c.fillStyle = "#6b7686";
+  c.fillText("src/pipecat/transports/*/   ·   src/pipecat/serializers/", cx, yBotTick+46);
+  glassHits.push({id:"bot", x:cx-halfBot-6, y:yBotTick-8, w:2*halfBot+12, h:64});
+}
+
+$("cvGlass").addEventListener("click", ev=>{
+  const r = ev.currentTarget.getBoundingClientRect();
+  const x = ev.clientX - r.left, y = ev.clientY - r.top;
+  for (const hh of glassHits){
+    if (x>=hh.x && x<=hh.x+hh.w && y>=hh.y && y<=hh.y+hh.h){
+      zone = hh.id; buildZoneTabs(); drawGlass(); renderZoneDetail(); return;
+    }
+  }
+});
+
+function chipList(arr, hl){
+  return arr.map(n=>'<span class="nm'+(hl&&hl.indexOf(n)>=0?' hl':'')+'">'+n+'</span>').join("");
+}
+function framesOf(k){
+  const want = k==="N" ? "-" : k;
+  return FRAMES.filter(f => f[2]===want || (f[2]==="SD" && (want==="S"||want==="D")));
+}
+function renderZoneDetail(){
+  const d = $("zoneDetail");
+  if (zone === "top"){
+    d.innerHTML = "<h3>모래시계의 위 — 62개 vendor directory</h3>" +
+      "<div class='kv'><span class='k'>측정</span><span class='mono'>ls -d src/pipecat/services/*/ | wc -l → 62</span>" +
+      "<span class='k'>주의</span><span>excerpt <code>pipecat-design-philosophy</code>는 73이라고 적었다. 73은 <b>entry</b> 수(62 dir + 11 loose .py)다. tree가 이긴다 — read.md §1.</span></div>" +
+      "<div class='names' style='margin-top:10px'>" + chipList(SERVICES, ["openai","deepgram","cartesia","elevenlabs","anthropic","google","openclaw"]) + "</div>" +
+      "<div style='margin-top:10px; color:#6b7686; font-size:0.8214rem'>vendor가 아닌 abstract base 11개(loose .py):</div>" +
+      "<div class='names'>" + chipList(SERVICE_MODULES) + "</div>";
+  } else if (zone === "bot"){
+    d.innerHTML = "<h3>모래시계의 아래 — 11 transport + 7 serializer</h3>" +
+      "<div class='names'>" + chipList(TRANSPORTS) + "</div>" +
+      "<div style='margin-top:10px; color:#6b7686; font-size:0.8214rem'>구체 <code>FrameSerializer</code> 구현 7개 (<code>src/pipecat/serializers/</code>):</div>" +
+      "<div class='names'>" + chipList(SERIALIZERS) + "</div>" +
+      "<div class='callout'>여덟 번째 <code>FrameSerializer</code> 하위 클래스 <code>RTVIEvalSerializer</code>가 " +
+      "<code>src/pipecat/evals/serializer.py:87</code>에 있지만 test harness용이라 모래시계의 바닥이 아니다. 바닥의 숫자는 <b>7</b>.</div>";
+  } else if (zone === "waist"){
+    d.innerHTML = "<h3>허리 — <code>Frame</code> 하나 (frames.py:65)</h3>" +
+      "<p style='margin:0; color:#9aa7b4'>Beck의 예측 그대로: 허리는 <b>거의 아무것도 약속하지 않는다</b>. " +
+      "payload 없음, kind discriminator 없음, schema version 없음. 7개 field는 전부 <code>field(init=False)</code>라 " +
+      "생성자 인자로 <b>넘길 수조차 없다</b> — 아래 119개 클래스에 base가 기여하는 생성자 인자는 0개다.</p>" +
+      "<pre>@dataclass\n<span class='kw'>class</span> <span class='hi'>Frame</span>:\n" +
+      "    id: int                          = field(init=<span class='st'>False</span>)   <span class='cm'># identity</span>\n" +
+      "    name: str                        = field(init=<span class='st'>False</span>)   <span class='cm'># identity</span>\n" +
+      "    pts: int | None                  = field(init=<span class='st'>False</span>)   <span class='cm'># timestamp slot</span>\n" +
+      "    broadcast_sibling_id: int | None = field(init=<span class='st'>False</span>)   <span class='cm'># correlation</span>\n" +
+      "    metadata: dict[str, Any]         = field(init=<span class='st'>False</span>)   <span class='cm'># 탈출구 (§10)</span>\n" +
+      "    transport_source: str | None     = field(init=<span class='st'>False</span>)   <span class='cm'># routing hint</span>\n" +
+      "    transport_destination: str|None  = field(init=<span class='st'>False</span>)   <span class='cm'># routing hint</span>\n\n" +
+      "<span class='cm'># 입장료 0원 — 이것만으로도 완전하고 합법적인 routable frame:</span>\n" +
+      "@dataclass\n<span class='kw'>class</span> MyFrame(ControlFrame): <span class='kw'>pass</span></pre>" +
+      "<div class='callout'><b>ossification.</b> 7개 field는 이제 사실상 불변이다. 그래서 side-channel 데이터의 답은 " +
+      "새 base field가 아니라 untyped <code>metadata: dict</code>다. 그런데 " +
+      "<code>grep -rn '\\.metadata\\[' src/pipecat/ → 0</code> — pipecat은 " +
+      "<code>worker.py:1226</code>에서 <code>StartFrame</code>에 한 번 쓰고, <b>어디서도 읽지 않는다</b>. " +
+      "boson이 correlation ID를 여기 실으면 write·read·전파를 전부 직접 소유해야 한다.</div>";
+  } else {
+    const M = BRANCH_META[zone];
+    const list = framesOf(zone);
+    const isoTxt = M.iso === 0
+      ? "<b style='color:#f85149'>0회</b> — <code>src/pipecat</code> 전체에서 이 branch로 dispatch하는 곳이 없다"
+      : "<b style='color:#f778ba'>"+M.iso+"회</b>";
+    let extra = "";
+    if (zone === "S"){
+      extra = "<div class='callout'><b>out-of-band는 6줄이다.</b> " +
+        "<code>frame_processor.py:1304</code>의 <code>if isinstance(frame, SystemFrame):</code>가 " +
+        "그 frame을 input task 위에서 <b>인라인 실행</b>하고, 나머지는 별도로 cancel 가능한 두 번째 queue로 보낸다. " +
+        "말하는 중인 processor에 <code>InterruptionFrame</code>이 닿는 이유는 scheduler도 supervisor도 아니라 이 한 줄이다.</div>";
+    } else if (zone === "D"){
+      extra = "<div class='callout bad'><b>runtime에서 split은 사실 2-way다.</b> " +
+        "<code>DataFrame</code> 밖의 모든 non-import 등장은 <code>class X(DataFrame):</code> 선언뿐이다. " +
+        "상속 대상일 뿐, 검사 대상이 아니다. docstring의 “cancelled by user interruptions”를 실제로 집행하는 것은 " +
+        "<code>Frame</code>을 상속하지도 않는 mixin <code>UninterruptibleFrame</code>(frames.py:147)이고, " +
+        "그 dispatch는 <code>utils/frame_queue.py</code> 한 파일에 3번뿐이다 — " +
+        "<code>reset()</code>이 uninterruptible만 남기고 <b>나머지를 전부 버린다</b>.</div>";
+    } else if (zone === "C"){
+      extra = "<div class='callout ok'><b>boson이 상속할 branch는 여기다.</b> " +
+        "speech에 대해 순서가 있고, 사용자가 끼어들면 함께 폐기된다 — 무효화된 발화에 대한 verdict는 함께 죽는 것이 맞다. " +
+        "DNC 등록·동의 기록처럼 barge-in을 뚫고도 반드시 배달돼야 하는 신호에만 " +
+        "<code>class X(ControlFrame, UninterruptibleFrame)</code>를 쓴다. " +
+        "<code>EndFrame</code>(1899)이 정확히 그 조합이고, <code>CancelFrame</code>(999)은 반대로 " +
+        "<code>SystemFrame</code>이라 앞질러 도착한다.</div>";
+    } else {
+      extra = "<div class='callout bad'><b>sum type이 새는 지점.</b> " +
+        "<code>class LLMContextFrame(Frame)</code>는 voice pipeline에서 가장 중요한 frame인데 어느 branch에도 없다. " +
+        "<code>FrameProcessorQueue.put()</code>이 <code>StartFrame</code> → <code>SystemFrame</code> → " +
+        "<code>else: DEFAULT_PRIORITY</code>로 검사하므로 20으로 떨어진다. 동작은 <code>DataFrame</code>과 같지만 " +
+        "<b>선언이 아니라 다른 파일의 <code>else</code>에서 나온 emergent property</b>다. 그 <code>else</code>가 바뀌면 " +
+        "frames.py는 한 글자도 안 바뀐 채 scheduling class가 조용히 바뀐다.</div>";
+    }
+    d.innerHTML = "<h3>" + (zone==="N" ? "어느 branch에도 없음" : "<code>"+M.name+"</code> (frames.py:"+M.line+")") +
+      " — " + M.count + "개</h3>" +
+      (zone==="N" ? "<p style='margin:0;color:#9aa7b4'>"+M.doc+"</p>"
+                  : "<div class='doc "+(zone==="S"?"sys":zone==="D"?"data":"ctrl")+"'>“"+M.doc+"”</div>") +
+      "<div class='kv'><span class='k'>runtime dispatch</span><span><code>isinstance(frame, "+
+      (zone==="N"?"LLMContextFrame":M.name)+")</code> → "+isoTxt+"</span></div>" +
+      "<div class='names' style='margin-top:10px'>" +
+      list.map(f=>'<span class="nm'+(f[2]==="SD"?' hl':'')+'">'+f[0]+
+        '<span style="color:#6b7686">:'+f[1]+'</span></span>').join("") + "</div>" +
+      (zone==="S"||zone==="D" ?
+        "<div style='margin-top:6px;color:#6b7686;font-size:0.8214rem'>강조된 <code>InputTextRawFrame</code>(1481)은 " +
+        "<code>class InputTextRawFrame(SystemFrame, TextFrame)</code>이라 <b>두 branch에 동시에</b> 잡힌다. " +
+        "이 +1과 <code>LLMContextFrame</code>의 −1이 상쇄돼 46+33+40이 정확히 119가 된다 — 우연이지 검증이 아니다.</div>" : "") +
+      extra;
+  }
+}
+
+$("btnDispatch").onclick = ()=>{
+  overlay = !overlay;
+  $("btnDispatch").textContent = "runtime dispatch overlay: " + (overlay ? "ON" : "OFF");
+  $("btnDispatch").className = "rb" + (overlay ? " on" : "");
+  drawGlass();
+};
+
+/* ==================================================================
+   PANEL 2 — AST walk
+   ================================================================== */
+const AST_STEPS = [
+  {v:"129", lbl:"top-level ClassDef", op:"ast.parse(frames.py).body",
+   note:"<b>grep으로 세지 마라.</b> <code>grep -c '^class .*Frame'</code>은 mixin과 non-frame helper를 " +
+     "과대 계상하고, base 이름이 <code>*Frame</code>이 아닌 subclass를 과소 계상한다. " +
+     "AST를 걷고 <b>transitive closure의 고정점</b>을 계산해야 한다. " +
+     "frames.py는 2,415줄, 그 안의 top-level <code>ClassDef</code>는 129개."},
+  {v:"122", lbl:"proper Frame subclass", op:"− 7 non-descendant",
+   note:"<code>Frame</code> 자손은 <code>Frame</code> 자신을 포함해 123개. 자신을 빼면 <b>122</b>. " +
+     "제외되는 7개는 아래 표 — 그중 <b>3개는 이름이 <code>Frame</code>으로 끝나는데 frame이 아니다</b>. " +
+     "grep이 실패하는 이유가 바로 이것."},
+  {v:"119", lbl:"concrete frame type", op:"− 3 branch marker",
+   note:"<code>SystemFrame</code> / <code>DataFrame</code> / <code>ControlFrame</code>은 아무도 인스턴스화하지 않는 " +
+     "abstract marker다. 빼면 <b>119</b>. branch 분해는 46 / 33 / 40 — 합이 정확히 119지만, " +
+     "이건 <code>LLMContextFrame</code>(−1)과 <code>InputTextRawFrame</code>(+1)이 상쇄된 산술적 우연이다."}
+];
+const NON_DESC = [
+  ["Frame", 65, "허리 그 자체 — <b>descendant</b>가 아니다"],
+  ["UninterruptibleFrame", 147, "mixin. <code>Frame</code>을 상속하지 않는 순수 marker dataclass"],
+  ["AudioRawFrame", 161, "payload mixin: <code>audio</code>, <code>sample_rate</code>, <code>num_channels</code>, <code>num_frames</code>"],
+  ["ImageRawFrame", 181, "payload mixin: <code>image</code>, <code>size</code>, <code>format</code>"],
+  ["DTMFFrame", 843, "keypad digit payload mixin"],
+  ["FunctionCallResultProperties", 748, "평범한 result-metadata dataclass"],
+  ["FunctionCallFromLLM", 1330, "평범한 tool-call descriptor dataclass"]
+];
+let astStep = 2, repoOn = false, naiveOn = false;
+
+function renderAst(){
+  const box = $("astChain"); box.innerHTML = "";
+  AST_STEPS.forEach((s,i)=>{
+    const el = document.createElement("div");
+    el.className = "cnode" + (i===astStep ? " on" : "");
+    el.innerHTML = '<div class="op">'+s.op+'</div><div class="big">'+s.v+'</div>' +
+                   '<div class="lbl">'+s.lbl+'</div>';
+    el.onclick = ()=>{ astStep = i; renderAst(); };
+    box.appendChild(el);
+  });
+  if (repoOn){
+    const el = document.createElement("div");
+    el.className = "cnode on";
+    el.style.borderColor = "#d29922"; el.style.background = "#2a2210";
+    el.innerHTML = '<div class="op">+ 31 outside frames.py</div>' +
+      '<div class="big" style="color:#d29922">150</div><div class="lbl">repo-wide concrete</div>';
+    box.appendChild(el);
+  }
+  $("astNote").innerHTML = "<h3>" + AST_STEPS[astStep].lbl + "</h3>" +
+    "<p style='margin:0 0 4px; color:#9aa7b4'>" + AST_STEPS[astStep].note + "</p>" +
+    (astStep === 1 ? "<div class='scroll'><table><thead><tr><th>클래스</th><th>줄</th>" +
+      "<th>실제로는 무엇인가</th></tr></thead><tbody>" +
+      NON_DESC.map(r=>"<tr><td class='n'>"+r[0]+"</td><td class='l'>"+r[1]+"</td><td>"+r[2]+"</td></tr>").join("") +
+      "</tbody></table></div>" : "") +
+    (astStep === 2 ? "<pre><span class='cm'># 고정점 — 이 3줄이 핵심이다</span>\n" +
+      "desc, changed = {<span class='st'>'Frame'</span>}, <span class='st'>True</span>\n" +
+      "<span class='kw'>while</span> changed:\n    changed = <span class='st'>False</span>\n" +
+      "    <span class='kw'>for</span> n, bs <span class='kw'>in</span> bases.items():\n" +
+      "        <span class='kw'>if</span> n <span class='kw'>not in</span> desc <span class='kw'>and</span> any(b <span class='kw'>in</span> desc <span class='kw'>for</span> b <span class='kw'>in</span> bs):\n" +
+      "            desc.add(n); changed = <span class='st'>True</span>\n\n" +
+      "<span class='cm'>SystemFrame  46\nDataFrame    33\nControlFrame 40\n             ---\n             </span><span class='hi'>119</span></pre>" : "");
+}
+
+$("btnNaive").onclick = ()=>{
+  naiveOn = !naiveOn;
+  $("btnNaive").className = "rb" + (naiveOn ? " on" : "");
+  $("naiveBox").innerHTML = !naiveOn ? "" :
+    "<div class='detail'><h3>함정 — <code>ast.ClassDef.bases</code>를 곧이곧대로 읽으면</h3>" +
+    "<pre><span class='cm'># subscript를 정규화하지 않고 ast.Name base만 모으면</span>\n" +
+    "bases = {c.name: [b.id <span class='kw'>for</span> b <span class='kw'>in</span> c.bases <span class='kw'>if</span> isinstance(b, ast.Name)] <span class='kw'>for</span> c <span class='kw'>in</span> tops}\n\n" +
+    "naive descendants: <span class='bad'>120</span>   <span class='cm'># 120 − 1(Frame) − 3(branch) = </span><span class='bad'>116</span><span class='cm'>, 3개 부족</span>\n\n" +
+    "<span class='cm'># 사라진 것들 — 앞의 6개는 정상 제외, 뒤의 3개는 </span><span class='bad'>진짜 frame</span>\n" +
+    "['AudioRawFrame','DTMFFrame','FunctionCallFromLLM','FunctionCallResultProperties',\n" +
+    " 'ImageRawFrame','UninterruptibleFrame',\n" +
+    " <span class='bad'>'LLMUpdateSettingsFrame','STTUpdateSettingsFrame','TTSUpdateSettingsFrame'</span>]</pre>" +
+    "<pre><span class='cm'># frames.py:2251 — 첫 base는 평범한 ast.Name이라 이 클래스는 살아남는다</span>\n" +
+    "@dataclass\n<span class='kw'>class</span> ServiceUpdateSettingsFrame(ControlFrame, UninterruptibleFrame, Generic[TSettings]):\n\n" +
+    "<span class='cm'># frames.py:2283, 2290, 2297 — base가 </span><span class='bad'>ast.Subscript</span><span class='cm'> 하나뿐인 세 subclass가 통째로 증발</span>\n" +
+    "@dataclass\n<span class='kw'>class</span> <span class='hi'>LLMUpdateSettingsFrame</span>(ServiceUpdateSettingsFrame[LLMSettings]): <span class='kw'>pass</span>\n" +
+    "@dataclass\n<span class='kw'>class</span> <span class='hi'>TTSUpdateSettingsFrame</span>(ServiceUpdateSettingsFrame[TTSSettings]): <span class='kw'>pass</span>\n" +
+    "@dataclass\n<span class='kw'>class</span> <span class='hi'>STTUpdateSettingsFrame</span>(ServiceUpdateSettingsFrame[STTSettings]): <span class='kw'>pass</span></pre>" +
+    "<div class='callout bad'>이건 반올림 오차가 아니다. 이 셋은 <b>migration에서 가장 많이 쓸 frame</b>이다 — " +
+    "<code>LLMUpdateSettingsFrame</code>은 stage prompt를 바꾸는 frame이고 " +
+    "<code>TTSUpdateSettingsFrame</code>은 통화 중 한국어 TTS voice를 바꾸는 frame이다. " +
+    "naive audit는 “그런 기능은 없다”고 보고할 것이다.</div></div>";
+};
+$("btnRepo").onclick = ()=>{
+  repoOn = !repoOn;
+  $("btnRepo").className = "rb" + (repoOn ? " on" : "");
+  renderAst();
+  $("repoBox").innerHTML = !repoOn ? "" :
+    "<div class='detail'><h3>repo-wide — <b>150 = 119 + 31</b></h3>" +
+    "<pre><span class='cm'># src/pipecat/ 전체에 같은 closure 적용 (top-level ClassDef만)</span>\n" +
+    "repo-wide concrete frame classes: <span class='hi'>150</span>\n" +
+    "outside frames.py:                <span class='hi'>31</span>\n" +
+    "  9  processors/frameworks/rtvi/frames.py\n" +
+    "  8  transports/daily/transport.py\n" +
+    "  6  services/openclaw/frames.py\n" +
+    "  3  transports/livekit/transport.py\n" +
+    "  2  <span class='st'>flows/actions.py</span>          <span class='cm'>← 대화 state machine 전체가 여기서 쓴 예산</span>\n" +
+    "  1  tests/utils.py\n  1  services/google/frames.py\n  1  pipeline/sync_parallel_pipeline.py</pre>" +
+    "<div class='callout ok'><b>31개는 무작위로 흩어져 있지 않다.</b> RTVI는 9개를 자기 " +
+    "<code>rtvi/frames.py</code>에, Daily는 8개를 자기 <code>transport.py</code>에, OpenClaw는 6개를 " +
+    "<code>services/openclaw/frames.py</code>에 두었다. <b>아무도 frames.py를 키우지 않았다.</b> " +
+    "frames.py는 공유되는 media vocabulary 전용이고, subsystem의 사설 vocabulary는 사설로 남는다. " +
+    "boson도 <code>boson/frames.py</code>다.</div>" +
+    "<div class='callout'><b>150에 대한 정직한 단서.</b> 이 walk는 top-level <code>ClassDef</code>만 센다. " +
+    "frames.py는 <code>with warnings.catch_warnings():</code> 블록 안에 4개를 더 숨기고 있다 — " +
+    "<code>EndTaskFrame</code>(1841), <code>StopTaskFrame</code>(1855), <code>CancelTaskFrame</code>(1869), " +
+    "<code>InterruptionTaskFrame</code>(1883). 세면 154다. 넷 다 " +
+    "<code>PipelineTask → PipelineWorker</code> 개명에서 나온 1.4.0 deprecated alias라 150을 쓴다.</div></div>";
+};
+
+/* ==================================================================
+   PANEL 3 — Wadler 행렬
+   ================================================================== */
+const NEW_COL = {n:"BosonRuleProcessor", p:"boson/processors.py", l:1, d:"f",
+                 m:"f".repeat(FRAMES.length)};
+const NEW_ROW = {n:"RuleVerdictFrame", l:1, b:"C"};
+const MAT_MAXCOL = COLS.length + 1;      /* 슬롯은 항상 13개 예약 — 추가해도 geometry가 안 흔들린다 */
+const MAT_MAXROW = FRAMES.length + 1;    /* 슬롯은 항상 120개 예약 */
+const CELL = {e:"#58a6ff", f:"#264a33", d:"#f85149", c:"#d29922"};
+let colAdded = false, rowAdded = false, pulse = null, matGeo = null;
+
+function activeCols(){ return colAdded ? COLS.concat([NEW_COL]) : COLS; }
+
+function drawMat(p){
+  const cv = $("cvMat"); const {c,w,h} = setupCanvas(cv, CANVAS_H_MAT);
+  const headH = 148, gutter = Math.min(150, Math.max(96, w*0.16)), padR = 8, padB = 14;
+  const colW = (w - gutter - padR) / MAT_MAXCOL;
+  const rowH = (h - headH - padB) / MAT_MAXROW;
+  matGeo = {headH, gutter, colW, rowH};
+  const cols = activeCols();
+  c.font = "9px ui-monospace,SFMono-Regular,Menlo,monospace";
+
+  /* 열 라벨 */
+  cols.forEach((col,j)=>{
+    const x = gutter + (j+0.5)*colW;
+    const dc = col.d==="d" ? CELL.d : col.d==="c" ? CELL.c : "#3fb950";
+    c.save(); c.translate(x, headH-13); c.rotate(-Math.PI/3);
+    c.textAlign = "right";
+    c.fillStyle = (colAdded && j===cols.length-1) ? "#3fb950"
+                : (col.d==="d" ? "#f0918c" : col.d==="c" ? "#e0b95c" : "#9aa7b4");
+    c.fillText(col.n, 0, 0);
+    c.restore();
+    /* 이 열의 "이름으로 모르는 frame"의 기본 운명을 색 사각형 하나로 */
+    c.fillStyle = dc; c.fillRect(x-3.5, headH-9, 7, 7);
+  });
+  /* 비어 있는 column 슬롯 */
+  if (!colAdded){
+    const x = gutter + (COLS.length+0.5)*colW;
+    c.setLineDash([4,4]); c.strokeStyle = "#39414f"; c.lineWidth = 1;
+    c.strokeRect(gutter+COLS.length*colW+1, headH, colW-2, MAT_MAXROW*rowH);
+    c.setLineDash([]);
+    c.save(); c.translate(x, headH-13); c.rotate(-Math.PI/3);
+    c.textAlign = "right"; c.fillStyle = "#4c545f"; c.fillText("＋ column", 0, 0); c.restore();
+  }
+
+  /* 셀 */
+  const nRow = rowAdded ? FRAMES.length+1 : FRAMES.length;
+  for (let j=0;j<cols.length;j++){
+    const col = cols[j];
+    const x = gutter + j*colW;
+    for (let i=0;i<nRow;i++){
+      let ch;
+      if (i < FRAMES.length) ch = col.m[i];
+      else ch = col.d;                       /* 새 row: 아무도 이름으로 모른다 → 기본 운명 */
+      const y = headH + i*rowH;
+      let fill = CELL[ch];
+      if (i === FRAMES.length && p !== null && p !== undefined && (ch==="d"||ch==="c")){
+        const a = 0.45 + 0.55*Math.abs(Math.sin(p*Math.PI*3));
+        fill = ch==="d" ? "rgba(248,81,73,"+a+")" : "rgba(210,153,34,"+a+")";
+      }
+      c.fillStyle = fill;
+      c.fillRect(x+1, y+0.35, colW-2, Math.max(rowH-0.7, 1.2));
+    }
+  }
+  /* 새 column / 새 row 테두리 강조 */
+  if (colAdded){
+    c.strokeStyle = "#3fb950"; c.lineWidth = 1.6;
+    c.strokeRect(gutter+COLS.length*colW+0.5, headH, colW-1, nRow*rowH);
+  }
+  if (rowAdded){
+    c.strokeStyle = "#d29922"; c.lineWidth = 1.6;
+    c.strokeRect(gutter+0.5, headH+FRAMES.length*rowH, cols.length*colW-1, rowH);
+  } else {
+    c.setLineDash([4,4]); c.strokeStyle = "#39414f"; c.lineWidth = 1;
+    c.strokeRect(gutter+0.5, headH+FRAMES.length*rowH+0.5, cols.length*colW-1, rowH-1);
+    c.setLineDash([]);
+  }
+
+  /* 왼쪽 gutter — branch 괄호 */
+  const GRP = [
+    {a:0,   b:45,  k:"S", t:"SystemFrame 46"},
+    {a:45,  b:77,  k:"D", t:"DataFrame 33"},
+    {a:78,  b:117, k:"C", t:"ControlFrame 40"},
+    {a:118, b:118, k:"N", t:"no branch 1"}
+  ];
+  c.textAlign = "right";
+  GRP.forEach(g=>{
+    const y0 = headH + g.a*rowH, y1 = headH + (g.b+1)*rowH;
+    const col = BRANCH_META[g.k].color;
+    c.strokeStyle = col; c.lineWidth = 2;
+    c.beginPath(); c.moveTo(gutter-7, y0+1); c.lineTo(gutter-7, y1-1); c.stroke();
+    c.beginPath(); c.moveTo(gutter-7, y0+1); c.lineTo(gutter-11, y0+1); c.stroke();
+    c.beginPath(); c.moveTo(gutter-7, y1-1); c.lineTo(gutter-11, y1-1); c.stroke();
+    c.fillStyle = col; c.font = "9.5px ui-monospace,SFMono-Regular,Menlo,monospace";
+    /* no-branch는 1줄뿐이라 라벨을 위로 밀어 새 row 라벨과 겹치지 않게 한다 */
+    c.fillText(g.t, gutter-15, g.k==="N" ? y0-1 : (y0+y1)/2 + 3);
+  });
+  if (rowAdded){
+    c.fillStyle = "#d29922"; c.font = "9.5px ui-monospace,monospace"; c.textAlign = "right";
+    c.fillText("RuleVerdictFrame ←", gutter-15, headH+MAT_MAXROW*rowH + 3);
+  }
+  c.textAlign = "left"; c.fillStyle = "#6b7686"; c.font = "9px ui-monospace,monospace";
+  c.fillText("행 = frame (row) ▼   열 = processor (column) ▶   열 이름 아래 사각형 = 그 열이 "
+    + "이름으로 모르는 frame의 기본 운명", 6, 13);
+}
+
+/* hover / tap tooltip */
+function matHover(ev){
+  if (!matGeo) return;
+  const cv = $("cvMat"), r = cv.getBoundingClientRect();
+  const x = ev.clientX - r.left, y = ev.clientY - r.top;
+  const {headH, gutter, colW, rowH} = matGeo;
+  const cols = activeCols();
+  const j = Math.floor((x-gutter)/colW), i = Math.floor((y-headH)/rowH);
+  const nRow = rowAdded ? FRAMES.length+1 : FRAMES.length;
+  const tip = $("tip");
+  if (j<0 || j>=cols.length || i<0 || i>=nRow || x<gutter){ tip.style.display="none"; return; }
+  const col = cols[j];
+  const fr = i < FRAMES.length ? FRAMES[i] : [NEW_ROW.n, "새로 추가", NEW_ROW.b];
+  const ch = i < FRAMES.length ? col.m[i] : col.d;
+  const VERD = {
+    e:"<span style='color:#58a6ff'>explicit</span> — 이 process_frame이 isinstance로 직접 분기한다",
+    f:"<span style='color:#3fb950'>forward</span> — 기본 else가 push_frame으로 흘려보낸다",
+    d:"<span style='color:#f85149'>drop</span> — 매칭 branch도 기본 forward도 없다. 조용히 사라진다",
+    c:"<span style='color:#d29922'>conditional</span> — 사용자 predicate가 결정한다"
+  };
+  const bl = fr[2]==="SD" ? "SystemFrame + DataFrame" :
+             fr[2]==="-" ? "no branch" : BRANCH_META[fr[2]].name;
+  tip.innerHTML = "<b>"+fr[0]+"</b> <span class='d'>"+
+    (typeof fr[1]==="number" ? "frames.py:"+fr[1] : fr[1])+" · "+bl+"</span><br>" +
+    "<b>"+col.n+"</b> <span class='d'>"+col.p+":"+col.l+"</span><br>" + VERD[ch];
+  tip.style.display = "block";
+  const tw = tip.offsetWidth, th = tip.offsetHeight;
+  let lx = ev.clientX + 14, ly = ev.clientY + 14;
+  if (lx + tw > window.innerWidth - 8) lx = ev.clientX - tw - 14;
+  if (ly + th > window.innerHeight - 8) ly = ev.clientY - th - 14;
+  tip.style.left = Math.max(6, lx) + "px";
+  tip.style.top  = Math.max(6, ly) + "px";
+}
+$("cvMat").addEventListener("mousemove", matHover);
+$("cvMat").addEventListener("click", matHover);
+$("cvMat").addEventListener("mouseleave", ()=>{ $("tip").style.display="none"; });
+
+function renderMatStats(){
+  const cols = activeCols();
+  const nRow = rowAdded ? FRAMES.length+1 : FRAMES.length;
+  let drops = 0, conds = 0;
+  if (rowAdded) cols.forEach(c=>{ if (c.d==="d") drops++; else if (c.d==="c") conds++; });
+  const st = [];
+  st.push({k:"rows (frame)", v:nRow, cls:rowAdded?"warn":""});
+  st.push({k:"columns (processor)", v:cols.length, cls:colAdded?"good":""});
+  st.push({k:"cells", v:nRow*cols.length, cls:""});
+  st.push({k:"바뀐 기존 파일", v:0, cls:"good"});
+  if (rowAdded){
+    st.push({k:"이 "+cols.length+"개 중 조용히 버리는 곳", v:drops, cls:"bad"});
+    st.push({k:"predicate에 달린 곳", v:conds, cls:"warn"});
+    st.push({k:"검토해야 할 isinstance site", v:577, cls:"bad"});
+    st.push({k:"그 site가 흩어진 파일", v:136, cls:"bad"});
+  }
+  $("matStats").innerHTML = st.map(s=>
+    '<div class="stat '+s.cls+'"><div class="sv">'+s.v+'</div><div class="sk">'+s.k+'</div></div>').join("");
+
+  let code = "";
+  if (colAdded && !rowAdded){
+    code = "<div class='callout ok'><b>column을 더하는 건 거의 공짜다.</b> " +
+      "한 개 method, 한 개 signature. 새 열의 119칸이 즉시 전부 forward가 되고, " +
+      "<b>기존 칸은 단 하나도 건드리지 않는다</b>. 어떤 <code>Pipeline([...])</code>의 " +
+      "몇 번째 자리에 넣어도 type-check된다 — ch-01의 uniform interface.</div>" +
+      "<pre><span class='kw'>class</span> <span class='st'>BosonRuleProcessor</span>(FrameProcessor):\n" +
+      "    <span class='kw'>async def</span> process_frame(self, frame: Frame, direction: FrameDirection):\n" +
+      "        <span class='kw'>await</span> super().process_frame(frame, direction)\n" +
+      "        <span class='kw'>await</span> self.push_frame(frame, direction)   <span class='cm'># ← 이 한 줄이 전부다</span></pre>";
+  }
+  if (rowAdded){
+    code += "<div class='callout bad'><b>row를 더하면 파일은 하나도 안 바뀌는데, 그게 바로 위험한 이유다.</b> " +
+      "sum type에는 exhaustiveness check가 없으므로 compiler는 136개 파일 중 어디를 고쳐야 하는지 " +
+      "<b>알려주지 않는다</b>. 근본 원인은 base class에 있다 — " +
+      "<code>FrameProcessor.process_frame</code>(frame_processor.py:820-847)은 " +
+      "<code>StartFrame</code>·<code>InterruptionFrame</code>·<code>CancelFrame</code>과 pause/resume 쌍만 " +
+      "처리하고 <b><code>else</code>도 <code>push_frame</code>도 없다</b>. forwarding은 상속되지 않는다.</div>" +
+      "<pre>@dataclass\n<span class='kw'>class</span> <span class='hi'>RuleVerdictFrame</span>(ControlFrame):\n" +
+      "    verdict: str\n    rule_name: str\n\n" +
+      "<span class='cm'># 아래는 filtering processor의 정상적인 모양이다 — 그리고 네 frame을 죽인다</span>\n" +
+      "<span class='kw'>async def</span> process_frame(self, frame: Frame, direction: FrameDirection):\n" +
+      "    <span class='kw'>await</span> super().process_frame(frame, direction)\n" +
+      "    <span class='kw'>if</span> isinstance(frame, TextFrame):\n" +
+      "        <span class='kw'>await</span> self.push_frame(self._transform(frame), direction)\n" +
+      "    <span class='kw'>elif</span> isinstance(frame, (StartFrame, EndFrame, InterruptionFrame)):\n" +
+      "        <span class='kw'>await</span> self.push_frame(frame, direction)\n" +
+      "    <span class='cm'># else가 없다 → </span><span class='bad'>RuleVerdictFrame은 여기서 사라진다</span>\n" +
+      "    <span class='cm'>#   exception 없음, warning 없음, log 없음, metric 없음</span></pre>" +
+      "<div class='callout'>행렬의 빨간 열 3개는 지어낸 것이 아니다. " +
+      "<code>FrameProcessor</code>(기본), <code>NullFilter</code>(<code>SystemFrame</code>/<code>EndFrame</code>만 통과), " +
+      "<code>FrameFilter</code>(<code>_types</code> + <code>EndFrame</code>/<code>SystemFrame</code>만 통과) — " +
+      "셋 다 지금 tree에 있는 코드고, 셋 다 네 frame이 존재하기 <b>전에</b> 작성됐다. " +
+      "<code>FunctionFilter</code>는 사용자가 준 <code>_filter</code> predicate에 달려 있어 노란색이다.</div>";
+  }
+  $("matCode").innerHTML = code;
+}
+function startPulse(){
+  const t0 = performance.now();
+  function tick(ts){
+    const p = (ts - t0)/1400;
+    if (p < 1){ drawMat(p); requestAnimationFrame(tick); }
+    else drawMat(null);
+  }
+  requestAnimationFrame(tick);
+}
+$("btnAddCol").onclick = ()=>{ colAdded = true; drawMat(null); renderMatStats(); };
+$("btnAddRow").onclick = ()=>{ rowAdded = true; renderMatStats(); startPulse(); };
+$("btnMatReset").onclick = ()=>{ colAdded = false; rowAdded = false; drawMat(null); renderMatStats(); };
+
+/* ==================================================================
+   PANEL 4 — 3-way test
+   ================================================================== */
+const CONCEPTS = [
+  {id:"c1", t:"<code>session.active_stage</code> — 지금 어느 stage인가", a:"state",
+   why:"현재 stage는 <b>문자열 하나</b>다. <code>flows/</code>도 정확히 이렇게 한다 — " +
+       "<code>self._current_node: str | None</code> (manager.py:149). " +
+       "stream의 일부로 <b>둘 이상의 component가 순서대로 읽어야 하나?</b> 아니다 → manager의 field."},
+  {id:"c2", t:"13개 <code>@check</code>가 누적한 rule 결과", a:"state",
+   why:"<code>FlowManager._state: dict[str, Any]</code> (manager.py:147)와 같은 자리다. " +
+       "한 component만 읽는 state는 universal waist에 있을 이유가 없다."},
+  {id:"c3", t:"script cursor — <code>ScriptEngine</code>이 자기 step을 추적", a:"state",
+   why:"producer와 consumer가 <b>같은 객체</b>다. 나갔다 돌아오는 frame은 아주 비싼 함수 호출일 뿐이다. " +
+       "read.md §12의 <code>ScriptStepFrame</code> 기각 사유가 이것."},
+  {id:"c4", t:"sentiment 5-turn 부정 window", a:"state",
+   why:"speech에 대해 순서가 있어야 하는 신호가 아니고, 읽는 쪽도 rule engine 자신이다. manager field."},
+  {id:"c5", t:"<code>StageTransition(\"purchase\")</code> — “purchase로 이동해줘”", a:"state",
+   why:"manager가 결정하고 manager가 적용한다. frame이 아니라 <b>method 호출</b>이고, " +
+       "그 <b>효과</b>가 (b)의 frame들이다. <code>StageMachine.transition()</code>이 whitelist로 거부할 수도 있다."},
+  {id:"c6", t:"stage 진입 시 system prompt 교체", a:"existing", f:"LLMUpdateSettingsFrame", fl:2283,
+   why:"<code>flows/manager.py:764-770</code>이 문자 그대로 이렇게 한다 — " +
+       "<code>LLMUpdateSettingsFrame(delta=LLMSettings(system_instruction=role_message))</code>."},
+  {id:"c7", t:"stage 진입 시 노출 tool 교체", a:"existing", f:"LLMSetToolsFrame", fl:694,
+   why:"<code>flows/manager.py:841</code>: <code>frames.append(LLMSetToolsFrame(tools=functions))</code>. " +
+       "tree의 모든 LLM service가 이미 올바르게 처리한다."},
+  {id:"c8", t:"<code>Respond(step.text)</code> — 대본 문구 그대로 발화", a:"existing", f:"TTSSpeakFrame", fl:795,
+   why:"frame은 매핑된다. 다만 “이 turn은 LLM을 건너뛴다”는 의미는 frame이 나르지 않는다 — " +
+       "<code>LLMRunFrame</code>을 <b>안 내보내는</b> 것으로 네 processor가 결정해야 한다. 그 gap은 ch-12의 문제."},
+  {id:"c9", t:"<code>Inject(content)</code> — rule verdict를 context에", a:"existing", f:"LLMMessagesAppendFrame", fl:645,
+   why:"<code>flows/manager.py:827-841</code>이 append/update를 <code>ContextStrategy</code>로 고른다. " +
+       "reset이 필요하면 <code>LLMMessagesUpdateFrame</code>(661)."},
+  {id:"c10", t:"transition 직후 추론 trigger", a:"existing", f:"LLMRunFrame", fl:634,
+   why:"<code>flows/manager.py:709</code>가 그대로 <code>LLMRunFrame()</code>을 queue한다."},
+  {id:"c11", t:"통화 중 한국어 TTS voice 교체", a:"existing", f:"TTSUpdateSettingsFrame", fl:2290,
+   why:"naive AST audit가 <b>증발시키는 바로 그 세 frame</b> 중 하나다(패널 2). " +
+       "있는데 없다고 보고되기 쉬운 기능."},
+  {id:"c12", t:"<code>RuleViolationFrame</code> — downstream guard가 TTS 이전에 verdict를 봐야 함", a:"new",
+   why:"두 조건 모두 만족: speech에 대해 순서가 있어야 하고, consumer(guard)가 producer(rule processor)와 " +
+       "<b>다른 processor</b>다. → <code>class RuleViolationFrame(ControlFrame)</code>, " +
+       "<code>boson/frames.py</code>에."},
+  {id:"c13", t:"<code>ConsentCheckpointFrame</code> — 법적 동의 확인 기록", a:"new",
+   why:"NEW이면서 <b><code>ControlFrame</code>만으로는 부족한</b> 유일한 후보다. barge-in이 나도 반드시 배달돼야 하므로 " +
+       "<code>class ConsentCheckpointFrame(ControlFrame, UninterruptibleFrame)</code>. " +
+       "<code>utils/frame_queue.py</code>의 <code>reset()</code>이 이것만 살려둔다."},
+  {id:"c14", t:"<code>StageEnteredFrame</code> — observer가 stage 경계를 stream에서 봐야 함", a:"new",
+   why:"조건부 통과다. <b>observer를 실제로 만들 때만</b> class 값어치가 있다. " +
+       "안 만들 거면 그냥 state다 — read.md §12 표의 정확한 표현."}
+];
+const BINS = {state:"binState", existing:"binExisting", new:"binNew"};
+const BINLBL = {state:"(a) STATE", existing:"(b) EXISTING FRAME", new:"(c) NEW ControlFrame"};
+let picked = null, placed = {}, right = 0, wrong = 0;
+
+function renderChips(){
+  const box = $("chips"); box.innerHTML = "";
+  CONCEPTS.forEach(cp=>{
+    const b = document.createElement("button");
+    b.className = "chip" + (placed[cp.id] ? " done" : (picked===cp.id ? " on" : ""));
+    b.innerHTML = cp.t;
+    if (!placed[cp.id]) b.onclick = ()=>{ picked = (picked===cp.id?null:cp.id); renderChips(); armBins(); };
+    box.appendChild(b);
+  });
+  if (!picked && Object.keys(placed).length < CONCEPTS.length && !$("sortFeed").innerHTML){
+    $("sortFeed").innerHTML = "<p style='margin:0;color:#6b7686'>개념을 하나 눌러 고른 뒤, 오른쪽 세 통 중 하나를 눌러라.</p>";
+  }
+}
+function armBins(){
+  Object.values(BINS).forEach(id=>{
+    const el = $(id);
+    el.className = el.className.replace(/ arm/g,"") + (picked ? " arm" : "");
+  });
+}
+function place(binKey){
+  if (!picked) return;
+  const cp = CONCEPTS.find(x=>x.id===picked);
+  const ok = cp.a === binKey;
+  placed[cp.id] = binKey;
+  if (ok) right++; else wrong++;
+  const it = document.createElement("span");
+  it.className = "it " + (ok ? "ok" : "no");
+  it.innerHTML = (ok ? "✓ " : "✗ ") + cp.t.replace(/<[^>]+>/g,"");
+  $(BINS[binKey]).querySelector(".items").appendChild(it);
+  $("sortFeed").innerHTML =
+    "<h3 style='color:" + (ok ? "#3fb950" : "#f85149") + "'>" +
+      (ok ? "맞다 — " : "아니다 — 정답은 ") + BINLBL[cp.a] +
+      (cp.f ? " · <code>" + cp.f + "</code> (frames.py:" + cp.fl + ")" : "") + "</h3>" +
+    "<p style='margin:0;color:#9aa7b4'>" + cp.why + "</p>";
+  picked = null;
+  renderChips(); armBins(); renderBudget();
+}
+Object.keys(BINS).forEach(k=>{ $(BINS[k]).onclick = ()=>place(k); });
+
+function renderBudget(){
+  const n = Object.values(placed).filter(v=>v==="new").length;
+  const el = $("budget");
+  el.className = "budget" + (n > 4 ? " over" : "");
+  $("budgetV").textContent = n + " / 4";
+  $("budgetN").innerHTML = n > 4
+    ? "<b style='color:#f85149'>예산 초과.</b> 10번째 frame class는 code smell이 아니라 " +
+      "<b>3개 전에 설계가 틀어졌다는 신호</b>다. 그 지점에서 너는 boson의 내부 protocol을 " +
+      "Pipecat의 허리 안에 다시 구현한 것이고, 열 개 전부가 §8의 row 비용을 문다 — " +
+      "그 타입들을 모르는 577개 isinstance site, 자동 pass-through 없음, 어딘가에서의 조용한 drop."
+    : "NEW frame 예산. <code>flows/</code>는 2개, <code>services/openclaw/</code>는 6개를 만들었다. " +
+      "correlation ID와 stage tag는 <code>frame.metadata</code>로 태워라(§10의 단서 적용).";
+  $("sortScore").textContent = (right+wrong) ? ("정답 " + right + " / 오답 " + wrong) : "";
+}
+$("btnSortReset").onclick = ()=>{
+  picked = null; placed = {}; right = 0; wrong = 0;
+  Object.values(BINS).forEach(id=>{ $(id).querySelector(".items").innerHTML = ""; });
+  $("sortFeed").innerHTML = "";
+  renderChips(); armBins(); renderBudget();
+};
+
+/* ==================================================================
+   부팅 + resize
+   ================================================================== */
+function redrawAll(){ drawGlass(); drawMat(null); }
+buildZoneTabs(); renderZoneDetail(); renderAst();
+renderChips(); armBins(); renderBudget(); renderMatStats();
+redrawAll();
+let rt = null;
+window.addEventListener("resize", ()=>{
+  if (rt) clearTimeout(rt);
+  rt = setTimeout(redrawAll, 120);
+});
+</script>
+</body>
+</html>
