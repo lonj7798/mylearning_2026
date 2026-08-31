@@ -728,6 +728,28 @@ audio has played is not a veto.
 processors.** [[custom-processor-guide]]'s "the honest port splits its four layers into four
 `FrameProcessor`s" is wrong, and Constraints Two and Three are why.
 
+> **Measured qualification — added 2026-08-27, after the learner challenged this section.**
+>
+> The derivation above is sound, but it protects a path Lina has never taken. Every live
+> `Filter(` in the boson tree is returned from **layer 01**:
+> `agents/test-lina-gateway/layers/01-filler-filter/rules/korean_fillers.py:71`,
+> `agents/dental-gateway/layers/01-filler-filter/rules/korean_fillers.py:40`,
+> `agents/dental-w-tool-gateway/layers/01-filler-filter/rules/korean_fillers.py:84`,
+> `agents/demo-gateway/layers/01-guard/rules/spam_filter.py:18` — and all four filter a
+> filler word or spam. A `Filter` returned from layer 01 runs *before* layers 02+ have staged
+> anything, so there is nothing to roll back. **Cross-layer rollback has never fired in
+> production.**
+>
+> The mechanism is real — boson's own comments describe it (`gateway/layers/pipeline.py:20`,
+> `:67`, `:163`, `:176`) and `test_layer_pipeline.py` covers the path repeatedly. But no
+> shipped rule exercises it, which is the same existing-API-versus-live-API distinction this
+> course applies to Pipecat's own `NullFilter`.
+>
+> So the honest form of this conclusion is a **trade-off, not a requirement**: splitting into
+> N processors costs cross-layer veto, *which today's Lina does not use*; collapsing buys the
+> veto back and shrinks the interruption-reset surface from N objects to one. Decide it on
+> whether a later layer will ever need to veto. Do not accept "must" on the derivation alone.
+
 Here is the proof in the shape of Q2's scenario.
 
 **(a) What has already left processor 03?** For processor 04 to be evaluating anything at all,

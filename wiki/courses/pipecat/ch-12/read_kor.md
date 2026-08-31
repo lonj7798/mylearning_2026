@@ -761,6 +761,27 @@ audio가 재생된 뒤에 도착하는 veto는 veto가 아닙니다.
 없습니다.** [[custom-processor-guide]]의 *"the honest port splits its four layers into four
 `FrameProcessor`s"*는 틀렸고, Constraint Two와 Three가 그 이유입니다.
 
+> **측정에 의한 단서 — 2026-08-27, 학습자가 이 절을 반박한 뒤 추가.**
+>
+> 위 도출은 타당하지만, 그것이 지키는 경로를 Lina는 한 번도 지나간 적이 없다. boson 트리에서
+> 살아있는 `Filter(` 반환은 전부 **layer 01**에서 나온다:
+> `agents/test-lina-gateway/layers/01-filler-filter/rules/korean_fillers.py:71`,
+> `agents/dental-gateway/layers/01-filler-filter/rules/korean_fillers.py:40`,
+> `agents/dental-w-tool-gateway/layers/01-filler-filter/rules/korean_fillers.py:84`,
+> `agents/demo-gateway/layers/01-guard/rules/spam_filter.py:18` — 네 곳 모두 filler word
+> 아니면 spam을 거른다. layer 01에서 반환된 `Filter`는 layer 02 이후가 아무것도 stage하기
+> **전에** 실행되므로 되돌릴 것이 없다. **cross-layer rollback은 프로덕션에서 발동한 적이 없다.**
+>
+> 메커니즘 자체는 실재한다 — boson 자신의 주석이 그렇게 설명하고(`gateway/layers/pipeline.py:20`,
+> `:67`, `:163`, `:176`) `test_layer_pipeline.py`가 그 경로를 여러 번 덮는다. 그러나 출시된
+> rule 중 그것을 행사하는 것이 없다. 이 코스가 Pipecat의 `NullFilter`에 적용한 것과 똑같은
+> **존재하는 API vs 살아있는 API**의 구분이다.
+>
+> 따라서 이 결론의 정직한 형태는 **강제가 아니라 트레이드오프**다: N개 processor로 나누면
+> cross-layer veto를 잃는데 *오늘의 Lina는 그것을 쓰지 않는다*. 합치면 veto를 되찾고
+> interruption 리셋 대상이 N개에서 1개로 준다. 판단 기준은 "앞으로 뒤쪽 layer가 veto를 쓸 일이
+> 있는가"이다. 도출만 보고 "반드시"를 받아들이지 말 것.
+
 Q2의 시나리오 모양으로 된 증명이 여기 있습니다.
 
 **(a) processor 03에서 이미 나간 것은 무엇인가?** processor 04가 무언가를 평가하고 있으려면,

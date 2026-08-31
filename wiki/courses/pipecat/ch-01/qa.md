@@ -528,3 +528,48 @@ monoid 0 · algebra 0 · associativ 0 · "identity element" 0 · commutat 0 · c
 | 5 동시성 하 순서 보장 | **§7.2–7.3**, `FrameProcessorQueue:132-143` | 미확인 |
 
 **§5·§7·§8이 반복 등장 = 현재 공백.** §1–§4는 Q1–Q9로 확보됨.
+
+---
+
+## Q13. (학습자 정정) layer04 Filter가 턴을 폐기한다는 건 사실과 다르다
+
+**학습자가 교사의 오류를 잡은 항목.** 교사가 "layer 02의 `Inject`와 layer 03의 `PreTool`을
+layer 04의 `Filter`가 되돌린다"는 시나리오를 제시했고, boson의 저자인 학습자가 *"layer04
+filter가 작동되는 경우가 거의 없고, 저렇게 작동하지도 않아. 해당 턴을 폐기한다는 건 처음
+듣는데"*라고 반박했다. **학습자가 맞다.**
+
+**실사용 측정** (`Filter(` 반환, 테스트·빌드 산출물 제외):
+```
+agents/test-lina-gateway/layers/01-filler-filter/rules/korean_fillers.py:71
+agents/dental-gateway/layers/01-filler-filter/rules/korean_fillers.py:40
+agents/dental-w-tool-gateway/layers/01-filler-filter/rules/korean_fillers.py:84
+agents/demo-gateway/layers/01-guard/rules/spam_filter.py:18
+```
+**전부 layer 01이고, 전부 filler word 아니면 spam.** 뒤쪽 layer에서 `Filter`가 나온 적이 없다.
+
+| 교사가 말한 것 | 실제 |
+|---|---|
+| layer 04가 `Filter`를 낸다 | 항상 layer 01 |
+| "영업시간 외 문의" 같은 업무 판정 | filler word("네","음")와 spam뿐 |
+| "해당 턴을 폐기" | layer 01 시점엔 되돌릴 것이 아직 없다. "이 발화는 입력으로 안 친다"에 가깝다 |
+
+**메커니즘 자체는 실재한다** — boson 자신의 주석이 명시한다(`gateway/layers/pipeline.py:20`
+*"vote before commit so a later Filter can veto it and every other staged effect"*, `:67`,
+`:163`, `:176`)이고 `test_layer_pipeline.py`가 그 경로를 여러 건 덮는다. **그러나 프로덕션
+rule 중 그 경로를 타는 것이 하나도 없다.** [[Q10]]·[[Q11]]에서 세운 구분(존재하는 API vs
+살아있는 API)이 학습자 자신의 코드에도 그대로 적용된 사례.
+
+**⚠ ch-12 전제에 단서가 필요하다.** [[design-boson-rules-on-pipecat]]와 [[ch-12/read]]는
+*"push_frame is irreversible ... all layers must collapse into one object"*라고 강제형으로
+쓴다. 논리는 타당하나 그 논리가 보호하는 것은 **한 번도 행사된 적 없는 경로**다. 따라서:
+
+- ❌ "two-phase commit 때문에 반드시 합쳐야 한다"
+- ✅ "layer별 processor로 나누면 cross-layer veto를 잃는데 **오늘의 Lina는 그것을 쓰지 않는다.**
+  합치는 것은 미래를 위한 보험이고, 보험료는 리셋 지점을 N에서 1로 줄이는 이득과 맞바꾼다"
+
+**강제가 아니라 판단이 필요한 트레이드오프**이며, 판단 근거는 "앞으로 뒤쪽 layer에서 veto를
+쓸 일이 있는가"이다. → ch-12 read.md 수정 필요.
+
+**교사의 절차적 실수:** excerpt를 학습자 시스템의 *동작 기술*로 취급했으나, excerpt는 agent가
+코드를 읽고 쓴 요약이지 **사용 실태**가 아니다. 시나리오를 제시하기 전에 실사용을 grep했어야
+했다.
