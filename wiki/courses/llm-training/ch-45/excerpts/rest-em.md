@@ -7,6 +7,8 @@ source_url: https://arxiv.org/abs/2312.06585
 created_at: "2026-04-23"
 ---
 
+> Superseded by the 2026-09 revision of read.md; kept for history.
+
 # Excerpt: ReST-EM — expectation-maximization for reasoning self-training
 
 **Source library:** `wiki/raw-data/llm-training/papers/rest-em.md`

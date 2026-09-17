@@ -7,6 +7,8 @@ source_url: https://arxiv.org/abs/2305.11206
 created_at: "2026-04-23"
 ---
 
+> Superseded by the 2026-09 revision of read.md; kept for history.
+
 # Excerpt: LIMA — the baseline thesis that justifies ch-36's mix
 
 **Source library:** `wiki/raw-data/llm-training/papers/lima.md`

@@ -7,6 +7,8 @@ source_url: https://www.interconnects.ai/p/frontiers-in-synthetic-data
 created_at: "2026-04-23"
 ---
 
+> Superseded by the 2026-09 revision of read.md; kept for history.
+
 # Excerpt: Lambert's "verification is the bottleneck" — the operating principle of 2025 synthesis
 
 **Author:** Nathan Lambert (Allen AI / Interconnects)

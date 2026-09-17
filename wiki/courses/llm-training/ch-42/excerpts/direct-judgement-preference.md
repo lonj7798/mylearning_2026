@@ -7,6 +7,8 @@ source_url: https://openreview.net/forum?id=HZVIQE1MsJ
 created_at: "2026-04-23"
 ---
 
+> Superseded by the 2026-09 revision of read.md; kept for history.
+
 # Excerpt: Synthetic-Judge Line — Con-J, Self-Taught Evaluators, J1
 
 **Source library:** `wiki/raw-data/llm-training/papers/direct-judgement-preference.md`

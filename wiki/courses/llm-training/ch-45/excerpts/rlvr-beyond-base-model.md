@@ -7,6 +7,8 @@ source_url: https://arxiv.org/abs/2504.13837
 created_at: "2026-04-23"
 ---
 
+> Superseded by the 2026-09 revision of read.md; kept for history.
+
 # Excerpt: RLVR Beyond Base Model — the pass@k critique
 
 **Source library:** `wiki/raw-data/llm-training/papers/rlvr-beyond-base-model.md`

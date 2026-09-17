@@ -5,129 +5,57 @@ phase: read
 excerpt_of: wiki/raw-data/llm-training/papers/loss-masking-prompt.md
 source_url: https://arxiv.org/abs/2405.14394
 created_at: "2026-04-23"
+revised: "2026-09-15 (generality revision; rewritten from arXiv:2405.14394v2)"
 ---
 
-# Excerpt: Prompt-masking — the label invariant §3 of ch-36 unit-tests
+# Excerpt: Instruction Tuning With Loss Over Instructions (Shi et al.)
 
-**Source library:** `wiki/raw-data/llm-training/papers/loss-masking-prompt.md`
-**Canonical references:** Shi et al. 2024 ("Instruction Tuning With Loss Over Instructions"), Taori et al. 2023 (Alpaca), Ouyang et al. 2022 (InstructGPT SFT), HF Alignment Handbook
-**Venue:** arXiv 2405.14394 (formal ablation) + community practice
-**Year:** 2023–2024
+**Paper:** Zhengyan Shi, Adam X. Yang, Bin Wu, Laurence Aitchison, Emine Yilmaz, Aldo Lipani (UCL; University of Bristol). arXiv v1 2024-05; read at v2 (2024-10-02), NeurIPS 2024. Source type: paper.
 
----
+**Why this excerpt was rewritten.** The earlier version stated that response-only loss "strictly dominates" full-sequence loss and that the paper's Table 2 shows an MT-Bench gain for response-only loss. The paper reports the opposite direction in most of its settings: adding loss on instruction tokens (IM) improved the 18-task NLP mean over response-only loss (IT) on all seven datasets in Table 1, and Table 2 is a BLEU table. The library card [[loss-masking-prompt]] repeats the "strictly better" wording; the statements below are taken from the paper.
 
-## Why this source anchors ch-36
+## Objectives (§3, Eqs. 2 and 4)
 
-If [[sequence-packing]] is the *attention-side* invariant (no key from sequence j attends to sequence i), loss-masking is the *label-side* invariant (no token outside the current assistant turn contributes to cross-entropy). The two are not independent: a packed block with correct attention mask but broken label mask trains fine, hits target throughput, and silently teaches the model to autocomplete user prompts. Ch-36's `§3 Loss-mask unit tests` is the label-side counterpart to `§4 Packed-attention unit tests`. Both must be green before a training step runs.
-
-The canonical formulation — mask prompt tokens, train on completion only — has been community practice since Alpaca (2023), but Shi 2024 is the first systematic ablation proving that response-only strictly dominates full-sequence loss on MT-Bench and AlpacaEval for instruction datasets ≥ a few thousand examples. That ablation is what ch-36 uses to justify *not* running the full-loss axis in its 2×2×2 grid — full-loss is a known loss, not an open question.
-
----
-
-## The canonical loss equation
-
-Shi 2024 and every downstream handbook define the SFT objective as response-only cross-entropy. For a conversation `(prompt p_{1:T_p}, response y_{1:T_y})`:
-
-```math
-\mathcal{L}_{\text{SFT}}(\theta) = -\frac{1}{T_y} \sum_{t=1}^{T_y} \log \pi_\theta(y_t \mid p, y_{<t})
+```
+IT:  L = − Σ_{j=1..n} log P(C_j | I_1..I_m, C_1..C_{j−1})
+IM:  L = − Σ_{t=1..m+n} log P(x_t | x_1..x_{t−1}) · 1(x_t ∉ T)
 ```
 
-Contrast with the *full-sequence* loss Shi 2024 ablates against:
+I is the instruction (m tokens), C the completion (n tokens), x their concatenation, and T the set of prompt-template tokens such as `<|user|>` and `<|assistant|>`. IM trains on instruction and completion tokens and excludes template tokens.
 
-```math
-\mathcal{L}_{\text{full}}(\theta) = -\frac{1}{T_p + T_y} \sum_{t=1}^{T_p + T_y} \log \pi_\theta(x_t \mid x_{<t})
-```
+## Setting (§4.1, App. C Table 6)
 
-**Notice:** the difference is two-fold. The *numerator* changes (only completion log-probs are summed). The *denominator* changes (normalization is over `T_y` not `T_p + T_y`). Implementing `ignore_index=-100` in PyTorch's `F.cross_entropy` handles both simultaneously — the `-100` positions are dropped from both the sum and the mean.
+LLaMA-2-7B base (also LLaMA-2-13B and OPT-6.7B). Total batch 128; epochs "2, 3, or 10" (text: "Training typically proceeds for 2 epochs"); maximum sequence length 2048; learning rate 2×10⁻⁵; AdamW, β = (0.9, 0.98), ε = 1e-6; linear schedule, warmup 0.03; weight decay 0; bf16; DeepSpeed stage 3; open-instruct code. Evaluation: 18 NLP tasks in six categories (MMLU, PIQA, OpenbookQA, HellaSwag, LAMBADA; LAMBADA multilingual, WMT 2014, WMT 2016; WSC, WinoGrande, ARC, CoQA; GSM8K, HumanEval; TruthfulQA, ToxiGen, Hendrycks Ethics; BBH), MT-Bench, AlpacaEval 1.0 and 2.0. No seed count or run-to-run variance is reported.
 
-If you implement masking by zeroing `loss_per_token` manually but divide by `T_p + T_y`, the loss value is correct-shaped but ~2× smaller than it should be for a prompt-heavy batch, and your learning rate is effectively halved compared to anyone using `ignore_index`. Ch-36's `test_loss_mask_matches_reference` explicitly checks this: compute CE with `ignore_index=-100`, compute it manually with `.masked_select` and `.mean()`, assert `torch.allclose(a, b, atol=1e-6)`.
+## Table 1 (LLaMA-2-7B; NLP mean of 18 tasks, MT-Bench, AlpacaEval 1.0)
 
----
+| Training data (examples) | NLP mean IT → IM | MT-Bench IT → IM | AlpacaEval 1.0 IT → IM |
+|---|---|---|---|
+| LLaMA-2-7B base (no SFT) | 49.32 | 1.16 | 0.01 |
+| Alpagasus Alpaca 5k (5,305) | 45.29 → 47.47 | 3.62 → 3.48 | 16.29 → 19.52 |
+| Alpagasus Dolly 3k (2,996) | 46.58 → 48.95 | 4.23 → 4.06 | 13.42 → 15.11 |
+| Alpagasus Dolly 9k (9,229) | 45.54 → 48.00 | 4.33 → 4.55 | 21.54 → 30.77 |
+| Less Tydiqa (13,533) | 48.21 → 48.70 | 4.08 → 4.36 | 5.12 → 10.10 |
+| Less MMLU Chat (13,533) | 47.18 → 47.84 | 3.86 → 4.54 | 4.42 → 9.78 |
+| Less BBH ICL (13,533) | 48.28 → 49.15 | 4.78 → 5.03 | 36.20 → 44.15 |
+| LIMA (1,030) | 48.79 → 49.60 | 4.77 → 4.83 | 33.06 → 32.94 |
 
-## Multi-turn: the combinatorics that the tests must pin down
+Every IT row has an NLP mean below the base model's 49.32. Category detail for Alpagasus Alpaca 5k IT: Commonsense Reasoning 75.86 (base) → 66.06; Multilinguality 61.99 → 57.24; BBH 38.80 → 26.80. The authors call this "instruction tuning tax" (§4.3 #3).
 
-Source lines 38–43 specify the multi-turn rule:
+## Conditions reported for the IM effect (§4.2, Fig. 2, Table 5)
 
-> For a conversation with turns `[u_1, a_1, u_2, a_2, …, u_k, a_k]`: mask **all** user turns, mask **all** prior assistant turns (a_1..a_{k−1}), train on a_k tokens only. Per-turn-training variant: unroll the conversation k times, each time masking through a_{i−1} and training on a_i → k× more data but identical loss value.
+- IM helps more when the instruction/output length ratio is large (Fig. 2 left); Tülu V2 (ratio about 0.5) benefits less than Science Literature (ratio 24.7).
+- IM helps more with fewer examples: Tülu V2 subsets from 1,000 to 35,000 examples at a fixed instruction/output ratio near 10 (Fig. 2 right; App. C). The figure has no per-point numeric labels.
+- Table 5 average lengths (unit not stated): LIMA total 484.47, output 442.75, instruction 41.72, instruction/output 0.0942; Less MMLU Chat total 225.19, output 8.24, instruction 216.95, instruction/output 26.3316.
+- Abstract: "we are not proposing IM as a replacement for current fine-tuning processes."
 
-| Strategy | Label mask on turn k | Data expansion | Effective loss |
-|----------|---------------------|----------------|----------------|
-| Last-turn-only | `[mask_all_but_a_k]` | 1× | `−log π(a_k \| u_1..u_k, a_1..a_{k-1})` |
-| Per-turn unrolled | `[mask_all_but_a_i]` for i=1..k, stacked | k× | `Σ_i −log π(a_i \| u_1..u_i, a_1..a_{i-1})` |
-| Full-assistant | `[mask_only_user_turns]` | 1× | `Σ_i −log π(a_i \| ...)` — summed in one pass |
+## Overfitting evidence (§4.3)
 
-**Notice:** per-turn-unrolled and full-assistant compute the same loss *value* but differ in *batch composition*. Full-assistant puts all of `a_1..a_k` in one packed block with one forward pass; per-turn-unrolled replicates the prompt `k` times across the batch. Per-turn-unrolled is what ch-36's §3 tests target because it's the form the HF Alignment Handbook ships by default (`train_on_response_only=True` + no manual unrolling = full-assistant; unrolling is a dataset preprocessing step).
+- LIMA training loss on output tokens: mean 1.37 (IT) versus 1.45 (IM); test loss on a 10% sample of Tülu V2: 1.32 (IT) versus 1.17 (IM) (Fig. 3).
+- BLEU between greedy outputs and training targets (Table 2), IT → IM: LIMA 18.15 → 17.30; Less BBH ICL 60.96 → 53.94; Less MMLU Chat 72.43 → 69.20.
+- Fig. 4: NLP mean over epochs 2-10 on five datasets; "IM generally has a lower instruction tuning tax compared to IT."
+- Table 3: a KL-divergence loss to the base model reduced NLP-task degradation but lowered open-ended generation scores.
 
-The ch-36 test `test_multiturn_mask_hides_prior_assistant` constructs a 3-turn conversation, applies the mask, and asserts that the indices of non-`-100` labels lie strictly inside `a_3`'s token span. This is the test that Taori's original Alpaca code did *not* have, and the reason several early forks trained on user-turn echoes for months before anyone noticed.
+## Used in
 
----
-
-## The regime where full-loss helps — and why ch-36 ignores it
-
-From Shi 2024's abstract:
-
-> Response-only loss is strictly better on helpfulness benchmarks (MT-Bench, AlpacaEval) for typical instruction datasets; full-sequence loss can help in the *tiny-dataset / strong-base-model* regime where it acts as a mild continued-pretraining regularizer.
-
-Ch-36 runs 100K SFT examples (full budget) or 20K (resource-constrained). Both sit comfortably above Shi 2024's "tiny-dataset regime" (< ~2K), so response-only is the answer and full-loss doesn't need to be a live axis. This is a deliberate design call: three axes × two levels = 8 runs, already at the edge of the 8×H100 / 8h compute budget. Spending two of those runs on a variable with a known answer is poor ablation hygiene per [[karpathy-training-neural-net-recipe]]'s "one axis per experiment" rule.
-
-LIMA ([[lima]]) sits at 1K — exactly the regime where full-loss might help. If a future lab revisits LIMA-scale SFT, the full-loss axis should be re-introduced.
-
----
-
-## Packing × masking: where the silent bug lives
-
-Source line 55 — the one paragraph that motivates the entire `§3 + §4` test pairing:
-
-> In a packed block, every sub-sequence has its own (prompt, response) split → the label mask must be reset per sub-sequence. Incorrect packing + masking is a common bug that silently degrades SFT.
-
-Concretely: if the packer concatenates three conversations `C_1, C_2, C_3` into one block and the label-mask function computes `prompt_len` only from `C_1`, then `C_2`'s prompt and `C_3`'s prompt both fall in the "unmasked" region and contribute to the loss. The model learns to predict user turns — exactly the failure Shi 2024 warns against, reintroduced through a packing bug.
-
-The ch-36 test `test_packed_labels_respect_subsequence_boundaries` constructs a packed block with three conversations, runs the label-masking function, and asserts:
-
-1. For each sub-sequence `i`, labels in `[cu[i], cu[i] + prompt_len_i)` are `-100`.
-2. For each sub-sequence `i`, labels in `[cu[i] + prompt_len_i, cu[i+1])` are the corresponding `input_ids[... + 1]` (shifted-by-one CE target).
-3. The total count of non-`-100` labels equals `Σ_i response_len_i`.
-
-This test is the intersection of [[sequence-packing]] and [[loss-masking-prompt]]. Neither source alone specifies it; the combination does. Ch-36 exists largely to enforce this intersection.
-
----
-
-## Implementation sketch from the source (line 45–52)
-
-```python
-labels = input_ids.clone()
-labels[:prompt_len] = -100  # mask prompt
-loss = F.cross_entropy(
-    logits[..., :-1, :].reshape(-1, V),
-    labels[..., 1:].reshape(-1),
-    ignore_index=-100,
-)
-```
-
-**Notice three things** the snippet bakes in that ch-36's tests must verify on real data:
-
-1. **Shift-by-one alignment.** `logits[..., :-1]` predicts `labels[..., 1:]`. If a packer accidentally strips the final EOS before the label computation, the last real token has no supervision signal and `response_len_i` off-by-one accumulates.
-2. **Flatten then reduce.** `.reshape(-1, V)` turns a `[B, L, V]` tensor into `[B*L, V]`; `ignore_index=-100` is what keeps the reduction correct despite variable effective lengths. Manually masking after `F.cross_entropy(reduction='none')` is equivalent only if you also divide by the non-`-100` count.
-3. **No explicit division by response length.** The `mean` reduction in `F.cross_entropy` handles it via the `ignore_index` count. This is why the loss value is *per-response-token*, not *per-batch-token*, and comparable across runs with different prompt/response length distributions.
-
----
-
-## The prompt-upweighting dead-end (and why ch-36 skips it)
-
-Source line 58:
-
-> Upweighting (e.g., `loss = α·L_prompt + L_response` with α < 1) gives modest gains in some ablations (Shi 2024), but the response-only baseline dominates across most dataset sizes and is simpler.
-
-Ch-36 treats `α = 0` (response-only) as the single choice and does not sweep `α`. This is a deliberate simplicity bet: one more sweep axis would triple the ablation grid for a known-small marginal gain. If the track's `sft-run-memo.md` surprise were "MT-Bench dropped unexpectedly on the packed+masked+NEFTune cell", re-introducing `α` would be a reasonable follow-up; it is not a first-order axis.
-
----
-
-## Connections
-
-- Attention-side companion: [[excerpts/sequence-packing]] — same silent-bug structure, different mask.
-- Reference recipe that bakes both in: [[excerpts/hf-alignment-handbook]] — `train_on_response_only=True`.
-- Baseline-thesis source for the 1K regime: [[excerpts/lima]] — where full-loss might actually help.
-- Ablation-methodology source: [[packed-vs-unpacked-ablation]] — defines Failure Modes 1–4 that include label-mask bugs.
-- Full-read chapter on masking: [[ch-32]].
-- Full-read chapter on packing: [[ch-33]].
-- Lab host: [[ch-36]] — `§3 Loss-mask unit tests`.
+ch-36 §3 (narrow data and the instruction tuning tax), §4.2 (IM versus response-only axis), Recipe row.

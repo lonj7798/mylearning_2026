@@ -2,92 +2,45 @@
 chapter: ch-40
 course: llm-training
 phase: read
-excerpt_of: wiki/raw-data/llm-training/papers/reinforce-plus-plus.md
+excerpt_of: arXiv:2501.03262 v1 and v9 (REINFORCE++); library card [[reinforce-plus-plus]] (verified 2026-09-14)
 source_url: https://arxiv.org/abs/2501.03262
 created_at: "2026-04-23"
+revised: "2026-09-15 (generality revision; aligned with the verified card)"
 ---
 
-# Excerpt: REINFORCE++ — global normalization for k=1 regimes
+# Excerpt: REINFORCE++ — normalize over the batch, not the group
 
-**Source library:** `wiki/raw-data/llm-training/papers/reinforce-plus-plus.md`
-**Artifact:** Jian Hu 2025, "REINFORCE++: A Simple and Efficient Approach for Aligning Large Language Models." OpenRLHF-native; targets the regime where you can only afford k=1 rollout per prompt.
+Used by [[read]] §3, §4, §6, and the Recipe. Authors (v9): Jian Hu, Jason Klein Liu, Haotian Xu, Wei Shen; v1 (4 Jan 2025) was by Jian Hu alone. Implementation in OpenRLHF.
 
----
-
-## Why this source anchors ch-40 §3
-
-REINFORCE++ fills the gap that RLOO and GRPO leave: what if k=1 per prompt (because you have a huge, diverse prompt pool and can't afford multiple rollouts each)? Neither a leave-one-out baseline nor a group-relative advantage is defined for a singleton. REINFORCE++'s answer: normalize advantages across the *entire mini-batch*. Ch-40 §3 is a walkthrough of this idea plus its three retained PPO-borrowings (clip, token-level KL, batch-wide norm).
-
----
-
-## The three design choices ch-40 §3 attributes to this paper
-
-From source lines 17–22 and 48–55:
-
-1. **Global advantage normalization** — mean/std computed over the full mini-batch of sequences (not per prompt, not per group). Works at k=1 because a single-prompt std is undefined.
-2. **PPO-clip retained** — REINFORCE++ alone in the family pairs k=1 with the clip. Rationale: with k=1 the per-token ratio can drift far from 1.0 under a single large advantage; ε=0.2 bounds the worst-case step.
-3. **KL as per-token shaped reward** — identical to RLOO, not identical to GRPO. `r̃_t = r(x,y)·𝟙{t=T} − β·KL_t` with KL_t a k1 estimator.
-
----
-
-## The algorithm ch-40 §3 reproduces
-
-Source lines 31–42:
-
+## Two variants (§3.1–3.2)
 ```
-r̃_t = r(x,y) · 𝟙{t = T} − β · KL_t
-G_t = Σ_{t'≥t} γ^{t'-t} r̃_{t'}                    # γ = 1 typical
-Â_t = (G_t − mean_B(G)) / std_B(G)                 # global batch norm
-L = −E_t[ min(ρ_t Â_t, clip(ρ_t, 1±ε) Â_t) ]
+REINFORCE++ (k ≥ 1)
+  A_{q,o_t} = r(o_1:T, q) − β Σ_{i=t..T} KL(i),  KL(t) = log[π_θold(o_t|q,o_<t) / π_ref(o_t|q,o_<t)]   (Eq. 4)
+  A^norm = (A − mean_batch(A)) / (std_batch(A) + ε)                                                     (Eq. 5)
+
+REINFORCE++ w/ Baseline (k > 1)
+  A′ = R − mean_group(R)                                                                                (Eq. 6)
+  A^norm = (A′ − mean_batch(A′)) / (std_batch(A′) + ε)                                                  (Eq. 7)
+  L = L_PPO(A^norm) − λ · E[½ (log π_θ/π_ref)²]                                                         (Eq. 8)
 ```
+The surrogate is PPO-clip (Eq. 1). w/ Baseline equals PPO with the critic removed, GAE `λ = γ = 1`, and two-stage global normalization (§3.3). The k2 loss coefficient `λ` is not reported.
 
-Ch-40 §3 reproduces this sequence because it cleanly names the four design choices: token-level KL shaping, cumulative return, global normalization, PPO-clip surrogate.
+## Arguments against group-level normalization (§2.2, App. A)
+1. Theorem 1: `(r_i − mean)/std` is biased for any group size `N ≥ 2` because the denominator depends on `r_i`.
+2. With `k = 4` or `8`, near-equal rewards drive the local std toward zero and the advantage "explodes". (Exactly equal rewards give zero, not a large value — see [[read]] §5.)
+3. Rewarding a response for beating other samples of the same prompt is linked by the authors to overfitting on easy prompts.
+App. B.1 argues that k2 is the correct separate-loss estimator for reverse KL and that k3 (used in GRPO) estimates forward KL.
 
----
+## Reported results (v9)
+- Chat-Arena-Hard, Llama-3-8B-SFT with a Bradley–Terry RM (~700K pairs, 20,000 prompts): REINFORCE++ k=1 46.7 (mean length 832); GRPO k=4 46.8 (860); RLOO 44.6; ReMax 45.1 (Table 1).
+- 30 AIME-24 training questions (model not stated): GRPO train pass@1 95.0 with AIME-25 pass@1 0.0 and pass@16 0.4; REINFORCE++ 71.0 / 2.5 / 40.0 (Table 2).
+- Knights and Knaves: average 62.1 vs GRPO 55.7, with the gap at 4+ people (§4.2, Fig. 4).
+- Qwen2.5-Math-Base on MATH splits: AIME-24 pass@8 21.04 vs 18.96; MATH-500 pass@1 72.00 vs 73.00 (Table 3).
+- Tool use, average@32: w/ Baseline 24.10, GRPO 22.58, PPO 21.85 (Table 4).
+Each is a single run without reported seeds.
 
-## Why global is better than per-group at small k (source lines 7, 17)
+## v1 settings (§4.2 Table 1)
+KL coefficient β 0.01 (general) and 0.001 (mathematics); clip ε 0.2; 4 samples per prompt; rollout batch 256, training batch 128 (units not stated); actor LR 5e-7; γ 1.0; maximum 25,000 samples. Training time on 70k samples, H100: PPO 60 h, REINFORCE++ 42 h (§5.2 Table 2).
 
-> "Prompt-local advantage normalization (GRPO's per-group, RLOO's leave-one-out) is high-variance when groups are small."
-
-For small groups, the per-prompt mean and std are noisy estimates of the true prompt-conditional reward distribution. With B=2048 sequences in a global batch, the mean and std are near-exact estimates of the batch-wide reward distribution. The tradeoff: you lose the "this response is good *for this prompt*" signal and replace it with "this response has above-average reward *across all prompts in the batch*." For LLM RLHF where prompts are heterogeneous but batches are huge, the latter is often a better estimator.
-
----
-
-## Attested hyperparameters
-
-Source lines 57–65:
-
-| Knob | Value |
-|------|-------|
-| Clip ε | 0.2 |
-| KL coef β | 0.01–0.05 |
-| Learning rate | 5e-7 – 1e-6 |
-| Global batch size | 512–2048 sequences |
-| k (samples per prompt) | 1–4 |
-| Epochs per rollout | 1 |
-| Sampling T | 1.0 |
-
-Ch-40 §3 calls out the k=1 column specifically: this is the only variant in the family where k=1 is a supported default. RLOO requires k ≥ 2; GRPO requires G ≥ 2.
-
----
-
-## The table that ch-40 §3 quotes (source lines 48–55)
-
-| Component | PPO | RLOO | GRPO | REINFORCE++ |
-|-----------|-----|------|------|-------------|
-| Value network | yes | no | no | **no** |
-| Clip ε | yes | no | yes | **yes** |
-| KL location | per-token reward | per-token reward | in-loss (k3) | **per-token reward** |
-| Advantage baseline | learned V | leave-one-out | group mean/std | **global batch mean/std** |
-| Group size requirement | — | k ≥ 2 | G ≥ 2 | **k = 1 OK** |
-
-Ch-40 §6 folds REINFORCE++ into its 4-row comparison table. The key cells to notice: it pairs k=1 with clip, unlike RLOO which has neither.
-
----
-
-## Connections to the rest of the track
-
-- [[rloo]], [[grpo]], [[dr-grpo]] — the group-baseline relatives that require k ≥ 2.
-- [[ppo]] — the source of the retained clip.
-- [[openrlhf-ppo]] — the reference implementation home.
-- [[entropy-mechanism-llm-rl]] — relevant for understanding why small-k / large-B works empirically.
+## Recommendations as stated (§5.1)
+Plain REINFORCE++ "performs best with symmetric rewards, such as −1/1" and is recommended when only one response per prompt can be scored; the w/ Baseline variant is recommended with `k > 1` and 0/1 rewards. The authors cite third-party reports (ScaleRL, LitePPO, DLER) that batch-level normalization is more stable (§5.2, not verified here).

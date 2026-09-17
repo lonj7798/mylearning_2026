@@ -7,6 +7,8 @@ source_url: https://aclanthology.org/2024.acl-long.757/
 created_at: "2026-04-23"
 ---
 
+> Superseded by the 2026-09 revision of read.md; kept for history.
+
 # Excerpt: Rephrasing the Web (WRAP) — the critique that classical filters have a ceiling
 
 **Source library:** `wiki/raw-data/llm-training/papers/rephrasing-the-web.md`

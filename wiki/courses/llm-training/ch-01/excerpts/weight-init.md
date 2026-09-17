@@ -7,6 +7,8 @@ source_url: https://arxiv.org/abs/2203.03466
 created_at: "2026-04-23"
 ---
 
+> Superseded by the 2026-09 revision of read.md; kept for history.
+
 # Excerpt: Weight initialization — Xavier, He, GPT-2, residual scaling, μP
 
 **Authors (composite):** Xavier Glorot, Yoshua Bengio (Glorot/Xavier, 2010); Kaiming He, Xiangyu Zhang, Shaoqing Ren, Jian Sun (He init, 2015); Alec Radford et al. (GPT-2, 2019); Greg Yang, Edward Hu et al. (μP, 2022)

@@ -1243,3 +1243,22 @@ IFD < 1
 
 ### 한 줄
 **"PPL = 1/P (반비례). 학습자 confusion은 마지막 step에서 PPL과 P를 동일시. PPL_cond 작음 → P_cond 큼 → q 도움 → IFD < 1 좋음. 비유: PPL = '몇 option 중 헷갈리는가', 낮을수록 model 자신감."**
+
+## Q-정정 (2026-09 revision)
+
+2026-09 revision에서 read.md를 primary source 기준으로 다시 썼다. 아래 Q들의 kernel에 들어 있던 사실 중 정정된 내용을 정리한다. 이전 entry의 "chapter line N" 참조는 git commit 4a72e54 시점의 read.md를 가리키며, 현재 read.md의 줄 번호와 맞지 않는다.
+
+- **Q1**: AlpaGasus rating은 4개 기준의 평균이 아니라, 한 번의 rating에 하나의 dimension("accuracy")만 0–5로 매긴다 ([[alpagasus]] §2.3, Fig. 3). 9k model은 GPT-4 judge 기준 4개 test set에서 win이 loss보다 많았지만 MMLU는 40.86 → 38.78 (7B)로 떨어졌으므로 "모든 benchmark 우수"는 틀리다. "4.0 = rater uncertainty boundary"는 논문에 없는 해석이다.
+- **Q2**: 실제 histogram은 5.0: 11개, 4.5: 9,218개, 4.0: 30,240개, 3.5: 10,811개, 3.0: 1,550개, <3: 172개이다 (Fig. 4). τ = 4.0은 39k를 남기며, generator별 분포 표와 "generator = rater family" 설명은 논문에 근거가 없다.
+- **Q3, Q13, Q24**: Cherry LLM의 IFD는 perplexity 비율이 아니라 mean token loss 비율 s(A|Q)/s(A)이다. Cherry LLM은 IFD > 1을 제거한 뒤 IFD가 **높은** sample부터 keep하므로 "작을수록 좋음", "keep zone 0.7–0.95", "IFD 0.002 → KEEP"은 방향이 반대이며, lowest-IFD subset은 가장 낮은 winning score를 냈다 ([[cherry-llm]] §2.2, §4.2.3).
+- **Q3, Q5**: pre-experience set 1,000개는 random이 아니라 100개 K-means cluster에서 10개씩 뽑는다. pre-experience model 없이도 10% data에서 Alpaca를 이겼으므로 "warmup 필수"는 과장이다 ([[cherry-llm]] §2.1, §4.3.1).
+- **Q3, Q6, Q9**: Superfiltering proxy는 GPT-2 124M이고 training 없이 바로 IFD를 계산한다. GPT-2와 LLaMA2-7B의 IFD Spearman ρ는 0.679–0.802이고, filtering 시간은 8분 대 161분(약 20×, "50×" 아님)이다. LLaMA2-7B IFD로 고른 data가 Superfiltering data보다 pairwise에서 이겼으므로 "quality 동일"은 틀리다 ([[superfiltering]] Tables 1, 4).
+- **Q6**: GPT-2와 LLaMA2는 tokenizer와 family가 다른데도 transfer가 측정되었다. "family mismatch면 깨짐"은 논문이 실험하지 않은 주장이다.
+- **Q7, Q8**: "ρ 0.7–0.9 = top X% 70–80% overlap"은 틀리다. 측정된 top-15% overlap은 GPT-2 기준 0.49–0.61, top-5%는 0.24–0.42이다 (Table 1). Q8의 decision rule 수치는 논문 값이 아니다.
+- **Q10, Q11**: DEITA의 complexity/quality scorer는 13B가 아니라 LLaMA-1 7B이고, embedding은 LLaMA-1 13B이다 (SBERT/MPNet 아님). DEITA-Mistral-7B 6K SFT는 MT-Bench 7.22로 200K SFT-only zephyr-beta-sft(5.32)보다 높고, SFT+DPO zephyr-beta(7.34)와는 다른 비교이다 ([[deita]] §2.3–2.5, Table 6).
+- **Q12**: "DEITA paper: FAISS + single A100 몇 시간"은 논문에서 확인되지 않는다.
+- **Q14, Q16, Q18, Q19, Q20**: LESS warmup은 "4% budget"이 아니라 random 5% subset에 대한 4 epoch LoRA training이다. Projection은 Gaussian이 아니라 Rademacher(±1), d = 8192이다. Adam 보정은 g/√v가 아니라 update 방향 m/(√v+ε)이고, 4개 checkpoint의 learning-rate-weighted cosine을 합산한다 ([[less]] Def. 3.1, §4.1).
+- **Q14, Q16, Q20**: "SGD-rank와 Adam-rank top 5%가 30% 다르다"는 논문에 없다. Table 9의 평균은 Adam 50.5, SGD 49.7이다. Q16의 MMLU 45.2/42.1/47.8 등 수치도 논문 값이 아니다.
+- **Q14, Q16**: pool은 ~100K (FLAN, Tulu, WizardLM)가 아니라 Flan V2, CoT, Dolly, OASST1 약 270K이다. LLaMA-2-7B에서 LESS 5%는 full data보다 MMLU (50.2 vs 51.6)와 BBH (41.5 vs 43.2)에서 낮고 TydiQA에서만 높다. random 5%보다는 세 benchmark 모두 높다 ([[less]] Table 2).
+- **Q21, Q22, Q23**: G-Vendi projection dimension은 8K가 아니라 1024이고 proxy는 Qwen2.5-0.5B-Instruct이다. Prismatic Synthesis는 greedy max-entropy selection이 아니라 gradient K-means에서 sparse cluster에 들어간 generated sample을 keep한다. G-Vendi는 GᵀG로 O(d²|D|)에 계산되므로 O(N³) cost 분석은 맞지 않는다 ([[prismatic-synthesis]] §2.1, §3.1, App. C).
+- **Q21**: "7B teacher → 671B 이김"은 틀리다. PrismMath-7B는 student이고, 문제는 Qwen2.5-72B-Instruct, 풀이는 R1-Distill-Qwen-32B가 생성했으며, R1-Distill-Qwen-7B(671B R1 data)를 7개 중 6개 benchmark에서 이겼다. G-Vendi와 OOD accuracy의 ρ ≈ 0.9는 math와 NLI에서만 측정되었다.

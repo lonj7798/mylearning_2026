@@ -7,6 +7,8 @@ source_url: https://arxiv.org/abs/2407.21783
 created_at: "2026-04-23"
 ---
 
+> Superseded by the 2026-09 revision of read.md; kept for history.
+
 # Excerpt: Llama 3 — the industrial DPO recipe
 
 **Source library:** `wiki/raw-data/llm-training/model-reports/llama-3.md`

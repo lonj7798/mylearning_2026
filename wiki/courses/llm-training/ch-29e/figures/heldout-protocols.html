@@ -1,0 +1,324 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Held-Out Protocols and Task Scaling (ch-29e)</title>
+<style>
+:root{
+  --bg:#fbfaf7; --panel:#ffffff; --ink:#1d1d1f; --muted:#5d5d63; --line:#d9d6cf;
+  --train:#dbe8f7; --train-ink:#1c4a7a; --eval:#fbe3c8; --eval-ink:#8a4a07;
+  --drop:#eeeeee; --drop-ink:#6b6b6b; --dev:#e2f1e0; --dev-ink:#2e6b2a;
+  --s1:#2f6fb3; --s2:#c7661b; --s3:#3f8f4a; --accent:#2f6fb3;
+}
+@media (prefers-color-scheme: dark){
+  :root{
+    --bg:#17171a; --panel:#202024; --ink:#ececf0; --muted:#a4a4ad; --line:#3a3a41;
+    --train:#1f3550; --train-ink:#b9d6f5; --eval:#4a3218; --eval-ink:#f7cf9f;
+    --drop:#2e2e33; --drop-ink:#a0a0a8; --dev:#233d25; --dev-ink:#bfe3bb;
+    --s1:#6fa8e6; --s2:#f0a060; --s3:#7cc387; --accent:#6fa8e6;
+  }
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;padding-inline:16px;padding-block:20px}
+main{max-width:980px;margin:0 auto}
+h1{font-size:1.35rem;margin:0 0 4px}
+h2{font-size:1.08rem;margin:0 0 6px}
+p{margin:6px 0}
+.sub{color:var(--muted);font-size:.9rem}
+section{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:14px 16px;margin:14px 0}
+.btns{display:flex;flex-wrap:wrap;gap:6px;margin:8px 0}
+button,select,input[type=range]{font:inherit}
+button{border:1px solid var(--line);background:transparent;color:var(--ink);border-radius:6px;padding:4px 10px;cursor:pointer}
+button[aria-pressed="true"]{background:var(--accent);border-color:var(--accent);color:#fff}
+select{border:1px solid var(--line);background:var(--panel);color:var(--ink);border-radius:6px;padding:3px 6px;max-width:100%}
+.grid{display:flex;flex-wrap:wrap;gap:6px;margin:10px 0}
+.chip{border-radius:6px;padding:5px 9px;font-size:.88rem;border:1px solid transparent}
+.chip.train{background:var(--train);color:var(--train-ink)}
+.chip.eval{background:var(--eval);color:var(--eval-ink);font-weight:600}
+.chip.drop{background:var(--drop);color:var(--drop-ink);text-decoration:line-through}
+.chip.dev{background:var(--dev);color:var(--dev-ink)}
+.legend{display:flex;flex-wrap:wrap;gap:10px;font-size:.84rem;color:var(--muted);margin-top:4px}
+.legend span{display:inline-flex;align-items:center;gap:5px}
+.sw{width:12px;height:12px;border-radius:3px;display:inline-block}
+.rowlab{font-size:.84rem;color:var(--muted);margin:10px 0 2px}
+.note{font-size:.88rem;color:var(--muted);border-left:3px solid var(--line);padding-left:10px;margin-top:8px}
+.chartwrap{overflow-x:auto}
+svg text{fill:var(--ink);font-size:11px}
+svg .ax{stroke:var(--line)}
+svg .grid-line{stroke:var(--line);stroke-dasharray:2 3}
+.readout{font-variant-numeric:tabular-nums;font-size:.95rem;margin:8px 0}
+.controls{display:flex;flex-wrap:wrap;gap:10px;align-items:center}
+table{border-collapse:collapse;font-size:.86rem;margin-top:6px}
+td,th{border:1px solid var(--line);padding:3px 7px;text-align:right}
+th:first-child,td:first-child{text-align:left}
+</style>
+</head>
+<body>
+<main>
+<h1>Held-Out Protocols and Task Scaling</h1>
+<p class="sub">Companion to ch-29e read.md. Panel A shows which task groups each protocol trains on, evaluates, or removes. Panel B plots held-out scores against the number of training tasks. Panel C evaluates the post-training power-law fits. All numbers are taken from the sources named under each panel.</p>
+
+<section id="panelA">
+<h2>A. Split builder</h2>
+<div class="btns" id="protoBtns"></div>
+<div id="flanPick" class="controls" hidden>
+  <label for="flanSel">FLAN cluster held out for evaluation:</label>
+  <select id="flanSel"></select>
+</div>
+<div id="splitView"></div>
+<div class="legend">
+  <span><i class="sw" style="background:var(--train)"></i>used for training</span>
+  <span><i class="sw" style="background:var(--eval)"></i>evaluated (held out)</span>
+  <span><i class="sw" style="background:var(--drop)"></i>removed from training to prevent leakage</span>
+  <span><i class="sw" style="background:var(--dev)"></i>development suite (used for decisions)</span>
+</div>
+<p class="note" id="splitNote"></p>
+</section>
+
+<section id="panelB">
+<h2>B. Held-out score versus training tasks</h2>
+<div class="btns" id="scaleBtns"></div>
+<div class="chartwrap"><svg id="scaleSvg" viewBox="0 0 640 300" width="640" height="300" role="img" aria-label="Held-out score versus number of training tasks"></svg></div>
+<p class="note" id="scaleNote"></p>
+</section>
+
+<section id="panelC">
+<h2>C. Post-training power law P = a · D^(1/b)</h2>
+<div class="controls">
+  <label for="fitSel">Fit:</label><select id="fitSel"></select>
+  <label for="dSlider">D (examples):</label>
+  <input id="dSlider" type="range" min="0" max="4" step="0.01" value="3">
+</div>
+<div class="readout" id="fitOut"></div>
+<div class="chartwrap"><svg id="fitSvg" viewBox="0 0 640 260" width="640" height="260" role="img" aria-label="Fitted accuracy versus number of fine-tuning examples"></svg></div>
+<p class="note">Coefficients from Revisiting the Superficial Alignment Hypothesis (arXiv:2410.03717v1), App. A.6 Table 7; runs used 0, 100, 500, 1,000, 5,000, and 10,000 examples up to the size of each training set (§3.1). P is benchmark accuracy in percent. A fitted curve summarizes measured points; values outside the measured range are extrapolations, not results. Check: Llama-3-8B on GSM8K gives 48.0 at D = 1,000; the paper measures 46.5% for a 1,000-example GSM8K model (Table 2).</p>
+</section>
+</main>
+
+<script>
+(function(){
+  var S = function(id){ return document.getElementById(id); };
+  function chips(list){
+    return '<div class="grid">' + list.map(function(c){
+      return '<span class="chip ' + c[1] + '">' + c[0] + '</span>';
+    }).join('') + '</div>';
+  }
+
+  /* ---------- Panel A data ---------- */
+  var flanClusters = [
+    ['Natural language inference (7)','nli'], ['Commonsense (4)','cs'], ['Sentiment (4)','sent'],
+    ['Paraphrase (4)','para'], ['Closed-book QA (3)','cbqa'], ['Struct to text (4)','s2t'],
+    ['Translation (8)','trans'], ['Reading comp. (5)','rc'], ['Read. comp. w/ commonsense (2)','rccs'],
+    ['Coreference (3)','coref'], ['Misc. (7)','misc'], ['Summarization (11)','summ']
+  ];
+  function flanDropped(held){
+    var d = {};
+    if (held === 'nli') d.para = 1;
+    if (held === 'para') d.nli = 1;
+    if (held === 'rc' || held === 'cs') d.rccs = 1;
+    if (held === 'rccs') { d.rc = 1; d.cs = 1; }
+    return d;
+  }
+  function renderFlan(){
+    var held = S('flanSel').value, d = flanDropped(held);
+    var list = flanClusters.map(function(c){
+      var cls = c[1] === held ? 'eval' : (d[c[1]] ? 'drop' : 'train');
+      return [c[0], cls];
+    });
+    S('splitView').innerHTML = '<div class="rowlab">12 clusters, 62 datasets; dataset counts in parentheses</div>' + chips(list);
+    S('splitNote').textContent = 'FLAN (arXiv:2109.01652v5 §2.2, footnote 1): a dataset is unseen only if no dataset from its cluster was trained; paraphrase and NLI exclude each other, and reading comprehension with commonsense is removed when either parent cluster is evaluated (both parents are removed when it is evaluated). Each held-out cluster needs its own trained model.';
+  }
+  var protocols = {
+    'FLAN': function(){ S('flanPick').hidden = false; renderFlan(); },
+    'T0': function(){
+      S('flanPick').hidden = true;
+      S('splitView').innerHTML =
+        '<div class="rowlab">12 tasks (Figure 2) plus BIG-bench</div>' +
+        chips([['Multiple-choice QA','train'],['Extractive QA','train'],['Closed-book QA','train'],['Sentiment','train'],
+               ['Topic classification','train'],['Structure-to-text','train'],['Summarization','train'],['Paraphrase identification','train'],
+               ['Natural language inference','eval'],['Coreference resolution','eval'],['Sentence completion','eval'],['Word sense disambiguation','eval'],
+               ['BIG-bench (14 tasks)','eval'],['GPT-3 evaluation datasets (main T0 model)','drop']]);
+      S('splitNote').textContent = 'T0 (arXiv:2110.08207v3 §3, §5): one model with four held-out tasks; checkpoint chosen on validation splits of training datasets; median and interquartile range over all prompts, with no prompt selection. T0+ and T0++ add the GPT-3 evaluation datasets and SuperGLUE.';
+    },
+    'Super-NaturalInstructions': function(){
+      S('flanPick').hidden = true;
+      S('splitView').innerHTML =
+        '<div class="rowlab">Evaluation: 12 categories, 154 tasks (119 English, 35 cross-lingual), at most 100 instances each</div>' +
+        chips([['Textual entailment','eval'],['Cause effect classification','eval'],['Coreference resolution','eval'],['Dialogue act recognition','eval'],
+               ['Answerability classification','eval'],['Word analogy','eval'],['Overlap extraction','eval'],['Keyword tagging','eval'],
+               ['Question rewriting','eval'],['Title generation','eval'],['Data to text','eval'],['Grammar error correction','eval']]) +
+        '<div class="rowlab">Training pool</div>' +
+        chips([['Remaining tasks: 757 English training tasks','train'],['Tasks built from the same source dataset as any test task','drop']]);
+      S('splitNote').textContent = 'Super-NaturalInstructions (arXiv:2204.07705v3 §5.1, footnote 6, Figure 4): source-dataset exclusion removes training tasks that share a source dataset with a test task. Scores are ROUGE-L on open-ended generations.';
+    },
+    'OPT-IML': function(){
+      S('flanPick').hidden = true;
+      S('splitView').innerHTML =
+        '<div class="rowlab">Fully held-out categories (L3)</div>' +
+        chips([['Cause effect classification','eval'],['Grammar error correction','eval'],['Stereotype detection','eval'],['Word analogy','eval']]) +
+        '<div class="rowlab">Partially supervised categories (L2): unseen tasks from trained categories</div>' +
+        chips([['Reasoning','eval'],['MMLU','eval'],['Question answering','eval'],['Summarization','eval'],['Toxic language detection','eval']]) +
+        '<div class="rowlab">Fully supervised (L1): held-out instances of trained tasks</div>' +
+        chips([['Question answering','eval'],['Summarization','eval'],['Dialogue generation','eval']]) +
+        '<div class="rowlab">Leakage control</div>' +
+        chips([['Train/eval task pairs with 13-gram overlap above 1% of the eval set, confirmed by manual review (~14,000 pairs examined)','drop']]);
+      S('splitNote').textContent = 'OPT-IML (arXiv:2212.12017v3 §2.3, §4.1, Table 4, Figure 2): validation categories for the three generalization levels. Increasing training tasks from 16 to 1,024 improved L3 and L2 and left L1 unchanged.';
+    },
+    'Tülu 3': function(){
+      S('flanPick').hidden = true;
+      var rows = [
+        ['Knowledge', ['MMLU','PopQA','TruthfulQA'], ['MMLU-Pro','GPQA']],
+        ['Reasoning', ['BigBenchHard','DROP'], ['AGIEval English']],
+        ['Math', ['MATH','GSM8K'], ['Deepmind Mathematics']],
+        ['Coding', ['HumanEval','HumanEval+'], ['BigcodeBench']],
+        ['Instruction following', ['IFEval','AlpacaEval 2'], ['IFEval-OOD','HREF']],
+        ['Safety', ['Tülu 3 Safety'], []]
+      ];
+      S('splitView').innerHTML = rows.map(function(r){
+        var list = r[1].map(function(x){return [x,'dev'];}).concat(r[2].map(function(x){return [x,'eval'];}));
+        if (!r[2].length) list.push(['no unseen safety suite','drop']);
+        return '<div class="rowlab">' + r[0] + '</div>' + chips(list);
+      }).join('');
+      S('splitNote').textContent = 'Tülu 3 (arXiv:2411.15124v5 Table 3, §2.2, §3.2, §7.4.1): design decisions used the development suite; unseen scores were not examined during development. Decontamination: a test instance overlaps a training instance when more than 50% of its tokens share an 8-gram with it. Example from Table 32 (8B SFT): removing persona data changes IFEval 72.8 to 53.6 and IFEval-OOD 17.6 to 18.0.';
+    }
+  };
+  var names = Object.keys(protocols);
+  flanClusters.forEach(function(c){
+    var o = document.createElement('option'); o.value = c[1]; o.textContent = c[0];
+    if (c[1] === 'nli') o.selected = true;
+    S('flanSel').appendChild(o);
+  });
+  S('flanSel').addEventListener('change', renderFlan);
+  function setProto(n){
+    Array.prototype.forEach.call(S('protoBtns').children, function(b){ b.setAttribute('aria-pressed', b.textContent === n ? 'true' : 'false'); });
+    protocols[n]();
+  }
+  names.forEach(function(n){
+    var b = document.createElement('button'); b.type = 'button'; b.textContent = n;
+    b.addEventListener('click', function(){ setProto(n); });
+    S('protoBtns').appendChild(b);
+  });
+  setProto('FLAN');
+
+  /* ---------- Panel B ---------- */
+  var NS = 'http://www.w3.org/2000/svg';
+  function el(tag, attrs, text){
+    var e = document.createElementNS(NS, tag);
+    for (var k in attrs) e.setAttribute(k, attrs[k]);
+    if (text !== undefined) e.textContent = text;
+    return e;
+  }
+  var scaleData = {
+    'Flan-PaLM (Table 3)': {
+      xs: [9, 89, 282, 1836], log: true, xlabel: 'Number of fine-tuning tasks (log scale; 0-task scores shown at left)', ylabel: 'Normalized average (%)',
+      ymin: 0, ymax: 70,
+      series: [
+        {name:'PaLM 8B', color:'var(--s1)', base:6.4, ys:[8.3,14.8,20.5,21.9]},
+        {name:'PaLM 62B', color:'var(--s2)', base:28.4, ys:[29.0,33.4,37.9,38.8]},
+        {name:'PaLM 540B', color:'var(--s3)', base:49.1, ys:[52.6,57.0,57.5,58.5]}
+      ],
+      note: 'Flan-PaLM (arXiv:2210.11416v5 §3, Table 3): mixtures added in order CoT (9 tasks), Muffin (89), T0-SF (282), NIV2 (1,836); held-out suites MMLU, BBH, TyDiQA, MGSM; normalized average of six scores. These runs used mixture Proportion A (App. E). Checkpoint steps were chosen by periodic held-out evaluation (§2.2).'
+    },
+    'FLAN (Figure 6)': {
+      xs: [11, 20, 26, 30, 34, 37, 39], log: false, xlabel: 'Datasets in training (clusters 1 to 7)', ylabel: 'Held-out average (%)',
+      ymin: 40, ymax: 70,
+      series: [{name:'LaMDA-PT 137B', color:'var(--s1)', ys:[49.9,55.0,59.3,59.2,60.8,61.9,63.5]}],
+      note: 'FLAN (arXiv:2109.01652v5 §4.1, Figure 6 data labels): held-out NLI, closed-book QA, and commonsense clusters; clusters added in order summarization, translation, reading comprehension, sentiment, data to text, coreference, conversational QA. The only decrease (59.3 to 59.2) follows the sentiment cluster.'
+    }
+  };
+  function drawScale(key){
+    var d = scaleData[key], svg = S('scaleSvg');
+    while (svg.firstChild) svg.removeChild(svg.firstChild);
+    var L = 70, R = 620, T = 16, B = 250;
+    var x0 = d.log ? Math.log10(d.xs[0]) : d.xs[0], x1 = d.log ? Math.log10(d.xs[d.xs.length-1]) : d.xs[d.xs.length-1];
+    var baseX = L + 12, dataL = d.log ? L + 60 : L + 12;
+    function X(v){ var t = d.log ? Math.log10(v) : v; return dataL + (t - x0) / (x1 - x0) * (R - dataL); }
+    function Y(v){ return B - (v - d.ymin) / (d.ymax - d.ymin) * (B - T); }
+    for (var g = d.ymin; g <= d.ymax; g += 10){
+      svg.appendChild(el('line', {x1:L, x2:R, y1:Y(g), y2:Y(g), 'class':'grid-line'}));
+      svg.appendChild(el('text', {x:L-8, y:Y(g)+4, 'text-anchor':'end'}, String(g)));
+    }
+    svg.appendChild(el('line', {x1:L, x2:R, y1:B, y2:B, 'class':'ax'}));
+    d.xs.forEach(function(x){ svg.appendChild(el('text', {x:X(x), y:B+16, 'text-anchor':'middle'}, x.toLocaleString('en-US'))); });
+    if (d.log) svg.appendChild(el('text', {x:baseX, y:B+16, 'text-anchor':'middle'}, '0'));
+    svg.appendChild(el('text', {x:(L+R)/2, y:B+38, 'text-anchor':'middle'}, d.xlabel));
+    var yl = el('text', {x:16, y:(T+B)/2, 'text-anchor':'middle', transform:'rotate(-90 16 ' + (T+B)/2 + ')'}, d.ylabel);
+    svg.appendChild(yl);
+    d.series.forEach(function(s, i){
+      var pts = d.xs.map(function(x, j){ return X(x) + ',' + Y(s.ys[j]); }).join(' ');
+      svg.appendChild(el('polyline', {points:pts, fill:'none', stroke:s.color, 'stroke-width':2.2}));
+      d.xs.forEach(function(x, j){
+        var c = el('circle', {cx:X(x), cy:Y(s.ys[j]), r:4, fill:s.color});
+        c.appendChild(el('title', {}, s.name + ': ' + s.ys[j].toFixed(1) + ' at ' + x.toLocaleString('en-US')));
+        svg.appendChild(c);
+        svg.appendChild(el('text', {x:X(x), y:Y(s.ys[j]) - 8, 'text-anchor':'middle'}, s.ys[j].toFixed(1)));
+      });
+      if (s.base !== undefined){
+        var c0 = el('circle', {cx:baseX, cy:Y(s.base), r:4, fill:'none', stroke:s.color, 'stroke-width':2});
+        c0.appendChild(el('title', {}, s.name + ' without fine-tuning: ' + s.base));
+        svg.appendChild(c0);
+        svg.appendChild(el('text', {x:baseX + 8, y:Y(s.base) + 4}, s.base.toFixed(1)));
+      }
+      svg.appendChild(el('text', {x:L + 70, y:T + 10 + i * 13, 'text-anchor':'start', style:'fill:' + s.color}, s.name));
+    });
+    S('scaleNote').textContent = d.note;
+    Array.prototype.forEach.call(S('scaleBtns').children, function(b){ b.setAttribute('aria-pressed', b.textContent === key ? 'true' : 'false'); });
+  }
+  Object.keys(scaleData).forEach(function(k){
+    var b = document.createElement('button'); b.type = 'button'; b.textContent = k;
+    b.addEventListener('click', function(){ drawScale(k); });
+    S('scaleBtns').appendChild(b);
+  });
+  drawScale('Flan-PaLM (Table 3)');
+
+  /* ---------- Panel C ---------- */
+  var fits = [
+    ['Math (GSM8K), llama-3-8b',19.47,7.66,7500], ['Math (GSM8K), mistral-7b',8.14,4.97,7500], ['Math (GSM8K), llama-2-7b',4.21,5.47,7500],
+    ['Multihop QnA (SubQA), llama-3-8b',11.54,7.77,2700], ['Multihop QnA (SubQA), mistral-7b',5.40,7.75,2700], ['Multihop QnA (SubQA), llama-2-7b',8.27,9.39,2700],
+    ['Coding (HumanEval+), llama-3-8b',27.14,23.43,10000], ['Coding (HumanEval+), mistral-7b',17.10,17.47,10000], ['Coding (HumanEval+), llama-2-7b',3.95,7.11,10000],
+    ['IF-Conifer (IFEval), llama-3-8b',31.06,11.90,5000], ['IF-Conifer (IFEval), mistral-7b',21.76,9.28,5000], ['IF-Conifer (IFEval), llama-2-7b',17.83,10.00,5000],
+    ['IF-Dolly (IFEval), llama-3-8b',30.94,21.12,15000], ['IF-Dolly (IFEval), mistral-7b',23.76,15.15,15000], ['IF-Dolly (IFEval), llama-2-7b',17.04,14.54,15000]
+  ];
+  fits.forEach(function(f, i){
+    var o = document.createElement('option'); o.value = i; o.textContent = f[0] + '  (a = ' + f[1] + ', b = ' + f[2] + ')';
+    S('fitSel').appendChild(o);
+  });
+  function drawFit(){
+    var f = fits[+S('fitSel').value], a = f[1], b = f[2], trainMax = f[3];
+    var D = Math.pow(10, +S('dSlider').value);
+    var P = a * Math.pow(D, 1 / b), P10 = a * Math.pow(10 * D, 1 / b), mult = Math.pow(10, 1 / b);
+    var ext = D > trainMax ? ' (beyond this training set size of ' + trainMax.toLocaleString('en-US') + ' examples: extrapolation)' : '';
+    S('fitOut').textContent = 'D = ' + Math.round(D).toLocaleString('en-US') + ' examples: P = ' + P.toFixed(1) + '. At 10 × D: P = ' + P10.toFixed(1) + '. Each tenfold increase multiplies P by 10^(1/b) = ' + mult.toFixed(3) + '.' + ext;
+    var svg = S('fitSvg');
+    while (svg.firstChild) svg.removeChild(svg.firstChild);
+    var L = 60, R = 620, T = 14, B = 210, ymax = 100;
+    function X(lg){ return L + lg / 4 * (R - L); }
+    function Y(v){ return B - Math.min(v, ymax) / ymax * (B - T); }
+    for (var g = 0; g <= ymax; g += 20){
+      svg.appendChild(el('line', {x1:L, x2:R, y1:Y(g), y2:Y(g), 'class':'grid-line'}));
+      svg.appendChild(el('text', {x:L-8, y:Y(g)+4, 'text-anchor':'end'}, String(g)));
+    }
+    [0,1,2,3,4].forEach(function(k){ svg.appendChild(el('text', {x:X(k), y:B+16, 'text-anchor':'middle'}, Math.pow(10,k).toLocaleString('en-US'))); });
+    svg.appendChild(el('text', {x:(L+R)/2, y:B+36, 'text-anchor':'middle'}, 'Fine-tuning examples D (log scale)'));
+    svg.appendChild(el('text', {x:14, y:(T+B)/2, 'text-anchor':'middle', transform:'rotate(-90 14 ' + (T+B)/2 + ')'}, 'Fitted P (%)'));
+    var pts = [], ptsExt = [];
+    for (var i = 0; i <= 200; i++){
+      var lg = i / 50, d = Math.pow(10, lg), p = a * Math.pow(d, 1 / b);
+      (d <= trainMax ? pts : ptsExt).push(X(lg) + ',' + Y(p));
+    }
+    if (ptsExt.length && pts.length) ptsExt.unshift(pts[pts.length - 1]);
+    svg.appendChild(el('polyline', {points:pts.join(' '), fill:'none', stroke:'var(--s1)', 'stroke-width':2.2}));
+    if (ptsExt.length > 1) svg.appendChild(el('polyline', {points:ptsExt.join(' '), fill:'none', stroke:'var(--s1)', 'stroke-width':2, 'stroke-dasharray':'5 4'}));
+    var lgD = Math.log10(D);
+    svg.appendChild(el('line', {x1:X(lgD), x2:X(lgD), y1:T, y2:B, stroke:'var(--s2)', 'stroke-width':1.5}));
+    svg.appendChild(el('circle', {cx:X(lgD), cy:Y(P), r:5, fill:'var(--s2)'}));
+    svg.appendChild(el('text', {x:L + 10, y:T + 12, 'text-anchor':'start'}, 'solid: within training-set size; dashed: extrapolation'));
+  }
+  S('fitSel').addEventListener('change', drawFit);
+  S('dSlider').addEventListener('input', drawFit);
+  drawFit();
+})();
+</script>
+</body>
+</html>

@@ -7,6 +7,8 @@ source_url: https://arxiv.org/abs/2305.02301
 created_at: "2026-04-23"
 ---
 
+> Superseded by the 2026-09 revision of read.md; kept for history.
+
 # Excerpt: Distilling Step-by-Step — joint (label + rationale) training
 
 **Source library:** `wiki/raw-data/llm-training/papers/distilling-step-by-step.md`

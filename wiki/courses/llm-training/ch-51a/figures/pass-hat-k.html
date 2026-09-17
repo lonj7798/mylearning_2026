@@ -1,0 +1,196 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>pass^k and pass@k calculator — ch-51a</title>
+<style>
+  :root { --fg:#16181d; --bg:#fbfbfa; --line:#c9ccd4; --accent:#2f5d8f; --accent2:#9a5b2a; --muted:#5b6070; }
+  * { box-sizing: border-box; }
+  body { margin:0; padding:20px; background:var(--bg); color:var(--fg);
+         font:14px/1.55 "Iowan Old Style", Georgia, "Times New Roman", serif; }
+  .wrap { max-width: 900px; margin: 0 auto; }
+  h1 { font-size:19px; margin:0 0 4px; }
+  h2 { font-size:15px; margin:22px 0 8px; border-bottom:1px solid var(--line); padding-bottom:4px; }
+  p, li, td, th, label { font-size:13.5px; }
+  .sub { color:var(--muted); margin:0 0 14px; }
+  table { border-collapse:collapse; width:100%; margin:8px 0; }
+  th, td { border:1px solid var(--line); padding:5px 8px; text-align:right; }
+  th:first-child, td:first-child { text-align:left; }
+  th { background:#eef0f3; font-weight:600; }
+  input[type=number] { width:64px; padding:2px 4px; font:inherit; font-size:13px; }
+  input[type=range] { width:220px; vertical-align:middle; }
+  .row { margin:8px 0; }
+  code, .mono { font-family: "SFMono-Regular", Menlo, Consolas, monospace; font-size:12.5px; }
+  .out { background:#eef0f3; border:1px solid var(--line); padding:10px 12px; margin:10px 0; }
+  .big { font-size:22px; font-family:"SFMono-Regular", Menlo, Consolas, monospace; }
+  .hat { color:var(--accent2); }
+  .at { color:var(--accent); }
+  canvas { border:1px solid var(--line); background:#fff; max-width:100%; }
+  .note { color:var(--muted); font-size:12.5px; }
+  button { font:inherit; font-size:13px; padding:3px 9px; border:1px solid var(--line); background:#fff; cursor:pointer; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<h1>pass^k and pass@k from the same trial table</h1>
+<p class="sub">Set how many trials each task was run for and how many of them succeeded. The panel computes both
+unbiased estimators from the definitions in τ-bench §3 and plots them against k.</p>
+
+<h2>1. Trial table</h2>
+<div class="row">
+  Trials per task <em>n</em>:
+  <input id="n" type="number" min="1" max="20" step="1" value="5">
+  <button id="reset">Reset to the chapter's five-task example</button>
+</div>
+<table>
+  <thead><tr><th>Task</th><th>Successes c</th><th>c/n</th><th>pass^k at k = <span class="kk">3</span></th><th>pass@k at k = <span class="kk">3</span></th></tr></thead>
+  <tbody id="rows"></tbody>
+  <tfoot><tr><th>Mean over tasks</th><th id="mc"></th><th id="mp1"></th><th id="mhat"></th><th id="mat"></th></tr></tfoot>
+</table>
+
+<div class="row">
+  k = <input id="k" type="range" min="1" max="5" step="1" value="3"> <span class="mono" id="kv">3</span>
+</div>
+
+<div class="out">
+  <div>pass^1 = pass@1 = <span class="big" id="p1"></span></div>
+  <div>pass^<span class="kk">3</span> = <span class="big hat" id="phat"></span> &nbsp;&nbsp;
+       pass@<span class="kk">3</span> = <span class="big at" id="pat"></span></div>
+  <div class="note">pass^k = E<sub>task</sub>[ C(c,k) / C(n,k) ] &nbsp; and &nbsp;
+       pass@k = 1 − E<sub>task</sub>[ C(n−c,k) / C(n,k) ]. A task with c &lt; k contributes 0 to pass^k;
+       a task with n − c &lt; k contributes 1 to pass@k.</div>
+</div>
+
+<h2>2. Both curves against k</h2>
+<canvas id="plot" width="860" height="300"></canvas>
+<p class="note">Orange: pass^k, the share of tasks solved in <em>every</em> one of k trials — it falls with k.
+Blue: pass@k, the share solved in <em>at least one</em> of k trials — it rises with k. They meet only at k = 1.
+The vertical gap at a given k is the part of the pass@k score that a single run would not reproduce.</p>
+
+<h2>3. Reported anchors</h2>
+<table>
+  <thead><tr><th>Setting</th><th>pass^1 / pass@1</th><th>pass@k</th><th>pass^k</th></tr></thead>
+  <tbody>
+    <tr><td>τ-retail, gpt-4o function calling, ≥ 3 trials per task (τ-bench Table 2, §5.1, Fig. 4)</td>
+        <td>61.2</td><td>not printed numerically</td><td>&lt; 25 at k = 8</td></tr>
+    <tr><td>Toolathlon, Claude-4.5-Sonnet, 3 runs per task (Toolathlon Table 3)</td>
+        <td>38.6 ± 2.7</td><td>51.9 at k = 3</td><td>20.4 at k = 3</td></tr>
+    <tr><td>Toolathlon, DeepSeek-v3.2-Exp, 3 runs per task (Toolathlon Table 3)</td>
+        <td>20.1 ± 1.2</td><td>27.8 at k = 3</td><td>12.0 at k = 3</td></tr>
+  </tbody>
+</table>
+<p class="note">Sources: τ-bench, arXiv:2406.12045v1, Table 2 and §5.1; The Tool Decathlon, arXiv:2510.25726v2,
+Table 3. All values are as printed in those sources.</p>
+
+</div>
+<script>
+(function () {
+  var DEFAULT = [5, 4, 3, 1, 0];          // successes per task in the chapter's worked example, n = 5
+  var state = { n: 5, c: DEFAULT.slice() };
+
+  function comb(a, b) {
+    if (b < 0 || b > a) return 0;
+    var r = 1;
+    for (var i = 0; i < b; i++) r = r * (a - i) / (i + 1);
+    return r;
+  }
+  function hatK(c, n, k) { return comb(n, k) === 0 ? 0 : comb(c, k) / comb(n, k); }
+  function atK(c, n, k)  { return comb(n, k) === 0 ? 0 : 1 - comb(n - c, k) / comb(n, k); }
+  function mean(a) { return a.reduce(function (x, y) { return x + y; }, 0) / a.length; }
+  function pct(x) { return (100 * x).toFixed(1); }
+
+  var rowsEl = document.getElementById('rows');
+  var kEl = document.getElementById('k');
+  var nEl = document.getElementById('n');
+
+  function render() {
+    var n = state.n, k = Math.min(+kEl.value, n);
+    kEl.max = n; kEl.value = k;
+    document.getElementById('kv').textContent = k;
+    Array.prototype.forEach.call(document.querySelectorAll('.kk'), function (e) { e.textContent = k; });
+
+    rowsEl.innerHTML = '';
+    state.c.forEach(function (c, i) {
+      var tr = document.createElement('tr');
+      tr.innerHTML = '<td>task ' + (i + 1) + '</td>' +
+        '<td><input type="number" min="0" max="' + n + '" step="1" value="' + c + '" data-i="' + i + '"></td>' +
+        '<td class="mono">' + (c / n).toFixed(2) + '</td>' +
+        '<td class="mono">' + hatK(c, n, k).toFixed(3) + '</td>' +
+        '<td class="mono">' + atK(c, n, k).toFixed(3) + '</td>';
+      rowsEl.appendChild(tr);
+    });
+    rowsEl.querySelectorAll('input').forEach(function (inp) {
+      inp.addEventListener('input', function () {
+        var v = Math.max(0, Math.min(state.n, Math.round(+this.value || 0)));
+        state.c[+this.dataset.i] = v;
+        render();
+      });
+    });
+
+    var p1 = mean(state.c.map(function (c) { return c / state.n; }));
+    var ph = mean(state.c.map(function (c) { return hatK(c, state.n, k); }));
+    var pa = mean(state.c.map(function (c) { return atK(c, state.n, k); }));
+    document.getElementById('mc').textContent = mean(state.c).toFixed(2);
+    document.getElementById('mp1').textContent = p1.toFixed(3);
+    document.getElementById('mhat').textContent = ph.toFixed(3);
+    document.getElementById('mat').textContent = pa.toFixed(3);
+    document.getElementById('p1').textContent = pct(p1) + '%';
+    document.getElementById('phat').textContent = pct(ph) + '%';
+    document.getElementById('pat').textContent = pct(pa) + '%';
+    plot();
+  }
+
+  function plot() {
+    var cv = document.getElementById('plot'), g = cv.getContext('2d');
+    var W = cv.width, H = cv.height, L = 52, R = 18, T = 16, B = 34;
+    g.clearRect(0, 0, W, H);
+    var n = state.n;
+    var xs = [], hs = [], as = [];
+    for (var k = 1; k <= n; k++) {
+      xs.push(k);
+      hs.push(mean(state.c.map(function (c) { return hatK(c, n, k); })));
+      as.push(mean(state.c.map(function (c) { return atK(c, n, k); })));
+    }
+    function X(k) { return L + (n === 1 ? 0 : (k - 1) / (n - 1) * (W - L - R)); }
+    function Y(v) { return T + (1 - v) * (H - T - B); }
+
+    g.strokeStyle = '#dfe2e7'; g.fillStyle = '#5b6070';
+    g.font = '11px monospace'; g.textAlign = 'right';
+    for (var v = 0; v <= 1.0001; v += 0.25) {
+      g.beginPath(); g.moveTo(L, Y(v)); g.lineTo(W - R, Y(v)); g.stroke();
+      g.fillText((100 * v).toFixed(0) + '%', L - 6, Y(v) + 4);
+    }
+    g.textAlign = 'center';
+    xs.forEach(function (k) { g.fillText('k=' + k, X(k), H - B + 18); });
+
+    function line(arr, color) {
+      g.strokeStyle = color; g.lineWidth = 2; g.beginPath();
+      arr.forEach(function (v, i) { i ? g.lineTo(X(xs[i]), Y(v)) : g.moveTo(X(xs[i]), Y(v)); });
+      g.stroke();
+      g.fillStyle = color;
+      arr.forEach(function (v, i) { g.beginPath(); g.arc(X(xs[i]), Y(v), 3.5, 0, 6.3); g.fill(); });
+    }
+    line(as, '#2f5d8f');
+    line(hs, '#9a5b2a');
+    g.textAlign = 'left'; g.font = '12px monospace';
+    g.fillStyle = '#2f5d8f'; g.fillText('pass@k', L + 6, Y(as[as.length - 1]) - 8);
+    g.fillStyle = '#9a5b2a'; g.fillText('pass^k', L + 6, Y(hs[hs.length - 1]) + 16);
+  }
+
+  nEl.addEventListener('input', function () {
+    var n = Math.max(1, Math.min(20, Math.round(+this.value || 1)));
+    state.n = n;
+    state.c = state.c.map(function (c) { return Math.min(c, n); });
+    render();
+  });
+  kEl.addEventListener('input', render);
+  document.getElementById('reset').addEventListener('click', function () {
+    state.n = 5; nEl.value = 5; state.c = DEFAULT.slice(); kEl.value = 3; render();
+  });
+  render();
+})();
+</script>
+</body>
+</html>

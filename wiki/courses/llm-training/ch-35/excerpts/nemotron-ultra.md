@@ -7,6 +7,8 @@ source_url: https://arxiv.org/abs/2512.20856
 created_at: "2026-04-23"
 ---
 
+> Superseded by the 2026-09 revision of read.md; kept for history.
+
 # Excerpt: Nemotron 3 (Nano/Super/Ultra) — multi-environment RL succession
 
 **Source library:** `wiki/raw-data/llm-training/model-reports/nemotron-ultra.md`

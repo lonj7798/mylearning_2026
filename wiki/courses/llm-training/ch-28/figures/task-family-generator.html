@@ -1,0 +1,258 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Long-Context Task Family Generator</title>
+<style>
+  :root {
+    color-scheme: light;
+    --surface: #fcfcfb; --panel: #f3f2ee; --text: #0b0b0b; --text2: #52514e; --muted: #7a7974;
+    --grid: #e2e1dc; --axis: #b9b8b1; --bar: #2a78d6; --mark: #fde9b0; --mark2: #d8e8fb; --markborder: #eda100;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      color-scheme: dark;
+      --surface: #1a1a19; --panel: #242423; --text: #ffffff; --text2: #c3c2b7; --muted: #9a998f;
+      --grid: #33332f; --axis: #5c5b55; --bar: #3987e5; --mark: #5a4410; --mark2: #1d3a5e; --markborder: #c98500;
+    }
+  }
+  :root[data-theme="dark"] {
+    color-scheme: dark;
+    --surface: #1a1a19; --panel: #242423; --text: #ffffff; --text2: #c3c2b7; --muted: #9a998f;
+    --grid: #33332f; --axis: #5c5b55; --bar: #3987e5; --mark: #5a4410; --mark2: #1d3a5e; --markborder: #c98500;
+  }
+  body { margin: 0; background: var(--surface); color: var(--text);
+    font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+  .wrap { max-width: 960px; margin: 0 auto; padding-inline: 16px; padding-block: 20px; }
+  h1 { font-size: 18px; margin: 0 0 4px; }
+  h2 { font-size: 15px; margin: 24px 0 6px; }
+  p { margin: 0 0 10px; color: var(--text2); }
+  .fam { display: flex; flex-wrap: wrap; gap: 6px; margin: 10px 0; }
+  .fam button { font: inherit; font-size: 13px; padding: 4px 10px; border-radius: 4px; cursor: pointer;
+    border: 1px solid var(--axis); background: var(--surface); color: var(--text); }
+  .fam button[aria-pressed="true"] { outline: 2px solid var(--bar); border-color: var(--bar); }
+  .knobs { display: flex; flex-wrap: wrap; gap: 14px 22px; background: var(--panel); border-radius: 6px; padding: 10px 12px; }
+  .knob { display: flex; flex-direction: column; font-size: 12px; color: var(--text2); min-width: 150px; }
+  .knob output { color: var(--text); font-weight: 600; font-variant-numeric: tabular-nums; }
+  .knob[hidden] { display: none; }
+  .grid { display: grid; grid-template-columns: minmax(0, 3fr) minmax(0, 2fr); gap: 14px; margin-top: 12px; }
+  @media (max-width: 720px) { .grid { grid-template-columns: 1fr; } }
+  pre { margin: 0; background: var(--panel); border-radius: 6px; padding: 10px; font-size: 12px; line-height: 1.45;
+    white-space: pre-wrap; word-break: break-word; max-height: 420px; overflow: auto; }
+  mark { background: var(--mark); color: var(--text); border-bottom: 2px solid var(--markborder); padding: 0 1px; }
+  mark.d { background: var(--mark2); border-bottom: 1px dashed var(--axis); }
+  .info { background: var(--panel); border-radius: 6px; padding: 10px 12px; font-size: 13px; }
+  .info dt { font-weight: 600; margin-top: 6px; }
+  .info dd { margin: 0; color: var(--text2); }
+  .legend { font-size: 12px; color: var(--text2); margin-top: 6px; }
+  .legend mark { font-size: 12px; }
+  .chart { position: relative; max-width: 620px; }
+  svg { width: 100%; height: auto; display: block; }
+  .tip { position: absolute; pointer-events: none; background: var(--panel); border: 1px solid var(--axis);
+    border-radius: 4px; padding: 5px 8px; font-size: 12px; white-space: nowrap; }
+  .tablewrap { overflow-x: auto; }
+  table { border-collapse: collapse; font-size: 12px; font-variant-numeric: tabular-nums; margin-top: 8px; }
+  th, td { padding: 3px 10px; border-bottom: 1px solid var(--grid); text-align: right; }
+  th:first-child, td:first-child { text-align: left; }
+  .cap { font-size: 12px; color: var(--muted); margin-top: 6px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Long-context task families: generate an instance</h1>
+  <p>Pick a family and change its knobs. The generator builds a miniature instance (one filler line stands for many tokens). Highlighted text is what the answer depends on; dashed highlights are distractors. The panel on the right states what the family measures and the limit reported for it. All generated content is illustrative; the numbers in the right panel and the chart come from the cited sources.</p>
+
+  <div class="fam" id="fam" role="group" aria-label="Task family"></div>
+  <div class="knobs">
+    <label class="knob" id="k-len">Filler lines <output id="o-len"></output><input type="range" id="len" min="8" max="40" value="16" /></label>
+    <label class="knob" id="k-depth">Needle depth (%) <output id="o-depth"></output><input type="range" id="depth" min="0" max="100" step="5" value="50" /></label>
+    <label class="knob" id="k-dist">Distractors <output id="o-dist"></output><input type="range" id="dist" min="0" max="8" value="3" /></label>
+    <label class="knob" id="k-vals">Values or queries <output id="o-vals"></output><input type="range" id="vals" min="1" max="6" value="3" /></label>
+    <label class="knob" id="k-hops">Hops <output id="o-hops"></output><input type="range" id="hops" min="1" max="6" value="3" /></label>
+    <label class="knob"><span>Random seed <output id="o-seed"></output></span><input type="range" id="seed" min="1" max="50" value="7" /></label>
+  </div>
+
+  <div class="grid">
+    <div>
+      <pre id="out" aria-live="polite"></pre>
+      <div class="legend"><mark>answer evidence</mark> <mark class="d">distractor</mark></div>
+    </div>
+    <dl class="info" id="info"></dl>
+  </div>
+
+  <h2>Synthetic long SFT share after long continued training (ProLong-8B)</h2>
+  <p>Average of JsonKV, RAG, re-rank, ICL, QA, and summarization after SFT on UltraChat mixed with synthetic long instruction data (generator Llama-3-8B-Instruct; share by tokens).</p>
+  <div class="chart" id="chart">
+    <svg id="bars" viewBox="0 0 620 260" role="img" aria-label="Average score by synthetic data share"></svg>
+    <div class="tip" id="tip" hidden></div>
+  </div>
+  <div class="tablewrap">
+    <table id="t8"><tr><th>Synthetic share</th><th>0%</th><th>1%</th><th>3%</th><th>10%</th><th>50%</th></tr>
+      <tr><td>Average</td><td>55.7</td><td>54.1</td><td>53.5</td><td>53.9</td><td>43.3</td></tr></table>
+  </div>
+  <p class="cap">Source: Gao et al., "How to Train Long-Context Language Models (Effectively)", arXiv 2410.02660, Table 8. Setting: ProLong base after 40B tokens of long continued training, Llama-3 8B. Other settings (Llama 3.1 with a 0.1% long share) reached a different conclusion; see read.md §4-§5.</p>
+</div>
+<script>
+(function () {
+  // deterministic PRNG so the same knobs give the same instance
+  let st = 1; const rnd = () => { st = (st * 16807) % 2147483647; return (st - 1) / 2147483646; };
+  const pick = a => a[Math.floor(rnd() * a.length)];
+  const filler = ['The committee met again in the spring to review the harbor accounts.',
+    'He wrote that the orchard had been sold twice before the war.', 'Rain delayed the survey of the northern road for a week.',
+    'The letters were kept in a cedar box beside the window.', 'A second edition added three chapters on river trade.',
+    'The mill used water from the upper canal until 1890.', 'Several visitors described the library as cold and quiet.',
+    'The inventory listed forty chairs and two long tables.'];
+  const words = ['apple', 'harbor', 'violet', 'copper', 'lantern', 'meadow', 'falcon', 'granite', 'saddle', 'thistle'];
+  const names = ['Mary', 'John', 'Sandra', 'Daniel'], rooms = ['kitchen', 'garden', 'office', 'hallway', 'bedroom'];
+  const esc = s => s.replace(/&/g, '&amp;').replace(/</g, '&lt;');
+  const num = () => String(1000000 + Math.floor(rnd() * 8999999));
+
+  const families = {
+    niah: { label: 'S-NIAH', knobs: ['len', 'depth'],
+      info: { measures: 'Retrieval of one inserted fact at a chosen depth and length.',
+        limit: 'At 128K, 5 of 6 frontier models score 100.0 (HELMET Table 5); across 35 models NIAH correlates with ∞Bench QA at ρ = 0.63 (HELMET Fig. 4). The original harness scores with a GPT-4 judge on a 1-10 rubric.',
+        source: 'needle-in-haystack-data; helmet' } },
+    mk: { label: 'MK-NIAH', knobs: ['len', 'depth', 'dist'],
+      info: { measures: 'Retrieval when other needles with the same form are present (distractor resistance).',
+        limit: 'On Yi-34B-200K, a haystack full of distractor needles lowered accuracy by about 40 points at 256K (RULER §5).',
+        source: 'excerpts/ruler-task-family' } },
+    mv: { label: 'MV-NIAH', knobs: ['len', 'vals'],
+      info: { measures: 'Returning every value bound to one key (recall completeness).',
+        limit: 'Yi-34B often returned duplicated answers without the complete set of values (RULER §5).',
+        source: 'excerpts/ruler-task-family' } },
+    vt: { label: 'VT (variable tracking)', knobs: ['len', 'hops'],
+      info: { measures: 'Following a chain of assignments spread through the context (multi-hop tracing).',
+        limit: 'Yi-34B degraded as hops increased at every context size (RULER §5, Fig. 3).',
+        source: 'excerpts/ruler-task-family' } },
+    cwe: { label: 'CWE (aggregation)', knobs: ['len', 'vals'],
+      info: { measures: 'Counting word frequencies over the whole context; evidence occupies a large share of the input.',
+        limit: 'Over 80% of Yi-34B CWE outputs at 128K copied the one-shot example (RULER §5).',
+        source: 'excerpts/ruler-task-family' } },
+    babi: { label: 'bAbI in book text', knobs: ['len', 'hops', 'dist'],
+      info: { measures: 'Reasoning over several facts hidden in natural prose (BABILong QA1-QA3 style).',
+        limit: 'Tested LLMs use 10-20% of their context; with background text every tested LLM stayed below 85% on QA2. bAbI sentences differ in style from PG19 prose, which a fine-tuned model can exploit (BABILong Abstract, §3.1, Limitations).',
+        source: 'babilong' } },
+    kv: { label: 'Key-value dictionaries (Artificial Needles)', knobs: ['len', 'depth', 'dist'],
+      info: { measures: 'Fact-free retrieval with overlapping subkeys; used as training data, not only for evaluation.',
+        limit: 'Mistral-7B TriviaQA +0.11 after training on this data vs −6.33 after NIAH-style data (Table 2); no gain on MDQA with retrieved distractors (§4). Tested at about 4K tokens.',
+        source: 'excerpts/artificial-needles-kv-retrieval' } },
+    mh: { label: 'Chunk QA / multi-hop merge', knobs: ['len', 'hops'],
+      info: { measures: 'SFT data: questions generated from separate chunks and merged so the answer needs several chunks (LongMIT MIMG; Llama 3 chunk QA trained with the whole document).',
+        limit: 'Self-Instruct generation gave under 35% multi-hop samples before MIMG (LongMIT Abstract). The Llama 3 report gives no ablation table for its 0.1% share.',
+        source: 'excerpts/longmit-mimg; excerpts/llama3-staged-schedule' } }
+  };
+  let fam = 'mk';
+  const $ = id => document.getElementById(id);
+
+  function fillerLines(n) { const a = []; for (let i = 0; i < n; i++) a.push(esc(pick(filler))); return a; }
+  function insertAt(lines, item, frac) { const i = Math.round(frac * lines.length); lines.splice(i, 0, item); }
+  function scatter(lines, items) { items.forEach(it => lines.splice(Math.floor(rnd() * (lines.length + 1)), 0, it)); }
+  function keepOrder(lines, items) { // insert in order at increasing random positions
+    const pos = items.map(() => rnd()).sort((a, b) => a - b);
+    for (let k = items.length - 1; k >= 0; k--) lines.splice(Math.round(pos[k] * lines.length), 0, items[k]); }
+
+  function generate() {
+    st = +$('seed').value * 7919 + 13;
+    const n = +$('len').value, depth = +$('depth').value / 100, dist = +$('dist').value, vals = +$('vals').value, hops = +$('hops').value;
+    let lines = fillerLines(n), q = '', a = '';
+    if (fam === 'niah' || fam === 'mk') {
+      const key = pick(words), v = num();
+      if (fam === 'mk') { const used = new Set([key]);
+        const ds = []; for (let i = 0; i < dist; i++) { let w; do { w = pick(words); } while (used.has(w) && used.size < words.length); used.add(w);
+          ds.push('<mark class="d">One of the special magic numbers for ' + w + ' is: ' + num() + '.</mark>'); }
+        scatter(lines, ds); }
+      insertAt(lines, '<mark>One of the special magic numbers for ' + key + ' is: ' + v + '.</mark>', depth);
+      q = 'What is the special magic number for ' + key + ' mentioned in the provided text?'; a = v;
+    } else if (fam === 'mv') {
+      const key = pick(words), vs = []; for (let i = 0; i < vals; i++) vs.push(num());
+      scatter(lines, vs.map(v => '<mark>One of the special magic numbers for ' + key + ' is: ' + v + '.</mark>'));
+      q = 'What are all the special magic numbers for ' + key + '?'; a = vs.join(', ');
+    } else if (fam === 'vt') {
+      const vars = []; for (let i = 0; i <= hops; i++) vars.push('X' + Math.floor(10000 + rnd() * 89999));
+      const val = Math.floor(10000 + rnd() * 89999);
+      const chain = ['<mark>VAR ' + vars[0] + ' = ' + val + '</mark>'];
+      for (let i = 1; i <= hops; i++) chain.push('<mark>VAR ' + vars[i] + ' = VAR ' + vars[i - 1] + '</mark>');
+      keepOrder(lines, chain);
+      q = 'Find all variables that are assigned the value ' + val + '.'; a = vars.join(', ');
+    } else if (fam === 'cwe') {
+      const common = words.slice(0, vals), rare = words.slice(vals);
+      const out = []; for (let i = 0; i < Math.max(6, n); i++) {
+        const w = rnd() < 0.6 ? '<mark>' + pick(common) + '</mark>' : pick(rare); out.push((i + 1) + '. ' + w); }
+      lines = out; q = 'What are the ' + vals + ' most common words in the list?'; a = common.join(', ');
+    } else if (fam === 'babi') {
+      const who = names.slice(0, 2), facts = [], path = [];
+      let place = pick(rooms);
+      for (let i = 0; i < hops; i++) { place = pick(rooms); path.push(place);
+        facts.push('<mark>' + who[0] + ' moved to the ' + place + '.</mark>'); }
+      const ds = []; for (let i = 0; i < dist; i++) ds.push('<mark class="d">' + who[1] + ' went to the ' + pick(rooms) + '.</mark>');
+      keepOrder(lines, facts); scatter(lines, ds);
+      q = 'Where is ' + who[0] + '?'; a = path[path.length - 1] + ' (the last of ' + hops + ' movement facts)';
+    } else if (fam === 'kv') {
+      const nd = Math.max(4, Math.floor(n / 2)); lines = [];
+      const gold = [100 + Math.floor(rnd() * 899), 100 + Math.floor(rnd() * 899), 100 + Math.floor(rnd() * 899)];
+      const gi = Math.min(nd - 1, Math.round(depth * (nd - 1))), gv = 1000 + Math.floor(rnd() * 8999);
+      const decoyAt = new Set(); for (let i = 0; i < dist; i++) decoyAt.add(Math.floor(rnd() * nd));
+      for (let d = 0; d < nd; d++) {
+        const ents = [];
+        for (let e = 0; e < 2; e++) ents.push('(' + [0, 1, 2].map(() => 100 + Math.floor(rnd() * 899)).join(', ') + '): ' + (1000 + Math.floor(rnd() * 8999)));
+        if (decoyAt.has(d) && d !== gi) ents.push('<mark class="d">(' + gold[0] + ', ' + gold[1] + ', ' + (100 + Math.floor(rnd() * 899)) + '): ' + (1000 + Math.floor(rnd() * 8999)) + '</mark>');
+        if (d === gi) ents.push('<mark>(' + gold[1] + ', ' + gold[2] + ', ' + gold[0] + '): ' + gv + '</mark>');
+        lines.push('Dictionary [' + (d + 1) + '] {' + ents.join(', ') + '}');
+      }
+      q = 'Report the key that contains the integers ' + gold.join(', ') + ' (not necessarily in order), its value, and the dictionary it is in. Answer in the template: The key ... is <fill-in-key>. Its value is <fill-in-value> and it is in Dictionary [<fill-in-dictionary-name>].';
+      a = 'Dictionary [' + (gi + 1) + '], value ' + gv;
+    } else if (fam === 'mh') {
+      const chunks = Math.max(hops, 2), per = Math.max(2, Math.floor(n / chunks)); lines = [];
+      const ent = ['the Arden mill', 'the harbor board', 'the 1890 survey', 'the cedar archive', 'the river company', 'the northern road'];
+      for (let c = 0; c < chunks; c++) {
+        lines.push('--- chunk ' + (c + 1) + ' (8K tokens in the Llama 3 generator) ---');
+        const body = fillerLines(per);
+        const fact = c === 0 ? ent[0] + ' was founded by the owner of ' + ent[1] + '.' :
+          'The owner of ' + ent[c] + ' also chaired ' + ent[(c + 1) % ent.length] + '.';
+        body.splice(Math.floor(rnd() * body.length), 0, '<mark>' + fact + '</mark>');
+        lines = lines.concat(body);
+      }
+      q = 'Single-hop questions are generated per chunk, then merged: "Which body is chaired by the person connected to ' + ent[0] + ' through ' + (chunks - 1) + ' links?"';
+      a = 'requires evidence from ' + chunks + ' chunks; the training example contains the whole document';
+    }
+    $('out').innerHTML = lines.join('\n') + '\n\nQuestion: ' + esc(q).replace(/&lt;fill/g, '&lt;fill') + '\nExpected answer: ' + esc(a);
+    const f = families[fam];
+    ['len', 'depth', 'dist', 'vals', 'hops'].forEach(k => { $('k-' + k).hidden = !f.knobs.includes(k); });
+    ['len', 'depth', 'dist', 'vals', 'hops', 'seed'].forEach(k => { $('o-' + k).textContent = $(k).value; });
+    $('info').innerHTML = '<dt>Family</dt><dd>' + f.label + '</dd><dt>What it measures</dt><dd>' + f.info.measures +
+      '</dd><dt>Reported limit</dt><dd>' + f.info.limit + '</dd><dt>Library source</dt><dd>' + f.info.source + '</dd>';
+    document.querySelectorAll('#fam button').forEach(b => b.setAttribute('aria-pressed', b.dataset.f === fam));
+  }
+
+  const famDiv = $('fam');
+  Object.keys(families).forEach(k => { const b = document.createElement('button'); b.textContent = families[k].label; b.dataset.f = k;
+    b.addEventListener('click', () => { fam = k; generate(); }); famDiv.appendChild(b); });
+  ['len', 'depth', 'dist', 'vals', 'hops', 'seed'].forEach(k => $(k).addEventListener('input', generate));
+  generate();
+
+  // Bar chart: ProLong Table 8
+  const data = [['0%', 55.7], ['1%', 54.1], ['3%', 53.5], ['10%', 53.9], ['50%', 43.3]];
+  const svg = $('bars'), NS = 'http://www.w3.org/2000/svg', W = 620, H = 260, L = 40, R = 10, T = 12, B = 36;
+  const el = (t, a) => { const e = document.createElementNS(NS, t); for (const k in a) e.setAttribute(k, a[k]); svg.appendChild(e); return e; };
+  const y = v => T + (60 - v) * (H - T - B) / 60;
+  [0, 20, 40, 60].forEach(v => { el('line', { x1: L, x2: W - R, y1: y(v), y2: y(v), stroke: 'var(--grid)' });
+    el('text', { x: L - 6, y: y(v) + 4, 'text-anchor': 'end', 'font-size': 11, fill: 'var(--muted)' }).textContent = v; });
+  const bw = (W - L - R) / data.length, tip = $('tip');
+  data.forEach(([lab, v], i) => {
+    const x0 = L + i * bw + bw * 0.25, w = bw * 0.5, top = y(v), base = y(0);
+    el('path', { d: 'M' + x0 + ',' + base + 'V' + (top + 4) + 'Q' + x0 + ',' + top + ' ' + (x0 + 4) + ',' + top + 'H' + (x0 + w - 4) +
+      'Q' + (x0 + w) + ',' + top + ' ' + (x0 + w) + ',' + (top + 4) + 'V' + base + 'Z', fill: 'var(--bar)' });
+    el('text', { x: x0 + w / 2, y: top - 6, 'text-anchor': 'middle', 'font-size': 12, fill: 'var(--text)' }).textContent = v.toFixed(1);
+    el('text', { x: x0 + w / 2, y: H - 18, 'text-anchor': 'middle', 'font-size': 12, fill: 'var(--text2)' }).textContent = lab;
+    const hit = el('rect', { x: L + i * bw, y: T, width: bw, height: H - T - B, fill: 'transparent' });
+    hit.addEventListener('mousemove', ev => { const r = $('chart').getBoundingClientRect();
+      tip.textContent = lab + ' synthetic: average ' + v.toFixed(1) + (i ? ' (' + (v - 55.7).toFixed(1) + ' vs 0%)' : ' (short-only SFT)');
+      tip.hidden = false; tip.style.left = Math.min(ev.clientX - r.left + 12, r.width - tip.offsetWidth - 4) + 'px'; tip.style.top = (ev.clientY - r.top - 30) + 'px'; });
+    hit.addEventListener('mouseleave', () => { tip.hidden = true; });
+  });
+  el('text', { x: (L + W - R) / 2, y: H - 2, 'text-anchor': 'middle', 'font-size': 11, fill: 'var(--text2)' }).textContent = 'share of synthetic long data in SFT (tokens)';
+})();
+</script>
+</body>
+</html>

@@ -2,346 +2,337 @@
 <html lang="en">
 <head>
 <meta charset="utf-8" />
-<title>Distillation Lineage — GPT-4/Orca and R1/QwQ families</title>
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Distillation Lineage — ch-20</title>
+<!-- ch-20 figure, revised 2026-09 (generality revision). Every number is taken from the source cards
+     cited in read.md; loci are shown in each detail panel. No external resources. -->
 <style>
+  :root {
+    --bg: #f7f7f5; --panel: #ffffff; --ink: #1d2330; --muted: #5d6578; --line: #d9dce3;
+    --teacher: #b7791f; --teacher-bg: #fdf3e1; --data: #2b6cb0; --data-bg: #e6f0fa;
+    --student: #6b46c1; --student-bg: #efe9fb; --sel: #c05621; --badge-yes: #276749; --badge-yes-bg: #e3f4ea;
+    --badge-no: #9b2c2c; --badge-no-bg: #fbe8e8;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #12151b; --panel: #1a1e27; --ink: #e6e9ef; --muted: #9aa3b5; --line: #2c3340;
+      --teacher: #f0b35a; --teacher-bg: #2e2516; --data: #7fb3ea; --data-bg: #16263a;
+      --student: #b79cf2; --student-bg: #251d38; --sel: #f6ad55; --badge-yes: #8fdcaa; --badge-yes-bg: #173324;
+      --badge-no: #f2a0a0; --badge-no-bg: #3a1c1c;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #12151b; --panel: #1a1e27; --ink: #e6e9ef; --muted: #9aa3b5; --line: #2c3340;
+    --teacher: #f0b35a; --teacher-bg: #2e2516; --data: #7fb3ea; --data-bg: #16263a;
+    --student: #b79cf2; --student-bg: #251d38; --sel: #f6ad55; --badge-yes: #8fdcaa; --badge-yes-bg: #173324;
+    --badge-no: #f2a0a0; --badge-no-bg: #3a1c1c;
+  }
   * { box-sizing: border-box; }
-  body {
-    margin: 0; padding: 24px;
-    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-    background: #0f1115; color: #e5e8ee; line-height: 1.45;
+  body { margin: 0; padding: 20px 16px; background: var(--bg); color: var(--ink);
+         font: 14px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+  h1 { font-size: 18px; margin: 0 0 4px; }
+  .sub { color: var(--muted); font-size: 13px; margin: 0 0 14px; max-width: 70em; }
+  .controls { display: flex; flex-wrap: wrap; gap: 14px; align-items: center; margin-bottom: 12px; font-size: 13px; }
+  .legend span { display: inline-flex; align-items: center; gap: 5px; margin-right: 12px; }
+  .sw { width: 11px; height: 11px; border-radius: 3px; display: inline-block; }
+  .layout { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 380px); gap: 16px; align-items: start; }
+  @media (max-width: 900px) { .layout { grid-template-columns: minmax(0, 1fr); } }
+  .group-label { font-size: 12px; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); margin: 14px 0 6px; }
+  .row { display: grid; grid-template-columns: minmax(0,1fr) 22px minmax(0,1fr) 22px minmax(0,1fr); align-items: stretch; gap: 4px; margin-bottom: 8px; }
+  @media (max-width: 560px) {
+    .row { grid-template-columns: minmax(0,1fr); }
+    .arrow { transform: rotate(90deg); height: 16px; }
   }
-  h1 { font-size: 18px; font-weight: 600; margin: 0 0 4px 0; }
-  .sub { font-size: 12px; color: #8a93a6; margin-bottom: 18px; }
-  .layout { display: grid; grid-template-columns: 1fr 360px; gap: 18px; }
-  .tree-wrap {
-    background: #161a22; border: 1px solid #242a36; border-radius: 10px;
-    padding: 16px; min-height: 560px; overflow: auto;
-  }
-  .legend {
-    display: flex; gap: 14px; flex-wrap: wrap; font-size: 11px;
-    color: #a8b0c2; margin-bottom: 10px;
-  }
-  .legend .sw { display: inline-block; width: 10px; height: 10px; border-radius: 50%;
-                margin-right: 5px; vertical-align: middle; }
-  svg { width: 100%; height: 560px; display: block; }
-  .node { cursor: pointer; transition: transform 120ms ease; }
-  .node:hover { filter: brightness(1.15); }
-  .node.selected circle { stroke: #ffd166; stroke-width: 3; }
-  .node text { font: 11px -apple-system, sans-serif; fill: #e5e8ee; pointer-events: none;
-               text-anchor: middle; }
-  .edge { stroke: #3a4458; stroke-width: 1.6; fill: none; }
-  .edge.distill { stroke-dasharray: 4 3; }
-  .panel {
-    background: #161a22; border: 1px solid #242a36; border-radius: 10px;
-    padding: 16px; font-size: 13px;
-  }
-  .panel h2 { margin: 0 0 8px 0; font-size: 15px; font-weight: 600; color: #ffd166; }
-  .panel .era { color: #8a93a6; font-size: 11px; text-transform: uppercase;
-                letter-spacing: 0.06em; margin-bottom: 10px; }
-  .row { display: grid; grid-template-columns: 120px 1fr; gap: 6px;
-         padding: 5px 0; border-bottom: 1px solid #242a36; }
-  .row:last-child { border-bottom: none; }
-  .k { color: #8a93a6; font-size: 12px; }
-  .v { color: #e5e8ee; font-size: 12px; word-break: break-word; }
-  .pill { display: inline-block; padding: 1px 7px; border-radius: 9px;
-          font-size: 10px; background: #2a3346; color: #cfd6e6; margin-right: 4px; }
-  .pill.license-permissive { background: #1f3a2a; color: #9be9b2; }
-  .pill.license-contested { background: #3d2a2a; color: #f29b9b; }
-  .pill.license-proprietary { background: #3a2f1f; color: #ffd59b; }
-  .placeholder { color: #6d7690; font-style: italic; font-size: 12px; }
-  .hint { font-size: 11px; color: #6d7690; margin-top: 10px; }
+  .arrow { display: flex; align-items: center; justify-content: center; color: var(--muted); font-size: 16px; }
+  .node { border: 1.5px solid var(--line); border-radius: 8px; padding: 7px 9px; cursor: pointer; background: var(--panel);
+          text-align: left; font: inherit; color: inherit; width: 100%; }
+  .node:focus-visible { outline: 2px solid var(--sel); outline-offset: 1px; }
+  .node .kind { font-size: 10px; text-transform: uppercase; letter-spacing: .06em; font-weight: 600; }
+  .node .name { font-size: 13px; font-weight: 600; display: block; }
+  .node .meta { font-size: 11.5px; color: var(--muted); display: block; }
+  .node.teacher { background: var(--teacher-bg); } .node.teacher .kind { color: var(--teacher); }
+  .node.data { background: var(--data-bg); } .node.data .kind { color: var(--data); }
+  .node.student { background: var(--student-bg); } .node.student .kind { color: var(--student); }
+  .node.empty { cursor: default; opacity: .55; }
+  .node.selected { border-color: var(--sel); box-shadow: 0 0 0 1px var(--sel); }
+  .badge { display: none; font-size: 10.5px; border-radius: 9px; padding: 0 7px; margin-top: 3px; }
+  .show-badges .badge { display: inline-block; }
+  .badge.yes { background: var(--badge-yes-bg); color: var(--badge-yes); }
+  .badge.no { background: var(--badge-no-bg); color: var(--badge-no); }
+  .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 14px; position: sticky; top: 12px; }
+  .panel h2 { margin: 0 0 2px; font-size: 15px; }
+  .panel .k-kind { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .05em; margin-bottom: 8px; }
+  .kv { display: grid; grid-template-columns: 108px minmax(0,1fr); gap: 4px 10px; padding: 5px 0; border-top: 1px solid var(--line); font-size: 12.5px; }
+  .kv .k { color: var(--muted); } .kv .v { overflow-wrap: anywhere; }
+  .placeholder { color: var(--muted); font-size: 13px; }
+  .note { font-size: 12px; color: var(--muted); margin: 2px 0 8px 2px; }
+  footer { margin-top: 18px; font-size: 12px; color: var(--muted); max-width: 70em; }
 </style>
 </head>
 <body>
-<h1>Distillation-as-Data — Genealogy Tree</h1>
-<div class="sub">Click a node for teacher model, trace counts, filter stack, license, and flagship student eval. Two eras: chat-teacher (GPT-4 / Orca line) and reasoning-teacher (R1 / QwQ line).</div>
+<h1>Distillation as data: teacher → dataset → student</h1>
+<p class="sub">Each row is one published distillation: the teacher that wrote the targets, the dataset and its filter, and the trained student. Select a box to read its data, filter, training settings, and reported results with the source locus. The checkbox marks whether the student was evaluated outside math, code, and science.</p>
+
+<div class="controls">
+  <div class="legend">
+    <span><i class="sw" style="background:var(--teacher)"></i>Teacher</span>
+    <span><i class="sw" style="background:var(--data)"></i>Dataset and filter</span>
+    <span><i class="sw" style="background:var(--student)"></i>Student</span>
+  </div>
+  <label><input type="checkbox" id="badges" /> Mark students evaluated outside math, code, and science</label>
+</div>
 
 <div class="layout">
-  <div class="tree-wrap">
-    <div class="legend">
-      <span><span class="sw" style="background:#ffd166"></span>Teacher (closed)</span>
-      <span><span class="sw" style="background:#9be9b2"></span>Teacher (open weights)</span>
-      <span><span class="sw" style="background:#7ec4ff"></span>Corpus / Dataset</span>
-      <span><span class="sw" style="background:#d08ef2"></span>Student model</span>
-      <span style="color:#6d7690"><span class="sw" style="background:#3a4458"></span>solid: descendant · dashed: distills-from</span>
-    </div>
-    <svg id="tree" viewBox="0 0 960 560" preserveAspectRatio="xMidYMid meet"></svg>
-  </div>
-
-  <div id="panel" class="panel">
-    <div class="placeholder">Select a node to see its details.</div>
-  </div>
+  <div id="rows"></div>
+  <aside class="panel" id="panel" aria-live="polite">
+    <div class="placeholder">Select a box to see its details.</div>
+  </aside>
 </div>
+
+<footer>
+  Sources (cards in wiki/raw-data/llm-training): distilling-step-by-step; orca; orca-2; dolphin; deepseek-r1 and deepseek-r1-recipe (arXiv:2501.12948v2);
+  sky-t1 (NovaSky blog); bespoke-stratos (blog, dataset and model cards); openr1 and openr1-recipe (HF Update #2);
+  open-thoughts (arXiv:2506.04178v2); transferability-of-llm-reasoning (arXiv:2507.00432v2); scaling-reasoning-losing-control-mathif (arXiv:2505.14810v2).
+  "Not reported" means the checked source does not print the value.
+</footer>
 
 <script>
 "use strict";
+const N = {
+  palm: { kind: "teacher", name: "PaLM-540B", meta: "few-shot CoT, about 10 exemplars", d: {
+    "Role": "Generates a rationale and a label for each training input by continuing (input, rationale, label) exemplars",
+    "Sampling": "not reported",
+    "Source": "distilling-step-by-step §3.1, Limitations" } },
+  dsbsData: { kind: "data", name: "DSBS rationales", meta: "4 task datasets", d: {
+    "Datasets (train)": "e-SNLI 549,367; ANLI R1 16,946; CQA 8,766; SVAMP 720",
+    "Format": "one T5 model; inputs prefixed [label] or [rationale]",
+    "Loss": "L = L_label + λ·L_rationale; λ not printed (code: α = 0.5)",
+    "Filter": "not reported (whether wrong teacher labels were removed is not stated)",
+    "Source": "distilling-step-by-step §3.2, App. A.2 Table 3, Recipe ledger" } },
+  t5: { kind: "student", name: "T5 220M / 770M / 11B", meta: "one student per dataset", broad: false, d: {
+    "Training": "LR 5e-5; batch 64 (220M, 770M), 32 (11B); 10,000 steps (220M, 770M), 4,000 (11B)",
+    "Results (220M, 100% data)": "e-SNLI / ANLI / CQA / SVAMP: multi-task 89.51 / 49.58 / 63.29 / 65.50; standard fine-tuning 88.38 / 43.58 / 62.19 / 62.63",
+    "Data efficiency": "ANLI: 770M beats few-shot PaLM-540B with 80% of labeled data",
+    "Outside target tasks": "not evaluated: each student is trained and tested on one dataset",
+    "Source": "distilling-step-by-step Tables 1–2, §4.3, App. A.1" } },
 
-// ---- Data: every node is either a teacher, a corpus, or a student ----
-const NODES = {
-  // ============ CHAT-TEACHER LINE (GPT-4 era) ============
-  "gpt4": {
-    kind: "teacher", closed: true, x: 120, y: 60, label: "GPT-4",
-    era: "2023 chat teacher",
-    details: {
-      "Model":            "GPT-4 (OpenAI API)",
-      "Role":             "Teacher for Orca line",
-      "Trace style":      "Short-to-medium CoT under system-prompt steering; no native <think> tag",
-      "License":          '<span class="pill license-proprietary">proprietary</span> API ToS restricts training competitors',
-      "Known quirks":     "Refusal patterns (\"As an AI language model…\"), verbose preambles, high English bias"
-    }
-  },
-  "orca1": {
-    kind: "corpus", x: 80, y: 170, label: "Orca-1 corpus",
-    era: "Mukherjee 2023",
-    details: {
-      "Paper":            "arxiv.org/abs/2306.02707",
-      "Teacher":          "GPT-4 (deep) + ChatGPT (broad)",
-      "Size":             "1M GPT-4 + 5M ChatGPT traces (progressive learning)",
-      "Prompt steering":  "16 hand-crafted system messages (CoT / ELI5 / expert / plan-and-execute / definition-unpack / MCQ-elimination / …)",
-      "Filter":           "Format check + task-level correctness where available; mostly trust the teacher",
-      "License":          '<span class="pill license-contested">contested</span> GPT-4 outputs; no public release',
-      "Student":          "Orca-13B (Llama-based)",
-      "Flagship eval":    "BigBench-Hard zero-shot 49.7 (vs Vicuna-13B 44.0)"
-    }
-  },
-  "orca2": {
-    kind: "corpus", x: 200, y: 170, label: "Orca-2 corpus",
-    era: "Mitra 2023",
-    details: {
-      "Paper":            "arxiv.org/abs/2311.11045",
-      "Teacher":          "GPT-4",
-      "Strategy modes":   "5 (direct / step-by-step / explain-then-answer / recall-then-answer / extract-then-answer)",
-      "Key trick":        "Prompt Erasing — student trained without the strategy-selecting system message, learns to pick strategy itself",
-      "License":          '<span class="pill license-contested">contested</span> GPT-4 outputs',
-      "Student":          "Orca-2 7B / 13B",
-      "Significance":     "Bridges 'execute the teacher\u2019s strategy' \u2192 'learn when each strategy applies'"
-    }
-  },
-  "openorca": {
-    kind: "corpus", x: 60, y: 290, label: "Open-Orca / SlimOrca",
-    era: "2023 community reproduction",
-    details: {
-      "Maintainers":      "Open-Orca community",
-      "Size":             "~4.2M (OpenOrca), ~518K (SlimOrca dedup)",
-      "Teacher":          "GPT-3.5 + GPT-4 (FLAN-augmented)",
-      "License":          '<span class="pill license-contested">contested</span> MIT on dataset; outputs governed by OpenAI ToS',
-      "Students":         "Used by Mistral-Orca, OpenOrca-Platypus, many community fine-tunes",
-      "Role":             "First public Orca-style corpus at scale"
-    }
-  },
-  "dolphin": {
-    kind: "corpus", x: 200, y: 290, label: "Dolphin (v1 \u2192 v2.x)",
-    era: "Hartford 2023\u20132025",
-    details: {
-      "Maintainer":       "Eric Hartford / Cognitive Computations",
-      "Size":             "v1: 1M (FLAN+GPT-4) + 3.5M (FLAN+GPT-3.5); v2.x adds community mixes",
-      "Filter":           '"Uncensoring": regex + classifier drop refusal patterns, alignment preambles, bias disclaimers',
-      "License":          '<span class="pill license-permissive">Apache-2.0 dataset</span> — but GPT-4 output license remains contested',
-      "Students":         "Dolphin-Mixtral, Dolphin-Llama3, Dolphin-Qwen, Dolphin-R1",
-      "Lesson":           "Teacher-bias transfer is systematic; refusal filter must be an explicit pipeline stage"
-    }
-  },
+  orcaT: { kind: "teacher", name: "ChatGPT, then GPT-4", meta: "closed API teachers", d: {
+    "Role": "ChatGPT answers FLAN-5M (stage 1); GPT-4 answers FLAN-1M (stage 2)",
+    "Sampling": "GPT-4 temperature 0.7, top_p 0.95; ChatGPT settings not stated",
+    "Stated reasons for ChatGPT stage": "capacity gap between 13B student and GPT-4; cost and rate limits",
+    "Source": "orca §3.1.3, footnote 9, Table 4" } },
+  orcaData: { kind: "data", name: "Orca FLAN-5M / FLAN-1M", meta: "16 system messages", d: {
+    "Queries": "FLAN-v2 zero-shot: CoT 150K, NiV2 440K, Flan 2021 2.5M, T0 2M, Dialog 0; Big-Bench tasks excluded",
+    "System messages": "16, Table 2 (empty; detailed answer; explain like five; step-by-step and justify; describe task and explain answer; ...); #8 and #10 only for multiple choice",
+    "Filter": "not reported",
+    "Source": "orca §3.1.1–3.1.3, Tables 2–3" } },
+  orca13: { kind: "student", name: "Orca-13B", meta: "LLaMA-13B", broad: true, d: {
+    "Training": "4 epochs per stage; 2,048 tokens, packing 2.7 examples per sequence; loss on teacher tokens; optimizer and LR not reported",
+    "Results": "BBH 49.7 (ChatGPT 48.9, GPT-4 67.4, Vicuna-13B 23.3); AGIEval 41.7 (ChatGPT 47.2)",
+    "Two stages vs FLAN-1M only": "AGIEval 41.7 vs 37.18 (also 5× more data, so not isolated)",
+    "Outside target tasks": "AGIEval, BBH, TruthfulQA-MC, ToxiGen, GPT-4-judged open-ended prompts",
+    "Source": "orca §3.2, Tables 8, 10, 11" } },
 
-  // ============ REASONING-TEACHER LINE (R1 era) ============
-  "r1": {
-    kind: "teacher", closed: false, x: 520, y: 60, label: "DeepSeek-R1",
-    era: "2025 reasoning teacher",
-    details: {
-      "Model":            "DeepSeek-R1 (671B MoE)",
-      "Weight license":   '<span class="pill license-permissive">MIT</span> — outputs explicitly permitted for training',
-      "Trace format":     "&lt;think&gt;…&lt;/think&gt;&lt;answer&gt;…&lt;/answer&gt; long CoT; median ~5K tokens, tail to 30K",
-      "Origin":           "RL (GRPO) on DeepSeek-V3-Base + cold-start SFT + RS-SFT + alignment RL",
-      "Hparams (public)": "GRPO \u03b5=10, KL=0.001, LR 3e-6, G=16, T=1.0, max gen 32,768 tokens",
-      "Quirks":           "Occasional English/Chinese mixing; \"Wait, let me reconsider\" reflection tic; AIME/MATH contamination risk"
-    }
-  },
-  "r1_800k": {
-    kind: "corpus", x: 440, y: 170, label: "R1 RS-SFT 800K",
-    era: "DeepSeek 2025",
-    details: {
-      "Origin":           "Rejection-sampling SFT stage of R1 pipeline; stage-1 RL model generates, V3-judge filters",
-      "Composition":      "~600K reasoning (math / code / science) + ~200K non-reasoning (writing / roleplay / translation)",
-      "Verifier":         "SymPy (math) + unit tests (code) + V3-judge (open-ended)",
-      "License":          '<span class="pill license-permissive">MIT</span> on derivatives via R1\u2019s license',
-      "Opacity":          "Per-source breakdown, reject-yield ratio, judge prompt NOT disclosed"
-    }
-  },
-  "r1_distill": {
-    kind: "student", x: 520, y: 280, label: "R1-Distill (1.5B\u201370B)",
-    era: "DeepSeek 2025",
-    details: {
-      "Student bases":    "Qwen2.5-Math 1.5B / 7B / 14B / 32B; Llama-3.1-8B; Llama-3.3-70B",
-      "Training":         "Pure SFT on 800K corpus; no RL on student",
-      "Flagship":         "R1-Distill-Qwen-32B: AIME24 ~72%, MATH500 ~94%, LiveCodeBench ~57% (beats o1-mini on MATH/AIME)",
-      "Lesson":           "Dense students benefit more from copied reasoning structure than from rediscovering via own RL"
-    }
-  },
-  "stratos": {
-    kind: "corpus", x: 340, y: 280, label: "Bespoke-Stratos-17k",
-    era: "Bespoke Labs 2025",
-    details: {
-      "Teacher":          "DeepSeek-R1 (API)",
-      "Size":             "17,000 (prompt, long-CoT) pairs",
-      "Filter":           "SymPy equivalence on \\boxed{} (math) + unit tests (code) + GPT-4o LLM-judge (science); MinHash dedup",
-      "Reject rate":      "30\u201350% (code dominates rejections)",
-      "Cost":             "~$800 API + ~$4K training on 8\u00d7H100",
-      "License":          '<span class="pill license-permissive">Apache-2.0</span>',
-      "Student":          "Bespoke-Stratos-32B: AIME24 ~63%, MATH500 ~93%, LCB ~57% (within 2\u20133 pts of R1-Distill-Qwen-32B at 1/47 the data)",
-      "Lesson":           "Curation beats scale up to a ceiling; the ceiling is the teacher"
-    }
-  },
-  "openr1": {
-    kind: "corpus", x: 620, y: 170, label: "OpenR1-Math-220k",
-    era: "HuggingFace 2025",
-    details: {
-      "Teacher":          "DeepSeek-R1 (HF-hosted + API mix)",
-      "Size":             "220K math problems \u00d7 ~2 traces \u2248 440K samples",
-      "Filter":           "Math-Verify (open-source SymPy) + format check (\\boxed{}, &lt;/think&gt;)",
-      "Reject rate":      "~20%",
-      "Cost":             "~$10K inference (HF H100 + API mix)",
-      "License":          '<span class="pill license-permissive">Apache-2.0</span>',
-      "Scope":            "Math only (code / science tracks in progress)",
-      "Student":          "OpenR1-Qwen-7B: MATH ~80%, AIME24 ~40%; follow-up GRPO adds +3\u20135 AIME",
-      "Lesson":           "2 traces/problem marginal over 1; most signal from R1 quality not trace multiplicity"
-    }
-  },
+  orca2T: { kind: "teacher", name: "GPT-4 with strategy instructions", meta: "task-specific system instructions", d: {
+    "Role": "Strategy chosen per task, guided by Orca 1 performance (direct-answer, step-by-step, explain-then-answer, and others); instructions may use multiple calls",
+    "Source": "orca-2 §3" } },
+  orca2Data: { kind: "data", name: "Orca 2 data (~817K)", meta: "Prompt Erasing", d: {
+    "Composition": "FLAN ~602K (1,448 tasks, 126 sub-categories); few-shot 55K; math ~160K; 2,000 synthetic doctor–patient conversations",
+    "Prompt Erasing": "strategy instruction replaced by a generic cautious system message at training time",
+    "Filter": "no correctness filter stated; model card: Azure content filters on synthetic data",
+    "Source": "orca-2 §3, §4.1" } },
+  orca2s: { kind: "student", name: "Orca-2-7B / 13B", meta: "LLaMA-2 bases", broad: true, d: {
+    "Training": "FLAN-v2 1 epoch → 5M ChatGPT 3 epochs → 1M GPT-4 + ~817K Orca 2, 4 epochs; 4,096 packed; LR not reported",
+    "Reasoning (13B)": "six-benchmark average 64.49 vs 56.85 for LLaMA-2-Chat-70B",
+    "Chat and grounding (13B)": "MT-Bench 6.15 vs 6.64 (LLaMA-2-Chat-13B); hallucination 10.97, 29.00 with cautious message",
+    "Safety (13B)": "violent defect rate 13.47% vs 0.17% for LLaMA-2-Chat-13B",
+    "Source": "orca-2 §4.2, Fig. 4, Tables 3, 4, 11" } },
 
-  // ============ QWQ TEACHER LINE ============
-  "qwq": {
-    kind: "teacher", closed: false, x: 820, y: 60, label: "QwQ-32B-preview",
-    era: "2024 open reasoning teacher",
-    details: {
-      "Model":            "QwQ-32B-preview (Alibaba)",
-      "Weight license":   '<span class="pill license-permissive">Apache-2.0</span>',
-      "Trace format":     'QwQ-native long-CoT; "Wait", "Hmm" reflection tokens; non-standard wrapper needs reformatting',
-      "Teacher strength": "Weaker than R1 on hardest problems (AIME25); closer to Qwen2.5 base distribution \u2192 less distribution shift for Qwen students",
-      "Key advantage":    "Fully local inference (no API); trace outputs freely redistributable"
-    }
-  },
-  "skyt1": {
-    kind: "corpus", x: 760, y: 170, label: "Sky-T1-data-17K",
-    era: "NovaSky 2025",
-    details: {
-      "Teacher":          "QwQ-32B-preview (local vLLM)",
-      "Size":             "17,000 (prompt, long-CoT) pairs",
-      "Filter":           "SymPy (math) + unit tests (code) + GPT-4o-mini LLM-judge (open-ended)",
-      "Reformatting":     "GPT-4o rewriter strips preamble filler; lifts AIME by +4 points",
-      "Cost":             "$450 total (training-only); teacher inference free (local)",
-      "License":          '<span class="pill license-permissive">Apache-2.0</span>',
-      "Student":          "Sky-T1-32B: AIME24 ~43%, MATH500 ~82%, LCB-Easy ~86%, GPQA-Dia ~57%",
-      "Delta vs R1":      "~20 pts behind R1-Distill on AIME (teacher ceiling)"
-    }
-  },
-  "openthoughts": {
-    kind: "corpus", x: 900, y: 170, label: "OpenThoughts3-1.2M",
-    era: "Guha 2025",
-    details: {
-      "Teacher":          "QwQ-32B (primary); R1 ablation included",
-      "Size":             "1.2M examples (850K math + 250K code + 100K science)",
-      "Filter":           "LLM-labeled difficulty (question side) beats embedding/fastText; 'no filter' beats aggressive answer-side filtering",
-      "Ablations":        "1000+ controlled experiments over pipeline",
-      "Dedup":            "Exact for math/science; NONE for code",
-      "Key finding":      "QwQ-32B beats DeepSeek-R1 as a teacher for Qwen2.5-7B despite R1 scoring higher on target benchmarks",
-      "License":          '<span class="pill license-permissive">Apache-2.0</span>',
-      "Student":          "OpenThinker3-7B: AIME24 69%, AIME25 53%, MATH500 90%, LCB 52%, GPQA-Dia 54% (strongest open-data 7B reasoner)"
-    }
-  }
+  dolT: { kind: "teacher", name: "GPT-4 and GPT-3.5", meta: "Orca reproduction", d: {
+    "Role": "completions for FLANv2 prompts with Orca's system prompts",
+    "Source": "dolphin card" } },
+  dolData: { kind: "data", name: "Dolphin", meta: "~1M GPT-4 + ~3.5M GPT-3.5", d: {
+    "Composition": "card: ~1M GPT-4 and ~3.5M GPT-3.5 completions; released files 892k and 2.84M rows",
+    "Filter": "duplicates removed; alignment, refusal, avoidance, bias removed; method and counts not given",
+    "License": "Apache-2.0 dataset; models follow their base model licenses",
+    "Source": "dolphin card" } },
+  dolS: { kind: "empty", name: "No student evaluated in the card", meta: "", d: null },
+
+  r1T: { kind: "teacher", name: "DeepSeek-R1 stage-1 RL checkpoint", meta: "671B MoE; MIT license", d: {
+    "Role": "samples multiple responses per reasoning prompt for rejection sampling",
+    "Samples per prompt; temperature": "not reported",
+    "License": "MIT; README permits distillation for training other LLMs",
+    "Source": "deepseek-r1 §3, B.3.3; teacher-output-licenses excerpt" } },
+  r1Data: { kind: "data", name: "R1 SFT set, 804,745", meta: "reasoning ~600k + general ~200k", d: {
+    "By domain (avg tokens)": "Math 395,285 (6,094.2); Code 211,129 (7,435.7); STEM 10,124 (4,928.8); Logic 10,395 (2,739.0); General 177,812 (1,419.8)",
+    "Reasoning filter": "keep correct samples; DeepSeek-V3 judge vs reference for part (Listing 4); drop CoT with mixed languages, long paragraphs, code blocks",
+    "Non-reasoning": "portions of DeepSeek-V3 SFT data plus program repair and front-end data; V3-written CoT except for simple queries",
+    "Turns": "average rounds 1.0 (mostly single-turn)",
+    "Source": "deepseek-r1-recipe Table 5; deepseek-r1 B.3.3" } },
+  r1S: { kind: "student", name: "DeepSeek-R1-Distill (6 models)", meta: "SFT only", broad: false, d: {
+    "Bases (initial LR)": "Qwen2.5-Math-1.5B (1e-4); Qwen2.5-Math-7B (8e-5); Qwen2.5-14B (7e-5); Qwen2.5-32B (6e-5); Llama-3.1-8B (5e-5); Llama-3.3-70B-Instruct (2e-5)",
+    "Training": "2–3 epochs; cosine decay to 1/10; 32,768 tokens; batch 64",
+    "Results (pass@1)": "Qwen-1.5B AIME24 28.9, MATH-500 83.9; Qwen-32B 72.6, 94.3, GPQA-D 62.1, LCB 57.2; Llama-70B 70.0, 94.5, 65.2, 57.5",
+    "RL baseline at 32B": "Qwen2.5-32B-Zero (RL > 10K steps): 47.0, 91.6, 55.0, 40.2",
+    "Outside target tasks": "not in the R1 paper; MathIF reports R1-Distill-Llama-70B IFEval 78.74 vs 90.38 for Llama-3.3-70B-Instruct",
+    "Source": "deepseek-r1-recipe Table 6; deepseek-r1 Tables 15–16; scaling-reasoning-losing-control-mathif Table 13" } },
+
+  qwqP: { kind: "teacher", name: "QwQ-32B-Preview", meta: "Apache-2.0", d: {
+    "Base": "Qwen2.5-32B-Instruct",
+    "Card limitations": "language mixing and code-switching; recursive reasoning loops",
+    "Sampling for Sky-T1": "not reported",
+    "Source": "teacher-output-licenses excerpt §3; sky-t1 blog" } },
+  skyData: { kind: "data", name: "Sky-T1-data-17K", meta: "10k math, 5k code, 1k science", d: {
+    "Prompts": "10k math (NuminaMATH AIME, MATH, Olympiads); 5k code (APPs, TACO); 1k STILL-2 science and puzzle",
+    "Filter": "math: exact match with ground truth; code: dataset unit tests",
+    "Rewrite": "QwQ traces rewritten by GPT-4o-mini; on APPs, answer extraction accuracy about 25% before vs over 90% after",
+    "Source": "sky-t1 (NovaSky blog, Data Curation Process)" } },
+  skyS: { kind: "student", name: "Sky-T1-32B-Preview", meta: "Qwen2.5-32B-Instruct", broad: false, d: {
+    "Training": "3 epochs; LR 1e-5; batch 96; 19 h on 8×H100, DeepSpeed ZeRO-3 offload (~$450)",
+    "Results": "MATH500 82.4; AIME24 43.3; LCB Easy / Medium / Hard 86.3 / 56.8 / 17.9; GPQA-D 56.8 (o1-preview: 81.4; 40.0; 92.9 / 54.9 / 16.3; 75.2)",
+    "Mixture finding": "3–4K math: AIME24 16.7 → 43.3; adding APPs code: 36.7; adding harder math and TACO: 43.3",
+    "Outside target tasks": "not evaluated",
+    "Source": "sky-t1 blog, Training, Evaluation, Other findings" } },
+
+  r1T2: { kind: "teacher", name: "DeepSeek-R1", meta: "API (deepseek-reasoner)", d: {
+    "Sampling": "not reported in blog or cards; released script passes temp 0.0 (not confirmed as the run)",
+    "Source": "bespoke-stratos Recipe ledger" } },
+  stratosData: { kind: "data", name: "Bespoke-Stratos-17k", meta: "16,710 rows; Sky-T1 pipeline in Curator", d: {
+    "Prompts": "10k math, 5k code (APPs, TACO), 1k STILL-2 (similar to Sky-T1)",
+    "Math filter": "gpt-4o-mini judge vs ground truth; retained correct solutions 25% (Sky-T1 parser) → 73%",
+    "Code filter": "execution on a Ray cluster",
+    "Science": "released script uses STILL-2 rows without an R1 call or verifier",
+    "Cost": "$800 (dataset card); generation 1.5 hours",
+    "Source": "bespoke-stratos blog, dataset card, combine_data.py" } },
+  stratosS: { kind: "student", name: "Bespoke-Stratos-32B / 7B", meta: "Qwen2.5-Instruct bases", broad: false, d: {
+    "Training": "3 epochs; LR 1e-5 cosine, warmup 0.1; batch 96; 32B: 27 h, 7B: 7 h on 8×H100",
+    "32B results": "AIME24 63.3; MATH500 93.0; GPQA-D 58.1; LCB v2 All 71.1 (R1-Distill-Qwen-32B, authors' eval: 66.7 / 89.8 / 61.1 / 72.2; reported AIME24 72.6)",
+    "7B results": "AIME24 20.0; MATH500 82.0; GPQA-D 37.8; LCB v2 All 36.1 (R1-Distill-Qwen-7B, authors' eval: 43.3 / 89.4 / 44.9 / 46.6)",
+    "Outside target tasks": "not evaluated; authors: benchmarks convey only one side",
+    "Source": "bespoke-stratos 32B and 7B tables, model cards" } },
+
+  r1T3: { kind: "teacher", name: "DeepSeek-R1", meta: "local, 512 H100", d: {
+    "Sampling": "R1 model card's recommended parameters (values not printed); max 16k tokens; 2, some 4, generations per problem",
+    "Source": "openr1 Update #2; openr1-recipe" } },
+  openr1Data: { kind: "data", name: "OpenR1-Math-220k", meta: "NuminaMath 1.5", d: {
+    "Prompts": "400k problems; 800k traces",
+    "Filter": "Math-Verify (55% of problems have ≥ 1 correct answer); Llama-3.3-70B-Instruct judge recovers 28,000 problems",
+    "Released": "default 93,733 rows; extended 131,396 rows (extended scores lower after SFT)",
+    "License": "Apache 2.0",
+    "Source": "openr1 Update #2; dataset card" } },
+  openr1S: { kind: "student", name: "OpenR1-Qwen-7B", meta: "Qwen2.5-Math-7B-Instruct", broad: false, d: {
+    "Training": "3 epochs; LR 5e-5 linear, 10% warmup; context 4k → 32k via RoPE 300k; batch not reported",
+    "Results": "MATH-500 90.6; AIME24 36.7; AIME25 40.0 (R1-Distill-Qwen-7B: 91.6 / 43.3 / 40)",
+    "Outside target tasks": "not evaluated",
+    "Source": "openr1 Update #2 table; openr1-recipe" } },
+
+  qwq: { kind: "teacher", name: "QwQ-32B", meta: "Apache-2.0", d: {
+    "Why chosen": "students trained on QwQ-32B outputs scored higher than on DeepSeek-R1 outputs: 44.2 vs 42.3 (code), 44.2 vs 41.6 (math)",
+    "Sampling": "temperature, top_p, max tokens not reported",
+    "Source": "open-thoughts §4.6 Table 8; Verification" } },
+  otData: { kind: "data", name: "OpenThoughts3-1.2M", meta: "850K math, 250K code, 100K science", d: {
+    "Construction": "75k questions × 16 answers (dataset card)",
+    "Question filters": "GPT-4o-mini difficulty (code); GPT-4.1-mini response length (math, science)",
+    "Dedup; answer filter": "exact for math and science, none for code; no answer filter",
+    "Source": "open-thoughts §4.3–4.6, §5" } },
+  otS: { kind: "student", name: "OpenThinker3-7B", meta: "Qwen2.5-7B-Instruct", broad: true, d: {
+    "Training": "LR 8e-5; batch 512 (unit not stated); 5 epochs (derived from App. D.2 'Large' set)",
+    "Results": "AIME25 53.3; LCB 06/24–01/25 51.7; GPQA-D 53.7",
+    "Outside target tasks": "HLE MCQ 10.2 vs 12.7 for base; HarmBench harmfulness 55.5 vs 14.5; XSTest over-refusal 5.6 vs 4.4",
+    "Source": "open-thoughts Table 1, App. D.2, App. L Table 30" } },
+
+  q32: { kind: "teacher", name: "Qwen3-32B", meta: "rejection sampling", d: {
+    "Role": "writes CoT for 47K math problems; only responses with correct final answers kept",
+    "Source": "transferability-of-llm-reasoning §2.2, App. A.3.2" } },
+  uniData: { kind: "data", name: "UniReason SFT data (47K math)", meta: "same problems used for RL", d: {
+    "Problems": "DeepScaler (lower difficulty) and SimpleRL levels 3–5",
+    "Variants": "thinking-mode traces; non-thinking-mode traces",
+    "Source": "transferability-of-llm-reasoning App. A.3.2, Table 1" } },
+  uniS: { kind: "student", name: "UniReason-Qwen3-14B (SFT)", meta: "controlled SFT vs RL", broad: true, d: {
+    "SFT (thinking traces)": "math avg 49.8; other reasoning 45.3; non-reasoning 21.1; IFEval 42.3; TI_non −104.1",
+    "RL on the same problems": "math avg 53.8; other reasoning 60.0; non-reasoning 53.2; IFEval 70.0; TI_non +52.2",
+    "Base": "math avg 27.7; other 30.2; non-reasoning 45.7; IFEval 69.2",
+    "Source": "transferability-of-llm-reasoning arXiv:2507.00432v2 Table 1" } }
 };
 
-// ---- Edges: source -> target with kind (descendant vs distill) ----
-const EDGES = [
-  // GPT-4 line
-  ["gpt4",   "orca1",  "distill"],
-  ["gpt4",   "orca2",  "distill"],
-  ["orca1",  "orca2",  "descendant"],
-  ["orca1",  "openorca","descendant"],
-  ["orca1",  "dolphin","descendant"],
-  ["gpt4",   "openorca","distill"],
-  ["gpt4",   "dolphin","distill"],
-
-  // R1 line
-  ["r1",       "r1_800k",   "distill"],
-  ["r1_800k",  "r1_distill","descendant"],
-  ["r1",       "stratos",   "distill"],
-  ["r1",       "openr1",    "distill"],
-
-  // QwQ line
-  ["qwq", "skyt1",        "distill"],
-  ["qwq", "openthoughts", "distill"],
-
-  // Cross-era: OpenThoughts ablates both teachers
-  ["r1",  "openthoughts", "distill"]
+const GROUPS = [
+  { label: "2023 — rationales and explanation traces from LLM teachers", rows: [
+      ["palm", "dsbsData", "t5"],
+      ["orcaT", "orcaData", "orca13"],
+      ["orca2T", "orca2Data", "orca2s", "Orca 2 training also reuses the Orca FLAN-5M and FLAN-1M responses in earlier stages."],
+      ["dolT", "dolData", "dolS"] ] },
+  { label: "2025 — reasoning teachers and long traces", rows: [
+      ["r1T", "r1Data", "r1S"],
+      ["qwqP", "skyData", "skyS"],
+      ["r1T2", "stratosData", "stratosS", "Bespoke-Stratos ports the Sky-T1 pipeline to Curator and replaces the teacher and the math filter."],
+      ["r1T3", "openr1Data", "openr1S"],
+      ["qwq", "otData", "otS"] ] },
+  { label: "2025 — controlled study of transfer outside math", rows: [
+      ["q32", "uniData", "uniS"] ] }
 ];
 
-// ---- Render ----
-const svg = document.getElementById("tree");
-const svgNS = "http://www.w3.org/2000/svg";
-
-function curve(x1, y1, x2, y2) {
-  const mx = (x1 + x2) / 2;
-  return `M${x1},${y1} C${mx},${y1} ${mx},${y2} ${x2},${y2}`;
-}
-
-function colorFor(node) {
-  if (node.kind === "teacher") return node.closed ? "#ffd166" : "#9be9b2";
-  if (node.kind === "corpus")  return "#7ec4ff";
-  if (node.kind === "student") return "#d08ef2";
-  return "#ccc";
-}
-
-// Draw edges first (under nodes)
-EDGES.forEach(([from, to, kind]) => {
-  const a = NODES[from], b = NODES[to];
-  const p = document.createElementNS(svgNS, "path");
-  p.setAttribute("d", curve(a.x, a.y + 20, b.x, b.y - 20));
-  p.setAttribute("class", `edge ${kind}`);
-  svg.appendChild(p);
-});
-
-// Draw nodes
-const nodeEls = {};
-Object.entries(NODES).forEach(([id, n]) => {
-  const g = document.createElementNS(svgNS, "g");
-  g.setAttribute("class", "node");
-  g.setAttribute("transform", `translate(${n.x},${n.y})`);
-  g.addEventListener("click", () => select(id));
-
-  const c = document.createElementNS(svgNS, "circle");
-  c.setAttribute("r", 18);
-  c.setAttribute("fill", colorFor(n));
-  c.setAttribute("stroke", "#0f1115");
-  c.setAttribute("stroke-width", 2);
-  g.appendChild(c);
-
-  const t = document.createElementNS(svgNS, "text");
-  t.setAttribute("y", 34);
-  t.textContent = n.label;
-  g.appendChild(t);
-
-  svg.appendChild(g);
-  nodeEls[id] = g;
-});
-
-// Panel rendering
+const KIND_LABEL = { teacher: "Teacher", data: "Dataset and filter", student: "Student", empty: "" };
+const rowsEl = document.getElementById("rows");
 const panel = document.getElementById("panel");
 let selected = null;
 
-function select(id) {
-  if (selected && nodeEls[selected]) nodeEls[selected].classList.remove("selected");
-  selected = id;
-  nodeEls[id].classList.add("selected");
-
-  const n = NODES[id];
-  let html = `<h2>${n.label}</h2><div class="era">${n.era}</div>`;
-  Object.entries(n.details).forEach(([k, v]) => {
-    html += `<div class="row"><div class="k">${k}</div><div class="v">${v}</div></div>`;
-  });
-  html += `<div class="hint">Edges: dashed = distill-from (teacher outputs \u2192 corpus); solid = descendant lineage.</div>`;
-  panel.innerHTML = html;
+function el(tag, cls, text) {
+  const e = document.createElement(tag);
+  if (cls) e.className = cls;
+  if (text !== undefined) e.textContent = text;
+  return e;
 }
 
-// Default selection: pick R1 so the centerpiece pipeline shows up first
-select("r1");
+function makeNode(id) {
+  const n = N[id];
+  const b = el(n.kind === "empty" ? "div" : "button", "node " + n.kind);
+  if (n.kind !== "empty") {
+    b.type = "button";
+    b.appendChild(el("span", "kind", KIND_LABEL[n.kind]));
+  }
+  b.appendChild(el("span", "name", n.name));
+  if (n.meta) b.appendChild(el("span", "meta", n.meta));
+  if (n.kind === "student") {
+    const badge = el("span", "badge " + (n.broad ? "yes" : "no"),
+      n.broad ? "evaluated outside math/code/science" : "math/code/science only");
+    b.appendChild(badge);
+  }
+  if (n.d) b.addEventListener("click", () => select(id, b));
+  return b;
+}
+
+function select(id, btn) {
+  if (selected) selected.classList.remove("selected");
+  selected = btn; btn.classList.add("selected");
+  const n = N[id];
+  panel.textContent = "";
+  panel.appendChild(el("h2", null, n.name));
+  panel.appendChild(el("div", "k-kind", KIND_LABEL[n.kind] + (n.meta ? " · " + n.meta : "")));
+  Object.entries(n.d).forEach(([k, v]) => {
+    const row = el("div", "kv");
+    row.appendChild(el("div", "k", k));
+    row.appendChild(el("div", "v", v));
+    panel.appendChild(row);
+  });
+}
+
+GROUPS.forEach(g => {
+  rowsEl.appendChild(el("div", "group-label", g.label));
+  g.rows.forEach(r => {
+    const row = el("div", "row");
+    row.appendChild(makeNode(r[0]));
+    row.appendChild(el("div", "arrow", "→"));
+    row.appendChild(makeNode(r[1]));
+    row.appendChild(el("div", "arrow", "→"));
+    row.appendChild(makeNode(r[2]));
+    rowsEl.appendChild(row);
+    if (r[3]) rowsEl.appendChild(el("div", "note", r[3]));
+  });
+});
+
+document.getElementById("badges").addEventListener("change", e => {
+  rowsEl.classList.toggle("show-badges", e.target.checked);
+});
 </script>
 </body>
 </html>

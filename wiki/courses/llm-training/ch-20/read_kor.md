@@ -7,9 +7,9 @@
 
 # 20장 — 데이터로서의 증류와 R1-Distill 계보
 
-> **핵심 통찰.** 2023–2025년의 distillation은 logit-matching이 아니다. 그것은 *teacher에서 sampling하고, sample을 filtering하고, filtered set으로 SFT하는 것*이다. teacher의 가치는 weight가 아니라 **output distribution**, 즉 prompt와 answer 사이의 token trace에 있다. Orca가 vanilla Alpaca와 달라지는 지점, R1-Distill이 Orca와 달라지는 지점은 모두 (a) trace를 어떻게 **elicitation**하는가(system-prompt scaffolding, format tag, multi-strategy prompting), (b) 어떻게 **filter**하는가(gold-answer match, unit-test pass, LLM-judge, symbolic equivalence), (c) teacher의 **quirk**를 얼마나 상속할 의향이 있는가에 대한 결정이다.
+> **핵심 통찰.** 이 장에서 말하는 증류의 기본 절차는 teacher가 문제의 답변을 여러 개 생성하고, 검증을 통과한 답변만 모아 student를 SFT하는 것이다. 이 방법은 샘플을 만든 prompt 분포 안에서는 강한 행동과 추론 형식을 옮기지만, 분포 밖 능력까지 자동으로 보장하지 않는다. 예를 들어 R1-Distill-Qwen-32B는 R1 샘플 804,745개로 학습해 AIME 2024 pass@1 72.6을 기록했지만, 수학 추론 trace만 학습한 Qwen3-14B는 비추론 평균 점수가 45.7에서 21.1로 떨어졌다. 따라서 수학·코드에는 정답 일치, 실행 테스트, 기호식 동치 같은 검증기를 쓰고, 일반 모델에는 안전성·지시 따르기·비수학 문제를 포함해 전후 성능을 따로 측정해야 한다. teacher의 말투와 거부 패턴도 함께 복사될 수 있으므로 teacher의 최고 점수만 보고 고르면 안 된다.
 >
-> **가이드라인.** reasoning distillation에서는 teacher의 trace wrapper를 verbatim 보존하고, domain에 맞는 verifier(SymPy / unit tests / LLM judge)로 rejection-sample하며, 강한 student라면 약 10–20K개의 correct trace를 유지하라. downstream에서 RL도 할 것이 아니라면 약 1M개가 필요하지 않다. teacher는 최고의 benchmark score를 가진 모델이 아니라 *student base에 가장 좋은 output distribution*을 가진 모델로 골라라. QwQ-32B는 R1이 모든 headline eval을 이기는데도 OpenThoughts ablation에서 R1을 이긴다.
+> **선택 기준.** teacher trace의 형식(`<think>` 등)을 보존하고, 문제 종류에 맞는 검증기로 오답을 제거한다. 데이터 수는 고정된 정답이 아니다. OpenThoughts3는 약 100만 샘플까지 규모가 커질수록 점수가 올랐고, 16,710개만 사용한 Bespoke-Stratos-32B는 R1-Distill-Qwen-32B보다 AIME 2024에서 9.3점 낮았다. 반대로 작은 student에 여러 teacher의 출력을 비교해 가장 잘 전이되는 teacher를 선택해야 한다. OpenThoughts 실험에서는 QwQ-32B 출력으로 만든 student가 DeepSeek-R1 출력 student보다 나은 경우가 있었다. 증류 후에는 teacher 대상 평가뿐 아니라 일반 지시 따르기와 안전성도 반드시 확인한다.
 
 ---
 

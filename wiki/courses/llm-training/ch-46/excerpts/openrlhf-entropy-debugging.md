@@ -7,6 +7,8 @@ source_url: https://github.com/OpenRLHF/OpenRLHF
 created_at: "2026-04-23"
 ---
 
+> Superseded by the 2026-09 revision of read.md; kept for history.
+
 # Excerpt: OpenRLHF/verl/TRL entropy-debugging — ch-46's instrumentation spec
 
 **Source library:** `wiki/raw-data/llm-training/blogs/openrlhf-entropy-debugging.md`

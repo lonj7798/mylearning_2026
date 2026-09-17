@@ -3,126 +3,81 @@ chapter: ch-50
 course: llm-training
 phase: read
 excerpt_of: wiki/raw-data/llm-training/papers/bfcl.md
-source_url: https://gorilla.cs.berkeley.edu/leaderboard.html
+source_url: https://proceedings.mlr.press/v267/patil25a.html
 created_at: "2026-04-23"
+revised: "2026-09-15 (generality revision — categories and numbers aligned with the ICML 2025 paper)"
 ---
 
-# Excerpt: BFCL — the canonical confusion-matrix decomposition
+# Excerpt: BFCL — confusion cells for a structured output space
 
 **Source library:** `wiki/raw-data/llm-training/papers/bfcl.md`
-**Artifact:** Multi-category function-calling leaderboard with AST-based call matching and relevance-detection category.
+**Artifact:** The Berkeley Function Calling Leaderboard (BFCL): From Tool Use to Agentic Evaluation of
+Large Language Models. Patil, Mao, Yan, Ji, Suresh, Stoica, et al. (UC Berkeley). ICML 2025, PMLR
+267:48371–48392.
+**Checked on 2026-09-15** against the verified library card, which was itself checked against the PMLR PDF
+on 2026-09-14.
+
+> **Corrections carried by this excerpt.** The earlier version listed "7 core categories: simple, parallel,
+> multiple, parallel-multiple, relevance-detection, chat, Java/JS-specific". The paper's single-turn
+> categories are Simple, Multiple, Parallel, Parallel Multiple, Irrelevance, and Relevance (§3.1,
+> App. C.2); Java and JavaScript are languages, not categories, and there is no "chat" category. The
+> earlier version also stated that "frontier models still hallucinate ~10% on irrelevant queries"; no such
+> figure appears in the paper, and the per-model Irrelevance scores in Table 1 vary widely.
 
 ---
 
-## Why this source grounds ch-50 §3's confusion-matrix clustering
+## Why ch-50 uses this source
 
-BFCL is the sharpest published example of "cluster-by-confusion-matrix." Every function-calling failure is assigned to one of a small set of orthogonal buckets (wrong function name, right function but wrong arguments, called when irrelevant, didn't call when needed, unparseable output). The buckets are the confusion matrix's off-diagonal cells, and each bucket has its own fix path. Ch-50 §3 uses this decomposition as the template any structured-output eval should copy.
-
----
-
-## The seven scoring categories — per-slice by call type
-
-Source §Evaluation methodology — Scoring categories:
-
-> - **Simple:** 1 call to 1 function.
-> - **Multiple:** 1 call to 1 function chosen from ≥2 candidates.
-> - **Parallel:** ≥2 calls to same function in same turn.
-> - **Parallel-Multiple:** ≥2 calls across multiple functions.
-> - **Relevance-Detection:** user query is irrelevant to offered tools → model must refuse / not call.
-> - **Live (V2+):** real user data in above categories.
-> - **Multi-Turn (V3+):** sequence of turns with state mutation.
-
-Seven ch-50 §5 ledger rows, each with a distinct failure mechanism. A model can be perfect on `simple` (pick one function, fill args) and catastrophic on `relevance-detection` (refuse when no tool applies) — the attested 2025 pattern. Aggregating them into "BFCL score" hides the gap; ch-50's point lands literally.
+Function calling has an enumerable output space, so its failures resolve into mutually exclusive cells
+rather than free-form reasons. ch-50 §6 uses it as the reference case for confusion-cell bucketing, and
+§7 uses its multi-turn error analysis as an example of LLM-judged trajectory labelling.
 
 ---
 
-## The AST matcher — where per-failure decomposition becomes automatic
+## The categories that define the cells (§3.1, App. C.2)
 
-Source §Evaluation methodology — AST matcher:
+| Category | Definition (`F` = candidate functions given to the model) |
+|---|---|
+| Simple | `\|F\| = 1`, one call expected |
+| Multiple | `\|F\| > 1`, one call expected |
+| Parallel | `\|F\| = 1`, several calls expected |
+| Parallel Multiple | `\|F\| > 1`, several calls expected |
+| Irrelevance | `\|F\| ≥ 1`, **no** call expected |
+| Relevance | at least one call expected |
 
-> Call matching uses an AST comparator:
-> 1. Parse predicted call and gold call into (name, kwargs).
-> 2. Normalize kwargs: sort by key, strip whitespace, canonicalize literals (e.g., `1.0` ≡ `1`, `"red"` ≡ `'red'`).
-> 3. Name must match exactly; kwargs must be equivalent; possible args may be absent if default.
+Irrelevance entries are built by removing parameter information from the query or removing a needed
+function; the expected output is a clarification or an error, and any call is counted as a hallucination
+(App. B).
 
-The AST matcher's decomposition is the confusion matrix. Each predicted call produces one of:
+## The matcher, which is what makes the cells exclusive (§4.1, App. H)
 
-- **`correct-call`** (diagonal) — name matches, kwargs equivalent.
-- **`name-mismatch`** — wrong function selected; kwargs irrelevant. Fix: retrieval / function-selector training.
-- **`kwargs-mismatch`** — right function, wrong arguments. Fix: argument-extraction SFT or instruction-tuning on the arg schema.
-- **`call-when-irrelevant`** (hallucinated call) — no tool should have been called. Fix: relevance-detection training, constrained decoding.
-- **`missing-call`** — a tool was needed, none emitted. Fix: recall-side training on multi-turn task completion.
-- **`unparseable-output`** — model emitted prose or broken JSON. Fix: output-format SFT.
+Calls are parsed with Python's `ast` module. The function name must match exactly and each parameter value
+must be in a set of accepted answers. Type handling differs by language: Python accepts an int where a
+float is expected; Java and JavaScript require a float literal; a float for an int parameter is invalid in
+all three. Lists are order-sensitive (all acceptable permutations are enumerated), strings are
+case-insensitive with whitespace and listed punctuation removed, dictionary key order is ignored, and
+parallel calls are matched all-or-nothing without positional alignment.
 
-Six buckets, each a named row in ch-50 §5's ledger. The AST matcher emits them automatically, so this is the rare case where cluster-by-confusion-matrix runs without an LLM-judge.
+The consequence for bucketing: the matcher's own false-accept behaviour (an int where a float is expected
+in Python) is a property of the grader, not of the model, and belongs in the ledger next to the counts.
 
----
+## Numbers ch-50 uses
 
-## Relevance-detection as the standalone hallucination bucket
+- **Abstention and calling move independently.** Qwen2.5-72B-Instruct in prompting mode scores 100.0 on
+  Relevance and 72.8 on Irrelevance (Table 1).
+- **Stateful tasks lag single-turn tasks.** gpt-4o-2024-11-20 (Prompt) scores 95.5 / 94.0 on single-turn
+  AST Multiple / Parallel, 59.0 on multi-turn base, and 6.0 on memory; the highest memory score in the
+  table is 12.0 (Table 1, §5.6).
+- **Format against content.** Prompting-mode models average 412.93 decoding issues against 182.5 for
+  function-calling-mode models out of 4,251 entries; among responses that do decode, function-calling-mode
+  models give the wrong number of calls more often in the Multiple category (77.5 against 21) (§5.1).
+- **LLM-judged multi-turn root causes.** With GPT-4o-08-06 as judge (App. F), the most frequent root cause
+  is "Failed to Understand Environment State", followed by "Failed to Understand User's Request"
+  (§5.4.2, Fig. 5).
+- **Overall level.** Across the 71 rows of Table 1 the best overall accuracy is 66.4
+  (gpt-4o-2024-11-20, prompting mode).
 
-Source §Current leaderboard snapshot (2025):
+## Used by
 
-> Relevance-detection gap: even frontier models still call tools on ~10% of irrelevant queries.
-
-One named bucket, one attested number, one persistent ledger row. Ch-50's argument that "a bucket can shrink, grow, or oscillate across runs" is demonstrated by BFCL's leaderboard history: the relevance-detection gap has not closed from V2 (2024) to the 2025 snapshot, meaning this bucket is stuck at ~10% across many models' runs. That is a ledger-shaped insight — the bucket name exists, the count persists, the fix has not arrived.
-
-This is also why the confusion-matrix panel in ch-50's mock HTML report isolates `hallucinated-call` as a distinct off-diagonal cell: it is the single most reliable, cross-model, cross-run failure bucket in modern function-calling eval.
-
----
-
-## V2 Live — why benchmark-specific fine-tuning is a slice-visible bug
-
-Source §Risks + gotchas:
-
-> **Benchmark-specific fine-tuning:** some labs train directly on BFCL-style data → inflated scores. V2 Live mitigates by using unseen real queries.
-
-Per-slice deltas catch this. A model's V1 score lifts while its V2-Live score stays flat → the signed delta on `V1-simple` is big and positive, on `V2-Live-simple` is near zero → the bucket `benchmark-overfitting` lights up. Aggregate "BFCL score" blurs V1 and V2-Live together and hides the overfit.
-
-Ch-50 §4's "effect-size threshold" extends here: set a different threshold on V1 (higher, because overfit risk) than V2-Live (lower, because it is the unseen-query slice that matters). A V1 lift without a matching V2-Live lift is not a real capability gain.
-
----
-
-## Pass^k — the variance-adjusted agentic slice
-
-Source §Modality-specific technical details:
-
-> **Pass^k metric:** from V3 onward, key agentic metric — model must succeed on all k independent trials of the same task.
-
-Pass^k is per-slice variance made into a scalar. A model with pass@1 = 0.8 and pass^k=5 = 0.2 has high per-task variance — 80% success once, but 20% success on all of five consecutive tries. Ch-50 §4's "two-run minimum" rule is the pass^k principle applied at the training level; BFCL applies it at the eval level. Both are the same insight — a single-shot number conceals variance.
-
-A failure-bucket ledger row `multi-turn-state-drift` (ch-50 §5) is measured by pass^k explicitly: tasks where pass@1 succeeds and pass^k fails are the pure variance bucket.
-
----
-
-## The AST matcher's edge cases — a named sub-bucket
-
-Source §Risks + gotchas:
-
-> **AST matcher is lenient on argument order but strict on value canonicalization** — edge cases (list-vs-tuple) cause spurious failures.
-
-Strict on value canonicalization means a `kwargs-mismatch` attribution can be *spurious* — the call is semantically correct but the matcher's literal normalization flagged it wrong. Ch-50 §3's LLM-judge reason-tagger applied to the kwargs-mismatch bucket will often split it into `true-kwargs-error` and `matcher-canonicalization-artifact`. The ledger should carry this sub-split explicitly; otherwise the bucket count is inflated by a known grader bias.
-
-This is ch-49's judge-calibration-meets-ch-50's-bucketing intersection: even a deterministic grader (AST matcher) has calibration failures that surface only under per-bucket audit.
-
----
-
-## Leaderboard snapshot — the three-line chart view
-
-Source §Current leaderboard snapshot (2025):
-
-> - Top proprietary: GPT-4o-class, Claude 3.7 Sonnet.
-> - Top open < 13B: ToolACE-8B, xLAM-2-8B, Hammer 2.1.
-> - Top open overall: xLAM-2-70B-fc-r, Llama-4-class derivatives.
-
-Three-line chart for leaderboard communication. The full per-category breakdown is the 50-slice view the leaderboard page also serves. BFCL publishes both — ch-50 §6's decision matrix is again the design principle, not a critique.
-
----
-
-## Connections to ch-50
-
-- **§3 cluster-by-confusion-matrix** — AST-matcher produces the canonical six-bucket decomposition.
-- **§5 failure-ledger** — seven category rows + within-category confusion sub-rows; relevance-detection is the persistent cross-run bucket.
-- **§4 when-is-regression-real** — differential thresholds on V1 vs V2-Live catch benchmark-specific fine-tuning.
-- **§6 three-line-vs-50-slice** — leaderboard top-3 list vs full category table.
-- **ch-49** — AST-matcher canonicalization errors are a judge-calibration artifact that contaminates bucket counts.
-- **[[ruler]]** — same "slice-set designed for orthogonality" discipline, applied to long-context.
+ch-50 §6 (confusion cells, the bucket table, grader false-accepts), §7 (LLM-judged trajectory labels),
+Negative samples (verifier-produced labels), Common mistakes.

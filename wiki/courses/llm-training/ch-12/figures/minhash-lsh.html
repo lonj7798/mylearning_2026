@@ -2,371 +2,344 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>MinHash + LSH S-curve, and the Semantic-Dedup Diversity Tradeoff</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MinHash LSH Candidate Probability and Repetition Loss Arithmetic</title>
+<!-- ch-12 companion figure. revised: 2026-09 (generality revision).
+     Panel A: LSH candidate probability P(s) = 1 - (1 - s^h)^B with presets from
+     Lee et al. (arXiv:2107.06499v2 §4.2, App. A), FineWeb (arXiv:2406.17557v2 §3.4, App. E.1),
+     and Mining of Massive Datasets Example 3.12. Panel B: the informal loss arithmetic of
+     Hernandez et al. (arXiv:2205.10487v1 §5.1). No external resources. -->
 <style>
-  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-         max-width: 1140px; margin: 1.8em auto; padding: 0 1em; color: #222;
-         background: #fafafa; }
-  h1 { font-size: 1.3em; margin-bottom: 0.15em; }
-  .subtitle { color: #666; margin-top: 0; font-size: 0.92em; line-height: 1.5; }
-  .layout { display: grid; grid-template-columns: 1fr 1fr; gap: 1.2em;
-            margin-top: 1.2em; }
-  .panel { border: 1px solid #dcdcdc; border-radius: 6px; background: #fff;
-           padding: 0.9em 1.1em; }
-  h2 { font-size: 1.05em; margin: 0 0 0.5em 0; color: #333;
-       border-bottom: 1px solid #eee; padding-bottom: 0.3em; }
-  .controls { display: grid; grid-template-columns: auto 1fr auto; gap: 0.5em 0.8em;
-              align-items: center; margin: 0.6em 0; font-size: 0.88em; }
-  .controls label { color: #333; font-weight: 600; }
+  :root {
+    --bg: #f7f7f5; --panel: #ffffff; --ink: #1d1d1f; --muted: #5b5b60; --line: #d9d9de;
+    --grid: #ececef; --accent: #1f5fae; --accent2: #b4461d; --ok: #2d6a3e; --mark: #7a4fb0;
+    --chip: #eef2f8;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #161618; --panel: #1f1f22; --ink: #ececef; --muted: #a4a4ab; --line: #3a3a40;
+      --grid: #2c2c31; --accent: #7fb0f0; --accent2: #f0936a; --ok: #7cc58f; --mark: #b99be6;
+      --chip: #2a3140;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #161618; --panel: #1f1f22; --ink: #ececef; --muted: #a4a4ab; --line: #3a3a40;
+    --grid: #2c2c31; --accent: #7fb0f0; --accent2: #f0936a; --ok: #7cc58f; --mark: #b99be6;
+    --chip: #2a3140;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink);
+         font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+  .wrap { max-width: 1120px; margin: 0 auto; padding-inline: 16px; padding-block: 20px 32px; }
+  h1 { font-size: 1.25rem; margin: 0 0 4px; }
+  .lede { color: var(--muted); margin: 0 0 16px; max-width: 70ch; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 480px), 1fr)); gap: 16px; }
+  .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 14px 16px; min-width: 0; }
+  h2 { font-size: 1rem; margin: 0 0 8px; }
+  .formula { font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 0.9rem; background: var(--chip);
+             padding: 6px 10px; border-radius: 6px; margin: 6px 0 10px; overflow-x: auto; }
+  .presets { display: flex; flex-wrap: wrap; gap: 6px; margin: 4px 0 10px; }
+  .presets button { font: inherit; font-size: 0.82rem; padding: 4px 9px; border-radius: 14px; cursor: pointer;
+                    border: 1px solid var(--line); background: var(--panel); color: var(--ink); }
+  .presets button[aria-pressed="true"] { border-color: var(--accent); background: var(--chip); }
+  .controls { display: grid; grid-template-columns: minmax(0, 11em) minmax(0, 1fr) 4.5em; gap: 6px 10px; align-items: center; font-size: 0.88rem; }
   .controls input[type=range] { width: 100%; }
-  .controls .val { font-family: 'SF Mono', Menlo, monospace; color: #335;
-                   min-width: 3.4em; text-align: right; font-size: 0.85em; }
-  canvas { width: 100%; height: 260px; background: #fff; border: 1px solid #eee;
-           border-radius: 4px; display: block; }
-  table.readout { width: 100%; border-collapse: collapse; margin-top: 0.6em;
-                  font-size: 0.85em; }
-  table.readout td { padding: 0.28em 0.4em; border-bottom: 1px dotted #e2e2e2; }
-  table.readout td.k { color: #555; width: 55%; }
-  table.readout td.v { font-family: 'SF Mono', Menlo, monospace; color: #1b3a70;
-                       text-align: right; }
-  .note { font-size: 0.8em; color: #666; margin-top: 0.7em; line-height: 1.5; }
-  .equation { font-family: 'SF Mono', Menlo, monospace; font-size: 0.85em;
-              background: #f3f3f9; padding: 0.5em 0.8em; border-radius: 4px;
-              border-left: 3px solid #5a6caa; margin: 0.5em 0; }
-  .chip { display: inline-block; font-size: 0.72em; padding: 1px 7px;
-          border-radius: 10px; background: #eef; color: #335; margin-left: 0.25em; }
-  .chip.warn { background: #fff4e0; color: #7a4a00; }
-  .chip.ok   { background: #e6f4ea; color: #1b5e20; }
-  .chip.bad  { background: #fde7e7; color: #802020; }
+  .controls input[type=number] { width: 100%; font: inherit; padding: 2px 4px; background: var(--panel); color: var(--ink);
+                                 border: 1px solid var(--line); border-radius: 4px; }
+  svg { width: 100%; height: auto; display: block; margin-top: 10px; }
+  .plot-bg { fill: var(--panel); }
+  .gridline { stroke: var(--grid); stroke-width: 1; }
+  .axis { stroke: var(--muted); stroke-width: 1; }
+  .ticktext { fill: var(--muted); font-size: 11px; }
+  .curve { fill: none; stroke: var(--accent); stroke-width: 2.4; }
+  .halfline { stroke: var(--accent2); stroke-width: 1.4; stroke-dasharray: 4 4; }
+  .verline { stroke: var(--ok); stroke-width: 1.4; stroke-dasharray: 2 3; }
+  .dot { fill: var(--mark); }
+  .dotlabel { fill: var(--ink); font-size: 11px; }
+  .lbl-half { fill: var(--accent2); font-size: 11px; }
+  .lbl-ver { fill: var(--ok); font-size: 11px; }
+  .tablewrap { overflow-x: auto; margin-top: 8px; }
+  table { border-collapse: collapse; width: 100%; font-size: 0.85rem; }
+  th, td { padding: 4px 6px; border-bottom: 1px solid var(--line); text-align: right; white-space: nowrap; }
+  th:first-child, td:first-child { text-align: left; }
+  td.num { font-family: ui-monospace, "SF Mono", Menlo, monospace; }
+  .note { color: var(--muted); font-size: 0.82rem; margin: 8px 0 0; }
+  .source { font-size: 0.82rem; margin: 8px 0 0; }
+  .verdict { margin-top: 8px; font-size: 0.9rem; }
+  .bar-mem { fill: var(--accent2); }
+  .bar-gen { fill: var(--accent); }
+  .barlabel { fill: var(--ink); font-size: 12px; }
 </style>
 </head>
 <body>
+<div class="wrap">
+  <h1>MinHash LSH candidate probability, and why repetition can be memorized</h1>
+  <p class="lede">Panel A computes the probability that two documents with Jaccard similarity s share at least one LSH bucket, for any number of hashes per bucket and any number of buckets. Presets load published settings, including the swapped reading of the Lee et al. setting discussed in ch-12 §4. Panel B recomputes the loss comparison that Hernandez et al. use to explain why a model can trade general capacity for memorizing a repeated subset (ch-12 §8.1).</p>
 
-<h1>MinHash + LSH: the S-curve, and the semantic-dedup diversity tradeoff</h1>
-<p class="subtitle">
-  Left panel derives the collision probability of r-rows-by-b-bands locality-sensitive
-  hashing over MinHash signatures: P(collision | J) = 1 - (1 - J^r)^b. Move the sliders
-  and watch the curve. The right panel is the semantic-dedup (SemDeDup / D4) analog:
-  as the cosine-similarity threshold gets more aggressive, recall of real duplicates
-  rises but the effective domain-coverage entropy of the retained set collapses.
-</p>
+  <div class="grid">
+    <section class="panel" aria-labelledby="pa">
+      <h2 id="pa">A. LSH candidate probability</h2>
+      <div class="formula">P(s) = 1 − (1 − s<sup>h</sup>)<sup>B</sup>&nbsp;&nbsp;&nbsp; h = hashes per bucket, B = number of buckets, k = h·B</div>
+      <div class="presets" id="presets" role="group" aria-label="Published settings"></div>
+      <div class="controls">
+        <label for="hRange">hashes per bucket h</label>
+        <input id="hRange" type="range" min="1" max="500" step="1" value="20">
+        <input id="hNum" type="number" min="1" max="2000" step="1" value="20" aria-label="hashes per bucket value">
+        <label for="bRange">number of buckets B</label>
+        <input id="bRange" type="range" min="1" max="600" step="1" value="450">
+        <input id="bNum" type="number" min="1" max="5000" step="1" value="450" aria-label="number of buckets value">
+      </div>
+      <svg id="plotA" viewBox="0 0 520 300" role="img" aria-label="Candidate probability as a function of Jaccard similarity"></svg>
+      <div class="tablewrap">
+        <table>
+          <thead><tr><th>Quantity</th><th>Value</th></tr></thead>
+          <tbody id="readA"></tbody>
+        </table>
+      </div>
+      <p class="note" id="presetNote"></p>
+      <p class="source">Sources: Lee et al. NearDup, "r buckets, with b hashes per bucket", b = 20, r = 450, k = 9,000, candidates verified at Jaccard &gt; 0.8 and edit similarity &gt; 0.8; alternative b = 20, r = 40, k = 800 at 0.9 (Lee et al., arXiv:2107.06499v2 §4.2, App. A). FineWeb 14 buckets of 8 hashes, bucket match treated as duplicate, reported P = 56%, 77%, 92%, 98.8% at s = 0.7, 0.75, 0.8, 0.85 (arXiv:2406.17557v2 §3.4, App. E.1). Textbook Example 3.12, 20 bands of 5 rows, 0.99965 at s = 0.8 (Leskovec, Rajaraman, Ullman, Ch. 3 §3.4.2, as recorded in the minhash-lsh library card). Half point s½ is computed as (1 − 2<sup>−1/B</sup>)<sup>1/h</sup>; the approximation (ln 2 / B)<sup>1/h</sup> is derived for large B.</p>
+    </section>
 
-<div class="layout">
-
-  <div class="panel">
-    <h2>LSH S-curve: P(collision | J) = 1 - (1 - J^r)^b</h2>
-    <canvas id="lshCanvas" width="600" height="260"></canvas>
-
-    <div class="controls">
-      <label for="r">rows per band r</label>
-      <input id="r" type="range" min="1" max="20" step="1" value="9">
-      <span class="val" id="rVal">9</span>
-
-      <label for="b">bands b</label>
-      <input id="b" type="range" min="1" max="40" step="1" value="20">
-      <span class="val" id="bVal">20</span>
-
-      <label for="jstar">target Jaccard J*</label>
-      <input id="jstar" type="range" min="0.50" max="0.99" step="0.01" value="0.80">
-      <span class="val" id="jstarVal">0.80</span>
-    </div>
-
-    <div class="equation">
-      t &asymp; (1 / b)^(1/r)  &nbsp;&nbsp;(the 0.5-threshold Jaccard)
-    </div>
-
-    <table class="readout">
-      <tr><td class="k">total signatures m = r * b</td>
-          <td class="v" id="mOut">180</td></tr>
-      <tr><td class="k">threshold t (where P = 0.5)</td>
-          <td class="v" id="tOut">--</td></tr>
-      <tr><td class="k">P(collision) at J = J*</td>
-          <td class="v" id="pstarOut">--</td></tr>
-      <tr><td class="k">P(collision) at J = 0.5 &nbsp;<span class="chip bad">false positives</span></td>
-          <td class="v" id="fpOut">--</td></tr>
-      <tr><td class="k">1 - P(collision) at J = 0.9 &nbsp;<span class="chip warn">false negatives</span></td>
-          <td class="v" id="fnOut">--</td></tr>
-    </table>
-    <p class="note">
-      Lee 2021 uses r=450, b=20 (m=9000). Under the formula above t &asymp; 0.993, so
-      LSH alone would accept nearly everything at J&ge;0.8. The paper runs an explicit
-      Jaccard post-filter on every LSH candidate pair; the massive signature count is
-      a recall-maxing choice, not a threshold-setting one. Typical production values
-      are r=9, b=20 (m=180, t&asymp;0.75) paired with a J&ge;0.8 verifier.
-    </p>
+    <section class="panel" aria-labelledby="pb">
+      <h2 id="pb">B. Memorize-or-generalize loss arithmetic</h2>
+      <div class="formula">memorize: (1 − f)·L<sub>small</sub> + f·L<sub>mem</sub> &nbsp;vs&nbsp; generalize: L<sub>full</sub></div>
+      <div class="controls">
+        <label for="fRange">repeated token share f</label>
+        <input id="fRange" type="range" min="0" max="0.5" step="0.005" value="0.10">
+        <input id="fNum" type="number" min="0" max="1" step="0.005" value="0.10" aria-label="repeated share value">
+        <label for="lfRange">L<sub>full</sub> (nats/token)</label>
+        <input id="lfRange" type="range" min="1" max="4" step="0.01" value="2.0">
+        <input id="lfNum" type="number" min="0" max="10" step="0.01" value="2.0" aria-label="full model loss value">
+        <label for="lsRange">L<sub>small</sub> (nats/token)</label>
+        <input id="lsRange" type="range" min="1" max="4" step="0.01" value="2.2">
+        <input id="lsNum" type="number" min="0" max="10" step="0.01" value="2.2" aria-label="reduced capacity loss value">
+        <label for="lmRange">L<sub>mem</sub> (nats/token)</label>
+        <input id="lmRange" type="range" min="0" max="2" step="0.01" value="0">
+        <input id="lmNum" type="number" min="0" max="10" step="0.01" value="0" aria-label="memorized data loss value">
+      </div>
+      <svg id="plotB" viewBox="0 0 520 220" role="img" aria-label="Average training loss under the two options"></svg>
+      <div class="tablewrap">
+        <table>
+          <thead><tr><th>Quantity</th><th>Value</th></tr></thead>
+          <tbody id="readB"></tbody>
+        </table>
+      </div>
+      <p class="verdict" id="verdictB"></p>
+      <p class="source">Defaults from Hernandez et al., arXiv:2205.10487v1 §5.1: an 800M model at about 2.0 nats/token, a 400M model at about 2.2, fully memorized data at 0, 10% repeated tokens, giving 0.9 × 2.2 + 0.1 × 0 = 1.98 &lt; 2.0. L<sub>small</sub> is the loss on unique data after capacity is used for memorization (in the paper's example, the loss of a model with half the parameters). The break-even share f* = (L<sub>small</sub> − L<sub>full</sub>) / (L<sub>small</sub> − L<sub>mem</sub>) is derived (9.1% at the defaults). Status: Interpretation by the authors. The arithmetic does not say whether the model has the capacity or enough repeats to memorize; the paper locates the worst degradation at intermediate repeat counts (Figures 2–4).</p>
+    </section>
   </div>
-
-  <div class="panel">
-    <h2>Semantic dedup (SemDeDup / D4): recall vs domain coverage</h2>
-    <canvas id="semCanvas" width="600" height="260"></canvas>
-
-    <div class="controls">
-      <label for="tau">cosine threshold &tau;</label>
-      <input id="tau" type="range" min="0.50" max="1.00" step="0.01" value="0.95">
-      <span class="val" id="tauVal">0.95</span>
-
-      <label for="kclust">cluster count k / sqrt(N)</label>
-      <input id="kclust" type="range" min="0.5" max="3.0" step="0.1" value="1.0">
-      <span class="val" id="kclustVal">1.0</span>
-
-      <label for="tail">tail-domain mass (long-tail share)</label>
-      <input id="tail" type="range" min="0.05" max="0.50" step="0.01" value="0.20">
-      <span class="val" id="tailVal">0.20</span>
-    </div>
-
-    <table class="readout">
-      <tr><td class="k">recall of true near-duplicates</td>
-          <td class="v" id="recallOut">--</td></tr>
-      <tr><td class="k">fraction of corpus removed</td>
-          <td class="v" id="removedOut">--</td></tr>
-      <tr><td class="k">domain-coverage entropy H(domain | kept)</td>
-          <td class="v" id="entOut">--</td></tr>
-      <tr><td class="k">long-tail retention (niche domains)</td>
-          <td class="v" id="tailRetOut">--</td></tr>
-    </table>
-    <p class="note">
-      At &tau;=0.95 you remove near-copies; at &tau;=0.80 you remove topical
-      redundants; at &tau;&lt;0.70 you start deleting domain coverage. D4 observes
-      that aggressive clustering (high k) plus low &tau; preferentially eats the
-      long tail: MMLU creeps up while niche-domain evals fall. Use &tau; as a
-      downstream-eval-gated knob, not a fixed duplicate threshold.
-    </p>
-  </div>
-
 </div>
 
 <script>
 (function () {
-  // ---------- Left panel: LSH S-curve ----------
-  const rEl = document.getElementById('r');
-  const bEl = document.getElementById('b');
-  const jstarEl = document.getElementById('jstar');
-  const rVal = document.getElementById('rVal');
-  const bVal = document.getElementById('bVal');
-  const jstarVal = document.getElementById('jstarVal');
-  const mOut = document.getElementById('mOut');
-  const tOut = document.getElementById('tOut');
-  const pstarOut = document.getElementById('pstarOut');
-  const fpOut = document.getElementById('fpOut');
-  const fnOut = document.getElementById('fnOut');
-  const cvs = document.getElementById('lshCanvas');
-  const ctx = cvs.getContext('2d');
-
-  function pLSH(J, r, b) {
-    return 1 - Math.pow(1 - Math.pow(J, r), b);
+  "use strict";
+  var NS = "http://www.w3.org/2000/svg";
+  function el(tag, attrs, text) {
+    var e = document.createElementNS(NS, tag);
+    for (var k in attrs) e.setAttribute(k, attrs[k]);
+    if (text !== undefined) e.textContent = text;
+    return e;
   }
-  function thresholdT(r, b) {
-    // root of 1 - (1 - t^r)^b = 0.5
-    // t = (1 - 0.5^(1/b))^(1/r)
-    return Math.pow(1 - Math.pow(0.5, 1 / b), 1 / r);
+  function fmtP(p) {
+    if (p === 0) return "0";
+    if (p >= 0.001) return p.toFixed(4);
+    return p.toExponential(1);
   }
+  function probLSH(s, h, B) {
+    // 1 - (1 - s^h)^B computed in log space for stability
+    var sh = Math.pow(s, h);
+    if (sh >= 1) return 1;
+    if (sh === 0) return 0;
+    var logMiss = B * Math.log1p(-sh);
+    return -Math.expm1(logMiss);
+  }
+  function halfPoint(h, B) { return Math.pow(-Math.expm1(-Math.LN2 / B), 1 / h); }
+  function halfApprox(h, B) { return Math.pow(Math.LN2 / B, 1 / h); }
 
-  function drawLSH() {
-    const r = parseInt(rEl.value);
-    const b = parseInt(bEl.value);
-    const jstar = parseFloat(jstarEl.value);
-    rVal.textContent = r;
-    bVal.textContent = b;
-    jstarVal.textContent = jstar.toFixed(2);
+  // ---------- Panel A ----------
+  var presets = [
+    { id: "lee", label: "Lee et al. NearDup (20 × 450)", h: 20, B: 450, ver: 0.8,
+      note: "Lee et al.: LSH gives candidates; a pair is a duplicate only if its exact Jaccard index exceeds 0.8 and its edit similarity exceeds 0.8. The green line marks the 0.8 verification threshold. Check: P(0.7) ≈ 0.30, P(0.8) ≈ 0.995, s½ ≈ 0.72." },
+    { id: "leealt", label: "Lee et al. alternative (20 × 40)", h: 20, B: 40, ver: 0.9,
+      note: "Lee et al. alternative configuration for Jaccard ≥ 0.9 and edit similarity ≥ 0.9 (App. A). Check: P(0.8) ≈ 0.37, P(0.9) ≈ 0.994, s½ ≈ 0.82." },
+    { id: "swap", label: "Swapped reading (450 × 20)", h: 450, B: 20, ver: 0.8,
+      note: "Swapped reading: 20 buckets of 450 hashes. This is how D4 App. A.1.2 describes the Lee et al. setting. P(0.8) is about 5 × 10⁻⁴³ and s½ ≈ 0.9925, so pairs between 0.8 and 0.99 would almost never reach verification. This contradicts Lee et al.'s stated aim of a high collision probability at 0.8." },
+    { id: "fineweb", label: "FineWeb (8 × 14)", h: 8, B: 14, ver: null,
+      note: "FineWeb: documents with the same 8 MinHashes in any bucket are treated as duplicates, with no separate verification, then clustered transitively. The curve itself sets the removal rate: P(0.6) ≈ 0.21, P(0.7) ≈ 0.56, P(0.8) ≈ 0.92." },
+    { id: "mmds", label: "Textbook Ex. 3.12 (5 × 20)", h: 5, B: 20, ver: null,
+      note: "Mining of Massive Datasets Example 3.12: 20 bands of 5 rows; P(0.8) = 0.99965. The textbook writes the formula as 1 − (1 − s^r)^b with r rows per band and b bands, so its letters mean the opposite of Lee et al.'s b and r." }
+  ];
+  var hRange = document.getElementById("hRange"), hNum = document.getElementById("hNum");
+  var bRange = document.getElementById("bRange"), bNum = document.getElementById("bNum");
+  var presetBox = document.getElementById("presets");
+  var noteEl = document.getElementById("presetNote");
+  var readA = document.getElementById("readA");
+  var svgA = document.getElementById("plotA");
+  var current = presets[0];
 
-    const W = cvs.width, H = cvs.height;
-    ctx.clearRect(0, 0, W, H);
-    // axes
-    const pad = 34;
-    ctx.strokeStyle = '#aaa'; ctx.lineWidth = 1;
-    ctx.beginPath();
-    ctx.moveTo(pad, H - pad); ctx.lineTo(W - 8, H - pad);
-    ctx.moveTo(pad, H - pad); ctx.lineTo(pad, 8);
-    ctx.stroke();
-    // gridlines
-    ctx.strokeStyle = '#eee';
-    for (let g = 0; g <= 10; g++) {
-      const x = pad + (W - pad - 8) * g / 10;
-      const y = 8 + (H - pad - 8) * g / 10;
-      ctx.beginPath(); ctx.moveTo(x, 8); ctx.lineTo(x, H - pad); ctx.stroke();
-      ctx.beginPath(); ctx.moveTo(pad, y); ctx.lineTo(W - 8, y); ctx.stroke();
+  presets.forEach(function (p) {
+    var b = document.createElement("button");
+    b.type = "button"; b.textContent = p.label; b.setAttribute("aria-pressed", "false");
+    b.addEventListener("click", function () {
+      current = p;
+      setVal(hRange, hNum, p.h); setVal(bRange, bNum, p.B);
+      drawA();
+    });
+    p.button = b;
+    presetBox.appendChild(b);
+  });
+  function setVal(range, num, v) {
+    num.value = v;
+    range.value = Math.min(Number(range.max), Math.max(Number(range.min), v));
+  }
+  function readInt(num, fallback) {
+    var v = parseInt(num.value, 10);
+    return (isFinite(v) && v >= 1) ? v : fallback;
+  }
+  hRange.addEventListener("input", function () { hNum.value = hRange.value; current = null; drawA(); });
+  bRange.addEventListener("input", function () { bNum.value = bRange.value; current = null; drawA(); });
+  function syncRange(range, numEl) {
+    var v = parseInt(numEl.value, 10);
+    if (isFinite(v) && v >= 1) range.value = Math.min(Number(range.max), Math.max(Number(range.min), v));
+  }
+  hNum.addEventListener("input", function () { syncRange(hRange, hNum); current = null; drawA(); });
+  bNum.addEventListener("input", function () { syncRange(bRange, bNum); current = null; drawA(); });
+
+  function drawA() {
+    var h = readInt(hNum, 1), B = readInt(bNum, 1);
+    // match a preset if values coincide
+    if (!current) {
+      presets.forEach(function (p) { if (p.h === h && p.B === B) current = p; });
     }
-    // axis labels
-    ctx.fillStyle = '#555'; ctx.font = '11px sans-serif';
-    ctx.fillText('J (Jaccard)', W - 70, H - 10);
-    ctx.save(); ctx.translate(10, H / 2); ctx.rotate(-Math.PI / 2);
-    ctx.fillText('P(collision)', -30, 0); ctx.restore();
-    for (let g = 0; g <= 10; g += 2) {
-      ctx.fillText((g / 10).toFixed(1), pad + (W - pad - 8) * g / 10 - 8, H - pad + 14);
-      ctx.fillText((1 - g / 10).toFixed(1), 6, 8 + (H - pad - 8) * g / 10 + 4);
-    }
-    // S-curve
-    ctx.strokeStyle = '#2a5db0'; ctx.lineWidth = 2.2;
-    ctx.beginPath();
-    let first = true;
-    for (let i = 0; i <= 400; i++) {
-      const J = i / 400;
-      const p = pLSH(J, r, b);
-      const x = pad + (W - pad - 8) * J;
-      const y = 8 + (H - pad - 8) * (1 - p);
-      if (first) { ctx.moveTo(x, y); first = false; }
-      else ctx.lineTo(x, y);
-    }
-    ctx.stroke();
-    // threshold line
-    const t = thresholdT(r, b);
-    if (t >= 0 && t <= 1) {
-      const xt = pad + (W - pad - 8) * t;
-      ctx.strokeStyle = '#c03030'; ctx.setLineDash([4, 4]); ctx.lineWidth = 1.5;
-      ctx.beginPath(); ctx.moveTo(xt, 8); ctx.lineTo(xt, H - pad); ctx.stroke();
-      ctx.setLineDash([]);
-      ctx.fillStyle = '#c03030';
-      ctx.fillText('t (P=0.5)', xt + 4, 22);
-    }
-    // J* marker
-    const xj = pad + (W - pad - 8) * jstar;
-    const pj = pLSH(jstar, r, b);
-    const yj = 8 + (H - pad - 8) * (1 - pj);
-    ctx.fillStyle = '#1b5e20';
-    ctx.beginPath(); ctx.arc(xj, yj, 4, 0, 2 * Math.PI); ctx.fill();
-    ctx.fillText('J*=' + jstar.toFixed(2) + ', P=' + pj.toFixed(3), xj + 6, yj - 6);
+    presets.forEach(function (p) { p.button.setAttribute("aria-pressed", p === current ? "true" : "false"); });
 
-    // readout
-    mOut.textContent = (r * b).toString();
-    tOut.textContent = t.toFixed(4);
-    pstarOut.textContent = pj.toFixed(4);
-    fpOut.textContent = pLSH(0.5, r, b).toExponential(2);
-    fnOut.textContent = (1 - pLSH(0.9, r, b)).toExponential(2);
+    while (svgA.firstChild) svgA.removeChild(svgA.firstChild);
+    var W = 520, H = 300, L = 44, R = 14, T = 12, Bm = 40;
+    var pw = W - L - R, ph = H - T - Bm;
+    function X(s) { return L + pw * s; }
+    function Y(p) { return T + ph * (1 - p); }
+    svgA.appendChild(el("rect", { x: L, y: T, width: pw, height: ph, "class": "plot-bg" }));
+    for (var g = 0; g <= 10; g++) {
+      svgA.appendChild(el("line", { x1: X(g / 10), y1: T, x2: X(g / 10), y2: T + ph, "class": "gridline" }));
+      svgA.appendChild(el("line", { x1: L, y1: Y(g / 10), x2: L + pw, y2: Y(g / 10), "class": "gridline" }));
+    }
+    svgA.appendChild(el("line", { x1: L, y1: T + ph, x2: L + pw, y2: T + ph, "class": "axis" }));
+    svgA.appendChild(el("line", { x1: L, y1: T, x2: L, y2: T + ph, "class": "axis" }));
+    for (g = 0; g <= 10; g += 2) {
+      svgA.appendChild(el("text", { x: X(g / 10), y: T + ph + 15, "text-anchor": "middle", "class": "ticktext" }, (g / 10).toFixed(1)));
+      svgA.appendChild(el("text", { x: L - 6, y: Y(g / 10) + 4, "text-anchor": "end", "class": "ticktext" }, (g / 10).toFixed(1)));
+    }
+    svgA.appendChild(el("text", { x: L + pw / 2, y: H - 6, "text-anchor": "middle", "class": "ticktext" }, "Jaccard similarity s"));
+    svgA.appendChild(el("text", { x: 12, y: T + ph / 2, "text-anchor": "middle", "class": "ticktext",
+      transform: "rotate(-90 12 " + (T + ph / 2) + ")" }, "candidate probability P(s)"));
+
+    var d = "";
+    for (var i = 0; i <= 500; i++) {
+      var s = i / 500, p = probLSH(s, h, B);
+      d += (i === 0 ? "M" : "L") + X(s).toFixed(2) + " " + Y(p).toFixed(2);
+    }
+    svgA.appendChild(el("path", { d: d, "class": "curve" }));
+
+    var sh = halfPoint(h, B);
+    if (sh > 0 && sh < 1) {
+      svgA.appendChild(el("line", { x1: X(sh), y1: T, x2: X(sh), y2: T + ph, "class": "halfline" }));
+      var anchorLeft = sh > 0.35;
+      svgA.appendChild(el("text", { x: X(sh) + (anchorLeft ? -6 : 6), y: T + ph * 0.45, "text-anchor": anchorLeft ? "end" : "start", "class": "lbl-half" },
+        "s½ = " + sh.toFixed(4)));
+    }
+    if (current && current.ver) {
+      svgA.appendChild(el("line", { x1: X(current.ver), y1: T, x2: X(current.ver), y2: T + ph, "class": "verline" }));
+      svgA.appendChild(el("text", { x: X(current.ver) + 5, y: T + ph * 0.75, "text-anchor": "start", "class": "lbl-ver" },
+        "verification " + current.ver.toFixed(1)));
+    }
+    [0.7, 0.8, 0.9].forEach(function (sv) {
+      var pv = probLSH(sv, h, B);
+      svgA.appendChild(el("circle", { cx: X(sv), cy: Y(pv), r: 3.5, "class": "dot" }));
+    });
+
+    var rows = [
+      ["k = h · B (hashes per document)", String(h * B)],
+      ["s½ where P = 0.5 (exact)", sh.toFixed(4)],
+      ["s½ approximation (ln 2 / B)^(1/h)", halfApprox(h, B).toFixed(4)]
+    ];
+    [0.5, 0.6, 0.7, 0.75, 0.8, 0.85, 0.9, 0.95].forEach(function (sv) {
+      rows.push(["P(s = " + sv + ")", fmtP(probLSH(sv, h, B))]);
+    });
+    readA.innerHTML = "";
+    rows.forEach(function (r) {
+      var tr = document.createElement("tr");
+      var a = document.createElement("td"); a.textContent = r[0];
+      var b = document.createElement("td"); b.textContent = r[1]; b.className = "num";
+      tr.appendChild(a); tr.appendChild(b); readA.appendChild(tr);
+    });
+    noteEl.textContent = current ? current.note :
+      "Custom setting. Without a verification step, the curve is the removal rule: pairs below the intended similarity are removed with the probability shown in the table.";
   }
 
-  rEl.addEventListener('input', drawLSH);
-  bEl.addEventListener('input', drawLSH);
-  jstarEl.addEventListener('input', drawLSH);
-  drawLSH();
+  // ---------- Panel B ----------
+  var pairsB = [["fRange", "fNum"], ["lfRange", "lfNum"], ["lsRange", "lsNum"], ["lmRange", "lmNum"]];
+  pairsB.forEach(function (pr) {
+    var r = document.getElementById(pr[0]), n = document.getElementById(pr[1]);
+    r.addEventListener("input", function () { n.value = r.value; drawB(); });
+    n.addEventListener("input", function () {
+      var v = parseFloat(n.value);
+      if (isFinite(v)) r.value = Math.min(Number(r.max), Math.max(Number(r.min), v));
+      drawB();
+    });
+  });
+  function num(id, fb) { var v = parseFloat(document.getElementById(id).value); return isFinite(v) ? v : fb; }
+  var svgB = document.getElementById("plotB");
+  var readB = document.getElementById("readB");
+  var verdictB = document.getElementById("verdictB");
 
-  // ---------- Right panel: SemDeDup tradeoff ----------
-  const tauEl = document.getElementById('tau');
-  const kclustEl = document.getElementById('kclust');
-  const tailEl = document.getElementById('tail');
-  const tauVal = document.getElementById('tauVal');
-  const kclustVal = document.getElementById('kclustVal');
-  const tailVal = document.getElementById('tailVal');
-  const recallOut = document.getElementById('recallOut');
-  const removedOut = document.getElementById('removedOut');
-  const entOut = document.getElementById('entOut');
-  const tailRetOut = document.getElementById('tailRetOut');
-  const cvs2 = document.getElementById('semCanvas');
-  const ctx2 = cvs2.getContext('2d');
+  function drawB() {
+    var f = Math.min(1, Math.max(0, num("fNum", 0.1)));
+    var Lf = num("lfNum", 2.0), Ls = num("lsNum", 2.2), Lm = num("lmNum", 0);
+    var mem = (1 - f) * Ls + f * Lm;
+    var gen = Lf;
+    var denom = Ls - Lm;
+    var fstar = denom > 0 ? (Ls - Lf) / denom : NaN;
 
-  // Synthetic model of the SemDeDup tradeoff. Recall rises as tau drops;
-  // long-tail retention collapses below tau ~= 0.85, more sharply for bigger k.
-  function recallAt(tau) {
-    // logistic in -tau: lower tau -> more aggressive -> higher recall
-    const x = (0.95 - tau) * 18;
-    return 1 / (1 + Math.exp(-x));
-  }
-  function removedAt(tau, k) {
-    const base = Math.max(0, (1 - tau));
-    return Math.min(0.8, base * (0.6 + 0.4 * k));
-  }
-  function tailRetentionAt(tau, k, tailMass) {
-    // as tau drops below 0.85, tail dies proportionally to k
-    const drop = Math.max(0, (0.90 - tau)) * (0.8 + 0.6 * k);
-    return Math.max(0.02, 1 - drop);
-  }
-  function entropyAt(tau, k, tailMass) {
-    // toy domain entropy: H_max = log(10); shrinks as tail dies
-    const H_max = Math.log(10);
-    const tailRet = tailRetentionAt(tau, k, tailMass);
-    // convex combination of two-part distribution (head + tail)
-    const head = 1 - tailMass;
-    const tail = tailMass * tailRet;
-    const total = head + tail;
-    const pHead = head / total;
-    const pTail = tail / total;
-    let H = 0;
-    if (pHead > 0) H -= pHead * Math.log(pHead);
-    if (pTail > 0) H -= pTail * Math.log(pTail);
-    // scale toward H_max assuming 10 sub-domains in head
-    const effective = H + Math.log(9) * (pHead);
-    return Math.min(H_max, effective);
-  }
-
-  function drawSem() {
-    const tau = parseFloat(tauEl.value);
-    const k = parseFloat(kclustEl.value);
-    const tailMass = parseFloat(tailEl.value);
-    tauVal.textContent = tau.toFixed(2);
-    kclustVal.textContent = k.toFixed(1);
-    tailVal.textContent = tailMass.toFixed(2);
-
-    const W = cvs2.width, H = cvs2.height;
-    ctx2.clearRect(0, 0, W, H);
-    const pad = 34;
-    // axes
-    ctx2.strokeStyle = '#aaa'; ctx2.lineWidth = 1;
-    ctx2.beginPath();
-    ctx2.moveTo(pad, H - pad); ctx2.lineTo(W - 8, H - pad);
-    ctx2.moveTo(pad, H - pad); ctx2.lineTo(pad, 8);
-    ctx2.stroke();
-    ctx2.strokeStyle = '#eee';
-    for (let g = 0; g <= 10; g++) {
-      const x = pad + (W - pad - 8) * g / 10;
-      const y = 8 + (H - pad - 8) * g / 10;
-      ctx2.beginPath(); ctx2.moveTo(x, 8); ctx2.lineTo(x, H - pad); ctx2.stroke();
-      ctx2.beginPath(); ctx2.moveTo(pad, y); ctx2.lineTo(W - 8, y); ctx2.stroke();
+    while (svgB.firstChild) svgB.removeChild(svgB.firstChild);
+    var W = 520, H = 220, L = 150, R = 60, T = 20;
+    var maxV = Math.max(mem, gen, 0.001) * 1.1;
+    var pw = W - L - R;
+    function bar(y, v, cls, label) {
+      svgB.appendChild(el("text", { x: L - 8, y: y + 20, "text-anchor": "end", "class": "barlabel" }, label));
+      svgB.appendChild(el("rect", { x: L, y: y, width: Math.max(0, pw * v / maxV), height: 30, "class": cls, rx: 3 }));
+      svgB.appendChild(el("text", { x: L + Math.max(0, pw * v / maxV) + 6, y: y + 20, "class": "barlabel" }, v.toFixed(3)));
     }
-    ctx2.fillStyle = '#555'; ctx2.font = '11px sans-serif';
-    ctx2.fillText('tau (cosine threshold)', W - 170, H - 10);
-    ctx2.save(); ctx2.translate(10, H / 2); ctx2.rotate(-Math.PI / 2);
-    ctx2.fillText('fraction', -20, 0); ctx2.restore();
-    for (let g = 0; g <= 10; g += 2) {
-      const tg = 0.5 + 0.05 * g;
-      ctx2.fillText(tg.toFixed(2), pad + (W - pad - 8) * g / 10 - 10, H - pad + 14);
-      ctx2.fillText((1 - g / 10).toFixed(1), 6, 8 + (H - pad - 8) * g / 10 + 4);
+    bar(T + 20, gen, "bar-gen", "generalize (L_full)");
+    bar(T + 80, mem, "bar-mem", "memorize repeats");
+    svgB.appendChild(el("line", { x1: L, y1: T + 10, x2: L, y2: T + 130, "class": "axis" }));
+    svgB.appendChild(el("text", { x: L + pw / 2, y: T + 170, "text-anchor": "middle", "class": "ticktext" },
+      "average training loss, nats/token (shorter bar = lower loss)"));
+
+    var rows = [
+      ["memorize: (1 − f)·L_small + f·L_mem", mem.toFixed(4)],
+      ["generalize: L_full", gen.toFixed(4)],
+      ["difference (memorize − generalize)", (mem - gen).toFixed(4)],
+      ["break-even share f*", isFinite(fstar) ? (fstar * 100).toFixed(1) + "%" : "undefined"]
+    ];
+    readB.innerHTML = "";
+    rows.forEach(function (r) {
+      var tr = document.createElement("tr");
+      var a = document.createElement("td"); a.textContent = r[0];
+      var b = document.createElement("td"); b.textContent = r[1]; b.className = "num";
+      tr.appendChild(a); tr.appendChild(b); readB.appendChild(tr);
+    });
+    if (mem < gen) {
+      verdictB.textContent = "At these values the average training loss is lower when the repeated share is memorized, so the objective does not penalize trading general capacity for memorization.";
+    } else if (mem > gen) {
+      verdictB.textContent = "At these values memorizing the repeated share gives a higher average training loss than keeping full capacity for unique data.";
+    } else {
+      verdictB.textContent = "At these values the two options give the same average training loss.";
     }
-    // curves: recall (blue) and tail-retention (red)
-    function plotCurve(color, fn) {
-      ctx2.strokeStyle = color; ctx2.lineWidth = 2.2;
-      ctx2.beginPath();
-      let first = true;
-      for (let i = 0; i <= 200; i++) {
-        const tauI = 0.5 + 0.5 * i / 200;
-        const v = fn(tauI);
-        const x = pad + (W - pad - 8) * ((tauI - 0.5) / 0.5);
-        const y = 8 + (H - pad - 8) * (1 - v);
-        if (first) { ctx2.moveTo(x, y); first = false; }
-        else ctx2.lineTo(x, y);
-      }
-      ctx2.stroke();
-    }
-    plotCurve('#2a5db0', (tv) => recallAt(tv));
-    plotCurve('#c03030', (tv) => tailRetentionAt(tv, k, tailMass));
-
-    // current tau marker
-    const xTau = pad + (W - pad - 8) * ((tau - 0.5) / 0.5);
-    ctx2.strokeStyle = '#444'; ctx2.setLineDash([3, 3]); ctx2.lineWidth = 1.2;
-    ctx2.beginPath(); ctx2.moveTo(xTau, 8); ctx2.lineTo(xTau, H - pad); ctx2.stroke();
-    ctx2.setLineDash([]);
-
-    // legend
-    ctx2.fillStyle = '#2a5db0'; ctx2.fillRect(W - 160, 12, 10, 10);
-    ctx2.fillStyle = '#333'; ctx2.fillText('recall of duplicates', W - 146, 22);
-    ctx2.fillStyle = '#c03030'; ctx2.fillRect(W - 160, 30, 10, 10);
-    ctx2.fillStyle = '#333'; ctx2.fillText('long-tail retention', W - 146, 40);
-
-    // readouts
-    const rec = recallAt(tau);
-    const rem = removedAt(tau, k);
-    const ret = tailRetentionAt(tau, k, tailMass);
-    const H_ = entropyAt(tau, k, tailMass);
-    recallOut.textContent = (rec * 100).toFixed(1) + ' %';
-    removedOut.textContent = (rem * 100).toFixed(1) + ' %';
-    entOut.textContent = H_.toFixed(3) + ' nats';
-    tailRetOut.textContent = (ret * 100).toFixed(1) + ' %';
   }
 
-  tauEl.addEventListener('input', drawSem);
-  kclustEl.addEventListener('input', drawSem);
-  tailEl.addEventListener('input', drawSem);
-  drawSem();
+  drawA();
+  drawB();
 })();
 </script>
-
 </body>
 </html>

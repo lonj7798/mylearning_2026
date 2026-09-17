@@ -5,109 +5,38 @@ phase: read
 excerpt_of: wiki/raw-data/llm-training/papers/rstar-math.md
 source_url: https://arxiv.org/abs/2501.04519
 created_at: "2026-04-23"
+revised_at: "2026-09-15"
 ---
 
-# Excerpt: rStar-Math — code-augmented MCTS and the pairwise Process Preference Model
+# Excerpt: rStar-Math — code-augmented search data, Q-value annotation, and the process preference model
 
-**Source library:** `wiki/raw-data/llm-training/papers/rstar-math.md`
-**Paper:** Guan et al. 2025, "rStar-Math: Small LLMs Can Master Math Reasoning with Self-Evolved Deep Thinking" (MSRA)
+**Checked on 2026-09-15 against arXiv:2501.04519v1 (full PDF including App. A).** The library card `papers/rstar-math.md` had no verification section at that date and contains the errors listed at the end; this excerpt is the checked extract used by ch-24 §5 and the Recipe.
 
----
+## Data generation (§3.2, App. A.1)
 
-## Why this source anchors ch-24 §5
+- Each step is a one-step natural-language CoT written as a Python comment plus code; a candidate is kept only if its code, concatenated with all previous steps, executes.
+- Selection: `UCT(s) = Q(s) + c·sqrt(ln N_parent(s) / N(s))`, `Q(s) = q(s)/N(s)` (Eq. 1); c = 2; tree depth 16; 8 candidate nodes per step; 16 rollouts per problem.
+- Terminal-guided annotation (rounds 1–2): `q(s_i)^k = q(s_i)^{k−1} + q(s_d)^k` (Eq. 2); terminal score +1 if the answer is correct, −1 otherwise; `q(s_i)^0 = 0`.
+- From round 3 the PPM predicts the initial q value of each step (Eq. 3); terminal nodes are still scored against ground truth.
 
-rStar-Math is the 2025 synthesis of three threads ch-24 tracks separately: (1) MCTS as a test-time reasoning procedure (from [[rstar]]), (2) step-level correctness signals (from [[omegaprm]] / [[let-verify]]), and (3) iterated self-evolution (from STaR-lineage). The paper ships **747K verified step-level trajectories** that take a 7B base from baseline to o1-preview-level math.
+## Training data and models
 
----
+- Problems: 747K word problems with final answers, mainly NuminaMath (competition level only) and MetaMath, plus GPT-4 problems seeded from 7.5K MATH train and 3.6K AMC-AIME problems, kept if at least 3 of 10 GPT-4 solutions agree (§3.4.1).
+- Policy SFT: top-2 correct trajectories per problem by average Q; 2 epochs; sequence length 4,096; batch 128; AdamW; linear schedule, LR 7e-6 for Qwen; fine-tuned from the base model in each round; synthetic problems with trajectory accuracy under 50% are removed (§3.4.1, App. A.1).
+- PPM: initialized from the policy with a scalar tanh head; per step, the two highest-Q candidates leading to correct answers are positives and the two lowest-Q candidates leading to wrong answers are negatives (the final step uses whole trajectories); loss `−(1/(2×2)) E[log σ(r_θ(x, y_pos) − r_θ(x, y_neg))]` (Eq. 4); 1 epoch, batch 512, LR 7e-6. Reason given: Q-values are too imprecise to use directly as reward labels (§1, §3.3).
+- Rounds (§3.4.2, Table 2): round 1 DeepSeek-Coder-V2-Instruct (236B), 8 rollouts, 5 candidates, about two weeks on 10 nodes of 8×H100; rounds 2–4 the 7B policy (and PPM from round 3); round 4 adds 64 and up to 128 rollouts for unsolved problems. Coverage 60.17% → 66.60% → 77.86% → 90.25%. Of 20 sampled unsolved problems, 19 had wrong reference answers.
 
-## The two novel moves
+## Results
 
-**Move 1: Code-augmented MCTS steps.** Each MCTS node corresponds to a single reasoning step, and a step has the shape `(natural-language thought, Python code block)`. The code is executed at node-expansion time. **Execution failure ⇒ node pruned from the tree.** This gives step-level correctness *without ever seeing the gold answer at the step level* — the step-level signal is whether the code ran, not whether the math is right. The trajectory-level signal (gold-answer match) still requires ground truth.
+- Policy alone, MATH (Table 3): base 58.8; rounds 1–4 69.6, 73.6, 75.8, 78.4.
+- With PPM-guided search over 8 trajectories (Table 6): 75.2, 86.6, 87.0, 89.4.
+- Table 5, Qwen2.5-Math-7B: rStar-Math with 64 trajectories 90.0 MATH, 53.3 AIME 2024, 65.6 OlympiadBench; Qwen2.5-Math-7B-Instruct 82.6 / 6.0 / 41.6.
+- Greedy policy (Table 10): 78.4 MATH, 26.7 AIME 2024.
+- SFT-data ablation, Qwen2.5-Math-7B (Table 7, MATH): MetaMath 55.2; NuminaMath-CoT 69.6; random self-samples 72.4; rejection sampling with ORM 73.4; step-by-step verified 78.4.
+- Reward model (Table 8, MATH): ORM best-of-N 82.6; PQM (MSE on Q-values) 88.2; PPM 89.4.
+- Backtracking appears in search outputs without self-reflection data or prompts (§5, Fig. 4, App. A.2).
+- Stated scope: word problems; code or general reasoning would need test cases, human labels, or mutual verification (§5).
 
-Ch-24 §5 presents the pseudocode. The key loop — restated from the source's description, written out in executable form:
+## Errors in the earlier excerpt and library card
 
-```
-def mcts_round(root, policy, gold):
-    for _ in range(N_rollouts):
-        node = select_by_ucb(root)         # UCB / PUCT descent
-        for _ in range(K):
-            (thought, code) = policy.sample(prefix=node.trace)
-            try:
-                exec(code)                 # step-level verification
-            except Exception:
-                continue                   # prune
-            node.add_child(Node(thought, code))
-        leaf = rollout_to_terminal(node.children[0], policy)
-        r = int(extract_boxed(leaf) == gold)
-        backprop_Q_N(leaf, r)
-```
-
-Two subtleties the source calls out. First, "code executed" is a broad filter: a step whose code produces numerical nonsense passes as long as no exception fires. The *content* is evaluated only through the downstream rollout's terminal reward. Second, the UCB formula is the PUCT variant `Q + c_puct · P · √N_parent / (1 + N_child)`, same as AlphaZero/MuZero.
-
-**Move 2: Pairwise Process Preference Model (PPM).** From the source (§Synthesis pipeline):
-
-> Within each problem, pairs of sibling MCTS steps with high vs low Q-value form step-preference pairs. PPM trained with pairwise ranking loss.
-
-The PPM is **not a scalar regression** onto a step-value like OmegaPRM's MC targets. It is a pairwise Bradley-Terry ranker:
-
-```
-L_PPM = -log σ( r_φ(step_high, prefix) - r_φ(step_low, prefix) )
-```
-
-where (step_high, step_low) are MCTS siblings sharing the same prefix, with Q-gap > δ.
-
-The authors' argument for pairwise-over-scalar, from the source (§Modality-specific):
-
-> PPM is not a scalar PRM: authors argue pairwise training avoids the Goodhart-style issues of scalar reward regression observed in math-shepherd / prm800k.
-
-Scalar PRMs fit an *absolute* step-value, which a policy can then exploit by producing steps whose surface features correlate with high predicted value but whose content is worse. Pairwise training only constrains *relative* preferences between siblings — the student learns "this step is better than that step in this prefix," not "this step has value 0.83."
-
----
-
-## The four-round self-evolution
-
-From the source (§Key Contributions):
-
-> Four-round self-evolution: each round's top policy samples new trajectories, PPM retrains, generator retrains.
-
-Concretely:
-- **Round 0**: bootstrap with Qwen2.5-Math-7B-Instruct as the policy; seed problem pool = ~747K from [[numina-math]] + MATH + GSM8K + olympiad + AIME.
-- **Round k → Round k+1**: (a) run MCTS with the round-k policy, (b) extract step-pairs with Q-gap > δ to retrain the PPM, (c) take top-K trajectories by PPM score to SFT the next policy.
-
-The round-by-round MATH curve is the punchline: **58 → 78 → 85 → 88 → 90**. Compounding.
-
-One risk the source flags ch-24 §5 also carries forward:
-
-> Compounding distribution narrowing: four self-evolution rounds risk collapsing to a small region of the solution space; authors mitigate with temperature scheduling.
-
-This is the ch-23 model-collapse warning applied to reasoning-trace loops — each round of self-evolution risks narrowing the policy's support. The mitigation is temperature scheduling (don't anneal too aggressively) and keeping the problem pool fixed across rounds.
-
----
-
-## Why step-level beats trajectory-level (the key comparison)
-
-From the source (§Quality evaluation):
-
-- PPM ablation: replacing PPM with a scalar PRM loses **6 MATH points**.
-
-This is the empirical cousin of the Step-DPO argument (§6 of ch-24): step-level signal concentrates gradient on actual disagreement, rather than diluting it across a long shared prefix. At 6 points absolute on MATH, the effect is as large as a round of self-evolution. For Track-4 RL consumers, this is the recommendation: if your PRM is scalar-regressed, swap to pairwise before scaling.
-
----
-
-## Headline numbers
-
-From the source (§Quality evaluation):
-
-- Qwen2.5-Math-7B-rStarMath: **90.0 MATH, 53.3 AIME24, 58.5 Olympiad**.
-- Beats o1-mini on MATH; matches o1-preview on several benchmarks.
-
-Still gold-answer-dependent: the trajectory-level reward requires known final answers. The novelty is that the **step-level signal is executability**, which is effectively free.
-
----
-
-## Connections
-
-- [[excerpts/omegaprm]] — MC-value-regressed PRM, the scalar alternative the PPM's pairwise training is designed to beat.
-- [[excerpts/step-dpo]] — pairwise *policy* preference (not a separate PPM head) — the DPO-flavoured cousin.
-- [[excerpts/openmathinstruct]] — terminal-only CoT filter; rStar-Math's inner loop is the strict upgrade.
-- [[ch-24]] §5 (MCTS synthesis), §6 (step-level supervision), §8 (practical guidance).
+- Round 0 "Qwen2.5-Math-7B-Instruct"; "Q-gap > δ sibling pairs"; "pairwise avoids Goodhart issues of scalar PRMs"; "MATH 58 → 78 → 85 → 88 → 90"; "58.5 Olympiad"; "PUCT with prior P"; "~100K GPU-hours"; "replacing PPM with a scalar PRM loses 6 MATH points".

@@ -7,6 +7,8 @@ source_url: https://arxiv.org/abs/2503.19551
 created_at: "2026-04-23"
 ---
 
+> Superseded by the 2026-09 revision of read.md; kept for history.
+
 # Excerpt: Scaling laws for synthetic data — the stage-6 empirics Lambert's framework predicts
 
 **Authors / papers:** SynthLLM (Microsoft, arXiv 2503.19551); Demystifying Synthetic Data (EMNLP 2025, arXiv 2510.01631); BeyondWeb (arXiv 2508.10975)

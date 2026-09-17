@@ -2,135 +2,89 @@
 chapter: ch-34
 course: llm-training
 phase: read
-excerpt_of: wiki/raw-data/llm-training/model-reports/phi-4.md
-source_url: https://www.microsoft.com/en-us/research/publication/phi-4-reasoning-technical-report/
+excerpt_of: "Phi-4 Technical Report (arXiv:2412.08905v1) and Phi-4-reasoning Technical Report (arXiv:2504.21318v1)"
+source_url: https://arxiv.org/abs/2504.21318
 created_at: "2026-04-23"
+revised: "2026-09-15 (rewritten against both primary texts; the earlier version attributed the 90-step GRPO run to Phi-4-reasoning instead of Phi-4-reasoning-plus and simplified the reward to +1/−0.5)"
 ---
 
-# Excerpt: Phi-4 + Phi-4-reasoning — long-CoT SFT sets the ceiling; 90 GRPO steps polish it
+# Excerpt: Phi-4 data, overfitting checks, and post-training; Phi-4-reasoning SFT and Phi-4-reasoning-plus RL
 
-**Source library:** `wiki/raw-data/llm-training/model-reports/phi-4.md`
-**Report:** Microsoft Research (Marah Abdin et al.), Dec 2024 (Phi-4) + Apr 2025 (Phi-4-reasoning).
+The library card [[phi-4]] has not been verified and combines both reports. Values below were read in the primary texts.
 
----
+## Phi-4 (arXiv:2412.08905v1, 2024-12-12)
+- **Pretraining (§3):** 14B; about 10T tokens; peak LR 0.0003; weight decay 0.1; global batch 5760; default context 4,096.
+- **Phi-3 phases as described here (§3.1):** phase 1 "largely of filtered web data"; phase 2 "primarily synthetic tokens
+  and a much smaller allocation for ultra-filtered and reasoning-heavy web data".
+- **Synthetic data (§2.2):** "a total of about 400B unweighted tokens" of synthetic data for pretraining and midtraining.
+- **Observations (§3.1):** more epochs over synthetic data beat fresh web tokens on reasoning-heavy benchmarks; "Models
+  trained only with synthetic data underperformed on the knowledge-heavy benchmarks and demonstrated increased
+  hallucinations." Table 3 (13B ablation models, relative to phi-3-medium): synthetic only MMLU +0.8, MATH +4.9,
+  HumanEval +12.1, TQA −14.8; synthetic + web rewrites TQA −7.7.
+- **Data mixture (§3.2):** ablations at 1T tokens and 7B scale; "the only benchmark that shows a clear benefit from web
+  data is TQA"; synthetic-heavy mixes were "marginally better" but knowledge-heavy web data was added "to improve
+  knowledge benchmarks".
+- **Pretraining benchmarks (§3, Table 2; change relative to phi-3-medium):** phi-4 (4k) MMLU +3.0, MMLU-pro +10.3, GSM8k
+  +2.2, HumanEval +7.8, ARCC +1.1, MBPP +6.8, MATH +8.9, TQA −0.7; phi-4 (16k) +2.7, +8.9, +1.2, +9.0, +0.9, +9.6, +8.4, −1.5.
+- **Midtraining (§3.3):** 4K → 16K; 30% newly curated long-context data and 70% recall tokens from pretraining; RoPE base
+  250K; maximum LR divided by 10; 250B tokens.
+- **SFT (§4.1):** LR 1e-6; "around 8B tokens"; math, coding, reasoning, conversation, identity, safety, and 40 languages.
+- **DPO (§4.2-4.3):** round 1 with Pivotal Token Search (PTS) pairs; round 2 "judge-guided DPO" with about 850k pairs
+  labeled by GPT-4o. PTS keeps questions with 0.2 ≤ p(success) ≤ 0.8 and turns a pivotal token into a pair of single
+  tokens t_acc and t_rej that increase or decrease p(success | prefix) (§4.3).
+- **Table 9 (SFT / DPO stage 1 / DPO stage 2 only / phi-4 = stage 1 + 2):** MMLU 82.8 / 84.8 / 84.2 / 84.8; GPQA 47.3 /
+  53.6 / 52.4 / 56.1; MATH 77.1 / 80.5 / 77.6 / 80.4; HumanEval 79.5 / 81.6 / 81.5 / 82.6; MGSM 80.8 / 80.8 / 81.5 / 80.6;
+  SimpleQA 3.7 / 2.9 / 2.9 / 3.0; DROP 82.8 / 86.1 / 71.8 / 75.5; MMLUPro 61.9 / 70.0 / 67.2 / 70.4; HumanEval+ 77.9 /
+  81.9 / 81.4 / 82.8; ArenaHard 56.7 / 66.5 / 69.8 / 75.4; IFEval 66.2 / 63.0 / 63.0 / 63.0; PhiBench (internal) 48.2 /
+  54.5 / 53.0 / 56.2. Each DPO stage includes 1-5% hallucination and safety data.
+- **Refusal data (App. A.1):** SFT uses (question, correct answer) where base phi-4 was usually correct, (question,
+  refusal) where it was usually wrong, and (bogus question, refusal); DPO uses correct > refusal where phi-4 sometimes
+  answered correctly and refusal > wrong where it sometimes answered incorrectly.
+- **Hallucination (§4.4, Fig. 6):** SimpleQA answers go from 90.0% incorrect (base) to 38.7% incorrect and 57.5% not
+  attempted (SFT) to 15.8% incorrect, 81.1% not attempted, 3.0% correct (final). The authors state the simple-evals F1
+  gives the base model a higher score than the final model.
+- **Fresh evaluation (§1.1, App. C):** November 2024 AMC-10/12, 78 questions released on or after November 6, 2024,
+  after all training data were collected; 10 generations per question at temperature 0.5 (App. C; the Fig. 1 caption instead says "100 runs"); phi-4 averages
+  91.8 of 150 (Fig. 1 bar label). Footnote 8: all three final candidate models scored above 89; the final model was chosen "before measuring its
+  score but after seeing the scores for the other two candidates".
+- **Weaknesses (§8):** factual hallucination (for example invented biographies), weak strict instruction following,
+  long answers to simple problems, tuned for single-turn queries.
 
-## Why this source anchors ch-34 §5
+## Phi-4-reasoning and Phi-4-reasoning-plus (arXiv:2504.21318v1, 2025-04-30)
+- **Models (§1):** Phi-4-reasoning is SFT on Phi-4; Phi-4-reasoning-plus adds RL on "a small set of ∼6K high-quality
+  math-focused problems".
+- **Prompt selection (§2.1):** seeds "at the edge of Phi-4's current abilities"; where no ground truth exists, plurality
+  answers of a strong reference model are the proxy, and difficulty is estimated from "the agreement rate of weaker
+  model's (e.g., Phi-4 or GPT-4o) generations"; rubric-based LLM evaluators score reasoning complexity.
+- **Decontamination (§2.2):** against the following list (GPQA appears twice; 23 distinct names): AIME-2024, MATH, GPQA, LiveCodeBench, Codeforces, OmniMATH, SWE-Bench Verified,
+  SimpleQA, DROP, AGIEval, ARC-C/E, CommonsenseQA, GSM8k, HellaSwag, HumanEval, MBPP, OpenBookQA, PIQA, WinoGrande,
+  ArenaHard, MT-Bench, PhiBench. AIME-2025 was released after the data were finalized.
+- **SFT (§3, §3.1-3.2):** two placeholder tokens repurposed as `<think>` and `</think>`; RoPE base doubled; 32K maximum
+  length. "over 1.4 million prompt-response pairs, totaling 8.3 billion unique tokens"; "roughly 16K steps, with a global
+  batch size of 32 and a context length of 32K tokens"; AdamW, LR 1e-5, linear warmup over 450 steps, weight decay 1e-4;
+  "2+ passes over reasoning data sources"; final model "trained for 16B tokens". LR grid [1e-6, 2e-5]; 1e-5 best.
+  Mixture weights are epochs per data cluster, tuned per domain and combined additively. o3-mini high effort was a stronger
+  teacher than medium; o3-mini medium had "similar effect to DeepSeek-R1" and was more token-efficient.
+- **Transfer (§1, §3, Table 2):** 30 to 60 percentage-point gains over Phi-4 on TSP, 3SAT, and BA-Calendar, described
+  as domains "not directly targeted during supervised fine-tuning or reinforcement learning". Table 2 (Phi-4 →
+  Phi-4-reasoning → plus; reasoning models at temperature 0.8, Phi-4 at 0.0): FlenQA 3K 82.0 → 97.7 → 97.9; IFEval Strict
+  62.3 → 83.4 → 84.9; ArenaHard 68.1 → 73.3 → 79.0; HumanEvalPlus 83.5 → 92.9 → 92.3; MMLUPro 71.5 → 74.3 → 76.0; Kitab
+  no-context precision 19.3 → 23.2 → 27.6; Kitab with-context precision 88.5 → 93.8 → 93.6; Kitab no-context recall 8.2 →
+  4.9 → 6.3; Kitab with-context recall 68.1 → 74.8 → 75.4; Toxigen toxic 72.6 → 86.7 → 77.3; Toxigen neutral 90.0 → 84.7 →
+  90.5; PhiBench 2.21 58.2 → 70.6 → 74.2.
+- **Variance (§1, §5.1, Table 1):** two average-of-5 runs "can differ significantly (by up to 5-10 percentage points on
+  AIME)"; AIME 2025 reported as pass@1 over 50 runs. AIME 25: Phi-4-reasoning 63.1 (std 6.3), plus 78.0 (4.6); AIME 24:
+  74.6 (5.1), 81.3 (1.8).
+- **RL reward (§4.1):** correct answers: R ∈ [0.5, 1.0] decreasing with length via ρ+ and cosine scaling; incorrect
+  answers: R ∈ [−1.0, −0.5], increasing toward −0.5 as length grows via ρ−; missing `<|im_end|>` → −0.5; invalid thinking
+  block → −1.0; repetition penalty from 5-gram frequencies; R_final = (8/13)·R_acc + (1/13)·R_rep (footnote 3: maximum
+  8/13 ≈ 0.62).
+- **RL settings (§4, §4.2):** 72,401 math seed problems, 64 sampled per iteration; verl; global batch 64 on 32 H100; LR
+  5e-8 with cosine warmup over 10 steps; G = 8; KL β = 0.001 (the printed objective writes the KL term as
+  D_KL(π_θ ‖ π_θold)); entropy coefficient 0.001; 32K maximum length with outputs
+  clipped at 31K. Checkpoint: "the model with the best observed AIME 2024 score, which is the model trained for 90 steps,
+  over only ∼6k examples". GRPO adds more than 10% AIME; further steps did not add gains (Fig. 7a).
 
-Phi-4-reasoning is the chapter's cleanest evidence that **SFT data quality sets the reasoning ceiling, and RL is a short polish on top**. Where DeepSeek-R1 runs long RL from a weaker SFT base (RL does the heavy lifting), Phi-4-reasoning runs 90 GRPO steps from a 1.4M-prompt o3-mini-generated long-CoT base (SFT does the heavy lifting). The +10% AIME gain from only 90 steps is the attested datapoint for the SFT-dominates-RL claim.
-
----
-
-## The core insight as stated
-
-From the source (lines 7-8):
-
-> - **Core Insight:** Data curation dominates algorithm choice — 1.4M o3-mini-generated reasoning traces for SFT, followed by only ~90 GRPO steps, reach competitive reasoning scores at 14B parameters.
-> - **Guideline:** Don't run RL long; most of the ceiling is set by SFT data quality. Use RL to squeeze the last 10% with a length-aware reward.
-
-This is the design stance of the Phi-4-reasoning recipe in one sentence. For ch-34, it directly contradicts the "RL is where the reasoning gains come from" reading of R1, and sharpens the recipe design question into *where do you spend the compute budget — teacher-API SFT generation or long RL rollouts?*
-
----
-
-## Phi-4 base — the pivotal-token DPO
-
-From the source (lines 18-20):
-
-> - **Phi-4 base:** 50 categories of synthetic data, ~400B unweighted tokens, injected into both pretraining and post-training. Pivotal-token DPO for preference pairs.
-
-Pivotal-token DPO is the Phi-4-base novelty. From the source (lines 27-30):
-
-> - **Preference / RL algorithm:**
->   - Phi-4 base: **Pivotal-token DPO** — pairs constructed at tokens where the probability of final-answer correctness changes most.
-
-The mechanism: instead of building DPO preference pairs at the *response* level (chosen full response vs rejected full response), Phi-4 identifies *individual tokens* where the model's probability of producing a correct final answer changes most sharply. Around those pivotal tokens, preference pairs are constructed — chosen token (or short continuation) vs rejected token. This gives a more surgical preference signal than sequence-level DPO, at the cost of requiring a correctness-predictor model to score each token position.
-
-The raw-data source does not disclose the pivotal-token detection algorithm. Reasonable guesses: score each prefix with a correctness head or judge, take positions where P(correct) changes by more than a threshold, generate paired continuations at those positions.
-
----
-
-## Phi-4-reasoning — the 1.4M / 16B / 8.3B trace corpus
-
-From the source (lines 20-24 and 25-26):
-
-> - **Phi-4-reasoning SFT:** 1.4M prompts filtered to the "boundary of base-model capability," with long reasoning traces generated by o3-mini in high-thinking mode at 32K context.
-> - **Phi-4-reasoning RL:** GRPO with rewards that combine correctness (+1 / −0.5) with a length-aware accuracy bonus and explicit penalties for (a) missing `<eos>`, (b) unclosed `<think>` blocks, (c) n-gram repetition with n=5.
-> - **RL is cheap:** only 90 GRPO steps produce >10% AIME gain; further steps yield little — SFT ceiling dominates.
-
-Three numbers are the critical disclosures:
-
-- **1.4M prompts** — the SFT prompt count.
-- **~16B SFT tokens total, ~8.3B unique** (from line 26) — after the long-CoT traces are generated. ~1.9× duplication, consistent with multiple rollouts per prompt and/or multiple traces per problem.
-- **90 GRPO steps** — the total RL training length.
-
-The **"boundary of base-model capability"** filter is the critical data-curation knob. Prompts that the base Phi-4 solves trivially carry no learning signal; prompts that the base cannot approach at all waste o3-mini's traces. The boundary is where the base model sometimes gets the right answer and sometimes doesn't — exactly the regime where long-CoT traces teach most.
-
----
-
-## The reward shape for GRPO
-
-From the source (lines 31-36):
-
-> - **Reward shape (Phi-4-reasoning GRPO):**
->   - +1 for correct answer, −0.5 for incorrect.
->   - Length-aware bonus: encourage concise outputs on correct answers; permit more think tokens on incorrect (model learns to "think longer when unsure").
->   - Penalty for missing EOS or unclosed `<think>` block.
->   - n-gram repetition penalty with n=5 — discourages degenerate loops.
-
-Every component of this reward is solving a specific failure mode observed during training:
-
-| Reward component | Failure mode it prevents |
-|---|---|
-| +1 / −0.5 | Reward hacking via confident-wrong answers (asymmetric cost) |
-| Length bonus conditional on correctness | Verbose-and-wrong pathology; rewards brevity when right |
-| "Think longer when unsure" | Short-CoT-and-wrong pathology; rewards more deliberation when uncertain |
-| EOS / `</think>` closure penalty | Run-on generation past the answer boundary |
-| n=5 repetition penalty | Entropy-collapse loops |
-
-This is the **Phi-4-reasoning stabilizer column** in ch-34's stance table: reward-shape stabilization, not optimizer stabilization (Qwen), architectural stabilization (OLMo), or dataset stabilization (Phi-3's pretraining curriculum).
-
----
-
-## The SFT-dominates-RL claim in numbers
-
-From the source (line 23):
-
-> - **RL is cheap:** only 90 GRPO steps produce >10% AIME gain; further steps yield little — SFT ceiling dominates.
-
-This is the ch-34 headline claim. 90 GRPO steps is short by 2024 standards — DeepSeek-R1 runs thousands of RL training steps. The +10% AIME comes *on top of* a 1.4M-prompt SFT base whose own AIME number is already high (set by o3-mini trace quality).
-
-**The claim is not "RL is unnecessary".** It is that the marginal return on RL compute, relative to the marginal return on teacher-API SFT compute, favors SFT in the regime Phi-4-reasoning operates in. At DeepSeek-R1's regime — weaker teacher, more RL — the trade-off flips.
-
----
-
-## Contrast with Qwen 3 and DeepSeek-R1
-
-From the source (lines 55-58):
-
-> ## Connections
-> - [[phi-3]] — prior generation's synthetic-data template.
-> - [[deepseek-r1]] — contrast: R1 runs much longer RL from a weaker SFT base; Phi-4-reasoning runs short RL from a heavily-curated SFT base.
-> - [[qwen-3]] — Stage-2 reasoning RL with GRPO comparison point (3,995 query–verifier pairs × 170 steps vs Phi-4's 1.4M × 90 steps).
-
-The Qwen 3 / Phi-4 RL-scale comparison is informative: Qwen's Stage-2 RL is **3,995 query–verifier pairs × 170 steps**, Phi-4-reasoning's is **1.4M prompts × 90 steps**. Qwen 3 has fewer prompts but more steps (more passes per prompt); Phi-4-reasoning has many prompts but fewer steps (fewer passes per prompt, but much more distinct data). Different compute allocations inside a similar total RL budget.
-
----
-
-## What the report does not disclose
-
-- GRPO group size G, clip ε, KL β, LR, optimizer (AdamW inferred), batch size, rollouts per prompt.
-- The pivotal-token detection algorithm for Phi-4-base DPO.
-- The 50 synthetic-data category list for the 400B-unweighted-token pool.
-- RM identity (if any) for the "boundary of base-model capability" prompt filter.
-- Per-domain AIME / MATH / coding breakdown pre- vs post-RL.
-
----
-
-## Connections
-
-- `[[phi-4]]` — raw source.
-- `[[ch-34]]` — §5 uses this for the SFT-dominates-RL stance.
-- `[[phi-3]]` — previous generation's pretrain-time synthetic template.
-- `[[deepseek-r1]]` — the RL-heavy contrast; same problem, opposite stance.
-- `[[qwen-3]]` — hybrid-thinking alternative design; different SFT / RL compute split.
-- `[[grpo]]` — the RL algorithm.
-- `[[dpo]]` — preference algorithm; Phi-4-base's pivotal-token variant.
+## Verification
+- Read on 2026-09-15 in the cached full texts of arXiv:2412.08905v1 (§1.1, §2.2, §3-§4.5, §8, App. C, Tables 1, 3, 9,
+  Fig. 1, 6) and arXiv:2504.21318v1 (§1-§5.1, Tables 1-2).

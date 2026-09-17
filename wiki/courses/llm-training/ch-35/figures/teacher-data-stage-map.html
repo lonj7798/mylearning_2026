@@ -1,0 +1,290 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Teacher-Data Stage Map</title>
+<style>
+:root {
+  color-scheme: light;
+  --page: #f9f9f7;
+  --surface: #fcfcfb;
+  --ink: #0b0b0b;
+  --ink-2: #52514e;
+  --muted: #898781;
+  --grid: #e1e0d9;
+  --axis: #c3c2b7;
+  --border: rgba(11,11,11,0.10);
+  --num: #2a78d6;       /* reported with numbers */
+  --num-ink: #ffffff;
+  --desc: #cde2fb;      /* described without numbers */
+  --desc-ink: #0d366b;
+  --none: #f0efec;      /* not reported */
+  --focus: #eb6834;
+}
+@media (prefers-color-scheme: dark) {
+  :root:where(:not([data-theme="light"])) {
+    color-scheme: dark;
+    --page: #0d0d0d; --surface: #1a1a19; --ink: #ffffff; --ink-2: #c3c2b7; --muted: #898781;
+    --grid: #2c2c2a; --axis: #383835; --border: rgba(255,255,255,0.10);
+    --num: #3987e5; --num-ink: #0b0b0b; --desc: #184f95; --desc-ink: #ffffff; --none: #262625; --focus: #d95926;
+  }
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --page: #0d0d0d; --surface: #1a1a19; --ink: #ffffff; --ink-2: #c3c2b7; --muted: #898781;
+  --grid: #2c2c2a; --axis: #383835; --border: rgba(255,255,255,0.10);
+  --num: #3987e5; --num-ink: #0b0b0b; --desc: #184f95; --desc-ink: #ffffff; --none: #262625; --focus: #d95926;
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--page); color: var(--ink);
+  font: 14px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; }
+main { max-width: 1080px; margin: 0 auto; padding-block: 24px 48px; padding-inline: 16px; }
+h1 { font-size: 22px; margin: 0 0 6px; }
+h2 { font-size: 16px; margin: 0 0 6px; }
+p { margin: 6px 0; }
+.lede { color: var(--ink-2); max-width: 78ch; }
+section.card { background: var(--surface); border: 1px solid var(--border); border-radius: 10px;
+  padding: 16px; margin-top: 16px; }
+.legend { display: flex; gap: 18px; flex-wrap: wrap; font-size: 13px; color: var(--ink-2); margin: 2px 0 10px; }
+.key { display: inline-flex; width: 22px; height: 18px; border-radius: 4px; align-items: center; justify-content: center;
+  font-size: 12px; margin-right: 6px; vertical-align: -3px; border: 1px solid var(--border); }
+.k-num { background: var(--num); color: var(--num-ink); }
+.k-desc { background: var(--desc); color: var(--desc-ink); }
+.k-none { background: var(--none); color: var(--muted); }
+.controls { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 10px; font-size: 13px; color: var(--ink-2); }
+.seg button { font: inherit; color: var(--ink); background: var(--surface); border: 1px solid var(--axis);
+  border-radius: 6px; padding: 3px 9px; cursor: pointer; }
+.seg button[aria-pressed="true"] { background: var(--ink); color: var(--surface); border-color: var(--ink); }
+.tablewrap { overflow-x: auto; }
+table.matrix { border-collapse: separate; border-spacing: 2px; font-size: 12.5px; }
+.matrix th { font-weight: 600; color: var(--ink-2); vertical-align: bottom; text-align: left; padding: 4px; }
+.matrix thead th button { all: unset; cursor: pointer; display: block; width: 84px; line-height: 1.25; }
+.matrix thead th button:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+.matrix tbody th { white-space: nowrap; padding-right: 10px; position: sticky; left: 0; background: var(--surface); z-index: 1; }
+.matrix tbody th small { display: block; color: var(--muted); font-weight: 400; }
+.cell { width: 84px; height: 34px; border-radius: 4px; border: 1px solid transparent; cursor: pointer;
+  font: inherit; font-size: 13px; }
+.cell.num { background: var(--num); color: var(--num-ink); }
+.cell.desc { background: var(--desc); color: var(--desc-ink); }
+.cell.none { background: var(--none); color: var(--muted); }
+.cell:hover, .cell:focus-visible, .cell.sel { outline: 2px solid var(--focus); outline-offset: 1px; }
+tr.dim th { color: var(--muted); font-weight: 400; }
+tr.dim .cell { opacity: 0.3; filter: grayscale(1); }
+#detail { min-height: 128px; }
+#detail .where { color: var(--muted); font-size: 12.5px; margin-top: 6px; }
+#detail .tag { display: inline-block; font-size: 12px; padding: 1px 7px; border-radius: 10px; border: 1px solid var(--axis); color: var(--ink-2); margin-left: 6px; }
+.caption { color: var(--ink-2); font-size: 12.5px; margin-top: 10px; }
+ol.stages { margin: 6px 0 0; padding-left: 20px; color: var(--ink-2); font-size: 13px; }
+ol.stages li { margin: 2px 0; }
+</style>
+</head>
+<body>
+<main>
+<h1>Teacher-data stage map</h1>
+<p class="lede">Rows are technical reports or posts; columns are the nine pipeline positions where a teacher model's output enters training (ch-35 §2). Select a cell to read what the report says at that position, with its locus. A blank-grey cell means the report was checked and does not describe teacher data at that position; it does not mean the lab never did it.</p>
+
+<section class="card">
+  <div class="legend" aria-label="Legend">
+    <span><span class="key k-num">●</span>used; settings or results given in numbers</span>
+    <span><span class="key k-desc">◐</span>used; described without numbers</span>
+    <span><span class="key k-none">·</span>not described in the report</span>
+  </div>
+  <div class="controls">
+    <span>Highlight rows that use:</span>
+    <div class="seg" role="group" aria-label="Row highlight">
+      <button type="button" data-f="all" aria-pressed="true">all rows</button>
+      <button type="button" data-f="onpolicy" aria-pressed="false">on-policy distillation</button>
+      <button type="button" data-f="logit" aria-pressed="false">logit distillation</button>
+      <button type="button" data-f="sftonly" aria-pressed="false">sequence-level SFT only</button>
+    </div>
+  </div>
+  <div class="tablewrap">
+    <table class="matrix" id="matrix">
+      <thead><tr><th scope="col">Report</th></tr></thead>
+      <tbody></tbody>
+    </table>
+  </div>
+</section>
+
+<section class="card" id="detail" aria-live="polite">
+  <h2 id="d-title">Select a cell or a column header</h2>
+  <p id="d-body" class="lede">Each cell summarizes one report at one pipeline position. Numbers are copied from the primary source at the locus shown.</p>
+  <p id="d-where" class="where"></p>
+</section>
+
+<section class="card">
+  <h2>Stage definitions</h2>
+  <ol class="stages" id="stagelist"></ol>
+  <p class="caption">Sources (all checked 2026-09-14 or 2026-09-15): arXiv:2501.12948v2 (DeepSeek-R1), 2412.19437v2 (DeepSeek-V3), 2512.02556v1 (DeepSeek-V3.2), 2606.19348v1 (DeepSeek-V4, via the deepseek-v4-recipe card), 2508.06471v1 (GLM-4.5), 2602.15763v2 (GLM-5), 2505.09388v1 (Qwen3), 2501.12599v4 (Kimi k1.5), 2507.20534v2 (Kimi K2), 2505.00949v5 (Llama-Nemotron), 2508.14444 (Nemotron Nano 2), 2504.21318v1 (Phi-4-reasoning), 2506.10910v1 (Magistral), 2503.19786v1 (Gemma 3), 2408.00118 (Gemma 2), 2408.11796v4 (Minitron), 2601.02780v2 (MiMo-V2-Flash); Meta Llama 4 post (2025-04-05); Hugging Face SmolLM3 post (2025-07-08); Thinking Machines "On-Policy Distillation" (2025-10-27).</p>
+</section>
+</main>
+
+<script>
+const STAGES = [
+  ["S1", "Pretraining logit distillation", "The student is pre-trained against a teacher's next-token distribution (all or a sample of the vocabulary) instead of, or together with, the one-hot data token."],
+  ["S2", "Pruning with distillation", "A trained model is pruned (depth or width) and the smaller model is retrained against the original model's logits."],
+  ["S3", "Mid-training on distilled traces", "Teacher-generated reasoning traces are added to a continued-pretraining or mid-training stage, before SFT."],
+  ["S4", "Cold start", "A small SFT set of long reasoning traces (from a teacher, from an RL model, or rewritten by humans) is trained before the first RL stage."],
+  ["S5", "Experts to one model", "Separate domain experts or specialists are trained, and their outputs become the SFT data of one general model."],
+  ["S6", "Post-RL rejection-sampling SFT", "An RL checkpoint samples responses, a filter keeps correct or preferred ones, and SFT is run on them (often from an earlier checkpoint)."],
+  ["S7", "Small-model distillation", "A larger model's outputs or logits train smaller released models of the same family or another family."],
+  ["S8", "Length reduction", "Teacher data or training choices aimed at shorter reasoning: shortest correct samples, truncated traces, merging, length penalties."],
+  ["S9", "Distillation after RL", "A distillation stage placed after RL stages (in one practitioner post, after mid-training): on-policy distillation from one or several teachers, or logit distillation to recover losses."]
+];
+
+// state: 2 = numbers, 1 = described, 0 or absent = not described
+// tags: onpolicy, logit, sftonly
+const ROWS = [
+  { name: "DeepSeek-R1", sub: "arXiv:2501.12948v2", tags: ["sftonly"], cells: {
+    S4: [2, "Cold start of \"thousands\" of long-CoT examples. DeepSeek-R1-Zero samples multiple trajectories per prompt at temperature 1.0; correct and readable ones are kept (sympy for math, repetition and language-mixing filters) and DeepSeek-V3 refines them. Human annotators convert traces into a first-person conversational style, an LLM rewrites more data using those examples, and a second human round verifies. SFT on DeepSeek-V3-Base: 2–3 epochs, cosine LR 5×10⁻⁵ → 5×10⁻⁶, 32,768 tokens, batch 128.", "Supp. B.3.2, B.4.2"],
+    S6: [2, "Rejection sampling from the first-stage RL checkpoint keeps only correct responses (some judged by DeepSeek-V3 against the reference). Chains of thought with mixed languages, long paragraphs, or code blocks are removed. 804,745 samples: Math 395,285; Code 211,129; STEM 10,124; Logic 10,395; General 177,812. SFT restarts from V3-Base.", "Supp. B.3.3 Table 5; Fig. 2"],
+    S7: [2, "Six SFT-only students on the same ~800k set: Qwen2.5-Math-1.5B, Qwen2.5-Math-7B, Qwen2.5-14B, Qwen2.5-32B, Llama-3.1-8B, Llama-3.3-70B-Instruct; 2–3 epochs, batch 64, 32,768 tokens. At 32B: Distill-Qwen-32B AIME 2024 72.6 vs RL from Qwen2.5-32B-Base (over 10K steps) 47.0.", "Supp. B.4.3 Table 6; Table 16"]
+  }},
+  { name: "DeepSeek-V3", sub: "arXiv:2412.19437v2", tags: ["sftonly"], cells: {
+    S5: [2, "Per-domain expert models (code, math, general reasoning) trained with SFT on <problem, original response> and <system prompt, problem, R1 response>, then RL with high-temperature sampling for \"hundreds of RL steps\". Rejection sampling from the experts builds the reasoning part of a 1.5M-instance SFT set; non-reasoning data comes from DeepSeek-V2.5 with human verification.", "§5.1"],
+    S8: [1, "Stated aim: keep R1's accuracy while avoiding its \"overthinking, poor formatting, and excessive length\". The ablation on DeepSeek-V2.5 still shows longer outputs: MATH-500 74.6 → 83.2 with average length 769 → 1510 tokens.", "§5.1; §5.4.1 Table 9"]
+  }},
+  { name: "DeepSeek-V3.2", sub: "arXiv:2512.02556v1", tags: ["sftonly"], cells: {
+    S5: [1, "Specialists for mathematics, programming, general logical reasoning, general agentic tasks, agentic coding, agentic search, plus writing and general QA, each in thinking and non-thinking modes and each trained with RL. Models trained on their distilled data score \"only marginally below\" the specialists; the following mixed RL stage removes the gap. No numbers or data sizes printed.", "§3"]
+  }},
+  { name: "DeepSeek-V4", sub: "arXiv:2606.19348v1", tags: ["onpolicy"], cells: {
+    S9: [1, "Multi-teacher on-policy distillation replaces the mixed RL stage: loss Σᵢ wᵢ·D_KL(π_θ ‖ π_Eᵢ) on student-sampled trajectories with full-vocabulary logits and more than ten teachers. Weights, steps, and learning rate are not reported.", "§5.1.2 Eq. 29 (deepseek-v4-recipe card)"]
+  }},
+  { name: "GLM-4.5", sub: "arXiv:2508.06471v1", tags: ["sftonly"], cells: {
+    S3: [2, "Synthetic reasoning mid-training stage at 32K: questions and answers for math, science, and coding competitions collected from webpages and books, with reasoning processes synthesized by a reasoning model (Figure 3 label: 500B tokens). The following 128K stage (100B) adds large-scale synthetic agent trajectories.", "§2.3; Figure 3"],
+    S4: [1, "Each expert (Reasoning, Agent, General chat) starts from a small cold-start SFT set with extended chain-of-thought responses; size not printed.", "§3.1"],
+    S5: [2, "Unified SFT on \"millions of samples\" from the three experts at 128K context, with data with and without explicit thinking balanced. Dropping the bottom 50% of prompts by response length gave +2%–4% on math and science; 4 responses per hard prompt gave another +1%–2% (benchmarks not named).", "§3.1"],
+    S6: [1, "Agent RL alternates with self-distillation: once RL plateaus, cold-start data is replaced by responses of the RL model, SFT is repeated, and RL continues on harder tasks.", "§3.3.2"]
+  }},
+  { name: "GLM-5", sub: "arXiv:2602.15763v2", tags: ["onpolicy"], cells: {
+    S5: [1, "Coding and agent SFT data improved with expert RL and rejection sampling; erroneous segments inside trajectories are kept but masked from the loss. Math and science problems are kept only if challenging for GLM-4.7.", "§3.1"],
+    S9: [2, "After Reasoning RL, Agentic RL, and General RL, on-policy cross-stage distillation uses the final checkpoints of earlier stages as teachers, prompts from their RL sets, advantage sg[log(π_teacher/π_θ)] per token, GRPO group size 1, batch 1,024. No before/after numbers are printed.", "§3.5 Eq. 2"]
+  }},
+  { name: "Qwen3", sub: "arXiv:2505.09388v1", tags: ["onpolicy"], cells: {
+    S4: [1, "Queries filtered with Qwen2.5-72B-Instruct (not verifiable, multiple sub-questions, or answerable without CoT are removed). QwQ-32B generates N candidates; six response filters. A subset is used, keeping samples and steps minimal. Set size and N not printed.", "§4.1"],
+    S6: [2, "Stage 3: thinking data generated by rejection sampling on Stage 1 queries with the Stage 2 RL model, combined with non-thinking data. Qwen3-32B thinking mode from Stage 2 to Stage 4: IFEval 73.0 → 85.0, AIME'24 83.8 → 81.4.", "§4.3; §4.7 Table 22"],
+    S7: [2, "Strong-to-weak distillation for 0.6B–14B and 30B-A3B: off-policy on teacher outputs in /think and /no_think, then on-policy logit alignment to Qwen3-32B or Qwen3-235B-A22B by minimizing KL. For Qwen3-8B from the same off-policy checkpoint: RL reaches AIME'24 67.6 (pass@64 90.0) with 17,920 GPU hours; on-policy distillation reaches 74.4 (pass@64 93.3) with 1,800 GPU hours.", "§4.5; §4.7 Table 21"]
+  }},
+  { name: "Kimi k1.5", sub: "arXiv:2501.12599v4", tags: ["sftonly"], cells: {
+    S4: [1, "Long-CoT warm-up: a small dataset of verified long-CoT paths built by prompt engineering, for text and image inputs. Size and settings not printed.", "§2.2"],
+    S8: [2, "long2short: weight-average merge of long- and short-CoT models; shortest correct of n = 8 samples for SFT; DPO with the shortest correct response as chosen and longer wrong responses, or correct responses 1.5× longer, as rejected; long2short RL with a length penalty. long2short RL reaches AIME 2024 60.8 at 3,272 tokens on average.", "§2.4; §3.4"]
+  }},
+  { name: "Kimi K2", sub: "arXiv:2507.20534v2", tags: ["sftonly"], cells: {
+    S5: [1, "SFT candidate responses come from K1.5 and in-house domain-specialized expert models and are filtered by LLM or human judges. Dataset size not printed.", "§3.1"]
+  }},
+  { name: "Llama-Nemotron", sub: "arXiv:2505.00949v5", tags: ["logit"], cells: {
+    S2: [2, "After neural architecture search: LN-Super distilled for 40B tokens; LN-Ultra distilled for 65B tokens and then continued-pretrained for 88B tokens.", "§2.2"],
+    S7: [2, "33,011,757 SFT samples. Reasoning-on responses from DeepSeek-R1 (math: 16 per problem), reasoning-off from Qwen2.5-Math-7B-Instruct (64 per problem), Llama-3.1-Nemotron-70B-Instruct, or Llama-3.3-70B-Instruct; \"detailed thinking on/off\" system prompts. GPQA-Diamond: LN-Ultra-SFT 66.4, DeepSeek-R1 71.5, LN-Ultra after RL 76.0.", "§3, Table 2; §5; Table 5"]
+  }},
+  { name: "Nemotron Nano 2", sub: "arXiv:2508.14444", tags: ["logit"], cells: {
+    S2: [2, "12B → 9B with forward-KL logit distillation: depth pruning and ~60B tokens; width pruning and ~50B + ~25B + ~1B tokens at 8,192 / 49,152 / 262,144. In an ablation after ~6B KD tokens, 70% reasoning-SFT data and 30% pretraining data gave the highest math average (58.5 vs 57.5 at 50/50 and 57.2 at 90/10).", "§4.3; Table 11"],
+    S7: [2, "About 80B SFT tokens; math, science, and code responses from DeepSeek-R1-0528; tool-calling and conversational responses from Qwen3-235B-A22B.", "§3.1; Table 7"],
+    S8: [2, "Stage 3 SFT adds examples with reasoning traces truncated to 1–2k tokens while keeping the answer; about 5% of the data. Without them, the model lengthens the answer under a short thinking budget and produces fewer well-formed responses (Figure 5, values shown only in the plot).", "§1; §3.2; §3.4"],
+    S9: [2, "After DPO and GRPO, ~0.4B tokens of logit distillation at 262,144 \"to recover post-RL drops\"; GRPO had lowered MMLU-Pro, which this step recovered (plot only).", "§4.3; Figure 6"]
+  }},
+  { name: "Phi-4-reasoning", sub: "arXiv:2504.21318v1", tags: ["sftonly"], cells: {
+    S7: [2, "Over 1.4M prompt-response pairs (8.3B unique tokens) with o3-mini responses on \"teachable\" prompts at the edge of Phi-4's ability; ~16K steps, batch 32, 32K context, LR 1e-5. o3-mini medium was similar to DeepSeek-R1 as a teacher but more token efficient; high effort was stronger and longer.", "§2.1; §3; §3.2"]
+  }},
+  { name: "Magistral", sub: "arXiv:2506.10910v1", tags: ["sftonly"], cells: {
+    S4: [2, "Magistral Small (24B) is SFT-trained for 4 epochs on correct traces from Magistral Medium's RL run plus Medium responses to OpenThoughts and OpenR1-code prompts, with 10% general instruction data, then RL. AIME'24 pass@1: SFT 65.4, RL only 65.8, SFT + RL 70.7; GPQA: 63.4, 68.8, 68.2; AIME'24 maj@64: 90.0, 86.7, 83.3.", "§5.3; Table 3"]
+  }},
+  { name: "Gemma 3 (and Gemma 2)", sub: "arXiv:2503.19786v1; 2408.00118", tags: ["logit"], cells: {
+    S1: [2, "Gemma 3: 256 logits sampled per token by teacher probability; non-sampled entries set to zero and the target renormalized; 14T / 12T / 4T / 2T tokens for 27B / 12B / 4B / 1B. A smaller teacher is better for short training horizons and a larger one for long horizons (Figure 8). Gemma 2 ablation: 2B on 500B tokens, 60.3 from scratch vs 67.7 distilled from a 7B teacher (3-benchmark average).", "Gemma 3 §2.2, §5.4; Gemma 2 Table 6"],
+    S7: [1, "Gemma 3 post-training uses \"an improved version of knowledge distillation\" from a large instruction-tuned teacher; settings not printed.", "Gemma 3 §3"]
+  }},
+  { name: "Llama 4", sub: "Meta post, 2025-04-05", tags: ["logit"], cells: {
+    S1: [1, "Maverick was codistilled from Behemoth during pre-training with a loss that \"dynamically weights the soft and hard targets through training\"; extra teacher forward passes for new data. No weights or ablation numbers.", "\"Pushing Llama to new sizes\""]
+  }},
+  { name: "MiMo-V2-Flash", sub: "arXiv:2601.02780v2", tags: ["onpolicy"], cells: {
+    S5: [1, "SFT on \"millions\" of samples in thinking and non-thinking modes with responses from in-house domain-specialized checkpoints.", "§4.2"],
+    S9: [2, "Multi-teacher on-policy distillation: domain teachers trained by RL; per-token advantage sg[log(π_teacher/π_θ)] plus α times an outcome-reward advantage. Student after MOPD vs best teacher: AIME 2025 94.1 vs 93.9; SWE-Bench Verified 73.4 vs 74.2; BrowseComp 45.4 vs 51.7 (best teacher: an SFT model); Arena-Hard creative writing 86.2 vs 90.1 (best teacher: the student before MOPD).", "§4.1, §4.4 Eq. 5–9; Table 7"]
+  }},
+  { name: "SmolLM3", sub: "Hugging Face post, 2025-07-08", tags: ["sftonly"], cells: {
+    S3: [2, "Reasoning mid-training on 35B tokens from OpenThoughts3-1.2M and a Llama-Nemotron subset with R1 traces, 4 epochs (~140B tokens). RULER degradation was later traced to this stage and repaired by merging (0.9 APO soup + 0.1 mid-training checkpoint).", "\"Reasoning Mid-training\"; \"Model Merging\""]
+  }},
+  { name: "Minitron", sub: "arXiv:2408.11796v4", tags: ["logit"], cells: {
+    S2: [2, "Teacher correction (~100B tokens on the distillation data), pruning, then forward-KL logit-only distillation without the LM loss. MN-Minitron-8B: 380B tokens, batch 768, LR 1e-4 → 4.5e-7; up to 40× fewer tokens than training from scratch.", "Methodology; Table 4; Analysis"]
+  }},
+  { name: "Thinking Machines", sub: "blog, 2025-10-27", tags: ["onpolicy"], cells: {
+    S9: [2, "Recovery after mid-training rather than RL: Qwen3-8B mid-trained on internal documents (70% documents, 30% chat) drops IF-eval from 85% to 79%; on-policy distillation from the original Qwen3-8B on Tulu 3 prompts restores 83% while internal QA moves 36% → 41%.", "\"Distillation for personalization\""],
+    S7: [2, "Qwen3-8B-Base after SFT on 400k OpenThoughts-3 prompts: AIME'24 60%; on-policy distillation reaches 70% in about 150 steps (about 77K prompts, 4 samples per prompt).", "\"Distillation for reasoning\""]
+  }}
+];
+
+const $ = (s) => document.querySelector(s);
+const headRow = $("#matrix thead tr");
+const tbody = $("#matrix tbody");
+const glyph = ["·", "◐", "●"];
+const cls = ["none", "desc", "num"];
+const label = ["not described in the report", "described without numbers", "numbers given"];
+
+STAGES.forEach(([id, name, def]) => {
+  const th = document.createElement("th");
+  th.scope = "col";
+  const b = document.createElement("button");
+  b.type = "button";
+  b.textContent = id + " " + name;
+  b.addEventListener("click", () => showStage(id));
+  th.appendChild(b);
+  headRow.appendChild(th);
+  const li = document.createElement("li");
+  li.innerHTML = "<strong>" + id + " " + name + ".</strong> " + def;
+  $("#stagelist").appendChild(li);
+});
+
+let selected = null;
+ROWS.forEach((row, ri) => {
+  const tr = document.createElement("tr");
+  tr.dataset.tags = row.tags.join(" ");
+  const th = document.createElement("th");
+  th.scope = "row";
+  th.innerHTML = row.name + "<small>" + row.sub + "</small>";
+  tr.appendChild(th);
+  STAGES.forEach(([id, name]) => {
+    const td = document.createElement("td");
+    const c = row.cells[id];
+    const st = c ? c[0] : 0;
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "cell " + cls[st];
+    btn.textContent = glyph[st];
+    btn.setAttribute("aria-label", row.name + ", " + name + ": " + label[st]);
+    const show = () => showCell(row, id, name, c, btn);
+    btn.addEventListener("click", show);
+    btn.addEventListener("focus", show);
+    btn.addEventListener("mouseenter", show);
+    td.appendChild(btn);
+    tr.appendChild(td);
+  });
+  tbody.appendChild(tr);
+});
+
+function showCell(row, id, name, c, btn) {
+  if (selected) selected.classList.remove("sel");
+  selected = btn; btn.classList.add("sel");
+  const st = c ? c[0] : 0;
+  $("#d-title").innerHTML = row.name + " · " + id + " " + name + '<span class="tag">' + label[st] + "</span>";
+  $("#d-body").textContent = c ? c[1] : "The report was checked for this position and does not describe teacher data here. This is a disclosure gap, not evidence that the stage was absent.";
+  $("#d-where").textContent = c ? "Locus: " + row.sub + ", " + c[2] : "Checked: " + row.sub;
+}
+function showStage(id) {
+  const s = STAGES.find((x) => x[0] === id);
+  const users = ROWS.filter((r) => r.cells[id]).map((r) => r.name + (r.cells[id][0] === 2 ? " (●)" : " (◐)"));
+  $("#d-title").textContent = s[0] + " " + s[1];
+  $("#d-body").textContent = s[2];
+  $("#d-where").textContent = "Reports describing this position: " + (users.length ? users.join(", ") : "none in this map") + ".";
+}
+document.querySelectorAll(".seg button").forEach((b) => {
+  b.addEventListener("click", () => {
+    document.querySelectorAll(".seg button").forEach((x) => x.setAttribute("aria-pressed", String(x === b)));
+    const f = b.dataset.f;
+    tbody.querySelectorAll("tr").forEach((tr) => {
+      const on = f === "all" || tr.dataset.tags.split(" ").includes(f);
+      tr.classList.toggle("dim", !on);
+    });
+  });
+});
+</script>
+</body>
+</html>

@@ -5,76 +5,59 @@ phase: read
 excerpt_of: wiki/raw-data/llm-training/model-reports/tulu-3.1.md
 source_url: https://huggingface.co/allenai/Llama-3.1-Tulu-3.1-8B
 created_at: "2026-04-23"
+revised: "2026-09-15 (generality revision; rewritten from the model card and open-instruct docs/tulu3.md@098424c)"
 ---
 
-# Excerpt: Tülu 3 → Tülu 3.1 — a single-stage RL-algorithm swap
+# Excerpt: Tülu 3 → Tülu 3.1 (8B) — what the model card says changed
 
-**Source library:** `wiki/raw-data/llm-training/model-reports/tulu-3.1.md` (HF model-card-only release)
-**Artifact:** Isolated PPO → GRPO ablation on `allenai/Llama-3.1-Tulu-3-8B-DPO`
+**Primary sources:** Llama-3.1-Tulu-3.1-8B model card (Hugging Face README: "Version 3.1 update", "Performance", "Hyperparamters", "Learning curves", "Reproduction command"); arXiv:2411.15124v5 Table 21; open-instruct `docs/tulu3.md` at commit 098424c.
+**Library cards:** [[tulu-3.1]], [[open-instruct-allenai-recipes]], [[open-instruct-allenai-recipes-recipe]]. The previous version of this excerpt called Tülu 3.1 a "controlled public ablation" of PPO versus GRPO with unpublished hyperparameters. The card publishes the hyperparameters, and several of them differ from the Tülu 3 run, so the comparison is not controlled.
 
----
+## The card's statement
 
-## Why this source anchors ch-33
+"The new version of our Tülu model is from an improvement only in the final RL stage of training. We switched from PPO to GRPO (no reward model) and did further hyperparameter tuning to achieve substantial performance improvements across the board over the original Tülu 3 8B model."
 
-Ch-33 §2 is built on the fact that Tülu 3.1 is the cleanest public *controlled ablation* in open post-training: everything is held fixed except the final RL algorithm. Most open releases change base, data, and algorithm together; Tülu 3.1 changes one algorithmic dimension at a time. This excerpt pins what changed, what did not, and why the ablation is rare.
+- Fine-tuned from `allenai/Llama-3.1-Tulu-3-8B-DPO`; RL dataset `allenai/RLVR-GSM-MATH-IF-Mixed-Constraints` (the same dataset name as the Tülu 3 PPO command, t3 L313–322).
+- Reward model row: "None with GRPO".
 
----
+## Settings that changed between the two final RL runs
 
-## What the source explicitly says changed
+| Setting | Tülu 3 8B (PPO) | Tülu 3.1 8B (GRPO) |
+|---|---|---|
+| Algorithm; value model | PPO; initialized from an RM | GRPO; none |
+| Learning rate; schedule | 3 × 10⁻⁷; linear | 5 × 10⁻⁷; constant |
+| KL β | 0.05 | 0.01 (estimator `kl3` in the command) |
+| Samples per prompt; unique prompts per iteration | not stated as such; effective batch 224 | 16; 48 (effective batch 768) |
+| Mini-batches; update iterations K | 1; 4 | 2; 1 |
+| No-EOS penalty | −10.0 | 0.0 |
+| Episodes | Table 21: 100,000; released checkpoint "earlier than final" | planned 10,000,000; released at step 1920 = episode 1,474,560 |
+| Unchanged | response length 2,048; temperature 1.0; clip ε 0.2; γ 1.0 | same |
 
-From the source (lines 37–42):
+Sources: arXiv:2411.15124v5 Table 21 and §6.2–6.4; model card "Hyperparamters"; open-instruct `docs/tulu3.md` L313–346 and L468–547.
 
-> Allen AI says the new version comes from an improvement **only in the final RL stage of training**.
-> The final stage switched from **PPO** to **GRPO**.
-> The model card also states **no reward model** is used in that final stage.
-> Additional **hyperparameter tuning** in the RL stage produced better average results than the original 8B Tulu 3 checkpoint.
+## Reported results (model card "Performance" table, 8B)
 
-The "only change" framing is attested; it is not my inference. Ai2 chose to release this as a model-card-only update rather than a paper precisely to communicate "nothing else moved".
+| Benchmark | Tülu 3 SFT | Tülu 3 DPO | Tülu 3 | Tülu 3.1 |
+|---|---:|---:|---:|---:|
+| Avg. | 60.4 | 64.4 | 64.8 | 66.3 |
+| MMLU (0-shot CoT) | 65.9 | 68.7 | 68.2 | 69.5 |
+| TruthfulQA | 46.8 | 56.1 | 55.0 | 59.9 |
+| BBH | 67.9 | 65.8 | 66.0 | 68.9 |
+| MATH | 31.5 | 42.0 | 43.7 | 47.8 |
+| GSM8K | 76.2 | 84.3 | 87.6 | 90.0 |
+| HumanEval (pass@10) | 86.2 | 83.9 | 83.9 | 84.8 |
+| IFEval | 72.8 | 81.1 | 82.4 | 83.9 |
+| AlpacaEval 2 | 12.4 | 33.5 | 34.5 | 34.9 |
+| Safety (6-task avg.) | 93.1 | 87.2 | 85.5 | 81.2 |
 
-## What the source explicitly says stayed the same
+The DPO and Tülu 3 columns match arXiv:2411.15124v5 Table 23. The card notes that the paper was later updated with fixed evaluations for some other models.
 
-From the source (lines 44–47):
+## What can and cannot be concluded
 
-> Earlier **SFT** and **DPO** stages remain those of **Tülu 3**.
-> The model card still frames the data as a mix of **publicly available, synthetic, and human-created datasets**.
-> The associated training dataset shown in the card is **`allenai/RLVR-GSM-MATH-IF-Mixed-Constraints`**.
+- Result (single run): the Tülu 3.1 checkpoint scores 1.5 points higher on the average and 4.3 points lower on safety than Tülu 3 8B.
+- Not supported: attributing either change to GRPO. Algorithm, value model, β, learning rate and schedule, samples per prompt, EOS penalty, and training length all differ. An attribution would need runs that change one of these at a time from the same DPO checkpoint.
+- The library card [[tulu-3-1]] describes "Tülu 3.1" as a Nov 2024 refresh of the recipe on Llama 3.1 and OLMo 2 bases. The model card and the Tülu 3 technical blog do not describe such a release.
 
-So the 939K SFT mix, the ~270K DPO pool, and the base model `Llama-3.1-Tulu-3-8B-DPO` are all unchanged. Only the final RL stage's algorithm, hparams, and training set are rebuilt.
+## Used in
 
----
-
-## Why it matters
-
-From the source (lines 49–51):
-
-> Tulu 3.1 is useful because it is a **controlled public ablation** rather than a broad marketing release.
-> It also shows that the open ecosystem quickly incorporated the **GRPO / verifier-style RL** trend after DeepSeek-R1 and DeepSeekMath made it prominent.
-
-The ecosystem signal is the more durable one: PPO was the default for LLM RL from the InstructGPT era through 2023. DeepSeekMath / DeepSeek-R1 reframed GRPO (Group Relative Policy Optimization) as the cheaper alternative — no value network, advantage from group-return baselines. Tülu 3.1 is the earliest public open-recipe model to adopt GRPO in a labelled head-to-head with PPO on the *same* base, data, and DPO checkpoint. That is the ablation structure that lets the community attribute any future PPO-vs-GRPO claim.
-
----
-
-## The "3.1 as multi-base refresh" alternative framing
-
-The companion source [[tulu-3-1]] (note the hyphenated slug — a different file) gives a *second* meaning of "3.1": the Ai2 blog uses "Tülu 3.1" to mean the multi-base refresh that re-runs the Tülu 3 recipe on Llama 3.1 AND OLMo 2 bases. Both framings are current; both are documented. Ch-33 §2.1 uses the **HF-card narrative** because it is the one that names the algorithmic change; §2.2/§2.3 integrate the multi-base framing where relevant.
-
----
-
-## What ch-33 keeps from this source
-
-- The "only the final RL stage changed" claim (§2.1).
-- PPO → GRPO as the specific swap (§2.1).
-- The no-RM inheritance (§2.1).
-- The hparam-retuned-but-not-published note (§2.3 delta table).
-- The `allenai/RLVR-GSM-MATH-IF-Mixed-Constraints` training-set name (§2.3 delta table).
-- The "controlled ablation" framing (§2.2).
-
----
-
-## Connections
-
-- **ch-33 §2** — where this excerpt is cited.
-- **[[grpo]]** — the algorithmic lens for the swap; the cheaper-than-PPO value-network-free variant.
-- **[[deepseek-r1]]** — the nearby public family that normalized GRPO-style reasoning RL.
-- **[[tulu-3]]** — the full underlying recipe; everything except the final stage is inherited from here.
-- **ch-34 (OLMo 2/3)** — OLMo 2 applies the Tülu 3 recipe directly; OLMo 3 builds on top of it.
+ch-33 §4.4, Common mistakes table, Recipe.

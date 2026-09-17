@@ -2,274 +2,228 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>ch-41 — Reward-model overoptimization and multi-attribute calibration</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ch-41 — Over-optimization functional forms and Bradley–Terry gradients</title>
 <style>
-  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-         background: #fafafa; color: #222; margin: 0; padding: 24px; }
-  h1 { font-size: 20px; margin: 0 0 4px; }
-  h2 { font-size: 15px; margin: 24px 0 8px; color: #444; }
-  .sub { font-size: 13px; color: #666; margin-bottom: 16px; }
-  .panel { background: #fff; border: 1px solid #ddd; border-radius: 6px; padding: 16px; margin-bottom: 20px; }
-  .controls { display: flex; flex-wrap: wrap; gap: 18px; margin-bottom: 12px; }
-  .control { display: flex; flex-direction: column; font-size: 12px; min-width: 180px; }
-  .control label { color: #555; margin-bottom: 4px; }
-  .control input[type=range] { width: 180px; }
-  .control .v { font-family: ui-monospace, "SF Mono", monospace; color: #0a6; }
-  canvas { display: block; border: 1px solid #eee; background: #fff; }
-  .legend { font-size: 12px; margin-top: 8px; }
-  .legend span { display: inline-block; width: 12px; height: 12px; vertical-align: middle; margin: 0 4px 0 10px; border-radius: 2px; }
-  .note { font-size: 12px; color: #666; margin-top: 10px; line-height: 1.45; }
-  .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
-  @media (max-width: 900px) { .grid { grid-template-columns: 1fr; } }
-  code { font-family: ui-monospace, "SF Mono", monospace; background: #f3f3f3; padding: 1px 4px; border-radius: 3px; }
+  :root {
+    --bg: #fafaf8; --panel: #ffffff; --ink: #1f2328; --muted: #5b6470; --rule: #d9dde3;
+    --gold: #1f7a4d; --rl: #8a4fbf; --peak: #c2410c; --grid: #eceef1; --accent: #1d5fa8;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #16181c; --panel: #1e2126; --ink: #e6e8eb; --muted: #a0a8b3; --rule: #353a42;
+      --gold: #4cc38a; --rl: #b98ae6; --peak: #f0883e; --grid: #2a2e35; --accent: #6aa6e8;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #16181c; --panel: #1e2126; --ink: #e6e8eb; --muted: #a0a8b3; --rule: #353a42;
+    --gold: #4cc38a; --rl: #b98ae6; --peak: #f0883e; --grid: #2a2e35; --accent: #6aa6e8;
+  }
+  body { margin: 0; background: var(--bg); color: var(--ink);
+         font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+  main { max-width: 980px; margin: 0 auto; padding-block: 20px 40px; padding-inline: 16px; }
+  h1 { font-size: 19px; margin: 0 0 4px; }
+  h2 { font-size: 15px; margin: 0 0 6px; }
+  p.sub { color: var(--muted); margin: 0 0 16px; }
+  .panel { background: var(--panel); border: 1px solid var(--rule); border-radius: 8px; padding: 16px; margin-bottom: 18px; }
+  .controls { display: flex; flex-wrap: wrap; gap: 14px 22px; margin: 8px 0 12px; }
+  .ctl { display: flex; flex-direction: column; min-width: 150px; flex: 1 1 150px; }
+  .ctl label { font-size: 12px; color: var(--muted); }
+  .ctl output { font-family: ui-monospace, "SF Mono", Menlo, monospace; color: var(--ink); }
+  input[type=range] { width: 100%; }
+  select, button { font: inherit; color: var(--ink); background: var(--panel); border: 1px solid var(--rule); border-radius: 6px; padding: 3px 8px; }
+  button { cursor: pointer; }
+  .row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+  svg { width: 100%; height: auto; display: block; }
+  .readout { font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 12.5px; background: var(--bg); border: 1px solid var(--rule); border-radius: 6px; padding: 8px 10px; margin-top: 10px; white-space: pre-wrap; overflow-x: auto; }
+  .cap { font-size: 12.5px; color: var(--muted); margin-top: 10px; }
+  .axis text, .lbl { fill: var(--muted); font-size: 11px; }
+  .gridline { stroke: var(--grid); }
+  .axisline { stroke: var(--muted); }
 </style>
 </head>
 <body>
+<main>
+<h1>Over-optimization functional forms and Bradley–Terry gradients</h1>
+<p class="sub">Companion to ch-41 read.md §2 (panel A) and §1 plus "Negative samples and negative feedback" (panel B).</p>
 
-<h1>Reward-model overoptimization and multi-attribute calibration</h1>
-<div class="sub">ch-41 companion. Panel A sweeps Gao 2022's inverted-U over RM quality and ensemble size. Panel B contrasts scalar-BT calibration against a 5-dim HelpSteer2 head.</div>
-
-<div class="grid">
-
-<div class="panel">
-  <h2>Panel A — Gold reward vs KL budget</h2>
-  <div class="sub">Horizontal axis <code>d = sqrt(KL(π‖π_ref))</code>. Proxy grows monotonically; gold follows an inverted-U. Larger / ensembled RMs shift the peak right, but do not eliminate it.</div>
+<section class="panel" id="panelA">
+  <h2>A. Gold score versus √KL for a proxy reward model</h2>
   <div class="controls">
-    <div class="control">
-      <label>RM quality α <span class="v" id="vAlpha">1.60</span></label>
-      <input type="range" id="alpha" min="0.6" max="2.4" step="0.01" value="1.6">
-    </div>
-    <div class="control">
-      <label>RM error β <span class="v" id="vBeta">0.24</span></label>
-      <input type="range" id="beta" min="0.06" max="0.60" step="0.01" value="0.24">
-    </div>
-    <div class="control">
-      <label>Ensemble K <span class="v" id="vK">1</span></label>
-      <input type="range" id="K" min="1" max="10" step="1" value="1">
-    </div>
-    <div class="control">
-      <label>Mode</label>
-      <select id="mode">
-        <option value="ppo">PPO  (d·(α − β·log d))</option>
-        <option value="bon">BoN  (d·(α − β·d))</option>
+    <div class="ctl"><label for="form">Functional form</label>
+      <select id="form">
+        <option value="bon">best-of-n: R(d) = d(α − βd)</option>
+        <option value="rl">RL: R(d) = d(α − β log d)</option>
       </select>
     </div>
+    <div class="ctl"><label for="alpha">α <output id="alphaV"></output></label><input id="alpha" type="range" min="0.20" max="1.00" step="0.01" value="0.50"></div>
+    <div class="ctl"><label for="beta">β <output id="betaV"></output></label><input id="beta" type="range" min="0.05" max="0.25" step="0.005" value="0.12"></div>
+    <div class="ctl"><label for="logn">best-of-n sample count n <output id="nV"></output></label><input id="logn" type="range" min="0.30" max="5.00" step="0.01" value="3.00"></div>
   </div>
-  <canvas id="cA" width="520" height="340"></canvas>
-  <div class="legend">
-    <span style="background:#4a7"></span>gold reward (true)
-    <span style="background:#888"></span>proxy reward (RM)
-    <span style="background:#c64"></span>peak d*
+  <div class="row">
+    <button type="button" data-a="0.50" data-b="0.12" data-f="bon">Illustrative smaller proxy RM (BoN)</button>
+    <button type="button" data-a="0.65" data-b="0.09" data-f="bon">Illustrative larger proxy RM (BoN)</button>
+    <button type="button" data-a="0.50" data-b="0.15" data-f="rl">RL, α = 0.50, β = 0.15</button>
+    <button type="button" data-a="0.50" data-b="0.12" data-f="rl">RL, α = 0.50, β = 0.12</button>
   </div>
-  <div class="note" id="noteA"></div>
-</div>
+  <svg id="svgA" viewBox="0 0 640 330" role="img" aria-label="Gold score as a function of d"></svg>
+  <div class="readout" id="readA"></div>
+  <p class="cap">Functional forms, the best-of-n KL formula KL = log n − (n−1)/n, and the definition d = √KL are from Gao, Schulman, Hilton (2022), arXiv:2210.10760 §1–§2 (source card: reward-model-overoptimization). The peak formulas d* = α/(2β) and d* = exp(α/β − 1) are derived by setting dR/dd = 0. The paper plots α and β but does not print them; all coefficient values here are user-set and illustrative. The paper's Fig. 3 shows α_bon increasing and β_bon, β_RL decreasing as proxy RM size grows, with α_RL held constant. The RL form likely does not hold near d = 0 (paper footnote 1), and RL and best-of-n use KL at different rates, so the two curves are not comparable at equal d (§3.5).</p>
+</section>
 
-<div class="panel">
-  <h2>Panel B — Scalar vs 5-dim RM calibration</h2>
-  <div class="sub">Reliability bars per dimension: predicted preference probability vs empirical win-rate, bucketed. A scalar BT RM mashes all axes into one score; a HelpSteer2 head keeps them separable.</div>
+<section class="panel" id="panelB">
+  <h2>B. Bradley–Terry loss and gradient for one preference pair</h2>
   <div class="controls">
-    <div class="control">
-      <label>Scenario</label>
-      <select id="scenario">
-        <option value="base">Baseline (Likert mid)</option>
-        <option value="verbose">Verbose-biased policy</option>
-        <option value="short">Terse policy</option>
-        <option value="hack">Reward-hacked policy</option>
-      </select>
-    </div>
-    <div class="control">
-      <label>Compose weights w_k</label>
-      <div style="font-size:11px; color:#666;">Helpful=0.35 · Correct=0.35 · Coherence=0.15 · Complexity=0.10 · Verbosity=0.05</div>
-    </div>
+    <div class="ctl"><label for="delta">score gap Δ = r(y_w) − r(y_l) <output id="deltaV"></output></label><input id="delta" type="range" min="-4" max="4" step="0.05" value="0.8"></div>
   </div>
-  <canvas id="cB" width="520" height="340"></canvas>
-  <div class="legend">
-    <span style="background:#49a"></span>5-dim HelpSteer2
-    <span style="background:#c84"></span>Scalar BT (aggregate)
-    <span style="background:#ccc"></span>ideal (predicted = empirical)
+  <div class="row">
+    <button type="button" data-d="3">easy negative (Δ = 3)</button>
+    <button type="button" data-d="0.8">§1.4 example (Δ = 0.8)</button>
+    <button type="button" data-d="0.1">near-miss negative (Δ = 0.1)</button>
+    <button type="button" data-d="-1">mis-ordered pair (Δ = −1)</button>
   </div>
-  <div class="note" id="noteB"></div>
-</div>
-
-</div>
+  <svg id="svgB" viewBox="0 0 640 300" role="img" aria-label="Bradley-Terry loss and gradient versus score gap"></svg>
+  <div class="readout" id="readB"></div>
+  <p class="cap">Loss L = −log σ(Δ) (DPO arXiv:2305.18290 §3 Eq. 2; source card: bradley-terry-rm). The gradient on the rejected score is ∂L/∂r(y_l) = σ(−Δ) = 1 − σ(Δ), and the gradient on the chosen score has the same magnitude with opposite sign. Pairs the reward model already separates (large Δ) contribute little gradient; near-miss pairs contribute most of it, which also makes a mislabelled near-miss pair the most costly. Adding the same constant to both scores leaves Δ, the loss, and the gradient unchanged.</p>
+</section>
+</main>
 
 <script>
-// ---------- Panel A ----------
-const cA = document.getElementById('cA'), gA = cA.getContext('2d');
-const vAlpha = document.getElementById('vAlpha'),
-      vBeta  = document.getElementById('vBeta'),
-      vK     = document.getElementById('vK'),
-      noteA  = document.getElementById('noteA');
-
-function drawPanelA() {
-  const alpha0 = parseFloat(document.getElementById('alpha').value);
-  const beta0  = parseFloat(document.getElementById('beta').value);
-  const K      = parseInt(document.getElementById('K').value);
-  const mode   = document.getElementById('mode').value;
-  vAlpha.textContent = alpha0.toFixed(2);
-  vBeta.textContent  = beta0.toFixed(2);
-  vK.textContent     = K;
-
-  // Ensembling shrinks RM error variance by ~1/K; the effective beta scales roughly like 1/sqrt(K).
-  // (Coste 2023: peak shifts right with K; gain saturates past K=5.)
-  const beta = beta0 / Math.sqrt(K);
-  const alpha = alpha0;
-
-  const W = cA.width, H = cA.height, pad = 38;
-  gA.clearRect(0,0,W,H);
-
-  gA.strokeStyle = '#ccc'; gA.lineWidth = 1;
-  gA.beginPath(); gA.moveTo(pad, H-pad); gA.lineTo(W-10, H-pad); gA.moveTo(pad, H-pad); gA.lineTo(pad, 10); gA.stroke();
-  gA.fillStyle = '#555'; gA.font = '11px sans-serif';
-  gA.fillText('d = sqrt(KL(π‖π_ref))', W-150, H-10);
-  gA.save(); gA.translate(12, 110); gA.rotate(-Math.PI/2); gA.fillText('reward (arb. units)', 0, 0); gA.restore();
-
-  const dMax = 10, yMax = 6.0, yMin = -3.0;
-  const x = d => pad + (d/dMax) * (W - pad - 12);
-  const y = v => (H-pad) - ((v - yMin)/(yMax - yMin)) * (H - pad - 12);
-
-  gA.fillStyle = '#999'; gA.font = '10px sans-serif';
-  for (let dt = 0; dt <= dMax; dt += 2) {
-    gA.fillText(dt.toString(), x(dt)-3, H-pad+12);
-    gA.strokeStyle = '#f0f0f0'; gA.beginPath(); gA.moveTo(x(dt), H-pad); gA.lineTo(x(dt), 12); gA.stroke();
+(function () {
+  var NS = 'http://www.w3.org/2000/svg';
+  function css(v) { return getComputedStyle(document.documentElement).getPropertyValue(v).trim(); }
+  function el(tag, attrs, parent) {
+    var e = document.createElementNS(NS, tag);
+    for (var k in attrs) e.setAttribute(k, attrs[k]);
+    if (parent) parent.appendChild(e);
+    return e;
   }
-  for (let yt = -3; yt <= 6; yt += 1) {
-    gA.fillText(yt.toString(), 6, y(yt)+3);
-    gA.strokeStyle = yt===0 ? '#ccc' : '#f5f5f5'; gA.beginPath(); gA.moveTo(pad, y(yt)); gA.lineTo(W-10, y(yt)); gA.stroke();
+  function text(parent, x, y, s, anchor, cls) {
+    var t = el('text', { x: x, y: y, 'text-anchor': anchor || 'middle', 'class': cls || 'lbl' }, parent);
+    t.textContent = s; return t;
   }
+  function f3(x) { return (Math.round(x * 1000) / 1000).toFixed(3); }
+  function f2(x) { return (Math.round(x * 100) / 100).toFixed(2); }
 
-  function gold(d) {  // Gao 2022 closed forms
+  // ---------- Panel A ----------
+  var form = document.getElementById('form'), alpha = document.getElementById('alpha'),
+      beta = document.getElementById('beta'), logn = document.getElementById('logn');
+  var svgA = document.getElementById('svgA'), readA = document.getElementById('readA');
+
+  function R(d, a, b, f) {
     if (d <= 0) return 0;
-    if (mode === 'bon') return d * (alpha - beta * d);
-    return d * (alpha - beta * Math.log(Math.max(d, 1e-3)));
+    return f === 'bon' ? d * (a - b * d) : d * (a - b * Math.log(d));
   }
-  function proxy(d) { return d * alpha - 0.05 * d + beta * d * d * 0.4 - 0.2; }
-
-  gA.strokeStyle = '#888'; gA.lineWidth = 1.5; gA.setLineDash([4,3]); gA.beginPath();
-  for (let d = 0; d <= dMax; d += 0.1) {
-    const px = x(d), py = y(proxy(d));
-    if (d === 0) gA.moveTo(px, py); else gA.lineTo(px, py);
+  function drawA() {
+    var a = +alpha.value, b = +beta.value, f = form.value;
+    var n = Math.round(Math.pow(10, +logn.value));
+    if (n < 2) n = 2;
+    document.getElementById('alphaV').textContent = f2(a);
+    document.getElementById('betaV').textContent = f3(b);
+    document.getElementById('nV').textContent = n.toLocaleString('en-US');
+    var dStar = f === 'bon' ? a / (2 * b) : Math.exp(a / b - 1);
+    var rStar = R(dStar, a, b, f);
+    var dMax = Math.max(4, Math.min(f === 'bon' ? 2.2 * dStar : 2.6 * dStar, 80));
+    var klN = Math.log(n) - (n - 1) / n, dN = Math.sqrt(klN);
+    var ys = [], i, d, N = 240, yMin = 0, yMax = 0;
+    for (i = 0; i <= N; i++) { d = dMax * i / N; var y = R(d, a, b, f); ys.push([d, y]); yMin = Math.min(yMin, y); yMax = Math.max(yMax, y); }
+    yMin = Math.max(yMin, -1.2 * Math.max(rStar, 0.2)); yMax = Math.max(yMax, 0.2) * 1.12;
+    while (svgA.firstChild) svgA.removeChild(svgA.firstChild);
+    var L = 56, T = 16, W = 560, H = 262;
+    function X(v) { return L + W * v / dMax; }
+    function Y(v) { return T + H * (yMax - v) / (yMax - yMin); }
+    var g = el('g', { 'class': 'axis' }, svgA);
+    for (i = 0; i <= 5; i++) {
+      var xv = dMax * i / 5; el('line', { x1: X(xv), x2: X(xv), y1: T, y2: T + H, 'class': 'gridline' }, g);
+      text(g, X(xv), T + H + 16, f2(xv));
+      var yv = yMin + (yMax - yMin) * i / 5; el('line', { x1: L, x2: L + W, y1: Y(yv), y2: Y(yv), 'class': 'gridline' }, g);
+      text(g, L - 6, Y(yv) + 4, f2(yv), 'end');
+    }
+    el('line', { x1: L, x2: L + W, y1: Y(0), y2: Y(0), 'class': 'axisline' }, g);
+    text(g, L + W / 2, T + H + 32, 'd = √KL(π ‖ π_init)');
+    var yl = text(g, 14, T + H / 2, 'gold score R(d)'); yl.setAttribute('transform', 'rotate(-90 14 ' + (T + H / 2) + ')');
+    var path = '', started = false;
+    ys.forEach(function (p) {
+      if (p[1] < yMin) { started = false; return; }
+      path += (started ? 'L' : 'M') + X(p[0]).toFixed(1) + ' ' + Y(p[1]).toFixed(1) + ' '; started = true;
+    });
+    el('path', { d: path, fill: 'none', stroke: f === 'bon' ? css('--gold') : css('--rl'), 'stroke-width': 2.4 }, svgA);
+    if (dStar <= dMax) {
+      el('line', { x1: X(dStar), x2: X(dStar), y1: T, y2: T + H, stroke: css('--peak'), 'stroke-dasharray': '4 4', 'stroke-width': 1.4 }, svgA);
+      el('circle', { cx: X(dStar), cy: Y(rStar), r: 4.5, fill: css('--peak') }, svgA);
+      text(svgA, X(dStar) + 6, T + 12, 'peak d* = ' + f2(dStar), 'start').setAttribute('fill', css('--peak'));
+    }
+    if (f === 'bon' && dN <= dMax) {
+      var yN = R(dN, a, b, f);
+      el('line', { x1: X(dN), x2: X(dN), y1: Math.max(T, Y(yN) - 10), y2: T + H, stroke: css('--accent'), 'stroke-width': 1.4 }, svgA);
+      text(svgA, X(dN) + 4, T + H - 8, 'n = ' + n.toLocaleString('en-US'), 'start').setAttribute('fill', css('--accent'));
+    }
+    var lines = [];
+    if (f === 'bon') {
+      lines.push('d* = α / (2β) = ' + f2(a) + ' / (2 × ' + f3(b) + ') = ' + f2(dStar) + '   KL at peak = d*² = ' + f2(dStar * dStar) + ' nats   R(d*) = ' + f3(rStar));
+      lines.push('n = ' + n.toLocaleString('en-US') + ':  KL = ln n − (n−1)/n = ' + f3(klN) + ' nats,  d = ' + f3(dN) + ',  R(d) = ' + f3(R(dN, a, b, f)));
+      var nPeak = Math.exp(dStar * dStar + 1);
+      lines.push('sample count whose KL equals the peak KL: about e^(d*² + 1) ≈ ' + (nPeak < 1e9 ? Math.round(nPeak).toLocaleString('en-US') : nPeak.toExponential(2)) + ' (for large n, (n−1)/n ≈ 1)');
+    } else {
+      lines.push('d* = exp(α/β − 1) = exp(' + f2(a) + '/' + f3(b) + ' − 1) = ' + f2(dStar) + '   KL at peak = ' + f2(dStar * dStar) + ' nats   R(d*) = ' + f3(rStar));
+      lines.push('the RL peak depends exponentially on α/β: a 0.01 change in β moves d* to ' + f2(Math.exp(a / (b + 0.01) - 1)) + ' (β + 0.01) or ' + f2(Math.exp(a / Math.max(b - 0.01, 0.01) - 1)) + ' (β − 0.01)');
+      lines.push('best-of-n marker is hidden for the RL form; RL spends KL at a different rate (Gao §3.5).');
+    }
+    readA.textContent = lines.join('\n');
   }
-  gA.stroke(); gA.setLineDash([]);
-
-  gA.strokeStyle = '#4a7'; gA.lineWidth = 2.2; gA.beginPath();
-  let peakD = 0, peakR = -Infinity;
-  for (let d = 0; d <= dMax; d += 0.05) {
-    const r = gold(d);
-    if (r > peakR) { peakR = r; peakD = d; }
-    const px = x(d), py = y(r);
-    if (d === 0) gA.moveTo(px, py); else gA.lineTo(px, py);
-  }
-  gA.stroke();
-
-  // peak marker
-  gA.fillStyle = '#c64';
-  gA.beginPath(); gA.arc(x(peakD), y(peakR), 5, 0, Math.PI*2); gA.fill();
-  gA.fillStyle = '#c64'; gA.font = '11px ui-monospace, monospace';
-  gA.fillText(`d* = ${peakD.toFixed(2)},  R_gold* = ${peakR.toFixed(2)}`,
-              x(peakD)+8, y(peakR)-8);
-
-  // explanation note
-  const effBeta = beta.toFixed(3);
-  const peakForm = mode === 'bon'
-    ? `d* = α/(2β) = ${(alpha/(2*beta)).toFixed(2)}`
-    : `d* = exp(α/β − 1) / e  ≈ ${Math.exp(alpha/beta - 1).toFixed(2)}`;
-  noteA.innerHTML =
-    `Mode: <code>${mode.toUpperCase()}</code>. ` +
-    `Ensemble K=${K} shrinks effective β to ${effBeta} (variance ↓ ~1/K; ` +
-    `Coste 2023 shows peak shifts from d≈3 single-RM baseline to d≈5–8 at K=3–5). ` +
-    `Closed-form peak: ${peakForm}. ` +
-    `Past d*, proxy keeps climbing (dashed) while gold falls — the Goodhart gap.`;
-}
-
-['alpha','beta','K','mode'].forEach(id =>
-  document.getElementById(id).addEventListener('input', drawPanelA));
-drawPanelA();
-
-// ---------- Panel B ----------
-const cB = document.getElementById('cB'), gB = cB.getContext('2d');
-const noteB = document.getElementById('noteB');
-
-// Attested HelpSteer2 dimensions (Nemotron-4-340B technical report).
-const DIMS = ['Helpfulness','Correctness','Coherence','Complexity','Verbosity'];
-const WK   = [0.35, 0.35, 0.15, 0.10, 0.05];
-
-// Per-scenario calibration gap: empirical minus predicted, per dimension,
-// for 5-dim RM vs scalar aggregate. Stylized but attribution matches the text:
-// verbose policies blow up Verbosity gap for scalar RM because it cannot
-// separate length from helpfulness. Reward-hacked policies blow up Correctness
-// gap because the scalar RM has been gamed on surface features.
-const SCENARIOS = {
-  base:    { five:[0.02, 0.03, 0.02, 0.04, 0.03], scalar:[0.08, 0.09, 0.06, 0.07, 0.18] },
-  verbose: { five:[0.03, 0.04, 0.03, 0.05, 0.05], scalar:[0.16, 0.18, 0.11, 0.14, 0.42] },
-  short:   { five:[0.04, 0.03, 0.02, 0.05, 0.04], scalar:[0.22, 0.14, 0.08, 0.12, 0.34] },
-  hack:    { five:[0.05, 0.06, 0.04, 0.06, 0.05], scalar:[0.34, 0.44, 0.18, 0.26, 0.28] }
-};
-
-function drawPanelB() {
-  const key = document.getElementById('scenario').value;
-  const sc = SCENARIOS[key];
-  const W = cB.width, H = cB.height, pad = 48;
-  gB.clearRect(0,0,W,H);
-
-  gB.strokeStyle = '#ccc'; gB.beginPath();
-  gB.moveTo(pad, H-pad); gB.lineTo(W-10, H-pad); gB.moveTo(pad, H-pad); gB.lineTo(pad, 16); gB.stroke();
-  gB.fillStyle = '#555'; gB.font = '11px sans-serif';
-  gB.fillText('HelpSteer2 dimension', W-150, H-12);
-  gB.save(); gB.translate(12, 170); gB.rotate(-Math.PI/2); gB.fillText('|empirical − predicted|  (lower = better calibrated)', 0, 0); gB.restore();
-
-  const maxGap = 0.50;
-  const plotH = H - pad - 20;
-  const groupW = (W - pad - 20) / DIMS.length;
-  const barW = (groupW - 8) / 2;
-
-  // y grid + ticks
-  gB.strokeStyle = '#f2f2f2';
-  for (let v = 0; v <= maxGap; v += 0.1) {
-    const y = (H-pad) - (v/maxGap) * plotH;
-    gB.beginPath(); gB.moveTo(pad, y); gB.lineTo(W-10, y); gB.stroke();
-    gB.fillStyle = '#999'; gB.font = '10px sans-serif';
-    gB.fillText(v.toFixed(1), 18, y+3);
-  }
-
-  // bars
-  DIMS.forEach((d, i) => {
-    const cx = pad + 12 + i * groupW;
-    const five = sc.five[i], sca = sc.scalar[i];
-    const fiveH = (five/maxGap) * plotH, scaH = (sca/maxGap) * plotH;
-    // 5-dim bar
-    gB.fillStyle = '#49a';
-    gB.fillRect(cx, (H-pad) - fiveH, barW, fiveH);
-    // scalar bar
-    gB.fillStyle = '#c84';
-    gB.fillRect(cx + barW + 4, (H-pad) - scaH, barW, scaH);
-    // value labels
-    gB.fillStyle = '#333'; gB.font = '10px ui-monospace, monospace';
-    gB.fillText(five.toFixed(2), cx-2, (H-pad) - fiveH - 4);
-    gB.fillText(sca.toFixed(2),  cx + barW + 2, (H-pad) - scaH - 4);
-    // dim label
-    gB.fillStyle = '#444'; gB.font = '11px sans-serif';
-    gB.fillText(d, cx - 4, H-pad+14);
-    gB.fillStyle = '#888'; gB.font = '10px sans-serif';
-    gB.fillText('w='+WK[i].toFixed(2), cx + 8, H-pad+26);
+  [form, alpha, beta, logn].forEach(function (x) { x.addEventListener('input', drawA); });
+  document.querySelectorAll('#panelA button').forEach(function (btn) {
+    btn.addEventListener('click', function () {
+      alpha.value = btn.getAttribute('data-a'); beta.value = btn.getAttribute('data-b'); form.value = btn.getAttribute('data-f'); drawA();
+    });
   });
 
-  // per-scenario caption
-  const caption = {
-    base:    'Both RMs land near the diagonal — scalar is only marginally worse on Verbosity.',
-    verbose: 'Scalar RM eats length as a free feature — Verbosity gap blows to 0.42 while the 5-dim head stays flat at 0.05.',
-    short:   'Terse policy flips the story: scalar RM underestimates Helpfulness because it conflated length with quality during training.',
-    hack:    'Reward-hacked policy: scalar RM is gamed on surface features; 5-dim separates Correctness from Coherence so Helpfulness composition stays calibrated.'
-  }[key];
-  noteB.innerHTML =
-    `<b>Scenario:</b> ${key}. ${caption} ` +
-    `The 5-dim head (<code>r_compose = Σ w_k · r_k</code>) lets you reweight at RL time without retraining ` +
-    `the RM — the Nemotron-4 / HelpSteer2 compositional pattern.`;
-}
+  // ---------- Panel B ----------
+  var delta = document.getElementById('delta'), svgB = document.getElementById('svgB'), readB = document.getElementById('readB');
+  function sig(z) { return 1 / (1 + Math.exp(-z)); }
+  function drawB() {
+    var D = +delta.value;
+    document.getElementById('deltaV').textContent = f2(D);
+    while (svgB.firstChild) svgB.removeChild(svgB.firstChild);
+    var L = 56, T = 14, W = 560, H = 230, xMin = -4, xMax = 4, yMax = 4.2;
+    function X(v) { return L + W * (v - xMin) / (xMax - xMin); }
+    function Y(v) { return T + H * (yMax - v) / yMax; }
+    var g = el('g', { 'class': 'axis' }, svgB), i;
+    for (i = -4; i <= 4; i++) { el('line', { x1: X(i), x2: X(i), y1: T, y2: T + H, 'class': 'gridline' }, g); text(g, X(i), T + H + 16, String(i)); }
+    for (i = 0; i <= 4; i++) { el('line', { x1: L, x2: L + W, y1: Y(i), y2: Y(i), 'class': 'gridline' }, g); text(g, L - 6, Y(i) + 4, String(i), 'end'); }
+    text(g, L + W / 2, T + H + 32, 'Δ = r(y_w) − r(y_l)');
+    var pl = '', pg = '', v;
+    for (i = 0; i <= 320; i++) {
+      v = xMin + (xMax - xMin) * i / 320;
+      var loss = -Math.log(sig(v)), grad = sig(-v);
+      pl += (i ? 'L' : 'M') + X(v).toFixed(1) + ' ' + Y(Math.min(loss, yMax)).toFixed(1) + ' ';
+      pg += (i ? 'L' : 'M') + X(v).toFixed(1) + ' ' + Y(grad).toFixed(1) + ' ';
+    }
+    el('path', { d: pl, fill: 'none', stroke: css('--accent'), 'stroke-width': 2.4 }, svgB);
+    el('path', { d: pg, fill: 'none', stroke: css('--peak'), 'stroke-width': 2.4, 'stroke-dasharray': '6 4' }, svgB);
+    var lossD = -Math.log(sig(D)), gradD = sig(-D);
+    el('line', { x1: X(D), x2: X(D), y1: T, y2: T + H, stroke: css('--muted'), 'stroke-width': 1 }, svgB);
+    el('circle', { cx: X(D), cy: Y(Math.min(lossD, yMax)), r: 4.5, fill: css('--accent') }, svgB);
+    el('circle', { cx: X(D), cy: Y(gradD), r: 4.5, fill: css('--peak') }, svgB);
+    text(svgB, L + W - 4, T + 14, 'solid: loss −log σ(Δ)', 'end').setAttribute('fill', css('--accent'));
+    text(svgB, L + W - 4, T + 30, 'dashed: |gradient| σ(−Δ)', 'end').setAttribute('fill', css('--peak'));
+    readB.textContent =
+      'σ(Δ) = ' + f3(sig(D)) + '   loss = −ln σ(Δ) = ' + f3(lossD) + '\n' +
+      '∂L/∂r(y_l) = σ(−Δ) = ' + f3(gradD) + '   ∂L/∂r(y_w) = −' + f3(gradD) + '\n' +
+      'ratio to an easy negative at Δ = 3 (σ(−3) = 0.047): ' + f2(gradD / sig(-3)) + '×';
+  }
+  delta.addEventListener('input', drawB);
+  document.querySelectorAll('#panelB button').forEach(function (btn) {
+    btn.addEventListener('click', function () { delta.value = btn.getAttribute('data-d'); drawB(); });
+  });
 
-document.getElementById('scenario').addEventListener('change', drawPanelB);
-drawPanelB();
+  function drawAll() { drawA(); drawB(); }
+  drawAll();
+  if (window.matchMedia) {
+    var mq = window.matchMedia('(prefers-color-scheme: dark)');
+    if (mq.addEventListener) mq.addEventListener('change', drawAll);
+  }
+})();
 </script>
-
 </body>
 </html>

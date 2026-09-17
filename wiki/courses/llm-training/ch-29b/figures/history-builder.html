@@ -1,0 +1,143 @@
+<!-- figure for ch-29b read.md §3 (evidence-injection histories). Self-contained: no external scripts, styles, or images. -->
+<title>Evidence-injection history builder</title>
+<style>
+:root{--bg:#fbfaf7;--fg:#1d1d1b;--muted:#5d5d58;--line:#d8d5cc;--card:#ffffff;
+  --ev:#2f6fb0;--up:#b3541e;--sg:#9aa5b1;--uc:#b9c2a6;--sim:#d9cfbd;--warn:#8a1c1c;--ok:#2d6a3e}
+@media (prefers-color-scheme: dark){:root{--bg:#171715;--fg:#ecebe6;--muted:#a8a69e;--line:#3a3934;--card:#22221f;
+  --ev:#6aa6e0;--up:#e38b55;--sg:#5b6570;--uc:#6b7560;--sim:#6e6656;--warn:#f08a8a;--ok:#8ccf9c}}
+body{margin:0;background:var(--bg);color:var(--fg);font:14px/1.5 system-ui,-apple-system,"Segoe UI",sans-serif}
+main{max-width:960px;margin:0 auto;padding-block:20px;padding-inline:16px}
+h1{font-size:19px;margin:0 0 4px}
+p{margin:6px 0}
+.muted{color:var(--muted)}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px;margin:14px 0}
+.card{background:var(--card);border:1px solid var(--line);border-radius:8px;padding:10px 12px}
+label{display:block;font-weight:600;font-size:13px}
+input[type=range]{width:100%}
+select,button{font:inherit;padding:3px 8px;border:1px solid var(--line);border-radius:6px;background:var(--card);color:var(--fg)}
+.val{font-variant-numeric:tabular-nums;color:var(--muted);font-weight:400}
+#strip{display:flex;flex-wrap:wrap;gap:2px;margin:10px 0;padding:8px;border:1px solid var(--line);border-radius:8px;background:var(--card)}
+.s{width:12px;height:22px;border-radius:2px}
+.legend{display:flex;flex-wrap:wrap;gap:12px;font-size:12px;color:var(--muted)}
+.legend span::before{content:"";display:inline-block;width:10px;height:10px;border-radius:2px;margin-right:4px;vertical-align:-1px;background:var(--c)}
+table{border-collapse:collapse;width:100%;font-size:13px}
+td,th{border-bottom:1px solid var(--line);padding:4px 6px;text-align:left;vertical-align:top}
+td.n{text-align:right;font-variant-numeric:tabular-nums}
+.flag{margin:4px 0;padding:6px 8px;border-radius:6px;border:1px solid var(--line)}
+.flag.w{color:var(--warn)} .flag.o{color:var(--ok)}
+.deciles{display:grid;grid-template-columns:repeat(10,1fr);gap:2px;margin-top:6px}
+.deciles div{height:28px;border:1px solid var(--line);border-radius:3px;display:flex;align-items:center;justify-content:center;font-size:11px}
+.caption{font-size:12px;color:var(--muted);margin-top:14px;border-top:1px solid var(--line);padding-top:8px}
+</style>
+<main>
+<h1>Evidence-injection history builder</h1>
+<p class="muted">Build one synthetic chat history of a target length by inserting evidence sessions into filler sessions, in the way LongMemEval constructs its histories. The panel reports session counts, the filler mix, where the evidence falls by decile, and how many 5,000-token chunks a MemAgent-style reader would process.</p>
+
+<div class="grid">
+  <div class="card">
+    <label>Target history length <span class="val" id="Lv"></span></label>
+    <input id="L" type="range" min="0" max="7" step="1" value="4">
+    <label style="margin-top:8px">Mean tokens per session <span class="val" id="sv"></span></label>
+    <input id="s" type="range" min="500" max="5000" step="100" value="2300">
+  </div>
+  <div class="card">
+    <label>Evidence sessions <span class="val" id="kv"></span></label>
+    <input id="k" type="range" min="1" max="6" step="1" value="3">
+    <label style="margin-top:8px"><input id="upd" type="checkbox" checked> Last evidence session updates the first (knowledge update)</label>
+  </div>
+  <div class="card">
+    <label>Evidence placement</label>
+    <select id="pl">
+      <option value="uniform">uniform random over the history</option>
+      <option value="late">clustered in the last 20%</option>
+      <option value="early">clustered in the first 20%</option>
+    </select>
+    <p style="margin-top:8px"><button id="re">Re-sample positions</button></p>
+  </div>
+</div>
+
+<div class="legend">
+  <span style="--c:var(--ev)">evidence session</span>
+  <span style="--c:var(--up)">update session (supersedes an earlier fact)</span>
+  <span style="--c:var(--sg)">filler: ShareGPT</span>
+  <span style="--c:var(--uc)">filler: UltraChat</span>
+  <span style="--c:var(--sim)">filler: simulated, non-conflicting attribute</span>
+</div>
+<div id="strip" aria-label="sessions in chronological order"></div>
+
+<div class="grid">
+  <div class="card">
+    <table id="counts"></table>
+  </div>
+  <div class="card">
+    <strong>Evidence by decile of the history</strong>
+    <div class="deciles" id="dec"></div>
+    <div id="flags"></div>
+  </div>
+</div>
+
+<div class="caption">
+Defaults follow LongMemEval_S: about 115K tokens and about 50 sessions per question (so about 2.3K tokens per session, derived), and a filler pool of 25% ShareGPT, 25% UltraChat, and 50% simulated sessions from other non-conflicting attributes (<a href="../../../../raw-data/llm-training/papers/longmemeval.md">longmemeval</a>, §3.2, §3.4, App. A.2). The decile check follows BEAM App. B.5 Table 7, which reports that at 10M tokens 0.00% of probing questions draw evidence from the first decile (<a href="../../../../raw-data/llm-training/papers/beam-10m-conversations.md">beam-10m-conversations</a>). The chunk count uses MemAgent's 5,000-token chunk and 1,024-token memory (<a href="../excerpts/memagent.md">memagent</a>, §3.1). Session lengths here are uniform; real sessions vary, so counts are approximate. The filler mix is rounded to whole sessions. The evidence-session control runs from 1 to 6; that range is a control of this figure, not a value from LongMemEval.
+</div>
+</main>
+<script>
+(function(){
+  var LENS=[8000,16000,32000,64000,115000,256000,512000,1000000];
+  var $=function(id){return document.getElementById(id)};
+  var seed=7;
+  function rng(){seed=(seed*1103515245+12345)%2147483648;return seed/2147483648;}
+  function fmt(n){return n>=1000000?(n/1000000).toFixed(n%1000000?1:0)+"M":n>=1000?Math.round(n/1000)+"K":String(n)}
+  function pick(n,k,policy){
+    var lo=0,hi=n;
+    if(policy==="late"){lo=Math.floor(n*0.8);} else if(policy==="early"){hi=Math.max(1,Math.ceil(n*0.2));}
+    var span=hi-lo, pos=[], tries=0;
+    k=Math.min(k,span);
+    while(pos.length<k && tries<10000){var p=lo+Math.floor(rng()*span); if(pos.indexOf(p)<0)pos.push(p); tries++;}
+    return pos.sort(function(a,b){return a-b});
+  }
+  var cached=null;
+  function render(resample){
+    var L=LENS[+$("L").value], s=+$("s").value, k=+$("k").value, upd=$("upd").checked, pl=$("pl").value;
+    $("Lv").textContent=fmt(L)+" tokens"; $("sv").textContent=s.toLocaleString(); $("kv").textContent=k;
+    var n=Math.max(k,Math.round(L/s));
+    var key=[n,k,pl].join("|");
+    if(resample||!cached||cached.key!==key){cached={key:key,pos:pick(n,k,pl)};}
+    var pos=cached.pos, kk=pos.length, filler=n-kk;
+    var nSG=Math.round(filler*0.25), nUC=Math.round(filler*0.25), nSim=filler-nSG-nUC;
+    var pool=[]; for(var i=0;i<nSG;i++)pool.push("sg"); for(i=0;i<nUC;i++)pool.push("uc"); for(i=0;i<nSim;i++)pool.push("sim");
+    var s2=seed; for(i=pool.length-1;i>0;i--){var j=Math.floor(rng()*(i+1));var t=pool[i];pool[i]=pool[j];pool[j]=t;} seed=s2;
+    var strip=$("strip"); strip.innerHTML=""; var fi=0;
+    var cells=Math.min(n,400), stride=n/cells;
+    for(var c=0;c<cells;c++){
+      var lo=Math.floor(c*stride), hi=Math.max(lo+1,Math.floor((c+1)*stride)), kind=null;
+      for(var q=0;q<kk;q++){if(pos[q]>=lo&&pos[q]<hi){kind=(upd&&kk>1&&q===kk-1)?"up":"ev";}}
+      var d=document.createElement("div"); d.className="s";
+      if(kind){d.style.background="var(--"+kind+")"; d.title=(kind==="up"?"update":"evidence")+" session";}
+      else{var f=pool[Math.min(fi,pool.length-1)]||"sim"; fi+=hi-lo; d.style.background="var(--"+f+")";}
+      strip.appendChild(d);
+    }
+    var chunks=Math.ceil(L/5000);
+    $("counts").innerHTML=
+      "<tr><th>Quantity</th><th class='n'>Value</th></tr>"+
+      "<tr><td>Sessions (target / mean session)</td><td class='n'>"+n+"</td></tr>"+
+      "<tr><td>Evidence sessions</td><td class='n'>"+kk+(upd&&kk>1?" (1 update)":"")+"</td></tr>"+
+      "<tr><td>Filler sessions</td><td class='n'>"+filler+"</td></tr>"+
+      "<tr><td>&nbsp;&nbsp;ShareGPT / UltraChat / simulated</td><td class='n'>"+nSG+" / "+nUC+" / "+nSim+"</td></tr>"+
+      "<tr><td>Evidence share of sessions (equal to token share at uniform session length)</td><td class='n'>"+(100*kk/n).toFixed(1)+"%</td></tr>"+
+      "<tr><td>5,000-token chunks (memory writes) for a MemAgent-style reader</td><td class='n'>"+chunks+"</td></tr>"+
+      (n>400?"<tr><td colspan='2' class='muted'>Strip shows "+cells+" cells; each cell groups about "+stride.toFixed(1)+" sessions.</td></tr>":"");
+    var dec=[0,0,0,0,0,0,0,0,0,0]; pos.forEach(function(p){dec[Math.min(9,Math.floor(10*p/n))]++;});
+    $("dec").innerHTML=dec.map(function(v,i){return "<div title='decile "+(i+1)+"' style='background:"+(v?"var(--ev)":"transparent")+";color:"+(v?"#fff":"var(--muted)")+"'>"+(v||"")+"</div>"}).join("");
+    var flags=[];
+    if(dec[0]===0) flags.push(["w","No evidence in the first decile. A reader that keeps only the most recent part of the history is not tested on early evidence (BEAM reports 0.00% first-decile evidence at 10M)."]);
+    if(dec.slice(0,8).reduce(function(a,b){return a+b},0)===0) flags.push(["w","All evidence lies in the last 20%. A recency-only strategy can pass; vary placement across the dataset."]);
+    if(upd&&kk>1) flags.push(["o","Knowledge update present: the correct answer is the value in the later session; an answer that gives only the earlier value is wrong."]);
+    if(upd&&kk<2) flags.push(["w","A knowledge update needs at least two evidence sessions."]);
+    if(dec[0]>0&&dec[9]>0) flags.push(["o","Evidence spans the first and last deciles."]);
+    $("flags").innerHTML=flags.map(function(f){return "<div class='flag "+f[0]+"'>"+f[1]+"</div>"}).join("");
+  }
+  ["L","s","k","upd","pl"].forEach(function(id){$(id).addEventListener("input",function(){render(false)});$(id).addEventListener("change",function(){render(false)});});
+  $("re").addEventListener("click",function(){render(true)});
+  render(true);
+})();
+</script>

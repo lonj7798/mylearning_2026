@@ -2,133 +2,65 @@
 chapter: ch-45
 course: llm-training
 phase: read
-excerpt_of: wiki/raw-data/llm-training/papers/self-correct-rl.md
+excerpt_of: wiki/raw-data/llm-training/papers/self-correct-rl.md (card not re-verified; see Corrections)
 source_url: https://arxiv.org/abs/2409.12917
-created_at: "2026-04-23"
+version: arXiv v2, 2024-10-04
+verified: 2026-09-15 (rewritten from the primary text; replaces the 2026-04 excerpt)
 ---
 
-# Excerpt: SCoRe — self-correction as a two-stage RL target
+# Excerpt: SCoRe — Training Language Models to Self-Correct via Reinforcement Learning
 
-**Source library:** `wiki/raw-data/llm-training/papers/self-correct-rl.md`
-**Authors:** Aviral Kumar, Vincent Zhuang, Rishabh Agarwal, Yi Su, JD Co-Reyes, Avi Singh, et al. (Google DeepMind)
-**Year:** 2024 (arXiv 2409.12917)
+**Used by:** [[read]] §1, §5, Negative samples, Recipe
 
----
+## Metrics (§3)
 
-## Why this source anchors ch-45
+Accuracy@t1 and Accuracy@t2 are first- and second-attempt accuracy; Δ(t1, t2) is their difference; Δ^{i→c} is the share of problems fixed at the second attempt and Δ^{c→i} the share of correct answers broken at the second attempt.
 
-Every other method in ch-45 bootstraps a **single-turn** policy. SCoRe bootstraps
-the **two-turn** structure `(answer, revise)`. The change of action space is not
-cosmetic — it exposes a failure mode (mode collapse onto turn-1 answer) that
-single-turn self-training cannot exhibit, and it motivates a reward-shaping
-recipe that is structurally different from anything in Self-Rewarding, SPIN,
-or ReST-EM. SCoRe is the ch-45 reference for *what a custom-shaped reward
-looks like when the goal is not a single-shot output but a behavior*.
+## The problem, measured (Table 1, Gemini 1.5 Flash on MATH500)
 
----
+| Method | Acc.@t1 | Acc.@t2 | Δ(t1,t2) | Δ^{i→c} | Δ^{c→i} |
+|---|---|---|---|---|---|
+| Base model | 52.6% | 41.4% | −11.2% | 4.6% | 15.8% |
+| STaR (D_STaR) | 55.4% | 41.2% | −14.2% | 5.4% | 19.6% |
+| STaR (D⁺_STaR) | 53.6% | 54.0% | 0.4% | 2.6% | 2.2% |
+| Pair-SFT (D_SFT) | 52.4% | 54.2% | 1.8% | 5.4% | 3.6% |
+| Pair-SFT (D⁺_SFT) | 55.0% | 55.0% | 0% | 0% | 0% |
 
-## The two SFT failure modes — source lines 17-18
+The two failure modes the authors name for SFT on self-generated correction traces: collapse to non-correcting behavior, and inability of offline methods to be robust to first-attempt distribution shift (§4).
 
-> Diagnosed two failure modes of SFT-on-self-correction:
-> (1) distribution shift — SFT data drawn from a stronger teacher;
-> (2) mode collapse — the model learns to produce the correct answer in turn 1
->     and no-op in turn 2.
+## Method (§5)
 
-Both kill the self-correction behavior you wanted to train. (1) is an
-IID-assumption violation; (2) is reward-hacking (the reward rewards `r(y_2)=1`,
-and `r(y_2)=1` is easiest if `y_1` was already correct). Plain SFT on a trace
-dataset cannot avoid either — this is why SCoRe uses RL with a bespoke shape.
+Stage I (Eq. 3): maximize the second-attempt reward while a KL term with coefficient β2 keeps the first-attempt distribution near the base model; the default KL on both turns stays with a smaller weight β1.
 
----
-
-## Stage I — freeze turn-1 with KL, optimize only turn-2
-
-Source lines 20-22:
-
-> Stage I: RL on turn-2 only, with a heavy KL regularization to the base model on turn-1
-> (keeps turn-1 behavior fixed while learning to edit).
-
-The loss (attested from source line 37):
+Stage II (Eq. 4): maximize the sum of both attempts' rewards with KL β1, and add to the second attempt the shaping bonus
 
 ```
-grad L_I = grad [ log pi(y_2 | x, y_1) * r(y_2) ]   with KL(pi || pi_ref) applied only on turn 1
+b̂(y2 | y1, y*) = α · ( r̂(y2, y*) − r̂(y1, y*) ),   α a positive constant, ideally larger than 1.0
 ```
 
-Why this works. If you freeze turn-1 to pi_ref, the model *cannot* cheat by
-producing the right answer up front. The only gradient direction for
-`r(y_2) = 1` is to actually learn an editing operation conditioned on the
-turn-1 response. This is the same structural trick as [[dpo]]'s KL-to-reference,
-but applied **on a specific segment of the trajectory** rather than the whole
-rollout.
+All experiments use the instantaneous reward only, which is equivalent to a discount factor γ = 0 (App. A). With γ = 0.8 and α = 1.0, standard multi-turn RL still collapses to non-correcting behavior (App. A, Fig. 9).
 
-Figure 5 of the paper ablates skipping Stage I — **mode collapse is immediate
-without it**. This is not optional.
+Turn 2 prompt (App. C): "There might be an error in the solution above because of lack of understanding of the question. Please correct the error, if any, and rewrite the solution." It does not reveal whether the first attempt was correct.
 
----
+Hyperparameters (App. B, Table 5): MATH — Gemini 1.5 Flash, Adam, learning rate 5e−6, 3,000 steps, batch 512, sampling temperature 1.0, α = 10, β1 = 0.01, β2 = 0.1. MBPP — Gemini 1.0 Pro, learning rate 1e−5, 1,500 steps, batch 128, temperature 1.0, α = 10, β1 = 0.01, β2 = 0.25. Checkpoints are selected by the highest training reward (§6).
 
-## Stage II — reward the improvement delta
+## Results as printed
 
-Source lines 22-23:
+MATH500 (Table 2): SCoRe Acc.@t1 60.0%, Acc.@t2 64.4%, Δ = 4.4%, Δ^{i→c} 5.8%, Δ^{c→i} 1.4%. Relative to the base model, Δ improves by 15.6 points and Acc.@t2 by 23.0 points (§6.1).
 
-> Stage II: joint RL over both turns with a reward-shaping bonus on the improvement
-> delta r(y_2) - r(y_1).
+Code (Table 3, trained on MBPP, evaluated on HumanEval): base MBPP-R 47.3%, Acc.@t1 53.7%, Acc.@t2 56.7%, Δ = 3.0%; SCoRe MBPP-R 60.6%, Acc.@t1 52.4%, Acc.@t2 64.6%, Δ = 12.2%. The abstract states the gain as 9.1% on HumanEval; §6.1 writes "9% higher than the base model".
 
-The loss (attested from source line 38):
+Ablations on MATH (Table 4): full SCoRe Δ = 4.4%; without multi-turn training −2.4%; without Stage I 2.2%; without reward shaping 2.6%; with STaR instead of REINFORCE in Stage II 2.2%.
 
-```
-R_shaped = r(y_1) + alpha * (r(y_2) - r(y_1)),   alpha = 2.0
-grad L_II = R_shaped * grad [ log pi(y_1 | x) + log pi(y_2 | x, y_1) ]
-```
+Inference-time scaling (§6.2): with a budget of 32 solutions per problem, parallel sampling alone gains 7.4% while splitting the budget into parallel samples plus one self-correction round gains 10.5%.
 
-The `alpha = 2.0` multiplier amplifies the *improvement between turns* relative
-to the raw turn rewards. Because `r(y_2) − r(y_1) ∈ {−1, 0, +1}` (binary outcome),
-a successful correction `(0 → 1)` gets reward `0 + 2*1 = 2`, double the reward
-of just getting it right in turn 1 `(1 → 1)` which would be `1 + 2*0 = 1`.
+Evaluation note (§6): the MATH training split is augmented with 4,500 problems from the MATH test set and results are reported on the remaining 500 problems.
 
-This is a **curriculum** encoded into the reward, not the data. The policy
-gradient sees a bigger gradient signal for "revise a wrong answer to correct"
-than for "already correct, no-op." Ch-45 readers should recognize this as the
-same structural pattern Meta-Rewarding uses (layered losses, one for each role)
-but applied in time (turn 1 vs turn 2) rather than in role (actor vs judge).
+## Corrections to the library card `papers/self-correct-rl.md`
 
----
-
-## The numerical claim
-
-Source line 22:
-
-> Achieves 15.6 pts of self-correction accuracy gain on MATH with Gemini 1.0 Pro
-> and 9.1 pts on MBPP — the first method to cross zero on the self-correction task
-> (models historically got worse on self-correction).
-
-Historically, adding a "please revise" turn made models **worse**, because
-without appropriate training they would second-guess correct answers and flip
-them to wrong ones. SCoRe is the first published crossing of zero. Not
-overwhelming, but this is a hard regime change: the sign of the effect flips.
-
----
-
-## Why offline methods fail here — source line 23
-
-> Establishes the on-policy requirement: off-policy / offline methods systematically
-> fail the self-correction task.
-
-If you sample correction trajectories from a teacher and SFT on them, the `y_1`
-comes from the teacher's distribution — and your student's `y_1` will look nothing
-like it. The conditioning `x + y_1` is out-of-distribution at inference. On-policy
-rollouts are the only way to make `y_1 ~ pi(·|x)` match between training and
-deployment. This is the same on-policy vs off-policy distinction that separates
-PPO from DPO in [[ch-39]], but expressed as "which distribution does turn-1 come from."
-
----
-
-## Connections
-
-- Shares the Stage I / Stage II layered-loss pattern with [[excerpts/meta-rewarding-lm]]'s
-  Actor-DPO / Judge-DPO split.
-- Uses GRPO-style rollouts and rule-based reward like [[excerpts/r1-zero-analysis]], but
-  with a multi-turn action space.
-- Complements [[let-verify]] and [[ch-44]] process-reward models: those produce
-  step-level signals; SCoRe trains the policy to *use* such signals to edit.
-- Host chapter: [[ch-45]] §6.
-- Forward to [[ch-50]] agentic RL where multi-turn trajectories become the norm.
+1. "9.1 pts on MBPP" → the 9.1-point self-correction gain is on **HumanEval**; MBPP is the training set and MBPP-R is a separate offline repair task (47.3% → 60.6%).
+2. "α = 2.0" → α = 10 for both MATH and MBPP (App. B Table 5).
+3. "Stage II loss: [r(y1) + α(r(y2) − r(y1))]·Σ∇log π" → the bonus is added to the second attempt's reward only, and with γ = 0 it enters the gradient of the second-attempt tokens (§5.2, App. A).
+4. "Base model: Gemini 1.0 Pro; also reproduced on Gemma-2-9B" → MATH uses Gemini 1.5 Flash and code uses Gemini 1.0 Pro (§6); no Gemma run appears in v2.
+5. "Optimizer: AdamW, lr 1e-6, batch 256" → Adam with the per-task values in Table 5 above.
+6. "Figure 4 (reward-shaping bonus coefficient)" → v2 has no such sweep; the shaping ablation is Table 4.

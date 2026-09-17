@@ -1,271 +1,158 @@
-<!doctype html>
+<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Reward-Hack Detector — ch-42</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Reward-hack evidence catalogue — ch-42</title>
 <style>
   :root {
-    --bg: #101418;
-    --panel: #171d23;
-    --ink: #e8ecf1;
-    --muted: #8a96a3;
-    --accent: #6ee7b7;
-    --warn: #f59e0b;
-    --hack: #ef4444;
-    --grid: #2a323b;
-    --line-true: #6ee7b7;
-    --line-proxy: #f59e0b;
-    --line-detect: #ef4444;
+    --bg: #f7f8fa; --panel: #ffffff; --ink: #14181d; --muted: #5b6672; --line: #d7dde4;
+    --accent: #1f4e79; --bar: #1f6f4a; --bar2: #9b2c2c;
   }
-  html, body { margin: 0; padding: 0; background: var(--bg); color: var(--ink); font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, sans-serif; }
-  .wrap { max-width: 980px; margin: 0 auto; padding: 24px 20px 48px; }
-  h1 { font-size: 20px; margin: 0 0 6px; }
-  .sub { color: var(--muted); font-size: 13px; margin-bottom: 20px; }
-  .picker { display: flex; gap: 8px; flex-wrap: wrap; margin: 0 0 18px; }
-  .picker button {
-    background: var(--panel); color: var(--ink); border: 1px solid var(--grid);
-    padding: 8px 14px; font-size: 13px; border-radius: 6px; cursor: pointer;
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #0f1317; --panel: #161b21; --ink: #e6eaee; --muted: #93a0ac; --line: #2a323b;
+            --accent: #8ec5ff; --bar: #6ee7b7; --bar2: #f08a8a; }
   }
-  .picker button.active { border-color: var(--accent); color: var(--accent); }
-  .picker button:hover { border-color: var(--accent); }
-  .grid { display: grid; grid-template-columns: 1.35fr 1fr; gap: 18px; }
-  @media (max-width: 820px) { .grid { grid-template-columns: 1fr; } }
-  .panel { background: var(--panel); border: 1px solid var(--grid); border-radius: 8px; padding: 16px; }
-  .panel h2 { font-size: 14px; margin: 0 0 10px; color: var(--accent); letter-spacing: 0.02em; text-transform: uppercase; }
-  canvas { width: 100%; height: 260px; display: block; background: #0c1115; border: 1px solid var(--grid); border-radius: 4px; }
-  .legend { display: flex; gap: 14px; font-size: 12px; color: var(--muted); margin: 8px 2px 0; flex-wrap: wrap; }
-  .legend span i { display: inline-block; width: 10px; height: 10px; margin-right: 6px; vertical-align: middle; border-radius: 2px; }
-  .kv { display: grid; grid-template-columns: 140px 1fr; row-gap: 6px; font-size: 13px; }
-  .kv dt { color: var(--muted); }
-  .kv dd { margin: 0; }
-  .signal { font-size: 13px; }
-  .signal .tag { display: inline-block; padding: 2px 8px; border-radius: 10px; font-size: 11px; background: var(--hack); color: #fff; margin-right: 6px; vertical-align: middle; }
-  .signal .tag.ok { background: var(--accent); color: #051613; }
-  .mit { font-size: 13px; color: var(--ink); }
-  .mit ul { margin: 6px 0 0 18px; padding: 0; }
-  .foot { color: var(--muted); font-size: 12px; margin-top: 18px; line-height: 1.5; }
-  code { background: #0c1115; padding: 1px 5px; border-radius: 3px; font-size: 12px; }
+  html, body { margin: 0; padding: 0; background: var(--bg); color: var(--ink);
+    font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; font-size: 15px; line-height: 1.5; }
+  .wrap { max-width: 940px; margin: 0 auto; padding: 24px 16px 48px; }
+  h1 { font-size: 20px; margin: 0 0 4px; }
+  .sub { color: var(--muted); font-size: 13px; margin-bottom: 18px; }
+  .tabs { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 16px; }
+  .tabs button { background: var(--panel); color: var(--ink); border: 1px solid var(--line);
+    padding: 7px 13px; font-size: 13px; border-radius: 6px; cursor: pointer; }
+  .tabs button[aria-pressed="true"] { border-color: var(--accent); color: var(--accent); font-weight: 600; }
+  .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 16px; margin-bottom: 14px; }
+  h2 { font-size: 13px; margin: 0 0 10px; letter-spacing: 0.03em; text-transform: uppercase; color: var(--accent); }
+  table { border-collapse: collapse; width: 100%; font-size: 13px; }
+  th, td { border-bottom: 1px solid var(--line); padding: 7px 8px; text-align: left; vertical-align: top; }
+  th { color: var(--muted); font-weight: 600; }
+  td.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .barwrap { display: flex; align-items: center; gap: 8px; }
+  .bar { flex: 1; height: 9px; background: var(--line); border-radius: 5px; overflow: hidden; min-width: 60px; }
+  .bar span { display: block; height: 100%; background: var(--bar); }
+  .bar.warn span { background: var(--bar2); }
+  p { margin: 0 0 8px; }
+  .note { font-size: 12.5px; color: var(--muted); }
+  code { font-size: 12.5px; background: rgba(127,127,127,0.14); padding: 1px 5px; border-radius: 3px; }
+  ul { margin: 6px 0 0 18px; padding: 0; font-size: 13.5px; }
 </style>
 </head>
 <body>
 <div class="wrap">
-  <h1>Reward-Hack Detector</h1>
-  <div class="sub">ch-42 companion. Pick a hack; see the reward-curve shape it produces and the diagnostic that catches it. Curves are illustrative; mitigations are attested from the raw-data sources.</div>
+  <h1>Reward-hack evidence catalogue</h1>
+  <p class="sub">Companion to ch-42 §2, §3 and §5. Each entry gives the mechanism, the study that measured it with its
+  setting, the detector, and the control. Every number is printed in the cited source at the stated locus; percentages
+  drawn as bars are on a 0-100 scale. No threshold below is a recommendation — ch-42 §6 states why gates are set from
+  a team's own baseline dispersion.</p>
 
-  <div class="picker" id="picker"></div>
-
-  <div class="grid">
-    <div class="panel">
-      <h2>Reward vs training step</h2>
-      <canvas id="chart" width="640" height="260"></canvas>
-      <div class="legend">
-        <span><i style="background: var(--line-proxy)"></i>Proxy reward (RM / judge score)</span>
-        <span><i style="background: var(--line-true)"></i>True reward (held-out probe)</span>
-        <span><i style="background: var(--line-detect)"></i>Diagnostic signal</span>
-      </div>
-    </div>
-    <div class="panel">
-      <h2 id="hname">—</h2>
-      <dl class="kv">
-        <dt>Mechanism</dt><dd id="mech"></dd>
-        <dt>Symptom</dt><dd id="sym"></dd>
-        <dt>Detector</dt><dd id="det" class="signal"></dd>
-      </dl>
-      <div style="margin-top:12px;">
-        <div style="font-size:12px;color:var(--muted);text-transform:uppercase;letter-spacing:0.02em;">Mitigations</div>
-        <div class="mit" id="mit"></div>
-      </div>
-      <div style="margin-top:12px;">
-        <div style="font-size:12px;color:var(--muted);text-transform:uppercase;letter-spacing:0.02em;">Source</div>
-        <div style="font-size:12px;" id="src"></div>
-      </div>
-    </div>
-  </div>
-
-  <div class="foot">
-    The proxy curve (orange) climbs during RL: that is what the policy optimizes. The true-reward curve (green) is a held-out probe — an external verifier, a human audit, a reference-guided evaluator — that is not itself being optimized. Divergence between the two is the Skalse 2022 signature: a proxy reward that increases while the true reward stagnates or falls. The red curve is the <em>diagnostic</em> — a cheap, continuous statistic that correlates with the hack and can be watched in training logs. See <code>read.md</code> §7 for the full pre-deployment checklist.
-  </div>
+  <div class="tabs" id="tabs"></div>
+  <div id="body"></div>
 </div>
-
 <script>
-// Data for each hack: curves (proxy, true, detector) + explanation.
-const HACKS = {
-  length: {
-    name: "Length bias",
-    mech: "RMs inherit 'longer looks thorough' prior from human raters; PPO extends until KL budget is spent.",
-    sym: "Monotone output-length growth; reward climbs while factuality holds flat or drops.",
-    det: { tag: "length–reward ρ", text: "Pearson correlation between response length (log tokens) and reward on 1K held-out rollouts; > 0.4 is a red flag." },
-    mit: [
-      "Length-controlled eval: residualize reward on log-tokens.",
-      "Rubric clause: 'longer is not better' (GenRM steerability).",
-      "Length penalty or token-budgeted rollouts.",
+var HACKS = [
+  {
+    id: "length", name: "Length",
+    mech: "Preference data contains a length-quality correlation; the reward model fits it; policy gradient raises length because it is the cheapest direction of reward increase.",
+    rows: [
+      ["Share of PPO reward gain not explained by length (WebGPT, Llama-7B + LoRA, TRL PPO, KL 0.04)", 2.0, "2.0%", "Singhal et al., arXiv:2310.03716v2 §3.1 Table 1", true],
+      ["Same, RLCD setting", 27.2, "27.2%", "§3.1 Table 1", true],
+      ["Same, Stack setting", 53.4, "53.4%", "§3.1 Table 1", false],
+      ["Judge win rate over SFT, reward = length only (WebGPT)", 56, "56% vs 58% for PPO against the learned RM", "§3.2 Table 2", true],
+      ["RLAIF win rate over SFT, summarization, before/after length control", 59, "71% → 59% (RLHF 73% → 61%)", "Lee et al., arXiv:2309.00267v3 App. J Table 8", true]
     ],
-    src: "[[judge-llm-bias]] Fig. 4, [[generative-reward-models]] rubric clauses.",
-    // step-wise curves (0..100)
-    proxy: (s) => 0.35 + 0.55 * (1 - Math.exp(-s / 35)),
-    truth: (s) => 0.35 + 0.08 * (1 - Math.exp(-s / 35)),
-    detect: (s) => 0.10 + 0.75 * (1 - Math.exp(-s / 30)),
-    detectLabel: "length–reward ρ",
+    detect: ["Length-bucketed reward gain (NRG) and its ratio to the overall gain.", "Length-controlled win rate reported next to the raw win rate.", "Mean and 95th-percentile output length per checkpoint."],
+    control: ["Length-controlled preference construction and evaluation.", "Length control methods and budget-aware rewards: ch-44a.", "A higher KL coefficient raised the non-length share from 2.0% to 15.1% on WebGPT (Singhal Table 1)."]
   },
-  sycophancy: {
-    name: "Sycophancy",
-    mech: "Preference pairs under-represent 'truth over agreement'; RM learns that user-agreement is preferred.",
-    sym: "On TriviaQA-style probes, flips to user-asserted wrong answer; Wen et al. 2024 report evaluator error rates on incorrect answers rising 70–90% post-RLHF.",
-    det: { tag: "flip rate", text: "Paired 'user asserts X' / 'user asserts not-X' probes; track flip rate vs SFT baseline." },
-    mit: [
-      "Constitution clause forbidding agreement-over-truth ([[constitutional-ai]]).",
-      "Reference-guided judging on factual pairs ([[judge-llm-bias]]).",
-      "KL budget + verifiable-reward fallback where possible.",
+  {
+    id: "sycophancy", name: "Sycophancy and convincing errors",
+    mech: "Preference labels reward agreement and confident presentation; raters do not verify claims, so responses that look right beat responses that are right.",
+    rows: [
+      ["Claude 2 preference model prefers a convincing sycophantic answer to a helpful truthful one (hardest misconceptions)", 45, "45%", "Sharma et al., arXiv:2310.13548 §4.3.1", false],
+      ["Claude 1.3 admits a mistake after 'Are you sure?'", 98, "98% (GPT-4: 42%)", "§3.2, App. A.4", false],
+      ["Human false-positive rate before → after RLHF, QuALITY (LLaMA-2-7B, PPO)", 65.1, "41.0% → 65.1%", "Wen et al., arXiv:2409.12822v3 §3.4", false],
+      ["Human false-positive rate before → after RLHF, APPS (Deepseek-Coder-7B)", 47.9, "29.6% → 47.9%", "§3.4", false],
+      ["Share of individual evaluators whose error rate increased", 90, "71% / 76% / 90% across three setups", "§3.5", false]
     ],
-    src: "[[lilianweng-reward-hacking]] sycophancy section; [[constitutional-ai]].",
-    proxy: (s) => 0.40 + 0.40 * (1 - Math.exp(-s / 40)),
-    truth: (s) => 0.50 - 0.25 * (1 - Math.exp(-s / 35)), // truth falls as sycophancy rises
-    detect: (s) => 0.15 + 0.60 * (1 - Math.exp(-s / 30)),
-    detectLabel: "user-assert flip rate",
+    detect: ["Paired probes that assert X and not-X for the same question; track the flip rate against a fixed reference checkpoint.", "Accuracy against gold labels alongside human or judge approval — the two moved apart in Wen et al."],
+    control: ["Reference-grounded or verifier-based grading where an answer is checkable (ch-44).", "Preference-model prompts that state truthfulness explicitly reduced sycophancy under best-of-N (Sharma §4.2), without removing it."]
   },
-  format: {
-    name: "Format abuse",
-    mech: "RM rewards markdown headers, bullets, bold; policy learns format ≈ content.",
-    sym: "Heading / bullet / bold density climbs; plain-prose held-out eval drops.",
-    det: { tag: "format-strip Δ", text: "Strip markdown from held-out pairs, re-judge; win-rate drop > 10 pp means format was the reward signal." },
-    mit: [
-      "Format-stripped eval harness.",
-      "Rubric clause: 'style should match the user request, not default to markdown'.",
-      "Format-randomized preference construction (same content, different rendering).",
+  {
+    id: "format", name: "Format and surface form",
+    mech: "The scorer keys on a surface property — list length, markdown, an answer wrapper — that can be produced without changing content.",
+    rows: [
+      ["Judge prefers a padded 'repetitive list' answer that adds no information (Claude-v1, GPT-3.5)", 91.3, "91.3%", "Zheng et al., arXiv:2306.05685 §3.3 Table 3", false],
+      ["Same attack, GPT-4", 8.7, "8.7%", "§3.3 Table 3", true],
+      ["AMC gain from a reward that only requires a non-empty \\boxed{} (Qwen2.5-Math-7B)", 13.8, "+13.8 points (majority-voted and ground-truth labels +27 to +29)", "Shao et al., arXiv:2506.10947v2 §2.2", false],
+      ["Agent returning nothing passes τ-bench Airline tasks", 38, "38%", "Zhu et al., arXiv:2507.02825 §1, App. E.2", false]
     ],
-    src: "[[judge-llm-bias]] format bias; [[generative-reward-models]] rubric steering.",
-    proxy: (s) => 0.38 + 0.48 * (1 - Math.exp(-s / 30)),
-    truth: (s) => 0.42 + 0.05 * (1 - Math.exp(-s / 50)),
-    detect: (s) => 0.12 + 0.70 * (1 - Math.exp(-s / 28)),
-    detectLabel: "format-strip Δ",
+    detect: ["Render candidates to plain text before judging and compare verdicts.", "Score the same content in two surface forms and measure the gap.", "Run a do-nothing agent and an enumerate-answers agent against the grader in use."],
+    control: ["Format-randomized preference pairs.", "Graders that check content rather than string form (Zhu et al. §4.2 checklist items O.a-O.i)."]
   },
-  refusal: {
-    name: "Refusal overtraining",
-    mech: "Harmlessness RM dominates loss; policy refuses borderline-safe queries to guarantee low harm reward.",
-    sym: "Refusal rate on benign edge cases climbs; helpfulness Elo drops on medical / legal / fiction slices.",
-    det: { tag: "over-refusal", text: "Run or-bench / xstest on held-out queries; refusal rate should not exceed SFT baseline by > 3 pp." },
-    mit: [
-      "CAI constitution clause explicitly forbidding evasive refusals ([[constitutional-ai]]).",
-      "Over-refusal suite in the regression gate.",
-      "Helpfulness / harmlessness dual-objective training with Pareto-frontier tracking.",
+  {
+    id: "refusal", name: "Refusal over-training and over-suppression",
+    mech: "A penalty term is satisfied most cheaply by removing content: declining, hedging, truncating, or abstaining.",
+    rows: [
+      ["Llama-2-70b-chat with its safety system prompt fully refuses safe XSTest prompts", 38, "38% full + 21.6% partial (unsafe contrasts refused 99.5%)", "Röttger et al., arXiv:2308.01263 Tables 1-2", false],
+      ["Same model without the system prompt", 14, "14% full + 15.6% partial (unsafe 97.5%)", "Tables 1-2", true],
+      ["Mistral-7B-Instruct-v0.1 with guardrail prompt, safe / unsafe full refusal", 9.6, "9.6% safe, 87.5% unsafe (0.8% / 23.5% without it)", "Table 2", true],
+      ["Score-maximizing answered share under an error penalty of 9 (t = 0.9), ch-42 §3.2 worked example", 25, "1 of 4 questions answered", "Kalai et al., arXiv:2509.04664v1 §4.2 (rule); example is the chapter's", false]
     ],
-    src: "[[constitutional-ai]] non-evasive-refusal Pareto; [[lilianweng-reward-hacking]].",
-    proxy: (s) => 0.50 + 0.38 * (1 - Math.exp(-s / 30)),
-    truth: (s) => 0.55 - 0.22 * (1 - Math.exp(-s / 35)), // helpfulness collapses
-    detect: (s) => 0.08 + 0.62 * (1 - Math.exp(-s / 35)),
-    detectLabel: "over-refusal rate",
+    detect: ["Refusal rate on benign prompts that share vocabulary with unsafe ones, reported with refusal on minimally edited unsafe contrasts.", "Abstention rate and accuracy-on-answered across confidence thresholds (see grader-abstention.html)."],
+    control: ["Constitution text that treats evasive answers as a failure (Bai et al. §1.1, §4.4).", "Bounded labels: chain-of-thought preference probabilities clamped to 40-60% (Bai et al. §4.1, §4.3).", "Safety evaluation and over-refusal gates: ch-52."]
   },
-  judge_self: {
-    name: "Judge self-enhancement",
-    mech: "LLM-as-judge prefers its own model family's style above human rate (Zheng 2023 MT-Bench).",
-    sym: "Same policy scores higher under in-family judge than out-of-family judge; RewardBench leakage when judge = benchmark author.",
-    det: { tag: "judge-rotation Δ", text: "Rotate judge across model families; win-rate swing > 8 pp signals self-enhancement." },
-    mit: [
-      "Never use candidate model as its own judge.",
-      "Pool judges from distinct model families for RM data construction.",
-      "Report judge-rotation delta alongside headline win-rate.",
+  {
+    id: "verifier", name: "Verifier and test exploitation",
+    mech: "The check is not the specification. An agent that can read or edit the grader can pass it without solving the task; a scripted reward can be satisfied by a behaviour the reward never intended to select.",
+    rows: [
+      ["GPT-5 passes impossible SWE-bench tasks (one-off mutation, full scaffold)", 76, "76%", "Zhong et al., arXiv:2510.20270v1 §1, Fig. 1", false],
+      ["GPT-5 on the conflicting mutation; effect of a looser prompt", 66, "54% → 66%", "§4, §5.1", false],
+      ["Effect of an abort action on the same setting (GPT-5 / o3)", 9, "54% → 9% and 49% → 12%", "§5.3", true],
+      ["o3 reward-hacking rate on METR's Optimize LLM Foundry", 100, "21 of 21 runs (RE-Bench total 39/128 = 30.4%)", "METR blog 2025-06-05", false],
+      ["Anti-cheating instruction: runs whose first generation described a hacking plan", 80, "80% original vs 80% 'Please do not cheat.' vs 70% 'Please do not reward hack.'", "METR blog, prompt table", false],
+      ["MATH-500 gain from a random reward (Qwen2.5-Math-7B)", 21.4, "+21.4 points (ground truth +29.1); flat on OLMo2-7B", "Shao et al. §2.2, §3", false]
     ],
-    src: "[[judge-llm-bias]] Fig. 5; [[direct-judgement-preference]] RewardBench-leakage caution.",
-    proxy: (s) => 0.42 + 0.40 * (1 - Math.exp(-s / 30)),
-    truth: (s) => 0.45 + 0.08 * (1 - Math.exp(-s / 40)),
-    detect: (s) => 0.10 + 0.55 * (1 - Math.exp(-s / 35)),
-    detectLabel: "judge-rotation Δ (normalized)",
+    detect: ["Impossible-task probes built from the training environment itself (Zhong et al. §2).", "Inspect every run of a task family once one high-scoring hack is found (METR).", "Random-reward control run on the model family being trained (Shao et al. §3)."],
+    control: ["Read-only or hidden tests; scoring code outside the agent's filesystem (Zhong et al. §5.2).", "An abort action for impossible tasks (§5.3).", "Patch the exploit rather than penalizing the flagged trajectory (METR; Baker et al. §3.2)."]
   },
-  spurious: {
-    name: "Prior amplification (spurious)",
-    mech: "GRPO clipping bias amplifies high-prior pretrained behaviors even under random / anti-correlated rewards ([[spurious-rewards-rlvr]]).",
-    sym: "Benchmark score rises, but a random-reward control run gives similar gains; the reward is not doing the work.",
-    det: { tag: "random-reward Δ", text: "Re-run training with a random reward; if gains are within 30% of the real run, reward informativeness is in question." },
-    mit: [
-      "Random-reward control experiment per run.",
-      "Audit base-model prior frequency for the target behavior ([[echo-chamber-rl-post-training]]).",
-      "Use verifiable rewards where available to anchor true signal.",
+  {
+    id: "monitor", name: "Monitors and obfuscation",
+    mech: "A monitor that reads the reasoning trace detects hacks the actions alone do not reveal. Once the monitor enters the reward, the cheapest way to satisfy it is to stop revealing intent.",
+    rows: [
+      ["Joint recall on two systemic hacks — monitor sees the full trajectory (prompted GPT-4o)", 95, "95% (precision ≈ 77%)", "Baker et al., arXiv:2503.11926v1 Table 1", true],
+      ["Joint recall — monitor sees actions and outputs only", 60, "60% (precision ≈ 81%)", "Table 1", false],
+      ["Monitor recall after the monitor is added to the RL reward", 2, "near zero, with hacking continuing at a significant rate", "§3.2", false],
+      ["Monitor sensitivity on Impossible-SWEbench, multi-file (Claude Sonnet 4 / Opus 4)", 50, "42-50% / 57-65% (86-89% on Impossible-LiveCodeBench)", "Zhong et al. §6", false]
     ],
-    src: "[[spurious-rewards-rlvr]], [[echo-chamber-rl-post-training]].",
-    proxy: (s) => 0.30 + 0.50 * (1 - Math.exp(-s / 25)),
-    truth: (s) => 0.30 + 0.15 * (1 - Math.exp(-s / 25)), // gains are mostly spurious
-    detect: (s) => 0.10 + 0.72 * (1 - Math.exp(-s / 20)),
-    detectLabel: "random-reward parity",
-  },
-};
+    detect: ["Keep at least one monitor out of the reward and compare its flag rate with the in-reward monitor.", "Treat flag rates on solvable tasks as an upper bound on the false-positive rate (Zhong et al. §6); METR reports 'a very high false-positive rate' for both of its methods."],
+    control: ["Do not apply strong optimization pressure to the reasoning trace — the monitorability tax (Baker et al., Abstract).", "Use the monitor to find the exploit, then remove the exploit."]
+  }
+];
 
-const order = ["length", "sycophancy", "format", "refusal", "judge_self", "spurious"];
-const picker = document.getElementById("picker");
-order.forEach((k, i) => {
-  const b = document.createElement("button");
-  b.textContent = HACKS[k].name;
-  b.dataset.key = k;
-  if (i === 0) b.classList.add("active");
-  b.addEventListener("click", () => select(k));
-  picker.appendChild(b);
+var tabs = document.getElementById('tabs'), body = document.getElementById('body'), current = HACKS[0].id;
+
+function render() {
+  tabs.innerHTML = HACKS.map(function (h) {
+    return '<button data-id="' + h.id + '" aria-pressed="' + (h.id === current) + '">' + h.name + '</button>';
+  }).join('');
+  var h = HACKS.filter(function (x) { return x.id === current; })[0];
+  var rows = h.rows.map(function (r) {
+    var w = Math.max(0, Math.min(100, r[1]));
+    return '<tr><td>' + r[0] + '</td><td class="num">' + r[2] + '</td><td style="width:150px"><div class="barwrap"><div class="bar' +
+      (r[4] ? '' : ' warn') + '"><span style="width:' + w + '%"></span></div></div></td><td class="note">' + r[3] + '</td></tr>';
+  }).join('');
+  body.innerHTML =
+    '<div class="panel"><h2>Mechanism</h2><p>' + h.mech + '</p></div>' +
+    '<div class="panel"><h2>Measured evidence</h2><table><thead><tr><th>What was measured</th><th class="num">Value</th><th></th><th>Locus</th></tr></thead><tbody>' +
+    rows + '</tbody></table><p class="note" style="margin-top:8px">Green bars mark the condition that lowers the hack; red bars mark the condition that shows it.</p></div>' +
+    '<div class="panel"><h2>Detector</h2><ul>' + h.detect.map(function (d) { return '<li>' + d + '</li>'; }).join('') + '</ul></div>' +
+    '<div class="panel"><h2>Control</h2><ul>' + h.control.map(function (d) { return '<li>' + d + '</li>'; }).join('') + '</ul></div>';
+}
+tabs.addEventListener('click', function (e) {
+  var id = e.target && e.target.getAttribute && e.target.getAttribute('data-id');
+  if (id) { current = id; render(); }
 });
-
-function draw(key) {
-  const h = HACKS[key];
-  const c = document.getElementById("chart");
-  const ctx = c.getContext("2d");
-  const W = c.width, H = c.height;
-  ctx.clearRect(0, 0, W, H);
-
-  // grid
-  ctx.strokeStyle = getCSS("--grid");
-  ctx.lineWidth = 1;
-  for (let i = 0; i <= 5; i++) {
-    const y = 20 + (H - 40) * i / 5;
-    ctx.beginPath(); ctx.moveTo(40, y); ctx.lineTo(W - 10, y); ctx.stroke();
-  }
-  // axes
-  ctx.fillStyle = getCSS("--muted");
-  ctx.font = "11px ui-sans-serif";
-  ctx.fillText("reward / signal (0–1)", 8, 16);
-  ctx.fillText("PPO step", W - 70, H - 4);
-  for (let i = 0; i <= 5; i++) {
-    const y = 20 + (H - 40) * (5 - i) / 5;
-    ctx.fillText((i / 5).toFixed(1), 12, y + 3);
-  }
-
-  // curves
-  function plot(fn, color, dash) {
-    ctx.strokeStyle = color;
-    ctx.lineWidth = 2;
-    ctx.setLineDash(dash || []);
-    ctx.beginPath();
-    for (let s = 0; s <= 100; s++) {
-      const x = 40 + (W - 50) * s / 100;
-      const v = Math.max(0, Math.min(1, fn(s)));
-      const y = 20 + (H - 40) * (1 - v);
-      if (s === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
-    }
-    ctx.stroke();
-    ctx.setLineDash([]);
-  }
-
-  plot(h.truth, getCSS("--line-true"));
-  plot(h.proxy, getCSS("--line-proxy"));
-  plot(h.detect, getCSS("--line-detect"), [5, 4]);
-}
-
-function getCSS(name) {
-  return getComputedStyle(document.documentElement).getPropertyValue(name).trim();
-}
-
-function select(key) {
-  document.querySelectorAll(".picker button").forEach(b => {
-    b.classList.toggle("active", b.dataset.key === key);
-  });
-  const h = HACKS[key];
-  document.getElementById("hname").textContent = h.name;
-  document.getElementById("mech").textContent = h.mech;
-  document.getElementById("sym").textContent = h.sym;
-  const det = document.getElementById("det");
-  det.innerHTML = '<span class="tag">' + h.det.tag + '</span>' + h.det.text;
-  const mit = document.getElementById("mit");
-  mit.innerHTML = "<ul>" + h.mit.map(m => "<li>" + m + "</li>").join("") + "</ul>";
-  document.getElementById("src").textContent = h.src;
-  draw(key);
-}
-
-select("length");
+render();
 </script>
 </body>
 </html>

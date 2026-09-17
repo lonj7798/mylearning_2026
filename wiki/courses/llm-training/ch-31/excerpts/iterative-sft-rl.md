@@ -7,6 +7,8 @@ source_url: https://arxiv.org/abs/2307.09288
 created_at: "2026-04-23"
 ---
 
+> Superseded by the 2026-09 revision of read.md; kept for history.
+
 # Excerpt: Iterative SFT+RL — the synthesis ch-31 was written to teach
 
 **Source library:** `wiki/raw-data/llm-training/papers/iterative-sft-rl.md`

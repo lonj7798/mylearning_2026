@@ -501,3 +501,21 @@ Generalist >> specialist 어려움. Generalist는 *모든 domain mix의 union*. 
 - **Synthetic을 push하는 axes**: Verifier + Taxonomy
 - 두 force balance가 mix 결정.
 
+
+---
+
+## Q-정정 (2026-09 revision)
+
+**배경**: read.md가 2026-09 generality revision으로 새로 작성되었다. 아래 Qn의 kernel에는 이제 정정된 사실이 들어 있다. 괄호의 번호는 새 read.md "Corrections to the version you studied"의 항목 번호이다. Q1–Q12에 있는 line reference(예: "line 209", "line 166-169")는 git commit 4a72e54 시점의 read.md를 가리킨다.
+
+- **Q1**: GLAN은 "6 levels of LLM-driven recursion"이 아니다. Fields, sub-fields, disciplines는 GPT-4가 제안하고 human annotator가 majority vote로 남길지 정하며, 126 disciplines가 남는다. 그 아래 subjects, syllabus, class sessions, key concepts는 GPT-4가 만든다. Question은 leaf concept 하나마다 쓰는 것이 아니라, 1–2개 session과 1–5개 key concept의 조합을 sampling해서 쓴다 (1–3).
+- **Q2**: "Cosmopedia 1차 30M prompts가 near-dup이었고 prompt taxonomy를 restructure해서 고쳤다"는 이야기는 blog에 없다. Blog는 generation 전에 prompt를 반복 수정했고, audience와 style별로 content가 어떻게 달라야 하는지 명시해서 duplicate content를 1% 미만으로 만들었다고 쓴다 (18). "verifier-friendly formats (line 103)"는 GLAN paper에 없다 (3). Nemotron-4의 prompt는 "6 task families"가 아니라 open Q&A, writing, closed Q&A, math & coding pipeline과 3K topics로 만든다 (7). Nemotron-4-340B-Reward는 HelpSteer2 10K로 학습하고, 나머지 human data 10K는 SFT용이다 (8). GLAN에 answer verification이 없다는 점은 맞다.
+- **Q3**: "concept당 instruction ~10개(line 247)"는 source에 없는 수치이다 (21). Cosmopedia는 audience(3) × format(4) × context(4) = 48이 아니라, audience 4개 × style 3개로 topic당 최대 12개 prompt를 만든다. Duplicate 해결 방법은 "tree branching factor 추가"가 아니라 prompt 안에 format과 content의 차이를 구체적으로 지시하는 것이었다 (18).
+- **Q4**: Phi를 "verifier 없음(style filter only)"으로 분류한 부분은 Phi-4에는 맞지 않는다. Phi-4는 synthetic code를 execution loop와 test로 검증하고, seed question의 답을 plurality voting으로 정한다 ([[phi-4]] §2.2–2.3). Phi-1의 quality filter는 GPT-4가 약 100k sample에 educational value를 annotation하고 random forest가 확장한 것이다 (13).
+- **Q5**: "한 anchor set(20K HelpSteer2)이 SFT와 preference를 모두 cover한다"는 틀리다. HelpSteer2는 10K이고 reward model 학습과 preference fine-tuning에 쓰이며, SFT human data 10K는 별도이다. Chosen/rejected label은 ground truth나 verifier가 있으면 그것을 쓰고, 초기 iteration에서는 LLM-as-judge, 이후에는 reward model을 쓴다. Reward model은 policy의 "own reward head"가 아니라 base model에 5-attribute linear head를 붙인 별도 model이다 (8–9). τ=0.7 예시는 설명용 가정이다.
+- **Q6**: Staged SFT의 adopter로 "Phi-4 (explicit), Qwen-2.5, Tülu-3"을 든 것은 틀리다. 이 chapter의 source 중 code-first 2-stage SFT를 보고한 것은 Nemotron-4뿐이고, Phi-4는 SFT를 한 round만 한다. Nemotron-4가 밝힌 이유는 여러 behavior를 동시에 학습할 때의 conflict(특히 coding)이며, "cleaner-signal-first", "format prior installation", "forgetting 비대칭" mechanism은 source에 없다. 같은 report의 Table 6에서 General SFT는 2% code replay에도 HumanEval을 70.7에서 66.5로 낮췄다 (10).
+- **Q7**: "inter-annotator agreement ~70-80%"와 "SFT label noise 10-30%"는 source에 없는 수치이다. Nemotron-4의 Code SFT data는 unit test가 아니라 LLM fitness check로 거른다 (9).
+- **Q8**: Phi-1 paper는 CodeExercises를 execution으로 검증했다고 보고하지 않고, GPT-3.5 data가 "has a high error rate"라고 쓴다. 따라서 "Verifier 통과 = comment quality 보증"을 Phi-1의 사례로 드는 것은 근거가 없다 ([[phi-textbooks]] §2.2, §6).
+- **Q9**: Phi-4는 "synthetic ~10%, filtered web ~90%"가 아니다. Table 5 기준 training token의 web 15%, web rewrites 15%, synthetic 40%, code 20%, acquired sources 10%이고, web rewrites도 synthetic의 하위 category이다. "Phi-1 synthetic exercises와 HumanEval overlap으로 50.6%가 의심된다"는 인용된 분석이 없다. Phi-1 자체 분석에서 13-gram match 4개는 모두 false positive이고, 비슷한 exercise를 제거하고 재학습해도 45.1–50.6%이다. 다만 similar vs non-similar HumanEval 문제에서 81.7% vs 26.9%로 차이가 크다. Phi family의 overfitting 증거는 GSM1k의 GSM8K gap이다 (12, 16).
+- **Q10**: Math-only mix 비율(~80% web / ~15% synthetic / ~5% RL)과 use case 표의 비율은 source에서 온 값이 아니라 추정이다. "General pretrain (Phi-4) ~10%"는 Q9의 Table 5 값으로 바뀐다. MathScale은 curated top-down taxonomy가 아니라 seed question에서 추출한 concept graph를 쓴다 ([[mathscale]] §3.1–3.2).
+- **Q11**: 표의 "Phi: Verifier ✗ → contamination" 연결은 Q4와 Q9의 정정을 따른다. Domain별 mix 비율(84%/16% 등)은 source에 없는 추정값이다.

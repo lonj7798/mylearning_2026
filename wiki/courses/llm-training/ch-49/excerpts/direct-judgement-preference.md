@@ -3,109 +3,60 @@ chapter: ch-49
 course: llm-training
 phase: read
 excerpt_of: wiki/raw-data/llm-training/papers/direct-judgement-preference.md
-source_url: https://arxiv.org/abs/2408.02666
+source_url: https://arxiv.org/abs/2409.14664
 created_at: "2026-04-23"
+revised_at: "2026-09-15"
 ---
 
-# Excerpt: Con-J / Self-Taught Evaluators / J1 — the 2024–25 synthetic-judge line
+# Excerpt: Direct Judgement Preference Optimization (SFR-Judge)
 
-**Source library:** `wiki/raw-data/llm-training/papers/direct-judgement-preference.md`
-**Representative papers:**
-- Con-J (ICLR 2025): "Learning LLM-as-a-Judge for Preference Alignment"
-- Self-Taught Evaluators (Meta 2024, arXiv 2408.02666)
-- J1 (2025, arXiv 2505.10320)
+**Authors:** Peifeng Wang, Austin Xu, Yilun Zhou, Caiming Xiong, Shafiq Joty (Salesforce AI Research)
+**Year:** 2024 (arXiv v1 2024-09; v3 2025-09)
+**Source type:** paper
+**Checked on:** 2026-09-15 against the library card, which was re-verified on 2026-09-14 against arXiv v3.
 
----
+> Rewritten in the 2026-09 revision. The previous version of this excerpt described four different papers
+> under this slug and attributed methods to the wrong ones. The corrections are listed below; the library
+> card `papers/direct-judgement-preference.md` is the verified reference for the rest.
 
-## Why this source owns §5 of ch-49
+## Corrections to the previous version of this excerpt
 
-Ch-49 §5 is the heart of the chapter's argument: GPT-4-as-judge is being replaced. This source is the aggregated 2024–25 line that does the replacing. The method-contrast table in `read.md` is a direct compression of this source's "Key Contributions (aggregate across papers)".
+1. "Con-J: DPO on contrastive judgment pairs with noisy-negative instruction perturbation" → the modified-instruction construction belongs to [[self-taught-evaluators]] (arXiv:2408.02666 §3.3). Con-J (Ye et al., arXiv:2410.03742 §3) pairs a judgement carrying the correct preference against one carrying the wrong or no preference, drawn from existing preference data, with DPO plus a small SFT weight. It does not remove the need for preference labels.
+2. "Self-Taught Evaluators: judge_{k+1} trained with DPO on its own decisions; crosses GPT-4 after ~3 iterations" → SFT (NLL on judgment tokens) on rejection-sampled correct judgments, 5 iterations; GPT-4-0125 (84.3) is first exceeded at iteration 2 (86.0).
+3. "J1: the verdict-token log-prob supplies the verifier signal; highest-accuracy open judge on RewardBench-hard" → J1 (Whitehouse et al., arXiv:2505.10320 §2.1, §2.3) is online GRPO training of judges on 22K synthetic pairs (17K WildChat, 5K MATH), with verifiable rewards against known verdicts plus consistency rewards. "RewardBench-hard" is not an existing benchmark.
+4. "~40K synthetic preference pairs (20K SFT + 20K DPO) beat models trained with 2–40× more data" and the "judge-as-weapon" leakage quotation → not supported by the source; removed.
 
----
+## What this paper actually is
 
-## The thesis
+SFR-Judge-8B / 12B / 70B are generative judges trained from Llama-3.1-8B-Instruct, NeMo-Instruct-12B, and Llama-3.1-70B-Instruct on 680K judgement preference pairs (§4.1).
 
-Source §Abstract:
+**Three pair types (§3):**
+- `D_CoT` (70%): a teacher (Llama-3.1-70B-Instruct, 20 samples per prompt, temperature 0.7) writes critique-plus-verdict samples; samples whose verdict matches the annotation are chosen, the rest rejected.
+- `D_Std` (15%): the same pairs with the critique removed and the protocol asking for the verdict only. Motivation (§3.2, Fig. 3): in a CoT critique only a few tokens decide the verdict, so critique-length targets dilute the signal on those tokens.
+- `D_Ded` (15%): given the protocol, the input, and a correct critique-plus-verdict, reconstruct the original responses; chosen = the originals, rejected = a reconstruction by the weaker Llama-3.1-8B-Instruct.
 
-> "A 2024-25 thread of work collapses the UltraFeedback pattern (external judge rates pairs, humans bootstrapped GPT-4) into a self-contained generative judge. The judge is itself a language model, trained with DPO on contrastive judgment pairs (chosen/rejected verdicts with rationales)."
+**Loss (§3.4):**
 
-The word "collapses" matters. UltraFeedback's pipeline was external — GPT-4 API, human-written prompts, scalar-RM output. This line internalizes the whole stack: judge weights are local, training data is self-generated, output is a structured verdict with rationale.
+```
+L = − log M_s(y_w | x) / (|y_w| + |x|)
+    − log σ( β log[ M_s(y_w|x) / M_ref(y_w|x) ] − β log[ M_s(y_l|x) / M_ref(y_l|x) ] )
+```
 
----
+`M_s` is the judge being trained, `M_ref` a frozen copy of the same initialization, `x = (p, i, r)` the protocol, task input and responses, `y = {c, j}` a critique and verdict, `|·|` token length, `σ` the logistic function, `β` the DPO temperature (not reported for the main runs).
 
-## The iterative Self-Taught trajectory
+## Results
 
-Source §Synthesis pipeline:
+- Pairwise average over 7 benchmarks: 84.25 (70B), 81.49 (12B), 80.91 (8B); GPT-4o 76.78; Skywork-Critic-Llama-3.1-70B 80.03; Self-taught-evaluator-Llama-3.1-70B 82.26; Con-J-7B 75.51 (Table 1).
+- RewardBench: 92.7 / 90.3 / 88.7; GPT-4o-2024-08-06 86.7 (Table 7).
+- Single rating, average Pearson: 0.76 / 0.70 / 0.68; GPT-4o 0.75 (Table 2). Classification: 85.60 / 84.12 / 85.41; GPT-4o 85.47 (Table 3).
+- Removing the critique at inference lowers 8B single-rating Pearson from 0.68 to 0.58 and the pairwise average from 80.97 to 80.05 (App. E.6, Table 9).
+- Hard versus easy negatives at 8B (App. E.8, Table 11): negatives from the 70B teacher vs the 8B teacher give pairwise accuracy 78.83 vs 77.56 and pairwise consistency 85.94 vs 80.70.
+- Specialization: continual fine-tuning the 8B judge on 12,500 RAGTruth pairs at β = 0.01 reaches 55.6% on ContextualJudgeBench (§5.5, Fig. 6).
 
-> "Self-Taught iteration:
->   Round 0: seed judge (fine-tuned on tiny labelled set).
->   Round k: use judge_k to label a fresh pool -> train judge_{k+1} with DPO on its own decisions vs alternative judgments.
->   Stopping criterion: RewardBench accuracy saturation or iteration cap."
+## Measurement convention to note
 
-And §Key Contributions:
-
-> "Self-Taught Evaluators: iterative self-improvement -- judge generates prefs, new policy, new judge prefs; no human labels after bootstrap."
-
-Ch-49 §5 names the 3-iteration GPT-4 crossover; this source is where that number comes from. The Self-Taught loop is mechanically identical to [[self-rewarding-lm]] but applied to the *judge* instead of the *policy*, and it avoids the iter-3 plateau that hits self-rewarding because the signal is (prompt, response, alternative-verdict) rather than (prompt, response, alternative-response) — the asymmetry in [[rlaif-scaling]] buys extra headroom.
-
----
-
-## Con-J's noisy-negative trick
-
-Source §Synthesis pipeline:
-
-> "Noisy-negative trick (Con-J): perturb the original instruction, generate a response to the noisy instruction, treat as a plausible 'rejected.'"
-
-This is a data-free way to build contrastive judgment pairs. You do not need a human (or a GPT-4) to label; you need an instruction-perturber. The rejected response is *plausible* because it was generated by the same model class, just to a slightly wrong instruction. The judge learns to distinguish the fine-grained instruction-following axis without paying for labels.
-
----
-
-## J1's CoT-RL addition
-
-Source §Key Contributions:
-
-> "J1 (2025): adds RL on the judge's thinking trace -> stronger chain-of-thought -> better judgments."
-
-Ch-49 explains this as an RLVR-analogue on judge CoT: verdict-token log-prob gives a verifier signal, GRPO rollouts score against reference verdicts, CoT gets optimized. J1 is the closest thing to "RLVR for judges" and it is the current (2025) SOTA on RewardBench-hard per this source.
-
----
-
-## The leakage warning — why eval-time judge != RL-time RM
-
-Source §Risks + gotchas:
-
-> "Judge-as-weapon: same judge model used to label prefs and evaluate benchmarks creates leakage -- RewardBench's increasing close relationship to training-time judges is a known measurement issue."
-
-Ch-49 §5(a) and §6 both cite this directly. It is the paper's strongest practical claim: the *separation* of train-time and eval-time judges is structural, not optional. If you are training Con-J as your RL-time reward, your eval-time judge must be a *different* model — otherwise you are scoring against your own training objective.
-
----
-
-## The sample budgets
-
-Source §Key Contributions:
-
-> "Demonstrated ~40K synthetic preference pairs (20K SFT + 20K DPO) suffice to beat models trained with 2-40x more data on RewardBench-class benchmarks."
-
-Ch-49 §5(c) uses this number to argue GPT-4-as-judge is being replaced on *cost* grounds: 40K self-generated pairs vs UltraFeedback's >1M GPT-4 annotations is a three-orders-of-magnitude reduction.
-
----
-
-## The risks the ch-49 anchor section encodes
-
-Source §Risks + gotchas:
-
-> "Self-reinforcement: iterative judge training can converge to a narrow rubric (judge-collapse analogue of model-collapse)."
-> "Rationale hallucination: natural-language rationales can be post-hoc justifications, not causes."
-> "No fresh-real-data anchor -- pure-synthetic iteration risks degradation without periodic real-pref injection."
-
-Ch-49 §8's "living anchor" rule is the composite mitigation for all three. The rationale-hallucination point gets its own paragraph in §8; the "periodic real-pref injection" is the per-quarter re-anchor protocol.
-
----
+For the six non-RewardBench pairwise benchmarks, each is run twice with the response order swapped and **the better of the two runs is reported** (§4.3). Order-averaged accuracy is not reported; consistency is given separately (App. E.1, Table 6).
 
 ## Connections
 
-- `read.md` §5 method-contrast table: Con-J / STE / J1 rows all cited from this source.
-- `read.md` §6 judge-as-weapon leakage: direct quote.
-- `read.md` §8 anchor protocol: composites this source's risks list.
-- [[self-rewarding-lm]] / [[meta-rewarding-lm]]: cousin lines that apply the same DPO-the-judge trick but with actor + judge in the same weights.
-- [[ultrafeedback-construction]]: the pattern this line collapses.
+[[self-taught-evaluators]] (the method whose construction was previously misattributed here), [[generative-reward-models]] (concurrent generative-judge line), [[meta-rewarding-lm]] (source of the 5-point additive scoring prompt used in its §5.4 experiment), [[rewardbench]] (main evaluation).

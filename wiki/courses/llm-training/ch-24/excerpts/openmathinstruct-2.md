@@ -5,79 +5,40 @@ phase: read
 excerpt_of: wiki/raw-data/llm-training/papers/openmathinstruct-2.md
 source_url: https://arxiv.org/abs/2410.01560
 created_at: "2026-04-23"
+revised_at: "2026-09-15"
 ---
 
-# Excerpt: OpenMathInstruct-2 — teacher strength dominates data scale
+# Excerpt: OpenMathInstruct-2 — question diversity, noise tolerance, and the teacher ablation
 
-**Source library:** `wiki/raw-data/llm-training/papers/openmathinstruct-2.md`
-**Paper:** Toshniwal et al. 2024, "OpenMathInstruct-2: Accelerating AI for Math with Massive Open-Source Instruction Data" (Nvidia)
+**Source library:** `wiki/raw-data/llm-training/papers/openmathinstruct-2.md` and `openmathinstruct-2-recipe.md` (verified 2026-09-14 against arXiv:2410.01560v2).
+Revised for ch-24 §2. The earlier excerpt (git 4a72e54) was titled "teacher strength dominates data scale"; the paper's findings do not support that title.
 
----
+## The four findings stated in the abstract
 
-## Why this source anchors ch-24 §2
+(a) solution format matters and verbose solutions hurt SFT; (b) data from a strong teacher beats equally sized data from a weak student model;
+(c) SFT is robust to low-quality solutions; (d) question diversity is needed for data-scaling gains.
 
-OpenMathInstruct-2 is the paper that justifies ch-24's "pick your verifier first, but then spend on the teacher before you spend on volume" rule. The authors hold the OpenMathInstruct-1 pipeline nearly fixed and change three knobs; the controlled ablations let ch-24 make the **stronger-teacher-dominates-more-data** claim cleanly.
+## Ablations (Llama3.1-8B-Base student, 1K MATH validation split, 4 runs; §2.2)
 
----
+| Ablation | Result | Locus |
+|---|---|---|
+| Format | OpenMath CoT 44.5 vs Llama CoT 40.6; mean length 237.0 vs 331.3 tokens | Table 1 |
+| Teacher at matched coverage | Llama3.1-405B-Instruct 37.9 ± 0.6 vs Llama3.1-8B-Base 30.1 ± 0.6 | Table 2 |
+| Filtering (128K) | 43.0–43.8 with judge or reward-model filters vs 43.6 ± 1.7 unfiltered | Table 3 |
+| Added wrong-answer or mispaired solutions | little to no degradation up to 20% at ≥ 256K pairs | Fig. 5 |
+| Unique questions at 256K pairs | 1K → 6.5K: +10.5 | §1, Fig. 6 |
 
-## The three swaps vs OMI-1
+## Data construction
 
-From the source (§Synthesis pipeline):
+- New questions: 5 few-shot pairs of an original and a similar question; no difficulty instruction; 32 solutions per new question at temperature 0.7; the majority answer replaces ground truth; minimum vote threshold 0 (§3, App. C.1, Table 9).
+- Decontamination: top-5 embedding neighbors, then Llama3.1-405B-Instruct paraphrase checks; 569K → 519K new questions (§3.1).
+- Post-processing drops solutions over 1,024 Llama3.1 tokens or under 200 characters (App. A.2).
+- Composition: 13.97M pairs, 607.3K unique questions, 592K synthesized (Table 5).
+- OpenMath2-Llama3.1-8B: 2 epochs, batch 512, constant LR 2e-5, AdamW weight decay 1e-2 (§4); GSM8K 91.7, MATH 67.8 greedy (Table 4).
+- Only math is evaluated; about 1.4% of Omni-MATH test questions are in the training data (§4, footnote 7).
 
-1. **Teacher**: Mixtral-8x7B-Instruct → **Llama-3.1-405B-Instruct** (BF16, served via vLLM).
-2. **Problem pool**: 15K seeds → ~600K augmented problems, via two teacher-prompted operations:
-   - Paraphrase the seed problem.
-   - Generate novel problems conditioned on topic tags extracted from MATH (e.g., "Algebra, Level 5").
-3. **Trace style**: TIR (OMI-1) → **pure text-CoT**, with occasional code. Authors' ablation found text-CoT outperforms TIR at 405B scale — the 405B teacher's arithmetic is accurate enough that the executor adds more noise than signal.
+## Removed from the earlier excerpt (not in the source)
 
-Sampling: K ≈ 32 CoT solutions per augmented problem, temperature 1.0, top-p 0.95. Total output: **14M (problem, solution) pairs**, cost ~650K H100-hours.
-
----
-
-## The headline ablation
-
-From the source (§Key Contributions): **Llama-3.1-405B at 1M samples beats Mixtral at 10M samples.** This single row justifies the ch-24 §2 guidance "scale solutions-per-problem before scaling problem count, and scale teacher strength before either."
-
-The scaling curve (§Quality evaluation): downstream MATH accuracy is approximately **linear in log(dataset size) up to ~5M**, and **flat beyond**. At the 5M knee, the marginal return on another million 405B-distilled samples is effectively zero — *on this teacher*. Switching to a stronger teacher would un-knee the curve.
-
-Question augmentation (§Quality evaluation ablation): adds +4 MATH points on top of the 1M-seed baseline. Paraphrase alone is ~+1, novel-question adds the other +3. This is roughly the same magnitude as MetaMath's FOBAR+SV+Rephrasing stack (ch-24 §3) — but with a much stronger teacher doing the augmentation.
-
----
-
-## Evaluation anchors
-
-- OpenMath2-Llama3.1-8B: **91.7 GSM8K, 67.8 MATH** — SOTA among open 8B math models at release (Oct 2024).
-- OpenMath2-Llama3.1-1.5B: ~84 GSM8K / 52 MATH — the "cheap-student" anchor for Track-4 RL consumers.
-
-For ch-24 §4's comparison: LIMO's 95.6 MATH500 (from 817 hand-curated long-CoT traces) is higher than OMI-2's 67.8 MATH — but MATH500 is a 500-problem subset selected for difficulty variety, while the reported 67.8 is on the full MATH test. The two numbers are not comparable without a MATH500 re-run; ch-24's Panel-2 visualisation uses the attested paper-reported benchmarks side-by-side.
-
----
-
-## The short-CoT ceiling — what OMI-2 can *not* do
-
-From the source (§Risks + gotchas):
-
-> **Short-CoT ceiling**: the dataset is non-reflective CoT; students trained on it do not acquire backtracking. Separate long-CoT sources (s1, LIMO, R1 distills) needed for o1-style behavior.
-
-This is the load-bearing caveat for ch-24 §4. No matter how large you scale OMI-2, a student fine-tuned on it will not spontaneously emit "Wait, let me reconsider" mid-trace. That capability must be installed by long-CoT traces — either curated from existing reasoning teachers (DeepSeek-R1, o1, Gemini-Thinking) or distilled through a reasoning loop like rStar-Math.
-
-Compute caveat also worth remembering: **~0.6M H100-hours for teacher sampling alone**. Out of reach for most labs; the released dataset is the only practical way to use it.
-
----
-
-## Question-aug contamination — the subtle leak
-
-From the source (§Risks + gotchas):
-
-> Novel questions generated by the teacher may overlap with MATH/GSM8K test sets — authors run decontamination against test sets but 405B teacher may still leak.
-
-405B teachers have seen the benchmark problems during their own pretraining. A "novel" teacher-generated problem may in fact be a thin paraphrase of a test-set item the teacher memorized. Authors use MinHash against test sets; ch-23's model-collapse argument suggests this is a necessary but not sufficient defense — the benchmarks might need to rotate out every teacher generation.
-
----
-
-## Connections
-
-- [[excerpts/openmathinstruct]] — the predecessor; the teacher-strength delta is the story.
-- [[excerpts/metamath]] — question-augmentation ancestor; OMI-2 generalises it at teacher scale.
-- [[excerpts/s1]], [[excerpts/limo]] — the small-N long-CoT alternative that sits above OMI-2 on reflective benchmarks.
-- [[ch-24]] §2 (wide-short-CoT), §4 (long-CoT alternative), §8 (practical guidance).
+- "Llama-3.1-405B at 1M samples beats Mixtral at 10M samples"; "scale solutions per problem before problem count".
+- "text-CoT outperforms TIR at 405B"; "paraphrase + topic-tag novel questions"; "~650K H100-hours"; "BF16 via vLLM".
+- "+4 MATH points from question augmentation"; "~7% false-positive rate"; "students do not acquire backtracking".

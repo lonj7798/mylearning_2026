@@ -2,144 +2,36 @@
 chapter: ch-23
 course: llm-training
 phase: read
-excerpt_of: wiki/raw-data/llm-training/papers/strong-model-collapse.md
+excerpt_of: wiki/raw-data/llm-training/papers/strong-model-collapse.md (card has no Verification section as of 2026-09-15; this excerpt was read against the primary source)
 source_url: https://arxiv.org/abs/2410.04840
 created_at: "2026-04-23"
+revised_at: "2026-09-15"
 ---
 
-# Excerpt: Dohmatob et al. (ICLR 2025 Spotlight) — Strong Model Collapse breaks scaling at 1%
+# Excerpt: Strong Model Collapse (Dohmatob, Feng, Subramonian, Kempe)
 
-**Source library:** `wiki/raw-data/llm-training/papers/strong-model-collapse.md`
-**Authors:** Elvis Dohmatob, Yunzhen Feng, Arjun Subramonian, Julia Kempe (Meta / NYU)
-**Venue:** ICLR 2025 Spotlight; arXiv 2410.04840
+**Paper:** Elvis Dohmatob, Yunzhen Feng, Arjun Subramonian, Julia Kempe (FAIR Meta, NYU, UCLA). arXiv v1 2024-10; v2 2024-10-08 read. Source type: paper.
 
----
+> This file replaces the 2026-04 excerpt. The formula `f(N) + c(p)·σ²_synth` and the claim "reproduced on GPT-2-scale LM training with 1% synthetic injection; the curve never recovers" are not in the paper. The library card still carries them.
 
-## Why this source anchors ch-23
+## Setting (§2)
+- Real sample D_1 of size n_1 from P_1; synthetic sample D_2 of size n_2 from a different distribution P_2; n = n_1 + n_2; p_2 = n_2/n.
+- "Synthetic data" means any training data from a distribution that deviates from the test distribution (§1.1). It is a fixed shifted distribution, not a recursive loop.
+- P_k: x ~ N(0, Σ), y = xᵀw_k* + ε. Label shift δ = w_2* − w_1* ~ N(0, Δ).
+- Quality of synthetic data: c²(Δ) = (1/d) tr ΣΔ; smaller is better (Definition 1).
+- Models: ridge regression (Eq. 3) and a random-projection model f(x) = vᵀSx of width m (Eq. 5). Proportionate limit d/n → ϕ (Eq. 4).
 
-Ch-23 §2 is this paper, condensed. The paper's contribution is not qualitative — everyone post-Shumailov already expected contamination to hurt — but *quantitative and asymptotic*: it gives the scaling-law-level statement that even a 1% synthetic fraction introduces an **irreducible** error term that no amount of real data can wash out. This upgrades Shumailov's "don't replace real with synthetic" warning to "don't mix *any* unverified synthetic into pretraining" — and forces the verifier-gate question to the center of the chapter.
+## Results
+- Theorem 1: E_test ≃ B + V + ζ; ζ is the extra term from synthetic data (Eq. 9–10). As ϕ → 0, ζ ≃ p_2² tr Δ, which stays positive unless p_2 → 0 ("strong model collapse", §3.1).
+- Corollary 1, isotropic, ϕ ∈ (0, 1), λ → 0: E_test ≃ σ²ϕ/(1 − ϕ) + (p_2² + p_2 p_1 ϕ/(1 − ϕ)) c² (Eq. 11); for small ϕ, E_test ≃ σ²d/n + p_2²c² + O(ϕ²) (Eq. 12). "The scaling law plateaus unless p_2 → 0+."
+- Abstract: "as little as 1% of the total training dataset" can still lead to model collapse (theoretical statement).
+- Model size (Theorem 2, §3.2): larger models can amplify collapse; beyond the interpolation threshold they may mitigate it without preventing it (Abstract).
+- MNIST (§4.1, Fig. 7): random-feature (width 100,000) and two-layer (width 2000) networks; scaling slows and plateaus as p_2 grows; collapse subsides only as p_2 → 0.
+- Language modeling (§4.2, Fig. 8, App. A.3): GPT-2-small (124M) generator trained on BabiStories (2.2M stories; Mixtral-generated reproduction of TinyStories); synthetic stories generated with temperature 1, top-p 1, then filtered for poor quality; models trained on mixes with p_2 ∈ {0, 0.001, …, 1.0}; evaluation on the TinyStories test set. The synthetic data are high quality (small c²), and "even moderate amounts of synthetic data delay the progression of the scaling laws"; the authors "expect this to eventually lead to plateaus". A plateau is not shown.
+- Model size in LM (p_2 = 1, synthetic set 10× the original): 18-layer (166M) and 24-layer (204M) models have lower loss below 1×10¹⁰ tokens; smaller models have lower loss beyond 3×10¹⁰ tokens (§4.2).
+- GPT-2 training settings: embedding 768, 12 heads, context 512, LR 5×10⁻³, dropout 0.05, weight decay 0.1, warm-up 2,000 iterations (App. A.3).
+- Mixing (§5): weighted single-step mixing cannot avoid collapse for fixed weight α ∈ (0, 1] (Corollary 2). Iterative mixing with p_1 = p_2 = 0.5 over order log(n/d) iterations recovers a scaling law proportional to the clean error but underperforms training on the real half alone (Corollary 3, Fig. 10).
+- Filtering and curation methods (Feng et al. 2024 and others) are named as beyond the paper's analysis (§1.2).
 
----
-
-## The main theorem — schematic form
-
-```
-# strong-model-collapse.md, lines 29-32
-Let `E[R_test]` be expected test risk; in the real-only case
-`E[R_test] ~ f(N)` decreases with `N` under standard scaling.
-Under synthetic fraction `p > 0`,
-  E[R_test] ≈ f(N) + c(p) · σ_synth²
-with `c(p) > 0` for any `p > 0`.
-```
-
-The asymptote is now a function of `p`, not `N`. Scaling flatlines. The paper derives the explicit form of `c(p)` under a random-projection approximation of neural networks (operator-valued free probability — the technical machinery is dense but the takeaway is the formula).
-
-**What this means for a practitioner.** If you add synthetic at fraction `p = 0.01` with `σ_synth²` comparable to real-data variance, your scaling law *departs from the real-only baseline* early and never catches up. You can spend 10× the compute on 10× the data and still sit at a worse asymptote than a 1×-data real-only run. The paper's empirical GPT-2-scale reproduction confirms this shape — the 1%-contamination curve visibly flatlines against the real-only baseline within the measured range.
-
----
-
-## The interpolation-threshold phase diagram
-
-```
-# strong-model-collapse.md, line 26 + "Findings"
-Below the interpolation threshold larger models amplify collapse;
-beyond it, larger models partially mitigate but never eliminate it.
-```
-
-The second theorem (phase diagram) layers model size on top of synthetic fraction. Two regimes:
-
-1. **Under-parameterized (below interpolation).** Larger models *worsen* collapse. Intuition: when the model cannot interpolate the training set, it spreads error across the data — including the synthetic portion — and synthetic error dominates the loss contribution.
-2. **Over-parameterized (above interpolation).** Larger models partially mitigate collapse. Intuition: they can fit the real portion while treating synthetic as noise to average over. But the mitigation is partial; `c(p) > 0` for all `p > 0` even in this regime.
-
-The policy-relevant corollary: "we'll just scale up to fix contamination" is mathematically wrong. Size helps only past interpolation and only partially. The only way to *eliminate* `c(p)·σ²` is to eliminate `p` or eliminate `σ_synth²` — i.e., remove contamination or verify synthetic into real-equivalent quality.
-
----
-
-## Why this is a scaling-law statement, not just a collapse statement
-
-Shumailov 2024 ([[excerpts/model-collapse]]) proved iterated recursion collapses. A natural defensive reading: "that's a closed-loop failure, real pipelines have open loops, we're safe." Strong Model Collapse blocks this defense. The setup is a *single training run* (not iterated) on a *fixed mixture* of real and synthetic. No recursion. No iteration. Just one run, one mixture, measured asymptotically in `N`.
-
-The result: even the single-run, non-iterative setting loses its scaling benefit at 1% contamination. The mechanism is not sample compounding across generations; it is **asymptotic bias** introduced by synthetic's distributional offset from real.
-
-This matters because it changes what pipelines are at risk:
-
-- **Clean recursive-iteration loops (Shumailov's concern):** affected.
-- **Open-web pretraining with accumulated LLM-generated text (the 2025 policy concern):** **also affected**. No iteration required.
-- **Mid-training mixes with some synthetic:** affected.
-- **SFT sets with any synthetic fraction:** affected.
-
-The one escape: make `σ_synth²` small. A *verified* synthetic corpus — where every sample has passed an external check and is indistinguishable from real at the distribution level — has `σ_synth² → σ_real²` and the bias term collapses. This is the theoretical basis for ch-23's §4 (verification as defense) and §5 (gate vs no-gate table).
-
----
-
-## The empirical reproduction — GPT-2 scale
-
-The paper runs the theoretical prediction against real LM training at GPT-2 scale:
-
-- Base: GPT-2-class model (exact size per paper).
-- Training data: real corpus with 0% vs 1% synthetic injection (synthetic = prior GPT-2 outputs).
-- Measurement: validation loss vs training-set size.
-
-Result: the 1%-contamination curve **departs from the 0% baseline early and flatlines**. The departure is visible within the first order of magnitude of data scaling and widens with `N`. No model-size sweep closes the gap.
-
-The paper explicitly cautions that the random-projection approximation is a simplification of real deep nets; the empirical reproduction supports but does not prove the full theory. But two independent lines of evidence (theory + experiment) agreeing is what makes this a ICLR Spotlight-class result.
-
----
-
-## The synthetic-quality loophole — ch-23's §4 bridge
-
-```
-# strong-model-collapse.md, lines 47-48
-Synthetic quality matters — the theory assumes "synthetic" = iid from
-a model; high-quality filtered synthetic (e.g., via an external verifier)
-behaves like real in the limit.
-```
-
-This is the most important sentence in the paper for ch-23's narrative. The pessimism is **assumption-dependent**. The assumption is that synthetic = iid samples from a generator model, untransformed. Under that assumption, `c(p) > 0` always.
-
-If you relax the assumption — if "synthetic" means "samples that passed a verifier independent of the generator" — then the distributional gap `σ_synth² - σ_real²` shrinks with verifier strength. A perfect verifier makes verified-synthetic indistinguishable from real; an imperfect verifier reduces but does not eliminate the gap. The Zhang et al. 2025 analytical convergence guarantee ([[excerpts/faithful-synth-eval]]) is the formalization of this loophole.
-
-This is why ch-23 §6 is titled "Canonical gate designs." The gates are not optional — they are what turns "synthetic" from a scaling-law poison into a scaling-law-neutral ingredient. Every production pipeline that scales without collapsing has a gate that makes this loophole real.
-
----
-
-## The open-web contamination corollary
-
-```
-# strong-model-collapse.md, line 48
-Policy implication (not the paper's claim): as open web accumulates
-LLM-generated text, all future pretraining corpora will be contaminated
-— hence active curation / provenance becomes mandatory.
-```
-
-This is the 2025 policy frame. Every subsequent pretraining corpus built from open-web crawl inherits some fraction of LLM-generated content. The question for the next generation of pretraining is not "how do we avoid synthetic" but "how do we filter or verify the synthetic we cannot avoid." Scale-up alone won't save us; Strong Model Collapse is a mathematical statement that `c(p) · σ²` doesn't die with bigger data.
-
-Operationally for 2026 pretraining:
-
-- Measure the synthetic fraction in your corpus (provenance-based if possible, detector-based as fallback).
-- Apply filters that shrink `σ_synth²` (deduplication, fluency filters, tail-preservation checks).
-- Budget the acceptable `c(p) · σ²` floor against your scaling target.
-
-Ch-23 §7's dashboard is this recipe operationalized.
-
----
-
-## What the paper does NOT claim
-
-Three important non-claims:
-
-1. **Not "all synthetic is worthless."** The theorem is about iid-model synthetic; verified synthetic is a different regime.
-2. **Not "1% is the magic threshold."** 1% is the regime-specific empirical number for GPT-2-scale. Other regimes have different thresholds. The universal statement is "`c(p) > 0` for `p > 0`."
-3. **Not "model size is irrelevant."** The phase diagram shows size matters; it just doesn't eliminate `c(p)`.
-
-Readers who conflate the paper with "synthetic data is bad" miss the structural point, which is that the *loop* matters, not the content.
-
----
-
-## Connections
-
-- [[excerpts/model-collapse]] — the iterative-recursion paper this one sharpens into an asymptotic statement.
-- [[excerpts/faithful-synth-eval]] — Zhang et al. 2025's convergence-under-verification is the formalization of the synthetic-quality loophole.
-- [[excerpts/synthetic-data-scaling-laws]] — empirical evidence that rephrased synthetic (which is implicitly verified by paraphrase anchoring) survives scaling, while pure-generated (which satisfies this paper's assumptions) does not.
-- [[excerpts/prismatic-synthesis]] — gradient-coverage selection shrinks `σ_synth²` by actively filling underpopulated regions; an anti-`c(p)` mechanism.
-- [[ch-23]] — §2 is this paper, §5 and §6 are responses to its loophole.
+## Verification
+- Read on 2026-09-15 against arXiv:2410.04840v2 PDF text (Abstract, §1–5, App. A.3).

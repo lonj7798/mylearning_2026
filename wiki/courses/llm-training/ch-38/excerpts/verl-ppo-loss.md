@@ -7,6 +7,8 @@ source_url: https://github.com/verl-project/verl
 created_at: "2026-04-23"
 ---
 
+> Superseded by the 2026-09 revision of read.md; kept for history.
+
 # Excerpt: verl PPO vanilla — asymmetric clip + dual-clip + loss-agg
 
 **Source library:** `wiki/raw-data/llm-training/frameworks/verl-ppo-loss.md`

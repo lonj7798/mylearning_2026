@@ -7,6 +7,8 @@ source_url: https://arxiv.org/abs/2405.14734
 created_at: "2026-04-23"
 ---
 
+> Superseded by the 2026-09 revision of read.md; kept for history.
+
 # Excerpt: SimPO — reference-free, length-normalized DPO
 
 **Source library:** `wiki/raw-data/llm-training/papers/simpo.md`

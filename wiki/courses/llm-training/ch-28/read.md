@@ -1,221 +1,351 @@
 <!-- chapter: ch-28
      track: synthetic
-     title: Modality — Long-Context Synthesis
-     sources: [[longalpaca]], [[longalign]], [[longchat]], [[longmit]], [[prolong]],
-              [[ruler]], [[babilong]], [[needle-in-haystack-data]], [[longbench]],
-              [[long-context-llama3]], [[long-context-data-engineering]],
-              [[qwen-long-context-synth]], [[longrope-data]], [[pose-synthesis]],
-              [[longembed-synth]], [[gemini-long-context-tricks]]
-     figures: figures/context-extension.html
+     kind: content
+     title: Long-Context Data Synthesis and Synthetic Evaluation Task Families
+     deps: [ch-27, ch-32c]
+     sources: [[needle-in-haystack-data]], [[excerpts/ruler-task-family]], [[ruler]], [[babilong]], [[helmet]], [[nolima]], [[excerpts/longalign-pipeline]], [[longalign]], [[excerpts/longmit-mimg]], [[excerpts/llama3-staged-schedule]], [[llama-3]], [[llama-3-recipe]], [[qwen-long-context-synth]], [[prolong]], [[prolong-recipe]], [[excerpts/artificial-needles-kv-retrieval]], [[in2-film]], [[context-synthesis-short-to-long]], [[nextlong]], [[lost-in-the-middle]], [[pose-synthesis]], [[excerpts/primary-quotes-2026-09]]
+     figures: figures/task-family-generator.html, figures/context-extension.html
+     revised: 2026-09 (generality revision)
 -->
 
-# Chapter 28 — Modality: Long-Context Synthesis
+# Chapter 28 — Long-Context Data Synthesis and Synthetic Evaluation Task Families
 
-> **Core insight.** Long-context capability is not a single-knob extension of short-context training — it is the *co-design* of three independent axes that every 2024+ frontier release has had to solve simultaneously. (i) **Position encoding**: RoPE's base frequency must be rescaled (Llama-3 uses 500K; Fu-2024 uses 200M; LongRoPE uses *per-dimension* factors λ_i found by evolutionary search) or the sinusoids alias past the pretraining range. (ii) **Data**: you need long *coherent* documents, not concatenations of short ones — ProLong's coherence filter is the difference between 512K context on 20B tokens and garbage. (iii) **Evaluation**: a single-needle NIAH pass does not prove long-context; RULER's 13-task generator and BABILong's reasoning-in-a-haystack reveal that "claimed context" and "effective context" routinely differ by 2× on frontier models (Llama-3.1-70B: claimed 128K, effective ~64K per RULER). Synthesis — of instruction data and of evaluation tasks — is what makes each of the three axes tractable.
+> **Core insight.** The same program-built generators (needles, key-value lists, multi-hop questions over chunks) are used both to build long-context training data and to build long-context evaluation tasks, and a synthetic task measures only the skill its generator isolates: across 35 instruction-tuned models at 128K, NIAH correlates with ∞Bench QA at Spearman ρ = 0.63 while the RAG task HotpotQA correlates at 0.88 ([[helmet]] Fig. 4). On the data side, the two reports that measured the synthetic long SFT share disagree: the ProLong base model, after 40B tokens of long continued training with 37% short data in the mix, scored best with short-only UltraChat SFT and lost 1.6 points when 1% of SFT tokens were synthetic long data ([[prolong]] Table 8), while Llama 3.1 reports that short-only SFT caused "significant regressions" in long-context ability and a 0.1% synthetic long share optimized short and long benchmarks ([[excerpts/llama3-staged-schedule]] §4.3.4); the ProLong authors attribute the difference to the amount of prior long training and the size of the short SFT set (Interpretation). In tests at about 4K tokens, fact-free synthetic retrieval data transfers to real retrieval without the knowledge-benchmark losses that NIAH-style training data causes (Mistral-7B TriviaQA +0.11 vs −6.33, [[excerpts/artificial-needles-kv-retrieval]] Table 2).
 >
-> **Guideline.** Treat long-context training as a three-stage stack: (1) **position extension** via staged RoPE-base rescaling (or LongRoPE per-dim search if you're data-poor); (2) **continued pretraining on coherent long documents** at a modest token budget (5B for Fu, 20B for ProLong) with cross-domain ratios preserved and within-domain length upsampling; (3) **SFT with synthesized long tasks** — LongAlign-style 5-questions-pick-one for cross-span coverage, multi-needle retrieval for explicit retrieval training, LongMIT-style multi-turn for dialog state. Evaluate on RULER + BABILong + realistic LongBench — never NIAH alone.
+> **Guideline.** When long-context ability is evaluated, report RULER effective length together with at least one application suite (HELMET categories) and a short-context suite, because NIAH is 100.0 for five of six frontier models at 128K ([[helmet]] Table 5) and does not rank models by application performance. When continued long-context training is run, keep high-quality short data in the mix (ProLong's best average was 60% long / 40% short in 5B-token ablations) and choose the mix by long and short scores measured after SFT, because 100% long data improved perplexity while lowering downstream scores after SFT ([[prolong]] §2.1, §3.2). When the long continued-training stage is short or the SFT set is large, add a small synthetic long share to SFT (Llama 3.1: 0.1%; LongAlign: 10k long examples added to 76k ShareGPT) and verify with an ablation, because short-only SFT regressed long context in Llama 3.1 and in SmolLM2 ([[excerpts/primary-quotes-2026-09]] smol-talk). Otherwise, when a model already has extensive long continued training, test short-only SFT first, because ProLong's synthetic long SFT at 1%, 3%, 10%, and 50% of tokens all scored below the 0% arm ([[prolong]] Table 8). When synthetic retrieval data is used for training, prefer data without factual content and evaluate with distractors that resemble real retrieval results, because the key-value data did not improve MDQA with retrieved (relevant) distractors ([[excerpts/artificial-needles-kv-retrieval]] §4).
+
+## Corrections to the version you studied
 
----
+1. "ProLong's coherence filter is the difference between 512K context on 20B tokens and garbage" → ProLong describes no coherence filter; it trains 40B tokens (20B at 64K, then 20B at 512K), and its main data finding is that long data must be mixed with high-quality short data ([[prolong]], §3.2, Table 9).
+2. "Fu-2024 uses 200M" (RoPE base, also "10K → 200M NTK-aware") → Fu et al. state only that they adjust the RoPE base "as in Xiong et al. (2023)"; no value is printed ([[excerpts/primary-quotes-2026-09]], long-context-data-engineering, §1, §4).
+3. Guideline "position extension via staged RoPE-base rescaling" and "RoPE base θ is rescaled from Llama-2's 10K to 500K for the final 128K model" → Llama 3 sets θ = 500,000 as an architecture hyperparameter for all of pre-training; no base change during the six long-context stages is described ([[excerpts/llama3-staged-schedule]], §3.2, §3.4.2).
+4. Guideline "(3) SFT with synthesized long tasks" as the default stage → this depends on the prior stage: ProLong's final SFT is short-only UltraChat because synthetic long data hurt at every tested share, while Llama 3.1 needed 0.1% synthetic long data ([[prolong]], §5, Table 8; [[excerpts/llama3-staged-schedule]], §4.3.4).
+5. "Chapters 23–27 established the synthetic-data design pattern" and "ch-27 — the synthetic-data design pattern" → the design pattern is ch-18; ch-27 is Agentic Trajectory Data (outline.json).
+6. "MinHash at 32K-shingled docs is 8× more expensive than at 4K" → no source reports this figure; removed.
+7. "teacher-context ceiling becomes a hard constraint" (cited to the unverified `longmit` card) → LongMIT generates questions from truncated document segments and then refills the context with other documents to a fixed length (App. C.2), so its generator does not read the full training context ([[excerpts/longmit-mimg]], App. C.2).
+8. NIAH needle "eat a sandwich at Dolores Park", "score exact-substring", "a blog post" → the default needle is "eat a sandwich and sit in Dolores Park on a sunny day", the original harness scores with a GPT-4 judge on a 1–10 rubric, and the artifact is a GitHub repository with linked tweet threads ([[needle-in-haystack-data]], L24, L360-390, Summary).
+9. "every 128K / 200K / 1M-context release now ships a NIAH heatmap" → unsupported and removed ([[needle-in-haystack-data]], Verification).
+10. BABILong "20 task templates" → the released evaluation set covers 10 tasks (QA1–QA10) and Tables 2 and 4 average QA1–QA5; 50M tokens is reached only by ARMT ([[babilong]], App. N.2, §3.3).
+11. "Llama-3.1-70B's RULER effective context is ~64K" (cited to the unverified `long-context-llama3` card) and "Meta acknowledges this in the paper" → the 128K claimed / 64K effective result is RULER Table 3; the Llama 3 report does not evaluate RULER ([[excerpts/ruler-task-family]], Table 3; [[excerpts/llama3-staged-schedule]], §5.2.6).
+12. "Llama-3.1-405B NIAH@128K is ~99% and RULER effective context is ~96K" → 405B does not appear in RULER Table 3; the Llama 3 report gives NIAH 100% and Multi-needle 98.1 for 405B ([[excerpts/llama3-staged-schedule]], §5.2.6, Table 21).
+13. "Qwen-2.5-14B-1M NIAH @ 1M ≈ 100% and RULER @ 1M ≈ 85%" → RULER is reported only up to 128K (14B-Instruct-1M 92.2); Passkey Retrieval at 1M is perfect for 14B-Instruct-1M ([[qwen-long-context-synth]], Table 4, Fig. 1).
+14. LongAlpaca "3,000 long documents — 40% ArXiv, 30% books, 30% GitHub", "ChatGPT or Claude", "3 QA pairs per document", length and profanity filters, "~$5K" → LongLoRA App. B.6 states self-collected QA on technical papers, science fiction, and other books, 9k long QA plus 3k Alpaca short QA, 5 epochs; generator, document count, code, filters, and cost are not stated ([[excerpts/primary-quotes-2026-09]], longalpaca).
+15. "Data quality saturates around 10k long examples" and "LongAlign-10k beats the larger LongAlpaca-12k on multi-segment integration" → LongAlign reports consistent improvement from 0k to 5k to 10k and no saturation; LongAlign-10k is higher on LongBench-Chat (6.28 vs 4.58) and MT-Bench, while LongAlpaca-12k is higher on LongBench S-Doc QA and M-Doc QA ([[excerpts/longalign-pipeline]], §4.2, Table 3).
+16. LongChat "mines ShareGPT's long tail — ≥ 8K tokens, ≥ 4 turns — for 18K long conversations" → LongChat reuses Vicuna's ShareGPT conversations truncated to 16K and fine-tunes 7B on 80k and 13B on 18k conversations ([[excerpts/primary-quotes-2026-09]], longchat, Step 2).
+17. "LongMIT ... synthesized multi-turn long-context dialogs — 5–10 turns ... lifts LongBench-Chat by 5–10 points" → LongMIT is multi-hop long-context instruction data built with the MIMG multi-agent framework (Chen et al. 2024); it reports LongBench QA subsets, not LongBench-Chat ([[excerpts/longmit-mimg]], §2, Table 1).
+18. ProLong "≥ 64K tokens of coherent content", "Web: discarded", "code × 4, books × 2, academic × 2, forum × 1, web × 0.5", "~40% code, 25% books, 15% academic ..." → the final mix is 30% code repositories, 30% books, 3% textbooks, 37% ShortMix; CommonCrawl was tested as a long source (Table 4) ([[prolong]], Table 4, Table 9).
+19. "Replacing the curated long documents with concatenated short documents ... costs 10+ points on HELMET" → no such ablation is in the paper ([[prolong]], Verification).
+20. ProLong stage 1 "RoPE base rescaled 500K → 128M", "LR 1e-4 → 1e-5", "100% long coherent documents ... no cross-document packing" → RoPE base 8×10^6 at 64K and 1.28×10^8 at 512K; LR 1e-5 with cosine decay to 1e-6 per stage; short data is packed and attention across documents is masked ([[prolong]], Table 9, App. B.2).
+21. ProLong "Stage 2 — SFT (5B tokens): 70% long-instruction (Claude-3-generated) + 30% UltraChat + multi-needle NIAH" → SFT is 1B tokens of UltraChat only; synthetic long data from Llama-3-8B-Instruct and Llama-3-70B-Instruct was tested and not used ([[prolong]], §5, Table 9).
+22. "~200K H100-hours", "(Llama-3-8B base)", "beating Llama-3.1-8B-Instruct and Qwen2-7B-Instruct on InfiniteBench @ 128K" → 2.2K + 12.2K H100 hours; initialized from Llama-3-8B-Instruct; HELMET 128K average 49.4 vs 46.5 for Llama-3.1-8B-Instruct, ∞Bench 48.0 vs 46.7, and RULER 71.9 vs 81.3 ([[prolong]], Tables 9, 10, 26).
+23. Llama 3 table of four stages with tokens (~100B, ~100B, ~150B, ~200B) and short:long ratios 80:20 → 40:60 → the report prints six stages and about 800B tokens, with no per-stage lengths, tokens, or ratios ([[llama-3-recipe]], v3 §3.4.2).
+24. "Long-context SFT is kept at ~0.1% of total SFT samples (~100K out of ~100M). Raising the long-SFT fraction above 1% costs ~1 MMLU point" → the report states 0.1% (Table 7: 0.11% of examples, 38,135.6 tokens on average); the total example count and any MMLU cost are not reported ([[llama-3-recipe]], §4.3.4, Table 7).
+25. "Teacher is Llama 3 405B itself (self-distillation)" → QA is generated by "an earlier version of the Llama 3 model" and chunk summaries by "our strongest Llama 3 8K context model" ([[excerpts/llama3-staged-schedule]], §4.3.4).
+26. Fu 2024 "documents longer than 32K get 5× weight" and "globally up-weighting Books ... drops short-context MMLU by 3–5 points" → neither number is in the paper; it reports per-domain loss effects of domain upsampling (Table 5) and packs data to 80K chunks regardless of document boundaries ([[excerpts/primary-quotes-2026-09]], long-context-data-engineering, §3, §4).
+27. LongRoPE "θ_i = θ^(2i/d)" and "With d = 128 RoPE dimensions, that's a 128-dimensional search space" → θ_i = θ^(−2i/d); the search has one factor per frequency (d/2 values) plus n̂, the number of initial tokens kept without interpolation ([[excerpts/primary-quotes-2026-09]], longrope-data, §2.1, §3.2).
+28. LongRoPE "Fitness is a weighted combination of long-context perplexity + NIAH retrieval accuracy" → the search minimizes perplexity on 5 PG19 validation samples; P = 64, T = 40, p = 0.3 are correct ([[excerpts/primary-quotes-2026-09]], longrope-data, Algorithm 1, §4.1).
+29. LongRoPE "< 1B tokens ... (~300M at 256K, ~600M at 2M)", "10× reduction in fine-tune data", "MMLU and GSM8K stay within 1 point" → fine-tuning is 400 steps on 128k segments and 600 more steps for 256k, global batch 32, with no token count printed; 2048k is reached by a second search; the 10× figure is not in the paper ([[excerpts/primary-quotes-2026-09]], longrope-data, §4.1).
+30. PoSE "train on 4K-token samples", "4× compute reduction", "retrieval-strong / reasoning-weak" → PoSE uses 2,048-token training windows; the compute and reasoning claims are not in the paper ([[pose-synthesis]], §4.1, Verification).
+31. Qwen2.5-1M "32K → 128K → 256K (50B + 50B + 100B tokens)" → stages 4,096 → 32,768 → 65,536 → 131,072 → 262,144 with RoPE bases up to 10,000,000; token counts are not reported ([[qwen-long-context-synth]], §3).
+32. Qwen2.5-1M "Synthetic SFT mix generated by Qwen-Max" with multi-needle, 50K–200K summarization, 5–20-passage RAG-QA, FILL-IN, and a multi-position filter → queries are written by Qwen2.5 from a random segment and responses by the Qwen-Agent framework; fill-in-the-middle is a pre-training task; the listed SFT tasks and filter are not in the report ([[qwen-long-context-synth]], §3, §4).
+33. "DCA ... inter-chunk uses a low-rank formulation" with "256K-sized chunks" → DCA remaps relative positions into intra-chunk, inter-chunk, and successive-chunk position indices so no distance exceeds the pre-training length; it is training-free ([[qwen-long-context-synth]], §5.1).
+34. "Short-context MMLU / GSM8K within 1 point of base Qwen-2.5" and "Qwen 3 inherits and refines this recipe" → Table 6 shows mixed changes (14B GPQA 45.5 → 39.9; 7B MMLU-Pro 56.3 → 54.3; 14B GSM8K 94.8 → 94.8); the report says nothing about Qwen 3 ([[qwen-long-context-synth]], Table 6, Verification).
+35. "ch-29 (next) ... long-context synthesis is one of the optional modality specializations" and "DCA ... deserves separate study in inference / serving chapters" → ch-29's concepts contain no long-context component, and the outline has no inference or serving chapter; long-document synthesis is ch-29a and context extension is ch-32b (outline.json).
 
-## Why this chapter exists
+## Why this chapter matters for a general-purpose model
 
-Chapters 23–27 established the synthetic-data design pattern for short-context SFT: generate → filter → dedup → verify → select → mix. Long-context breaks each step of that loop. A teacher model must *read* 100K tokens of source document before it can generate a useful question-answer pair, so teacher-context ceiling becomes a hard constraint ([[longmit]]). Filter cost scales with sequence length, so MinHash at 32K-shingled docs is 8× more expensive than at 4K. Verification is the steepest: there is no cheap automatic check that a generated answer actually uses evidence spread across 50K tokens of document; LLM-judge + human spot-check is all we have ([[longalign]] validates 94/100 manually).
+The pipeline for a general-purpose model is pre-training → mid-training → SFT → preference optimization → RL → evaluation. Long-context ability is added mainly at mid-training (ch-32b), preserved or elicited at SFT, and gated at evaluation (ch-32c). Natural data with long-range dependencies and natural long evaluation tasks are both scarce, so labs synthesize them. This chapter covers the synthetic task families used for evaluation, the early and production recipes for synthetic long SFT data, and the evidence on how much synthetic long data to mix.
 
-At the same time, the *architecture* side changed. Context-extension is not just "train longer sequences" — RoPE ([[longrope-data]], [[long-context-data-engineering]]) has a fixed frequency spectrum tied to its base θ, and pushing position indices past the training range produces frequency aliasing unless you rescale. The resulting stack — position fix + long-doc CPT + synthetic long-SFT + synthetic long-eval — is what distinguishes Llama-3-128K, ProLong-512K, and Qwen-2.5-1M from each other.
+Three measurable problems motivate the chapter. First, a benchmark built from one generator can be saturated while application ability varies: NIAH is 100.0 for five of six frontier models at 128K, and those five models have HELMET averages from 47.0 (Llama-3.1-8B-Inst) to 63.8 (GPT-4o-08) in the same table ([[helmet]] Table 5). Second, long SFT data changes short-context ability and long-context ability in different directions depending on the prior stage (§4, §5). Third, training on synthetic long tasks can transfer, fail to transfer, or remove other abilities, depending on what the synthetic data contains (§6). Each of these is a generality question: a long-context gain is useful for a general model only if it holds on tasks the generator did not produce and does not remove short-context ability.
 
-This chapter walks the stack in the order labs actually build it: synthetic evaluation first (because you can't design data for a capability you can't measure), then SFT-only recipes, then continued-pretraining recipes, then the position-encoding lane that cuts fine-tune data by 10×, then the 1M-context frontier.
+## §1 Synthetic evaluation task families: NIAH, RULER, BABILong
 
-The raw-data library backing each section is in `wiki/raw-data/llm-training/papers/` — 16 source files, from the Kamradt NIAH README to the Qwen 2.5-1M technical report. Each section here cites them via `[[wikilink]]`; for deeper walk-throughs of the single most load-bearing claim per paper, see the excerpts under `excerpts/`.
+**Definitions.** A *synthetic long-context task* inserts task-relevant text (the *needle* or *facts*) into long filler text (the *haystack*) by a program, so that the answer is known without annotation. A *task family* is a generator with parameters (needle type, number of distractors, number of hops, input length) that produces many instances.
 
----
+**Needle-in-a-Haystack (NIAH).** The Kamradt harness inserts one sentence into Paul Graham essays at a chosen depth, trims the context to a chosen length, asks a question the needle answers, and scores the reply with a GPT-4 judge on a 1–10 rubric ([[needle-in-haystack-data]] L360-390). In the released GPT-4-128K run, 207 of 225 (length, depth) cells scored 10 ([[needle-in-haystack-data]] Findings). The problem it addresses is whether a model can retrieve a fact at a given position. The problem it does not address is whether the model can ignore similar distractors, return several items, or combine facts.
 
-## 1. The synthetic-task family — NIAH → RULER → BABILong
+**RULER.** RULER extends NIAH to 13 task configurations in four categories ([[excerpts/ruler-task-family]] §3, Table 5):
+1. Retrieval: single needle (S-NIAH), multi-key with distractor needles (MK-NIAH), multi-value (MV-NIAH), multi-query (MQ-NIAH).
+2. Multi-hop tracing: variable tracking (VT), `X2 = X1`, `X3 = X2`, return all names bound to one value.
+3. Aggregation: common-word and frequent-word extraction (CWE, FWE).
+4. QA: SQuAD and HotpotQA with distractor paragraphs.
 
-Long-context *evaluation* is itself synthetic — because there is no natural benchmark long enough. The lineage starts with a blog post.
+Each model is evaluated with 500 generated examples per task at 4K, 8K, 16K, 32K, 64K, and 128K, inside the model's chat template, with an answer prefix and recall-based accuracy ([[excerpts/ruler-task-family]] §4).
 
-### 1.1 Needle-in-a-Haystack (Kamradt, Nov 2023)
+**Effective length.** RULER defines the effective length as the largest tested length whose 13-task average exceeds the Llama2-7B score at 4K:
 
-The original [[needle-in-haystack-data]] test is a one-liner: hide the sentence *"The best thing to do in San Francisco is eat a sandwich at Dolores Park on a sunny day"* at programmatic depth inside Paul Graham essays padded to target length, ask *"What is the best thing to do in San Francisco?"*, score exact-substring. The output is a 2D heatmap (depth × length, accuracy as colour). No teacher, near-zero cost, visually legible. That last property is why it became the *de facto* long-context marketing metric — every 128K / 200K / 1M-context release now ships a NIAH heatmap.
+```
+L_eff(model) = max { L ∈ {4K, 8K, 16K, 32K, 64K, 128K} : S(model, L) > 85.6 }
+```
 
-**What NIAH misses.** It tests retrieval of one fact, at one depth, with one query. Real long-context behaviour requires retrieval of multiple facts, ignoring distractors, aggregating across spans, and reasoning across retrieved items. A model can pass NIAH at 128K while collapsing on multi-hop at 32K. Hence the two successor benchmarks.
+- `S(model, L)` is the mean accuracy over the 13 tasks at input length `L`.
+- `85.6` is Llama2-7B's mean at 4K ([[excerpts/ruler-task-family]] Table 3).
 
-### 1.2 RULER and BABILong — the task-family table
+**Worked example.** Llama 3.1 70B scores 96.5, 95.8, 95.4, 94.8, 88.4, and 66.6 at 4K through 128K. The scores exceed 85.6 through 64K (88.4) and fall below at 128K (66.6), so L_eff = 64K for a claimed 128K. Llama 3.1 8B scores 87.4 at 32K and 84.7 at 64K, so L_eff = 32K. GradientAI's Llama-3 70B (claimed 1M) scores 90.8 at 16K and 85.4 at 32K, so L_eff = 16K ([[excerpts/ruler-task-family]] Table 3). A 0.2-point difference at 32K (85.4 vs 85.6) changes the reported length by a factor of two, so L_eff is a threshold statistic with a large step size; the full score row carries more information. The figure [figures/context-extension.html](figures/context-extension.html) plots these Table 3 rows against the threshold so the reader can read off the effective length for each model and see how close each score is to 85.6.
 
-| Family | Paper | Primitive | Complexity knobs | What it stresses |
-|---|---|---|---|---|
-| **S-NIAH** (single-needle) | [[needle-in-haystack-data]], [[ruler]] | 1 key-value injected in haystack | depth, length, needle type (word / 7-digit / UUID), haystack type (noise / essay) | baseline retrieval |
-| **MK-NIAH** (multi-key) | [[ruler]] | N keys, query one | N ∈ {4, …, full-haystack-distractors} | distractor resistance |
-| **MV-NIAH** (multi-value) | [[ruler]] | one key → k values, return all | k ∈ {2, 4, 8} | recall completeness |
-| **MQ-NIAH** (multi-query) | [[ruler]] | multiple independent queries per haystack | number of queries | parallel retrieval |
-| **VT** (variable tracing) | [[ruler]] | `X2 = X1`, `X3 = X2`, …; return equivalents | chain count, hops per chain | coreference / state |
-| **CWE** (common-word extraction) | [[ruler]] | tokens from common + uncommon word distribution | common count, frequency ratio | aggregation |
-| **FWE** (frequent-word extraction) | [[ruler]] | Zeta-distributed tokens, return top-K | Zeta α, K | aggregation tail |
-| **QA** | [[ruler]] | SQuAD / HotpotQA + distractor paragraphs | paragraph count | realistic retrieval + reasoning |
-| **bAbI-in-PG19** | [[babilong]] | 20 bAbI reasoning tasks inside natural PG19 prose | 0K → 10M length (50M reported), 20 task templates | retrieval + symbolic reasoning |
+**RULER's failure analysis.** On Yi-34B-200K, adding distractor needles lowered accuracy by about 40 points at 256K in the full-haystack setting, raising the number of queries from 1 to 8 lowered it by about 15 points, and over 80% of CWE outputs at 128K copied the one-shot example ([[excerpts/ruler-task-family]] §5). These are three separate failure types that a single-needle test does not expose.
 
-RULER's three methodology points are quietly load-bearing: (a) **context length and task complexity vary independently** — you can tell whether a model broke because of raw length or because of distractor density; (b) **500 examples per task per length** with an explicit answer prefix in the chat template; (c) **effective context size** is defined as the longest length whose score stays above the Llama2-7B@4K baseline of 85.6. BABILong's complementary choice is to keep the reasoning structure *templated* (contamination-resistant) while the distractors are *real prose* (not artificial filler).
+**BABILong.** BABILong hides the facts of bAbI reasoning tasks (agents moving between locations) between sentences of PG19 books, keeping the task fixed while the length grows ([[babilong]] §2, App. N.3). The tested LLMs "effectively use only 10-20% of the context"; with background text every tested LLM stayed below 85% on QA2 (two supporting facts), while several passed QA1 (one fact) up to 16K–64K ([[babilong]] Abstract, §3.1). RAG pipelines reached about 60% on QA1 at every length but fell below random on QA2 and QA3 ([[babilong]] §3.2).
 
-**The result that matters for every training report.** Many models with advertised 128K windows degrade sharply once distractors, multiple targets, or aggregation are introduced — claimed ≠ effective context. Llama-3.1-70B's NIAH @ 128K is ~99%, but its RULER effective context is ~64K ([[long-context-llama3]]). Qwen-2.5-14B-1M's NIAH @ 1M is ~100% but its RULER @ 1M is ~85% ([[qwen-long-context-synth]]). The gap is the reasoning-in-a-haystack tax.
+**Measurement limits.**
+- *Correlation with applications.* HELMET computes Spearman ρ between synthetic tasks and application categories across 35 instruction-tuned models at 128K. NIAH vs ∞Bench QA is 0.63, RULER MK vs ∞Bench QA 0.81, and HotpotQA RAG vs ∞Bench QA 0.88; no synthetic task averages above 0.8 against the downstream categories ([[helmet]] Figs. 3–4). Result (single study).
+- *Lexical overlap.* When the question shares almost no words with the needle, GPT-4o falls from 99.3 to 69.7 at 32K ([[nolima]] Table 3). The authors interpret this as standard needles being locatable by word matching (Interpretation).
+- *Distinguishable facts.* bAbI sentences are short and differ in style from PG19 book prose (books published before 1919), and the authors state that fine-tuned models can learn tokens that separate facts from background ([[babilong]] Limitations).
+- *Position.* With 20 documents, GPT-3.5-Turbo scores 75.8% with the answer document first, 53.8% at position 10, and 63.2% at position 20 ([[lost-in-the-middle]] App. G Table 6). An average over depths hides this curve.
 
----
+**Implication for a general-purpose model.** A synthetic family is a controlled probe of one skill. It is useful for diagnosis (which knob breaks the model) and for training-data design, and it is a weak proxy for application breadth. The detailed evaluation gate belongs to ch-32c. The figure [figures/task-family-generator.html](figures/task-family-generator.html) generates small instances of each family used in this chapter, lets the reader change the generator knobs (distractors, values, hops, depth), and shows next to each instance what the family measures and the limit reported for it.
 
-## 2. Early SFT-only recipes — LongAlpaca and LongAlign
+## §2 Early long instruction data: LongAlpaca and LongAlign
 
-Before anyone had the compute for 20B-token continued pretraining, the question was: *can we make a short-context base behave like a long-context model using only SFT?*
+**Definition.** *Long-context instruction data* is SFT data whose prompt contains a long document (8K–64K tokens in LongAlign; LongAlpaca does not report lengths) and whose response depends on that document.
 
-### 2.1 LongAlpaca-12K ([[longalpaca]], Chen et al. 2023)
+**Problem.** After context extension by continued training, a model accepts long inputs but may not follow instructions over them. LongAlign measures this directly: ChatGLM3-6B-64k fine-tuned on ShareGPT alone (LongAlign-0k) scored 3.73 on LongBench-Chat, and adding 10k long examples raised it to 6.28 ([[excerpts/longalign-pipeline]] Table 3).
 
-The recipe is the minimum viable product. (i) Collect **3,000 long documents** — 40% ArXiv CS papers, 30% public-domain books, 30% GitHub repos. (ii) For each document, prompt **ChatGPT or Claude** (Claude preferred on the longest docs, then still at 100K ceiling) with the full text plus a task-type specification (summarize / QA / extract / analyze). Generate **3 QA pairs per document**. (iii) Filter: document ≥ 8K tokens, answer ≥ 30 tokens, profanity check. (iv) **Mix in 3K random Alpaca samples** (≤2K tokens) to preserve short-chat behaviour. Pair with **LongLoRA's shifted-sparse attention** and you extend Llama-2-7B to 32K/100K at ~$5K in API fees.
+**LongAlpaca (2023).** LongLoRA's SFT set contains 9k long-context QA pairs on "technical papers, science fiction, and other books" and 3k short QA pairs sampled from Alpaca, trained for 5 epochs ([[excerpts/primary-quotes-2026-09]] longalpaca). The paper does not name the generator or give filters. In RULER Table 3, LongAlpaca-13B (claimed 32K) has an effective length under 4K ([[excerpts/ruler-task-family]] Table 3).
 
-The artifact — `Yukang/LongAlpaca-12k` — became the reference baseline for subsequent long-context datasets, not because it was state-of-the-art but because it shipped.
+**LongAlign (2024), step by step** ([[excerpts/longalign-pipeline]] §3.2, App. A):
+1. Extend the base model: RoPE base 10,000 → 2,000,000 and 10B tokens of continued training on sequences under 64K.
+2. Sample documents under 64K tokens from 9 sources and upsample longer ones.
+3. For each document, pick one of four task prompts at random (general, summary, multi-hop reasoning, information extraction) and ask Claude 2.1 for five questions that "cover all parts of the text".
+4. Pick one question at random and ask Claude 2.1 for the answer.
+5. Check quality by hand on a sample: 94 of 100 answers correct, 2 incorrect, 3 incomplete, 1 irrelevant.
+6. Mix the 10k long examples with 76k ShareGPT examples and train 2 epochs.
 
-### 2.2 LongAlign-10k ([[longalign]], Bai et al. 2024)
+**Mixing result (ChatGLM3-6B-64k, Table 3).** LongBench-Chat 3.73 / 5.99 / 6.28 for 0k / 5k / 10k long examples. Short tasks stay within 1.1 points on MMLU (45.5 / 46.6 / 45.5) and 0.17 on MT-Bench (5.34 / 5.50 / 5.51). LongAlpaca-12k gives 4.58 on LongBench-Chat and 4.93 on MT-Bench but the highest S-Doc QA (65.8) and M-Doc QA (45.6). Result (single study, one model for this table). The authors attribute LongAlpaca's LongBench advantage to 2WikiMQA and NarrativeQA resembling its book-based sources (Interpretation).
 
-LongAlign is the first recipe to take long-context SFT seriously as a distinct training problem. Four ingredients:
+**Loss weighting under packing.** Long SFT data has a skewed shape: LongAlign-10k targets average 200 tokens with a target/sequence token ratio of 0.015, against 330 tokens and a ratio printed as 19.3 for ShareGPT (no unit is printed; the value is consistent only with a percentage, 0.193) ([[excerpts/longalign-pipeline]] App. A). When sequences are packed and each pack's loss is a token mean, sequences are not weighted equally. The intended loss gives each sequence weight 1/M:
 
-1. **Self-Instruct-style synthesis on 9 source mixes** — ArXiv, Books3, C4, CLUECorpus2020, CommonCrawl, GitHub, StackExchange, Wikipedia, WuDaoCorpora; 90% EN / 10% ZH. Teacher is **Claude 2.1**. Generation is two-stage: *ask Claude for 5 candidate questions covering the whole document, then randomly pick one and ask for the answer.* That pick-one trick forces cross-span coverage — without it, the teacher picks locally-answerable questions, and the student learns long retrieval, not long reasoning.
-2. **Packing + block-diagonal mask** using `flash_attn_varlen_func` with `cu_seqlens`. Average pack holds ≈12 sequences; batch-size 8 → global batch 96.
-3. **Sequence-level loss weighting** — the naïve packed loss over-weights packs with few (long) sequences and over-weights targets with more tokens. Fix: weight each target token by `1/N` where `N` is that sequence's target length; during training scale by `K/(M·N)` where `K` packs, `M` sequences. On ChatGLM3-6B-64k, LongBench-Chat rises from **5.76 → 6.21**; on Llama-2-7B-64k, **5.89 → 6.10**.
-4. **Pre-SFT context extension**: expand RoPE base **10,000 → 2,000,000** (200× rescale) and continually pretrain to 64K on 10B tokens *before* SFT.
+```
+L = (1/M) Σ_i L_i / N_i                                  (per-sequence mean)
+L' = (1/K) Σ_k ( Σ_{i∈k} L_i ) / ( Σ_{i∈k} N_i )          (per-pack token mean)
+```
 
-LongAlign is therefore a post-extension recipe; it does not claim to solve position extrapolation. Data quality saturates around **10k long examples** — beyond that, diversity matters more than volume, and LongAlign-10k beats the larger LongAlpaca-12k on multi-segment integration.
+- `M` is the number of sequences in the batch, `K` the number of packs.
+- `L_i` is the summed token loss of sequence `i`, `N_i` its number of target tokens.
+- In `L'`, sequence `i` in pack `k` has weight `N_i / (K · Σ_{j∈k} N_j)` on its mean loss `L_i/N_i`.
 
-### 2.3 LongChat and LongMIT — the conversational variants
+LongAlign scales each target token of sequence `i` by `K / (N_i · M)` and sums over packs, which recovers `L` ([[excerpts/longalign-pipeline]] Eq. 4, App. B).
 
-[[longchat]] (LMSYS, June 2023) mines **ShareGPT's long tail** — real user conversations ≥ 8K tokens, ≥ 4 turns — for 18K long conversations, then fine-tunes Vicuna with **condensed rotary embedding** (position index `i` becomes `i/c` with `c = 8` for 16K). It's the real-log counterpart to LongAlign's synthetic pipeline. Short-lived as a position trick (superseded by NTK-aware → YaRN → LongRoPE) but durable as a *data-sourcing signal*: real long conversations contain topic shifts, backtracking, and cross-turn reference patterns that synthesis struggles to emulate.
+**Worked example.** Take K = 2 packs and M = 4 sequences. Pack A holds one sequence with 200 target tokens. Pack B holds three sequences with 10, 20, and 30 target tokens (60 in total). Under `L'`, the pack-A sequence has weight 200 / (2 · 200) = 0.50, and the pack-B sequences have 10/120 = 0.083, 20/120 = 0.167, and 30/120 = 0.25. The intended weight is 1/4 = 0.25 each. The long single sequence receives twice its intended weight and the 10-token sequence one third. With the fix, ChatGLM3-6B-64k LongBench-Chat goes from 5.76 (packing) to 6.21, and Llama-2-7B-64k from 5.89 to 6.10 ([[excerpts/longalign-pipeline]] Table 4). Packing and sorted batching cut ChatGLM3-6B-64k training time from 45.4 h to 20.5 h and 19.1 h (Fig. 5). Packing masks are covered in ch-04.
 
-[[longmit]] generalizes this to synthesized multi-turn long-context dialogs — 5–10 turns each referencing document spans, full context 20K–100K — and reports adding multi-turn on top of single-turn long-doc SFT lifts LongBench-Chat by **5–10 points** across model families. The limiter is teacher-context ceiling: only frontier closed models can coherently generate a 10-turn conversation conditioned on a 50K-token document.
+## §3 Multi-hop long instruction synthesis: LongMIT and the MIMG framework
 
----
+**Definition.** A *multi-hop* question requires two or more pieces of evidence located in different parts of the context. LongMIT is a multi-hop long-context instruction dataset built with MIMG (Multi-agent Interactive Multi-hop Generation) ([[excerpts/longmit-mimg]]).
 
-## 3. ProLong — the document-coherence thesis
+**Problem, as measured.** Self-Instruct-style generation with Qwen2-72B gave fewer than 35% multi-hop samples and over 40% poor-quality samples in the authors' manual annotation ([[excerpts/longmit-mimg]] Abstract).
 
-[[prolong]] (Gao, Wettig, Yen, Chen; Princeton NLP 2024) is the paper that answered "does long-doc quality matter or is volume enough?". Answer: quality matters, and the difference is 10+ points on HELMET.
+**Mechanism** ([[excerpts/longmit-mimg]] §2, App. C):
+1. A single-hop question agent generates questions and then answers (question-then-answer order) from document segments.
+2. A sampling step builds a question-similarity matrix with BGE embeddings and selects related questions from one document (higher quality) or several documents (higher diversity).
+3. A merging agent combines the selected single-hop questions into one multi-hop question, without a rationale.
+4. A quality verification agent (InternLM2-20B, with a rationale) scores each sample on several criteria; samples with quality score above 8.5 are kept.
+5. The context is refilled with other documents to a fixed length.
 
-### 3.1 The coherence filter — what counts as a "long document"
+**Evidence.** On human-labelled samples with Qwen-72B-Instruct as backbone, MIMG reaches 94.8 high-quality, 88.2 diversity, and 94.8 multi-hop, against 61.3 / 53.4 / 33.1 for Self-Instruct ([[excerpts/longmit-mimg]] Table 7). SFT on LongMIT gives LongBench QA averages (GPT-4o scored) of 64.29 on LLaMA3-8B vs 52.92 with LongAlign and 52.02 with LongAlpaca ([[excerpts/longmit-mimg]] Table 1). Verification findings: scoring outperforms binary classification, LLM verifiers agree poorly with humans on long inputs (low kappa) but select with high precision, and removing the rationale lowers verifier precision by more than 8.6% across domains (§3.1).
 
-ProLong's training mix is curated against an explicit *coherence* criterion, not just length. The filter threshold is **≥ 64K tokens of coherent content per document**, with coherence judged source-type-by-source-type:
+**Conditions and limits.** LongMIT has 64.40k samples and 5.07B tokens, against 9.89k and 0.17B for LongAlign (Table 3), so the Table 1 comparison is not matched in tokens. Evaluation covers LongBench QA subsets; summarization and code are not in Table 1. Short-context checks on a Llama-3-8B-ProLong base show IFEval instruction-level loose accuracy rising from 0.1259 to 0.1583 and ArenaHard moving from 7.2 to 6.7 with overlapping confidence intervals (Tables 6, 8). Result (single study).
 
-- **Code**: whole *repository* (README → source → tests concatenated in sensible order), not single files.
-- **Books**: full-book PDFs parsed with structural fidelity.
-- **Academic**: full papers *with references*.
-- **Web**: **discarded** — even long web docs are mostly scraped listings with weak long-range dependency.
+**Implication for a general-purpose model.** The measurable levers here are the multi-hop rate and the verifier's precision, both of which are properties of the generator and filter, not of the source documents. For a general model, the same verifier logic applies to any long SFT slice; ch-29a covers long-document generators in more depth.
 
-That last rule is the paper's sting. "Long" and "coherent" are not the same predicate on web data. After the filter, the 30B-token mix is re-weighted per source: **code × 4, books × 2, academic × 2, forum × 1, web × 0.5**, producing a final distribution of ~40% code, 25% books, 15% academic, 10% long forum threads, 10% misc web.
+## §4 Production long-SFT generators: Llama 3.1 and Qwen2.5-1M
 
-The ablation is the proof. Replacing the curated long documents with *concatenated short documents* of equal token budget — the obvious shortcut — costs **10+ points on HELMET**. The concatenation shortcut teaches a model that "long context" = "sequence of locally-coherent short segments," which is the failure mode that then shows up on RULER's multi-hop tracing and BABILong's reasoning tasks.
+**Llama 3.1 long-context stage.** In Llama 3 405B pre-training, the context grows from 8K to 128K in six stages over about 800B tokens; the report does not give the schedule for 8B and 70B. A stage ends when "model performance on short-context evaluations has recovered completely" and the model "perfectly solves 'needle in a haystack' tasks up to that length" ([[excerpts/llama3-staged-schedule]] §3.4.2). The gate combines a short-context criterion and a synthetic retrieval criterion; §1 explains why the retrieval criterion alone does not establish application ability.
 
-### 3.2 The staged schedule
+**Llama 3.1 long SFT generators** ([[excerpts/llama3-staged-schedule]] §4.3.4):
+1. *QA:* split curated long documents into 8K chunks, generate QA pairs from randomly selected chunks, and train with the whole document as context.
+2. *Summarization:* summarize 8K chunks, then summarize the summaries; train the model to summarize the full document; generate QA from the summaries that requires global understanding.
+3. *Code reasoning:* parse Python imports, select files referenced by at least five other files, remove one, and ask the model which files depended on it and what the missing code is.
+4. Bucket the samples at 16K, 32K, 64K, and 128K.
 
-- **Stage 1 — CPT (20B tokens)**: RoPE base rescaled **500K → 128M** (Llama-3.1 NTK-aware style). Train at 64K context initially, expand to 512K in the second half. LR 1e-4 → 1e-5 cosine. **100% long coherent documents**, one document per training sample, *no cross-document packing*.
-- **Stage 2 — SFT (5B tokens)**: 70% long-instruction (LongAlign-style, Claude-3-generated) + 30% short-instruction (UltraChat) + synthetic multi-needle NIAH training samples to explicitly teach retrieval.
+The generator reads 8K chunks while the training example contains the whole document, so the generator does not need a long context window. The answer depends on one chunk (QA) or on several parts of the document (summary QA, code).
 
-Total compute ~200K H100-hours produces ProLong-8B (Llama-3-8B base) at 512K context, leading among open 8B models on HELMET and beating Llama-3.1-8B-Instruct and Qwen2-7B-Instruct on InfiniteBench @ 128K.
+**Mixing evidence.** Short-only SFT "resulted in significant regressions in long-context capabilities"; a 0.1% synthetic long share "optimizes the performance across both short-context and long-context benchmarks"; short-only DPO did not hurt long context when the SFT model was strong on long context ([[excerpts/llama3-staged-schedule]] §4.3.4). No ablation table is printed. Result (single study, no numbers).
 
----
+**Worked example: example share vs token share.** Table 7 lists long-context data at 0.11% of SFT examples with 38,135.6 tokens on average, and 846.1 tokens on average over all SFT examples ([[excerpts/llama3-staged-schedule]] Table 7). The long-context token share is 0.0011 × 38,135.6 / 846.1 ≈ 0.050, about 5% of SFT tokens (derived; the report prints no token share). A "0.1% long" recipe copied with the example share applied to tokens would contain about 50 times fewer long tokens than Llama 3.1 used.
 
-## 4. The production recipe — Llama 3 and Fu 2024
+**Qwen2.5-1M.** Pre-training extends the context in five stages (4,096 → 32,768 → 65,536 → 131,072 → 262,144 tokens, RoPE bases up to 10,000,000), with 75% of sequences at the stage's maximum length and 25% shorter in stages 3–5 ([[qwen-long-context-synth]] §3). Natural long text is augmented with three synthetic tasks because natural text "often exhibits weak long-distance associations": fill-in-the-middle, keyword- and position-based paragraph retrieval, and paragraph reordering (§3). For SFT, Qwen2.5 writes a query from a randomly extracted segment and the Qwen-Agent framework writes the answer over the full document with retrieval, chunk-by-chunk reading, and step-by-step reasoning; SFT runs first on short data up to 32,768 tokens and then on a short and long mix up to 262,144 tokens (§4). Offline RL uses only pairs of at most 8,192 tokens and still raises LongBench-Chat (7B 7.32 → 8.08, 14B 8.56 → 8.76) (Table 3). The report reads this as short-to-long transfer (Interpretation).
 
-Two parallel 2024 reports nail down the frontier recipe for 128K.
+**Conditions and limits.** Neither report publishes example counts or ablation tables for its long SFT share. Qwen2.5-1M's short-context results against the 128K models are mixed (14B GPQA 45.5 → 39.9, IFEval 81.0 → 84.3; [[qwen-long-context-synth]] Table 6).
 
-### 4.1 Llama 3's staged schedule ([[long-context-llama3]])
+## §5 Continued-training data and the SFT share, as ProLong states it
 
-Meta extends Llama 3.1 (405B / 70B / 8B) from 8K to 128K with a **six-stage continued pretraining** schedule, ~800B tokens total:
+**Setting.** ProLong studies continued training of Llama-3 8B for long context, with ablations of 5B tokens at 64K, each evaluated after UltraChat SFT on a HELMET subset plus five short tasks ([[prolong]] §2–§3).
 
-| Stage | Context | Tokens | RoPE base | Data mix shift |
-|---|---|---|---|---|
-| A | 8K → 16K | ~100B | adjusted | short:long 80:20 |
-| B | 16K → 32K | ~100B | adjusted | 70:30 |
-| C | 32K → 64K | ~150B | adjusted | 60:40 |
-| D | 64K → 128K | ~200B | **500K** (final) | 40:60 |
+**Findings, with numbers.**
+1. *Perplexity does not select the mix.* As the long share rises to 100%, PG19 perplexity keeps improving while the downstream long-context average drops ([[prolong]] §2.1, Fig. 1).
+2. *Evaluate after SFT.* Before SFT, recall and RAG prefer high long shares; after SFT they fall with more long data. Short-task scores fall monotonically as the long share rises. The best average is 60% long / 40% short ([[prolong]] §3.2, Fig. 3). The authors hypothesize that a long-only model is a poor initialization for generic SFT (Interpretation).
+3. *Long sources.* With 60% long data: books/repositories 1:1 average 54.6, books 53.8, code repositories 52.3 (highest recall, 99.2), CommonCrawl 50.9 ([[prolong]] Table 4). Repository files are concatenated without dependency ordering, which the authors expect to "increase the distance between dependent files and reduce recency bias" (§3.1).
+4. *Short sources.* ShortMix scores 54.6 long / 65.5 short against FineWeb-Edu 53.0 / 63.0 ([[prolong]] Table 6).
+5. *Document masking.* Masking attention across documents gives 54.6 / 65.5 against 53.6 / 64.9 without masks ([[prolong]] App. B.2, Table 20).
+6. *Train longer than evaluated.* From a 20B-token 64K checkpoint, 4B more tokens at 512K beat 4B at 64K when both are evaluated at 64K (recall 98.5 vs 95.0, re-rank 32.9 vs 28.0) ([[prolong]] Table 7).
 
-**The key formula change.** The RoPE base frequency `θ` is rescaled from Llama-2's `10K` to **500K** for the final 128K model. RoPE's per-dimension frequency is
+**Why training on longer sequences than the evaluation length helps, as the authors model it (hypothesis).** Assume a task needs examples of dependencies spanning exactly d tokens, and dependencies are equally likely at every position. A sequence of length L contains L − d + 1 spans of length d. One document of length n·d contains n·d − d + 1 such spans; n separate documents of length d contain n. The difference is (n − 1)(d − 1) ([[prolong]] §4). The authors state that these assumptions do not hold in practice and offer the model as intuition for the Table 7 result. Worked example: d = 4, n = 3. One 12-token document has 12 − 4 + 1 = 9 spans; three 4-token documents have 3; the difference is 6 = (3 − 1)(4 − 1). The same count explains why packing unrelated short documents with document masking adds no long spans (Interpretation).
 
-$$
-\theta_i \;=\; \theta^{-2i/d}
-$$
+**Synthetic long SFT data.** Synthetic long instruction data (40% QA from random chunks, 30% RAG over chunk lists, 30% recursive book summaries, generated by Llama-3-8B-Instruct) mixed into UltraChat by token share; unlike ProLong's 5B-token data ablations, these SFT runs start from the ProLong base model trained on 40B tokens up to 512K ([[prolong]] §5, Table 8):
 
-with `d` the head dimension. Increasing `θ` *shrinks* every frequency, *stretches* every wavelength, and pushes the sinusoid aliasing point further out along the position axis. Llama 3 ships at `θ = 500K`; Fu 2024 ([[long-context-data-engineering]]) pushes to `θ = 200M` for 128K on Llama-2; LongRoPE generalizes to per-dimension λ_i.
+| Synthetic share (tokens) | 0% | 1% | 3% | 10% | 50% |
+|---|---|---|---|---|---|
+| Average (RAG, re-rank, ICL at 32K/64K average; JsonKV, QA, summarization at 512K) | 55.7 | 54.1 | 53.5 | 53.9 | 43.3 |
 
-**Post-training integration.** Long-context SFT is kept at **~0.1% of total SFT samples** (~100K out of ~100M). Raising the long-SFT fraction above 1% costs ~1 MMLU point — the short-context regression is the binding constraint, not long-context gain. Teacher is Llama 3 405B itself (self-distillation).
+A Llama-3-70B-Instruct generator gave 54.2 / 55.4 / 53.6 / 49.7 at 1 / 3 / 10 / 50%, also below 55.7 ([[prolong]] App. B.5, Table 23). The figure [figures/task-family-generator.html](figures/task-family-generator.html) also plots this table as bars.
 
-**The claimed-vs-effective gap.** Llama-3.1-405B NIAH@128K is ~99% and RULER effective context is ~96K. Llama-3.1-70B's effective RULER context is ~64K despite 128K support — Meta acknowledges this in the paper. The training-eval co-design gap shows up as soon as RULER replaces NIAH.
+**Reconciling ProLong with Llama 3.1 and LongAlign.** The authors give two hypotheses: earlier work may have had too little long continued training, so synthetic SFT data acted as additional long training; and Llama 3.1's short instruction set is much larger, so a long share may prevent degeneration on long tasks during extensive short SFT ([[prolong]] §5). Both are Interpretation. Supporting observation for the second: SmolLM2 fine-tuned only on short samples lost long-context ability beyond 2,048 tokens, and SmolTalk added LongAlign samples under 16K tokens ([[excerpts/primary-quotes-2026-09]] smol-talk). Open question: no study varies both the long continued-training budget and the SFT set size.
 
-### 4.2 Fu 2024 — the 5B-token open recipe ([[long-context-data-engineering]])
+**Conditions and limits.** ProLong's results are at the 10B scale on Llama-3 models ([[prolong]] Limitations). After SFT, ProLong averages 69.4 on five short tasks against 69.8 for Llama-3-8B-Instruct, but is lower on MMLU (64.6 vs 67.0) and GSM8K (58.9 vs 68.5); the authors attribute this to Llama-3-8B-Instruct's closed instruction data ([[prolong]] App. B.7, Table 25).
 
-A complementary thesis: **cross-domain ratios must be preserved; only within-domain length distribution changes.** Start from SlimPajama with 7 sources (CC, C4, GitHub, Books, ArXiv, Wikipedia, StackExchange). Preserve the original proportions (CC ≈ 67%, Books ≈ 4%, …). *Within each source*, compute a length histogram and reweight sampling so documents longer than 32K get **5× weight**. Train 5B tokens at 80K context window with RoPE base rescaled `10K → 200M` NTK-aware.
+## §6 Synthetic retrieval training and transfer to real tasks
 
-The critical ablation: breaking the cross-domain ratio (e.g., globally up-weighting Books) preserves long-context NIAH but drops short-context MMLU by **3–5 points**. Long-context gain must not cost short-context capability; that's what the within-domain-only rule buys you.
+**Question.** Does fine-tuning on a synthetic retrieval generator improve real long-context tasks, and at what cost to other abilities?
 
----
+**Artificial Needles.** The data are lists of integer dictionaries; the model reports the value of a key and the dictionary containing it, or, in the harder variant, finds a tuple key whose subkeys partly overlap other keys ([[excerpts/artificial-needles-kv-retrieval]] §2). Mistral-7B-Instruct-v0.1 is trained on 350 samples of about 3,900 tokens for 2 epochs with loss on answer tokens only; GPT-3.5 Turbo on 150 multi-subkey samples for 3 epochs (§3.1). An answer template in the prompt keeps the loss on formatting tokens low (§2, Fig. 4).
 
-## 5. LongRoPE and the per-dim search — the position-encoding lane
+**Evidence.**
+- Transfer: on 20-document MDQA (about 4K tokens) the U-shaped position curve flattens; the abstract reports a 10.5% gain at position 10 for GPT-3.5 Turbo. Fine-tuning on MDQA itself with a similar token count gave lower MDQA accuracy ([[excerpts/artificial-needles-kv-retrieval]] §3.2, Fig. 5).
+- Retention and comparison (Mistral-7B, similar training tokens, Table 2):
 
-The data-centric papers share a question they rarely answer: *is there a RoPE rescaling that works better than uniform NTK-aware or YaRN?*
-
-[[longrope-data]] (Ding et al., MSRA 2024) answers with evolutionary search. RoPE applies rotation at frequency `θ_i = θ^(2i/d)` for dimension `i`. Uniform rescaling does `θ_i → θ_i / λ` with a single `λ`. LongRoPE generalizes:
-
-$$
-\theta_i' \;=\; \theta_i \,/\, \lambda_i
-$$
-
-where each **per-dimension factor** `λ_i` is learned. With `d = 128` RoPE dimensions, that's a 128-dimensional search space.
-
-**Search cost.** Population size **64**, **40 generations**, mutation rate **0.3** — so roughly **64 × 40 = 2560** fitness evaluations in the worst case, each a long-context forward pass. Initial population is seeded from NTK-aware, YaRN, and uniform rescaling — a reasonable prior that stops the first generations from wasting evaluations on garbage. Fitness is a weighted combination of long-context perplexity + NIAH retrieval accuracy on a held-out corpus. Output is an optimized `λ_i` vector per target context (256K, 1M, 2M).
-
-**Why this wins.** A uniform rescale makes every RoPE dimension reach the same effective range; but the high-frequency dimensions (small `i`) saturate much earlier than the low-frequency ones. A per-dimension λ can leave high-frequency dimensions alone while aggressively compressing low-frequency ones. The payoff is a **10× reduction in fine-tune data**: LongRoPE extends LLaMA-2-7B to 2M context with **< 1B tokens of fine-tune data** across two stages (~300M at 256K, ~600M at 2M) — compared to Fu 2024's 5B at 128K. Short-context MMLU and GSM8K stay within 1 point of base.
-
-Complementary to LongRoPE is [[pose-synthesis]]'s **PoSE** — train on 4K-token samples but inject a random position-ID gap `δ ~ Uniform[0, target_ctx − 4K]` between two chunks, so the model learns long-position attention with short-context compute. 4× compute reduction vs full-length, but retrieval-strong / reasoning-weak because PoSE simulates position distribution, not content distribution.
-
----
-
-## 6. Qwen 2.5-1M and Qwen 3 — the 1M inference stack
-
-[[qwen-long-context-synth]] pushes the frontier from 128K to 1M tokens via a three-leg pipeline that is explicitly a *training-inference split*: train at a reasonable cap, extrapolate at inference.
-
-1. **Gradual continued pretraining** 32K → 128K → 256K (50B + 50B + 100B tokens). Code-repo heavy in stage 2; document-concatenation across topics in stage 3 — explicitly synthesising multi-topic mixed-context sequences.
-2. **Synthetic SFT mix generated by Qwen-Max** — multi-needle retrieval (1–8 needles at varied positions), long-doc summarization (50K–200K → summary), RAG-QA (5–20 candidate passages requiring cross-passage fusion), long-code understanding, FILL-IN (masked-segment reconstruction). Filter: answer must reference multiple positions of the source document to avoid shortcut learning.
-3. **Dual-Chunk Attention (DCA) at inference** — split long queries into 256K-sized chunks; intra-chunk attention is standard; inter-chunk uses a low-rank formulation that extrapolates RoPE smoothly. This enables 1M-token serving without 1M-token training.
-
-**The eval-curve at 1M tokens for Qwen 2.5-1M.** Qwen-2.5-14B-1M hits **NIAH @ 1M ≈ 100%** and **RULER @ 1M ≈ 85%**. The 15-point NIAH-to-RULER gap is the reasoning-in-a-haystack tax that's become the standard diagnostic. InfiniteBench is strong. Short-context MMLU / GSM8K within 1 point of base Qwen-2.5. Qwen 3 inherits and refines this recipe inside its hybrid-thinking training pipeline.
-
-Gemini ([[gemini-long-context-tricks]]) adds a product-side observation: at million-token scale, *prompt organization and context caching* become part of the eval story. More context does not imply uniform attention quality. The training-side implication: when you synthesize long-context SFT data, varying where in the context the answer-relevant evidence lives (front, middle, back) is itself a diversity axis, not a nuisance variable.
-
----
-
-## 7. What to remember — the three-lane matrix
-
-| Lane | Knobs | Representative paper | Numbers to memorize |
+| Fine-tuning data | MMLU | TriviaQA | NQ-Open |
 |---|---|---|---|
-| **Position extension** | RoPE base θ; per-dim λ_i; PoSE δ offset | [[long-context-llama3]], [[longrope-data]] | Llama-3: θ = 500K; Fu: θ = 200M; LongRoPE: 2560 search evals → 10× FT data savings |
-| **Data (CPT)** | document coherence filter; within-domain length upsample; domain weights | [[prolong]], [[long-context-data-engineering]] | ProLong 20B CPT + 5B SFT; Fu 5B CPT @ 80K; ProLong code × 4 / books × 2 / web × 0.5 |
-| **Data (SFT)** | cross-span QA; multi-needle; multi-turn | [[longalign]], [[longmit]], [[longalpaca]] | LongAlign 10k; long-SFT kept at ~0.1% (Llama-3); +5–10 LongBench-Chat from multi-turn |
-| **Evaluation** | NIAH heatmap; RULER 13 tasks; BABILong 20 bAbI-in-PG19 | [[needle-in-haystack-data]], [[ruler]], [[babilong]] | RULER 500 ex/task/length; Llama-3.1-70B claimed 128K / effective 64K; Qwen 1M: NIAH 100 / RULER 85 |
+| none | 53.42 | 47.63 | 11.61 |
+| synthetic key-value, template | 53.44 | 47.74 | 11.98 |
+| MultidocQA | 53.19 | 45.20 | 8.69 |
+| IN2 | 53.49 | 45.44 | 9.80 |
+| Needle-in-a-haystack | 52.83 | 41.30 | 4.88 |
 
-The unifying lesson: a long-context capability number is a *claim about a length*, and every such claim has to specify which of the four lanes the number was measured in. "128K context" without stating "NIAH / RULER / BABILong / real" is underspecified.
+The authors attribute the TriviaQA and NQ-Open drops of the baselines to training on factual content, which can encourage hallucination (Interpretation, citing Gekhman et al.).
 
-Play with the axes in **[figures/context-extension.html](figures/context-extension.html)** — the interactive combines a RoPE frequency-band visualization (uniform rescale vs LongRoPE per-dim) with a growing NIAH haystack that reports simulated needle-recovery as context scales. The right panel shows the claimed-vs-effective gap explicitly: crank context from 8K to 1M and watch retrieval stay near 100% while a reasoning-weighted metric collapses around the training-data cap.
+**Related synthetic designs.** IN2 trains Mistral-7B-Instruct-v0.2 on 1.4M synthesized QA examples with evidence placed at random positions in 4K–32K contexts, plus short QA and general instructions; the VAL Probing min-max position gap falls from 56.2 to 13.9 and MMLU moves from 59.3 to 59.2 ([[in2-film]] Table 1, Fig. 5). Training with distractor contexts matters: LLaMA3.1-8B with 1.6k human-written QA pairs whose contexts GPT-4o-mini wrote (1 relevant + 9 irrelevant) reaches a LongBench average of 38.57, against 25.39 for instruction synthesis from original documents and 23.35 for UltraChat alone ([[context-synthesis-short-to-long]] Table 3). For continued training, interleaving each chunk of a short document with its most similar retrieved chunks reaches a HELMET+RULER average of 62.58 at 128K, against 52.85 for random concatenation ([[nextlong]] Table 1).
 
----
+**Conditions and limits.** Artificial Needles tests contexts of about 4K tokens plus one 24K run, and "Models finetuned on our dataset will not improve" on MDQA with retrieved (relevant) distractors ([[excerpts/artificial-needles-kv-retrieval]] §4, Fig. 10). BABILong's QA1 fine-tuning shows the transfer risk in the other direction: GPT-3.5 fine-tuned on QA1 improved on QA2–QA5 while fully fine-tuned Mistral-7B degraded on them ([[babilong]] App. I, Fig. 9). Result (single studies).
 
-## Connections and what's next
+**Implication for a general-purpose model.** Synthetic retrieval data is an input to a mixture, not a stand-alone recipe. Its value for a general model is measured on held-out real tasks with realistic distractors and on knowledge benchmarks. A gain on tasks built by the same generator as the training data does not show transfer, because the Artificial Needles gains did not extend to MDQA with retrieved distractors (§4 of that paper).
 
-- **[[longalign]] / [[longalpaca]] / [[longchat]] / [[longmit]]** — early SFT-only recipes; LongAlign's packed-loss correction and LongMIT's multi-turn supplement cover the SFT lane.
-- **[[prolong]] / [[long-context-llama3]] / [[long-context-data-engineering]]** — production CPT recipes, each a different point on the data-budget vs curation curve.
-- **[[longrope-data]] / [[pose-synthesis]]** — the position-encoding lane; both are orthogonal to the data recipe.
-- **[[qwen-long-context-synth]] / [[gemini-long-context-tricks]]** — 1M-context frontier; DCA as training-inference split.
-- **[[ruler]] / [[babilong]] / [[needle-in-haystack-data]] / [[longbench]] / [[longembed-synth]]** — the evaluation lanes that make the rest measurable.
-- **ch-27** — the synthetic-data design pattern that this chapter specializes to the long-context modality.
-- **ch-29 (next)** — the learner-authored pipeline where you generate ~5K instructions end-to-end; long-context synthesis is one of the optional modality specializations.
+## Negative samples and negative feedback
 
-## Further reading
+**Where negatives appear in this stage.** (1) *Negative marginal value:* samples rejected by a filter, such as LongMIT samples scored at or below 8.5 by the InternLM2-20B verifier ([[excerpts/longmit-mimg]] App. C.4.2), or LongAlign answers found incorrect, incomplete, or irrelevant in the manual check (6 of 100; the paper does not describe removing such samples from the full set). (2) *Negative as content:* distractors placed in the input and trained with ordinary cross-entropy on the correct answer, such as MK-NIAH distractor needles, multi-subkey keys that share subkeys with the gold key ([[excerpts/artificial-needles-kv-retrieval]] Fig. 2), 9 irrelevant contexts per example ([[context-synthesis-short-to-long]]), and similar retrieved chunks ([[nextlong]]). (3) *Negative as gradient:* in the sources of this chapter, only Qwen2.5-1M's offline RL "similar to DPO" uses rejected responses, and only on pairs of at most 8,192 tokens ([[qwen-long-context-synth]] §4). No source here uses negative as conditioning.
 
-- [[longalign]] — the paper to read first; it's the most complete end-to-end SFT recipe and the packed-loss derivation is load-bearing.
-- [[prolong]] — read §4 (data curation) and the HELMET ablation. The coherence filter vs concatenation ablation is the clearest evidence that volume alone doesn't work.
-- [[ruler]] — read Table 5 (13-task configuration) and the effective-context definition. Use it as your standing long-context eval.
-- [[longrope-data]] — read §3 (evolutionary search) and the `θ_i' = θ_i / λ_i` equation. It's the cleanest example of position-encoding as an independent lane.
-- [[qwen-long-context-synth]] — the frontier 1M recipe; DCA is the training-inference trick that deserves separate study in inference / serving chapters.
+**What current practice does.** Long-context pipelines mostly discard failures (verifier thresholds) and use distractors as content. Negative gradients on long inputs are not reported in these sources; Llama 3.1 and Qwen2.5-1M both keep preference data short ([[excerpts/llama3-staged-schedule]] §4.3.4).
 
-## Companion visualization
+**Mechanism for the gradient case.** For a softmax over logits z with probabilities p, the gradient of the log-probability of token y is
 
-**[figures/context-extension.html](figures/context-extension.html)** — three interactive panels. **Left:** a RoPE frequency-band chart. Slide the max-context slider and toggle uniform-rescale vs LongRoPE per-dim mode; the frequency bands `θ_i = θ^{-2i/d}` redraw, with the effective "usable-range" band shaded. **Middle:** an NIAH haystack that grows with the context slider; a needle sprite stays at your chosen depth and a simulated recovery-rate counter updates based on distance-from-training-cap and noise. **Right:** the claimed-vs-effective curve — NIAH, RULER, and a BABILong-style reasoning metric plotted on the same axis as context grows, so you can watch the three curves diverge. Use it to fuse §1's eval taxonomy and §5's position-encoding math in one picture.
+```
+∂ log p_y / ∂ z_j = 1[j = y] − p_j
+```
+
+- `1[j = y]` is 1 for the chosen token and 0 otherwise; `p_j` is the model probability of token j.
+
+A step that decreases log p_y moves z_y down by (1 − p_y) and moves every other z_j up by p_j. Worked example: p = (0.7, 0.2, 0.1) and y = token 3 (the unlikely, rejected token). The logit changes are proportional to (+0.7, +0.2, −0.9), so most of the removed mass goes to token 1, the already most likely token. Pushing down an unlikely rejected continuation therefore sharpens the distribution toward the current mode. The full treatment is ch-43a; supervised uses of negatives are ch-31a.
+
+**Evidence and controls.** Distractors as content improved robustness in the cited studies: the NIAH pilot model trained with 1k-essay distractors stayed above 90% at 32K when distractors appeared at test time, while the model trained without distractors degraded ([[context-synthesis-short-to-long]] §3.3, Fig. 2). Hard negatives chosen by similarity beat random ones for continued-training data ([[nextlong]] §5.4, Fig. 7, values not printed). For filters, the controls are a rationale in the verifier and several scoring criteria (§3). No source in this chapter measures the share of improvement due to negatives.
+
+**Diagnostics.** Log the verifier rejection rate per source domain and per length bucket (verifier precision falls for classification on longer inputs; [[excerpts/longmit-mimg]] Fig. 3c); report accuracy separately for instances with and without distractors; for any DPO-style stage on long inputs, log chosen and rejected log-probabilities separately.
+
+**Effect on generality.** Distractor-as-content data targets a failure (retrieving a similar wrong item) that applications share. Filter rejections change the task and domain distribution of what remains; record the per-domain survival rate so a filter does not remove a domain from the long slice.
+
+## Recipe
+
+| Model (exact release) | Size | Stage | Setting | Value | Source location | Status | Evidence for this value |
+|---|---|---|---|---|---|---|---|
+| Llama 3.1 405B | 405B | long-context | stages; tokens | six stages from 8K to 128K; approximately 800B tokens; per-stage lengths, tokens, mix not printed | arXiv:2407.21783v3 §3.4.2 ([[llama-3-recipe]]) | verified 2026-09-15 | stage gate: short-context evals fully recovered and NIAH solved at that length |
+| Llama 3.1 | 8B/70B/405B | pretrain-stable | RoPE base | 500,000 (whole pre-training) | §3.2 | verified 2026-09-15 | cites Xiong et al. (2023) for lengths up to 32,768; no ablation reported |
+| Llama 3.1 | not scoped | SFT | long-context share | 0.1% synthetic long data (§4.3.4); 0.11% of examples, 38,135.6 tokens per example (Table 7) | §4.3.4, Table 7 | verified 2026-09-15 | "careful ablations"; no table |
+| Llama 3.1 | not scoped | SFT | length buckets | 16K, 32K, 64K, 128K | §4.3.4 | verified 2026-09-15 | no ablation reported |
+| Llama 3.1 | not scoped | preference | DPO data length | short-context only | §4.3.4 | verified 2026-09-15 | no long-context regression when the SFT model is strong on long context; no table |
+| ProLong-64k-Base (Llama-3-8B-ProLong-64k-Base) | 8B | long-context | stage 1 | 20B tokens at 64K; RoPE base 8×10^6; batch 4M tokens; AdamW LR 1e-5, 10% warmup, cosine to 1e-6 | arXiv:2410.02660v4 Table 9 ([[prolong-recipe]]) | verified 2026-09-14 | App. B.1 Table 18: base 8×10^6 → 54.6 vs 4×10^6 → 48.7 |
+| ProLong-512k-Base (Llama-3-8B-ProLong-512k-Base) | 8B | long-context | stage 2 | 20B tokens at 512K; RoPE base 1.28×10^8; batch 8M tokens; LR 1e-5 (Table 9) vs 5e-6 (released `train_512K.sh`) | Table 9; github.com/princeton-nlp/ProLong@499fa29 | conflict | Table 7: +4B tokens at 512K > +4B at 64K, evaluated at 64K |
+| ProLong-64k-Base | 8B | long-context | data mix (share type not stated) | 30% code repos, 30% books, 3% textbooks, 37% ShortMix (27% FineWeb-Edu, 27% FineWeb, 11% Wikipedia, 11% StackExchange, 8% Tulu-v2, 8% OpenWebMath, 8% ArXiv) | Table 9 | verified 2026-09-15 | Fig. 3 (5B-token ablation): 60% long best average; Tables 4, 6 |
+| ProLong-64k-Base, ProLong-512k-Base | 8B | long-context | cross-document attention | masked | Table 9; App. B.2 | verified 2026-09-15 | Table 20: 54.6 / 65.5 vs 53.6 / 64.9 |
+| ProLong-512k-Instruct (Llama-3-8B-ProLong-512k-Instruct) | 8B | SFT | data; tokens; LR; batch | UltraChat only; 1B tokens; LR 2e-5, 5% warmup, cosine to 2e-6; 4M tokens | Table 9 | verified 2026-09-15 | Table 8: 0% synthetic 55.7 vs 1% 54.1 |
+| ChatGLM3-6B-64k, Llama-2-7B/13B-64k (LongAlign) | 6B, 7B, 13B | long-context | RoPE base; tokens | 10,000 → 2,000,000; 10B tokens under 64K | EMNLP 2024 Findings §4.1 ([[excerpts/longalign-pipeline]]) | verified 2026-09-15 | no ablation reported |
+| LongAlign-6B-64k | 6B | SFT | mix; epochs; packing | 76k ShareGPT + 10k LongAlign; 2 epochs (about 1500-2000 steps); about 12 sequences per pack; global batch 96; loss weighting | §4.1, App. B | verified 2026-09-15 | Table 3: LongBench-Chat 3.73 / 5.99 / 6.28 for 0k / 5k / 10k; Table 4 |
+| LongAlpaca (LongLoRA) | 7B-70B (not scoped) | SFT | data; epochs | 9k long QA + 3k Alpaca short QA; 5 epochs | arXiv:2309.12307 App. B.6 ([[excerpts/primary-quotes-2026-09]]) | verified 2026-09-15 | no ablation reported |
+| LLaMA3-8B + LongMIT | 8B | SFT | data; optimizer; batch; epochs | 64.40k samples, 5.07B tokens; Adam LR 3×10^-5, β1 0.9, β2 0.95; packing; 4M tokens; 1 epoch; max length 4K-128K | arXiv:2409.01893v2 Table 3, App. E.1 | verified 2026-09-15 | Table 1: 64.29 vs 52.92 (LongAlign) |
+| LongMIT data | — | SFT (data generation) | generator; verifier; threshold | Qwen2-72B-Instruct; InternLM2-20B; quality score > 8.5 | App. C.3, C.4.2 | verified 2026-09-15 | §3.1, Figs. 3–4 (verifier strategy) |
+| Qwen2.5-7B/14B-1M | 7B, 14B | long-context | stages; RoPE base; length mix | 4,096 → 32,768 (base 10,000 → 1,000,000); 65,536 / 131,072 / 262,144 with 1M / 5M / 10M; 75% at max length, 25% shorter; tokens not reported | arXiv:2501.15383v1 §3 ([[qwen-long-context-synth]]) | verified 2026-09-14 | Table 2: RULER-128K 37.6 / 56.0 / 83.8 / 87.6 (14B) |
+| Qwen2.5-7B/14B-Instruct-1M | 7B, 14B | SFT | stages | short ≤ 32,768, then short + long ≤ 262,144; ratio not reported | §4 | verified 2026-09-14 | no ablation reported |
+| Qwen2.5-7B/14B-Instruct-1M | 7B, 14B | preference | pair length | offline RL similar to DPO, pairs ≤ 8,192 tokens; β not reported | §4 | verified 2026-09-14 | Table 3: LongBench-Chat +0.75 / +0.20 |
+| Mistral-7B-Instruct-v0.1 (Artificial Needles) | 7B | SFT | data; epochs; loss | 350 key-value samples, 85 dictionaries, about 3,900 tokens; 2 epochs; answer tokens only | arXiv:2406.19292v2 §3.1 ([[excerpts/artificial-needles-kv-retrieval]]) | verified 2026-09-15 | Fig. 5; Table 2 |
+
+**Starting point for a small general-purpose run.** For an 8B model that already has long continued training comparable to ProLong's (40B tokens, Llama-3 8B), start SFT with short data only, as ProLong-8B did with 1B tokens of UltraChat at LR 2e-5, and run a 1% synthetic long-data arm as the ablation, because Table 8 selected short-only in that setting. For the continued-training stage itself, the verified starting mix is ProLong-64k-Base's 63% long (30% code repositories, 30% books, 3% textbooks) and 37% ShortMix at 64K with RoPE base 8×10^6 and document masking (Table 9), used at 8B on Llama-3 for 20B tokens; the 5B-token ablations that selected it found 60% long / 40% short best (Fig. 3). When the long continued-training stage is much shorter or the SFT set is large, start from a long share of 0.1%, as Llama 3.1 reported (§4.3.4; Table 7 gives 0.11% of examples; model size not scoped), and compute the token share it implies (about 5% from Table 7, derived in §4) before choosing. LongAlign's 10k long examples mixed with 76k ShareGPT (10/86 ≈ 12% of examples, derived) is the verified point for ChatGLM3-6B-64k after 10B tokens of context extension.
+
+## Generalization lens
+
+**(a) What increases breadth.**
+- Short data during long continued training: short-task averages fall monotonically as the long share rises, and 60/40 gave the best long average after SFT ([[prolong]] Fig. 3).
+- Diverse long sources: books and code repositories 1:1 beat either alone on the long average (54.6 vs 53.8 and 52.3), and books help ICL and summarization while repositories help recall ([[prolong]] Table 4).
+- Several task types in long SFT: LongAlign's four prompt types and Llama 3.1's QA, summarization, and code generators target different application categories; HELMET shows category correlations as low as 0.34 at 128K ([[helmet]] Fig. 5), so one task type does not cover the others.
+- Fact-free synthetic retrieval data kept TriviaQA and NQ-Open unchanged while NIAH-style data lowered them by 6.33 and 6.73 ([[excerpts/artificial-needles-kv-retrieval]] Table 2).
+
+**(b) What causes narrowing or forgetting.**
+- 100% long continued training: perplexity improves while downstream long scores after SFT drop ([[prolong]] §2.1, §3.2).
+- Too much synthetic long SFT after long continued training: 50% synthetic gave 43.3 vs 55.7 ([[prolong]] Table 8).
+- Short-only SFT without long continued training of ProLong's size: regressions in Llama 3.1 ([[excerpts/llama3-staged-schedule]] §4.3.4) and loss beyond 2,048 tokens in SmolLM2 ([[excerpts/primary-quotes-2026-09]] smol-talk).
+- Training on factual long QA or needle data: TriviaQA and NQ-Open losses of 1.81 to 6.73 points on Mistral-7B ([[excerpts/artificial-needles-kv-retrieval]] Table 2).
+- Training on one templated family: fully fine-tuned Mistral-7B on BABILong QA1 degraded on QA2–QA5 ([[babilong]] App. I).
+
+**(c) How to measure it at this stage.**
+- Long side: RULER full score rows and effective length, one application suite (HELMET categories), and position-resolved accuracy ([[lost-in-the-middle]]).
+- Short side: the same short suite before and after each long stage (ProLong used five short tasks; Llama 3.1 gated stages on short-context recovery).
+- After SFT, not before ([[prolong]] §2.2, Fig. 2).
+- Held-out families: evaluate on families not used to generate training data (for example train on key-value retrieval and test on MDQA with retrieved distractors, [[excerpts/artificial-needles-kv-retrieval]] §4). ProLong reports held-out HELMET tasks, NoCha, RULER, and ∞Bench beyond its development subset ([[prolong]] Limitations); its RULER score (71.9) is below Llama-3.1-8B-Instruct (81.3) while its HELMET average is higher (49.4 vs 46.5), so conclusions depend on the suite ([[prolong]] Tables 10, 26).
+- Known measurement errors: NIAH scores depend on the judge and prompt template ([[needle-in-haystack-data]] Guideline); effective length is a threshold statistic (§1 worked example); LongBench-Chat has 50 queries ([[excerpts/longalign-pipeline]] §3.4).
+
+## Common mistakes and how to detect them
+
+| Mistake | Observable symptom | Check |
+|---|---|---|
+| Choosing the continued-training mix by perplexity | PG19 or held-out long perplexity improves while HELMET recall and RAG after SFT decline | Evaluate each candidate mix after a fixed short SFT run ([[prolong]] Fig. 1, Fig. 3) |
+| Treating NIAH as the long-context gate | NIAH 100 at all depths; RULER MK-NIAH, VT, or CWE low at the same length | Report the RULER row per length and the MK-NIAH and VT tasks separately |
+| Applying an example share as a token share | Long SFT slice about 50 times smaller in tokens than intended when 0.1% of examples is applied as 0.1% of tokens | Compute token share = example share × long mean length / overall mean length (§4 worked example) |
+| Adding synthetic long SFT after extensive long continued training | Long average after SFT drops relative to short-only SFT | Run 0% and 1% synthetic arms ([[prolong]] Table 8) |
+| Short-only SFT on a model with limited long continued training | Long scores after SFT fall below the pre-SFT checkpoint | Evaluate the base and SFT checkpoints on the same long suite ([[excerpts/llama3-staged-schedule]] §4.3.4) |
+| Packed long SFT without per-sequence loss weighting | Training favors long single-sequence packs; long-chat scores lower than naive batching | Compare packing with and without loss weighting on LongBench-Chat ([[excerpts/longalign-pipeline]] Table 4) |
+| Training on needle-style factual data | TriviaQA or NQ-Open drops after long-context fine-tuning | Include knowledge QA in the short regression suite ([[excerpts/artificial-needles-kv-retrieval]] Table 2) |
+| Generator produces single-hop questions labelled as multi-hop | High QA scores, low gains on 2WikiMQA, MuSiQue, HotpotQA | Hand-label a sample for multi-hop rate before training ([[excerpts/longmit-mimg]] Abstract) |
+| Averaging over needle depth | Mean accuracy acceptable; middle positions low | Plot accuracy by position and report best-minus-worst gap ([[lost-in-the-middle]]) |
+| Evaluation distractors unlike real retrieval | Gains on random-distractor MDQA, none on retrieved-distractor MDQA | Test with retrieved distractors ([[excerpts/artificial-needles-kv-retrieval]] Fig. 10) |
+
+## Check your understanding
+
+1. RULER reports Llama 3.1 8B with effective length 32K and GradientAI's Llama-3 70B with 16K. Using the Table 3 rows, explain why the second model's 32K score of 85.4 changes its reported effective length by a factor of two, and what a reader should report instead of the single number.
+2. HELMET finds NIAH correlates with ∞Bench QA at 0.63 and HotpotQA RAG at 0.88. Explain which properties of the NIAH generator make it a weaker predictor, using RULER's Yi-34B failure analysis and NoLiMa's lexical-overlap result.
+3. ProLong found short-only SFT best, while Llama 3.1 found short-only SFT caused regressions. Using the authors' two hypotheses and the SmolTalk observation, explain what property of each pipeline could produce opposite results, and design the smallest experiment that would distinguish the hypotheses.
+4. In the LongAlign worked example, the 200-token sequence in a pack of one receives weight 0.50 instead of 0.25. Explain why long-context SFT data makes this bias larger than in short chat data, using the target/sequence ratios 0.015 (LongAlign-10k) and 19.3 (ShareGPT, read as a percentage).
+5. Llama 3.1's QA generator reads an 8K chunk but the training example contains the whole document. Explain what the model must learn from such an example that the generator did not need, and which failure this design risks when the chunk's content is duplicated elsewhere in the document.
+6. Artificial Needles data kept TriviaQA unchanged while NIAH-style data lowered it by 6.33 points. Give the authors' causal explanation, state its evidence status, and describe a control experiment that would test it.
+7. ProLong's dependency count says one document of length n·d has (n − 1)(d − 1) more spans of length d than n documents of length d. Explain why this argument supports document masking for packed short data rather than contradicting it.
+8. Qwen2.5-1M's offline RL used only pairs of at most 8,192 tokens and improved LongBench-Chat. State what this does and does not show about where long-context ability must be trained, and which additional measurement would be needed to claim no long-context loss.
+
+## Connections
+
+- Previous: ch-27 — Agentic Trajectory Data.
+- Next: ch-29 — Lab: Synthetic Instruction Set with Filter, Deduplication, and Verification.
+- Dependencies: ch-27 — Agentic Trajectory Data; ch-32c — Claimed versus Effective Context Length and Long-Context Evaluation.
+- Design pattern used here: ch-18 — The Synthetic-Data Design Pattern: Generate, Filter, Deduplicate, Verify, Select, Mix.
+- Context-extension methods and mixtures: ch-32b — Context-Length Extension: Methods, Data Mixtures, and Short-Context Regression.
+- Deeper long-data synthesis: ch-29a — Long-Document Synthesis for Continued Pretraining and Long-Context SFT; ch-29b — Long-Conversation and Accumulating-Context Synthesis.
+- Long-context share in SFT mixtures: ch-30b — Multi-Skill SFT Mixtures: Interference, Transfer, and Agentic and Long-Context Shares.
+- Negatives: ch-31a — Negative Samples in Supervised Training: Corrections, Failure Conditioning, Critiques, and Unlikelihood; ch-43a — Negative Samples and Negative Gradients: Likelihood Displacement, Squeezing, and Negative Advantages.
+- Long-context RL: ch-44a — Length in RL: Overlong Responses, Length Control, and Long-Context RL.
+
+## Sources
+
+- [[needle-in-haystack-data]] — NIAH harness defaults, GPT-4 judge scoring, original run counts.
+- [[excerpts/ruler-task-family]] — RULER task families, protocol, effective-length threshold, Table 3 rows, Yi-34B failure analysis.
+- [[ruler]] — library card for RULER (task list).
+- [[babilong]] — bAbI-in-PG19 construction, 10–20% context use, QA1–QA3 results, QA1 fine-tuning transfer, limitations.
+- [[helmet]] — correlations of synthetic and RAG tasks with application categories; NIAH saturation at 128K.
+- [[nolima]] — accuracy drop when question-needle lexical overlap is removed.
+- [[lost-in-the-middle]] — position dependence of multi-document QA accuracy.
+- [[excerpts/longalign-pipeline]] — LongAlign data construction, manual check, mixing table, loss weighting equations and results.
+- [[longalign]] — library card for LongAlign.
+- [[excerpts/longmit-mimg]] — LongMIT / MIMG pipeline, verifier findings, dataset size, training settings, results.
+- [[excerpts/llama3-staged-schedule]] — Llama 3 RoPE base, six-stage long-context gate, long SFT generators, 0.1% share, Table 7, Table 21.
+- [[llama-3]], [[llama-3-recipe]] — verified Llama 3 card and recipe ledger rows.
+- [[qwen-long-context-synth]] — Qwen2.5-1M stages, synthetic pre-training tasks, SFT generation, short-pair RL, DCA, short-context Table 6.
+- [[prolong]], [[prolong-recipe]] — ProLong mix, short/long ratio, masking, training length, synthetic SFT table, final results.
+- [[excerpts/artificial-needles-kv-retrieval]] — synthetic key-value retrieval data, transfer, retention and baseline comparison, limitation.
+- [[in2-film]] — IN2 position-balanced synthetic QA and position-gap result.
+- [[context-synthesis-short-to-long]] — LLM-written contexts with distractors for human QA pairs.
+- [[nextlong]] — hard-negative interleaving for continued-training data.
+- [[pose-synthesis]] — PoSE training window, used for correction 30.
+- [[excerpts/primary-quotes-2026-09]] — primary quotes for LongAlpaca, LongChat, Fu et al. 2024, LongRoPE, and SmolTalk, used for corrections and the SmolLM2 observation.

@@ -2,319 +2,319 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>Data Operations Pipeline — raw shards → trainer</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Tokenizer cost, language premium, and mixture calculator</title>
+<!-- ch-11 figure. Rewritten 2026-09 (generality revision). The earlier version showed throughput numbers, a
+     three-tier PII cascade, and shard sizes that the cited reports do not contain. Every constant below is
+     quoted from a source named in the captions. -->
 <style>
-  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-         max-width: 1180px; margin: 1.5em auto; padding: 0 1em; color: #222;
-         background: #fafafa; }
-  h1 { font-size: 1.35em; margin-bottom: 0.2em; }
-  .subtitle { color: #666; margin-top: 0; font-size: 0.92em; }
-  .layout { display: grid; grid-template-columns: 1.05fr 1.15fr; gap: 1.1em;
-            margin-top: 1em; }
-  .panel { border: 1px solid #dcdcdc; border-radius: 6px; background: #fff;
-           padding: 0.9em 1.1em; }
-  h2 { font-size: 1.02em; margin: 0 0 0.6em 0; color: #333;
-       border-bottom: 1px solid #eee; padding-bottom: 0.3em; }
-  .pipeline { display: flex; flex-direction: column; gap: 4px; }
-  .stage { display: grid; grid-template-columns: 28px 1fr auto; gap: 0.5em;
-           align-items: center; padding: 0.55em 0.7em;
-           border: 1px solid #ccd; border-radius: 6px; background: #f6f8fd;
-           cursor: pointer; user-select: none; transition: background 0.12s; }
-  .stage:hover { background: #eef3ff; }
-  .stage.active { background: #dde8ff; border-color: #556; }
-  .stage .idx { font-family: 'SF Mono', Menlo, monospace; font-size: 0.78em;
-                color: #557; background: #e4ebff; border-radius: 3px;
-                padding: 2px 6px; text-align: center; }
-  .stage .nm { font-weight: 600; font-size: 0.92em; color: #223; }
-  .stage .desc { font-size: 0.75em; color: #666; display: block; margin-top: 1px; }
-  .stage .thr { font-family: 'SF Mono', Menlo, monospace; font-size: 0.74em;
-                color: #4a633a; background: #eaf5e2; border-radius: 3px;
-                padding: 2px 6px; white-space: nowrap; }
-  .arrow { text-align: center; color: #99a; font-size: 0.85em; padding: 0; }
-  .detail h3 { font-size: 0.96em; margin: 0 0 0.25em 0; color: #223; }
-  .detail .lead { font-size: 0.85em; color: #456; margin-bottom: 0.8em;
-                  line-height: 1.45; }
-  .section { margin-top: 0.7em; }
-  .section-title { font-size: 0.75em; text-transform: uppercase; letter-spacing: 0.5px;
-                   color: #667; margin-bottom: 0.35em; font-weight: 600; }
-  .kv { display: grid; grid-template-columns: 115px 1fr; gap: 0.3em 0.7em;
-        font-size: 0.82em; }
-  .kv dt { color: #667; }
-  .kv dd { margin: 0; color: #223; font-family: 'SF Mono', Menlo, monospace;
-           font-size: 0.78em; }
-  .attrs { list-style: none; padding: 0; margin: 0; }
-  .attrs li { border-left: 3px solid #89a; background: #f4f7fa;
-              padding: 0.35em 0.6em; margin-bottom: 0.3em;
-              font-size: 0.8em; line-height: 1.4; border-radius: 3px; }
-  .attrs li code { background: #e4ebff; padding: 1px 4px; border-radius: 3px;
-                   font-family: 'SF Mono', Menlo, monospace; font-size: 0.85em;
-                   color: #335; }
-  .failures { list-style: none; padding: 0; margin: 0; }
-  .failures li { border-left: 3px solid #c84040; background: #fff6f6;
-                 padding: 0.45em 0.65em; margin-bottom: 0.35em;
-                 font-size: 0.8em; line-height: 1.45; border-radius: 3px; }
-  .failures li .ft { font-weight: 600; color: #8b1a1a; display: block;
-                     margin-bottom: 2px; }
-  .failures li .sym { color: #555; font-style: italic; font-size: 0.92em;
-                      display: block; margin-top: 4px; }
-  .note { font-size: 0.78em; color: #667; margin-top: 1.1em; line-height: 1.5; }
-  code.lin { background: #eef; padding: 1px 4px; border-radius: 3px;
-             font-family: 'SF Mono', Menlo, monospace; font-size: 0.82em;
-             color: #335; }
-  .hint { font-size: 0.8em; color: #778; font-style: italic; margin-top: 0.7em; }
+  :root {
+    --bg: #fafaf8; --panel: #ffffff; --ink: #1f2328; --muted: #5b636e; --line: #d9dde3;
+    --accent: #2f6fb3; --accent-soft: #e6eef8; --warn: #a3471b; --warn-soft: #fbece4;
+    --ok: #2e7d4f; --ok-soft: #e5f3ea; --bar: #6f98c9;
+    --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #16181c; --panel: #1f2227; --ink: #e6e8eb; --muted: #a0a7b1; --line: #373c44;
+      --accent: #7fb0e6; --accent-soft: #243447; --warn: #f0a37c; --warn-soft: #3a2a22;
+      --ok: #7cc59a; --ok-soft: #1f3528; --bar: #5b86b8;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #16181c; --panel: #1f2227; --ink: #e6e8eb; --muted: #a0a7b1; --line: #373c44;
+    --accent: #7fb0e6; --accent-soft: #243447; --warn: #f0a37c; --warn-soft: #3a2a22;
+    --ok: #7cc59a; --ok-soft: #1f3528; --bar: #5b86b8;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink);
+         font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+  main { max-width: 1080px; margin: 0 auto; padding-block: 20px 40px; padding-inline: 16px; }
+  h1 { font-size: 1.3rem; margin: 0 0 4px; }
+  .sub { color: var(--muted); margin: 0 0 16px; }
+  .tabs { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 12px; }
+  .tabs button { font: inherit; padding: 6px 12px; border: 1px solid var(--line); background: var(--panel);
+                 color: var(--ink); border-radius: 6px; cursor: pointer; }
+  .tabs button[aria-selected="true"] { background: var(--accent-soft); border-color: var(--accent); }
+  section.panel { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 16px; }
+  h2 { font-size: 1.05rem; margin: 0 0 8px; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; }
+  label { display: block; font-size: 0.85rem; color: var(--muted); }
+  input, select { font: inherit; width: 100%; padding: 5px 7px; margin-top: 3px; border: 1px solid var(--line);
+                  border-radius: 5px; background: var(--bg); color: var(--ink); }
+  .row { display: flex; flex-wrap: wrap; gap: 8px; margin: 10px 0; }
+  .row button { font: inherit; font-size: 0.85rem; padding: 4px 10px; border: 1px solid var(--line);
+                border-radius: 5px; background: var(--bg); color: var(--ink); cursor: pointer; }
+  .out { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 8px; margin-top: 12px; }
+  .stat { border: 1px solid var(--line); border-radius: 6px; padding: 8px 10px; }
+  .stat .k { font-size: 0.78rem; color: var(--muted); }
+  .stat .v { font-family: var(--mono); font-size: 1.02rem; }
+  .note { font-size: 0.85rem; padding: 8px 10px; border-radius: 6px; margin-top: 10px; }
+  .note.warn { background: var(--warn-soft); color: var(--warn); }
+  .note.ok { background: var(--ok-soft); color: var(--ok); }
+  .caption { font-size: 0.8rem; color: var(--muted); margin-top: 12px; border-top: 1px solid var(--line); padding-top: 8px; }
+  .scroll { overflow-x: auto; }
+  table { border-collapse: collapse; width: 100%; font-size: 0.88rem; }
+  th, td { border-bottom: 1px solid var(--line); padding: 5px 6px; text-align: left; white-space: nowrap; }
+  td.num { text-align: right; font-family: var(--mono); }
+  th.num { text-align: right; }
+  .barcell { min-width: 140px; }
+  .bar { height: 10px; background: var(--bar); border-radius: 2px; }
+  td input { width: 90px; margin: 0; }
+  td input.name { width: 110px; }
+  .bad { color: var(--warn); font-weight: 600; }
+  .good { color: var(--ok); }
+  [hidden] { display: none !important; }
 </style>
 </head>
 <body>
+<main>
+  <h1>Tokenizer cost, language premium, and mixture calculator</h1>
+  <p class="sub">Three calculators for Chapter 11. Each uses only formulas and constants printed in the cited sources.</p>
 
-<h1>Production Data Pipeline — raw shards to trainer</h1>
-<p class="subtitle">
-  Click any stage on the left. The right panel shows the lineage attributes that stage
-  emits, typical throughput at 15T-token pretrain scale, and the operational failure
-  modes with their observable symptoms. Sources: FineWeb (15T), Llama 3 (15.6T),
-  DeepSeek-V3 (14.8T), Dolma, OLMo 3 model-flow.
-</p>
-
-<div class="layout">
-
-  <div class="panel">
-    <h2>Pipeline stages</h2>
-    <div class="pipeline" id="pipeline"></div>
-    <p class="hint">Each arrow is a <code class="lin">(doc_id, attr) → (doc_id, attr')</code> append. No stage rewrites the doc-id.</p>
+  <div class="tabs" role="tablist">
+    <button role="tab" aria-selected="true" data-tab="p1">1 · Vocabulary size and compute</button>
+    <button role="tab" aria-selected="false" data-tab="p2">2 · Language premium and context</button>
+    <button role="tab" aria-selected="false" data-tab="p3">3 · Mixture shares and resume</button>
   </div>
 
-  <div class="panel detail" id="detail">
-    <!-- populated by JS -->
-  </div>
+  <!-- Panel 1 -->
+  <section class="panel" id="p1">
+    <h2>Vocabulary size, tokens, and FLOPs</h2>
+    <div class="grid">
+      <label>Vocabulary size V (tokens)<input id="v" type="number" min="1024" step="1" value="43000"></label>
+      <label>Embedding dimension d<input id="d" type="number" min="64" step="1" value="3200"></label>
+      <label>Non-vocabulary parameters N_nv (billions)<input id="nnv" type="number" min="0.01" step="0.01" value="2.87"></label>
+      <label>Training characters H (billions)<input id="h" type="number" min="0.1" step="0.1" value="517.5"></label>
+    </div>
+    <div class="row">
+      <span style="color:var(--muted);font-size:0.85rem;align-self:center">Table 3 presets (N_nv = 2.87B, d = 3200):</span>
+      <button data-preset="32000,509.1">2.3e21, V = 32K</button>
+      <button data-preset="43000,517.5">2.3e21, V = 43K</button>
+      <button data-preset="32000,62.2">2.8e20, V = 32K</button>
+      <button data-preset="24000,60.8">2.8e20, V = 24K</button>
+    </div>
+    <div class="out">
+      <div class="stat"><div class="k">f(V), tokens per character</div><div class="v" id="o-f"></div></div>
+      <div class="stat"><div class="k">Characters per token</div><div class="v" id="o-cpt"></div></div>
+      <div class="stat"><div class="k">Tokens D = H·f(V)</div><div class="v" id="o-dtok"></div></div>
+      <div class="stat"><div class="k">Vocabulary parameters N_v = V·d</div><div class="v" id="o-nv"></div></div>
+      <div class="stat"><div class="k">Compute C ≈ 6(N_nv + V·d)·D</div><div class="v" id="o-c"></div></div>
+      <div class="stat"><div class="k">V padded to a multiple of 128</div><div class="v" id="o-pad"></div></div>
+    </div>
+    <div class="note warn" id="o-warn" hidden></div>
+    <p class="caption">f(V) = 0.0064·(ln V)² − 0.1581·ln V + 1.2047 and C ≈ 6(N_nv + V·d)·H·f(V) from [[vocabulary-scaling-laws]] Eq. 3 and Eq. 5 (arXiv:2407.13623v3, fit on SlimPajama BPE tokenizers from 1K to 1024K). Table 3 prints D = 128.5B at V = 32K and D = 127.0B at V = 43K for the 2.3e21 budget; the fit gives values within 0.5% of those. The quadratic fit has its minimum near V ≈ 231K, so compression values above about 200K are not meaningful. Padding rule from OLMo-core tokenizer.py L77-82 ([[olmo-core-olmo3-configs]]).</p>
+  </section>
 
-</div>
+  <!-- Panel 2 -->
+  <section class="panel" id="p2" hidden>
+    <h2>How much of the same content fits, and what it costs</h2>
+    <div class="grid">
+      <label>Tokenizer (FLORES-200 premiums relative to English)
+        <select id="tok">
+          <option value="cl100k">cl100k_base (ChatGPT, GPT-4)</option>
+          <option value="gpt2">GPT-2 / RoBERTa</option>
+        </select>
+      </label>
+      <label>Context window (tokens)<input id="ctx" type="number" min="128" step="1" value="8192"></label>
+    </div>
+    <div class="scroll" style="margin-top:12px">
+      <table>
+        <thead><tr><th>Language</th><th class="num">Premium</th><th class="num">Tokens for content that is one English window</th><th class="num">Share of that content that fits</th><th class="barcell">Share (bar)</th><th class="num">Relative training compute per unit of content</th></tr></thead>
+        <tbody id="prem-body"></tbody>
+      </table>
+    </div>
+    <p class="caption">Premiums from [[tokenizer-language-unfairness]] Table 1 (arXiv:2305.15425, FLORES-200, 2,000 parallel sentences). Tokens for the content = window × premium; share that fits = 1 / premium; relative compute = premium, because training compute per token is constant at fixed model size (C ≈ 6ND). These are derived quantities; the paper reports premiums, latency (Fig. 2), and context effects (§5.3), not downstream accuracy.</p>
+  </section>
 
-<div class="note">
-  Throughput figures are order-of-magnitude estimates composed from FineWeb's
-  <code class="lin">datatrove</code> report, Llama 3's pretrain compute disclosure,
-  and OLMo 3's "1024 H100" pretrain budget. Your numbers will vary by 2-3x depending
-  on I/O substrate and CPU fleet; the <i>ordering</i> of stages by throughput
-  (tokenize ≫ classifier ≫ exec-filter) is the invariant worth remembering.
-</div>
+  <!-- Panel 3 -->
+  <section class="panel" id="p3" hidden>
+    <h2>Target ratios to token counts</h2>
+    <div class="grid">
+      <label>Requested tokens R (billions)<input id="req" type="number" min="1" step="1" value="100"></label>
+      <label>Global batch (tokens)<input id="gb" type="number" min="1" step="1" value="4194304"></label>
+      <label>Sequence length (tokens)<input id="seq" type="number" min="1" step="1" value="8192"></label>
+    </div>
+    <div class="scroll" style="margin-top:12px">
+      <table>
+        <thead><tr><th>Source</th><th class="num">Available (B tokens)</th><th class="num">target_ratio</th><th class="num">max_repetition_ratio</th><th class="num">Needed (B)</th><th class="num">Cap (B)</th><th class="num">Passes over source</th><th>Status</th></tr></thead>
+        <tbody id="mix-body"></tbody>
+      </table>
+    </div>
+    <div class="out">
+      <div class="stat"><div class="k">Sum of target ratios</div><div class="v" id="m-sum"></div></div>
+      <div class="stat"><div class="k">training_steps = ceil(R / batch)</div><div class="v" id="m-steps"></div></div>
+      <div class="stat"><div class="k">Instances per batch</div><div class="v" id="m-ipb"></div></div>
+      <div class="stat"><div class="k">Requested instances</div><div class="v" id="m-inst"></div></div>
+    </div>
+    <div class="note" id="m-note"></div>
+
+    <h2 style="margin-top:18px">Resume after a batch-size change</h2>
+    <div class="grid">
+      <label>tokens_processed at checkpoint<input id="tp" type="number" min="0" step="1" value="4194304000"></label>
+      <label>Global batch after resume (tokens)<input id="gb-new" type="number" min="1" step="1" value="3145728"></label>
+    </div>
+    <div class="out">
+      <div class="stat"><div class="k">batches_processed = tokens_processed // batch</div><div class="v" id="r-bp"></div></div>
+      <div class="stat"><div class="k">Sequences trained before restart</div><div class="v" id="r-seen"></div></div>
+      <div class="stat"><div class="k">Sequences skipped on resume</div><div class="v" id="r-skip"></div></div>
+      <div class="stat"><div class="k">Sequences trained twice</div><div class="v" id="r-dup"></div></div>
+    </div>
+    <p class="caption">Allocation rule from OLMo-core@66f768b source_mixture.py L309-348: needed = int(R · target_ratio); cap = int(available · max_source_fraction · max_repetition_ratio), with max_source_fraction = 1 here; the build fails when cap &lt; needed. Resume rule from data_loader.py L757-763: batches_processed = tokens_processed // global_batch_size, then the first batches_processed batches of the seeded global order are skipped (L734-735). Default values: OLMo 3 7B stage-1 batch 8,192 × 512 tokens and the 4,194,304,000 tokens recorded at step 1,000 in OLMo-3-1025-7B.csv ([[olmo-core-olmo3-configs]]). The three sources are this chapter's worked example, not a released mixture.</p>
+  </section>
+</main>
 
 <script>
-const STAGES = [
-  {
-    id: "raw",
-    name: "Raw shards",
-    desc: "content-addressed by BLAKE3 of original bytes",
-    throughput: "2 GB/s per node",
-    detail: {
-      lead: "Starting substrate. One raw document per line in parquet or tar shards, keyed by doc_id = BLAKE3(bytes). Immutable. Re-crawling the same URL tomorrow produces the same doc_id iff bytes are identical. This is the primary key every downstream attribute references.",
-      attrs: [
-        "<code>doc_id</code>: 32-byte BLAKE3 hash of raw UTF-8 bytes",
-        "<code>url</code>, <code>crawl_date</code>, <code>snapshot_id</code> (e.g. CC-MAIN-2024-30)",
-        "<code>source_bucket</code>: web / code / books / academic / social"
-      ],
-      failures: [
-        { t: "Silent re-crawl of mutated content", b: "Same URL, different bytes, different doc_id. Shows up as 'new documents' in a snapshot that is supposed to be stable. Fix: never treat URL as the primary key — only BLAKE3.", s: "Symptom: dedup cluster sizes grow 1–3% month-over-month without explanation." },
-        { t: "Unicode normalization drift", b: "NFC vs NFD normalization changes bytes, changes doc_id. Pin one normalization globally before any hashing.", s: "Symptom: identical-looking documents get different hashes; downstream dedup misses them." }
-      ]
-    }
-  },
-  {
-    id: "filter1",
-    name: "Filter stage 1 (language + quality)",
-    desc: "fastText lang-ID, Gopher heuristics, C4 rules",
-    throughput: "500 MB/s per node",
-    detail: {
-      lead: "First pass drops roughly 60-70% of raw web text. CCNet skeleton: language ID via fastText, then heuristic quality filters (line length, symbol ratio, stopword ratio, terminal punctuation). Attribute file is additive — the raw shards are untouched.",
-      attrs: [
-        "<code>lang</code>: ISO code + confidence score",
-        "<code>gopher_quality</code>: composite score ∈ [0, 1]",
-        "<code>c4_rules</code>: per-heuristic boolean array [pass, pass, fail, pass, ...]",
-        "<code>length_stats</code>: mean_line_length, max_line_length, n_words"
-      ],
-      failures: [
-        { t: "Language-ID confusion on code-mixed text", b: "Singlish, Hinglish, French-in-English documents get low English confidence and are dropped — but they carry real signal. Fix: downstream union of lang ∈ {en, en-mix} bucket.", s: "Symptom: downstream MMLU fine on English but IFEval multilingual regresses." },
-        { t: "Gopher threshold set on the wrong distribution", b: "Threshold tuned on a clean validation set, applied to noisy raw web. Loses 5–10% of good documents.", s: "Symptom: ablation shows threshold=0.7 and threshold=0.8 give similar MMLU but the 0.7 run gets +0.3% on knowledge-heavy subsets." }
-      ]
-    }
-  },
-  {
-    id: "filter2",
-    name: "Filter stage 2 (content + PII)",
-    desc: "toxic classifier, PII regex cascade, opt-out",
-    throughput: "200 MB/s per node (Tier 2); 20 MB/s (Tier 3)",
-    detail: {
-      lead: "Content + PII filtering. Dolma's three-tier cascade: regex for email/IP/phone (Tier 1, every doc), NER classifier on flagged documents (Tier 2, ~5%), LLM classifier audit (Tier 3, ~1%). Opt-out registry applied as a bloom filter at read time. Every removal is logged to attributes/pii.",
-      attrs: [
-        "<code>pii.emails</code>, <code>pii.phones</code>, <code>pii.ips</code>: counts",
-        "<code>pii.removed_spans</code>: [[start, end, category, tier], ...]",
-        "<code>toxic.hate</code>, <code>toxic.nsfw</code>: classifier scores",
-        "<code>optout.matched</code>: boolean — if true, doc fully dropped",
-        "<code>audit.log_offset</code>: pointer into the PII-removal event log"
-      ],
-      failures: [
-        { t: "Regex false-negative on obfuscated span", b: "john [at] gmail [dot] com or phone written as 'one two three dash...'. Tier 1 misses; Tier 2/3 catch some. Regulator-facing residual risk.", s: "Symptom: post-hoc audit finds PII in released checkpoint; issue a take-down of affected shards." },
-        { t: "PII removal creates new near-duplicates", b: "Two docs that differed only in a scrubbed email are now identical. If PII runs AFTER dedup, these are missed. Must run PII before dedup.", s: "Symptom: dedup cluster sizes drop when PII stage is reordered — diagnostic run is the only way to catch this." },
-        { t: "Opt-out registry stale", b: "New opt-out request comes in mid-pretrain; registry not reloaded; doc survives in the already-tokenized shards.", s: "Symptom: legal surfaces a complaint weeks later, and the doc is already in the checkpoint." }
-      ]
-    }
-  },
-  {
-    id: "dedup",
-    name: "Dedup (exact + MinHash per-dump)",
-    desc: "hash-based exact, MinHash near-dup, cluster IDs",
-    throughput: "100 MB/s per node",
-    detail: {
-      lead: "Two-level dedup: exact (bloom filter on doc-BLAKE3) then approximate (MinHash + LSH, signature size 128–256). FineWeb's result: per-dump MinHash outperforms global dedup on downstream MMLU. Dedup output is a cluster_id per doc; keeping one representative per cluster is a query.",
-      attrs: [
-        "<code>dedup.exact_duplicate_of</code>: doc_id or null",
-        "<code>dedup.minhash_sig</code>: uint64[128]",
-        "<code>dedup.cluster_id</code>: per-dump cluster",
-        "<code>dedup.cluster_rank</code>: 0 = keep, >0 = drop in this mix"
-      ],
-      failures: [
-        { t: "Global dedup removes legitimate rare documents", b: "A high-quality document appearing in 3 CC snapshots gets dedupped to 1 copy globally, but each snapshot is sampled separately at training time — net effect is under-representation. FineWeb's per-dump result.", s: "Symptom: MMLU drops ~0.5% vs per-dump variant; only visible with an ablation run." },
-        { t: "Bloom filter saturation", b: "At >10B unique docs, a false-positive rate of 1% starts dropping real documents. Size the bloom to the true cardinality.", s: "Symptom: exact-dedup rate plateaus at ~99% instead of the expected 95–97%." },
-        { t: "MinHash signature collision tunable too loose", b: "Jaccard ≥ 0.8 threshold discards near-paraphrases that are actually different documents (different URLs, same news story). Affects news-heavy subsets most.", s: "Symptom: news / social bucket shrinks 20%+ after MinHash, other buckets <5%." }
-      ]
-    }
-  },
-  {
-    id: "tokenize",
-    name: "Tokenize",
-    desc: "byte-level BPE, 128K vocab, SentencePiece",
-    throughput: "300 MB/s per CPU-node; GPU tokenizers 10× faster",
-    detail: {
-      lead: "Text → int32 token ids. The tokenizer is the first artifact that's locked: its BLAKE3 hash is embedded in every downstream shard. Offline tokenization is 4× faster for the trainer than on-the-fly, at the cost of a full-corpus rewrite if the tokenizer ever changes. Reserved slots (`<|reserved_0|>` … `<|reserved_N|>`) are preserved for later SFT.",
-      attrs: [
-        "<code>tok.tokenizer_id</code>: BLAKE3(tokenizer.json)",
-        "<code>tok.n_tokens</code>: int",
-        "<code>tok.reserved_map</code>: JSON {name → id} for reserved slots",
-        "<code>tok.byte_fallback</code>: bool"
-      ],
-      failures: [
-        { t: "Tokenizer version mismatch between pretrain and SFT", b: "SFT run reuses pretrain shards but with a re-trained tokenizer (more special tokens). Token IDs are different; model trains on garbage for first 1000 steps. Fix: assert tokenizer_id == checkpoint.tokenizer_id at load.", s: "Symptom: SFT loss starts above pretrain final loss and never recovers." },
-        { t: "New language in Stage 2 without byte fallback", b: "Stage 1 English-only tokenizer can't encode Korean; Stage 2 adds Korean data; tokenizer fails with 'unknown byte'. With byte_fallback=True this degrades gracefully; without it, trainer crashes.", s: "Symptom: dataloader throws OOV errors on 5% of batches." },
-        { t: "No reserved slots — must extend vocab for <think>", b: "Post-pretrain vocab extension without mean-of-neighbors init drifts chat template for ~1000 SFT steps. See read.md §5.", s: "Symptom: ||E_in[<think>]|| is 30× smaller than median embedding norm at SFT start." }
-      ]
-    }
-  },
-  {
-    id: "shuffle",
-    name: "Shuffle",
-    desc: "per-rank deterministic RNG, mix-pointer",
-    throughput: "limited by sort/merge, not I/O",
-    detail: {
-      lead: "Global shuffle is expensive; standard recipe is 'shard-level shuffle + intra-shard shuffle with a local RNG seeded from (rank, epoch)'. Mosaic Streaming keeps dataloader state = (rank_shard_list, within_shard_offset, rng_seed); this fits in a few KB and round-trips cleanly on resume (see ch-06 §5.1).",
-      attrs: [
-        "<code>shuf.seed</code>: int, derived from config",
-        "<code>shuf.scheme</code>: 'shard_local' | 'global' | 'none'",
-        "<code>mix.pointer</code>: which mix-stage this shard belongs to (Dolma 3 / Dolmino / Longmino / ...)"
-      ],
-      failures: [
-        { t: "Non-deterministic shuffle → resume replays", b: "Shuffle uses time-based RNG; resume produces a different permutation; trainer replays already-seen tokens. Single most dangerous silent failure.", s: "Symptom: loss drops ~0.01 for 500 steps after resume, then drifts upward." },
-        { t: "Missing mix-pointer", b: "OLMo 3 model-flow has multiple stages (Dolma 3 → Dolmino → Longmino), each with a different mix. Resume without mix-pointer reverses the curriculum.", s: "Symptom: long-context eval regresses during a resumed long-context stage." }
-      ]
-    }
-  },
-  {
-    id: "pack",
-    name: "Pack (MDS shards, 200MB)",
-    desc: "sequence packing, uniform shard size",
-    throughput: "1 GB/s per node",
-    detail: {
-      lead: "Sequence-pack tokenized documents into fixed-size training examples (typical: 8192 tokens per example). Emit MDS shards at uniform 200 MB each — the sweet spot FineWeb reports (99% of shards within 1.5× median). Too small: open/close overhead dominates. Too large: stragglers.",
-      attrs: [
-        "<code>pack.shard_path</code>, <code>pack.shard_offset</code>: where this doc lives in the final corpus",
-        "<code>pack.seq_len</code>: length of packed example",
-        "<code>pack.cross_sample_mask</code>: attention-mask encoding sample boundaries",
-        "<code>pack.shard_size_bytes</code>: for uniformity QA"
-      ],
-      failures: [
-        { t: "Uneven shard sizes → straggler worker", b: "One shard 5 GB, one shard 10 MB. Rank holding the 5 GB shard blocks the step. 1024-way DP amplifies this.", s: "Symptom: GPU util drops 20% once per epoch when the big shard is picked." },
-        { t: "Cross-sample attention leak", b: "Packed examples require attention masks that forbid cross-sample attention. Bug: mask missing, model silently attends across document boundaries. ch-07 material.", s: "Symptom: perplexity on held-out *unpacked* data is ~5% worse than on packed — only visible with the right eval." }
-      ]
-    }
-  },
-  {
-    id: "train",
-    name: "Trainer",
-    desc: "reads (doc_id → shard_offset) map",
-    throughput: "40 GB/s aggregate at 1024 H100s",
-    detail: {
-      lead: "The final consumer. The trainer loads a <code>(rank_shard_list, within_shard_offset)</code> state into its dataloader and streams int32 token tensors. The full data graph collapses to one map: <code>doc_id → (shard_path, offset)</code>. Everything upstream of this is reproducible from the attribute files.",
-      attrs: [
-        "<code>train.run_id</code>: BLAKE3 of (mix_query, tokenizer_id, code_sha)",
-        "<code>train.step</code>: global step",
-        "<code>train.mix_pointer</code>: current stage"
-      ],
-      failures: [
-        { t: "Mix query not versioned", b: "'The mix' is a script or notebook, not a committed file. Reproducing the mix six months later requires archaeology. Fix: mix query = file in training config repo, hashed into run_id.", s: "Symptom: cannot reproduce the run; new run produces 0.5%+ different eval scores." },
-        { t: "Attribute files deleted to save storage", b: "Someone frees disk by rm'ing attributes/. Future re-derivation of a filtered subset now requires rerunning the filters from scratch.", s: "Symptom: dataset re-derivation project quoted at 2 weeks of compute instead of 2 hours of query." }
-      ]
-    }
-  }
-];
-
-const pipeline = document.getElementById("pipeline");
-const detail   = document.getElementById("detail");
-
-STAGES.forEach((s, i) => {
-  const el = document.createElement("div");
-  el.className = "stage";
-  el.dataset.idx = i;
-  el.innerHTML = `
-    <span class="idx">${i + 1}</span>
-    <div>
-      <span class="nm">${s.name}</span>
-      <span class="desc">${s.desc}</span>
-    </div>
-    <span class="thr">${s.throughput}</span>
-  `;
-  el.addEventListener("click", () => select(i));
-  pipeline.appendChild(el);
-  if (i < STAGES.length - 1) {
-    const a = document.createElement("div");
-    a.className = "arrow";
-    a.textContent = "▼";
-    pipeline.appendChild(a);
-  }
-});
-
-function select(i) {
-  document.querySelectorAll(".stage").forEach(el => {
-    el.classList.toggle("active", +el.dataset.idx === i);
+(function () {
+  // ---------- tabs ----------
+  var tabs = document.querySelectorAll('.tabs button');
+  tabs.forEach(function (b) {
+    b.addEventListener('click', function () {
+      tabs.forEach(function (x) { x.setAttribute('aria-selected', x === b ? 'true' : 'false'); });
+      ['p1', 'p2', 'p3'].forEach(function (id) { document.getElementById(id).hidden = (id !== b.dataset.tab); });
+    });
   });
-  const s = STAGES[i];
-  const d = s.detail;
-  detail.innerHTML = `
-    <h3>${s.name}</h3>
-    <div class="lead">${d.lead}</div>
-    <div class="section">
-      <div class="section-title">Typical at 15T-token pretrain scale</div>
-      <dl class="kv">
-        <dt>Throughput</dt><dd>${s.throughput}</dd>
-        <dt>Stage index</dt><dd>${i + 1} of ${STAGES.length}</dd>
-      </dl>
-    </div>
-    <div class="section">
-      <div class="section-title">Lineage attributes emitted</div>
-      <ul class="attrs">
-        ${d.attrs.map(a => `<li>${a}</li>`).join("")}
-      </ul>
-    </div>
-    <div class="section">
-      <div class="section-title">Common operational failures</div>
-      <ul class="failures">
-        ${d.failures.map(f => `
-          <li>
-            <span class="ft">${f.t}</span>${f.b}
-            ${f.s ? `<span class="sym">${f.s}</span>` : ""}
-          </li>`).join("")}
-      </ul>
-    </div>
-  `;
-}
 
-select(0);
+  function fmt(x, digits) {
+    if (!isFinite(x)) return '—';
+    return x.toLocaleString('en-US', { maximumFractionDigits: digits, minimumFractionDigits: digits });
+  }
+  function sci(x) {
+    if (!isFinite(x) || x <= 0) return '—';
+    var e = Math.floor(Math.log10(x)); var m = x / Math.pow(10, e);
+    return m.toFixed(2) + 'e' + e;
+  }
+  function num(id) { return parseFloat(document.getElementById(id).value); }
+
+  // ---------- panel 1 ----------
+  var A = 0.0064, B = -0.1581, Cc = 1.2047; // Tao et al. 2024, Eq. 3
+  function f(V) { var l = Math.log(V); return A * l * l + B * l + Cc; }
+  function p1() {
+    var V = num('v'), d = num('d'), nnv = num('nnv') * 1e9, H = num('h') * 1e9;
+    var fv = f(V), D = H * fv, Nv = V * d, C = 6 * (nnv + Nv) * D;
+    document.getElementById('o-f').textContent = fmt(fv, 4);
+    document.getElementById('o-cpt').textContent = fmt(1 / fv, 3);
+    document.getElementById('o-dtok').textContent = fmt(D / 1e9, 1) + 'B';
+    document.getElementById('o-nv').textContent = fmt(Nv / 1e9, 4) + 'B';
+    document.getElementById('o-c').textContent = sci(C);
+    document.getElementById('o-pad').textContent = fmt(128 * Math.ceil(V / 128), 0);
+    var w = document.getElementById('o-warn');
+    if (V > 200000) { w.hidden = false; w.textContent = 'V is above about 200K: the quadratic fit rises after its minimum near 231K, so f(V) no longer describes a real tokenizer.'; }
+    else if (V < 1024) { w.hidden = false; w.textContent = 'V is below the smallest fitted tokenizer (1K).'; }
+    else { w.hidden = true; }
+  }
+  ['v', 'd', 'nnv', 'h'].forEach(function (id) { document.getElementById(id).addEventListener('input', p1); });
+  document.querySelectorAll('[data-preset]').forEach(function (b) {
+    b.addEventListener('click', function () {
+      var parts = b.dataset.preset.split(',');
+      document.getElementById('v').value = parts[0];
+      document.getElementById('h').value = parts[1];
+      document.getElementById('d').value = 3200;
+      document.getElementById('nnv').value = 2.87;
+      p1();
+    });
+  });
+  p1();
+
+  // ---------- panel 2 ----------
+  // Petrov et al. 2023, Table 1 (premium relative to English on FLORES-200)
+  var PREM = {
+    cl100k: [['English', 1.00], ['Portuguese', 1.48], ['German', 1.58], ['Italian', 1.64], ['Chinese (Simplified)', 1.91],
+             ['Japanese', 2.30], ['Bulgarian', 2.64], ['Standard Arabic', 3.04], ['Burmese', 11.70], ['Shan', 15.05]],
+    gpt2:   [['English', 1.00], ['Portuguese', 1.94], ['German', 2.14], ['Italian', 2.01], ['Chinese (Simplified)', 3.21],
+             ['Japanese', 3.00], ['Bulgarian', 5.51], ['Standard Arabic', 4.40], ['Burmese', 16.89], ['Shan', 18.76]]
+  };
+  function p2() {
+    var rows = PREM[document.getElementById('tok').value];
+    var ctx = num('ctx');
+    var body = document.getElementById('prem-body');
+    body.innerHTML = '';
+    rows.forEach(function (r) {
+      var share = 1 / r[1];
+      var tr = document.createElement('tr');
+      tr.innerHTML = '<td>' + r[0] + '</td><td class="num">' + r[1].toFixed(2) + '</td><td class="num">' +
+        fmt(ctx * r[1], 0) + '</td><td class="num">' + fmt(100 * share, 1) + '%</td><td class="barcell"><div class="bar" style="width:' +
+        (100 * share).toFixed(1) + '%"></div></td><td class="num">' + r[1].toFixed(2) + '×</td>';
+      body.appendChild(tr);
+    });
+  }
+  document.getElementById('tok').addEventListener('change', p2);
+  document.getElementById('ctx').addEventListener('input', p2);
+  p2();
+
+  // ---------- panel 3 ----------
+  var SOURCES = [
+    { name: 'web', avail: 200, ratio: 0.60, rep: 1.0 },
+    { name: 'code', avail: 20, ratio: 0.30, rep: 1.0 },
+    { name: 'math', avail: 5, ratio: 0.10, rep: 2.0 }
+  ];
+  var mixBody = document.getElementById('mix-body');
+  SOURCES.forEach(function (s, i) {
+    var tr = document.createElement('tr');
+    tr.innerHTML = '<td><input class="name" data-i="' + i + '" data-k="name" value="' + s.name + '"></td>' +
+      '<td class="num"><input type="number" min="0" step="0.1" data-i="' + i + '" data-k="avail" value="' + s.avail + '"></td>' +
+      '<td class="num"><input type="number" min="0" max="1" step="0.01" data-i="' + i + '" data-k="ratio" value="' + s.ratio + '"></td>' +
+      '<td class="num"><input type="number" min="1" step="0.1" data-i="' + i + '" data-k="rep" value="' + s.rep + '"></td>' +
+      '<td class="num" id="need' + i + '"></td><td class="num" id="cap' + i + '"></td><td class="num" id="pass' + i + '"></td><td id="st' + i + '"></td>';
+    mixBody.appendChild(tr);
+  });
+  mixBody.addEventListener('input', function (e) {
+    var t = e.target; if (!t.dataset.k) return;
+    var i = +t.dataset.i;
+    SOURCES[i][t.dataset.k] = t.dataset.k === 'name' ? t.value : parseFloat(t.value);
+    p3();
+  });
+  function p3() {
+    var R = num('req') * 1e9, gb = num('gb'), seq = num('seq');
+    var sum = 0, errors = 0;
+    SOURCES.forEach(function (s, i) {
+      sum += s.ratio;
+      var avail = s.avail * 1e9;
+      var need = Math.floor(R * s.ratio);
+      var cap = Math.floor(avail * 1.0 * s.rep);
+      document.getElementById('need' + i).textContent = fmt(need / 1e9, 2);
+      document.getElementById('cap' + i).textContent = fmt(cap / 1e9, 2);
+      document.getElementById('pass' + i).textContent = avail > 0 ? fmt(need / avail, 2) : '—';
+      var st = document.getElementById('st' + i);
+      if (cap < need) {
+        errors++;
+        var minRep = avail > 0 ? need / avail : Infinity;
+        st.innerHTML = '<span class="bad">Insufficient tokens: needs max_repetition_ratio ≥ ' + fmt(minRep, 2) + '</span>';
+      } else {
+        st.innerHTML = '<span class="good">OK</span>';
+      }
+    });
+    document.getElementById('m-sum').textContent = fmt(sum, 3);
+    var steps = Math.ceil(R / gb);
+    var ipb = gb / seq;
+    document.getElementById('m-steps').textContent = fmt(steps, 0);
+    document.getElementById('m-ipb').textContent = Number.isInteger(ipb) ? fmt(ipb, 0) : fmt(ipb, 3);
+    document.getElementById('m-inst').textContent = Number.isInteger(ipb) ? fmt(steps * ipb, 0) : '—';
+    var note = document.getElementById('m-note');
+    var msgs = [];
+    if (Math.abs(sum - 1) > 1e-6) msgs.push('Target ratios must sum to 1.0 (source_mixture.py L141-148).');
+    if (!Number.isInteger(ipb)) msgs.push('Global batch must be a multiple of the sequence length (L344-346).');
+    if (errors) msgs.push(errors + ' source(s) would raise OLMoConfigurationError.');
+    if (msgs.length) { note.className = 'note warn'; note.textContent = msgs.join(' '); }
+    else { note.className = 'note ok'; note.textContent = 'Configuration is feasible. Ratios are shares of requested tokens, so passes above 1.0 mean repeated tokens.'; }
+  }
+  ['req', 'gb', 'seq'].forEach(function (id) { document.getElementById(id).addEventListener('input', function () { p3(); p3r(); }); });
+  p3();
+
+  function p3r() {
+    var tp = num('tp'), gNew = num('gb-new'), seq = num('seq');
+    var bp = Math.floor(tp / gNew);
+    var seen = tp / seq;
+    var skipped = bp * gNew / seq;
+    document.getElementById('r-bp').textContent = fmt(bp, 0);
+    document.getElementById('r-seen').textContent = Number.isInteger(seen) ? fmt(seen, 0) : fmt(seen, 2);
+    document.getElementById('r-skip').textContent = Number.isInteger(skipped) ? fmt(skipped, 0) : fmt(skipped, 2);
+    var dup = seen - skipped;
+    document.getElementById('r-dup').textContent = Number.isInteger(dup) ? fmt(dup, 0) : fmt(dup, 2);
+  }
+  ['tp', 'gb-new'].forEach(function (id) { document.getElementById(id).addEventListener('input', p3r); });
+  p3r();
+})();
 </script>
-
 </body>
 </html>

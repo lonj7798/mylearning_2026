@@ -1,0 +1,132 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ch-52 — How fast safety behavior erodes</title>
+<style>
+  :root{ --bg:#fff; --fg:#16181d; --muted:#5b6472; --line:#d8dde5; --panel:#f6f8fa;
+         --a:#2f5d8a; --b:#8a4b2f; --c:#3f7a52; }
+  *{box-sizing:border-box}
+  body{margin:0;padding:24px;font:14px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;color:var(--fg);background:var(--bg)}
+  .wrap{max-width:980px;margin:0 auto}
+  h1{font-size:19px;margin:0 0 4px}
+  h2{font-size:15px;margin:26px 0 8px}
+  p.lead{color:var(--muted);margin:0 0 16px;max-width:80ch}
+  .panel{border:1px solid var(--line);border-radius:6px;padding:14px 16px;background:var(--panel);margin-bottom:18px}
+  .ctl{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:10px}
+  .ctl label{font-size:13px;color:var(--muted);min-width:180px}
+  input[type=range]{flex:1;min-width:200px}
+  .val{font-variant-numeric:tabular-nums;font-weight:600;min-width:120px}
+  svg{width:100%;height:auto;display:block}
+  .axis{stroke:#aab2bd;stroke-width:1}
+  .grid{stroke:#e6eaf0;stroke-width:1}
+  .lbl{font-size:11px;fill:var(--muted)}
+  .pt{fill:var(--a)}
+  .pt2{fill:var(--b)}
+  .ln{fill:none;stroke:var(--a);stroke-width:2}
+  .ln2{fill:none;stroke:var(--b);stroke-width:2;stroke-dasharray:5 3}
+  table{border-collapse:collapse;width:100%;font-size:13px;margin-top:8px}
+  th,td{border:1px solid var(--line);padding:6px 9px;text-align:left}
+  th{background:var(--panel);font-weight:600}
+  td.num{text-align:right;font-variant-numeric:tabular-nums}
+  caption{caption-side:bottom;text-align:left;font-size:12.5px;color:var(--muted);padding-top:6px}
+  .note{font-size:12.5px;color:var(--muted);max-width:88ch;margin-top:8px}
+  .key{display:inline-block;width:11px;height:11px;border-radius:2px;vertical-align:-1px;margin-right:5px}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>How fast safety behavior erodes</h1>
+  <p class="lead">Two measured curves from ch-52 §5, on the same model (Llama-2-7B-Chat) and the same benchmark (HEx-PHI, 330 harmful instructions). Move each slider to read the value at that point. Both curves rise steeply in the first few units, which is the argument for re-running a safety gate on the shipped checkpoint rather than inheriting a number.</p>
+
+  <div class="panel">
+    <h2 style="margin-top:0"><span class="key" style="background:var(--a)"></span>Fine-tuning attack: attack success rate against gradient steps</h2>
+    <div class="ctl">
+      <label for="s1">Gradient steps on 100 harmful pairs</label>
+      <input id="s1" type="range" min="0" max="6" step="2" value="0">
+      <span class="val" id="v1"></span>
+    </div>
+    <svg id="chart1" viewBox="0 0 640 240" role="img" aria-label="Attack success rate against gradient steps"></svg>
+    <p class="note">Llama-2-7B-Chat fine-tuned on 100 (harmful instruction, harmful answer) pairs, learning rate 2e-5, batch size 64. Values: 1.5% at 0 steps, 22.4% at 2, 76.4% at 4, 87.9% at 6 (Shallow Safety Alignment, arXiv:2406.05946v1, Fig. 3). At batch 64, six steps is 384 examples.</p>
+  </div>
+
+  <div class="panel">
+    <h2 style="margin-top:0"><span class="key" style="background:var(--b)"></span>Prefilling attack: attack success rate against prefilled non-refusal tokens</h2>
+    <div class="ctl">
+      <label for="s2">Non-refusal tokens prefilled (k)</label>
+      <input id="s2" type="range" min="0" max="3" step="1" value="0">
+      <span class="val" id="v2"></span>
+    </div>
+    <svg id="chart2" viewBox="0 0 640 240" role="img" aria-label="Attack success rate against prefilled tokens"></svg>
+    <p class="note">Solid line: Llama-2-7B-Chat. Dashed line: the same model after depth-augmented fine-tuning, which trains recovery into a refusal after a harmful prefix of k tokens. Values at k = 5 / 10 / 20 / 40: 42.1 / 51.5 / 56.1 / 57.0% initial and 2.8 / 2.9 / 3.4 / 4.5% augmented (Table 2). The x axis is ordinal, not linear in k.</p>
+  </div>
+
+  <h2>Erosion produced by fine-tuning that was not about safety</h2>
+  <table>
+    <thead><tr><th>Fine-tuning data</th><th>Model</th><th class="num">before</th><th class="num">after</th></tr></thead>
+    <tbody>
+      <tr><td>10 harmful examples, 5 epochs (under $0.20 via the API)</td><td>GPT-3.5 Turbo 0613</td><td class="num">1.8%</td><td class="num">88.8%</td></tr>
+      <tr><td>10 identity-shifting examples, 10 epochs (no toxic content; not flagged by the moderation API)</td><td>GPT-3.5 Turbo 0613</td><td class="num">0%</td><td class="num">87.3%</td></tr>
+      <tr><td>Alpaca, 1 epoch (benign)</td><td>GPT-3.5 Turbo 0613</td><td class="num">5.5%</td><td class="num">31.8%</td></tr>
+      <tr><td>Alpaca, 1 epoch (benign)</td><td>Llama-2-7b-Chat</td><td class="num">0.3%</td><td class="num">16.1%</td></tr>
+      <tr><td>Dolly, 1 epoch (benign)</td><td>Llama-2-7b-Chat</td><td class="num">0.6%</td><td class="num">12.1%</td></tr>
+      <tr><td>LLaVA-Instruct, 1 epoch (benign)</td><td>Llama-2-7b-Chat</td><td class="num">0%</td><td class="num">18.8%</td></tr>
+      <tr><td>benign web-navigation demonstrations (WebDojo attack success)</td><td>Llama-3.1-8B-Instruct</td><td class="num">32.88%</td><td class="num">64.38%</td></tr>
+      <tr><td>the same run, refusal rate on harmful web tasks</td><td>Llama-3.1-8B-Instruct</td><td class="num">26.03%</td><td class="num">6.85%</td></tr>
+    </tbody>
+    <caption>Rows 1-6: harmfulness rate on a 330-prompt policy benchmark scored by a GPT-4 judge (arXiv:2310.03693 Tables 1-3). Rows 7-8: arXiv:2508.14031 Table 1, where task success on WebArena-Lite rose from 2.42% to 22.42% in the same run.</caption>
+  </table>
+  <p class="note">Mixing safety data back in reduces but does not remove the effect: the 100-shot attack goes 91.8% to 23.0% with 100 safety samples, and Alpaca goes 31.8% to 19.7% with 500 safety samples (arXiv:2310.03693 Table 4).</p>
+</div>
+
+<script>
+const C1 = {x:[0,2,4,6], y:[1.5,22.4,76.4,87.9], xlab:"gradient steps", ylab:"ASR (%)", xticks:["0","2","4","6"]};
+const C2 = {x:[0,1,2,3], y:[42.1,51.5,56.1,57.0], y2:[2.8,2.9,3.4,4.5], xlab:"prefilled tokens k", ylab:"ASR (%)", xticks:["5","10","20","40"]};
+
+function draw(svgId, C, twoSeries){
+  const W=640,H=240,L=52,R=16,T=16,B=40;
+  const pw=W-L-R, ph=H-T-B;
+  const maxY=100;
+  const px = i => L + (C.x.length===1?0:(i/(C.x.length-1))*pw);
+  const py = v => T + ph - (v/maxY)*ph;
+  let s='';
+  for(let g=0; g<=5; g++){
+    const v=g*20, y=py(v);
+    s+='<line class="grid" x1="'+L+'" y1="'+y+'" x2="'+(W-R)+'" y2="'+y+'"/>';
+    s+='<text class="lbl" x="'+(L-8)+'" y="'+(y+4)+'" text-anchor="end">'+v+'</text>';
+  }
+  s+='<line class="axis" x1="'+L+'" y1="'+(T+ph)+'" x2="'+(W-R)+'" y2="'+(T+ph)+'"/>';
+  s+='<line class="axis" x1="'+L+'" y1="'+T+'" x2="'+L+'" y2="'+(T+ph)+'"/>';
+  C.xticks.forEach(function(t,i){
+    s+='<text class="lbl" x="'+px(i)+'" y="'+(T+ph+18)+'" text-anchor="middle">'+t+'</text>';
+  });
+  s+='<text class="lbl" x="'+(L+pw/2)+'" y="'+(H-6)+'" text-anchor="middle">'+C.xlab+'</text>';
+  s+='<text class="lbl" x="14" y="'+(T+10)+'">'+C.ylab+'</text>';
+  let d=''; C.y.forEach(function(v,i){ d+=(i?'L':'M')+px(i)+' '+py(v)+' '; });
+  s+='<path class="ln" d="'+d+'"/>';
+  C.y.forEach(function(v,i){ s+='<circle class="pt" cx="'+px(i)+'" cy="'+py(v)+'" r="4"/>'; });
+  if(twoSeries && C.y2){
+    let d2=''; C.y2.forEach(function(v,i){ d2+=(i?'L':'M')+px(i)+' '+py(v)+' '; });
+    s+='<path class="ln2" d="'+d2+'"/>';
+    C.y2.forEach(function(v,i){ s+='<circle class="pt2" cx="'+px(i)+'" cy="'+py(v)+'" r="4"/>'; });
+  }
+  document.getElementById(svgId).innerHTML = s;
+}
+
+function upd1(){
+  const i = Math.round(document.getElementById('s1').value/2);
+  document.getElementById('v1').textContent = C1.y[i].toFixed(1) + '% ASR';
+}
+function upd2(){
+  const i = parseInt(document.getElementById('s2').value,10);
+  document.getElementById('v2').textContent = C2.y[i].toFixed(1) + '% / ' + C2.y2[i].toFixed(1) + '% augmented';
+}
+document.getElementById('s1').addEventListener('input', upd1);
+document.getElementById('s2').addEventListener('input', upd2);
+draw('chart1', C1, false);
+draw('chart2', C2, true);
+upd1(); upd2();
+</script>
+</body>
+</html>

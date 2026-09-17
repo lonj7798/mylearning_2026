@@ -7,6 +7,8 @@ source_url: https://arxiv.org/abs/2411.15124
 created_at: "2026-04-23"
 ---
 
+> Superseded by the 2026-09 revision of read.md; kept for history.
+
 # Excerpt: RLVR / Tülu 3 — the verifier-as-reward design of Option B
 
 **Source library:** `wiki/raw-data/llm-training/papers/rlvr-tulu3.md`

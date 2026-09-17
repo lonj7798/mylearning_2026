@@ -124,3 +124,17 @@ multi-turn dialogue     coherence + groundedness  judge / topic check
 ```
 
 The verifier's *shape* is determined by what ground-truth signal the modality provides — not by which LLM you happen to be using.
+
+---
+
+## Q-정정 (2026-09 revision)
+
+2026-09 revision에서 [[read]]를 primary source 기준으로 다시 작성했다. 아래 항목은 기존 entry의 kernel 중 수정된 사실이다. 기존 entry의 line reference(예: "line 22", "line 156", "line 171", "line 173")는 git commit 4a72e54 시점의 read.md를 가리킨다.
+
+- **Q3** — "verify 없는 pipeline은 student를 망가뜨린다"는 일반 규칙이 아니다. APIGen에서는 check에 실패한 sample을 다시 넣으면 BFCL이 xLAM-7B에서 4.06~5.94점, xLAM-1B에서 9.59~12.17점 떨어졌다(Fig. 5). OpenMathInstruct-2에서는 256K pair 이상일 때 오답 solution 20%까지 accuracy 손실이 거의 없었다(Fig. 5). 영향은 output 형태, student 크기, data 규모에 따라 다르다.
+- **Q6** — Nemotron-4의 human data는 "20K human prefs"가 아니다. 약 20K 중 10K는 SFT용, 10K는 reward model과 preference fine-tuning용 HelpSteer2이다(§3.2). "anchor가 pipeline을 calibrate한다"는 문장은 report에 없고 이 course의 해석이다.
+- **Q7** — "Nemotron과 APIGen은 anchor를 seed로 쓰지 않는다"는 틀렸다. APIGen은 seed QA example을 sampling하고 verified sample을 seed set에 다시 추가한다(§3.1). Nemotron-4는 human-written example을 few-shot으로 써서 수행할 수 없는 task의 question을 생성하고, LLM에게 그 question에 대한 refusal response를 쓰게 한다(§3.2.5).
+- **Q8** — ProLong은 document-grounded synthetic long instruction data의 성공 사례가 아니다. ProLong은 synthetic long data를 SFT에 섞었을 때 short UltraChat만 쓴 경우보다 점수가 낮았다(0%에서 55.7, 50%에서 43.3, Table 8). 최종 SFT는 UltraChat만 사용했다.
+- **Q10** — OpenMathInstruct-2는 SymPy를 쓰지 않는다. 새 question에는 gold answer가 없어서 같은 teacher의 solution 32개 중 majority answer를 기준으로 쓰고, evaluation은 GPT-4o judge로 한다. 또한 LLM 기반 verifier도 실제로 쓰인다. APIGen의 semantic check는 LLM이고, Nemotron-4는 초기에 LLM-as-judge를 쓰다가 Chat-Hard accuracy가 더 높은 reward model(0.87 vs 0.54)로 바꿨다(§3.2.3). 인용된 "line 173" 문장은 revision에서 삭제했다.
+- **Q12** — OpenMathInstruct-2의 14M 규모는 "정확한 verifier로 오답을 제거"한 결과로 설명되지 않는다. vote threshold는 0이었고, judge와 reward model filtering은 gain이 없었으며(Table 3), 논문은 teacher 강도(37.9 vs 30.1, Table 2)와 unique question 수(Fig. 6)의 효과를 보고한다. reward hacking과 judge 설계는 ch-26이 아니라 [[ch-42]]와 [[ch-49]]에서 다룬다.
+- **Pattern Map** — "new math → symbolic equivalence → SymPy" 행은 OpenMathInstruct-2에 해당하지 않는다. gold answer가 없는 math question의 verifier는 majority vote이고, 이 방식은 teacher가 반복하는 같은 오류를 걸러내지 못한다.

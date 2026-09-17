@@ -1,274 +1,300 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-<meta charset="UTF-8">
-<title>Contamination Detection — n-gram FP/FN and Paraphrase Leakage</title>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ch-48 — LSH banding and estimated performance gain</title>
 <style>
-  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-         max-width: 1180px; margin: 1.6em auto; padding: 0 1em; color: #1f1f1f;
-         background: #fafafa; }
-  h1 { font-size: 1.3em; margin-bottom: 0.25em; }
-  .subtitle { color: #5a5a5a; margin-top: 0; font-size: 0.92em; line-height: 1.5; }
-  .panel { border: 1px solid #dcdcdc; border-radius: 6px; background: #fff;
-           padding: 0.9em 1em; margin-top: 1em; }
-  h2 { font-size: 1.0em; margin: 0 0 0.6em 0; color: #2b2b2b;
-       border-bottom: 1px solid #ececec; padding-bottom: 0.3em; }
-  svg.plot { width: 100%; height: 320px; display: block; background: #fcfcfc;
-             border: 1px solid #ececec; border-radius: 4px; }
-  .axis { stroke: #666; stroke-width: 1; fill: none; }
-  .axis-text { font-family: 'SF Mono', Menlo, monospace; font-size: 10px; fill: #444; }
-  .grid { stroke: #eee; stroke-width: 1; }
-  .curve { fill: none; stroke-width: 2.2; }
-  .curve.fp { stroke: #c4793d; }
-  .curve.fn { stroke: #2e5aa8; }
-  .curve.ngram { stroke: #2e5aa8; }
-  .curve.emb { stroke: #2f8a4a; }
-  .marker { fill: #c4793d; stroke: #fff; stroke-width: 2; }
-  .legend-item { font-family: 'SF Mono', Menlo, monospace; font-size: 11px; fill: #222; }
-  .controls { display: flex; flex-wrap: wrap; gap: 0.8em; margin-bottom: 0.6em; align-items: center; }
-  .controls label { font-family: 'SF Mono', Menlo, monospace; font-size: 0.85em;
-                    color: #333; display: flex; flex-direction: column; min-width: 160px; }
-  .controls input[type=range] { width: 100%; }
-  .controls select { font-family: 'SF Mono', Menlo, monospace; font-size: 0.88em; }
-  .readout { font-family: 'SF Mono', Menlo, monospace; font-size: 0.82em;
-             color: #5a6a80; }
-  .verdict { font-size: 0.88em; color: #333; background: #f5f7fb;
-             padding: 0.55em 0.75em; border-radius: 4px;
-             border-left: 3px solid #2e5aa8; margin-top: 0.6em; }
-  code { background: #eef; padding: 1px 4px; border-radius: 3px;
-         font-family: 'SF Mono', Menlo, monospace; font-size: 0.85em; }
+  :root {
+    --bg: #fbfbfa; --fg: #1a1a1a; --muted: #5c5c5c; --line: #d4d4d0;
+    --accent: #1f5e8c; --accent2: #8c3a1f; --panel: #ffffff;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; padding: 16px; background: var(--bg); color: var(--fg);
+         font: 14px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif; }
+  .wrap { max-width: 900px; margin: 0 auto; }
+  h1 { font-size: 18px; margin: 0 0 4px; }
+  h2 { font-size: 15px; margin: 0 0 8px; }
+  p.sub { color: var(--muted); margin: 0 0 16px; }
+  .tabs { display: flex; gap: 8px; margin-bottom: 12px; flex-wrap: wrap; }
+  .tabs button { font: inherit; padding: 6px 12px; border: 1px solid var(--line);
+                 background: var(--panel); color: var(--fg); border-radius: 4px; cursor: pointer; }
+  .tabs button[aria-selected="true"] { background: var(--accent); color: #fff; border-color: var(--accent); }
+  .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 16px; }
+  .panel[hidden] { display: none; }
+  .row { display: flex; gap: 18px; flex-wrap: wrap; align-items: flex-start; }
+  .controls { flex: 1 1 250px; min-width: 240px; }
+  .plot { flex: 2 1 380px; min-width: 300px; }
+  label { display: block; margin: 10px 0 2px; font-size: 13px; }
+  input[type=range] { width: 100%; }
+  input[type=number] { width: 90px; font: inherit; padding: 3px 5px; border: 1px solid var(--line); border-radius: 3px; }
+  .val { font-variant-numeric: tabular-nums; color: var(--accent); font-weight: 600; }
+  table { border-collapse: collapse; width: 100%; margin-top: 12px; font-size: 13px; }
+  th, td { border: 1px solid var(--line); padding: 4px 7px; text-align: left; font-variant-numeric: tabular-nums; }
+  th { background: #f2f2ef; font-weight: 600; }
+  .out { margin-top: 12px; padding: 10px 12px; background: #f5f7f9; border-left: 3px solid var(--accent); }
+  .out b { font-variant-numeric: tabular-nums; }
+  figcaption { color: var(--muted); font-size: 12.5px; margin-top: 12px; }
+  svg { width: 100%; height: auto; display: block; }
+  .ax { stroke: var(--line); stroke-width: 1; }
+  .gl { stroke: #eceae6; stroke-width: 1; }
+  .tick { font-size: 10px; fill: var(--muted); }
+  code { background: #f2f2ef; padding: 1px 4px; border-radius: 3px; }
 </style>
 </head>
 <body>
+<div class="wrap">
+  <h1>Chapter 48 figures — LSH banding and estimated performance gain</h1>
+  <p class="sub">Two calculators for the two numbers a contamination memo reports: which pairs a
+  near-duplicate detector will propose, and how many benchmark points the flagged items are worth.</p>
 
-<h1>Contamination Detection — Interactive</h1>
-<p class="subtitle">
-  Two panels. <b>Panel 1</b>: pick an n-gram size and overlap cutoff on a synthesized train/eval
-  corpus; the FP/FN curves reveal the detector's operating point. <b>Panel 2</b>: sweep the
-  paraphrase ratio (fraction of eval tokens replaced by synonyms) and watch n-gram recall
-  collapse while embedding-neighbour recall degrades more gently. Models are synthetic but
-  directions are attested by <code>deduplicating-training-data</code> (n-gram / MinHash),
-  <code>llama-3</code> (13-token convention), and <code>faithful-synth-eval</code> (paraphrase tail).
-</p>
-
-<div class="panel">
-  <h2>Panel 1 — FP/FN vs n-gram size and cutoff</h2>
-  <div class="controls">
-    <label>n-gram size: <span id="nval" class="readout">13</span>
-      <input type="range" id="n" min="4" max="50" value="13" step="1">
-    </label>
-    <label>overlap cutoff (frac eval n-grams hit): <span id="cval" class="readout">0.80</span>
-      <input type="range" id="c" min="0.05" max="1.00" value="0.80" step="0.01">
-    </label>
-    <label>corpus contamination base rate: <span id="bval" class="readout">0.02</span>
-      <input type="range" id="b" min="0.00" max="0.20" value="0.02" step="0.005">
-    </label>
+  <div class="tabs" role="tablist">
+    <button role="tab" id="tab-lsh" aria-selected="true" aria-controls="panel-lsh">LSH banding</button>
+    <button role="tab" id="tab-epg" aria-selected="false" aria-controls="panel-epg">EPG calculator</button>
   </div>
-  <svg id="plot1" class="plot" viewBox="0 0 720 320" preserveAspectRatio="xMidYMid meet"></svg>
-  <div class="verdict" id="verdict1"></div>
-</div>
 
-<div class="panel">
-  <h2>Panel 2 — Paraphrase leakage: n-gram vs embedding recall</h2>
-  <div class="controls">
-    <label>paraphrase ratio (frac eval tokens rewritten): <span id="pval" class="readout">0.00</span>
-      <input type="range" id="p" min="0.00" max="1.00" value="0.00" step="0.01">
-    </label>
-    <label>detector:
-      <select id="dsel">
-        <option value="both" selected>both (n-gram and embedding)</option>
-        <option value="ngram">n-gram only</option>
-        <option value="emb">embedding only</option>
-      </select>
-    </label>
-  </div>
-  <svg id="plot2" class="plot" viewBox="0 0 720 320" preserveAspectRatio="xMidYMid meet"></svg>
-  <div class="verdict" id="verdict2"></div>
+  <!-- ------------------------------------------------------------------ -->
+  <section class="panel" id="panel-lsh" role="tabpanel" aria-labelledby="tab-lsh">
+    <h2>Candidate probability P(s) = 1 − (1 − s<sup>b</sup>)<sup>r</sup></h2>
+    <div class="row">
+      <div class="controls">
+        <p style="margin:0 0 6px"><code>b</code> = hashes that must all agree inside one bucket.
+        <code>r</code> = number of buckets. <code>s</code> = Jaccard similarity of the shingle sets.</p>
+        <label for="b">b, hashes per bucket: <span class="val" id="bv">20</span></label>
+        <input type="range" id="b" min="1" max="60" step="1" value="20">
+        <label for="r">r, number of buckets: <span class="val" id="rv">450</span></label>
+        <input type="range" id="r" min="1" max="600" step="1" value="450">
+        <label for="s">s, Jaccard similarity: <span class="val" id="sv">0.80</span></label>
+        <input type="range" id="s" min="0" max="1" step="0.005" value="0.8">
+        <div class="out">
+          P(s) at the marked point: <b id="ps">0.9946</b><br>
+          50% crossing of this curve: s ≈ <b id="mid">0.723</b><br>
+          Same numbers used the other way round (r buckets of b hashes swapped):
+          P(s) = <b id="psw">0.0000</b>, 50% crossing s ≈ <b id="midsw">0.993</b>
+        </div>
+        <p style="margin:10px 0 0; font-size:13px">Presets:
+          <button type="button" data-b="20" data-r="450" class="preset">Lee et al. main (0.8)</button>
+          <button type="button" data-b="20" data-r="40" class="preset">Lee et al. alternative (0.9)</button>
+        </p>
+      </div>
+      <div class="plot">
+        <svg viewBox="0 0 420 300" role="img" aria-label="Candidate probability against Jaccard similarity">
+          <g id="grid"></g>
+          <path id="curve" fill="none" stroke="var(--accent)" stroke-width="2"></path>
+          <path id="curveSw" fill="none" stroke="var(--accent2)" stroke-width="1.5" stroke-dasharray="4 3"></path>
+          <circle id="dot" r="4" fill="var(--accent)"></circle>
+          <g id="axes"></g>
+        </svg>
+        <p style="font-size:12.5px; margin:4px 0 0">
+          <span style="color:var(--accent)">&#9473;</span> b hashes per bucket, r buckets &nbsp;
+          <span style="color:var(--accent2)">&#9476;</span> the two values swapped
+        </p>
+      </div>
+    </div>
+
+    <table>
+      <tr><th>Jaccard s</th><th>0.50</th><th>0.60</th><th>0.70</th><th>0.75</th><th>0.80</th><th>0.85</th></tr>
+      <tr><th>P(s), b = 20, r = 450</th><td>0.00043</td><td>0.0163</td><td>0.302</td><td>0.761</td><td>0.9946</td><td>1.000</td></tr>
+    </table>
+
+    <figcaption>
+      Parameters and the confirmation thresholds are from Lee et al. 2021, “Deduplicating Training Data Makes
+      Language Models Better”, §4.2 and App. A: 5-gram shingles, a MinHash signature of k = 9,000 hashes split
+      into r = 450 buckets of b = 20 hashes, candidate probability 1 − (1 − s<sup>b</sup>)<sup>r</sup>, and pairs
+      confirmed at Jaccard &gt; 0.8 and edit similarity &gt; 0.8. The alternative preset is the (0.9/0.9,
+      b = 20, r = 40, k = 800) setting from App. A, Fig. 4. Curve values are computed in the page, not taken
+      from the paper.
+    </figcaption>
+  </section>
+
+  <!-- ------------------------------------------------------------------ -->
+  <section class="panel" id="panel-epg" role="tabpanel" aria-labelledby="tab-epg" hidden>
+    <h2>Estimated performance gain from a flagged subset</h2>
+    <div class="row">
+      <div class="controls">
+        <label for="n">Benchmark instances: <input type="number" id="n" value="100" min="1" step="1"></label>
+        <label for="f">Instances flagged by the detector: <input type="number" id="f" value="40" min="0" step="1"></label>
+        <label for="cf">Correct among flagged: <input type="number" id="cf" value="34" min="0" step="1"></label>
+        <label for="cc">Correct among clean: <input type="number" id="cc" value="36" min="0" step="1"></label>
+        <div class="out">
+          Reported score (all instances): <b id="all">70.0</b><br>
+          Score on the clean subset: <b id="clean">60.0</b> (n = <b id="cn">60</b>)<br>
+          Percent flagged: <b id="pf">40.0</b><br>
+          <b>EPG = reported − clean = <span id="epg">10.0</span> points</b>
+          <div id="warn" style="color:var(--accent2); margin-top:6px"></div>
+        </div>
+      </div>
+      <div class="plot">
+        <svg viewBox="0 0 420 240" role="img" aria-label="Reported score and clean-subset score">
+          <g id="bars"></g>
+        </svg>
+        <p style="font-size:12.5px; margin:4px 0 0">
+          EPG is the height difference between the two bars. A clean subset with few instances makes the
+          right-hand bar noisy, which is why the threshold is selected on a z-statistic rather than on EPG.
+        </p>
+      </div>
+    </div>
+
+    <h2 style="margin-top:18px">Reference rows: Llama 3 contamination analysis</h2>
+    <table>
+      <tr><th>Benchmark</th><th>% contaminated</th><th>gain 8B</th><th>gain 70B</th><th>gain 405B</th></tr>
+      <tr><td>AGIEval</td><td>98</td><td>8.5</td><td>19.9</td><td>16.3</td></tr>
+      <tr><td>BIG-Bench Hard</td><td>95</td><td>26.0</td><td>36.0</td><td>41.0</td></tr>
+      <tr><td>HellaSwag</td><td>85</td><td>14.8</td><td>14.8</td><td>14.3</td></tr>
+      <tr><td>PiQA</td><td>55</td><td>8.5</td><td>7.9</td><td>8.1</td></tr>
+      <tr><td>NaturalQuestions</td><td>52</td><td>1.6</td><td>0.9</td><td>0.8</td></tr>
+      <tr><td>GSM8K</td><td>41</td><td>0.0</td><td>0.1</td><td>1.3</td></tr>
+      <tr><td>Winogrande</td><td>6</td><td>−0.1</td><td>−0.1</td><td>−0.2</td></tr>
+      <tr><td>SQuAD</td><td>0</td><td>0.0</td><td>0.0</td><td>0.0</td></tr>
+    </table>
+
+    <figcaption>
+      EPG is defined in Singh et al. 2024, “Evaluation data contamination in LLMs: how do we measure it and
+      (when) does it matter?”, §4.1, as the model's score on the full benchmark minus its score on the subset
+      a metric marks clean. The reference table is Table 15 of the Llama 3 report (arXiv:2407.21783, §5.1.4),
+      which flags instances by 8-gram overlap with a per-dataset token-ratio threshold chosen for maximal
+      significant estimated performance gain. NaturalQuestions and BIG-Bench Hard have similar flagged
+      percentages and gains that differ by more than 24 points.
+    </figcaption>
+  </section>
 </div>
 
 <script>
-// ---- Panel 1 model ----
-// Synthesize a train/eval corpus with known contamination. FP = fraction of clean
-// train docs flagged (spurious n-gram collision). FN = fraction of contaminated
-// eval instances NOT flagged. Both depend on n-gram size n and cutoff c.
-//
-// Model shape (calibrated so n=8,c~0.1 reproduces the ~1-3% FP observation on Wikipedia-
-// style text, and n=50 yields near-zero FP per [[deduplicating-training-data]]):
-//   fp(n, c) = exp( - (n - 3) / 1.8 ) * (1 - c)^1.2
-//   fn(n, c) = 1 - (1 - 0.0025 * n) * (1 - c^0.7)   [simplified]
-// Both clamped to [0, 1].
-function fpModel(n, c) {
-  const raw = Math.exp(-(n - 3) / 1.8) * Math.pow(Math.max(0, 1 - c), 1.2);
-  return Math.max(0, Math.min(1, raw));
-}
-function fnModel(n, c, baseRate) {
-  // longer n-grams and higher cutoff -> more FN. Base rate scales the floor.
-  const perItemRecall = Math.max(0, 1 - c) * Math.max(0, 1 - 0.012 * (n - 3));
-  const fn = 1 - perItemRecall;
-  return Math.max(0, Math.min(1, fn));
-}
+(function () {
+  "use strict";
 
-function drawAxes(svg, xlab, ylab) {
-  const ns = "http://www.w3.org/2000/svg";
-  // Clear
-  while (svg.firstChild) svg.removeChild(svg.firstChild);
-  const W = 720, H = 320, L = 60, R = 620, T = 30, B = 280;
-  // grid
-  for (let i = 0; i <= 10; i++) {
-    const y = T + (B - T) * i / 10;
-    const line = document.createElementNS(ns, "line");
-    line.setAttribute("x1", L); line.setAttribute("x2", R);
-    line.setAttribute("y1", y); line.setAttribute("y2", y);
-    line.setAttribute("class", "grid"); svg.appendChild(line);
-    const t = document.createElementNS(ns, "text");
-    t.setAttribute("x", L - 6); t.setAttribute("y", y + 3);
-    t.setAttribute("text-anchor", "end");
-    t.setAttribute("class", "axis-text");
-    t.textContent = (1 - i / 10).toFixed(1);
-    svg.appendChild(t);
+  /* ---------- tabs ---------- */
+  var tabs = [["tab-lsh", "panel-lsh"], ["tab-epg", "panel-epg"]];
+  tabs.forEach(function (pair) {
+    document.getElementById(pair[0]).addEventListener("click", function () {
+      tabs.forEach(function (p) {
+        var selected = p[0] === pair[0];
+        document.getElementById(p[0]).setAttribute("aria-selected", String(selected));
+        document.getElementById(p[1]).hidden = !selected;
+      });
+    });
+  });
+
+  /* ---------- panel 1: LSH banding ---------- */
+  var W = 420, H = 300, L = 42, R = 12, T = 12, B = 32;
+  var px = function (s) { return L + s * (W - L - R); };
+  var py = function (p) { return H - B - p * (H - T - B); };
+
+  function P(s, b, r) {
+    if (s <= 0) return 0;
+    var t = Math.pow(s, b);
+    if (t >= 1) return 1;
+    return -Math.expm1(r * Math.log1p(-t));
   }
-  for (let i = 0; i <= 10; i++) {
-    const x = L + (R - L) * i / 10;
-    const line = document.createElementNS(ns, "line");
-    line.setAttribute("y1", T); line.setAttribute("y2", B);
-    line.setAttribute("x1", x); line.setAttribute("x2", x);
-    line.setAttribute("class", "grid"); svg.appendChild(line);
-    const t = document.createElementNS(ns, "text");
-    t.setAttribute("y", B + 14); t.setAttribute("x", x);
-    t.setAttribute("text-anchor", "middle");
-    t.setAttribute("class", "axis-text");
-    t.textContent = (i / 10).toFixed(1);
-    svg.appendChild(t);
+  function midpoint(b, r) {
+    var lo = 0, hi = 1, m;
+    for (var i = 0; i < 60; i++) { m = (lo + hi) / 2; if (P(m, b, r) < 0.5) lo = m; else hi = m; }
+    return (lo + hi) / 2;
   }
-  const xt = document.createElementNS(ns, "text");
-  xt.setAttribute("x", (L + R) / 2); xt.setAttribute("y", H - 4);
-  xt.setAttribute("text-anchor", "middle"); xt.setAttribute("class", "axis-text");
-  xt.textContent = xlab; svg.appendChild(xt);
-  const yt = document.createElementNS(ns, "text");
-  yt.setAttribute("transform", `rotate(-90 16 ${(T + B) / 2})`);
-  yt.setAttribute("x", 16); yt.setAttribute("y", (T + B) / 2);
-  yt.setAttribute("text-anchor", "middle"); yt.setAttribute("class", "axis-text");
-  yt.textContent = ylab; svg.appendChild(yt);
-  return { L, R, T, B };
-}
-
-function plotCurve(svg, pts, cls, box) {
-  const ns = "http://www.w3.org/2000/svg";
-  const { L, R, T, B } = box;
-  const d = pts.map((p, i) => {
-    const x = L + (R - L) * p[0];
-    const y = T + (B - T) * (1 - p[1]);
-    return (i === 0 ? "M" : "L") + x.toFixed(1) + "," + y.toFixed(1);
-  }).join(" ");
-  const path = document.createElementNS(ns, "path");
-  path.setAttribute("d", d); path.setAttribute("class", "curve " + cls);
-  svg.appendChild(path);
-}
-
-function marker(svg, x, y, box) {
-  const ns = "http://www.w3.org/2000/svg";
-  const { L, R, T, B } = box;
-  const cx = L + (R - L) * x;
-  const cy = T + (B - T) * (1 - y);
-  const dot = document.createElementNS(ns, "circle");
-  dot.setAttribute("cx", cx); dot.setAttribute("cy", cy);
-  dot.setAttribute("r", 5); dot.setAttribute("class", "marker");
-  svg.appendChild(dot);
-}
-
-function legend(svg, items) {
-  const ns = "http://www.w3.org/2000/svg";
-  let x = 480, y = 42;
-  for (const [label, cls] of items) {
-    const line = document.createElementNS(ns, "line");
-    line.setAttribute("x1", x); line.setAttribute("x2", x + 24);
-    line.setAttribute("y1", y); line.setAttribute("y2", y);
-    line.setAttribute("class", "curve " + cls); svg.appendChild(line);
-    const t = document.createElementNS(ns, "text");
-    t.setAttribute("x", x + 30); t.setAttribute("y", y + 4);
-    t.setAttribute("class", "legend-item"); t.textContent = label;
-    svg.appendChild(t); y += 16;
+  function path(b, r) {
+    var d = "", i, s;
+    for (i = 0; i <= 200; i++) { s = i / 200; d += (i ? "L" : "M") + px(s).toFixed(2) + " " + py(P(s, b, r)).toFixed(2); }
+    return d;
   }
-}
 
-function renderPanel1() {
-  const n = parseInt(document.getElementById("n").value);
-  const c = parseFloat(document.getElementById("c").value);
-  const b = parseFloat(document.getElementById("b").value);
-  document.getElementById("nval").textContent = n;
-  document.getElementById("cval").textContent = c.toFixed(2);
-  document.getElementById("bval").textContent = b.toFixed(3);
-  const svg = document.getElementById("plot1");
-  const box = drawAxes(svg, "cutoff (overlap fraction)", "rate");
-  // Two curves at the chosen n: FP vs c, FN vs c.
-  const fpPts = [], fnPts = [];
-  for (let i = 0; i <= 100; i++) {
-    const cc = i / 100;
-    fpPts.push([cc, fpModel(n, cc)]);
-    fnPts.push([cc, fnModel(n, cc, b)]);
+  var grid = document.getElementById("grid"), axes = document.getElementById("axes");
+  function svgEl(name, attrs, text) {
+    var e = document.createElementNS("http://www.w3.org/2000/svg", name);
+    Object.keys(attrs).forEach(function (k) { e.setAttribute(k, attrs[k]); });
+    if (text !== undefined) e.textContent = text;
+    return e;
   }
-  plotCurve(svg, fpPts, "fp", box);
-  plotCurve(svg, fnPts, "fn", box);
-  marker(svg, c, fpModel(n, c), box);
-  legend(svg, [["FP rate", "fp"], ["FN rate", "fn"]]);
-  const fp = fpModel(n, c), fn = fnModel(n, c, b);
-  let regime = "balanced";
-  if (n <= 6) regime = "recall-favoured (expect FP > 1%)";
-  else if (n <= 13) regime = "Llama-3 convention; FP <0.1% on web-scale text";
-  else if (n >= 40) regime = "ExactSubstr territory; near-zero FP, paraphrase-blind";
-  document.getElementById("verdict1").textContent =
-    `n=${n}, cutoff=${c.toFixed(2)} -> FP=${(fp*100).toFixed(2)}%, FN=${(fn*100).toFixed(1)}%.  ` +
-    `Regime: ${regime}.  Rule: if your FP > your FN target, shorten n; if FN > FP target, lengthen n.`;
-}
+  (function drawAxes() {
+    var i, v;
+    for (i = 0; i <= 10; i++) {
+      v = i / 10;
+      grid.appendChild(svgEl("line", { x1: px(v), y1: T, x2: px(v), y2: H - B, class: "gl" }));
+      grid.appendChild(svgEl("line", { x1: L, y1: py(v), x2: W - R, y2: py(v), class: "gl" }));
+    }
+    axes.appendChild(svgEl("line", { x1: L, y1: H - B, x2: W - R, y2: H - B, class: "ax" }));
+    axes.appendChild(svgEl("line", { x1: L, y1: T, x2: L, y2: H - B, class: "ax" }));
+    for (i = 0; i <= 5; i++) {
+      v = i / 5;
+      axes.appendChild(svgEl("text", { x: px(v), y: H - B + 13, class: "tick", "text-anchor": "middle" }, v.toFixed(1)));
+      axes.appendChild(svgEl("text", { x: L - 6, y: py(v) + 3, class: "tick", "text-anchor": "end" }, v.toFixed(1)));
+    }
+    axes.appendChild(svgEl("text", { x: (L + W - R) / 2, y: H - 4, class: "tick", "text-anchor": "middle" }, "Jaccard similarity s"));
+    axes.appendChild(svgEl("text", { x: 11, y: (T + H - B) / 2, class: "tick", "text-anchor": "middle",
+      transform: "rotate(-90 11 " + ((T + H - B) / 2) + ")" }, "P(candidate)"));
+  })();
 
-// ---- Panel 2 model ----
-// n-gram recall collapses with paraphrase ratio p: each rewritten token breaks
-// every n-gram it touches, so recall ~ (1-p)^n. Embedding recall degrades as
-// (1 - p^1.3) clamped, reflecting that semantic embeddings are paraphrase-robust
-// to a ceiling but ultimately fail on heavy rewrites.
-function ngramRecall(p, n) {
-  return Math.pow(Math.max(0, 1 - p), n);
-}
-function embRecall(p) {
-  return Math.max(0, 1 - Math.pow(p, 1.3));
-}
-
-function renderPanel2() {
-  const p = parseFloat(document.getElementById("p").value);
-  const which = document.getElementById("dsel").value;
-  document.getElementById("pval").textContent = p.toFixed(2);
-  const svg = document.getElementById("plot2");
-  const box = drawAxes(svg, "paraphrase ratio p", "recall (flagged / truly contaminated)");
-  const ngramPts = [], embPts = [];
-  for (let i = 0; i <= 100; i++) {
-    const pp = i / 100;
-    ngramPts.push([pp, ngramRecall(pp, 13)]);
-    embPts.push([pp, embRecall(pp)]);
+  var bEl = document.getElementById("b"), rEl = document.getElementById("r"), sEl = document.getElementById("s");
+  function renderLsh() {
+    var b = +bEl.value, r = +rEl.value, s = +sEl.value;
+    document.getElementById("bv").textContent = b;
+    document.getElementById("rv").textContent = r;
+    document.getElementById("sv").textContent = s.toFixed(3);
+    document.getElementById("curve").setAttribute("d", path(b, r));
+    document.getElementById("curveSw").setAttribute("d", path(r, b));
+    var dot = document.getElementById("dot");
+    dot.setAttribute("cx", px(s)); dot.setAttribute("cy", py(P(s, b, r)));
+    document.getElementById("ps").textContent = P(s, b, r).toFixed(4);
+    document.getElementById("mid").textContent = midpoint(b, r).toFixed(3);
+    document.getElementById("psw").textContent = P(s, r, b).toFixed(4);
+    document.getElementById("midsw").textContent = midpoint(r, b).toFixed(3);
   }
-  if (which !== "emb") plotCurve(svg, ngramPts, "ngram", box);
-  if (which !== "ngram") plotCurve(svg, embPts, "emb", box);
-  marker(svg, p, which === "emb" ? embRecall(p) : ngramRecall(p, 13), box);
-  legend(svg, [["n-gram recall (n=13)", "ngram"], ["embedding recall (cos >=0.9)", "emb"]]);
-  const ng = ngramRecall(p, 13), em = embRecall(p);
-  let takeaway = "";
-  if (p < 0.1) takeaway = "light edit: both detectors catch nearly everything.";
-  else if (p < 0.3) takeaway = "moderate paraphrase: n-gram already missing half; embedding still strong.";
-  else if (p < 0.6) takeaway = "heavy paraphrase: n-gram near zero; embedding carrying the load.";
-  else takeaway = "near-total rewrite: embedding also leaking; no detector is safe.";
-  document.getElementById("verdict2").textContent =
-    `p=${p.toFixed(2)}: n-gram recall=${(ng*100).toFixed(1)}%, embedding recall=${(em*100).toFixed(1)}%.  ` +
-    takeaway + "  The recall gap is what the memo must name.";
-}
+  [bEl, rEl, sEl].forEach(function (el) { el.addEventListener("input", renderLsh); });
+  Array.prototype.forEach.call(document.querySelectorAll(".preset"), function (btn) {
+    btn.addEventListener("click", function () {
+      bEl.value = btn.getAttribute("data-b"); rEl.value = btn.getAttribute("data-r"); renderLsh();
+    });
+  });
+  renderLsh();
 
-for (const id of ["n", "c", "b"]) {
-  document.getElementById(id).addEventListener("input", renderPanel1);
-}
-for (const id of ["p", "dsel"]) {
-  document.getElementById(id).addEventListener("input", renderPanel2);
-}
-renderPanel1();
-renderPanel2();
+  /* ---------- panel 2: EPG ---------- */
+  var ids = ["n", "f", "cf", "cc"], inputs = {};
+  ids.forEach(function (i) { inputs[i] = document.getElementById(i); });
+
+  function renderEpg() {
+    var n = Math.max(1, Math.round(+inputs.n.value || 0));
+    var f = Math.min(n, Math.max(0, Math.round(+inputs.f.value || 0)));
+    var cleanN = n - f;
+    var cf = Math.min(f, Math.max(0, Math.round(+inputs.cf.value || 0)));
+    var cc = Math.min(cleanN, Math.max(0, Math.round(+inputs.cc.value || 0)));
+    var all = 100 * (cf + cc) / n;
+    var clean = cleanN > 0 ? 100 * cc / cleanN : NaN;
+    var epg = cleanN > 0 ? all - clean : NaN;
+
+    document.getElementById("all").textContent = all.toFixed(1);
+    document.getElementById("clean").textContent = cleanN > 0 ? clean.toFixed(1) : "undefined";
+    document.getElementById("cn").textContent = cleanN;
+    document.getElementById("pf").textContent = (100 * f / n).toFixed(1);
+    document.getElementById("epg").textContent = cleanN > 0 ? epg.toFixed(1) : "undefined";
+
+    var warn = "";
+    if (cleanN === 0) warn = "Every instance is flagged, so there is no clean subset and EPG is undefined.";
+    else if (cleanN < 30) warn = "The clean subset has " + cleanN + " instances. At this size the clean-subset score is noisy and a threshold selected on EPG alone can be driven by a few items.";
+    document.getElementById("warn").textContent = warn;
+
+    var bars = document.getElementById("bars");
+    while (bars.firstChild) bars.removeChild(bars.firstChild);
+    var base = 200, h = 160;
+    function bar(x, value, label, colour) {
+      var v = isNaN(value) ? 0 : Math.max(0, Math.min(100, value));
+      var top = base - h * v / 100;
+      bars.appendChild(svgEl("rect", { x: x, y: top, width: 90, height: base - top, fill: colour, rx: 2 }));
+      bars.appendChild(svgEl("text", { x: x + 45, y: top - 6, class: "tick", "text-anchor": "middle" },
+        isNaN(value) ? "—" : value.toFixed(1)));
+      bars.appendChild(svgEl("text", { x: x + 45, y: base + 15, class: "tick", "text-anchor": "middle" }, label));
+    }
+    bars.appendChild(svgEl("line", { x1: 40, y1: base, x2: 390, y2: base, class: "ax" }));
+    bar(90, all, "full benchmark", "#1f5e8c");
+    bar(230, clean, "clean subset", "#8c3a1f");
+    if (!isNaN(epg)) {
+      var yTop = base - h * Math.max(0, Math.min(100, all)) / 100;
+      var yBot = base - h * Math.max(0, Math.min(100, clean)) / 100;
+      bars.appendChild(svgEl("line", { x1: 340, y1: yTop, x2: 340, y2: yBot, stroke: "#1a1a1a", "stroke-width": 1 }));
+      bars.appendChild(svgEl("text", { x: 346, y: (yTop + yBot) / 2 + 3, class: "tick" }, "EPG " + epg.toFixed(1)));
+    }
+  }
+  ids.forEach(function (i) { inputs[i].addEventListener("input", renderEpg); });
+  renderEpg();
+})();
 </script>
-
 </body>
 </html>

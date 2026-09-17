@@ -2,84 +2,85 @@
 chapter: ch-16
 course: llm-training
 phase: read
-excerpt_of: wiki/raw-data/llm-training/papers/rlvr-tulu3.md
+artifact: "Tülu 3: Pushing Frontiers in Open Language Model Post-Training — RLVR stage"
 source_url: https://arxiv.org/abs/2411.15124
-created_at: "2026-04-23"
+version: arXiv v5 (2025-04-14)
+verified_on: "2026-09-15"
+supersedes: the 2026-04 version of this file, which described a pass-rate-filtered pool derived from the 939K SFT mix
 ---
 
-# Excerpt: RLVR (Tülu 3 methodology) — the verifier-as-reward invariant
+# Excerpt: Tülu 3 RLVR — the prompt set as actually reported
 
-**Source library:** `wiki/raw-data/llm-training/papers/rlvr-tulu3.md`
-**Paper:** Lambert, Morrison, Pyatkin, Huang, Ivison et al. (Allen AI), "Tülu 3" — RLVR methodology subpage.
+Used by [[read]] §1, §4 and the Recipe table.
 
----
+## Objective (§6, Eq. 7–8)
 
-## Why this source anchors ch-16
+```
+max_{π_θ}  E_{y∼π_θ(x)} [ R_RLVR(x, y) ] = [ v(x, y) − β KL[π_θ(y|x) ‖ π_ref(y|x)] ]
+v(x, y) = α if correct, 0 otherwise
+```
 
-Where [[excerpts/tulu-3]] gives the *recipe* (hyperparameters, prompt counts, verifier list), this subpage gives the *framework*: the formal definition of RLVR, the prompt-curation invariant, and the Goodhart-gap argument for why verifier-grounded reward collapses to zero proxy/gold drift. Ch-16 §1 leans on this source for its definition of "what an RL prompt is."
+`v`: the verifiable reward function; `α = 10`, set from pilot experiments and not tuned further
+(§6). Optimization is PPO, run after preference finetuning.
 
----
+## The prompt set (§6.1, Table 22)
 
-## The formal RLVR setup and the prompt-curation invariant
+| Prompt dataset | Count | Verification |
+|---|---|---|
+| GSM8K Train | 7,473 | exact match against the extracted answer |
+| MATH Train | 7,500 | exact match against the extracted answer |
+| IF verifiable | 14,973 | prompt-specific verifiers |
+| **Total** | **29,946** | |
 
-From the source (lines 18, 25):
+Construction, as described: the GSM8K and MATH training splits are used with their standard 8-shot
+and 3-shot chain-of-thought prompts; the IF set is built by sampling instructions from the Tülu 2
+SFT mix and combining them with constraints from the IFEval taxonomy, one verification function per
+constraint template. The report states the combination "results in a mixture of roughly 30,000
+prompts with ground truth labels".
 
-> **Formal RLVR setup:** for a prompt `x` paired with a verifier `v: (x, y) → {0, 1}`, the reward is simply `r(x, y) = v(x, y)` — no RM.
->
-> **Prompt curation:** only prompts with a verifier + a known reference answer enter the RLVR set; RLHF/DPO handles the rest.
+**Corrections to the earlier chapter text.** The set is not derived by filtering the 939,344-prompt
+SFT mix, no rollout pass-rate band is applied, no "filtered beats unfiltered" ablation is reported,
+and code is not part of the RLVR stage (the verifier list in §6.1 is math, MATH-style math, and
+instruction-following constraints only).
 
-This is the invariant that drives ch-16 §1's three rules for what an RL prompt must be. Specifically:
+## Training settings (Table 21 and its caption; §6.4)
 
-1. **Every prompt must be paired with a grader.** The source makes this an absolute — "only prompts with a verifier + a known reference answer enter the RLVR set." Ch-16 takes this as the first pool-eligibility condition.
-2. **The grader returns {0, 1}.** Not a continuous score. This shapes the group-baseline variance: under binary rewards, variance is `p(1 − p)`, which the chapter's §2 and the rollout-passrate HTML figure both use as the primary quality signal.
-3. **The verifier is fixed.** Not learned, not drifting. This collapses the Goodhart gap that plagues classical RLHF — a learned RM can be hacked; a SymPy equivalence check cannot.
+Shared: γ = 1.0, GAE λ = 0.95, mini-batches 1, clip ε 0.2, value coefficient 0.1, gradient-norm
+threshold 1.0, linear LR schedule, generation temperature 1.0, max prompt length 2,048, −10 penalty
+for responses without an EOS token, advantage whitening, dropout disabled.
 
----
+| Setting | 8B RLVR | 70B RLVR |
+|---|---|---|
+| Learning rate | 3×10⁻⁷ | 1×10⁻⁷ |
+| Effective batch size | 224 | 640 |
+| PPO update iterations K | 4 | 4 |
+| Response length | 2,048 (1,024 for GSM8K-only runs) | 2,048 |
+| Total episodes | 100,000 | 400,000 |
+| KL coefficient β | 0.05 | 0.07 (Table 21 caption) / 0.7 (§6.4 body) |
+| Warm-up ratio ω | 0.0 | 0.07 (caption) / 0.1 (body) |
 
-## The three verifier domains
+The value model is initialized from a general reward model; §6.2 reports this initialization gives
+the highest GSM8K test score and the highest average against initialization from the anchored DPO
+model (Figure 21). β was swept over [0.1, 0.05, 0.03, 0.01] in the ablations (§6.2).
 
-From the source (lines 19–23):
+## Episodes and epochs
 
-> - *Math:* extract the final numeric/symbolic answer and compare to the reference using a tolerant grader (SymPy / normalized string match on MATH, exact integer match on GSM8K).
-> - *Constrained instruction following:* IFEval-style constraints ("respond in JSON", "use exactly 3 bullet points") checked with regex / parsers.
-> - *Code:* run model-generated code against unit tests in a sandbox; reward = 1 iff all tests pass.
+§6.2 states "In our RLVR ablation experiments, we train for roughly 100,000/7,473 ≈ 13 epochs" for
+the GSM8K-only pool. For the combined 29,946-prompt set at 100,000 episodes the corresponding
+number is ≈ 3.3 epochs (derived, not printed in the report).
 
-These map onto the verifier-type table in ch-16 §1. The source's critical methodological note (line 39):
+## Results and over-optimization
 
-> **Failure mode to watch:** if the verifier has loopholes (string-match math graders that accept "42" inside prose), RLVR can hack those loopholes. Treat verifier engineering like unit-test engineering.
+Table 23 (8B): MATH 42.0 → 43.7, GSM8K 84.3 → 87.6, IFEval 81.1 → 82.4 against the DPO starting
+point, average 64.4 → 64.8. At 70B: MATH 62.3 → 63.0, IFEval 82.6 → 83.2, GSM8K unchanged at 93.5,
+which the report attributes to saturation. §6.2 notes that a larger KL budget does not necessarily
+improve verifiable rewards, and Appendix B.4 shows over-optimized outputs from higher-KL IFEval
+runs. The "no reward hacking by construction" framing in the library card is not supported by these
+two passages.
 
-This is the "verifier hacking" category that ch-16 references implicitly when it says "the verifier is a fixed, interpretable function" (§1). The chapter doesn't belabor the point — it belongs to the reward-engineering chapter in the RL track — but it underpins why the filter in §2 operates on rollout pass-rate and *not* on rollout reward distribution alone. If the verifier is loophole-prone, reward alone is misleading; pass-rate relative to a held-out reference is more robust.
+## 405B (§8.1)
 
----
-
-## Why KL control is still needed
-
-From the source (line 24):
-
-> **KL control still used:** standard KL-to-SFT penalty (per-token, added to reward) with a small β, otherwise the policy collapses to a degenerate high-reward mode like constant-answer-guessing.
-
-This is the RLVR-specific version of a broader point: the chapter's §3.3 "KL drift" pathology (when replaying trajectories against a moved `π_ref`) is exactly this KL penalty becoming stale. In live Tülu 3 runs, `π_ref` is frozen at the SFT checkpoint, which is why the KL penalty stays consistent. If a replay buffer stored rollouts from step 1 and `π_ref` remained constant, the KL-reward piece would still be valid — but the policy-gradient piece would still suffer the IS-ratio explosion. That's why [[excerpts/replay-buffer-rlhf]] concludes "replay prompts, not trajectories" and not "replay trajectories against frozen references."
-
----
-
-## Why this collapses the proxy/gold gap
-
-From the source (line 23):
-
-> **Why it sidesteps reward hacking:** the verifier is a fixed, interpretable function. There is no proxy RM to drift; there is no OOD region where the reward spuriously rises. Goodhart's gap (see [[reward-model-overoptimization]]) is mechanically zero on verifiable prompts.
-
-This is load-bearing for ch-16's *bridge to synthetic* (§5). The synthetic-prompt generator (Track 3) produces prompts that must carry verifiers; the Goodhart-zero guarantee is what makes synthetic-prompt RL scalable. If we were using learned reward models, each synthetic prompt would inject its own RM-drift risk. Verifier-grounded prompts don't. That structural property is why the 2025 pattern is "synthetic prompts + mechanical verifiers" rather than "synthetic prompts + synthetic reward models."
-
----
-
-## What this excerpt unlocks
-
-- **ch-16 §1** — verifier taxonomy and the "grader is mandatory" rule.
-- **ch-16 §3.3** — KL-drift pathology connects to the frozen-`π_ref` setup described here.
-- **ch-16 §5** — the Goodhart-zero property is why synthetic prompts are viable.
-
-## Connections
-
-- [[excerpts/tulu-3]] — the same paper from the recipe angle.
-- [[excerpts/replay-buffer-rlhf]] — KL control interacts with trajectory-replay bias.
-- [[ch-16]] — §1, §3.3, §5.
+"Given the model's saturation of GSM8K from SFT and DPO training alone, we removed the GSM8K data,
+and we additionally found that the IFEval data did not help much in initial RLVR runs. As such, for
+Tülu 3 405B RLVR we only used the MATH train set." MATH improved by over 5 points within 25 RLVR
+steps; training stopped at 75 steps for compute reasons.

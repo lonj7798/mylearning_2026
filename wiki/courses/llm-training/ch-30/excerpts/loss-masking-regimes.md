@@ -2,120 +2,103 @@
 chapter: ch-30
 course: llm-training
 phase: read
-excerpt_of: wiki/raw-data/llm-training/papers/loss-masking-prompt.md
+excerpt_of: arXiv:2405.14394v2; arXiv:2401.13586v4; github.com/allenai/open-instruct@098424c; github.com/huggingface/trl@v0.23.0
 source_url: https://arxiv.org/abs/2405.14394
 created_at: "2026-04-23"
+revised: "2026-09-15 (generality revision; rewritten from primary sources)"
 ---
 
-# Excerpt: Loss masking as the mechanical heart of SFT
+# Excerpt: Loss masking choices — instruction loss, prompt loss weight, and framework defaults
 
-**Source library:** `wiki/raw-data/llm-training/papers/loss-masking-prompt.md`
-**Anchor paper:** Shi 2024 — "Instruction Tuning With Loss Over Instructions"
-**Companion handbook:** [[hf-alignment-handbook]] (the `train_on_response_only=True` default)
+This excerpt quotes four primary artifacts used by [[read]] §1-§2 and §7. The library card [[loss-masking-prompt]] has not yet been corrected and states the opposite of the Shi et al. result; the quotes below are taken from the paper.
 
----
+## 1. Shi et al., "Instruction Tuning With Loss Over Instructions" (arXiv:2405.14394v2, NeurIPS 2024)
 
-## Why this source anchors ch-30
+Abstract (verbatim): "we propose a simple yet effective method, INSTRUCTION MODELLING (IM), which trains LMs by applying a loss function to the instruction and prompt part rather than solely to the output part. Through experiments across 21 diverse benchmarks, we show that, in many scenarios, IM can effectively improve the LM performance … We observe that IM is especially beneficial when trained on datasets with lengthy instructions paired with brief outputs, or under the Superficial Alignment Hypothesis (SAH) where a small amount of training examples are used for instruction tuning. … It is worth noting that we are not proposing IM as a replacement for current fine-tuning processes."
 
-Loss masking is axis #2 of the five SFT design axes. It is the cheapest axis to get wrong and the cheapest to get right: one `labels[mask] = -100` line separates "the model learns to generate user prompts" from "the model learns to complete the assistant turn." The source is the clearest published statement of what that line does and when the default flips.
+Loss definitions (§3): IT, Eq. 2: `L = − Σ_{j=1..n} log P(C_j | I_1..I_m, C_1..C_{j−1})`. IM, Eq. 4: `L = − Σ_{t=1..m+n} log P(x_t | x_1..x_{t−1}) · 1(x_t ∉ T)`, "where 1(x_t ∉ T) is an indicator function that is 1 if x_t is not a template token".
 
----
+Table 1 (LLaMA-2-7B base; selected rows; NLP mean of 18 tasks / MT-Bench / AlpacaEval 1.0 / AlpacaEval 2.0):
 
-## The one-line implementation — quoted verbatim
+| Dataset (examples) | IT | NEFTune | IM |
+|---|---|---|---|
+| Alpagasus Alpaca 5k (5,305) | 45.29 / 3.62 / 16.29 / 2.46 | 45.62 / 3.50 / 21.37 / 2.37 | 47.47 / 3.48 / 19.52 / 3.29 |
+| Alpagasus Dolly 3k (2,996) | 46.58 / 4.23 / 13.42 / 2.00 | 47.07 / 4.42 / 14.04 / 2.03 | 48.95 / 4.06 / 15.11 / 2.44 |
+| Alpagasus Dolly 9k (9,229) | 45.54 / 4.33 / 21.54 / 2.28 | 45.99 / 4.21 / 31.61 / 2.84 | 48.00 / 4.55 / 30.77 / 2.67 |
+| Less Tydiqa (13,533) | 48.21 / 4.08 / 5.12 / 1.88 | 47.47 / 4.19 / 8.35 / 2.58 | 48.70 / 4.36 / 10.10 / 2.88 |
+| Less MMLU Chat (13,533) | 47.18 / 3.86 / 4.42 / 1.20 | 47.74 / 4.06 / 6.22 / 1.06 | 47.84 / 4.54 / 9.78 / 1.93 |
+| Less BBH ICL (13,533) | 48.28 / 4.78 / 36.20 / 2.36 | 49.03 / 5.05 / 39.81 / 2.87 | 49.15 / 5.03 / 44.15 / 3.56 |
+| LIMA (1,030) | 48.79 / 4.77 / 33.06 / 2.58 | 48.70 / 4.79 / 30.51 / 2.43 | 49.60 / 4.83 / 32.94 / 2.47 |
 
-From `loss-masking-prompt.md`, §Implementation (Python sketch):
+Base model: 49.32 / 1.16 / 0.01 / 0.01. Instruction/output length ratios (Table 5): Less MMLU Chat 26.33, Less Tydiqa 5.86, Less BBH ICL 3.27, Dolly 3k 0.64, Alpaca 5k 0.57, Dolly 9k 0.30, LIMA 0.09.
+
+Overfitting analysis (§4.3): "In the training loss distribution for the LIMA dataset, IM exhibits a slightly higher mean loss of 1.45 compared to 1.37 for IT … IM demonstrates a lower mean test loss of 1.17 compared to 1.32 for IT" (Tülu V2, 10% sample; loss on output tokens only). Table 2 BLEU against training outputs, IT → IM: LIMA 18.15 → 17.30, Less Tydiqa 69.21 → 65.63, Less MMLU Chat 72.43 → 69.20, Less BBH ICL 60.96 → 53.94, Alpaca 5k 72.26 → 70.50, Dolly 9k 61.76 → 60.61, Dolly 3k 60.99 → 59.04. Table 3 (KL loss to the base model): LIMA NLP 48.79 → 49.26 and AlpacaEval 2.0 2.58 → 0.06; Dolly 9K NLP 45.54 → 49.31 and AlpacaEval 2.0 2.28 → 0.04.
+
+Settings (App. C, Table 6): LLaMA-2-7B, LLaMA-2-13B, OPT-6.7B; total batch 128; epochs 2, 3, or 10 ("Training typically proceeds for 2 epochs"); maximum length 2048; LR 2×10⁻⁵; AdamW, ε 1e-6, betas (0.9, 0.98); linear schedule, warmup 0.03; weight decay 0; bf16; code built on Open-Instruct.
+
+## 2. Huerta-Enochian and Ko, "Instruction Fine-Tuning: Does Prompt Loss Matter?" (arXiv:2401.13586v4)
+
+Abstract (verbatim): "We found that performance of models fine-tuned on short-completion data had a statistically-significant negative quadratic relationship with PLW. Using small values (0.01 − 0.5) of PLW produced better results on multiple-choice and short-generation benchmarks (outperforming models fine-tuned on long-completion data) while large values (≈ 1.0) of PLW produced better results on long-generation benchmarks."
+
+Contributions list: "We verified that PLW can be safely ignored when fine-tuning on long-completion data."
+
+Definitions (§2.1): the generation ratio R_g is "the ratio of completion length to prompt length"; data with R_g < 1 are short-completion data. §4: 10 PLW levels in [0, 1] ("PLW = 0.0 is identical to the masking used in the original Alpaca project, and PLW = 1.0 is equivalent to unmasked training"), LLaMA 1 7B and LLaMA 2 7B, AlpacaData (R_g 3.27), AlpacaDataCleaned (7.83), AlpacaDataShort (0.08), "a total of sixty experimental training runs", thirteen benchmarks, original Alpaca code and hyperparameters.
+
+## 3. open-instruct at commit 098424c (released code)
+
+`open_instruct/finetune.py` L132-133:
 
 ```python
-labels = input_ids.clone()
-labels[:prompt_len] = -100  # mask prompt
-loss = F.cross_entropy(logits[..., :-1, :].reshape(-1, V),
-                       labels[..., 1:].reshape(-1),
-                       ignore_index=-100)
+    dataset_transform_fn: list[str] = field(
+        default_factory=lambda: ["sft_tulu_tokenize_and_truncate_v1", "sft_tulu_filter_v1"]
 ```
 
-Three invariants packed into these four lines:
+`open_instruct/dataset_transformation.py` L1214-1218:
 
-1. **`-100` is not a magic number.** It is PyTorch `F.cross_entropy`'s default `ignore_index`. Tensorflow users use a mask multiplied into the loss; HuggingFace / TRL follow PyTorch.
-2. **`labels = input_ids.clone()` before masking.** The model predicts the *next* token, so the targets are a shift-by-one of the inputs. Masking in-place on `input_ids` would break the attention computation.
-3. **The shift-by-one `[..., :-1, :]` / `[..., 1:]`** — done inside the loss, not inside the tokenizer. The tokenizer's `input_ids` are the forward pass; the loss realigns them.
+```python
+def _trainable_assistant_indices(messages: list[dict[str, Any]], last_turn_only: bool) -> list[int]:
+    assistant_indices = [idx for idx, m in enumerate(messages) if m["role"] == "assistant"]
+    if last_turn_only:
+        return assistant_indices[-1:]
+    return assistant_indices
+```
 
-## Notice: the single formula separating response-only from full-sequence
+`sft_tulu_tokenize_and_truncate_v1` (L1554-1564) calls the tokenizer path with the default `last_turn_only=False`; `last_turn_tulu_tokenize_and_truncate_v1` (L1565-1575) passes `last_turn_only=True` and is documented as "training only on the final assistant turn".
 
-From `loss-masking-prompt.md`, §Standard SFT loss:
+Truncation, L1427-1428 and L1464-1468:
 
-> `L_SFT(θ) = −(1 / T_y) Σ_{t=1..T_y} log π_θ(y_t | p, y_<t)`
->
-> Prompt tokens' labels are set to `-100` (ignore_index in PyTorch CE) so their gradient contribution is zero.
+```python
+DEFAULT_OVER_LENGTH_STRATEGY = "keep"
+OVER_LENGTH_STRATEGIES = (DEFAULT_OVER_LENGTH_STRATEGY, "terminate", "drop")
+...
+    """Handle a conversation that `max_seq_length` truncation cut short.
 
-And §Full-sequence loss (not recommended for instruction SFT):
+    Right-sided truncation drops the trailing EOS, so a cut inside an assistant turn leaves
+    trainable text with no terminator. `keep` leaves the row as is, `terminate` replaces its
+    final token with a trainable EOS, `drop` masks it out so `sft_tulu_filter_v1` removes it.
+```
 
-> `L_full(θ) = −(1 / (T_p + T_y)) Σ_t log π_θ(x_t | x_<t)`
->
-> Trains the model to reproduce the user's prompt — never used at inference, wastes capacity.
+Underivable spans, L1499-1504: "Tokenize one conversation, masking the whole row out if its labels are underivable. Such rows are rare (~0.005% of tulu-3-sft-olmo-2-mixture) …". This commit is from 2026; the code used for the 2024 Tülu 3 run was not checked.
 
-The two differ only in which positions contribute to the sum. Shi 2024's ablation is a direct test: same model, same data, same optimizer, swap which formula is used. Response-only wins on MT-Bench and AlpacaEval across every dataset size they tested *except* LIMA-sized (≤ 1K) on a strong base, where full-sequence acts as a cheap continued-pretraining regulariser — the one place prompt leakage helps.
+## 4. TRL v0.23.0, `trl/trainer/sft_config.py` L85-94 (released code)
 
----
+```
+completion_only_loss (`bool` or `None`, *optional*, defaults to `None`):
+    Whether to compute loss only on the completion part of the sequence. If set to `True`, loss is computed
+    only on the completion, which is supported only for [prompt-completion](#prompt-completion) datasets. If
+    `False`, loss is computed on the entire sequence. If `None` (default), the behavior depends on the dataset:
+    loss is computed on the completion for [prompt-completion](#prompt-completion) datasets, and on the full
+    sequence for [language modeling](#language-modeling) datasets.
+assistant_only_loss (`bool`, *optional*, defaults to `False`):
+    Whether to compute loss only on the assistant part of the sequence. If set to `True`, loss is computed only
+    on the assistant responses, which is supported only for [conversational](#conversational) datasets. If
+    `False`, loss is computed on the entire sequence.
+```
 
-## The multi-turn rule — where ch-30's table comes from
-
-From `loss-masking-prompt.md`, §Multi-turn chat masking:
-
-> For a conversation with turns `[u_1, a_1, u_2, a_2, …, u_k, a_k]`:
-> - Mask **all** user turns.
-> - Mask **all** prior assistant turns (a_1..a_{k−1}) — they are part of the prompt when generating a_k.
-> - Train on a_k tokens only.
-
-This is the row of ch-30's per-regime loss-mask table for "multi-turn chat." The source also documents the per-turn-training variant:
-
-> Per-turn-training variant: unroll the conversation k times, each time masking through a_{i−1} and training on a_i → k× more data but identical loss value.
-
-Notice: the two variants give the same loss value but *different gradient statistics*. Unrolling makes early turns appear k times in the effective dataset, which is a non-trivial re-weighting. [[allenai-tulu-sft-recipe]] uses the final-turn-only variant; [[hf-alignment-handbook]] offers both via TRL's `SFTTrainer`.
-
----
-
-## Packed-sequence interaction — the silent-bug class
-
-From `loss-masking-prompt.md`, §Packed-sequence interaction:
-
-> In a packed block, every sub-sequence has its own (prompt, response) split → the label mask must be reset per sub-sequence. Incorrect packing + masking is a common bug that silently degrades SFT.
-
-Chapter 30's §4 (packing) cross-references this: the attention mask, position IDs, *and* label mask must all reset at `cu_seqlens` boundaries. Missing any of the three is a different failure mode:
-
-- Missing attention mask → cross-document leakage (softmax partition).
-- Missing position-ID reset → RoPE frequencies shifted.
-- Missing **label** reset → prompt tokens of sub-sequence 2 contribute to loss.
-
-The label failure is the hardest to catch because it does not change the loss *value* much — it only changes *what* the model learns. The diagnostic is to decode a packed batch and confirm each sub-sequence's prompt region has `-100` in its corresponding `labels` slot.
-
----
-
-## Why not upweight the response?
-
-From `loss-masking-prompt.md`, §Why not upweight the response:
-
-> Upweighting (e.g., loss = α·L_prompt + L_response with α < 1) gives modest gains in some ablations (Shi 2024), but the response-only baseline dominates across most dataset sizes and is simpler.
-
-Ch-30's "prompt-weighted" option in the HTML companion comes from here. It is a real option in the literature; it is the attested second-best. Simpler beats it. This is a small but important pedagogic point: the SFT stack has many knobs that *can* move metrics slightly, and the practitioner's discipline is to keep the count of active knobs minimal so that ablations are interpretable.
-
----
-
-## What ch-30 keeps, changes, drops
-
-| Source default | Ch-30 position | Reason |
-|----------------|----------------|--------|
-| Response-only loss | Same — framed as the mask axis's default | Attested to dominate; used in both Zephyr and Tülu-3 |
-| `ignore_index = -100` | Same — quoted in ch-30 §2 | PyTorch API, TRL convention |
-| Mask-all-prior-turns multi-turn | Same — table row for multi-turn chat | Attested; matches [[hf-alignment-handbook]] `train_on_response_only` |
-| Full-sequence as a contrarian | Listed as option, warned against at scale | Shi 2024 ablation; tiny-dataset exception noted |
-| Prompt-weighted as third way | Listed as option with warn badge | Modest gains, extra knob — discipline axis |
-
----
+The file contains no `train_on_response_only` field. `train_on_responses_only` is not a TRL option at this version.
 
 ## Connections
 
-- [[excerpts/sequence-packing-contract]] — the packing partner of this excerpt; the "reset per sub-sequence" contract.
-- [[excerpts/chat-template-matrix]] — the template decides *which* token spans correspond to which role, which in turn decides the mask.
-- [[ch-30]] — §2 and §6 both depend on this source.
-- [[ch-31]] (iterative SFT↔RL bridges) — rejection-sampling SFT is "response-only on rejection-sampled responses"; same mask.
-- [[ch-32]] (reasoning SFT) — extends the table with the `<think>` column, but the loss-mask primitive is the same `-100` technique.
+- [[read]] §1 (mask table), §2 (instruction loss and PLW), §7 (truncation, span derivation).
+- [[smol-training-playbook]] — SmolLM3 user-turn masking result and TRL `{% generation %}` masks.
+- [[neftune]] — the NEFTune baseline compared in Table 1.

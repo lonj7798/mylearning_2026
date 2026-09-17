@@ -7,6 +7,8 @@ source_url: https://arxiv.org/abs/2401.01335
 created_at: "2026-04-23"
 ---
 
+> Superseded by the 2026-09 revision of read.md; kept for history.
+
 # Excerpt: SPIN — iterative DPO without preference data, via human-text-as-chosen
 
 **Source library:** `wiki/raw-data/llm-training/papers/spin.md`

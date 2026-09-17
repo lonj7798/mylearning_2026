@@ -7,6 +7,8 @@ source_url: https://arxiv.org/abs/2307.09288
 created_at: "2026-04-23"
 ---
 
+> Superseded by the 2026-09 revision of read.md; kept for history.
+
 # Excerpt: Llama-2 RSFT appendix — the iterative-SFT recipe that anchors ch-31
 
 **Source library:** `wiki/raw-data/llm-training/model-reports/llama-2.md`

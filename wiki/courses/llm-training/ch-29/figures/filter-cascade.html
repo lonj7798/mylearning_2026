@@ -2,330 +2,242 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>Synthetic-SFT Filter Cascade — interactive Sankey</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ch-29 Filter Cascade Calculator</title>
 <style>
-  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-         max-width: 1200px; margin: 1.6em auto; padding: 0 1em; color: #1f1f1f;
-         background: #fafafa; }
-  h1 { font-size: 1.3em; margin-bottom: 0.25em; }
-  .subtitle { color: #5a5a5a; margin-top: 0; font-size: 0.92em; line-height: 1.5; }
-  .layout { display: grid; grid-template-columns: 1fr 340px; gap: 1.2em;
-            margin-top: 1em; }
-  .panel { border: 1px solid #dcdcdc; border-radius: 6px; background: #fff;
-           padding: 0.9em 1em; }
-  h2 { font-size: 1.0em; margin: 0 0 0.6em 0; color: #2b2b2b;
-       border-bottom: 1px solid #ececec; padding-bottom: 0.3em; }
-  svg { width: 100%; height: 420px; display: block; }
-  .stage-rect { cursor: pointer; transition: stroke-width 0.15s; }
-  .stage-rect:hover { stroke-width: 3; }
-  .stage-label { font-family: 'SF Mono', Menlo, monospace; font-size: 12px;
-                 fill: #1b1b1b; text-anchor: middle; font-weight: 600; }
-  .stage-count { font-family: 'SF Mono', Menlo, monospace; font-size: 14px;
-                 fill: #1b1b1b; text-anchor: middle; }
-  .stage-rate  { font-family: 'SF Mono', Menlo, monospace; font-size: 10px;
-                 fill: #666; text-anchor: middle; }
-  .flow-path { fill-opacity: 0.55; stroke: none; }
-  .reject-path { fill: #d0a0a0; fill-opacity: 0.35; stroke: none; }
-  .slider-row { margin: 0.55em 0; font-size: 0.88em; }
-  .slider-row label { display: block; color: #333; margin-bottom: 0.2em; }
-  .slider-row .row { display: flex; align-items: center; gap: 0.5em; }
-  .slider-row input[type=range] { flex: 1; }
-  .slider-row .val { font-family: 'SF Mono', Menlo, monospace; font-size: 0.88em;
-                     color: #204080; min-width: 3.2em; text-align: right; }
-  .legend { font-size: 0.82em; color: #444; margin-top: 0.6em; line-height: 1.6; }
-  .legend .chip { display: inline-block; width: 10px; height: 10px;
-                  border-radius: 2px; margin-right: 4px; vertical-align: middle; }
-  .notes { font-size: 0.85em; color: #444; line-height: 1.5; margin-top: 0.4em;
-           background: #f5f7fb; padding: 0.55em 0.75em; border-radius: 4px;
-           border-left: 3px solid #2e5aa8; }
-  .tooltip { position: absolute; background: #fff; border: 1px solid #ccc;
-             border-radius: 4px; padding: 0.45em 0.65em; font-size: 0.82em;
-             pointer-events: none; box-shadow: 0 2px 6px rgba(0,0,0,0.1);
-             display: none; max-width: 260px; line-height: 1.45; }
-  code { background: #eef; padding: 1px 4px; border-radius: 3px;
-         font-family: 'SF Mono', Menlo, monospace; font-size: 0.85em; }
+  :root {
+    --bg: #fafaf8; --panel: #ffffff; --ink: #1d1d1f; --muted: #5b5b60; --line: #dedede;
+    --keep: #3a78b5; --drop: #c98a7a; --accent: #2e5aa8; --warn: #9a5b00; --grid: #ececec;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #17181b; --panel: #202226; --ink: #e8e8ea; --muted: #a2a2a8; --line: #36383d;
+            --keep: #6fa3d8; --drop: #c2877a; --accent: #8fb3ea; --warn: #e0a64a; --grid: #2c2e33; }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; padding: 1.2em 16px 2em; background: var(--bg); color: var(--ink);
+         font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+  main { max-width: 1100px; margin: 0 auto; }
+  h1 { font-size: 1.25em; margin: 0 0 .2em; }
+  h2 { font-size: 1.0em; margin: 0 0 .6em; padding-bottom: .3em; border-bottom: 1px solid var(--line); }
+  p.lead { color: var(--muted); margin: 0 0 1em; }
+  .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: .9em 1em; margin-bottom: 1em; }
+  .grid2 { display: grid; grid-template-columns: minmax(0, 320px) minmax(0, 1fr); gap: 1em; }
+  @media (max-width: 760px) { .grid2 { grid-template-columns: minmax(0, 1fr); } }
+  label { display: block; font-size: .9em; margin: .5em 0 .1em; }
+  .row { display: flex; gap: .5em; align-items: center; }
+  .row input[type=range] { flex: 1; min-width: 0; }
+  .val { font-family: Menlo, monospace; min-width: 4.5em; text-align: right; color: var(--accent); }
+  input[type=number] { width: 7em; background: var(--panel); color: var(--ink); border: 1px solid var(--line); border-radius: 4px; padding: 2px 4px; }
+  .scroll { overflow-x: auto; }
+  table { border-collapse: collapse; width: 100%; font-size: .9em; }
+  th, td { border-bottom: 1px solid var(--line); padding: 4px 6px; text-align: right; white-space: nowrap; }
+  th:first-child, td:first-child { text-align: left; }
+  .note { color: var(--muted); font-size: .85em; margin-top: .6em; }
+  .warn { color: var(--warn); }
+  svg { width: 100%; height: auto; display: block; }
+  svg text { fill: var(--ink); font-size: 13px; font-family: Menlo, monospace; }
+  button { background: var(--panel); color: var(--ink); border: 1px solid var(--line); border-radius: 4px; padding: 3px 8px; cursor: pointer; }
 </style>
 </head>
 <body>
+<main>
+<h1>Filter cascade calculator</h1>
+<p class="lead">Three panels for ch-29. (1) Survival counts per stage and the raw count needed for a target size. (2) How category-dependent IFD keep rates change category shares. (3) MinHash-LSH candidate probability for chosen band settings. Default rates are the illustrative values in read.md §1 and §3.4; replace them with the rates measured in the lab.</p>
 
-<h1>Synthetic-SFT Filter Cascade</h1>
-<p class="subtitle">
-  Horizontal Sankey. Starting count: <span id="rawCount">5000</span> raw instructions from
-  <code>self-instruct + evol-instruct</code>. Each stage has a slider controlling its pass-rate.
-  The blue-green flow is <strong>accepted</strong>; the red-brown flow diverted downward is
-  <strong>rejected</strong>. Hover a stage box to see its rejection reason profile; click to
-  pin the explanation.
-</p>
-
-<div class="layout">
-
-<div class="panel">
-  <h2>Cascade flow</h2>
-  <svg id="sankey" viewBox="0 0 900 420" preserveAspectRatio="xMidYMid meet"></svg>
-  <div class="legend">
-    <span class="chip" style="background:#4a8fb8"></span> accepted &nbsp;
-    <span class="chip" style="background:#d0a0a0"></span> rejected &nbsp;
-    <span class="chip" style="background:#2e5aa8"></span> stage box (height = survivors)
-  </div>
-</div>
-
-<div class="panel">
-  <h2>Stage thresholds</h2>
-
-  <div class="slider-row">
-    <label>Raw pool size</label>
-    <div class="row">
-      <input type="range" id="s_raw" min="500" max="15000" step="500" value="5000">
-      <span class="val" id="v_raw">5000</span>
+<section class="panel">
+  <h2>1. Survival counts (stage order: format → dedup → IFD → verifier)</h2>
+  <div class="grid2">
+    <div>
+      <label for="raw">Raw generations N_raw</label>
+      <div class="row"><input type="number" id="raw" value="50000" min="100" step="100"></div>
+      <label for="sf">Format filter survival</label>
+      <div class="row"><input type="range" id="sf" min="0.30" max="1" step="0.01" value="0.80"><span class="val" id="sfv"></span></div>
+      <label for="sd">Near-duplicate removal survival</label>
+      <div class="row"><input type="range" id="sd" min="0.30" max="1" step="0.01" value="0.90"><span class="val" id="sdv"></span></div>
+      <label for="si">IFD keep share of the deduplicated pool</label>
+      <div class="row"><input type="range" id="si" min="0.02" max="1" step="0.01" value="0.15"><span class="val" id="siv"></span></div>
+      <label for="vc">Share of rows with a verifier (checkable)</label>
+      <div class="row"><input type="range" id="vc" min="0" max="1" step="0.01" value="0.40"><span class="val" id="vcv"></span></div>
+      <label for="vp">Verifier pass rate on checkable rows</label>
+      <div class="row"><input type="range" id="vp" min="0.2" max="1" step="0.01" value="0.75"><span class="val" id="vpv"></span></div>
+      <label for="tgt">Target pool size N_target</label>
+      <div class="row"><input type="number" id="tgt" value="5000" min="10" step="10"></div>
+    </div>
+    <div>
+      <svg id="bars" viewBox="0 0 640 250" role="img" aria-label="Rows kept and removed per stage"></svg>
+      <div class="scroll"><table id="survTable"></table></div>
+      <p class="note" id="solver"></p>
     </div>
   </div>
+  <p class="note">Formula: N_k = N_raw · s_1 · … · s_k; verifier survival = 1 − (checkable share) × (1 − pass rate). The earlier version of this lab used 10,000 raw rows with survival rates 0.78 (format), 0.15 (IFD), 0.897 (dedup), and 0.943 (verifier) and ended at 990 rows, not at its 5,000-row target.</p>
+</section>
 
-  <div class="slider-row">
-    <label>Format pass-rate (strictness: low&rarr;high)</label>
-    <div class="row">
-      <input type="range" id="s_format" min="0.50" max="0.95" step="0.01" value="0.78">
-      <span class="val" id="v_format">0.78</span>
+<section class="panel">
+  <h2>2. Category shares before and after IFD selection</h2>
+  <div class="scroll"><table id="catTable"></table></div>
+  <p class="note">Edit the counts and keep rates. The direction of the defaults follows Cherry LLM Table 4 (top 5% by IFD led by "write story" and "generate story", bottom 5% by "rewrite sentence" and "edit sentence"); the numbers themselves are illustrative. With the defaults the total keep share is 0.15, as planned, while the rewriting share falls from 20% to 4%.</p>
+</section>
+
+<section class="panel">
+  <h2>3. MinHash-LSH candidate probability</h2>
+  <div class="grid2">
+    <div>
+      <label for="r">Hash values per band r</label>
+      <div class="row"><input type="range" id="r" min="1" max="32" step="1" value="8"><span class="val" id="rv"></span></div>
+      <label for="b">Number of bands b</label>
+      <div class="row"><input type="range" id="b" min="1" max="500" step="1" value="16"><span class="val" id="bv"></span></div>
+      <label for="cj">Confirmation threshold on estimated Jaccard</label>
+      <div class="row"><input type="range" id="cj" min="0.5" max="0.99" step="0.01" value="0.80"><span class="val" id="cjv"></span></div>
+      <div class="row" style="margin-top:.6em; flex-wrap: wrap;">
+        <button id="pLab">lab: r = 8, b = 16</button>
+        <button id="pLee">Lee et al.: r = 20, b = 450</button>
+      </div>
+      <p class="note" id="lshNote"></p>
+    </div>
+    <div>
+      <svg id="curve" viewBox="0 0 640 300" role="img" aria-label="Candidate probability versus Jaccard similarity"></svg>
     </div>
   </div>
-
-  <div class="slider-row">
-    <label>IFD keep-fraction (top-K by difficulty &lt; 1)</label>
-    <div class="row">
-      <input type="range" id="s_ifd" min="0.05" max="0.50" step="0.01" value="0.15">
-      <span class="val" id="v_ifd">0.15</span>
-    </div>
-  </div>
-
-  <div class="slider-row">
-    <label>MinHash Jaccard threshold (0=loose, 1=strict)</label>
-    <div class="row">
-      <input type="range" id="s_dedup" min="0.50" max="0.95" step="0.01" value="0.80">
-      <span class="val" id="v_dedup">0.80</span>
-    </div>
-  </div>
-
-  <div class="slider-row">
-    <label>Verifier pass-rate (reasoning/tool subset only)</label>
-    <div class="row">
-      <input type="range" id="s_verify" min="0.40" max="0.98" step="0.01" value="0.75">
-      <span class="val" id="v_verify">0.75</span>
-    </div>
-  </div>
-
-  <div class="notes" id="notes">
-    Click any stage box to pin an explanation here.
-  </div>
-</div>
-
-</div>
-
-<div class="tooltip" id="tooltip"></div>
+  <p class="note">P(candidate | Jaccard = s) = 1 − (1 − s^r)^b. Lee et al. (arXiv:2107.06499 §4.2, App. A) use 9,000 hashes in 450 buckets of 20 and keep pairs with Jaccard &gt; 0.8 and edit similarity &gt; 0.8. A pair must first become a candidate and then pass the confirmation threshold. A higher confirmation threshold marks fewer pairs as duplicates and removes fewer rows.</p>
+</section>
+</main>
 
 <script>
-// ---- Cascade model ----------------------------------------------------------
-// Survival at each stage is the product of previous survival * this stage's pass-rate.
-// Dedup survival is 1 - (1 - threshold)*collapseFactor because tighter threshold
-// keeps more; this is a pedagogical approximation of [[deduplicating-training-data]]'s
-// LSH behaviour (b=20, r=450 -> ~0.8 Jaccard).
+(function () {
+  const $ = id => document.getElementById(id);
+  const fmt = n => Math.round(n).toLocaleString("en-US");
+  const NS = "http://www.w3.org/2000/svg";
+  function el(tag, attrs, text) {
+    const e = document.createElementNS(NS, tag);
+    for (const k in attrs) e.setAttribute(k, attrs[k]);
+    if (text !== undefined) e.textContent = text;
+    return e;
+  }
+  const css = name => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
 
-const stages = [
-  { id:"raw",    label:"RAW",         desc:"Teacher outputs before any filter.",
-                 reject:"Generated by self-instruct (~70%) + evol-instruct (~30%)." },
-  { id:"format", label:"FORMAT",      desc:"Strip empties, length outliers, multimodal refs, input==output.",
-                 reject:"Dominant rejection: empty output, input==output, >2K-token runaway." },
-  { id:"ifd",    label:"IFD",         desc:"Keep top-K of samples with PPL(a|q)/PPL(a) < 1.",
-                 reject:"Dominant rejection: IFD >= 1 (instruction not informative to response)." },
-  { id:"dedup",  label:"MINHASH",     desc:"5-gram shingles, MinHash-LSH, threshold J.",
-                 reject:"Dominant rejection: paraphrased evol-instruct near-duplicates." },
-  { id:"verify", label:"VERIFIER",    desc:"3-layer: format(JSON)+exec+judge (reasoning/tool subset).",
-                 reject:"Dominant rejection: execution exception (timeout or wrong arg type)." },
-];
+  // ---- Panel 1 ----
+  function survival() {
+    const raw = Math.max(0, +$("raw").value || 0);
+    const sf = +$("sf").value, sd = +$("sd").value, si = +$("si").value;
+    const vc = +$("vc").value, vp = +$("vp").value;
+    const sv = 1 - vc * (1 - vp);
+    ["sf", "sd", "si", "vc", "vp"].forEach(k => $(k + "v").textContent = (+$(k).value).toFixed(2));
+    const stages = [["raw", raw, null]];
+    const rates = [["format", sf], ["dedup", sd], ["IFD", si], ["verifier", sv]];
+    let n = raw;
+    rates.forEach(([name, s]) => { const next = n * s; stages.push([name, next, s]); n = next; });
 
-function computeFlow(params) {
-  const raw = params.raw;
-  const afterFormat = Math.round(raw * params.format);
-  const afterIfd    = Math.round(afterFormat * params.ifd);
-  // dedup: looser threshold drops more; survival = 0.55 + 0.45*threshold
-  const dedupSurv   = 0.55 + 0.45 * params.dedup;
-  const afterDedup  = Math.round(afterIfd * dedupSurv);
-  // verifier applies only to the ~40% reasoning/tool subset
-  const toolSubset  = Math.round(afterDedup * 0.40);
-  const toolKept    = Math.round(toolSubset * params.verify);
-  const afterVerify = afterDedup - toolSubset + toolKept;
-  return { raw, format: afterFormat, ifd: afterIfd, dedup: afterDedup, verify: afterVerify };
-}
+    let html = "<tr><th>stage</th><th>rate</th><th>kept</th><th>removed</th><th>share of raw</th></tr>";
+    stages.forEach(([name, cnt, s], i) => {
+      const prev = i ? stages[i - 1][1] : cnt;
+      html += `<tr><td>${name}</td><td>${s === null ? "—" : s.toFixed(3)}</td><td>${fmt(cnt)}</td>` +
+              `<td>${i ? fmt(prev - cnt) : "—"}</td><td>${raw ? (100 * cnt / raw).toFixed(2) + "%" : "—"}</td></tr>`;
+    });
+    $("survTable").innerHTML = html;
 
-// ---- SVG layout -------------------------------------------------------------
-const SVG_W = 900, SVG_H = 420;
-const MARGIN_X = 40, MARGIN_Y = 30;
-const N = stages.length;
-const colGap = (SVG_W - 2 * MARGIN_X) / (N - 1);
-const BOX_W = 84;
-const MAX_BOX_H = SVG_H - 2 * MARGIN_Y - 40;
-const CENTER_Y = SVG_H / 2;
+    const prod = sf * sd * si * sv;
+    const tgt = Math.max(0, +$("tgt").value || 0);
+    const need = prod > 0 ? Math.ceil(tgt / prod) : Infinity;
+    const final = stages[stages.length - 1][1];
+    $("solver").innerHTML = `Product of rates = ${prod.toFixed(4)}. Final pool = ${fmt(final)} rows. ` +
+      `Raw count needed for N_target = ${fmt(tgt)}: <strong>${isFinite(need) ? fmt(need) : "—"}</strong>` +
+      (final < tgt ? ` <span class="warn">(current raw count is short by ${fmt(need - raw)})</span>` : "") + ".";
 
-const svg = document.getElementById("sankey");
-const tooltip = document.getElementById("tooltip");
-const notes = document.getElementById("notes");
-let pinnedStage = null;
-
-function drawCascade(flow) {
-  svg.innerHTML = "";
-  // Normalize heights
-  const maxCount = flow.raw;
-  const heights = stages.map(s => Math.max(6, (flow[s.id] / maxCount) * MAX_BOX_H));
-
-  // Pre-compute stage coordinates
-  const boxes = stages.map((s, i) => {
-    const cx = MARGIN_X + i * colGap;
-    const h = heights[i];
-    return { id: s.id, label: s.label, x: cx - BOX_W/2, y: CENTER_Y - h/2,
-             w: BOX_W, h, count: flow[s.id] };
-  });
-
-  // Flow paths between consecutive boxes (accepted = narrowing trapezoid)
-  for (let i = 0; i < N - 1; i++) {
-    const a = boxes[i], b = boxes[i+1];
-    const x0 = a.x + a.w, x1 = b.x;
-    const y0top = a.y, y0bot = a.y + a.h;
-    const y1top = b.y, y1bot = b.y + b.h;
-    // Smooth curve using cubic bezier
-    const cx0 = x0 + (x1 - x0) * 0.45;
-    const cx1 = x0 + (x1 - x0) * 0.55;
-    const d = `M ${x0} ${y0top} C ${cx0} ${y0top} ${cx1} ${y1top} ${x1} ${y1top}
-               L ${x1} ${y1bot} C ${cx1} ${y1bot} ${cx0} ${y0bot} ${x0} ${y0bot} Z`;
-    const p = document.createElementNS("http://www.w3.org/2000/svg", "path");
-    p.setAttribute("d", d);
-    p.setAttribute("class", "flow-path");
-    p.setAttribute("fill", "#4a8fb8");
-    svg.appendChild(p);
-
-    // Reject flow: diverted downward below the box
-    if (a.count > b.count) {
-      const rejectH = (a.count - b.count) / maxCount * MAX_BOX_H;
-      const rTop = y0bot;
-      const rBot = y0bot + rejectH;
-      const rx1 = x1 - 6;
-      const dR = `M ${x0} ${rTop} C ${cx0} ${rTop} ${cx1} ${rBot} ${rx1} ${rBot}
-                  L ${rx1} ${rBot + 4} L ${x0} ${rTop + 4} Z`;
-      const pR = document.createElementNS("http://www.w3.org/2000/svg", "path");
-      pR.setAttribute("d", dR);
-      pR.setAttribute("class", "reject-path");
-      svg.appendChild(pR);
-    }
+    const svg = $("bars"); svg.innerHTML = "";
+    const W = 640, H = 250, left = 70, top = 16, bottom = 40, bw = 80;
+    const gap = (W - left - 10 - bw * stages.length) / (stages.length - 1);
+    const scale = raw ? (H - top - bottom) / raw : 0;
+    svg.appendChild(el("line", { x1: left - 6, y1: H - bottom, x2: W - 6, y2: H - bottom, stroke: css("--line") }));
+    stages.forEach(([name, cnt], i) => {
+      const x = left + i * (bw + gap);
+      const prev = i ? stages[i - 1][1] : cnt;
+      const hk = cnt * scale, hd = (prev - cnt) * scale;
+      svg.appendChild(el("rect", { x, y: H - bottom - hk, width: bw, height: Math.max(hk, 0.5), fill: css("--keep") }));
+      if (i) svg.appendChild(el("rect", { x, y: H - bottom - hk - hd, width: bw, height: hd, fill: css("--drop"), "fill-opacity": 0.7 }));
+      svg.appendChild(el("text", { x: x + bw / 2, y: H - bottom + 15, "text-anchor": "middle" }, name));
+      svg.appendChild(el("text", { x: x + bw / 2, y: H - bottom + 30, "text-anchor": "middle" }, fmt(cnt)));
+    });
+    svg.appendChild(el("text", { x: 4, y: top + 8 }, "rows"));
+    svg.appendChild(el("rect", { x: W - 190, y: 4, width: 10, height: 10, fill: css("--keep") }));
+    svg.appendChild(el("text", { x: W - 175, y: 13 }, "kept"));
+    svg.appendChild(el("rect", { x: W - 120, y: 4, width: 10, height: 10, fill: css("--drop"), "fill-opacity": 0.7 }));
+    svg.appendChild(el("text", { x: W - 105, y: 13 }, "removed"));
   }
 
-  // Boxes and labels
-  boxes.forEach((b, i) => {
-    const g = document.createElementNS("http://www.w3.org/2000/svg", "g");
-    const r = document.createElementNS("http://www.w3.org/2000/svg", "rect");
-    r.setAttribute("x", b.x); r.setAttribute("y", b.y);
-    r.setAttribute("width", b.w); r.setAttribute("height", b.h);
-    r.setAttribute("rx", 4);
-    r.setAttribute("class", "stage-rect");
-    r.setAttribute("fill", "#eaf0f8");
-    r.setAttribute("stroke", "#2e5aa8");
-    r.setAttribute("stroke-width", pinnedStage === b.id ? 3 : 1.4);
-    g.appendChild(r);
+  // ---- Panel 2 ----
+  const cats = [
+    { name: "open generation", n: 14400, k: 0.24 },
+    { name: "rewriting and editing", n: 7200, k: 0.03 },
+    { name: "math reasoning", n: 9000, k: 0.12 },
+    { name: "tool call", n: 5400, k: 0.12 },
+  ];
+  function buildCats() {
+    let html = "<tr><th>category</th><th>after dedup</th><th>IFD keep rate</th><th>after IFD</th><th>share before</th><th>share after</th><th>change (points)</th></tr>";
+    cats.forEach((c, i) => {
+      html += `<tr><td>${c.name}</td><td><input type="number" data-i="${i}" data-f="n" value="${c.n}" min="0" step="100"></td>` +
+              `<td><input type="number" data-i="${i}" data-f="k" value="${c.k}" min="0" max="1" step="0.01"></td>` +
+              `<td id="ca${i}"></td><td id="cb${i}"></td><td id="cc${i}"></td><td id="cd${i}"></td></tr>`;
+    });
+    html += `<tr><td><strong>total</strong></td><td id="tn"></td><td id="tk"></td><td id="ta"></td><td>100%</td><td>100%</td><td></td></tr>`;
+    $("catTable").innerHTML = html;
+    $("catTable").querySelectorAll("input").forEach(inp => inp.addEventListener("input", e => {
+      const c = cats[+e.target.dataset.i]; c[e.target.dataset.f] = Math.max(0, +e.target.value || 0); updateCats();
+    }));
+    updateCats();
+  }
+  function updateCats() {
+    const before = cats.reduce((a, c) => a + c.n, 0);
+    const after = cats.reduce((a, c) => a + c.n * c.k, 0);
+    cats.forEach((c, i) => {
+      const a = c.n * c.k, sb = before ? 100 * c.n / before : 0, sa = after ? 100 * a / after : 0;
+      $("ca" + i).textContent = fmt(a);
+      $("cb" + i).textContent = sb.toFixed(1) + "%";
+      $("cc" + i).textContent = sa.toFixed(1) + "%";
+      const d = sa - sb;
+      $("cd" + i).innerHTML = (Math.abs(d) > 5 ? '<span class="warn">' : "<span>") + (d >= 0 ? "+" : "") + d.toFixed(1) + "</span>";
+    });
+    $("tn").textContent = fmt(before);
+    $("ta").textContent = fmt(after);
+    $("tk").textContent = before ? (after / before).toFixed(3) : "—";
+  }
 
-    const t1 = document.createElementNS("http://www.w3.org/2000/svg", "text");
-    t1.setAttribute("x", b.x + b.w/2); t1.setAttribute("y", b.y + b.h + 18);
-    t1.setAttribute("class", "stage-label");
-    t1.textContent = b.label;
-    g.appendChild(t1);
-
-    const t2 = document.createElementNS("http://www.w3.org/2000/svg", "text");
-    t2.setAttribute("x", b.x + b.w/2); t2.setAttribute("y", b.y + b.h + 34);
-    t2.setAttribute("class", "stage-count");
-    t2.textContent = b.count.toLocaleString();
-    g.appendChild(t2);
-
-    if (i > 0) {
-      const prev = boxes[i-1].count;
-      const rate = prev > 0 ? (b.count / prev * 100).toFixed(1) + "%" : "-";
-      const t3 = document.createElementNS("http://www.w3.org/2000/svg", "text");
-      t3.setAttribute("x", b.x + b.w/2); t3.setAttribute("y", b.y - 6);
-      t3.setAttribute("class", "stage-rate");
-      t3.textContent = "pass " + rate;
-      g.appendChild(t3);
+  // ---- Panel 3 ----
+  function lsh() {
+    const r = +$("r").value, b = +$("b").value, cj = +$("cj").value;
+    $("rv").textContent = r; $("bv").textContent = b; $("cjv").textContent = cj.toFixed(2);
+    const P = s => 1 - Math.pow(1 - Math.pow(s, r), b);
+    const svg = $("curve"); svg.innerHTML = "";
+    const W = 640, H = 300, L = 48, R = 12, T = 12, B = 36;
+    const X = s => L + s * (W - L - R), Y = p => T + (1 - p) * (H - T - B);
+    for (let t = 0; t <= 10; t++) {
+      const v = t / 10;
+      svg.appendChild(el("line", { x1: X(v), y1: Y(0), x2: X(v), y2: Y(1), stroke: css("--grid") }));
+      svg.appendChild(el("line", { x1: X(0), y1: Y(v), x2: X(1), y2: Y(v), stroke: css("--grid") }));
+      if (t % 2 === 0) {
+        svg.appendChild(el("text", { x: X(v), y: H - B + 14, "text-anchor": "middle" }, v.toFixed(1)));
+        svg.appendChild(el("text", { x: L - 6, y: Y(v) + 4, "text-anchor": "end" }, v.toFixed(1)));
+      }
     }
+    svg.appendChild(el("text", { x: (W + L) / 2, y: H - 4, "text-anchor": "middle" }, "Jaccard similarity s of a pair"));
+    svg.appendChild(el("text", { x: 12, y: T + 4, transform: `rotate(90 12 ${T + 4})` }, "P(candidate)"));
+    let d = "";
+    for (let i = 0; i <= 200; i++) { const s = i / 200; d += (i ? "L" : "M") + X(s).toFixed(1) + " " + Y(P(s)).toFixed(1) + " "; }
+    svg.appendChild(el("path", { d, fill: "none", stroke: css("--accent"), "stroke-width": 2 }));
+    svg.appendChild(el("line", { x1: X(cj), y1: Y(0), x2: X(cj), y2: Y(1), stroke: css("--warn"), "stroke-dasharray": "4 3" }));
+    svg.appendChild(el("text", { x: X(cj) + 4, y: Y(0.05) }, "confirm ≥ " + cj.toFixed(2)));
+    const pts = [0.5, 0.7, 0.8, 0.9].map(s => `s = ${s}: ${P(s).toFixed(3)}`).join("; ");
+    $("lshNote").textContent = `Signature length k = r × b = ${r * b}. Candidate probability ${pts}. ` +
+      `Candidate pairs whose estimated Jaccard is below ${cj.toFixed(2)} are rejected by the confirmation step.`;
+  }
+  $("pLab").addEventListener("click", () => { $("r").value = 8; $("b").value = 16; lsh(); });
+  $("pLee").addEventListener("click", () => { $("r").value = 20; $("b").value = 450; lsh(); });
 
-    g.addEventListener("mouseenter", e => showTooltip(e, stages[i]));
-    g.addEventListener("mousemove", moveTooltip);
-    g.addEventListener("mouseleave", hideTooltip);
-    g.addEventListener("click", () => pinStage(stages[i]));
-    svg.appendChild(g);
-  });
-
-  // Final survival summary text
-  const finalT = document.createElementNS("http://www.w3.org/2000/svg", "text");
-  finalT.setAttribute("x", SVG_W - MARGIN_X);
-  finalT.setAttribute("y", MARGIN_Y - 8);
-  finalT.setAttribute("text-anchor", "end");
-  finalT.setAttribute("class", "stage-rate");
-  const overall = flow.raw > 0 ? (flow.verify / flow.raw * 100).toFixed(1) : "-";
-  finalT.textContent = `end-to-end survival: ${overall}%`;
-  svg.appendChild(finalT);
-}
-
-function showTooltip(e, stage) {
-  tooltip.style.display = "block";
-  tooltip.innerHTML = `<strong>${stage.label}</strong><br>${stage.desc}<br>` +
-                      `<em style="color:#7a4a4a">${stage.reject}</em>`;
-}
-function moveTooltip(e) {
-  tooltip.style.left = (e.pageX + 14) + "px";
-  tooltip.style.top  = (e.pageY + 10) + "px";
-}
-function hideTooltip() { tooltip.style.display = "none"; }
-
-function pinStage(stage) {
-  pinnedStage = stage.id;
-  notes.innerHTML = `<strong>${stage.label}</strong> &mdash; ${stage.desc}` +
-                    `<br><span style="color:#7a4a4a">${stage.reject}</span>`;
-  run();
-}
-
-// ---- Wiring -----------------------------------------------------------------
-const inputs = {
-  raw:    document.getElementById("s_raw"),
-  format: document.getElementById("s_format"),
-  ifd:    document.getElementById("s_ifd"),
-  dedup:  document.getElementById("s_dedup"),
-  verify: document.getElementById("s_verify"),
-};
-const vals = {
-  raw:    document.getElementById("v_raw"),
-  format: document.getElementById("v_format"),
-  ifd:    document.getElementById("v_ifd"),
-  dedup:  document.getElementById("v_dedup"),
-  verify: document.getElementById("v_verify"),
-};
-
-function readParams() {
-  return {
-    raw:    parseInt(inputs.raw.value),
-    format: parseFloat(inputs.format.value),
-    ifd:    parseFloat(inputs.ifd.value),
-    dedup:  parseFloat(inputs.dedup.value),
-    verify: parseFloat(inputs.verify.value),
-  };
-}
-
-function run() {
-  const p = readParams();
-  vals.raw.textContent    = p.raw.toLocaleString();
-  vals.format.textContent = p.format.toFixed(2);
-  vals.ifd.textContent    = p.ifd.toFixed(2);
-  vals.dedup.textContent  = p.dedup.toFixed(2);
-  vals.verify.textContent = p.verify.toFixed(2);
-  document.getElementById("rawCount").textContent = p.raw.toLocaleString();
-  drawCascade(computeFlow(p));
-}
-
-Object.values(inputs).forEach(el => el.addEventListener("input", run));
-run();
+  ["raw", "sf", "sd", "si", "vc", "vp", "tgt"].forEach(k => $(k).addEventListener("input", survival));
+  ["r", "b", "cj"].forEach(k => $(k).addEventListener("input", lsh));
+  const mq = window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)");
+  if (mq && mq.addEventListener) mq.addEventListener("change", () => { survival(); lsh(); });
+  survival(); buildCats(); lsh();
+})();
 </script>
-
 </body>
 </html>

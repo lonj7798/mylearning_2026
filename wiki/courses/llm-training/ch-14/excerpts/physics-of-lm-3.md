@@ -7,6 +7,8 @@ source_url: https://arxiv.org/abs/2404.05405
 created_at: "2026-04-23"
 ---
 
+> Superseded by the 2026-09 revision of read.md; kept for history.
+
 # Excerpt: Allen-Zhu's 2-Bits-per-Parameter Knowledge Capacity
 
 **Source:** `wiki/raw-data/llm-training/papers/physics-of-lm-3.md`

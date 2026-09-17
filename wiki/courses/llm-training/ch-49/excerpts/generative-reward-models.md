@@ -5,89 +5,52 @@ phase: read
 excerpt_of: wiki/raw-data/llm-training/papers/generative-reward-models.md
 source_url: https://arxiv.org/abs/2410.12832
 created_at: "2026-04-23"
+revised_at: "2026-09-15"
 ---
 
-# Excerpt: Generative Reward Models — judge = reward = log-prob
+# Excerpt: Generative Reward Models (GenRM / CoT-GenRM)
 
-**Source library:** `wiki/raw-data/llm-training/papers/generative-reward-models.md`
-**Papers:** Mahan et al. 2024 "Generative Reward Models" (2410.12832); Ankner et al. 2024 "Critique-out-Loud Reward Models" (2408.15240)
+**Authors:** Dakota Mahan, Duy Van Phung, Rafael Rafailov, Chase Blagden, Nathan Lile, Louis Castricato, Jan-Philipp Fränken, Chelsea Finn, Alon Albalak (SynthLabs; Stanford University)
+**Year:** 2024 (arXiv v1 2024-10)
+**Source type:** paper
+**Checked on:** 2026-09-15 against the library card, which was re-verified on 2026-09-14 against arXiv v1.
 
----
+> Rewritten in the 2026-09 revision. The previous version of this excerpt carried an author list from a
+> different paper and several claims the source does not make.
 
-## Why this source is the bridge from "judge" to "reward"
+## Corrections to the previous version of this excerpt
 
-Ch-49 §6 argues that "judge" and "reward" are the same math used at different phases. This paper is the source for that claim. The identity
+1. Authors "Lifan Yuan, Ganqu Cui, … Maosong Sun" → the author list above (title page).
+2. "reward = log P('A is better' | x, y_A, y_B, rubric)" → the paper trains `−log π(I | x, y1, y2)` where `I` is an answer-indicator token, and reads preference probabilities from output likelihoods or majority votes. No rubric input and no such formula is printed (§3, §4, Eq. 7).
+3. "Fig. 4 calibration plot; GenRMs are calibrated where BT RMs are overconfident" → Fig. 4 compares UltraInteract-trained models on RewardBench Reasoning versus non-Reasoning. No calibration curve and no calibration claim appears in the paper.
+4. "CoT improves accuracy 3–10 pp on RewardBench"; "GenRM ensembles give calibrated uncertainty" → not supported by the source; removed.
+5. Pointwise 1–10 scoring → the paper evaluates pairwise judgments only.
 
-> `r(x, y) = log P_RM("A is better" | x, y_A, y_B, rubric)`
+## Method (§4)
 
-collapses the distinction entirely. An LLM judge that emits a verdict token has an implicit scalar reward in its log-probs, and that reward can be trained against, optimized against, or simply read at eval time.
+- **GenRM**: loss `−log π(I | x, y1, y2)` with `I` the answer-indicator token ("A" or "B"); a classifier trained by next-token prediction (Eq. 7).
+- **CoT-GenRM**: the model writes a rationale `r`, then the indicator. Three ways to obtain rationales:
+  - **STaR-SFT** (Eq. 8): sample `(r, I)` from the current model, keep chains whose verdict matches the label, SFT on `−log π(I | x, y1, y2, r) − log π(r | x, y1, y2)`.
+  - **STaR-Rationalizer**: rationales produced by a post-rationalization model that is told the correct answer, then trained with Eq. 8.
+  - **STaR-DPO** (Eq. 9): DPO with chosen `(r_w, I_w)` a rationale ending in the correct verdict and rejected `(r_l, I_l)` a rationale ending in the wrong verdict.
+- Prompts are based on the MT-Bench judge prompt with ties removed; the listed factors are helpfulness, relevance, accuracy, depth, creativity, and level of detail, and the prompt instructs the judge not to let length or position influence the verdict (App. A.1, Fig. 6).
+- All models start from Llama-3.1-8B-Instruct; training sets are UltraFeedback (61k pairs) and UltraInteract; generative scores in Figs. 2 and 4 are majority votes over 32 samples (§5).
 
----
+## Results
 
-## The construction
+- **UltraFeedback-trained (§5.1):** zero-shot judge without reasoning 52.25% on UltraFeedback, rising to 67.75% with CoT and self-consistency; Bradley–Terry RM, PairRM, and GenRM about 73–74% in-distribution; STaR-DPO 73.9%, STaR-SFT 67.4%. On RewardBench, STaR-DPO 81.9% against GenRM 78.9%; Safety subset STaR-DPO 91.0% against PairRM 81.8%.
+- **UltraInteract-trained (§5.2):** in-distribution STaR-DPO 90.2% against base 68.8%, with explicit reward models about 94%. On RewardBench Reasoning, Bradley–Terry falls **below random**, best GenRM 70.8%, zero-shot judge 76.6%, STaR-DPO 87.2%. On RewardBench non-Reasoning: judge 78.0%, STaR-DPO 75.0%.
+- **Majority voting at 32 (§5.4):** +1.6% on UltraFeedback and +3.8% on RewardBench for UltraFeedback-trained models; +4.6% and +4.9% for UltraInteract-trained models.
+- **Rationale source (§5.3, Table 1):** rationales from a stronger model do not help. GPT-4-bootstrapped rationales start lower and end higher; Llama 3.1 70B rationales raise in-distribution accuracy slightly and lower RewardBench accuracy. STaR-Rationalizer matches STaR-DPO in-distribution but falls below the base model on RewardBench, with Maj@1 dropping from 71.73 to 67.62 over three iterations (Table 3). The authors' hypothesis is that post-rationalized rationales are off-policy for the base model (Interpretation).
 
-Source §Key Contributions:
+## Relevance to ch-49
 
-> "GenRM scoring: `r(x, y) = log P_RM('A is better' | x, y_A, y_B, rubric)` -- or a soft margin between 'A' and 'B' tokens."
-> "Critique-then-verdict (CoT-RM): sample a critique `c ~ P_RM(.|prompt)` first, then score the verdict given the critique -- accuracy improves 3-10 pp on RewardBench over no-CoT."
-> "Training: fine-tune the LM with next-token supervision on (prompt, critique, verdict) triples; no dedicated scalar head -- keeps the RM in the same model family as the policy."
+The result ch-49 uses is the in-distribution versus out-of-distribution split: a Bradley–Terry head can reach about 94% on the training distribution and below random on RewardBench Reasoning, while a judge trained to reason reaches 87.2% there. In-distribution accuracy is not evidence of a judge that generalizes.
 
-Three things follow that ch-49 uses:
+## Not tested by the paper (§7)
 
-1. A judge is not architecturally distinct from an RM; it is a prompt-and-tokenization contract over the base LM.
-2. CoT-before-verdict is not optional styling — it is worth 3–10 pp RewardBench accuracy. Ch-49 §4 template #2 takes this seriously.
-3. Training a judge on (prompt, critique, verdict) triples is exactly what Con-J and J1 do downstream ([[direct-judgement-preference]]).
-
----
-
-## Calibration — the §7 claim
-
-Source §Key Contributions:
-
-> "Calibration: the LM's verdict probability is reliably tied to ground-truth agreement -- useful as an uncertainty signal (feeds back into reward-ensembling-style LCB combinations)."
-
-And §Key Figures:
-
-> "Fig. 4 (calibration plot) -- generative RMs are well-calibrated where BT RMs are overconfident."
-
-Panel 2 of `figures/judge-bias.html` seeds the BT vs GenRM curves from this figure. Note the precise wording: "calibrated *where* BT RMs are overconfident" — not uniformly. Ch-49 §7 elaborates: calibration is rubric-conditional.
-
----
-
-## Rubric as policy knob
-
-Source §Key Contributions:
-
-> "Robustness: when the rubric is extended to say 'longer is not better, be concerned if the response is sycophantic', the RM generalizes those constraints to unseen prompts -- the RM is steerable via its own context, which scalar RMs cannot be."
-
-This is the structural reason ch-49 §3 can recommend "rubric extensions" as corrections for verbosity and formatting biases. The judge's context is the steering. Scalar BT RMs have no equivalent lever.
-
----
-
-## Compute trade-off
-
-Source §Key Contributions:
-
-> "Compute trade-off: GenRMs are slower (need to generate critique tokens) but reuse the base-LM inference stack and scale with model capability."
-
-Ch-49 §6 encodes this as "RL-time RM vs eval-time judge" split. RL-time wants per-token speed (short-rubric GenRM or PairRM); eval-time wants critique depth (long-rubric CoT GenRM). Same math, different compute budgets.
-
----
-
-## The failure modes it still has
-
-Source §Technical Details:
-
-> "Failure modes: verbosity bias and self-enhancement (see judge-llm-bias) still apply; mitigated by rubric wording and by using a judge from a different model family than the policy."
-
-GenRM is not a *fix* for judge bias — it is a *platform* on which bias corrections can be applied. Ch-49 §5(d) (cross-family judging) is the structural mitigation that survives even the generative construction.
-
----
+Using the trained judge as a reward inside PPO or online preference optimization, and reward hacking of generative reward models; both are listed as future work. Batch size, sequence length, compute, and the UltraInteract pair count are not reported.
 
 ## Connections
 
-- `read.md` §6 — "judge = reward = log-prob" identity from this paper.
-- `read.md` §7 — BT-vs-GenRM calibration curve comes from Fig. 4 of this paper.
-- `figures/judge-bias.html` Panel 2 — BT and GenRM curves seeded from source Fig. 4 shape.
-- [[direct-judgement-preference]] (Con-J / STE / J1) — extends this construction to the training-free synthetic-judge line.
-- [[pairrm]] — the joint-encoder pairwise RM that motivates GenRM's "put both responses in the context" structure.
+[[rewardbench]] (the out-of-distribution evaluation), [[direct-judgement-preference]] and [[self-taught-evaluators]] (concurrent judge-training methods), [[judge-llm-bias]] (source of the judge prompt and of the zero-shot judge failures it cites).

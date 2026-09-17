@@ -5,97 +5,52 @@ phase: read
 excerpt_of: wiki/raw-data/llm-training/papers/rest-em.md
 source_url: https://arxiv.org/abs/2312.06585
 created_at: "2026-04-23"
+revised_at: "2026-09-15"
 ---
 
-# Excerpt: ReST-EM — STaR as expectation-maximization and the 2-iter saturation curve
+# Excerpt: Beyond Human Data: Scaling Self-Training for Problem-Solving with Language Models (ReST-EM)
 
-**Source library:** `wiki/raw-data/llm-training/papers/rest-em.md`
-**Artifact:** E-step / M-step / diversity-cap recipe and the MATH saturation numbers
+**Source library:** `wiki/raw-data/llm-training/papers/rest-em.md` (verified 2026-09-14 against arXiv:2312.06585v4)
+**Revision note:** rewritten in the 2026-09 revision. The earlier version of this excerpt quoted numbers that are not in the paper (K = 32 at temperature 1.0 with top-p 0.95, a cap of 4, learning rate 1e-5, batch 128, "iteration 1 +8%, iteration 2 +6%", MATH 34.1% → 50.6%, APPS 16.4% → 31.2%). The values below come from the verified card.
 
----
+- **Authors:** Avi Singh, John D. Co-Reyes, Rishabh Agarwal, Ankesh Anand, Piyush Patil, Xavier Garcia, et al. (Google DeepMind; R. Agarwal also Mila)
+- **Year:** 2023 (arXiv v1 2023-12-12; TMLR 04/2024)
+- **Used in:** ch-31 §1.1, §1.2, §1.5, §4, §5.4, Recipe, Generalization lens
 
-## Why this source anchors ch-31
+## Objective (§3, Algorithm 1)
 
-ReST-EM (Singh 2023) gives ch-31 two things nothing else in the literature provides with the same clarity:
+ReST-EM is expectation–maximization for RL with a binary optimality variable O, p(O = 1 | x, y) ∝ f(r(x, y)). The Generate (E) step samples outputs from the current policy and scores them. The Improve (M) step maximizes J(θ) = E_{(x,y)∼D_i}[ r(x, y) log p_θ(y | x) ] while reward improves on a validation set. With r ∈ {0, 1}, incorrect samples have zero weight (§3 Remark). Each Improve step fine-tunes the base pretrained model rather than the previous iterate, to limit task-specific overfitting (§3).
 
-1. **A clean recipe with concrete hyperparameters.** K=32 samples per problem at T=1.0, top-p=0.95, verifier-filter by exact-match or unit-test, SFT at lr=1e-5 for 1 epoch, batch 128, diversity cap 4 distinct accepted solutions per problem.
-2. **The 2-iter saturation curve.** MATH iter-1 +8%, iter-2 +6%, iter-3 flat. This is the number ch-31's decision tree (node 3) uses to decide "switch to on-policy RL." Without a concrete saturation number, the decision tree is hand-waving.
+## Settings (§5 Implementation Details)
 
----
+| Setting | Value |
+|---|---|
+| Models | PaLM 2-S (Bison), PaLM 2-S* (Codey), PaLM 2-L (Unicorn); parameter counts not reported |
+| Training problems | MATH 7,500; APPS (Introductory) 2,342 |
+| Samples per problem | MATH 32; APPS 64 |
+| Sampling | top-K with K = 40; temperature 0.7 |
+| Kept per problem | at most 10 correct solutions, to limit over-representation of easy problems |
+| Loss | next-token loss on model solutions only; input = few-shot prompt + question |
+| Iterations run | MATH 3; APPS 2 |
+| Learning rate, batch, epochs, compute | not reported |
+| Evaluation decoding | greedy (Figs. 2–3); pass@K at T = 1.0, top-p 0.95 (Fig. 5); majority voting over 64 samples (§5.2) |
 
-## The attested recipe — quoted
+## Results with loci
 
-From the source (lines 30–37):
-
-> - **Base model:** PaLM-2-L (~340B active params), also ablated on -S and -XS.
-> - **E-step:** sample K=32 solutions per problem at T=1.0, top-p=0.95.
-> - **Verifier:** exact-match on ground-truth final answer (MATH) or unit-test pass (APPS).
-> - **M-step:** SFT on (problem, correct-solution) pairs; 1 epoch; lr=1e-5; batch 128.
-> - **Diversity cap:** keep at most 4 distinct correct solutions per problem (prevents memorization of one solution path).
-> - **Iterations:** 2 for MATH; gains saturate.
-> - **Compute split:** inference for E-step dominates (~100 H100-hrs per iter at K=32, N=10K problems).
-
-Ch-31 §4 reproduces these numbers as the reference configuration for the "verifier-is-exact-match" branch of the decision tree.
-
----
-
-## The EM formalism — why framing matters
-
-ReST-EM is STaR cast as expectation-maximization over a latent rationale variable `z`:
-
-- **E-step:** given the current policy `\pi_t`, sample K rationales per problem; filter by the verifier's indicator `1[answer correct]`; this is a Monte-Carlo approximation of the posterior `p(z | x, y_correct)`.
-- **M-step:** maximize `E_{z ~ posterior}[log \pi_\theta(z | x)]` — standard SFT on the filtered rationales.
-
-The gain from this framing is not mathematical; it is pedagogical. Once you see the loop as EM, three things become obvious:
-
-1. **You are maximizing a lower bound on the log-likelihood of correct answers** under the rationale prior. This is why the loop has a well-defined local optimum: the EM fixed-point.
-2. **The E-step's K is a Monte-Carlo budget knob**, not a quality knob. Larger K reduces E-step variance; it does not change the fixed point.
-3. **The M-step's LR and epochs are the regularizer.** Overfitting in the M-step pulls the policy away from the filtered posterior; 1-epoch / lr=1e-5 keeps it close.
-
-Ch-31 does not lean heavily on the EM formalism in the prose, but the decision tree's "do another round" nodes are EM iterations and the "switch to on-policy RL" node is "EM has converged; the policy-gradient objective is different."
-
----
-
-## The 2-iter saturation number, read carefully
-
-From the source (line 26):
-
-> **Figure 2 (MATH accuracy vs iteration):** iter-1 +8%, iter-2 +6%, iter-3 flat; the canonical saturation curve.
-
-Three things hide inside this number:
-
-1. **Saturation is not over.** Iter-3 is flat *on MATH*. On APPS, the curve saturates similarly. On harder distributions with more rationale diversity, the saturation point likely extends — but no open run has published a clean >3-iter saturation curve, so ch-31 defaults to "2-3 rounds" as the operational ceiling.
-2. **The diversity cap is load-bearing.** Without the cap (keep all correct solutions), iter-3 *regresses*. The paper documents this (Figure 6 in the source). The cap is not a tuning knob; it is a pre-condition for iter-2 being usable at all.
-3. **Transfer gains outlive single-task saturation.** Training on MATH improves Big-Bench-Hard tasks that were not in the training distribution. This is the evidence for ch-31's claim that iterative-SFT on verifier-filtered reasoning is pushing the base model's reasoning prior rather than narrowly distilling one skill.
-
----
-
-## What ReST-EM adds to STaR
-
-STaR uses K=1 (one sample per problem) with rationalization on failure. ReST-EM uses K=32 with *no* rationalization. The trade-off:
-
-- **STaR (K=1 + rationalize):** gets a correct trace on nearly every problem (via the backward-rationalization branch). Cost: rationalized traces are off-distribution and can inject failure modes.
-- **ReST-EM (K=32, filter only):** gets correct traces only on problems where pass@32 > 0. Cost: zero signal from problems where pass@32 = 0.
-
-Ch-31's decision tree node 2 ("is pass@1 between 0.1 and 0.8?") is the ReST-EM constraint made explicit. If pass@1 < 0.1, K=32 may still not be enough; you need either STaR-style rationalization or a harder curriculum. If pass@1 > 0.8, there is no signal left to extract.
-
----
-
-## Ch-31's default borrowed from ReST-EM
-
-- **Default K for verifier-exact-match tasks:** 32. (Llama-2's K=10 is for RM-scored chat; exact-match is cheaper to compute, so K can grow.)
-- **Default iterations:** 2-3. Beyond 3 on the same data, stop.
-- **Default diversity cap:** 4 distinct accepted per problem.
-- **Default M-step:** 1 epoch, lr=1e-5, batch 128 (for MATH-scale problems).
-
-These are the numbers the HTML companion's slider defaults are chosen to bracket.
-
----
+- **Versus human data.** Fine-tuning on self-generated, reward-filtered data beats fine-tuning on human solutions for PaLM 2-S, PaLM 2-S*, and PaLM 2-L on MATH and APPS (§5.1, Figs. 2–3).
+- **Majority voting.** PaLM 2-L after ReST-EM reaches 48.82% on MATH test with 64-sample majority voting vs 44.02% for the base model (§5.2).
+- **Iterations vs samples.** PaLM 2-L on MATH: one iteration with 3× samples per problem gives 40.3% pass@1, below 41.0% at iteration 2 and 41.9% at iteration 3 (§5.3).
+- **Overfitting.** Training accuracy rises with iterations while test accuracy does not: small MATH test gains after iteration 1; APPS regresses at iteration 2, which the authors attribute to overfitting on a problem set about one third the size of MATH (§5.1, Fig. 4). More iterations also regress HumanEval transfer for the APPS model (§5.1).
+- **Restart from base.** Compared with continuing from the previous iterate, restarting gives comparable APPS performance and better HumanEval transfer (PaLM 2-S*; §3, Fig. 7).
+- **Transfer.** Held-out evaluations: GSM8K, HumanEval, the 2023 Hungarian high-school finals exam, and Big-Bench Hard. MATH- and APPS-trained PaLM 2-L show no major degradation on BBH (§5.4, Fig. 9).
+- **pass@K.** ReST-EM exceeds the base model at all K in Fig. 5, with the largest gap at K = 1; the authors state it may not close the gap at large K (§5.2, §6).
+- **Dataset size.** One iteration on 1,000 MATH questions gives gains that the authors call "significant" (§5.3, Fig. 8 left); 4,000 questions scored slightly below 2,000, attributed to single-run fine-tuning variance.
+- **Difficulty.** Easy, medium, hard, and very hard bins (base success at T = 1.0 of 75–100%, 50–75%, 25–50%, < 25%) all improve; medium and hard gain most (§5.3, Fig. 8 right).
+- **Distillation.** PaLM 2-S fine-tuned on PaLM 2-L solutions beats PaLM 2-S fine-tuned on its own ReST-EM data, attributed to more questions having solutions (§5.3, Fig. 6 right).
+- **Rationalization.** In preliminary experiments, STaR-style rationalization increased false positives (correct final answer, incorrect reasoning), so ReST-EM does not use it (§4).
 
 ## Connections
 
-- [[star]] — the predecessor with K=1 + rationalize.
-- [[v-star]] — the successor with a learned verifier over partial rationales.
-- [[rlvr-tulu3]] / [[deepseek-r1]] — replace the M-step SFT with an RL objective on the same verifier filter.
-- [[rejection-sampling-finetuning]] — the pattern ReST-EM is a specific instance of.
-- **ch-31 §4** — reference configuration for the "verifier-is-exact-match" branch of the decision tree.
+- [[star]]: greedy decoding, one solution per problem, rationalization; ReST-EM uses temperature sampling and no rationalization (§4, Table 1).
+- [[v-star]]: trains a DPO verifier on the incorrect samples that ReST-EM discards.
+- [[raft-reinforce-rej-minimalist]]: RAFT is an instance of the same {0,1}-reward objective; the paper compares it with GRPO.

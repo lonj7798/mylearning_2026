@@ -7,6 +7,8 @@ source_url: https://lilianweng.github.io/tags/rlhf/
 created_at: "2026-04-23"
 ---
 
+> Superseded by the 2026-09 revision of read.md; kept for history.
+
 # Excerpt: Lil'Log RLHF — canonical per-token KL-as-reward
 
 **Source library:** `wiki/raw-data/llm-training/blogs/lilianweng-rlhf.md`

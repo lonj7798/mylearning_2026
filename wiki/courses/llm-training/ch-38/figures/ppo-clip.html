@@ -2,255 +2,247 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>ch-38 — PPO clip + KL-to-reward sweep</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ch-38 — PPO clipped objective, per-token reward, and alignment tax</title>
+<!-- revised: 2026-09 (generality revision). Self-contained: no external scripts, styles, or images. -->
 <style>
-  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-         background: #0f1115; color: #d6d8de; margin: 0; padding: 2rem; }
-  h1 { font-size: 1.25rem; font-weight: 600; margin: 0 0 0.25rem; color: #f3f4f7; }
-  h2 { font-size: 1.0rem; font-weight: 600; margin: 1.4rem 0 0.4rem; color: #e9eaf0; }
-  p, li { font-size: 0.88rem; line-height: 1.5; color: #b9bcc6; }
-  .panel { background: #161a22; border: 1px solid #262b36; border-radius: 8px;
-           padding: 1rem 1.25rem; margin: 1rem 0; }
-  .controls { display: flex; gap: 1rem; align-items: center; flex-wrap: wrap;
-              font-size: 0.85rem; margin-bottom: 0.8rem; }
-  .controls label { display: flex; align-items: center; gap: 0.5rem; }
-  input[type=range] { width: 180px; }
-  button { background: #262b36; color: #d6d8de; border: 1px solid #343a47;
-           padding: 0.3rem 0.7rem; border-radius: 4px; cursor: pointer;
-           font-size: 0.82rem; }
-  button.active { background: #3a4ab0; border-color: #4a5ac0; color: #fff; }
-  canvas { display: block; background: #0b0d12; border-radius: 4px; }
-  .legend { display: flex; gap: 1.2rem; font-size: 0.78rem; margin-top: 0.5rem;
-            color: #9da1ab; flex-wrap: wrap; }
-  .legend span { display: inline-flex; align-items: center; gap: 0.35rem; }
-  .dot { width: 10px; height: 10px; border-radius: 50%; display: inline-block; }
-  .readout { font-family: "SF Mono", Menlo, monospace; font-size: 0.8rem;
-             color: #9da1ab; margin-top: 0.3rem; }
-  code { background: #1f2330; padding: 1px 5px; border-radius: 3px;
-         font-size: 0.82rem; color: #e3a472; }
-  .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; }
-  @media (max-width: 800px) { .grid2 { grid-template-columns: 1fr; } }
+  :root {
+    --bg: #fafaf7; --panel: #ffffff; --border: #d9d9d2; --text: #1d1f23; --muted: #5b606b;
+    --grid: #e6e6e0; --axis: #8a8f99; --c1: #2f5fb3; --c2: #c2572b; --c3: #3f8a4f; --c4: #7a4fb0;
+    --hl: #f3efe0; --input: #ffffff;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #121418; --panel: #1a1d23; --border: #2c313a; --text: #e4e6eb; --muted: #a2a7b2;
+      --grid: #2a2f38; --axis: #7d8390; --c1: #7fa6ec; --c2: #e98c62; --c3: #7cc38a; --c4: #b596e6;
+      --hl: #2a2718; --input: #20242b;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; padding: 1.25rem 1rem 2rem; background: var(--bg); color: var(--text);
+         font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+  main { max-width: 900px; margin: 0 auto; }
+  h1 { font-size: 1.2rem; margin: 0 0 .3rem; }
+  h2 { font-size: 1rem; margin: 0 0 .4rem; }
+  p { margin: .3rem 0 .6rem; color: var(--muted); }
+  .panel { background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 1rem; margin: 1rem 0; }
+  .controls { display: flex; flex-wrap: wrap; gap: .6rem 1.2rem; align-items: center; margin: .4rem 0 .8rem; }
+  .controls label { display: flex; align-items: center; gap: .4rem; }
+  input[type=range] { width: 160px; max-width: 100%; }
+  input[type=number] { width: 5.2rem; background: var(--input); color: var(--text); border: 1px solid var(--border); border-radius: 4px; padding: 2px 4px; }
+  button { background: var(--input); color: var(--text); border: 1px solid var(--border); border-radius: 4px; padding: .25rem .6rem; cursor: pointer; }
+  button[aria-pressed=true] { border-color: var(--c1); box-shadow: inset 0 0 0 1px var(--c1); }
+  svg { width: 100%; height: auto; display: block; }
+  .readout { font-family: ui-monospace, Menlo, monospace; font-size: 13px; background: var(--hl); padding: .5rem .6rem; border-radius: 4px; }
+  .scroll { overflow-x: auto; }
+  table { border-collapse: collapse; font-size: 13px; min-width: 560px; }
+  th, td { border: 1px solid var(--border); padding: 3px 6px; text-align: right; }
+  th { background: var(--hl); }
+  .caption { font-size: 12px; color: var(--muted); margin-top: .5rem; }
+  .grid4 { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: .6rem; }
+  .legend { display: flex; flex-wrap: wrap; gap: .8rem; font-size: 12px; color: var(--muted); }
+  .sw { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 4px; vertical-align: middle; }
 </style>
 </head>
 <body>
+<main>
+<h1>PPO clipped objective, per-token reward, and alignment tax</h1>
+<p>Companion to ch-38 read.md §2, §3, and §6.1. Every number in panel 3 is copied from InstructGPT (arXiv:2203.02155v1) Table 14.</p>
 
-<h1>ch-38 — PPO clipped surrogate and KL-to-reward tradeoff</h1>
-<p>Companion to <code>wiki/courses/llm-training/ch-38/read.md</code>. Two interactive panels:
-Panel 1 scrubs the ratio r and advantage sign to expose <em>why</em> the pessimistic min flattens the gradient outside [1-&epsilon;, 1+&epsilon;].
-Panel 2 sweeps &beta; to trace the KL-vs-reward Pareto front annotated with reward-hacking and mode-collapse regimes.</p>
-
-<div class="panel">
-  <h2>Panel 1. L^CLIP(r, A) and its gradient</h2>
+<section class="panel" id="p1">
+  <h2>Panel 1 — One term of L<sup>CLIP</sup> as a function of the ratio r</h2>
+  <p>The term is min(r·Â, clip(r, 1−ε, 1+ε)·Â) with |Â| = 1 (Schulman et al. 2017, Eq. 7). The dashed line is the unclipped term r·Â. Move r to see which of the four cases in read.md §2 applies and whether the gradient with respect to r is zero.</p>
   <div class="controls">
-    <label>r: <input type="range" id="r-slider" min="0" max="200" step="1" value="100"></label>
-    <label>&epsilon;: <input type="range" id="eps-slider" min="5" max="50" step="1" value="20"></label>
-    <button id="sign-pos" class="active">A &gt; 0</button>
-    <button id="sign-neg">A &lt; 0</button>
-    <span class="readout" id="panel1-readout"></span>
+    <span>Sign of Â:</span>
+    <button id="apos" aria-pressed="true">Â = +1</button>
+    <button id="aneg" aria-pressed="false">Â = −1</button>
+    <label>ε <input id="eps" type="range" min="0.05" max="0.5" step="0.01" value="0.2"><span id="epsv">0.20</span></label>
+    <label>r <input id="rr" type="range" min="0" max="2" step="0.01" value="1.3"><span id="rv">1.30</span></label>
   </div>
-  <canvas id="panel1" width="820" height="300"></canvas>
-  <div class="legend">
-    <span><span class="dot" style="background:#7aa7ff"></span> L^CPI = r&middot;A (unclipped)</span>
-    <span><span class="dot" style="background:#e3a472"></span> clip(r, 1-&epsilon;, 1+&epsilon;)&middot;A</span>
-    <span><span class="dot" style="background:#9ae67a"></span> L^CLIP = min of the two</span>
-    <span><span class="dot" style="background:#d06a6a"></span> dL^CLIP/dr (gradient)</span>
-  </div>
-  <p>Casework (A &gt; 0): gradient lives inside [1-&epsilon;, 1+&epsilon;] and on the <em>left</em> tail where the
-  unclipped term is pessimistic. Gradient is zero above 1+&epsilon; — the trust region. For A &lt; 0, mirror.</p>
-</div>
+  <svg id="plot1" viewBox="0 0 640 300" role="img" aria-label="Clipped objective term versus ratio"></svg>
+  <div class="readout" id="out1"></div>
+</section>
 
-<div class="panel">
-  <h2>Panel 2. &beta; sweep — KL(&pi;&Vert;&pi;_ref) vs reward</h2>
+<section class="panel" id="p2">
+  <h2>Panel 2 — Per-token reward and GAE for a 3-token response</h2>
+  <p>Per-token reward r<sub>t</sub> = −β·(log π<sub>θ</sub> − log π<sub>ref</sub>) plus the RM score on the last token. δ<sub>t</sub> = r<sub>t</sub> + γV(s<sub>t+1</sub>) − V(s<sub>t</sub>), with V after the last token equal to 0, and Â<sub>t</sub> = δ<sub>t</sub> + γλÂ<sub>t+1</sub>. The defaults reproduce the worked example in read.md §3.</p>
   <div class="controls">
-    <label>&beta;: <input type="range" id="beta-slider" min="1" max="200" step="1" value="20"></label>
-    <span class="readout" id="panel2-readout"></span>
+    <label>β <input id="beta" type="number" step="0.005" value="0.05"></label>
+    <label>RM score <input id="score" type="number" step="0.1" value="1.0"></label>
+    <label>γ <input id="gamma" type="number" step="0.01" value="1"></label>
+    <label>λ <input id="lam" type="number" step="0.01" value="0.95"></label>
   </div>
-  <canvas id="panel2" width="820" height="300"></canvas>
+  <div class="scroll">
+    <table id="gae">
+      <thead><tr><th>t</th><th>log π<sub>θ</sub> − log π<sub>ref</sub></th><th>V(s<sub>t</sub>)</th><th>KL reward</th><th>r<sub>t</sub></th><th>δ<sub>t</sub></th><th>Â<sub>t</sub></th><th>return Â<sub>t</sub>+V</th></tr></thead>
+      <tbody></tbody>
+    </table>
+  </div>
+  <div class="caption">Edit the log-ratio and value cells. The k1 log-ratio of a single token can be negative, which gives a positive KL reward on that token.</div>
+</section>
+
+<section class="panel" id="p3">
+  <h2>Panel 3 — InstructGPT 175B on public NLP datasets</h2>
+  <p>GPT-3, SFT, PPO (γ = 0), and PPO-ptx (γ = 27.8) at 175B. Each task has its own vertical scale, starting at zero. The difference to GPT-3 is printed above each bar.</p>
+  <div class="controls">
+    <button id="few" aria-pressed="true">few-shot</button>
+    <button id="zero" aria-pressed="false">zero-shot</button>
+  </div>
   <div class="legend">
-    <span><span class="dot" style="background:#7aa7ff"></span> expected reward E[r]</span>
-    <span><span class="dot" style="background:#e3a472"></span> KL(&pi;&Vert;&pi;_ref)</span>
-    <span><span class="dot" style="background:#9ae67a"></span> objective E[r] - &beta;&middot;KL</span>
+    <span><span class="sw" style="background:var(--c1)"></span>GPT-3</span>
+    <span><span class="sw" style="background:var(--c4)"></span>SFT</span>
+    <span><span class="sw" style="background:var(--c2)"></span>PPO (γ = 0)</span>
+    <span><span class="sw" style="background:var(--c3)"></span>PPO-ptx (γ = 27.8)</span>
   </div>
-  <p>Regimes: small &beta; (left) &rarr; reward hacking, policy drifts outside RM calibration region.
-  Large &beta; (right) &rarr; mode collapse toward &pi;_ref, RM signal ignored. InstructGPT picked &beta;=0.02 on
-  reward-scale-normalized RMs; Llama-2 picked &beta;=0.01 to allow larger per-iteration drift under iterative RLHF.</p>
-</div>
+  <div class="grid4" id="bars"></div>
+  <div class="caption">Source: Ouyang et al., "Training language models to follow instructions with human feedback", arXiv:2203.02155v1, Table 14 (175B columns). Metrics: F1 for SQuADv2 and DROP, accuracy for HellaSwag, BLEU for WMT15 FR→EN. HellaSwag zero-shot: 0.781 / 0.753 / 0.743 / 0.807.</div>
+</section>
+</main>
 
 <script>
 (function () {
-  // ---------- Panel 1: PPO clip ----------
-  const c1 = document.getElementById('panel1');
-  const ctx1 = c1.getContext('2d');
-  const rSlider = document.getElementById('r-slider');
-  const epsSlider = document.getElementById('eps-slider');
-  const signPos = document.getElementById('sign-pos');
-  const signNeg = document.getElementById('sign-neg');
-  const readout1 = document.getElementById('panel1-readout');
-  let advSign = 1;
+  const css = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+  const NS = 'http://www.w3.org/2000/svg';
+  const el = (tag, attrs, parent, text) => {
+    const e = document.createElementNS(NS, tag);
+    for (const k in attrs) e.setAttribute(k, attrs[k]);
+    if (text !== undefined) e.textContent = text;
+    if (parent) parent.appendChild(e);
+    return e;
+  };
 
-  signPos.addEventListener('click', () => {
-    advSign = 1; signPos.classList.add('active'); signNeg.classList.remove('active'); drawPanel1();
-  });
-  signNeg.addEventListener('click', () => {
-    advSign = -1; signNeg.classList.add('active'); signPos.classList.remove('active'); drawPanel1();
-  });
-  [rSlider, epsSlider].forEach(el => el.addEventListener('input', drawPanel1));
-
-  function drawPanel1() {
-    const W = c1.width, H = c1.height;
-    ctx1.clearRect(0, 0, W, H);
-    const eps = epsSlider.value / 100;
-    const r = rSlider.value / 100;
-    const A = advSign;
-    const padL = 56, padR = 16, padT = 16, padB = 34;
-    const xMin = 0, xMax = 2, yMin = -1.4, yMax = 1.4;
-    function X(x) { return padL + (x - xMin) / (xMax - xMin) * (W - padL - padR); }
-    function Y(y) { return padT + (yMax - y) / (yMax - yMin) * (H - padT - padB); }
-
-    // axes
-    ctx1.strokeStyle = '#2a2f3c'; ctx1.lineWidth = 1;
-    ctx1.beginPath(); ctx1.moveTo(padL, Y(0)); ctx1.lineTo(W - padR, Y(0)); ctx1.stroke();
-    ctx1.beginPath(); ctx1.moveTo(X(1), padT); ctx1.lineTo(X(1), H - padB); ctx1.stroke();
-    // clip-window shaded
-    ctx1.fillStyle = 'rgba(122,167,255,0.06)';
-    ctx1.fillRect(X(1 - eps), padT, X(1 + eps) - X(1 - eps), H - padT - padB);
-    // labels
-    ctx1.fillStyle = '#9da1ab'; ctx1.font = '11px -apple-system, sans-serif';
-    ctx1.fillText('r', W - padR - 8, Y(0) + 14);
-    ctx1.fillText('L', padL - 30, padT + 12);
-    ctx1.fillText('0', padL - 10, Y(0) + 4);
-    ctx1.fillText('1', X(1) - 3, H - padB + 14);
-    ctx1.fillText((1 - eps).toFixed(2), X(1 - eps) - 12, H - padB + 14);
-    ctx1.fillText((1 + eps).toFixed(2), X(1 + eps) - 12, H - padB + 14);
-
-    // curves
-    function drawCurve(fn, color, width) {
-      ctx1.strokeStyle = color; ctx1.lineWidth = width;
-      ctx1.beginPath();
-      for (let i = 0; i <= 400; i++) {
-        const rr = xMin + i / 400 * (xMax - xMin);
-        const yy = fn(rr);
-        if (i === 0) ctx1.moveTo(X(rr), Y(yy)); else ctx1.lineTo(X(rr), Y(yy));
-      }
-      ctx1.stroke();
+  // ---------- Panel 1 ----------
+  let sign = 1;
+  const eps = document.getElementById('eps'), rr = document.getElementById('rr');
+  const svg1 = document.getElementById('plot1'), out1 = document.getElementById('out1');
+  const term = (r, e, a) => Math.min(r * a, Math.min(Math.max(r, 1 - e), 1 + e) * a);
+  function draw1() {
+    const e = +eps.value, r = +rr.value, a = sign;
+    document.getElementById('epsv').textContent = e.toFixed(2);
+    document.getElementById('rv').textContent = r.toFixed(2);
+    while (svg1.firstChild) svg1.removeChild(svg1.firstChild);
+    const W = 640, H = 300, L = 50, R = 20, T = 15, B = 35;
+    const x = v => L + (v / 2) * (W - L - R);
+    const y = v => T + (2 - v) / 4 * (H - T - B); // y range [-2, 2]
+    for (let g = -2; g <= 2; g += 0.5) {
+      el('line', { x1: L, x2: W - R, y1: y(g), y2: y(g), stroke: css('--grid') }, svg1);
+      el('text', { x: L - 6, y: y(g) + 4, 'text-anchor': 'end', 'font-size': 11, fill: css('--muted') }, svg1, g.toFixed(1));
     }
-    const unclipped = rr => rr * A;
-    const clipped = rr => Math.max(1 - eps, Math.min(1 + eps, rr)) * A;
-    const Lclip = rr => A > 0 ? Math.min(unclipped(rr), clipped(rr))
-                              : Math.min(unclipped(rr), clipped(rr));
-    // gradient analytically: unclipped grad = A if inside window, else min-pessimism
-    const grad = rr => {
-      const u = unclipped(rr), cc = clipped(rr);
-      if (A > 0) {
-        // min picks u when u < cc; grad = A if u picked, 0 if clipped region (since clip is constant)
-        if (u < cc) return A; // active unclipped, grad A
-        return 0;
-      } else {
-        if (u < cc) return A; // grad A (negative)
-        return 0;
-      }
-    };
-    drawCurve(unclipped, '#7aa7ff', 1.5);
-    drawCurve(clipped, '#e3a472', 1.5);
-    drawCurve(Lclip, '#9ae67a', 2.5);
-    drawCurve(grad, '#d06a6a', 1.5);
-
-    // ratio marker
-    ctx1.fillStyle = '#fff';
-    ctx1.beginPath(); ctx1.arc(X(r), Y(Lclip(r)), 4, 0, Math.PI * 2); ctx1.fill();
-    readout1.textContent = `r=${r.toFixed(2)}  eps=${eps.toFixed(2)}  A=${A>0?'+1':'-1'}  ` +
-                           `L_CPI=${unclipped(r).toFixed(3)}  L_CLIP=${Lclip(r).toFixed(3)}  ` +
-                           `dL/dr=${grad(r).toFixed(3)}`;
+    for (let g = 0; g <= 2; g += 0.25) {
+      el('line', { x1: x(g), x2: x(g), y1: T, y2: H - B, stroke: css('--grid') }, svg1);
+      el('text', { x: x(g), y: H - B + 16, 'text-anchor': 'middle', 'font-size': 11, fill: css('--muted') }, svg1, g.toFixed(2));
+    }
+    el('text', { x: (W + L) / 2, y: H - 4, 'text-anchor': 'middle', 'font-size': 12, fill: css('--text') }, svg1, 'ratio r = π_θ / π_θold');
+    [1 - e, 1 + e].forEach(v => el('line', { x1: x(v), x2: x(v), y1: T, y2: H - B, stroke: css('--axis'), 'stroke-dasharray': '2 3' }, svg1));
+    let d1 = '', d2 = '';
+    for (let i = 0; i <= 200; i++) {
+      const v = i / 100;
+      d1 += (i ? 'L' : 'M') + x(v) + ' ' + y(v * a);
+      d2 += (i ? 'L' : 'M') + x(v) + ' ' + y(term(v, e, a));
+    }
+    el('path', { d: d1, fill: 'none', stroke: css('--axis'), 'stroke-dasharray': '5 4', 'stroke-width': 1.5 }, svg1);
+    el('path', { d: d2, fill: 'none', stroke: css('--c1'), 'stroke-width': 2.5 }, svg1);
+    const val = term(r, e, a);
+    el('circle', { cx: x(r), cy: y(val), r: 5, fill: css('--c2') }, svg1);
+    const h = 1e-4;
+    const grad = (term(r + h, e, a) - term(r - h, e, a)) / (2 * h);
+    let kase;
+    if (a > 0) kase = r < 1 + e ? 'case 1: Â > 0, r < 1+ε — gradient raises π(a)' : 'case 2: Â > 0, r ≥ 1+ε — clipped, gradient zero';
+    else kase = r > 1 - e ? 'case 3: Â < 0, r > 1−ε — gradient lowers π(a); no upper bound on the loss as r grows' : 'case 4: Â < 0, r ≤ 1−ε — clipped, gradient zero';
+    out1.textContent = `term = min(${(r * a).toFixed(2)}, ${(Math.min(Math.max(r, 1 - e), 1 + e) * a).toFixed(2)}) = ${val.toFixed(2)}   d term / d r = ${Math.abs(grad) < 1e-6 ? '0' : grad.toFixed(2)}   ${kase}`;
   }
+  const setSign = s => { sign = s; document.getElementById('apos').setAttribute('aria-pressed', s > 0); document.getElementById('aneg').setAttribute('aria-pressed', s < 0); draw1(); };
+  document.getElementById('apos').onclick = () => setSign(1);
+  document.getElementById('aneg').onclick = () => setSign(-1);
+  eps.oninput = draw1; rr.oninput = draw1;
 
-  // ---------- Panel 2: KL vs reward sweep ----------
-  const c2 = document.getElementById('panel2');
-  const ctx2 = c2.getContext('2d');
-  const betaSlider = document.getElementById('beta-slider');
-  const readout2 = document.getElementById('panel2-readout');
-  betaSlider.addEventListener('input', drawPanel2);
-
-  // Toy model: the closed-form optimum of E[r] - beta*KL(pi||pi_ref) is a tilted posterior.
-  // For a scalar illustration let reward be r_max * (1 - exp(-KL/K0)), i.e. diminishing
-  // returns in KL budget; the objective picks the interior max.
-  const r_max = 1.0, K0 = 0.5;
-  const rewardOfKL = KL => r_max * (1 - Math.exp(-KL / K0));
-  const drewarddKL = KL => (r_max / K0) * Math.exp(-KL / K0);
-  function optKL(beta) {
-    // set dR/dKL = beta  =>  (r_max/K0)*exp(-KL/K0) = beta
-    const v = beta * K0 / r_max;
-    if (v >= 1) return 0;
-    return -K0 * Math.log(v);
+  // ---------- Panel 2 ----------
+  const rows = [{ lr: 0.4, v: 0.5 }, { lr: -0.2, v: 0.6 }, { lr: 0.2, v: 0.8 }];
+  const tbody = document.querySelector('#gae tbody');
+  const f4 = v => (Math.abs(v) < 5e-5 ? 0 : v).toFixed(4);
+  function build2() {
+    tbody.innerHTML = '';
+    rows.forEach((row, i) => {
+      const tr = document.createElement('tr');
+      tr.innerHTML = `<td>${i + 1}</td><td><input type="number" step="0.1" value="${row.lr}" data-i="${i}" data-k="lr"></td><td><input type="number" step="0.1" value="${row.v}" data-i="${i}" data-k="v"></td><td></td><td></td><td></td><td></td><td></td>`;
+      tbody.appendChild(tr);
+    });
+    tbody.querySelectorAll('input').forEach(inp => inp.oninput = () => { rows[+inp.dataset.i][inp.dataset.k] = +inp.value; calc2(); });
+    calc2();
   }
-
-  function drawPanel2() {
-    const W = c2.width, H = c2.height;
-    ctx2.clearRect(0, 0, W, H);
-    const beta = betaSlider.value / 100;
-    const padL = 56, padR = 16, padT = 16, padB = 34;
-    const xMin = 0, xMax = 3.0, yMin = -0.2, yMax = 1.2;
-    function X(x) { return padL + (x - xMin) / (xMax - xMin) * (W - padL - padR); }
-    function Y(y) { return padT + (yMax - y) / (yMax - yMin) * (H - padT - padB); }
-
-    // axes
-    ctx2.strokeStyle = '#2a2f3c'; ctx2.lineWidth = 1;
-    ctx2.beginPath(); ctx2.moveTo(padL, Y(0)); ctx2.lineTo(W - padR, Y(0)); ctx2.stroke();
-    ctx2.beginPath(); ctx2.moveTo(padL, padT); ctx2.lineTo(padL, H - padB); ctx2.stroke();
-    ctx2.fillStyle = '#9da1ab'; ctx2.font = '11px -apple-system, sans-serif';
-    ctx2.fillText('KL(pi||pi_ref)', W - padR - 70, Y(0) + 14);
-    for (let k = 0; k <= 3; k++) {
-      ctx2.fillText(k.toFixed(1), X(k) - 6, H - padB + 14);
-      ctx2.strokeStyle = '#1e222c'; ctx2.beginPath();
-      ctx2.moveTo(X(k), padT); ctx2.lineTo(X(k), H - padB); ctx2.stroke();
-    }
-    for (let y = 0; y <= 1.0; y += 0.25) {
-      ctx2.fillStyle = '#9da1ab'; ctx2.fillText(y.toFixed(2), padL - 30, Y(y) + 4);
-      ctx2.strokeStyle = '#1e222c'; ctx2.beginPath();
-      ctx2.moveTo(padL, Y(y)); ctx2.lineTo(W - padR, Y(y)); ctx2.stroke();
-    }
-
-    // reward curve
-    ctx2.strokeStyle = '#7aa7ff'; ctx2.lineWidth = 2; ctx2.beginPath();
-    for (let i = 0; i <= 400; i++) {
-      const KL = xMin + i / 400 * (xMax - xMin);
-      const y = rewardOfKL(KL);
-      if (i === 0) ctx2.moveTo(X(KL), Y(y)); else ctx2.lineTo(X(KL), Y(y));
-    }
-    ctx2.stroke();
-    // KL line (y = KL)
-    ctx2.strokeStyle = '#e3a472'; ctx2.lineWidth = 1.2; ctx2.setLineDash([4, 4]);
-    ctx2.beginPath();
-    ctx2.moveTo(X(0), Y(0));
-    ctx2.lineTo(X(xMax), Y(xMax)); // diagonal up to cut off
-    ctx2.stroke(); ctx2.setLineDash([]);
-    // objective r - beta*KL
-    ctx2.strokeStyle = '#9ae67a'; ctx2.lineWidth = 2; ctx2.beginPath();
-    for (let i = 0; i <= 400; i++) {
-      const KL = xMin + i / 400 * (xMax - xMin);
-      const y = rewardOfKL(KL) - beta * KL;
-      if (i === 0) ctx2.moveTo(X(KL), Y(y)); else ctx2.lineTo(X(KL), Y(y));
-    }
-    ctx2.stroke();
-    // optimum marker
-    const KLstar = optKL(beta);
-    const yStar = rewardOfKL(KLstar) - beta * KLstar;
-    ctx2.fillStyle = '#fff';
-    ctx2.beginPath(); ctx2.arc(X(KLstar), Y(yStar), 5, 0, Math.PI * 2); ctx2.fill();
-
-    // regime labels
-    ctx2.fillStyle = '#d06a6a';
-    if (beta < 0.05) ctx2.fillText('reward hacking regime — β too small', X(1.5), Y(1.1));
-    else if (beta > 1.0) ctx2.fillText('mode collapse regime — β too large', X(0.2), Y(1.1));
-    else ctx2.fillText('sweet spot (InstructGPT β=0.02, Llama-2 β=0.01)', X(0.7), Y(1.1));
-
-    readout2.textContent = `beta=${beta.toFixed(3)}  KL*=${KLstar.toFixed(3)}  ` +
-                           `E[r]*=${rewardOfKL(KLstar).toFixed(3)}  obj*=${yStar.toFixed(3)}`;
+  function calc2() {
+    const beta = +document.getElementById('beta').value, score = +document.getElementById('score').value;
+    const gamma = +document.getElementById('gamma').value, lam = +document.getElementById('lam').value;
+    const n = rows.length, kl = [], rew = [], del = [], adv = new Array(n);
+    for (let t = 0; t < n; t++) { kl[t] = -beta * rows[t].lr; rew[t] = kl[t] + (t === n - 1 ? score : 0); }
+    for (let t = 0; t < n; t++) { const next = t + 1 < n ? rows[t + 1].v : 0; del[t] = rew[t] + gamma * next - rows[t].v; }
+    let last = 0;
+    for (let t = n - 1; t >= 0; t--) { last = del[t] + gamma * lam * last; adv[t] = last; }
+    tbody.querySelectorAll('tr').forEach((tr, t) => {
+      const c = tr.children;
+      c[3].textContent = f4(kl[t]); c[4].textContent = f4(rew[t]); c[5].textContent = f4(del[t]);
+      c[6].textContent = f4(adv[t]); c[7].textContent = f4(adv[t] + rows[t].v);
+    });
   }
+  ['beta', 'score', 'gamma', 'lam'].forEach(id => document.getElementById(id).oninput = calc2);
 
-  drawPanel1();
-  drawPanel2();
+  // ---------- Panel 3 ----------
+  // InstructGPT Table 14, 175B columns: GPT, SFT, PPO, PPO-ptx
+  const data = {
+    few: [
+      { task: 'SQuADv2 (F1)', v: [69.75, 65.90, 51.95, 69.93], d: 2 },
+      { task: 'DROP (F1)', v: [35.27, 35.85, 27.78, 33.34], d: 2 },
+      { task: 'HellaSwag (acc)', v: [0.791, 0.741, 0.759, 0.820], d: 3 },
+      { task: 'FR→EN (BLEU)', v: [39.93, 35.07, 26.58, 36.76], d: 2 }
+    ],
+    zero: [
+      { task: 'SQuADv2 (F1)', v: [64.30, 57.67, 43.68, 59.85], d: 2 },
+      { task: 'DROP (F1)', v: [27.53, 15.79, 13.08, 15.23], d: 2 },
+      { task: 'HellaSwag (acc)', v: [0.781, 0.753, 0.743, 0.807], d: 3 },
+      { task: 'FR→EN (BLEU)', v: [38.92, 36.90, 24.16, 34.28], d: 2 }
+    ]
+  };
+  const names = ['GPT-3', 'SFT', 'PPO', 'PPO-ptx'];
+  let mode = 'few';
+  function draw3() {
+    const box = document.getElementById('bars');
+    box.innerHTML = '';
+    const cols = [css('--c1'), css('--c4'), css('--c2'), css('--c3')];
+    data[mode].forEach(item => {
+      const W = 220, H = 200, T = 34, B = 30, L = 8;
+      const s = document.createElementNS(NS, 'svg');
+      s.setAttribute('viewBox', `0 0 ${W} ${H}`);
+      s.setAttribute('role', 'img');
+      s.setAttribute('aria-label', item.task + ' ' + mode + '-shot: ' + item.v.map((v, i) => names[i] + ' ' + v).join(', '));
+      el('text', { x: W / 2, y: 14, 'text-anchor': 'middle', 'font-size': 12, 'font-weight': 600, fill: css('--text') }, s, item.task);
+      const max = Math.max(...item.v) * 1.08;
+      const bw = (W - 2 * L) / 4;
+      el('line', { x1: L, x2: W - L, y1: H - B, y2: H - B, stroke: css('--axis') }, s);
+      item.v.forEach((v, i) => {
+        const h = (v / max) * (H - T - B);
+        const x0 = L + i * bw + 6;
+        el('rect', { x: x0, y: H - B - h, width: bw - 12, height: h, fill: cols[i], rx: 2 }, s);
+        el('text', { x: x0 + (bw - 12) / 2, y: H - B + 12, 'text-anchor': 'middle', 'font-size': 10, fill: css('--muted') }, s, names[i]);
+        el('text', { x: x0 + (bw - 12) / 2, y: H - B + 24, 'text-anchor': 'middle', 'font-size': 10, fill: css('--text') }, s, v.toFixed(item.d));
+        if (i > 0) {
+          const diff = v - item.v[0];
+          el('text', { x: x0 + (bw - 12) / 2, y: H - B - h - 4, 'text-anchor': 'middle', 'font-size': 10, fill: css('--text') }, s, (diff >= 0 ? '+' : '−') + Math.abs(diff).toFixed(item.d));
+        }
+      });
+      box.appendChild(s);
+    });
+  }
+  const setMode = m => { mode = m; document.getElementById('few').setAttribute('aria-pressed', m === 'few'); document.getElementById('zero').setAttribute('aria-pressed', m === 'zero'); draw3(); };
+  document.getElementById('few').onclick = () => setMode('few');
+  document.getElementById('zero').onclick = () => setMode('zero');
+
+  const redrawAll = () => { draw1(); draw3(); };
+  if (window.matchMedia) {
+    const mq = window.matchMedia('(prefers-color-scheme: dark)');
+    if (mq.addEventListener) mq.addEventListener('change', redrawAll);
+  }
+  draw1(); build2(); draw3();
 })();
 </script>
-
 </body>
 </html>

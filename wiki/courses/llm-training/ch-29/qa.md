@@ -57,3 +57,13 @@ P/N/U는 **call당 1개**(per-turn 아님 — 옛 random-walk는 죽음), **종�
 ## Q11 — meta: 좋은 질문을 어떻게 하나
 
 좋은 질문은 *발명*이 아니라 분석이 fork에 멈춘 자리에서 *수확*. recipe = [믿음+이유] + [깨질 지점] + [그 fork 판단 요청]. senior에게 최강: risk-prior("뭐가 제일 걱정?") / blind-spot("내가 안 묻는 게?"). 약한 질문 = 허락 구하기("이거 괜찮나요?"). → senior 대화용 질문 9개 + agenda 도출 (verifier 충분성 / sim-to-real 측정 / eval metric이 가장 약한 고리).
+
+---
+
+## Q-정정 (2026-09 revision)
+
+**배경**: read.md가 2026-09 generality revision으로 새로 작성되었다. 정정 목록은 새 read.md의 "Corrections to the version you studied" 1–20번에 있다. 이 파일의 Q1–Q11은 read.md 본문을 다시 설명한 것이 아니라 Lina TMR conversation pipeline에 cascade를 적용한 application probe이다. 따라서 kernel 안에 이번에 정정된 사실(survival arithmetic, ln(V) loss gate, APIGen ablation 수치, IFD 정의와 pre-experience 방식, LIMA baseline, Self-Instruct의 output-first 방향, MinHash threshold 방향)을 담은 Qn은 없다.
+
+- **Q1–Q11**: 정정할 사실 없음. 다만 Q2와 Q11에서 verifier를 설계 원칙으로 쓸 때, APIGen의 근거는 "layer를 하나씩 제거한 ablation(−18/−11/−6)"이 아니라 "실패한 sample을 training data에 다시 넣은 add-back ablation"이다. xLAM-7B에서 BFCL이 −4.06(semantic 실패 추가), −5.94(execution 실패 추가), xLAM-1B에서 −9.59, −12.17 변했고, format 단계 arm은 없다 (정정 3).
+- **Q7–Q8의 coverage 논의와 연결**: 새 read.md §3.4는 filter 단계마다 category 비율과 coverage score를 기록하도록 한다. Cherry LLM에서 IFD 상위 5%는 "write story"류가 차지하고 "rewrite sentence"류는 하위 5%에 몰린다. 이 사실은 Q7의 "coverage는 selection이 아니라 sampler가 책임진다"는 kernel과 방향이 같다.
+- **Line reference**: 이 파일의 이전 entry와 ch-29 관련 대화에서 가리키는 read.md line 번호는 git commit 4a72e54 시점의 read.md를 기준으로 한다.

@@ -2,279 +2,271 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>SFT Design Axes — Interactive Config Builder (ch-30)</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SFT Label and Loss-Weight Explorer (ch-30)</title>
 <style>
-  :root { --bg:#fafaf7; --panel:#fff; --ink:#1b1b1b; --dim:#6a6a6a; --line:#d8d8d4;
-          --accent:#1e4f79; --hot:#8a2f2f; --good:#2f6d3f; --warn:#9a6a1a; --code:#f2f1ec; }
-  body { background:var(--bg); color:var(--ink); font-family:-apple-system,"Helvetica Neue",Arial,sans-serif;
-         font-variant-numeric:tabular-nums; max-width:1080px; margin:24px auto; padding:0 20px; line-height:1.45; }
-  h1 { font-size:20px; margin:0 0 4px 0; }
-  h2 { font-size:14px; margin:18px 0 6px 0; color:var(--accent); letter-spacing:0.4px; }
-  .sub { color:var(--dim); font-size:13px; margin-bottom:18px; }
-  .wrap { display:grid; grid-template-columns:340px 1fr; gap:18px; }
-  .panel { background:var(--panel); border:1px solid var(--line); padding:14px 16px; border-radius:4px; }
-  .axis { margin-bottom:14px; }
-  .axis label { font-size:12px; color:var(--dim); display:block; margin-bottom:4px; text-transform:uppercase; letter-spacing:0.6px; }
-  .axis select, .axis input[type="number"] { width:100%; padding:6px 8px; border:1px solid var(--line);
-         background:#fff; font:inherit; font-size:13px; border-radius:3px; }
-  .axis .toggle { display:flex; gap:10px; align-items:center; font-size:13px; }
-  .pair { display:grid; grid-template-columns:1fr 1fr; gap:10px; }
-  table { width:100%; border-collapse:collapse; font-size:12px; margin-top:6px; }
+  :root {
+    --bg:#f8f7f3; --panel:#ffffff; --ink:#1c1c1c; --dim:#5f5f5f; --line:#d9d7d0;
+    --train:#2d5f8b; --ctx:#c9ced6; --err:#b4552f; --absent:#efeee9; --accent:#2d5f8b; --warn:#8a5a12;
+    --code:#f1f0eb;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg:#17181a; --panel:#202226; --ink:#e9e9e6; --dim:#a8a8a2; --line:#3a3c41;
+            --train:#6fa6d6; --ctx:#4a4f58; --err:#e08a63; --absent:#2a2c30; --accent:#6fa6d6; --warn:#e0b25a; --code:#2a2c30; }
+  }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--ink); font:14px/1.5 -apple-system,"Segoe UI",Helvetica,Arial,sans-serif; }
+  main { max-width:1040px; margin:0 auto; padding:20px 16px 40px; }
+  h1 { font-size:20px; margin:0 0 4px; }
+  h2 { font-size:16px; margin:0 0 8px; color:var(--accent); }
+  p.sub { color:var(--dim); margin:0 0 16px; }
+  .panel { background:var(--panel); border:1px solid var(--line); border-radius:6px; padding:14px 16px; margin-bottom:18px; }
+  .controls { display:grid; grid-template-columns:repeat(auto-fit,minmax(220px,1fr)); gap:10px 16px; margin-bottom:12px; }
+  label.ctl { display:block; font-size:12px; color:var(--dim); margin-bottom:3px; }
+  select, input[type=number] { width:100%; padding:5px 7px; font:inherit; color:var(--ink); background:var(--panel); border:1px solid var(--line); border-radius:4px; }
+  .check { display:flex; gap:8px; align-items:center; margin-top:18px; }
+  .seq { margin:8px 0 12px; }
+  .seqhead { font-size:12px; color:var(--dim); margin-bottom:3px; }
+  .bar { display:flex; width:100%; min-height:30px; border:1px solid var(--line); border-radius:3px; overflow:hidden; }
+  .seg { display:flex; align-items:center; justify-content:center; font-size:11px; white-space:nowrap; overflow:hidden; border-right:1px solid var(--panel); padding:0 2px; }
+  .seg.train { background:var(--train); color:#fff; }
+  .seg.ctx { background:var(--ctx); color:var(--ink); }
+  .seg.err { background:repeating-linear-gradient(45deg,var(--ctx),var(--ctx) 5px,var(--err) 5px,var(--err) 7px); color:var(--ink); }
+  .legend { display:flex; flex-wrap:wrap; gap:12px; font-size:12px; color:var(--dim); margin:4px 0 10px; }
+  .sw { display:inline-block; width:14px; height:12px; vertical-align:middle; margin-right:4px; border:1px solid var(--line); }
+  .tablewrap { overflow-x:auto; }
+  table { border-collapse:collapse; width:100%; font-size:13px; }
   th, td { border:1px solid var(--line); padding:4px 8px; text-align:left; }
-  th { background:#f1efe8; font-weight:600; }
-  tr.hot td { background:#fdf3f0; }
-  pre { background:var(--code); padding:10px 12px; border-radius:3px; font-size:12px;
-        white-space:pre-wrap; word-break:break-all; border-left:3px solid var(--accent); }
-  .kv { display:grid; grid-template-columns:180px 1fr; gap:4px 12px; font-size:13px; }
-  .kv .k { color:var(--dim); }
-  .badge { display:inline-block; padding:1px 8px; border-radius:10px; font-size:11px; font-weight:600; }
-  .b-good { background:#e3f0e6; color:var(--good); }
-  .b-warn { background:#faf1de; color:var(--warn); }
-  .b-hot  { background:#fbe3df; color:var(--hot); }
-  .small { font-size:12px; color:var(--dim); }
+  th { background:var(--code); font-weight:600; }
+  td.num { text-align:right; font-variant-numeric:tabular-nums; }
+  .note { font-size:13px; margin-top:10px; }
+  .note li { margin-bottom:4px; }
+  .warn { color:var(--warn); }
+  .caption { font-size:12px; color:var(--dim); margin-top:10px; border-top:1px solid var(--line); padding-top:8px; }
+  code { background:var(--code); padding:0 3px; border-radius:3px; font-size:12px; }
 </style>
 </head>
 <body>
+<main>
+<h1>SFT label and loss-weight explorer</h1>
+<p class="sub">Companion to chapter 30, §1.2, §3, and §7. Panel A shows which tokens of a conversation receive labels under a loss layout, a history rule for the training template, and a history rule for the serving client. Panel B computes per-token loss weights under the three aggregation formulas of Tülu 3 §4.3.2. Token counts are illustrative; template tokens are ignored.</p>
 
-<h1>SFT Design Axes — Config Builder</h1>
-<p class="sub">Chapter 30 companion. Toggle the five axes; the right panel recomputes your training-config summary, the per-regime loss-mask row, the chat-template delimiters (verbatim), and the expected packing speedup.</p>
-
-<div class="wrap">
-
-  <div class="panel">
-    <h2>Axis controls</h2>
-
-    <div class="axis">
-      <label>1. Regime</label>
-      <select id="regime">
-        <option value="single">single-turn instruction</option>
-        <option value="chat">multi-turn chat</option>
-        <option value="tool">tool-call</option>
-        <option value="reason">reasoning</option>
-        <option value="agent">agentic</option>
+<section class="panel" aria-labelledby="pa">
+  <h2 id="pa">A. Labels per token</h2>
+  <div class="controls">
+    <div>
+      <label class="ctl" for="preset">Conversation</label>
+      <select id="preset">
+        <option value="chat">Two-turn chat with thinking (§1.2 worked example)</option>
+        <option value="agent">Agentic trajectory with one failed tool call</option>
       </select>
     </div>
-
-    <div class="axis">
-      <label>2. Loss mask</label>
-      <select id="mask">
-        <option value="response">response-only (default)</option>
-        <option value="full">full-sequence</option>
-        <option value="weighted">prompt-weighted (alpha=0.1)</option>
+    <div>
+      <label class="ctl" for="layout">Loss layout</label>
+      <select id="layout">
+        <option value="all">All assistant turns, single pass</option>
+        <option value="last">Last assistant turn only, single pass</option>
+        <option value="expand">Per-turn expansion</option>
+        <option value="im">Instruction modelling, single pass (all non-template tokens)</option>
       </select>
     </div>
-
-    <div class="axis">
-      <label>3. Chat template</label>
-      <select id="template">
-        <option value="chatml">ChatML</option>
-        <option value="llama3">Llama-3</option>
-        <option value="qwen3">Qwen-3 (hybrid thinking)</option>
-        <option value="dsv3">DeepSeek-V3</option>
+    <div>
+      <label class="ctl" for="rule">History rule of the training template (single-pass layouts)</label>
+      <select id="rule">
+        <option value="keep">Keep all earlier thinking</option>
+        <option value="drop">Drop earlier thinking (Qwen3 model card rule)</option>
+        <option value="user">Drop thinking only at a new user message (DeepSeek-V3.2 §3.2.1)</option>
       </select>
     </div>
-
-    <div class="axis">
-      <label>4. Packing</label>
-      <div class="toggle">
-        <input type="checkbox" id="packing" checked>
-        <span>enabled (flash_attn_varlen_func)</span>
-      </div>
-      <div class="pair" style="margin-top:6px">
-        <div>
-          <label>L_max</label>
-          <input type="number" id="lmax" value="4096" min="512" max="32768" step="512">
-        </div>
-        <div>
-          <label>avg(L_i)</label>
-          <input type="number" id="lavg" value="600" min="32" max="8192" step="16">
-        </div>
-      </div>
+    <div>
+      <label class="ctl" for="srule">History rule of the serving client (also used by per-turn expansion)</label>
+      <select id="srule">
+        <option value="keep">Keep all earlier thinking</option>
+        <option value="drop" selected>Drop earlier thinking (Qwen3 model card rule)</option>
+        <option value="user">Drop thinking only at a new user message (DeepSeek-V3.2 §3.2.1)</option>
+      </select>
     </div>
-
-    <div class="axis">
-      <label>5. NEFTune</label>
-      <div class="toggle">
-        <input type="checkbox" id="neftune">
-        <span>enabled (alpha)</span>
-        <input type="number" id="alpha" value="5" min="1" max="20" step="1" style="width:60px">
-      </div>
-      <div class="small" style="margin-top:4px">Dataset size (prompts):
-        <input type="number" id="dsize" value="50000" min="500" max="2000000" step="500" style="width:100px">
-      </div>
+    <div>
+      <label class="ctl" for="agg">Aggregation</label>
+      <select id="agg">
+        <option value="sum">Sum over trained tokens</option>
+        <option value="mean">Mean within each sequence, then mean over sequences</option>
+      </select>
+    </div>
+    <div class="check">
+      <input type="checkbox" id="errmask" checked>
+      <label for="errmask">Mask the erroneous tool call (GLM-5 §3.1)</label>
     </div>
   </div>
-
-  <div class="panel">
-    <h2>Config summary</h2>
-    <div class="kv" id="summary"></div>
-
-    <h2>Per-regime loss-mask row</h2>
-    <table id="maskTable">
-      <thead>
-        <tr>
-          <th>regime</th><th>system</th><th>user</th><th>assistant (current)</th>
-          <th>assistant (prior)</th><th>tool_call</th><th>tool_response</th><th>&lt;think&gt;</th>
-        </tr>
-      </thead>
-      <tbody></tbody>
-    </table>
-
-    <h2>Chat template — verbatim delimiters</h2>
-    <pre id="tmpl"></pre>
-
-    <h2>Packing — expected speedup</h2>
-    <div class="kv" id="pack"></div>
-
-    <h2>Pre-flight checks</h2>
-    <div id="checks"></div>
+  <div class="legend">
+    <span><span class="sw" style="background:var(--train)"></span>trained (label = token id)</span>
+    <span><span class="sw" style="background:var(--ctx)"></span>in context, label = −100</span>
+    <span><span class="sw" style="background:repeating-linear-gradient(45deg,var(--ctx),var(--ctx) 5px,var(--err) 5px,var(--err) 7px)"></span>erroneous step, in context, label = −100</span>
   </div>
-</div>
+  <div id="seqs"></div>
+  <div class="tablewrap"><table id="stats"></table></div>
+  <ul class="note" id="notes"></ul>
+</section>
+
+<section class="panel" aria-labelledby="pb">
+  <h2 id="pb">B. Loss aggregation across two samples</h2>
+  <div class="controls">
+    <div><label class="ctl" for="n1">n₁: non-padding target tokens of sample 1</label><input type="number" id="n1" value="10" min="1" max="100000"></div>
+    <div><label class="ctl" for="l1">mean token loss of sample 1</label><input type="number" id="l1" value="2.0" step="0.1" min="0"></div>
+    <div><label class="ctl" for="n2">n₂: non-padding target tokens of sample 2</label><input type="number" id="n2" value="90" min="1" max="100000"></div>
+    <div><label class="ctl" for="l2">mean token loss of sample 2</label><input type="number" id="l2" value="1.0" step="0.1" min="0"></div>
+  </div>
+  <div class="tablewrap"><table id="aggtab"></table></div>
+  <p class="note" id="aggnote"></p>
+  <p class="caption">Formulas from Tülu 3 (arXiv:2411.15124v5 §4.3.2, Eqs. 1-2): one forward pass L = (l₁ + l₂)/(n₁ + n₂); gradient accumulation with one sample per micro-batch L = (l₁/n₁ + l₂/n₂)/2; sum loss L = l₁ + l₂, where lₖ is the summed token loss of sample k. Tülu 3 reports that it used a sum loss and that this "requires an adjustment to learning rates". Default inputs reproduce the worked example in read.md §3.</p>
+</section>
+
+<p class="caption">Sources for panel A: history rules from the Qwen3-8B model card (Best Practices) and DeepSeek-V3.2 (arXiv:2512.02556v1 §3.2.1); masked erroneous segments from GLM-5 (arXiv:2602.15763v2 §3.1); all-assistant-turn default and last-turn option from open-instruct@098424c <code>dataset_transformation.py</code> L1214-1218; instruction modelling from Shi et al. (arXiv:2405.14394v2 Eq. 4), whose main results (Table 1) use single-turn data; the paper does not describe how earlier turns are treated in multi-turn data. Excerpts: ch-30/excerpts/chat-template-matrix.md, glm-5.md, loss-masking-regimes.md.</p>
+</main>
 
 <script>
-// --- data ---------------------------------------------------------------
-const REGIMES = {
-  single: { label: "single-turn instruction", mask: ["N","N","Y","—","—","—","—"] },
-  chat:   { label: "multi-turn chat",         mask: ["N","N","Y","N","—","—","—"] },
-  tool:   { label: "tool-call",               mask: ["N","N","Y","N","Y","N","—"] },
-  reason: { label: "reasoning",               mask: ["N","N","Y","N","—","—","Y"] },
-  agent:  { label: "agentic",                 mask: ["N","N","Y","N","Y","N","Y"] }
-};
+(function () {
+  // Each message: role and segments. kind: user | tool | think | answer | call. err marks a failed step.
+  var PRESETS = {
+    chat: [
+      { role: 'user', segs: [{ kind: 'user', n: 50, name: 'u₁' }] },
+      { role: 'assistant', segs: [{ kind: 'think', n: 200, name: 'a₁ think' }, { kind: 'answer', n: 50, name: 'a₁ answer' }] },
+      { role: 'user', segs: [{ kind: 'user', n: 40, name: 'u₂' }] },
+      { role: 'assistant', segs: [{ kind: 'think', n: 300, name: 'a₂ think' }, { kind: 'answer', n: 60, name: 'a₂ answer' }] }
+    ],
+    agent: [
+      { role: 'user', segs: [{ kind: 'user', n: 60, name: 'task' }] },
+      { role: 'assistant', segs: [{ kind: 'think', n: 120, name: 'a₁ think' }, { kind: 'call', n: 30, name: 'a₁ call', err: true }] },
+      { role: 'tool', segs: [{ kind: 'tool', n: 80, name: 'error output' }] },
+      { role: 'assistant', segs: [{ kind: 'think', n: 90, name: 'a₂ think' }, { kind: 'call', n: 30, name: 'a₂ call' }] },
+      { role: 'tool', segs: [{ kind: 'tool', n: 150, name: 'tool output' }] },
+      { role: 'assistant', segs: [{ kind: 'think', n: 100, name: 'a₃ think' }, { kind: 'answer', n: 70, name: 'a₃ answer' }] }
+    ]
+  };
 
-const TEMPLATES = {
-  chatml:
-`<|im_start|>system
-You are helpful.<|im_end|>
-<|im_start|>user
-Hi<|im_end|>
-<|im_start|>assistant
-Hello.<|im_end|>`,
+  var $ = function (id) { return document.getElementById(id); };
 
-  llama3:
-`<|begin_of_text|><|start_header_id|>system<|end_header_id|>
+  // Is the thinking of assistant message j rendered when message `end` is the current (final) message?
+  function keepThink(msgs, j, end, rule) {
+    if (j === end) return true;
+    if (rule === 'keep') return true;
+    if (rule === 'drop') return false;
+    for (var k = j + 1; k <= end; k++) { if (msgs[k].role === 'user') return false; }
+    return true;
+  }
 
-You are helpful.<|eot_id|><|start_header_id|>user<|end_header_id|>
+  // Render messages[0..end] as one sequence; labelFn(msgIndex, seg) -> 'train' | 'ctx'.
+  function render(msgs, end, rule, labelFn, errMask) {
+    var out = [];
+    var historyTokens = {};
+    var running = 0;
+    for (var i = 0; i <= end; i++) {
+      var m = msgs[i];
+      if (m.role === 'assistant') historyTokens[i] = running;
+      for (var s = 0; s < m.segs.length; s++) {
+        var seg = m.segs[s];
+        if (seg.kind === 'think' && !keepThink(msgs, i, end, rule)) continue;
+        var lab = labelFn(i, seg);
+        if (lab === 'train' && seg.err && errMask) lab = 'err';
+        out.push({ name: seg.name, n: seg.n, lab: lab, msg: i });
+        running += seg.n;
+      }
+    }
+    return { segs: out, historyTokens: historyTokens };
+  }
 
-Hi<|eot_id|><|start_header_id|>assistant<|end_header_id|>
+  function servingHistory(msgs, t, rule) {
+    var tot = 0;
+    for (var i = 0; i < t; i++) {
+      msgs[i].segs.forEach(function (seg) {
+        if (seg.kind === 'think' && msgs[i].role === 'assistant' && !keepThink(msgs, i, t, rule)) return;
+        tot += seg.n;
+      });
+    }
+    return tot;
+  }
 
-Hello.<|eot_id|>`,
+  function draw() {
+    var msgs = PRESETS[$('preset').value];
+    var layout = $('layout').value, rule = $('rule').value, srule = $('srule').value, agg = $('agg').value, errMask = $('errmask').checked;
+    var last = msgs.length - 1;
+    var asst = []; msgs.forEach(function (m, i) { if (m.role === 'assistant') asst.push(i); });
+    var seqs = [];
+    if (layout === 'expand') {
+      asst.forEach(function (t) {
+        seqs.push({ title: 'Example for assistant message ' + (asst.indexOf(t) + 1),
+          r: render(msgs, t, srule, function (i) { return i === t ? 'train' : 'ctx'; }, errMask), target: t });
+      });
+    } else {
+      var fn;
+      if (layout === 'all') fn = function (i) { return msgs[i].role === 'assistant' ? 'train' : 'ctx'; };
+      else if (layout === 'last') fn = function (i) { return i === last ? 'train' : 'ctx'; };
+      else fn = function () { return 'train'; };
+      seqs.push({ title: 'Single sequence', r: render(msgs, last, rule, fn, errMask), target: null });
+    }
 
-  qwen3:
-`<|im_start|>system
-You are helpful.<|im_end|>
-<|im_start|>user
-Solve 2+2<|im_end|>
-<|im_start|>assistant
-<think>2 plus 2 is 4.</think>4<|im_end|>`,
+    var html = '', totalProc = 0, totalTrain = 0, rows = '';
+    var nSeq = seqs.filter(function (sq) { return sq.r.segs.some(function (g) { return g.lab === 'train'; }); }).length;
+    seqs.forEach(function (sq) {
+      var proc = 0, tr = 0;
+      sq.r.segs.forEach(function (g) { proc += g.n; if (g.lab === 'train') tr += g.n; });
+      totalProc += proc; totalTrain += tr;
+      html += '<div class="seq"><div class="seqhead">' + sq.title + ' — ' + proc + ' tokens processed, ' + tr + ' trained</div><div class="bar">';
+      sq.r.segs.forEach(function (g) {
+        var cls = g.lab === 'train' ? 'train' : (g.lab === 'err' ? 'err' : 'ctx');
+        html += '<div class="seg ' + cls + '" style="flex:' + g.n + ' 0 0" title="' + g.name + ': ' + g.n + ' tokens">' + g.name + ' ' + g.n + '</div>';
+      });
+      html += '</div></div>';
+      var w = tr === 0 ? '—' : (agg === 'sum' ? '1' : (nSeq > 1 ? '1/(' + nSeq + '·' + tr + ') = ' : '1/' + tr + ' = ') + (1 / (nSeq * tr)).toFixed(5));
+      rows += '<tr><td>' + sq.title + '</td><td class="num">' + proc + '</td><td class="num">' + tr + '</td><td class="num">' + w + '</td></tr>';
+    });
+    $('seqs').innerHTML = html;
+    $('stats').innerHTML = '<tr><th>Sequence</th><th>Tokens processed</th><th>Tokens trained</th><th>Loss weight per trained token</th></tr>' + rows +
+      '<tr><th>Total</th><th class="num">' + totalProc + '</th><th class="num">' + totalTrain + '</th><th></th></tr>';
 
-  dsv3:
-`<｜begin▁of▁sentence｜><｜User｜>Hi<｜Assistant｜>Hello.<｜end▁of▁sentence｜>`
-};
+    // Notes: compare training history with serving history for each trained assistant turn.
+    var notes = [];
+    if (layout !== 'expand') {
+      var single = seqs[0].r;
+      asst.forEach(function (t, idx) {
+        if (layout === 'last' && t !== last) return;
+        var th = single.historyTokens[t], sv = servingHistory(msgs, t, srule);
+        var thinkRendered = single.segs.some(function (g) { return g.msg === t && /think/.test(g.name); });
+        if (th !== sv) notes.push('<span class="warn">Assistant message ' + (idx + 1) + ' is trained with a ' + th + '-token history, but the serving client sends ' + sv + ' tokens before it.</span>');
+        if (!thinkRendered) notes.push('<span class="warn">Assistant message ' + (idx + 1) + ' is rendered without its thinking span, so its thinking is never a training target, although the model generates thinking when that message is the current turn.</span>');
+      });
+      if (!notes.length) notes.push('Every trained assistant message sees the same history in training as the serving client sends under this rule.');
+    } else {
+      notes.push('Each example renders the history with the serving-client rule at that turn, so training and serving histories match by construction. Prefix tokens are processed once per example.');
+    }
+    if (layout === 'im') notes.push('Shi et al. report instruction modelling results mainly on single-turn data (Table 1); training on user and tool-output tokens in agentic trajectories has no evidence in the chapter sources.');
+    if (!errMask && $('preset').value === 'agent' && layout !== 'last') notes.push('<span class="warn">The failed tool call is a training target: cross-entropy raises its probability.</span>');
+    $('notes').innerHTML = notes.map(function (x) { return '<li>' + x + '</li>'; }).join('');
+  }
 
-const TEMPLATE_SUPPORT = {
-  chatml:{thinking:false,toolcall:"convention"}, llama3:{thinking:false,toolcall:"python_tag (Llama-3.1)"},
-  qwen3:{thinking:true,toolcall:"<tool_call>...</tool_call>"}, dsv3:{thinking:"R1 only",toolcall:"convention"}
-};
+  function drawAgg() {
+    var n1 = Math.max(1, +$('n1').value || 1), n2 = Math.max(1, +$('n2').value || 1);
+    var m1 = Math.max(0, +$('l1').value || 0), m2 = Math.max(0, +$('l2').value || 0);
+    var s1 = n1 * m1, s2 = n2 * m2;
+    var rows = [
+      ['One forward pass (token mean)', (s1 + s2) / (n1 + n2), 1 / (n1 + n2), 1 / (n1 + n2)],
+      ['Gradient accumulation, one sample per micro-batch', (m1 + m2) / 2, 1 / (2 * n1), 1 / (2 * n2)],
+      ['Sum loss', s1 + s2, 1, 1]
+    ];
+    var h = '<tr><th>Aggregation</th><th>L</th><th>Weight per token, sample 1</th><th>Weight per token, sample 2</th><th>Ratio (sample 1 : sample 2)</th></tr>';
+    rows.forEach(function (r) {
+      h += '<tr><td>' + r[0] + '</td><td class="num">' + r[1].toFixed(3) + '</td><td class="num">' + r[2].toPrecision(3) + '</td><td class="num">' + r[3].toPrecision(3) + '</td><td class="num">' + (r[2] / r[3]).toFixed(2) + ' : 1</td></tr>';
+    });
+    $('aggtab').innerHTML = h;
+    $('aggnote').textContent = 'Summed token losses: l₁ = ' + s1.toFixed(1) + ', l₂ = ' + s2.toFixed(1) +
+      '. Under gradient accumulation a token of the shorter sample receives ' + (Math.max(n1, n2) / Math.min(n1, n2)).toFixed(2) +
+      ' times the weight of a token of the longer sample; the token-mean and sum rows weight all tokens equally, and the sum row scales the gradient with the token count.';
+  }
 
-// --- helpers ------------------------------------------------------------
-const $ = (id) => document.getElementById(id);
-
-function packingSpeedup(lmax, lavg, on) {
-  if (!on) return { raw: 1.0, realised: 1.0 };
-  const raw = lmax / Math.max(lavg, 1);
-  const realised = Math.min(raw, Math.pow(raw, 0.6) * 1.8);
-  return { raw, realised };
-}
-function neftuneAdvice(ds, on, alpha) {
-  if (!on) return ds <= 100000
-    ? { level:"warn", msg:"off — but at |D| ≤ 100K NEFTune typically adds 5–30 pts AlpacaEval; consider on" }
-    : { level:"good", msg:"off — correct default at this scale (Tülu-3 939K finds NEFTune neutral)" };
-  if (ds >= 500000) return { level:"warn", msg:"on — NEFTune saturates at ≥ 500K; plan an ablation before keeping it" };
-  if (alpha < 5 || alpha > 15) return { level:"warn", msg:"on — paper sweeps alpha in [5,15]; your value is outside this range" };
-  return { level:"good", msg:`on — alpha=${alpha} within attested range [5,15]` };
-}
-function maskAdvice(mask, ds) {
-  if (mask === "response") return { level:"good", msg:"response-only is the attested default (Shi 2024 dominates across scales)" };
-  if (mask === "full") return ds <= 1000
-    ? { level:"warn", msg:"full-sequence: only justified in tiny-dataset / strong-base regime" }
-    : { level:"hot",  msg:"full-sequence: not recommended at this scale; trains model to generate prompts" };
-  return { level:"warn", msg:"prompt-weighted: modest gains in some slices; response-only is simpler and dominates broadly" };
-}
-function templateAdvice(regime, tmpl) {
-  const sup = TEMPLATE_SUPPORT[tmpl];
-  if ((regime === "reason" || regime === "agent") && !sup.thinking)
-    return { level:"hot", msg:`regime needs <think>...</think> but template ${tmpl} has no native thinking tokens` };
-  if ((regime === "tool" || regime === "agent") && sup.toolcall === "convention")
-    return { level:"warn", msg:`tool-call support in ${tmpl} is convention-only; you must fix a marker and enforce it in data` };
-  return { level:"good", msg:"template and regime are compatible" };
-}
-
-function badge(level, msg) {
-  const cls = level === "good" ? "b-good" : level === "warn" ? "b-warn" : "b-hot";
-  return `<div style="margin:4px 0"><span class="badge ${cls}">${level}</span> ${msg}</div>`;
-}
-
-// --- render -------------------------------------------------------------
-function render() {
-  const regime = $("regime").value;
-  const mask = $("mask").value;
-  const tmpl = $("template").value;
-  const packingOn = $("packing").checked;
-  const lmax = parseInt($("lmax").value, 10);
-  const lavg = parseInt($("lavg").value, 10);
-  const neftuneOn = $("neftune").checked;
-  const alpha = parseInt($("alpha").value, 10);
-  const ds = parseInt($("dsize").value, 10);
-
-  // Summary
-  const sp = packingSpeedup(lmax, lavg, packingOn);
-  const summary = [
-    ["Regime", REGIMES[regime].label],
-    ["Loss mask", mask],
-    ["Chat template", tmpl],
-    ["Packing", packingOn ? `on  (L_max=${lmax}, avg(L_i)=${lavg})` : "off"],
-    ["NEFTune", neftuneOn ? `on  (alpha=${alpha})` : "off"],
-    ["Dataset size", ds.toLocaleString() + " prompts"]
-  ];
-  $("summary").innerHTML = summary.map(([k, v]) =>
-    `<div class="k">${k}</div><div>${v}</div>`).join("");
-
-  // Mask table — highlight active regime row
-  const tbody = $("maskTable").querySelector("tbody");
-  tbody.innerHTML = Object.entries(REGIMES).map(([k, r]) => {
-    const hot = k === regime ? " class='hot'" : "";
-    return `<tr${hot}><td>${r.label}</td>${r.mask.map(c => `<td>${c}</td>`).join("")}</tr>`;
-  }).join("");
-
-  // Template
-  $("tmpl").textContent = TEMPLATES[tmpl];
-
-  // Packing
-  $("pack").innerHTML = [
-    ["raw L_max / avg(L_i)", sp.raw.toFixed(2) + "x"],
-    ["realised (after varlen overhead)", sp.realised.toFixed(2) + "x"],
-    ["diagnostic",
-      "train 100 steps unpacked vs packed; loss curves must agree within 0.01 nats"]
-  ].map(([k, v]) => `<div class="k">${k}</div><div>${v}</div>`).join("");
-
-  // Checks
-  const checks = [];
-  checks.push(templateAdvice(regime, tmpl));
-  checks.push(maskAdvice(mask, ds));
-  checks.push(neftuneAdvice(ds, neftuneOn, alpha));
-  if (packingOn && lavg > lmax) checks.push({ level:"hot", msg:"avg(L_i) exceeds L_max — packing ratio undefined" });
-  else if (packingOn && sp.raw < 1.5) checks.push({ level:"warn", msg:"packing speedup < 1.5x; sequences already long, may not earn its keep" });
-  else if (packingOn) checks.push({ level:"good", msg:"packing contract: cu_seqlens + position_ids reset + per-sub-sequence label mask" });
-  else checks.push({ level:"warn", msg:"packing off — 50-89% of tokens may be padding; on-by-default in Tulu-3 / Zephyr" });
-  $("checks").innerHTML = checks.map(c => badge(c.level, c.msg)).join("");
-}
-
-// --- wire up ------------------------------------------------------------
-["regime","mask","template","packing","lmax","lavg","neftune","alpha","dsize"]
-  .forEach(id => $(id).addEventListener("input", render));
-
-render();
+  ['preset', 'layout', 'rule', 'srule', 'agg', 'errmask'].forEach(function (id) { $(id).addEventListener('change', draw); });
+  ['n1', 'n2', 'l1', 'l2'].forEach(function (id) { $(id).addEventListener('input', drawAgg); });
+  draw(); drawAgg();
+})();
 </script>
-
 </body>
 </html>

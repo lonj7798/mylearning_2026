@@ -7,6 +7,8 @@ source_url: https://arxiv.org/abs/2510.16657 ; https://arxiv.org/html/2509.16499
 created_at: "2026-04-23"
 ---
 
+> Superseded by the 2026-09 revision of read.md; kept for history.
+
 # Excerpt: The 2025 faithfulness-check cluster — verification as the convergence guarantee
 
 **Source library:** `wiki/raw-data/llm-training/papers/faithful-synth-eval.md`

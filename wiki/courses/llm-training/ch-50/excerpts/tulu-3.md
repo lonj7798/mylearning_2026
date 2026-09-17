@@ -5,120 +5,96 @@ phase: read
 excerpt_of: wiki/raw-data/llm-training/model-reports/tulu-3.md
 source_url: https://arxiv.org/abs/2411.15124
 created_at: "2026-04-23"
+revised: "2026-09-15 (generality revision — numbers replaced with the report's tables)"
 ---
 
-# Excerpt: Tulu 3 — the per-verifier per-stage gain ledger
+# Excerpt: Tülu 3 — per-stage table, and the development/unseen split
 
 **Source library:** `wiki/raw-data/llm-training/model-reports/tulu-3.md`
-**Artifact:** Three-stage SFT -> DPO -> RLVR pipeline reporting per-stage gains attributed to specific verifiers.
+**Artifact:** Tülu 3: Pushing Frontiers in Open Language Model Post-Training (Allen AI), arXiv:2411.15124.
+**Checked on 2026-09-15** against the arXiv PDF; all values below are quoted at the table or section given.
+
+> **Correction carried by this excerpt.** The library card's `## Technical Details — What RLVR buys`
+> states "+5–10pp on GSM8K, +~4pp on IFEval" for the RLVR stage relative to the DPO checkpoint. Table 6 and
+> Table 23 both give 8B GSM8K 84.3 → 87.6 (+3.3) and IFEval 81.1 → 82.4 (+1.3). The earlier version of this
+> excerpt repeated the card's figures. Where the card and the tables disagree, the tables govern.
 
 ---
 
-## Why this source is ch-50's headline motivating example
+## Why ch-50 uses this source
 
-Tulu 3's Figure 1 is the image ch-50 §1 is arguing with. The aggregate-average from DPO to RLVR is a small single-digit move. The per-benchmark breakdown is +5 to +10 pp on verifier-aligned slices and ~0 on the rest. The whole ch-50 guideline — "always compute per-slice first and aggregate second" — is what prevents a reader of only the aggregate from concluding that RLVR is marginal.
-
----
-
-## The three-line chart vs the per-slice report
-
-Source §Key Figures/Tables to Study:
-
-> **Figure 1** (Three-stage pipeline): SFT -> DPO -> RLVR, with per-stage benchmark gains.
-
-Figure 1 itself shows *per-benchmark* not aggregate-only. But the release abstract and most downstream citations compress it into a single narrative number ("Tulu 3 matches or beats Llama 3.1 Instruct"). That compression is ch-50 §6's three-line-chart view; Figure 1 is the 50-slice-report view. Both exist in the same paper — the authors chose both formats deliberately because each answers a different question.
+Two of the chapter's three worked examples come from this report: the per-stage per-benchmark table
+(ch-50 §1) and the paired development/unseen evaluation design (ch-50 §2).
 
 ---
 
-## What RLVR actually buys, per slice
+## Per-stage per-benchmark table — Table 6 (8B, released checkpoints)
 
-Source §Technical Details — What RLVR buys:
+| Benchmark (eval setting) | Tülu 3 8B SFT | Tülu 3 8B DPO | Tülu 3 8B (final) |
+|---|---|---|---|
+| Avg. | 60.6 | 64.7 | 65.1 |
+| MMLU (0-shot, CoT) | 65.9 | 68.7 | 68.2 |
+| PopQA (15-shot) | 29.3 | 29.3 | 29.1 |
+| TruthfulQA (6-shot) | 46.8 | 56.1 | 55.0 |
+| BigBenchHard (3-shot, CoT) | 69.7 | 68.7 | 69.0 |
+| DROP (3-shot) | 61.3 | 62.5 | 62.6 |
+| MATH (4-shot CoT, Flex) | 31.5 | 42.0 | 43.7 |
+| GSM8K (8-shot, CoT) | 76.2 | 84.3 | 87.6 |
+| HumanEval (pass@10) | 86.2 | 83.9 | 83.9 |
+| HumanEval+ (pass@10) | 81.4 | 78.6 | 79.2 |
+| IFEval (prompt loose) | 72.8 | 81.1 | 82.4 |
+| AlpacaEval 2 (LC % win) | 12.4 | 33.5 | 34.5 |
+| Safety (6-task avg.) | 93.1 | 87.2 | 85.5 |
 
-> Measured gains relative to DPO-only checkpoint: +5–10pp on GSM8K, +~4pp on IFEval, neutral-to-positive on other evals. No reward hacking observed because the verifier is ground-truth.
+Table 23 (§6.4) reports the same DPO → RLVR comparison at 8B with an average of 64.4 → 64.8; it differs
+from Table 6 on the average and on BigBenchHard because some rows use different eval settings
+(IFEval Strict rather than prompt loose, a different BBH setting). The §6.4 prose describes the 8B result
+as "non-trivial improvements … improving all three of MATH, GSM8k, and IFEval" and does not discuss the
+TruthfulQA and Safety rows.
 
-Five attested per-slice deltas, not one aggregate:
+At 70B the pattern differs: GSM8K 93.5 → 93.5 with §6.4 attributing the absence of movement to saturation.
 
-- `(RLVR, GSM8K)` = +5 to +10 pp — large, verifier-aligned.
-- `(RLVR, IFEval)` = +~4 pp — moderate, verifier-aligned (constraint-checker).
-- `(RLVR, MMLU)` = neutral-to-positive — below ch-50's 1.0 pp effect-size threshold on knowledge.
-- `(RLVR, TruthfulQA)` = neutral-to-positive — ditto.
-- `(RLVR, AlpacaEval)` = neutral-to-positive — ditto.
+## Development and unseen suites — §2.2, §7.2–7.4
 
-Ch-50 §4's signed-vs-unsigned distinction bites here: signed deltas are two strong positives + three near-zeros. Unsigned deltas could still be large on the near-zeros (policy reshapes behaviour without changing win-rate), and the report does not address this — a gap ch-51's variance treatment fills.
+> Crucially, we did not examine scores on our unseen set when developing our models, allowing us to
+> observe how much we may have overfit to particular evaluations in our decisions around data mixtures,
+> algorithms, and hyperparameters. (§2.2)
 
----
+Pairing (Table 3): MMLU → MMLU-Pro and GPQA; BigBenchHard → AGIEval English; MATH and GSM8K → DeepMind
+Mathematics; HumanEval and HumanEval+ → BigCodeBench; IFEval → IFEval-OOD; AlpacaEval 2 → HREF. There is
+no unseen safety evaluation (§2.2).
 
-## Per-verifier slicing — three named buckets
+**Table 31 (8B), development (Dev.) and unseen (Uns.) per skill:**
 
-Source §Technical Details — RLVR:
+| Skill | SFT Dev / Uns | DPO Dev / Uns | Final Dev / Uns |
+|---|---|---|---|
+| Avg. | 64.9 / 29.9 | 68.3 / 31.9 | 68.8 / 32.4 |
+| Knowledge Recall (MMLU → GPQA) | 65.9 / 31.9 | 68.7 / 31.2 | 68.2 / 35.7 |
+| Reasoning (BBH → AGIEval) | 67.9 / 56.2 | 65.8 / 61.8 | 66.0 / 59.3 |
+| Math (MATH → DM Mathematics) | 31.5 / 32.3 | 42.0 / 33.0 | 43.7 / 35.4 |
+| Coding (HumanEval → BigCodeBench) | 86.2 / 11.5 | 83.9 / 9.5 | 83.9 / 7.4 |
+| Inst. Following (IFEval → IFEval-OOD) | 72.8 / 17.6 | 81.1 / 23.9 | 82.4 / 24.3 |
 
-> **Verifiers used:**
->   - GSM8K / MATH: exact-match / sympy equivalence.
->   - IFEval: constraint-satisfaction checker.
->   - Code tasks: unit-test execution.
+The authors' own conclusions from §7.4.1: the final checkpoints obtain the best average on both splits;
+"our choices overfit to the development evaluations in Precise Instruction Following, and to some extent in
+Knowledge Recall and Reasoning"; and the DPO data-scaling curves (Fig. 24) indicate "our development
+process overfit to MATH to some extent", attributed to LaTeX formatting differences between MATH and
+DeepMind Mathematics.
 
-Three verifier families = three ch-50 §5 ledger rows. Each has a canonical failure bucket:
+§7.4.2, discussing Table 33, reports a general result about the IFEval pair: "there is a significant difference between
+performance on IFEval and IFEval-OOD of all the models, even though we created the latter to be structured
+very similar to the original dataset, just with a disjoint set of constraints."
 
-- **`sympy-string-loophole`** — the verifier accepts a string that happens to contain the gold answer (`\boxed{42}` inside prose). Ch-50's `verifier-loophole` bucket lives here.
-- **`IFEval constraint-category confusion`** — format-strict / keyword / length / language constraints fail independently; per-constraint-type slicing is mandatory. Ch-50's `format-violation-IFEval` bucket lives here.
-- **`unit-test-timeout`** — code task fails because the generated solution loops or hangs, not because it is wrong. A named bucket the Tulu report lists implicitly in its eval-code disclosure.
+## Checkpoint selection — §6.4
 
-The per-verifier ledger is more informative than per-benchmark — a single benchmark can span verifier families (e.g., code tasks with both unit-test and style-check verifiers).
+> We evaluated our models every 100 training steps (40 for 70B), and picked as our final 8B model the
+> checkpoints with best overall performance on MATH and IFEval.
 
----
+The same paragraph reports 8B runs reaching GSM8K 89.4 and IFEval 84.8 that "tended to perform worse in
+other metrics, dragging down their overall average". The selection rule is itself a slicing decision: two
+slices decide which checkpoint is released.
 
-## 939K SFT prompts, 57/43 public/synthetic split — a slice axis on training data
+## Used by
 
-Source §Technical Details — SFT:
-
-> **Total prompts:** 939,344 (57% public sources incl. WildChat/OpenAssistant, 43% synthetic/in-house).
-
-The 57/43 split is a training-side slice. A per-source eval win-rate lets the team attribute downstream gains to specific SFT sources; this is the per-mixture ablation the report alludes to:
-
-Source §Key Contributions:
-
-> Detailed ablations: per-mixture SFT contribution, DPO vs RLVR gain, which verifiers help which benchmark.
-
-"Per-mixture SFT contribution" and "which verifiers help which benchmark" are two ch-50 slice analyses, stated as first-class deliverables. A team that does not produce these cannot claim a per-stage attribution.
-
----
-
-## Safety-specific DPO slice — a bucket built into the training set
-
-Source §Key Contributions:
-
-> Safety-specific DPO slice built from red-team prompts.
-
-"Safety-specific DPO slice" is not only an eval slice — it is a training-data slice with its own preference pool. Ch-50 §3's "cluster-by-reason" ontology has a `sycophancy` / `unsafe-refusal` axis that maps onto this slice directly. The per-slice training -> per-slice eval pipeline is closed: red-team prompts generate preferences, DPO trains on that slice, eval measures refusal-rate on held-out red-team prompts, regression -> bucket `refusal-when-harmful-declined` grows in the ledger.
-
----
-
-## Size-stratified DPO β — ch-50's "one size one parameter" trap
-
-Source §Technical Details — DPO:
-
-> **Beta:** 5.0 (length-normalized DPO) for 8B; different values per size.
-
-Different β per size means the per-size per-slice sweep produced different optima. Aggregating 8B and 70B eval numbers under one β would under-report both. Ch-50 §2's rule that "per-slice decompositions compose, they do not substitute" is operative: the β-sweep axis *inside* the training run is a slice that propagates to the eval table's per-size decomposition.
-
----
-
-## Ten-million-episode RLVR — variance is a first-class concern
-
-Source §Technical Details — RLVR:
-
-> **Total episodes:** 10,000,000.
-
-Ten million episodes sounds like a variance killer, but the held-out eval set is still ~hundreds of items per benchmark. Per-item score variance dominates the final-number uncertainty, not training variance. Ch-50 §4's paired-bootstrap CI is the right confidence statement for a Tulu 3-style report — not the standard error over training episodes, which is a different (and less relevant) quantity.
-
----
-
-## Connections to ch-50
-
-- **§1 aggregate-hides-story** — Tulu 3 Figure 1 is the canonical counter to "one RLVR number."
-- **§2 per-slice-beats-per-task** — verifier-family slicing is the required decomposition.
-- **§3 cluster-by-reason** — `sympy-string-loophole`, `IFEval-constraint-category`, `unit-test-timeout` are named buckets from the three verifiers.
-- **§4 when-is-regression-real** — +5 to +10 pp on GSM8K clears a 2.0-pp reasoning threshold; neutral-to-positive on MMLU does not clear a 1.0-pp knowledge threshold.
-- **§5 failure-ledger** — three verifier-family rows; safety-DPO slice is a fourth row.
-- **§6 three-line-vs-50-slice** — the abstract is the three-line view; Figure 1 + ablation tables are the 50-slice view.
-- **[[rlvr-tulu3]]** — methodology page; where the verifier-loophole bucket is named explicitly.
+ch-50 §1 (per-stage table), §2 (development/unseen gap), §8 (decision table), Recipe (evaluation-split and
+checkpoint-selection rows), Generalization lens (a) and (b).

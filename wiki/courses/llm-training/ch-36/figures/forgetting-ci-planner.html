@@ -1,0 +1,242 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Forgetting Interval Planner</title>
+<style>
+  :root {
+    --bg: #fafaf8; --panel: #ffffff; --ink: #1d1d1b; --muted: #5d5d58; --line: #d9d9d3;
+    --accent: #2f5d9e; --paired: #2f5d9e; --unpaired: #8a8a82; --seed: #6b4fa0; --bonf: #b0622a;
+    --zero: #1d1d1b; --margin: #b03030; --ok: #2c7a4b; --bad: #a13a2a; --input: #ffffff;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #161614; --panel: #1f1f1c; --ink: #ecebe6; --muted: #a9a8a0; --line: #3a3a35;
+      --accent: #8fb3e8; --paired: #8fb3e8; --unpaired: #9d9d95; --seed: #b9a2e6; --bonf: #e3a577;
+      --zero: #ecebe6; --margin: #ef8a8a; --ok: #7fcf9d; --bad: #ef9a8a; --input: #262622;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #161614; --panel: #1f1f1c; --ink: #ecebe6; --muted: #a9a8a0; --line: #3a3a35;
+    --accent: #8fb3e8; --paired: #8fb3e8; --unpaired: #9d9d95; --seed: #b9a2e6; --bonf: #e3a577;
+    --zero: #ecebe6; --margin: #ef8a8a; --ok: #7fcf9d; --bad: #ef9a8a; --input: #262622;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink);
+         font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+  main { max-width: 980px; margin: 0 auto; padding-inline: 16px; padding-block: 20px 32px; }
+  h1 { font-size: 1.3rem; margin: 0 0 4px; }
+  p.lead { color: var(--muted); margin: 0 0 16px; max-width: 72ch; }
+  .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 14px 16px; margin-bottom: 14px; }
+  h2 { font-size: 0.95rem; margin: 0 0 10px; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 10px 14px; }
+  label { display: flex; flex-direction: column; gap: 3px; font-size: 0.82rem; color: var(--muted); }
+  input, select { font: inherit; color: var(--ink); background: var(--input); border: 1px solid var(--line);
+                  border-radius: 5px; padding: 5px 7px; width: 100%; }
+  .table-wrap { overflow-x: auto; }
+  table { border-collapse: collapse; width: 100%; font-variant-numeric: tabular-nums; font-size: 0.86rem; }
+  th, td { text-align: left; padding: 5px 8px; border-bottom: 1px solid var(--line); white-space: nowrap; }
+  th { color: var(--muted); font-weight: 600; }
+  .ok { color: var(--ok); font-weight: 600; }
+  .bad { color: var(--bad); font-weight: 600; }
+  .neutral { color: var(--muted); font-weight: 600; }
+  svg { width: 100%; height: auto; display: block; }
+  svg text { fill: var(--ink); font-size: 12px; }
+  svg .muted { fill: var(--muted); }
+  .note { color: var(--muted); font-size: 0.8rem; margin: 8px 0 0; }
+  .warn { color: var(--bad); font-size: 0.82rem; min-height: 1.2em; margin: 6px 0 0; }
+  figcaption { color: var(--muted); font-size: 0.8rem; line-height: 1.5; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Forgetting interval planner</h1>
+  <p class="lead">Set a suite size, the base model's correct count, and how many items an SFT checkpoint lost and gained.
+  The planner computes the forgetting delta and four 95% intervals: unpaired, paired over items, paired with seed variance,
+  and the last one widened for multiple comparisons. Defaults reproduce the GSM8K example in ch-36 §6.1.</p>
+
+  <section class="panel" aria-label="Inputs">
+    <h2>Inputs</h2>
+    <div class="grid">
+      <label>Suite (sets the item count)
+        <select id="suite">
+          <option value="1319" selected>GSM8K — 1,319</option>
+          <option value="1165">ARC-Challenge — 1,165</option>
+          <option value="541">IFEval — 541 prompts</option>
+          <option value="164">HumanEval — 164</option>
+          <option value="14042">MMLU — 14,042</option>
+          <option value="11313">TriviaQA — 11,313</option>
+          <option value="custom">Custom</option>
+        </select>
+      </label>
+      <label>Items n <input id="n" type="number" min="2" step="1" value="1319"></label>
+      <label>Base model correct <input id="base" type="number" min="0" step="1" value="660"></label>
+      <label>Lost (base right, SFT wrong) <input id="lost" type="number" min="0" step="1" value="110"></label>
+      <label>Gained (base wrong, SFT right) <input id="gained" type="number" min="0" step="1" value="70"></label>
+      <label>SFT seeds k <input id="k" type="number" min="1" max="20" step="1" value="3"></label>
+      <label>Seed SD, SFT arm (points) <input id="sa" type="number" min="0" step="0.05" value="1.15"></label>
+      <label>Seed SD, other arm (points; 0 for base) <input id="sb" type="number" min="0" step="0.05" value="0"></label>
+      <label>Comparisons m (Bonferroni) <input id="m" type="number" min="1" step="1" value="1"></label>
+      <label>Non-inferiority margin δ (points) <input id="delta" type="number" min="0" step="0.1" value="2"></label>
+    </div>
+    <p class="warn" id="warn" role="status"></p>
+  </section>
+
+  <section class="panel" aria-label="Results">
+    <h2>Intervals for SFT − base (accuracy points)</h2>
+    <svg id="chart" viewBox="0 0 900 250" role="img" aria-label="Four confidence intervals plotted against zero and the margin"></svg>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Interval</th><th>SE (points)</th><th>Multiplier</th><th>95% interval</th><th>Zero</th><th>Margin −δ</th></tr></thead>
+        <tbody id="rows"></tbody>
+      </table>
+    </div>
+    <p class="note" id="summary"></p>
+  </section>
+
+  <figure class="panel" style="margin:0">
+    <figcaption>
+      <b>Formulas.</b> Δ = (gained − lost)/n. Unpaired SE = sqrt(p_base(1 − p_base)/n + p_sft(1 − p_sft)/n) and paired SE =
+      sqrt(Σ(d_i − Δ)²/(n − 1)/n) follow Miller, "Adding Error Bars to Evals", §4.1-4.2, Eqs. 5 and 7 (arXiv:2411.00640).
+      The seed term adds SD_sft²/k + SD_other²/k to the paired variance; this is a course approximation (ch-36 §6.3), not a formula
+      from a source, and with k = 1 the seed SD cannot be estimated from the runs themselves. The Bonferroni row uses the two-sided
+      normal quantile at α = 0.05/m (for m = 20 the multiplier is 3.02).
+      <b>Suite sizes.</b> ARC-Challenge, GSM8K, HumanEval, MMLU, and TriviaQA as evaluated in Madaan et al., "Quantifying Variance in
+      Evaluation Benchmarks", Table 1 (arXiv:2406.10229); IFEval 541 prompts from Zhou et al. §1 (arXiv:2311.07911).
+      <b>Default example.</b> 660 of 1,319 correct, 110 lost, 70 gained: Δ = −3.03 points, paired interval [−5.02, −1.04],
+      unpaired interval [−6.85, +0.78] (ch-36 §6.1).
+    </figcaption>
+  </figure>
+</main>
+
+<script>
+(function () {
+  "use strict";
+  var $ = function (id) { return document.getElementById(id); };
+  var ids = ["n", "base", "lost", "gained", "k", "sa", "sb", "m", "delta"];
+
+  // Inverse standard normal CDF (Acklam's rational approximation).
+  function invNorm(p) {
+    var a = [-39.69683028665376, 220.9460984245205, -275.9285104469687, 138.3577518672690, -30.66479806614716, 2.506628277459239];
+    var b = [-54.47609879822406, 161.5858368580409, -155.6989798598866, 66.80131188771972, -13.28068155288572];
+    var c = [-0.007784894002430293, -0.3223964580411365, -2.400758277161838, -2.549732539343734, 4.374664141464968, 2.938163982698783];
+    var d = [0.007784695709041462, 0.3224671290700398, 2.445134137142996, 3.754408661907416];
+    var pl = 0.02425, q, r;
+    if (p < pl) { q = Math.sqrt(-2 * Math.log(p));
+      return (((((c[0]*q+c[1])*q+c[2])*q+c[3])*q+c[4])*q+c[5]) / ((((d[0]*q+d[1])*q+d[2])*q+d[3])*q+1); }
+    if (p > 1 - pl) { q = Math.sqrt(-2 * Math.log(1 - p));
+      return -(((((c[0]*q+c[1])*q+c[2])*q+c[3])*q+c[4])*q+c[5]) / ((((d[0]*q+d[1])*q+d[2])*q+d[3])*q+1); }
+    q = p - 0.5; r = q * q;
+    return (((((a[0]*r+a[1])*r+a[2])*r+a[3])*r+a[4])*r+a[5])*q / (((((b[0]*r+b[1])*r+b[2])*r+b[3])*r+b[4])*r+1);
+  }
+
+  function num(id) { var v = parseFloat($(id).value); return isFinite(v) ? v : 0; }
+  function fmt(x, dgt) { var s = x.toFixed(dgt); return (x > 0 ? "+" : "") + s; }
+
+  function compute() {
+    var warn = [];
+    var n = Math.max(2, Math.round(num("n")));
+    var base = Math.min(Math.max(0, Math.round(num("base"))), n);
+    var lost = Math.min(Math.max(0, Math.round(num("lost"))), base);
+    var gained = Math.min(Math.max(0, Math.round(num("gained"))), n - base);
+    if (lost !== Math.round(num("lost"))) warn.push("Lost is limited to the base model's correct count.");
+    if (gained !== Math.round(num("gained"))) warn.push("Gained is limited to the base model's wrong count.");
+    var k = Math.max(1, Math.round(num("k")));
+    var sa = Math.max(0, num("sa")), sb = Math.max(0, num("sb"));
+    var m = Math.max(1, Math.round(num("m")));
+    var delta = Math.max(0, num("delta"));
+    if (k === 1 && (sa > 0 || sb > 0)) warn.push("With k = 1 the seed SD is an assumption, not an estimate.");
+
+    var pb = base / n, ps = (base - lost + gained) / n;
+    var D = (gained - lost) / n;
+    var sumsq = lost + gained - n * D * D;
+    var sePaired = Math.sqrt(Math.max(0, sumsq) / (n - 1) / n);
+    var seUnpaired = Math.sqrt(pb * (1 - pb) / n + ps * (1 - ps) / n);
+    var seedVar = Math.pow(sa / 100, 2) / k + Math.pow(sb / 100, 2) / k;
+    var seTotal = Math.sqrt(sePaired * sePaired + seedVar);
+    var z = 1.959963984540054;
+    var zb = -invNorm(0.05 / (2 * m));
+
+    var rows = [
+      { name: "Unpaired (Eq. 5)", se: seUnpaired, mult: z, color: "var(--unpaired)" },
+      { name: "Paired over items (Eq. 7)", se: sePaired, mult: z, color: "var(--paired)" },
+      { name: "Paired + seed variance", se: seTotal, mult: z, color: "var(--seed)" },
+      { name: "Paired + seeds, Bonferroni m = " + m, se: seTotal, mult: zb, color: "var(--bonf)" }
+    ];
+    rows.forEach(function (r) { r.lo = (D - r.mult * r.se) * 100; r.hi = (D + r.mult * r.se) * 100; });
+
+    $("warn").textContent = warn.join(" ");
+    var tb = "";
+    rows.forEach(function (r) {
+      var zcls = r.hi < 0 ? "bad" : (r.lo > 0 ? "ok" : "neutral");
+      var ztxt = r.hi < 0 ? "excluded (interval below 0)" : (r.lo > 0 ? "excluded (interval above 0)" : "included");
+      var pass = r.lo > -delta;
+      tb += "<tr><td>" + r.name + "</td><td>" + (r.se * 100).toFixed(2) + "</td><td>" + r.mult.toFixed(2) +
+            "</td><td>[" + fmt(r.lo, 2) + ", " + fmt(r.hi, 2) + "]</td><td class='" + zcls + "'>" + ztxt + "</td><td class='" + (pass ? "ok" : "bad") + "'>" +
+            (pass ? "lower end above −δ" : "lower end below −δ") + "</td></tr>";
+    });
+    $("rows").innerHTML = tb;
+    $("summary").textContent = "Base " + (pb * 100).toFixed(1) + "%, SFT " + (ps * 100).toFixed(1) + "%, Δ = " + fmt(D * 100, 2) +
+      " points. Items changed: " + (lost + gained) + " of " + n + " (agreement " + ((1 - (lost + gained) / n) * 100).toFixed(1) + "%).";
+    draw(rows, D * 100, delta);
+  }
+
+  function draw(rows, D, delta) {
+    var svg = $("chart"), NS = "http://www.w3.org/2000/svg";
+    while (svg.firstChild) svg.removeChild(svg.firstChild);
+    var lo = Math.min(0, -delta), hi = 0;
+    rows.forEach(function (r) { lo = Math.min(lo, r.lo); hi = Math.max(hi, r.hi); });
+    var pad = Math.max(0.5, (hi - lo) * 0.08); lo -= pad; hi += pad;
+    var W = Math.max(320, Math.round(svg.getBoundingClientRect().width) || 900);
+    var narrow = W < 620;
+    var L = narrow ? 14 : 250, R = W - 20, top = narrow ? 34 : 24, rowH = narrow ? 52 : 44;
+    var X = function (v) { return L + (v - lo) / (hi - lo) * (R - L); };
+    function el(tag, attrs, text) {
+      var e = document.createElementNS(NS, tag);
+      for (var a in attrs) e.setAttribute(a, attrs[a]);
+      if (text !== undefined) e.textContent = text;
+      svg.appendChild(e); return e;
+    }
+    var yAxis = top + rows.length * rowH + 2;
+    var step = Math.pow(10, Math.floor(Math.log10((hi - lo) / 5)));
+    if ((hi - lo) / step > 10) step *= 2;
+    for (var t = Math.ceil(lo / step) * step; t <= hi; t += step) {
+      var tx = X(t);
+      el("line", { x1: tx, x2: tx, y1: top - 6, y2: yAxis, stroke: "var(--line)", "stroke-width": 1 });
+      el("text", { x: tx, y: yAxis + 16, "text-anchor": "middle", "class": "muted" }, (Math.abs(t) < 1e-9 ? 0 : t).toFixed(step < 1 ? 1 : 0));
+    }
+    el("line", { x1: X(0), x2: X(0), y1: top - 10, y2: yAxis, stroke: "var(--zero)", "stroke-width": 1.5 });
+    el("text", { x: X(0) + 4, y: top - 10, "class": "muted" }, "0");
+    if (delta > 0) {
+      el("line", { x1: X(-delta), x2: X(-delta), y1: top - 10, y2: yAxis, stroke: "var(--margin)", "stroke-width": 1.5, "stroke-dasharray": "5 4" });
+      el("text", { x: X(-delta) - 4, y: top - 10, "text-anchor": "end", fill: "var(--margin)" }, "−δ");
+    }
+    rows.forEach(function (r, i) {
+      var y = top + i * rowH + rowH / 2;
+      el("text", { x: narrow ? L : 12, y: narrow ? y - 12 : y + 4 }, r.name);
+      el("line", { x1: X(r.lo), x2: X(r.hi), y1: y, y2: y, stroke: r.color, "stroke-width": 6, "stroke-linecap": "round" });
+      el("circle", { cx: X(D), cy: y, r: 5, fill: "var(--panel)", stroke: r.color, "stroke-width": 2.5 });
+    });
+    el("text", { x: (L + R) / 2, y: yAxis + 34, "text-anchor": "middle", "class": "muted" }, "SFT − base, accuracy points");
+    svg.setAttribute("viewBox", "0 0 " + W + " " + (yAxis + 46));
+  }
+
+  $("suite").addEventListener("change", function () {
+    if (this.value !== "custom") {
+      var oldN = Math.max(2, Math.round(num("n"))), newN = parseInt(this.value, 10), f = newN / oldN;
+      $("n").value = newN;
+      ["base", "lost", "gained"].forEach(function (id) { $(id).value = Math.round(num(id) * f); });
+    }
+    compute();
+  });
+  window.addEventListener("resize", compute);
+  ids.forEach(function (id) { $(id).addEventListener("input", function () {
+    if (id === "n") { $("suite").value = "custom"; var opt = $("suite").querySelector("option[value='" + $("n").value + "']"); if (opt) $("suite").value = $("n").value; }
+    compute();
+  }); });
+  compute();
+})();
+</script>
+</body>
+</html>

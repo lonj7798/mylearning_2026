@@ -2,113 +2,54 @@
 chapter: ch-13
 course: llm-training
 phase: read
-excerpt_of: wiki/raw-data/llm-training/model-reports/olmo-2.md
+excerpt_of: wiki/raw-data/llm-training/model-reports/olmo-2.md (library card not verified on 2026-09-15; values below are taken from the primary source)
 source_url: https://arxiv.org/abs/2501.00656
+primary_version: arXiv:2501.00656v3 (2025-10-08); v1 2025-01
 created_at: "2026-04-23"
+revised_at: "2026-09-15"
 ---
 
-# Excerpt: OLMo 2 — two-stage curriculum as the first public pretrain-vs-mid-train split
+# Excerpt: 2 OLMo 2 Furious — mid-training mixture (Dolmino Mix 1124)
 
-**Source library:** `wiki/raw-data/llm-training/model-reports/olmo-2.md`
-**Report:** Walsh, Soldaini, Groeneveld et al. 2025, "OLMo 2: 2 OLMo 2 Furious" (Allen AI).
+Values used by ch-13 `read.md` §4, §5, §7, and Recipe, read in the v3 PDF text on 2026-09-15. Organization: Allen Institute for AI.
 
----
+## Pretraining mix (Table 4)
+OLMo 2 Mix 1124: DCLM-Baseline 3.71T tokens; StarCoder (filtered) 83.0B; peS2o 58.6B; arXiv 20.8B; OpenWebMath 12.2B; Algebraic Stack 11.8B; Wikipedia & Wikibooks 3.7B; total 3.90T. The text says "over 95% derived from web data" (§2.4.1).
 
-## Why this source anchors ch-13
+## Dolmino source pool (Table 5)
+- High-quality subset: DCLM-Baseline filtered (FastText top 7%, FineWeb ≥ 2) 752B; FLAN (decontaminated) 17.0B; peS2o 58.6B; Wikipedia & Wikibooks 3.7B; Stack Exchange curated Q&A 1.26B; total 832.6B.
+- Math mix: TuluMath 230M; Dolmino SynthMath 28.7M; TinyGSM-MIND 6.48B; MathCoder2 Synth Books 3.87B; Metamath (OWM-filtered) 84.2M; CodeSearchNet (OWM-filtered) 1.78M; GSM8K train split 2.74M; total 10.7B.
 
-OLMo 2 is the *transitional* example in ch-13's mix-reporting taxonomy. It introduces a clean two-stage pretraining curriculum — broad corpus first, curated cooldown second — and publishes the composition of both stages. This is the first-in-class public demonstration that pretraining mix ≠ mid-training mix, and it is the direct predecessor to OLMo 3's four-stage expansion.
+## Final mixes (Table 13, "Mix %" column sums to 100)
+| Source | 50B mix | 100B mix | 300B mix |
+|---|---|---|---|
+| Filtered DCLM | 47.2 | 50.2 | 51.9 |
+| Decontam. FLAN | 16.6 | 16.7 | 11.3 |
+| StackExchange Q&A | 2.45 | 2.47 | 1.68 |
+| peS2o | 5.85 | 9.52 | 19.4 |
+| Wikipedia/Wikibooks | 7.11 | 3.57 | 4.86 |
+| Dolmino Math | 20.8 | 17.5 | 10.8 |
 
----
+> "We train OLMo 2 7B on the 50B mix. To account for the larger batch size (Section §2.3), we use the 100B mix for OLMo 2 13B, ensuring the same number of steps during learning rate anneal." (§4.5)
 
-## The two-stage pretraining split
+The 100B mix repeats StackExchange Q&A and math twice; the 300B mix repeats them four times, FLAN twice, and Wiki four times (§4.5).
 
-From the source (lines 33-38):
+## Candidate mid-training mixes, 7B from a 4T-token checkpoint, 50B tokens (Table 11)
+| Mix | OLMES (MCF) | OLMES-Gen | MMLU (MCF) | GSM* |
+|---|---|---|---|---|
+| pretrain checkpoint | 69.6 | 63.2 | 59.8 | 28.5 |
+| PT Mix | 74.0 | 64.5 | 61.8 | 27.0 |
+| Web FW72 | 75.2 | 63.8 | 63.1 | 28.5 |
+| Web FW72 + Ins | 74.2 | 64.1 | 63.0 | 46.0 |
+| Web FW72 + Math | 75.7 | 69.7 | 62.3 | 52.0 |
+| Web FW72 + Math + Ins | 75.7 | 70.2 | 63.1 | 46.5 |
 
-> ### Pretraining
-> - **Stage 1 data:** OLMo-Mix-1124 — ~3.9T tokens drawn from DCLM, Dolma 1.7, Starcoder, Proof Pile II.
-> - **Stage 2 cooldown data:** Dolmino mix — curated higher-quality subset, ~50B tokens.
-> - **Architecture:** [RMSNorm, reordered norm, QK-Norm, RoPE, Z-loss, improved init]
-> - **Context:** 4K native, extended to 32K in cooldown.
-> - **Sizes:** 7B, 13B, 32B (dense).
+GSM* is a random sample of 200 GSM8K questions used for development.
 
-The 3.9T / 50B split is approximately 78:1. Stage 1 is where the model sees breadth; Stage 2 is a short, concentrated cooldown on curated content during LR decay.
+## Microanneals (§4.4.2)
+Experiment 1: "the 35/65 mixture yields a GSM* of 63.5, and the 10/90 mixture yields a GSM* of 61. This suggests that it is not strictly necessary to have a large proportion of domain-specific data in the annealing mixture, just that domain-specific data is present." In total, 19 microanneals used 130B tokens. (The Experiment 2 text gives 61 for one copy of math data while its table gives 63.5; ch-13 does not use Experiment 2.)
 
-This two-stage structure encodes several design decisions ch-13 unpacks:
+## Held-out split and results (footnote 6, Table 9)
+> "GSM8k (Cobbe et al., 2021) was only partially held-out, as we subsampled 200 of 1319 GSM8k examples for mid-training data development when we noticed poor math capabilities after pretraining; we call this dev set GSM*. The remaining 1119 GSM8k examples we reserve as held-out and report final performance on them only."
 
-1. **Different α per stage.** OLMo-Mix-1124 weights web-heavy sources (DCLM + Dolma 1.7). Dolmino tilts toward high-quality curated content. The switch at stage transition is a deliberate α shift.
-2. **Context extension coincides with cooldown.** The 4K → 32K extension happens on Dolmino, not on OLMo-Mix-1124. Long-context training is paired with higher-quality data — part mix choice, part pragmatic (noise-heavy web is a bad substrate for long-context RoPE adaptation).
-3. **Cooldown as mid-training.** The paper does not use the term "mid-training" explicitly; by OLMo 3's vocabulary, Dolmino is a mid-training stage. This terminological gap is itself informative — OLMo 2 is doing mid-training before the community settled on the word.
-
----
-
-## What OLMo 2 publishes vs withholds
-
-From the source (lines 17-23):
-
-> ## Key Contributions
-> - Open release at production-useful scale (7B/13B/32B) with checkpoints, data, eval code.
-> - Architectural stability recipe: RMSNorm + reordered norm + QK-Norm + RoPE + Z-loss. Prevents the training-spike phenotype that plagued OLMo 1.
-> - Confirms the Tulu 3 recipe generalizes: SFT -> DPO -> RLVR works on a non-Llama base without modification.
-> - Two-stage pretraining curriculum: 90%+ of budget on OLMo-Mix-1124 (3.9T tokens), then a cooldown on higher-quality "Dolmino" mix.
-> - 32B variant is the first fully-open model to beat GPT-3.5 and GPT-4o-mini on average benchmarks.
-
-The 90%+ / <10% token budget split is disclosed. Per-source composition within each stage is published as part of the data release. What the source does not explicitly document:
-
-- How the α *within* OLMo-Mix-1124 was chosen — hand-tuned, DoReMi-derived, or inherited from the underlying DCLM/Dolma decisions? Likely hand-tuned with ablation validation, based on the working-note convention.
-- Whether Dolmino's composition was swept for downstream impact before the cooldown recipe locked in.
-
----
-
-## The Tulu 3 recipe as a third and fourth mix
-
-From the source (lines 45-48):
-
-> ### Post-training (Tulu 3 recipe)
-> - **SFT:** OLMo-specific variant of Tulu 3 SFT mix (~939K prompts from Tulu 3, with OLMo-compatible formatting).
-> - **DPO:** on-policy preferences generated from the SFT checkpoint + Tulu 3 preference mix. Beta/LR per-size (following Tulu 3 defaults; LRs re-tuned lightly).
-> - **RLVR:** PPO with verifiable rewards (GSM8K/MATH exact-match, IFEval constraint checks, code unit tests). Hyperparameters inherit from Tulu 3: LR 3e-7, beta KL 0.05, clip eps 0.2, GAE lambda 0.95, 4 PPO update epochs per step.
-
-OLMo 2 inherits *three* post-training mixes from Tulu 3:
-
-- SFT mix: 939K prompts, capability-bucketed.
-- DPO mix: on-policy preferences + Tulu 3 preference pool.
-- RLVR prompts: a narrow verifier-compatible subset (math, IFEval, code).
-
-Combined with the two pretraining stages, OLMo 2 uses **five distinct mixes** end-to-end. This is the same structural insight OLMo 3 crystallizes (ch-13 §5.3): modern training is a sequence of stage-specific mixtures, each with its own α.
-
----
-
-## The architectural-stability angle and its mix interaction
-
-From the source (line 19):
-
-> - Architectural stability recipe: RMSNorm + reordered norm + QK-Norm + RoPE + Z-loss. Prevents the training-spike phenotype that plagued OLMo 1.
-
-This may seem off-topic for a mix excerpt, but it interacts with mix choice: **unstable architectures force conservative mixes**. OLMo 1 had spike-prone training, which constrained α toward lower-variance sources. OLMo 2's stability recipe relaxes that constraint, allowing more math/code in the mix (sources whose token-level loss has higher variance). The two threads are coupled: you cannot upweight high-variance domains unless your architecture absorbs the gradient noise.
-
-Ch-13 §6's operational checklist implicitly assumes this: "Set EG step η in the range 0.05–1.0" only works if the architecture can tolerate the resulting mix oscillations. On OLMo 1-era architectures, the same η would produce unrecoverable loss spikes.
-
----
-
-## Compute footprint of the two stages
-
-From the source (lines 53-55):
-
-> - 7B: ~460K H100 GPU-hours pretraining.
-> - 13B: ~1.9M H100 GPU-hours pretraining.
-> - Post-training: small fraction of pretraining (not separately broken out).
-
-If Stage 1 is ~3.9T tokens and Stage 2 is ~50B (~1.3% of tokens), then Stage 2 consumes a similar ~1-3% of the pretraining GPU-hours — but its impact on downstream evals is disproportionate (the source's "RLVR stage lifts GSM8K and MATH consistently for 7B and 13B (single-digit pp gains)" is separate, but the cooldown stage lifts math/code eval similarly).
-
-This disproportionate-impact property is the economic case for mid-training: it consumes a few percent of compute and shifts downstream metrics by a few percent. Pretraining dollars vs mid-training dollars vs post-training dollars each have different marginal returns, and OLMo 2 is one of the first reports to expose that structure publicly.
-
----
-
-## Connections
-
-- `[[olmo-2]]` — raw source.
-- `[[ch-13]]` — §5.2 uses this source; §4 places the two-stage split in the stage-specific table.
-- `[[olmo-3]]` — four-stage successor that makes the stage split even more explicit.
-- `[[tulu-3]]` — supplies the three post-training sub-mixes.
-- `[[dolma]]` — foundational corpus; OLMo-Mix-1124 supersedes Dolma 1.7.
-- `[[interplay-pretraining-midtraining-rl]]` — formalizes the "mid-training is a distinct stage" claim that OLMo 2 demonstrates.
+Table 9, OLMo 2 7B, pretraining → pretraining & mid-training: average 53.0 → 62.9; GSM8K 24.1 → 67.5; MMLU Pro (held-out) 27.4 → 31.0; TriviaQA (held-out) 74.6 → 78.0. The 7B mid-trained checkpoint averages three runs on 50B Dolmino tokens (Table 9 caption).

@@ -1,0 +1,136 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Aptitude and Unreliability Calculator</title>
+<style>
+  :root { --bg:#fbfbf9; --fg:#1f2328; --muted:#5b6470; --line:#d9dde3; --panel:#ffffff;
+          --full:#2f6db5; --shard:#b5562f; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg:#16181c; --fg:#e6e8eb; --muted:#9aa3ad; --line:#353a42; --panel:#1e2126;
+            --full:#6aa2e8; --shard:#e58a61; }
+  }
+  body { margin:0; background:var(--bg); color:var(--fg);
+         font:14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+  main { max-width:880px; margin:0 auto; padding-block:24px; padding-inline:16px; }
+  h1 { font-size:1.3em; margin:0 0 4px; }
+  .sub { color:var(--muted); margin:0 0 14px; }
+  .panel { background:var(--panel); border:1px solid var(--line); border-radius:8px; padding:14px; margin:12px 0; }
+  .row { display:flex; flex-wrap:wrap; gap:6px; align-items:center; margin:6px 0; }
+  .row strong { min-width:90px; }
+  input[type=number] { width:56px; padding:3px; background:var(--bg); color:var(--fg); border:1px solid var(--line); border-radius:4px; }
+  svg { width:100%; height:auto; display:block; }
+  .tablewrap { overflow-x:auto; }
+  table { border-collapse:collapse; width:100%; font-size:.9em; }
+  th, td { border-bottom:1px solid var(--line); padding:4px 8px; text-align:right; font-variant-numeric:tabular-nums; }
+  th:first-child, td:first-child { text-align:left; }
+  .note { color:var(--muted); font-size:.9em; }
+  select { max-width:100%; background:var(--bg); color:var(--fg); border:1px solid var(--line); border-radius:4px; padding:2px; }
+</style>
+</head>
+<body>
+<main>
+<h1>Average performance, aptitude, and unreliability</h1>
+<p class="sub">Metrics from "LLMs Get Lost In Multi-Turn Conversation" (arXiv:2505.06120v1, §4.2): for N = 10 simulations of one instruction with scores S<sub>i</sub> in 0–100, P = mean(S), A = 90th percentile of S, U = 90th percentile − 10th percentile.</p>
+
+<div class="panel">
+  <div class="row"><strong>FULL</strong><span id="fullIn"></span></div>
+  <div class="row"><strong>SHARDED</strong><span id="shardIn"></span></div>
+  <div class="row"><strong>Percentile</strong>
+    <select id="pct">
+      <option value="nearest">nearest rank (9th and 1st sorted value; used in read.md §9)</option>
+      <option value="linear">linear interpolation (NumPy default)</option>
+    </select>
+  </div>
+  <p class="note">The paper does not state its percentile interpolation, so both conventions are offered. Edit any score to recompute.</p>
+</div>
+
+<div class="panel">
+  <svg id="plot" viewBox="0 0 860 220" role="img" aria-label="Score strips for FULL and SHARDED runs with aptitude and unreliability marked"></svg>
+</div>
+
+<div class="panel tablewrap">
+  <table>
+    <thead><tr><th>Setting</th><th>P (average)</th><th>A (90th pct)</th><th>10th pct</th><th>U = A − 10th</th></tr></thead>
+    <tbody id="out"></tbody>
+  </table>
+  <p class="note" id="summary"></p>
+</div>
+
+<div class="panel note">
+  <strong>Reported results for comparison</strong> (15 LLMs, 600 instructions, six tasks): SHARDED averaged 39% below FULL; aptitude fell 16% on average and unreliability rose 112%; CONCAT averaged 95.1% of FULL (§6.1–6.2). With user and assistant temperature both 0, unreliability stayed around 30 points (§7.2).
+</div>
+</main>
+
+<script>
+const FULL0 = [70,80,80,80,90,90,90,90,100,100];
+const SHARD0 = [0,10,30,40,60,80,90,90,100,100];
+const css = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+function makeInputs(id, vals) {
+  const box = document.getElementById(id);
+  vals.forEach(v => {
+    const i = document.createElement("input");
+    i.type = "number"; i.min = 0; i.max = 100; i.step = 1; i.value = v;
+    i.addEventListener("input", draw);
+    box.appendChild(i);
+  });
+}
+function read(id) {
+  return [...document.querySelectorAll(`#${id} input`)].map(i => Math.min(100, Math.max(0, Number(i.value) || 0)));
+}
+function percentile(sorted, p, mode) {
+  const n = sorted.length;
+  if (mode === "nearest") { const k = Math.max(1, Math.ceil(p / 100 * n)); return sorted[k - 1]; }
+  const pos = (p / 100) * (n - 1), lo = Math.floor(pos), hi = Math.ceil(pos);
+  return sorted[lo] + (sorted[hi] - sorted[lo]) * (pos - lo);
+}
+function stats(s, mode) {
+  const sorted = [...s].sort((a, b) => a - b);
+  const P = s.reduce((a, b) => a + b, 0) / s.length;
+  const A = percentile(sorted, 90, mode), B = percentile(sorted, 10, mode);
+  return { P, A, B, U: A - B };
+}
+const NS = "http://www.w3.org/2000/svg";
+function draw() {
+  const mode = document.getElementById("pct").value;
+  const sets = [["FULL", read("fullIn"), css("--full")], ["SHARDED", read("shardIn"), css("--shard")]];
+  const svg = document.getElementById("plot");
+  while (svg.firstChild) svg.removeChild(svg.firstChild);
+  const L = 90, R = 30, W = 860, sx = x => L + (x / 100) * (W - L - R);
+  const add = (tag, a, text) => { const e = document.createElementNS(NS, tag); for (const k in a) e.setAttribute(k, a[k]); if (text !== undefined) e.textContent = text; svg.appendChild(e); return e; };
+  for (let g = 0; g <= 100; g += 10) {
+    add("line", { x1:sx(g), x2:sx(g), y1:10, y2:190, stroke:css("--line") });
+    add("text", { x:sx(g), y:208, "text-anchor":"middle", fill:css("--muted"), "font-size":11 }, g);
+  }
+  const rows = [];
+  sets.forEach(([name, s, col], k) => {
+    const y = 55 + k * 90, st = stats(s, mode);
+    rows.push([name, st]);
+    add("text", { x:L - 10, y:y + 4, "text-anchor":"end", fill:css("--fg"), "font-size":12 }, name);
+    add("rect", { x:sx(st.B), y:y - 22, width:Math.max(1, sx(st.A) - sx(st.B)), height:44, fill:col, opacity:0.15 });
+    add("line", { x1:sx(st.A), x2:sx(st.A), y1:y - 26, y2:y + 26, stroke:col, "stroke-width":2 });
+    add("text", { x:sx(st.A), y:y - 30, "text-anchor":"middle", fill:col, "font-size":11 }, "A");
+    add("line", { x1:sx(st.P), x2:sx(st.P), y1:y - 26, y2:y + 26, stroke:col, "stroke-width":2, "stroke-dasharray":"4 3" });
+    add("text", { x:sx(st.P), y:y + 40, "text-anchor":"middle", fill:col, "font-size":11 }, "P");
+    const counts = {};
+    s.forEach(v => {
+      counts[v] = (counts[v] || 0) + 1;
+      add("circle", { cx:sx(v), cy:y + (counts[v] - 1) * 7 - 7, r:4, fill:col });
+    });
+  });
+  document.getElementById("out").innerHTML = rows.map(([n, st]) =>
+    `<tr><td>${n}</td><td>${st.P.toFixed(1)}</td><td>${st.A.toFixed(1)}</td><td>${st.B.toFixed(1)}</td><td>${st.U.toFixed(1)}</td></tr>`).join("");
+  const f = rows[0][1], sh = rows[1][1];
+  const pd = f.P ? (100 * (f.P - sh.P) / f.P) : 0;
+  const ad = f.A ? (100 * (f.A - sh.A) / f.A) : 0;
+  document.getElementById("summary").textContent =
+    `P changes by ${(-pd).toFixed(1)}% from FULL to SHARDED; A changes by ${(-ad).toFixed(1)}%; U goes from ${f.U.toFixed(1)} to ${sh.U.toFixed(1)} points. The shaded band spans the 10th to 90th percentile (its width is U).`;
+}
+makeInputs("fullIn", FULL0);
+makeInputs("shardIn", SHARD0);
+document.getElementById("pct").addEventListener("change", draw);
+draw();
+</script>
+</body>
+</html>

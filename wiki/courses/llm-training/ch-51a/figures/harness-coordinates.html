@@ -1,0 +1,145 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Harness coordinates that move an agent score — ch-51a</title>
+<style>
+  :root { --fg:#16181d; --bg:#fbfbfa; --line:#c9ccd4; --a:#2f5d8f; --b:#9a5b2a; --muted:#5b6070; }
+  * { box-sizing:border-box; }
+  body { margin:0; padding:20px; background:var(--bg); color:var(--fg);
+         font:14px/1.55 "Iowan Old Style", Georgia, "Times New Roman", serif; }
+  .wrap { max-width:940px; margin:0 auto; }
+  h1 { font-size:19px; margin:0 0 4px; }
+  .sub { color:var(--muted); margin:0 0 14px; font-size:13.5px; }
+  .tabs { display:flex; flex-wrap:wrap; gap:6px; margin:14px 0 10px; }
+  .tabs button { font:inherit; font-size:13px; padding:5px 11px; border:1px solid var(--line);
+                 background:#fff; cursor:pointer; }
+  .tabs button[aria-selected="true"] { background:#16181d; color:#fbfbfa; border-color:#16181d; }
+  .panel { border:1px solid var(--line); background:#fff; padding:14px 16px; }
+  .q { font-size:13.5px; margin:0 0 10px; }
+  .grp { margin:0 0 14px; }
+  .grpname { font-size:12.5px; color:var(--muted); margin-bottom:3px;
+             font-family:"SFMono-Regular", Menlo, Consolas, monospace; }
+  .bar { display:flex; align-items:center; gap:8px; margin:2px 0; }
+  .lab { width:190px; font-size:12.5px; font-family:"SFMono-Regular", Menlo, Consolas, monospace;
+         text-align:right; color:var(--muted); flex:none; }
+  .track { flex:1; background:#eef0f3; height:17px; position:relative; min-width:80px; }
+  .fill { height:17px; background:var(--a); }
+  .fill.alt { background:var(--b); }
+  .val { width:56px; font-size:12.5px; font-family:"SFMono-Regular", Menlo, Consolas, monospace; flex:none; }
+  .spread { font-size:12.5px; color:var(--b); margin:2px 0 0 198px; }
+  .src { font-size:12.5px; color:var(--muted); border-top:1px solid var(--line); padding-top:8px; margin-top:8px; }
+  @media (max-width:560px) {
+    .lab { width:110px; }
+    .spread { margin-left:118px; }
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<h1>Four harness coordinates that move a reported agent score</h1>
+<p class="sub">Each tab holds one coordinate. Within a group the model is fixed and only the coordinate changes, so
+the spread inside a group is what the coordinate is worth. Every value is printed in the cited source; no value is
+interpolated or rescaled.</p>
+
+<div class="tabs" id="tabs"></div>
+<div class="panel" id="panel"></div>
+
+</div>
+<script>
+(function () {
+  var DATA = [
+    {
+      id: 'scaffold',
+      tab: 'Scaffold',
+      q: 'Same model, same 89 tasks, different agent scaffold (resolution rate on Terminal-Bench 2.0, ±95% CI).',
+      max: 70,
+      groups: [
+        { name: 'GPT-5.2', bars: [['Codex CLI', 62.9], ['Terminus 2', 54.0]] },
+        { name: 'Claude Opus 4.5', bars: [['Terminus 2', 57.8], ['Claude Code', 52.1], ['OpenHands', 51.9]] },
+        { name: 'Claude Sonnet 4.5', bars: [['Terminus 2', 42.8], ['Mini-SWE-Agent', 42.5], ['OpenHands', 40.3], ['Claude Code', 40.1]] },
+        { name: 'Gemini 2.5 Pro', bars: [['Terminus 2', 32.6], ['Mini-SWE-Agent', 26.1], ['Gemini CLI', 19.6], ['OpenHands', 15.7]] },
+        { name: 'Grok 4', bars: [['Mini-SWE-Agent', 29.0], ['Terminus 2', 23.4], ['OpenHands', 19.6]] }
+      ],
+      src: 'Terminal-Bench, arXiv:2601.11868v1, Table 2 (at least five runs per agent-model combination). ' +
+           'The best scaffold differs by model: Codex CLI for GPT-5.2, Terminus 2 for Claude Opus 4.5 and ' +
+           'Gemini 2.5 Pro, Mini-SWE-Agent for Grok 4.'
+    },
+    {
+      id: 'budget',
+      tab: 'Turn and cost budget',
+      q: 'Same model, same 731 public tasks, same SWE-Agent scaffold; the second bar adds a $2 per-task cost cap.',
+      max: 50,
+      groups: [
+        { name: 'GPT-5 (high)', bars: [['50 turns', 41.8], ['50 turns + $2 cap', 25.9]] },
+        { name: 'Claude Sonnet 4', bars: [['50 turns', 42.7], ['50 turns + $2 cap', 17.6]] }
+      ],
+      src: 'SWE-Bench Pro, arXiv:2509.16941v2, Table 1 (uncapped) and Table 5 (50 turns and $2 cap; the setting ' +
+           'used for every §6 analysis). Pass@1 resolve rate, number of runs per model not stated.'
+    },
+    {
+      id: 'time',
+      tab: 'Simulated time',
+      q: 'Same model, same Gaia2 Time split; "instant" mode stops the simulation clock while the model generates.',
+      max: 40,
+      groups: [
+        { name: 'GPT-5 (high)', bars: [['default (clock runs)', 0.0], ['instant mode', 34.4]] },
+        { name: 'Claude-4-Sonnet', bars: [['default (clock runs)', 8.1], ['instant mode', 26.7]] }
+      ],
+      src: 'ARE / Gaia2, arXiv:2509.17158, Table 2 and Fig. 13; pass@1, 3 runs per scenario. The §4.3 text gives ' +
+           'the Claude-4-Sonnet default value as 8.2 while Fig. 13 gives 8.1.'
+    },
+    {
+      id: 'tool',
+      tab: 'Tool quality',
+      q: 'Same model, same 830 queries, same fixed 100,195-document corpus; only the retriever behind the search tool changes.',
+      max: 75,
+      groups: [
+        { name: 'gpt-5', bars: [['BM25', 55.90], ['Qwen3-Embedding-8B', 70.12]] },
+        { name: 'o3', bars: [['BM25', 49.28], ['Qwen3-Embedding-8B', 63.49]] },
+        { name: 'Claude Sonnet 4', bars: [['BM25', 14.34], ['Qwen3-Embedding-8B', 36.75]] },
+        { name: 'Qwen3-32B', bars: [['BM25', 3.49], ['Qwen3-Embedding-8B', 10.36]] }
+      ],
+      src: 'BrowseComp-Plus, arXiv:2508.06600v1, Table 1; accuracy judged by gpt-4.1, top-k = 5 documents each ' +
+           'truncated to 512 tokens. Replacing BM25 with Qwen3-Embedding-8B raised accuracy for every agent tested.'
+    }
+  ];
+
+  var tabsEl = document.getElementById('tabs'), panelEl = document.getElementById('panel');
+
+  function draw(d) {
+    var h = '<p class="q">' + d.q + '</p>';
+    d.groups.forEach(function (g) {
+      h += '<div class="grp"><div class="grpname">' + g.name + '</div>';
+      var vals = g.bars.map(function (b) { return b[1]; });
+      g.bars.forEach(function (b, i) {
+        var w = Math.max(0.4, 100 * b[1] / d.max);
+        h += '<div class="bar"><div class="lab">' + b[0] + '</div>' +
+             '<div class="track"><div class="fill' + (i ? ' alt' : '') + '" style="width:' + w + '%"></div></div>' +
+             '<div class="val">' + b[1].toFixed(1) + '</div></div>';
+      });
+      var lo = Math.min.apply(null, vals), hi = Math.max.apply(null, vals);
+      h += '<div class="spread">spread within this group: ' + (hi - lo).toFixed(1) + ' points</div></div>';
+    });
+    h += '<div class="src">Source: ' + d.src + '</div>';
+    panelEl.innerHTML = h;
+  }
+
+  DATA.forEach(function (d, i) {
+    var b = document.createElement('button');
+    b.textContent = d.tab;
+    b.setAttribute('aria-selected', i === 0 ? 'true' : 'false');
+    b.addEventListener('click', function () {
+      Array.prototype.forEach.call(tabsEl.children, function (c) { c.setAttribute('aria-selected', 'false'); });
+      b.setAttribute('aria-selected', 'true');
+      draw(d);
+    });
+    tabsEl.appendChild(b);
+  });
+  draw(DATA[0]);
+})();
+</script>
+</body>
+</html>

@@ -2,109 +2,54 @@
 chapter: ch-14
 course: llm-training
 phase: read
-excerpt_of: Grattafiori et al. 2024 — "The Llama 3 Herd of Models" (data section)
+excerpt_of: wiki/raw-data/llm-training/model-reports/llama-3.md and llama-3-recipe.md (sections on annealing data, contamination analysis, post-training decontamination)
 source_url: https://arxiv.org/abs/2407.21783
-created_at: "2026-04-23"
+primary_version: arXiv:2407.21783v3 (2024-11-23; v1 2024-07)
+created_at: "2026-09-15"
+revised: 2026-09 (generality revision; replaces the 2026-04 excerpt, whose n-gram filtering procedure, thresholds, and dropped-token share do not appear in the report)
 ---
 
-# Excerpt: Llama 3 Decontamination and Data Budget
+# Excerpt: Contamination handling in The Llama 3 Herd of Models
 
-**Source:** `wiki/raw-data/llm-training/model-reports/llama-3.md`
-**Primary paper:** Aaron Grattafiori et al. (Meta Llama Team), "The Llama 3 Herd of Models", 2024
-**arXiv:** https://arxiv.org/abs/2407.21783
+Verbatim quotations used by ch-14 `read.md`, with loci. Author: Llama Team, AI @ Meta. Checked against the v3 PDF on 2026-09-15. Source type: official technical report.
 
----
+What the report does and does not describe:
+- Pre-training data: a post-hoc 8-gram **contamination analysis** that estimates score effects (§5.1.4). The report does not describe removing documents from the pre-training corpus by n-gram overlap, and it prints no share of removed tokens.
+- Post-training data: **exact-match decontamination** against benchmark prompts (§5.2).
+- Annealing data: benchmark training sets excluded (§3.1.3).
+- Organization: a separate pre-training data team (§10).
 
-## Bibliographic header
+## Annealing data (§3.1.3)
+> "We do not include any training sets from commonly used benchmarks in our annealing data. This enables us to assess the true few-shot learning capabilities and out-of-domain generalization of Llama 3."
+> "Following OpenAI (2023a), we evaluate the efficacy of annealing on the GSM8k (Cobbe et al., 2021) and MATH (Hendrycks et al., 2021b) training sets in annealing."
+> "We find that annealing improved the performance of a pre-trained Llama 3 8B model on the GSM8k and MATH validation sets by 24.0% and 6.4%, respectively. However, the improvements on the 405B model are negligible"
 
-Llama 3 is the most thoroughly documented frontier pretraining run from 2024. For the ch-14 data-scaling topic, the load-bearing numbers are the token budget, the decontamination n-gram size, and the dropout rate.
+## Contamination analysis (§5.1.4)
+> "Any of these methods can suffer from false positives and negatives, and how to best run contamination analyses is currently still an open field of research. Here, we largely follow the suggestions of Singh et al. (2024)."
+> "For all our evaluation datasets, we score examples based on 8-gram overlap ... We consider an example of a dataset D to be contaminated if a ratio T_D of its tokens are part of an 8-gram occurring at least once in the pre-training corpus. We select T_D separately for each dataset, based on which value shows the maximal significant estimated performance gain across the three model sizes."
 
-From the raw-data notes:
+Selected rows of Table 15 (percent of the evaluation set considered contaminated; estimated performance gain for 8B / 70B / 405B):
 
-> *"Llama 3 is pre-trained on 15.6T tokens and post-trained via six rounds of SFT + Rejection Sampling + DPO."*
+| Benchmark | Contam. % | 8B | 70B | 405B |
+|---|---|---|---|---|
+| AGIEval | 98 | 8.5 | 19.9 | 16.3 |
+| BIG-Bench Hard | 95 | 26.0 | 36.0 | 41.0 |
+| GSM8K | 41 | 0.0 | 0.1 | 1.3 |
+| HellaSwag | 85 | 14.8 | 14.8 | 14.3 |
+| MATH | 1 | 0.0 | -0.1 | -0.2 |
+| NaturalQuestions | 52 | 1.6 | 0.9 | 0.8 |
+| PiQA | 55 | 8.5 | 7.9 | 8.1 |
+| QuaC | 99 | 2.4 | 11.0 | 6.4 |
+| SQuAD | 0 | 0.0 | 0.0 | 0.0 |
+| MMLU, MMLU-Pro, HumanEval, MBPP | – | – | – | – |
 
-15.6T unique tokens is roughly the upper end of what public-web English pretraining can reach in 2024 after aggressive filtering. Llama 4 and subsequent Meta releases will need to either (a) dip into the `R > 1` regime per Muennighoff (see [[excerpts/data-constrained-scaling]]) or (b) lean harder on synthetic data — the post-training recipe already does this.
+> "For Natural Questions, on the other hand, the estimated 52% contamination seems to have virtually no effect on the performance. For SQuAD and MATH, low thresholds yield high levels of contamination, but no performance gains."
+> "for MBPP, HumanEval, MMLU and MMLU-Pro, other contamination detection methods may be needed: even with higher thresholds, 8-gram overlap gives such high contamination scores that it is impossible to get a good performance gain estimate."
 
----
+## Post-training data (§5.2)
+> "We apply decontamination of the post-training data by running exact match with the prompts from each benchmark."
 
-## The data-budget signal
-
-Llama 3 405B:
-- **Pretraining tokens:** 15.6T (≈ `R = 1` on the unique-token pool)
-- **Context:** 8K native, extended to 128K
-- **Compute:** 3.8e25 FLOPs
-- **Chinchilla ratio:** `D/N ≈ 15.6T / 405B ≈ 38.5` — *overtrained* (Chinchilla-optimal would be ~20).
-
-The 2× overtraining is deliberate: Meta optimises for inference cost. Chinchilla tells you the compute-optimal model for a given training budget; they want the *inference*-optimal model for a given deployment use-case. A 2× smaller model trained 2× longer has the same training loss but ~half the inference cost.
-
-**What Llama 3 does not do:** it does not repeat tokens. At `R = 1` for bulk pretraining, Muennighoff's decay is barely engaged (`w(1) = 1.0`). The repetition savings sit unused. Meta appears to judge that scraping another 5T tokens is harder than spending more compute.
-
----
-
-## Decontamination procedure — 8-gram overlap
-
-From the raw-data notes:
-
-> *"Rejection sampling: for each prompt, sample K=10–30 completions from the best round-(N-1) chat model at temperature T=0.6–1.0, then keep the top by RM score. Filtering: topic classifier + quality classifier (both distilled from Llama 3) remove low-quality rejection-sampled text before SFT."*
-
-The pretraining decontamination pipeline (documented in the Llama 3 paper's data section, not reproduced verbatim in the raw-data notes but summarised in the ch-14 recipe):
-
-```
-1. Enumerate all eval suites that Llama 3 will be evaluated on:
-   MMLU, GSM8K, MATH, HumanEval, BBH, ARC, AGIEval, CommonsenseQA, ...
-
-2. For each eval sample, extract 8-gram n-grams from (question + answer).
-   Build a Bloom filter per eval.
-
-3. Stream pretraining documents:
-   For each document d:
-     Count 8-grams from d that hit any eval Bloom filter.
-     If overlap_fraction(d, eval) > 0.5 for any eval: drop d.
-```
-
-Meta reports dropping `< 0.1%` of pretraining tokens at this threshold — the procedure is not expensive in data yield. The 0.5 threshold is permissive — a document has to be more than half-composed of eval-suite n-grams to be dropped. For reasoning-sensitive evals, stricter thresholds (~0.1) are applied.
-
-**Why 8-gram.** The 2024 standard settled at 8 because:
-- 4-grams catch paraphrases but over-flag common phrases (FP >> FN).
-- 8-grams catch substantial question-stem reproduction while passing common English.
-- 13-grams catch only verbatim; paraphrases leak through.
-- 20-grams essentially only catch copy-paste.
-
-See `ch-14/read.md` §4 for the full false-positive / false-negative discussion.
-
----
-
-## The iterative post-training recipe as a decontamination amplifier
-
-The 6-round SFT → Rejection Sampling → DPO loop is not only about preference optimisation. Each round re-mines training data from the current best model's outputs, which:
-
-1. Replaces scraped web content with model-generated content — reducing eval leakage from unexpected web sources.
-2. Filters through Llama 3's own topic and quality classifiers, which are trained to reject low-quality / potentially contaminated content.
-3. Uses the reward model to down-weight outputs that look "memorised" — an implicit anti-contamination signal.
-
-The full post-training data mix (from the raw-data notes):
-
-> *"~50–80% synthetic rejection-sampled data. Remainder: human SFT demonstrations, preference data, capability-specific synthetic (code-exec-filtered code, math with verifier, multi-turn tool use traces, long-context QA)."*
-
-This composition is contamination-aware by construction: human-anchored, verifier-filtered, and iteratively re-mined.
-
----
-
-## What Llama 3 is silent about
-
-Three omissions worth noting for a learner:
-
-1. **No explicit `R_T` fit.** Meta does not publish their own Muennighoff-style decay constant. The fact that they ran at `R = 1` suggests they did not feel the need to repeat, not that they measured decay.
-2. **Decontamination audit is not open.** The dropped-document log is not released. OLMo 3's OlmoTrace ([[excerpts/olmo-3-decontamination]]) is the open counterpart.
-3. **Synthetic-contamination estimate `p_synth` is not reported.** Meta does not claim what fraction of the 15.6T scrape is machine-generated. Given Dohmatob's 1% flatlining bound ([[excerpts/model-collapse]]), this is a non-trivial gap.
-
-For a frontier lab replicating Llama 3 in 2026, these three numbers are where you would differ — publish them and you have a more scientifically defensible pretraining run.
-
----
-
-## Connections
-
-- The scaling law that Llama 3 sits on: [[excerpts/data-constrained-scaling]]
-- The open-lab counterpart: [[excerpts/olmo-3-decontamination]]
-- The contamination-weaponisation angle: [[excerpts/anthropic-sleeper-agents-data]]
-- Chapter synthesis: [[ch-14]]
+## Organization of data and evaluation (§5.3, §10)
+> "Modeling teams did not have access to our human-evaluation prompts to prevent accidental contamination or overfitting on the test set." (§5.3)
+> "to ensure Llama 3 is not accidentally overfitted on commonly used benchmarks, our pre-training data was procured and processed by a separate team that was strongly incentivized to prevent contamination of that pre-training data with external benchmarks." (§10)
+> "we ensure that our human evaluations remain trustworthy by allowing only a small set of researchers who do not contribute to model development to perform and access these evaluations." (§10)

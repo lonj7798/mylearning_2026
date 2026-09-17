@@ -1,0 +1,272 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Difficulty Filter Explorer</title>
+<style>
+:root{
+  --bg:#fbfaf7; --panel:#ffffff; --ink:#1d1d1f; --muted:#5f6368; --line:#d9d6cf;
+  --curve:#2f6fb0; --curve2:#c26a00; --mark:#b3261e; --bar:#2f6fb0; --bar2:#9aa5b1; --grid:#ece9e2;
+}
+@media (prefers-color-scheme: dark){
+  :root{
+    --bg:#16181b; --panel:#1f2226; --ink:#e8e6e1; --muted:#a3a7ad; --line:#3a3e44;
+    --curve:#6fa8e0; --curve2:#f0a24a; --mark:#f08a82; --bar:#6fa8e0; --bar2:#6b7480; --grid:#2a2d32;
+  }
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font:14px/1.5 system-ui,-apple-system,"Segoe UI",sans-serif}
+.wrap{max-width:1000px;margin:0 auto;padding-inline:16px;padding-block:20px 40px}
+h1{font-size:20px;margin:0 0 4px}
+h2{font-size:15px;margin:0 0 8px}
+p.lead{margin:0 0 16px;color:var(--muted)}
+.grid{display:grid;grid-template-columns:minmax(0,300px) minmax(0,1fr);gap:16px}
+@media (max-width:760px){.grid{grid-template-columns:minmax(0,1fr)}}
+.panel{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:12px 14px;margin-bottom:16px}
+label{display:block;font-size:13px;margin:10px 0 2px}
+input[type=range]{width:100%}
+input[type=number]{width:70px}
+select{max-width:100%}
+select,input[type=number]{font:inherit;color:var(--ink);background:var(--panel);border:1px solid var(--line);border-radius:6px;padding:3px 6px}
+.val{font-variant-numeric:tabular-nums;color:var(--muted);font-size:12px}
+.row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+table{border-collapse:collapse;width:100%;font-variant-numeric:tabular-nums;font-size:13px}
+th,td{text-align:right;padding:4px 6px;border-bottom:1px solid var(--line)}
+th:first-child,td:first-child{text-align:left}
+.formula{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12.5px;background:var(--bg);border:1px solid var(--line);border-radius:6px;padding:6px 8px;margin:6px 0;white-space:pre-wrap}
+.scroll{overflow-x:auto}
+#chart{min-width:520px}
+#funnel{min-width:720px}
+svg text{fill:var(--ink);font-size:11px}
+svg .muted{fill:var(--muted)}
+.note{font-size:12.5px;color:var(--muted);margin-top:6px}
+.big{font-size:18px;font-variant-numeric:tabular-nums}
+.tabs{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px}
+.tabs button{font:inherit;color:var(--ink);background:var(--panel);border:1px solid var(--line);border-radius:6px;padding:4px 10px;cursor:pointer}
+.tabs button[aria-pressed="true"]{border-color:var(--curve);color:var(--curve)}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Difficulty filters as sampling experiments</h1>
+  <p class="lead">A difficulty filter samples a reference model n times on a prompt and keeps the prompt when the number of correct samples k falls in a set S. If the reference model solves the prompt with probability p per sample, k follows a binomial distribution, so the filter keeps the prompt with a probability that depends on p. This page draws that probability for the published rules in read.md §2 and lets the reader test a custom rule. The second panel shows the published selection stages on a log scale.</p>
+
+  <div class="grid">
+    <div class="panel">
+      <h2>Rule</h2>
+      <label for="preset">Published rule</label>
+      <select id="preset"></select>
+      <div class="note" id="presetNote"></div>
+      <label for="n">n (samples per prompt) <span class="val" id="nV"></span></label>
+      <input id="n" type="range" min="1" max="64" step="1" value="4">
+      <div class="row">
+        <label for="kmin" style="margin:6px 0 0">keep if k ≥</label>
+        <input id="kmin" type="number" min="0" max="64" value="0">
+        <label for="kmax" style="margin:6px 0 0">and k ≤</label>
+        <input id="kmax" type="number" min="0" max="64" value="0">
+      </div>
+      <label for="p">p (reference model's per-sample success probability) <span class="val" id="pV"></span></label>
+      <input id="p" type="range" min="0" max="1" step="0.01" value="0.2">
+      <div style="margin-top:10px">Probability the prompt is kept</div>
+      <div class="big" id="keepV"></div>
+      <div class="formula" id="formulaV"></div>
+    </div>
+
+    <div class="panel">
+      <h2>P(keep | p) across p</h2>
+      <div class="scroll"><svg id="chart" viewBox="0 0 640 330" width="100%" role="img" aria-label="Retention probability as a function of p"></svg></div>
+      <div class="note">Solid line: the current rule. Dashed line: the comparison rule chosen below. The red marker is the p set by the slider.</div>
+      <label for="compare">Comparison rule</label>
+      <select id="compare"></select>
+      <div class="scroll" style="margin-top:10px">
+        <table id="tbl"><thead><tr><th>p</th><th>current rule</th><th>comparison rule</th></tr></thead><tbody></tbody></table>
+      </div>
+    </div>
+  </div>
+
+  <div class="panel">
+    <h2>Published selection stages (log scale)</h2>
+    <div class="tabs" id="tabs"></div>
+    <div class="scroll"><svg id="funnel" viewBox="0 0 900 260" width="100%" role="img" aria-label="Counts at each selection stage"></svg></div>
+    <div class="note" id="funnelNote"></div>
+  </div>
+
+  <p class="note">Sources: LIMO arXiv:2502.03387v3 §3.1.1; Llama-Nemotron arXiv:2505.00949v5 §5.1; Kimi k1.5 arXiv:2501.12599 §2.1; OpenMathReasoning arXiv:2504.16891v1 Tables 1 and 5; s1 arXiv:2501.19393v3 §2; Magistral arXiv:2506.10910v1 Table 1; Light-R1 arXiv:2503.10460v4 §3.1.3. The binomial model assumes independent samples with one fixed p per prompt; the papers do not report p itself, so p is set by the reader.</p>
+</div>
+
+<script>
+(function(){
+  var PRESETS = [
+    {id:'limo1', name:'LIMO stage 1: Qwen2.5-Math-7B-Instruct', n:4, kmin:0, kmax:0,
+     note:'Drop the problem if it is solved within 4 attempts; keep k = 0.'},
+    {id:'limo2', name:'LIMO stage 2: DeepSeek-R1-Distill-Qwen-32B', n:32, kmin:1, kmax:3,
+     note:'Keep problems solved in 1 to 3 of 32 attempts.'},
+    {id:'lnu', name:'LN-Ultra RL data: LN-Super', n:8, kmin:0, kmax:5,
+     note:'Discard prompts with pass rate 0.75 or higher over 8 responses; keep k ≤ 5.'},
+    {id:'kimi', name:'Kimi k1.5 guessability: model without CoT', n:8, kmin:0, kmax:0,
+     note:'General question-answering prompts: remove a prompt if a model without chain of thought guesses the answer within 8 attempts; keep k = 0. Here p is the guessing probability.'},
+    {id:'custom', name:'Custom rule', n:16, kmin:1, kmax:12,
+     note:'Set n and the kept range of k by hand.'}
+  ];
+  var FUNNELS = [
+    {id:'omr', name:'OpenMathReasoning problems', unit:'problems',
+     stages:[['forum discussions',620000],['extracted problems',580000],['"bad" problems removed',550000],['decontaminated',540000]],
+     note:'AoPS forums; Qwen2.5-32B-Instruct extracts, classifies, and decontaminates (arXiv:2504.16891v1 Table 1).'},
+    {id:'omrsol', name:'OpenMathReasoning solutions', unit:'CoT solutions',
+     stages:[['generated',5200000],['kept (reach expected answer)',3200000]],
+     note:'DeepSeek-R1 4.2M → 2.7M and QwQ-32B 1.0M → 0.5M; kept share 3.2/5.2 = 61.5% (Table 5; share derived).'},
+    {id:'s1', name:'s1K', unit:'questions',
+     stages:[['collected',59029],['API errors removed',54116],['format checks',51581],['difficulty filter',24496],['domain-stratified sampling',1000]],
+     note:'Difficulty: removed if Qwen2.5-7B-Instruct or Qwen2.5-32B-Instruct solves it, graded by Claude 3.5 Sonnet. 384 of the final 1,000 come directly from sources judged high-quality, so the last stage is not a pure subset of the 24,496 (arXiv:2501.19393v3 §2.1-2.2).'},
+    {id:'limo', name:'LIMO', unit:'problems',
+     stages:[['LIMO-Pool after two difficulty stages',2125],['top rule-scored chains',800]],
+     note:'The starting corpus is described as "tens of millions" and has no exact count, so it is not drawn (arXiv:2502.03387v3 §3.1).'},
+    {id:'mag', name:'Magistral math (RL data)', unit:'problems',
+     stages:[['initial',699000],['format filter',501000],['difficulty filter',38000]],
+     note:'Two grading passes with 16 samples each: Mistral Large 2, then a 24B RL-trained grader (arXiv:2506.10910v1 §4.1, Table 1).'},
+    {id:'lr1', name:'Light-R1 SFT data', unit:'questions',
+     stages:[['seed math questions (about)',1000000],['stage 1 (about)',76000],['stage 2 (about)',3000]],
+     note:'Stage 1 by DeepScaleR-1.5B-Preview pass rate, stage 2 by DeepSeek-R1 pass rate (§3.1.3; §1 names DeepSeek-R1-Distill-Qwen-32B); the paper prints "around 1000k", "approximately 76k", and "approximately 3k" (arXiv:2503.10460v4 §3.1).'}
+  ];
+
+  var $ = function(id){ return document.getElementById(id); };
+  function lgamma(x){ // Lanczos
+    var g=7, c=[0.99999999999980993,676.5203681218851,-1259.1392167224028,771.32342877765313,-176.61502916214059,12.507343278686905,-0.13857109526572012,9.9843695780195716e-6,1.5056327351493116e-7];
+    if(x<0.5) return Math.log(Math.PI/Math.sin(Math.PI*x)) - lgamma(1-x);
+    x-=1; var a=c[0], t=x+g+0.5;
+    for(var i=1;i<g+2;i++) a+=c[i]/(x+i);
+    return 0.5*Math.log(2*Math.PI)+(x+0.5)*Math.log(t)-t+Math.log(a);
+  }
+  function binom(n,k,p){
+    if(p<=0) return k===0?1:0;
+    if(p>=1) return k===n?1:0;
+    return Math.exp(lgamma(n+1)-lgamma(k+1)-lgamma(n-k+1)+k*Math.log(p)+(n-k)*Math.log(1-p));
+  }
+  function keep(rule,p){
+    var s=0, lo=Math.max(0,rule.kmin), hi=Math.min(rule.n,rule.kmax);
+    for(var k=lo;k<=hi;k++) s+=binom(rule.n,k,p);
+    return Math.min(1,Math.max(0,s));
+  }
+  var cur = Object.assign({}, PRESETS[0]);
+  var cmp = Object.assign({}, PRESETS[1]);
+
+  PRESETS.forEach(function(pr){
+    var o=document.createElement('option'); o.value=pr.id; o.textContent=pr.name; $('preset').appendChild(o);
+    var o2=document.createElement('option'); o2.value=pr.id; o2.textContent=pr.name; $('compare').appendChild(o2);
+  });
+  $('compare').value='limo2';
+
+  function syncInputs(){
+    $('n').value=cur.n; $('kmin').value=cur.kmin; $('kmax').value=cur.kmax;
+    $('kmin').max=cur.n; $('kmax').max=cur.n;
+  }
+  function readInputs(){
+    cur.n=parseInt($('n').value,10);
+    var a=parseInt($('kmin').value,10), b=parseInt($('kmax').value,10);
+    if(isNaN(a)) a=0; if(isNaN(b)) b=0;
+    a=Math.max(0,Math.min(cur.n,a)); b=Math.max(0,Math.min(cur.n,b));
+    cur.kmin=a; cur.kmax=b;
+    $('kmin').max=cur.n; $('kmax').max=cur.n;
+  }
+  function fmt(x){ return x.toFixed(3); }
+
+  function render(){
+    var p=parseFloat($('p').value);
+    $('nV').textContent=cur.n; $('pV').textContent=p.toFixed(2);
+    var kv=keep(cur,p);
+    $('keepV').textContent=fmt(kv);
+    var lo=Math.max(0,cur.kmin), hi=Math.min(cur.n,cur.kmax);
+    var terms=[];
+    if(lo>hi){ terms.push('empty range: no k is kept'); }
+    else {
+      for(var k=lo;k<=hi && terms.length<6;k++) terms.push('k='+k+': C('+cur.n+','+k+')·p^'+k+'·(1−p)^'+(cur.n-k)+' = '+binom(cur.n,k,p).toFixed(4));
+      if(hi-lo+1>6) terms.push('… '+(hi-lo+1-6)+' more terms');
+    }
+    $('formulaV').textContent='P(keep) = Σ over k in ['+lo+', '+hi+'] of C(n,k)·p^k·(1−p)^(n−k)\n'+terms.join('\n');
+    drawChart(p);
+    var rows='';
+    [0.01,0.05,0.1,0.2,0.3,0.5,0.75,0.9].forEach(function(q){
+      rows+='<tr><td>'+q.toFixed(2)+'</td><td>'+fmt(keep(cur,q))+'</td><td>'+fmt(keep(cmp,q))+'</td></tr>';
+    });
+    $('tbl').querySelector('tbody').innerHTML=rows;
+  }
+
+  function drawChart(p){
+    var svg=$('chart'), W=640, H=330, L=50, R=16, T=14, B=40;
+    var x=function(v){return L+v*(W-L-R);}, y=function(v){return T+(1-v)*(H-T-B);};
+    var s='';
+    for(var i=0;i<=10;i++){
+      var gv=i/10;
+      s+='<line x1="'+x(gv)+'" y1="'+y(0)+'" x2="'+x(gv)+'" y2="'+y(1)+'" stroke="var(--grid)"/>';
+      s+='<line x1="'+x(0)+'" y1="'+y(gv)+'" x2="'+x(1)+'" y2="'+y(gv)+'" stroke="var(--grid)"/>';
+      if(i%2===0){
+        s+='<text x="'+x(gv)+'" y="'+(y(0)+16)+'" text-anchor="middle">'+gv.toFixed(1)+'</text>';
+        s+='<text x="'+(L-8)+'" y="'+(y(gv)+4)+'" text-anchor="end">'+gv.toFixed(1)+'</text>';
+      }
+    }
+    s+='<line x1="'+x(0)+'" y1="'+y(0)+'" x2="'+x(1)+'" y2="'+y(0)+'" stroke="var(--line)"/>';
+    s+='<line x1="'+x(0)+'" y1="'+y(0)+'" x2="'+x(0)+'" y2="'+y(1)+'" stroke="var(--line)"/>';
+    s+='<text x="'+((L+W-R)/2)+'" y="'+(H-6)+'" text-anchor="middle" class="muted">p, per-sample success probability of the reference model</text>';
+    s+='<text x="12" y="'+((T+H-B)/2)+'" text-anchor="middle" class="muted" transform="rotate(-90 12 '+((T+H-B)/2)+')">P(keep)</text>';
+    function path(rule){
+      var d='';
+      for(var j=0;j<=200;j++){ var q=j/200; d+=(j?'L':'M')+x(q).toFixed(1)+','+y(keep(rule,q)).toFixed(1); }
+      return d;
+    }
+    s+='<path d="'+path(cmp)+'" fill="none" stroke="var(--curve2)" stroke-width="2" stroke-dasharray="6 4"/>';
+    s+='<path d="'+path(cur)+'" fill="none" stroke="var(--curve)" stroke-width="2.5"/>';
+    var kv=keep(cur,p);
+    s+='<line x1="'+x(p)+'" y1="'+y(0)+'" x2="'+x(p)+'" y2="'+y(1)+'" stroke="var(--mark)" stroke-dasharray="3 3"/>';
+    s+='<circle cx="'+x(p)+'" cy="'+y(kv)+'" r="5" fill="var(--mark)"/>';
+    svg.innerHTML=s;
+  }
+
+  var activeFunnel=FUNNELS[0].id;
+  FUNNELS.forEach(function(f){
+    var b=document.createElement('button'); b.type='button'; b.textContent=f.name; b.dataset.id=f.id;
+    b.addEventListener('click',function(){ activeFunnel=f.id; drawFunnel(); });
+    $('tabs').appendChild(b);
+  });
+  function drawFunnel(){
+    var f=FUNNELS.filter(function(z){return z.id===activeFunnel;})[0];
+    Array.prototype.forEach.call($('tabs').children,function(b){ b.setAttribute('aria-pressed', b.dataset.id===activeFunnel?'true':'false'); });
+    var svg=$('funnel'), W=900, L=250, R=120, rowH=44, T=16;
+    var H=T+f.stages.length*rowH+30; svg.setAttribute('viewBox','0 0 '+W+' '+H);
+    var maxV=f.stages[0][1], minLog=Math.log10(500), maxLog=Math.log10(Math.max(maxV,1000))+0.1;
+    var xs=function(v){ return L+(Math.log10(v)-minLog)/(maxLog-minLog)*(W-L-R); };
+    var s='';
+    [1e3,1e4,1e5,1e6].forEach(function(t){
+      if(Math.log10(t)>maxLog) return;
+      s+='<line x1="'+xs(t)+'" y1="'+(T-4)+'" x2="'+xs(t)+'" y2="'+(H-24)+'" stroke="var(--grid)"/>';
+      s+='<text x="'+xs(t)+'" y="'+(H-8)+'" text-anchor="middle" class="muted">'+(t>=1e6?(t/1e6)+'M':(t/1e3)+'k')+'</text>';
+    });
+    f.stages.forEach(function(st,i){
+      var yy=T+i*rowH, w=Math.max(2,xs(st[1])-L);
+      var share=(i===0)?'':' ('+(100*st[1]/f.stages[i-1][1]).toFixed(1)+'% of previous)';
+      s+='<text x="'+(L-10)+'" y="'+(yy+20)+'" text-anchor="end">'+st[0]+'</text>';
+      s+='<rect x="'+L+'" y="'+(yy+6)+'" width="'+w.toFixed(1)+'" height="22" rx="3" fill="'+(i===f.stages.length-1?'var(--bar)':'var(--bar2)')+'"/>';
+      s+='<text x="'+(L+w+6)+'" y="'+(yy+21)+'">'+st[1].toLocaleString('en-US')+share+'</text>';
+    });
+    svg.innerHTML=s;
+    $('funnelNote').textContent=f.note+' Unit: '+f.unit+'. Percentages of the previous stage are derived from the printed counts.';
+  }
+
+  $('preset').addEventListener('change',function(){
+    var pr=PRESETS.filter(function(z){return z.id===$('preset').value;})[0];
+    cur=Object.assign({},pr); $('presetNote').textContent=pr.note; syncInputs(); render();
+  });
+  $('compare').addEventListener('change',function(){
+    var pr=PRESETS.filter(function(z){return z.id===$('compare').value;})[0];
+    cmp=Object.assign({},pr); render();
+  });
+  ['n','kmin','kmax'].forEach(function(id){
+    $(id).addEventListener('input',function(){ readInputs(); if(id==='n') $('nV').textContent=cur.n; $('presetNote').textContent='Edited rule (n = '+cur.n+', keep '+cur.kmin+' ≤ k ≤ '+cur.kmax+').'; render(); });
+  });
+  $('p').addEventListener('input',render);
+  $('presetNote').textContent=PRESETS[0].note;
+  syncInputs(); render(); drawFunnel();
+})();
+</script>
+</body>
+</html>

@@ -2,75 +2,61 @@
 chapter: ch-51
 course: llm-training
 phase: read
-excerpt_of: wiki/raw-data/llm-training/papers/judge-llm-bias.md
+excerpt_of: "primary source arXiv:2306.05685 (NeurIPS 2023 Datasets and Benchmarks); library card wiki/raw-data/llm-training/papers/judge-llm-bias.md has no Verification section as of 2026-09-15"
 source_url: https://arxiv.org/abs/2306.05685
 created_at: "2026-04-23"
+revised: "2026-09-15 — numbers re-read from the primary text; the card's '20-30% flip rate' and 'reference-guided +10 pp agreement' are not what the paper reports"
 ---
 
-# Excerpt: Judging LLM-as-a-Judge — the judge-variance floor that bootstrap must include
+# Excerpt: Judging LLM-as-a-Judge with MT-Bench and Chatbot Arena (Zheng et al. 2023)
 
-**Source library:** `wiki/raw-data/llm-training/papers/judge-llm-bias.md`
-**Artifact:** position bias (20–30% flip), verbosity bias, self-enhancement bias; swap-and-average + reference-guided mitigations.
+**Authors:** Lianmin Zheng, Wei-Lin Chiang, Ying Sheng, Siyuan Zhuang, Zhanghao Wu, Yonghao Zhuang, Zi Lin,
+Zhuohan Li, Dacheng Li, Eric P. Xing, Hao Zhang, Joseph E. Gonzalez, Ion Stoica. Source type: paper.
 
----
+ch-51 uses this source for one purpose: judge inconsistency is a noise source that does not shrink when the
+evaluation set grows. The full treatment of judge bias and calibration is in ch-49.
 
-## Why this source is ch-51's "LLM-as-judge" variance anchor
+## Table 2 — position bias, as printed
 
-Every go/no-go memo that uses an LLM judge (pairwise win-rate, MT-Bench-style numeric score, RLAIF label) inherits a variance floor that is *not* reducible by adding more items. It is structural — the judge itself is noisy. Ch-51's §1 variance table lists "judge variance" as a standalone row for this reason.
+Consistency is "the percentage of cases where a judge gives consistent results when swapping the order of two
+assistants". The test set is deliberately hard: "we construct two similar answers to each first-turn question in
+MT-bench by calling GPT-3.5 twice with a temperature of 0.7" (§3.2).
 
-Source §Key Contributions:
+| Judge | Prompt | Consistency | Biased toward first | Biased toward second | Error |
+|---|---|---|---|---|---|
+| Claude-v1 | default | 23.8% | 75.0% | 0.0% | 1.2% |
+| Claude-v1 | rename | 56.2% | 11.2% | 28.7% | 3.8% |
+| GPT-3.5 | default | 46.2% | 50.0% | 1.2% | 2.5% |
+| GPT-3.5 | rename | 51.2% | 38.8% | 6.2% | 3.8% |
+| GPT-4 | default | 65.0% | 30.0% | 5.0% | 0.0% |
+| GPT-4 | rename | 66.2% | 28.7% | 5.0% | 0.0% |
 
-> Position bias: A vs B ordering changes the winner in ~20–30% of cases; mitigated by swap-and-average or "two-game" scoring.
-> Verbosity bias: longer responses win more often than a length-controlled baseline.
-> Self-enhancement bias: GPT-4 prefers GPT-4-authored responses at a rate above what humans prefer.
+"Only GPT-4 outputs consistent results in more than 60% of cases" (§3.2). Under the default prompt the swap
+changes the verdict in 35.0% of pairs for GPT-4, 53.8% for GPT-3.5, and 76.2% for Claude-v1. Appendix D.1 reports
+that position bias is less prominent in some categories and less prominent for model pairs whose quality differs
+widely (Tables 9-11).
 
-The 20–30% flip rate is the headline number. Without swap-and-average, a 3 pp "win" could be entirely a position artifact — and a bootstrap CI *computed on one ordering* will not capture this bias, only the ordering-conditional variance.
+## Mitigations, as reported
 
----
+- Swapping positions: "a conservative approach is to call a model a winner only when an answer is preferred in
+  both orders. If the results are inconsistent after swapping, we can call it a tie" (§3.4).
+- Few-shot judge: raises GPT-4 consistency from 65.0% to 77.5%; "however, high consistency may not imply
+  [higher] accuracy" (§3.4).
+- Reference-guided grading on math questions: Table 4 reports the GPT-4 failure rate on 10 math questions with
+  position swaps as 14/20 (default), 6/20 (chain of thought), 3/20 (reference-guided); §3.4 states the
+  improvement as "from 70% to 15%".
+- Verbosity: under the "repetitive list" attack on 23 MT-Bench answers, the failure rate is 91.3% for Claude-v1,
+  91.3% for GPT-3.5, and 8.7% for GPT-4 (Table 3).
 
-## The mitigations ch-51 §1 borrows wholesale
+## Agreement with humans
 
-Source §Technical Details:
+Table 5 (MT-Bench, first turn) reports GPT-4 pairwise vs human agreement at 85% under setup S2 (non-tie votes
+only) and 66% under setup S1 (ties and position-bias-inconsistent votes included, counted as ties); human vs human
+agreement in the same table is 81% (S2) and 63% (S1). Table 6 (Chatbot Arena) reports GPT-4 vs human at 87% (S2)
+and 64% (S1). Figure 2 shows agreement rising with the win-rate difference between the two models in a pair. The
+paper reports agreement rates; it does not report a measurement of judge calibration drift over time.
 
-> Position-bias mitigation: evaluate both orders, take a win only if the judge is consistent; otherwise declare tie.
-> Verbosity-bias mitigation: length-controlled evaluation pairs where responses differ only in length; compute length-residualized win rate.
-> Self-enhancement mitigation: never use the candidate as its own judge; for preference-label generation, use a stronger independent model; for RM training data, pool multiple judges.
+## Used in
 
-Ch-51 §6 memo's "judge-bias check: position-swap parity on IFEval-judge subset = 94% (≥90% threshold)" comes directly from this. The threshold is a concrete acceptance criterion; if position-swap parity < 90%, the go/no-go is halted pending a judge audit or a stronger judge.
-
----
-
-## The judge-agreement number as a ceiling on claimable effect
-
-Source §Abstract:
-
-> GPT-4 reaches ~80% agreement with human experts — the same rate as humans agree among themselves.
-
-This is an upper bound on judge reliability, not a lower bound on variance. If the judge disagrees with humans 20% of the time on any single item, a win-rate shift smaller than ~20 pp has a non-trivial probability of being a judge-opinion shift rather than a model-capability shift. Ch-51 §7(c) lists this as a named failure mode; the fix is (a) swap-and-average, (b) pool ≥2 judges, (c) report judge-agreement rate alongside win-rate.
-
----
-
-## Reference-guided grading — the single cheapest fix
-
-Source §Technical Details:
-
-> Reference-guided grading: attach a gold reference solution to the prompt; raises agreement on objective tasks (math, coding), less effect on writing tasks.
-
-For any eval where a gold answer exists (MATH, GSM8K, code with unit tests), reference-guided grading moves σ_judge toward 0 by making the judge a near-verifier. Ch-51's §1 variance table notes "σ_judge ≈ 0 for rule-based verifiers; 1–4 pp for LLM-as-judge pairwise." The guideline: prefer verifiers over LLM judges whenever the task admits one.
-
----
-
-## Why this matters for paired bootstrap
-
-Paired bootstrap §4 assumes the per-item scores are valid comparable estimates. When the judge has position bias, the *score itself* is miscalibrated per item — pairing does not fix it. The fix is upstream: run both orderings, average; then paired-bootstrap on the averaged scores. Ch-51 §4 sign test is the robust alternative: it uses only the *direction* of the preference, which is ~80% aligned with human judgment even under position bias.
-
----
-
-## Connections
-
-- **[[bradley-terry-rm]]** — Chatbot Arena Elo is the Bradley-Terry-at-scale version of these pairwise judgments.
-- **[[constitutional-ai]], [[rlaif-scaling]]** — AI-labeling pipelines inherit these biases directly.
-- **[[reward-hacking-taxonomy]]** — verbosity / self-enhancement are attested proxy failures.
-- **ch-51 §1** — judge-variance row.
-- **ch-51 §4 sign test** — robust to judge miscalibration when directions still align with humans.
-- **ch-52** — safety eval frequently uses LLM judges; inherits the same variance floor.
+ch-51 §1.5 (judge inconsistency as an irreducible noise term in a win-rate gate) and Common mistakes. ch-49 holds
+the full bias inventory.

@@ -1,0 +1,431 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Knowledge Acquisition Explorer (ch-12a)</title>
+<style>
+:root {
+  color-scheme: light;
+  --bg: #f7f6f3;
+  --surface: #fcfcfb;
+  --text: #0b0b0b;
+  --text2: #52514e;
+  --muted: #6f6e69;
+  --grid: #e3e2de;
+  --axis: #b9b8b2;
+  --border: #dcdbd6;
+  --s1: #2a78d6;
+  --s2: #eb6834;
+  --s3: #1baf7a;
+  --band: rgba(42, 120, 214, 0.12);
+  --tip-bg: #ffffff;
+  --btn-on: #e6eefa;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --bg: #121211;
+    --surface: #1a1a19;
+    --text: #ffffff;
+    --text2: #c3c2b7;
+    --muted: #9a998f;
+    --grid: #2c2c2a;
+    --axis: #55544f;
+    --border: #33332f;
+    --s1: #3987e5;
+    --s2: #d95926;
+    --s3: #199e70;
+    --band: rgba(57, 135, 229, 0.18);
+    --tip-bg: #242423;
+    --btn-on: #1d2735;
+  }
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --bg: #121211;
+  --surface: #1a1a19;
+  --text: #ffffff;
+  --text2: #c3c2b7;
+  --muted: #9a998f;
+  --grid: #2c2c2a;
+  --axis: #55544f;
+  --border: #33332f;
+  --s1: #3987e5;
+  --s2: #d95926;
+  --s3: #199e70;
+  --band: rgba(57, 135, 229, 0.18);
+  --tip-bg: #242423;
+  --btn-on: #1d2735;
+}
+* { box-sizing: border-box; }
+[hidden] { display: none !important; }
+body {
+  margin: 0; background: var(--bg); color: var(--text);
+  font: 14px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+}
+main { max-width: 980px; margin: 0 auto; padding: 20px 16px 40px; }
+h1 { font-size: 1.35rem; margin: 0 0 4px; }
+h2 { font-size: 1.05rem; margin: 0 0 4px; }
+p.lede { color: var(--text2); margin: 0 0 16px; }
+.tabs { display: flex; flex-wrap: wrap; gap: 6px; margin: 0 0 12px; }
+button {
+  font: inherit; color: var(--text); background: var(--surface); border: 1px solid var(--border);
+  border-radius: 6px; padding: 5px 10px; cursor: pointer;
+}
+button[aria-pressed="true"], button[aria-selected="true"] { background: var(--btn-on); border-color: var(--s1); }
+.panel { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 14px; }
+.sub { color: var(--text2); margin: 0 0 10px; }
+.controls { display: flex; flex-wrap: wrap; gap: 10px 18px; align-items: center; margin: 6px 0 10px; }
+.controls label { color: var(--text2); }
+.group { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; }
+.legend { display: flex; flex-wrap: wrap; gap: 6px 16px; margin: 4px 0 8px; color: var(--text2); }
+.key { display: inline-flex; align-items: center; gap: 6px; }
+.sw { width: 12px; height: 12px; border-radius: 3px; display: inline-block; }
+.ln { width: 18px; height: 2px; display: inline-block; }
+.chart { width: 100%; overflow-x: auto; position: relative; }
+svg { display: block; width: 100%; height: auto; }
+svg text { fill: var(--muted); font-size: 11px; }
+svg .lbl { fill: var(--text2); font-size: 12px; }
+.readout { margin: 10px 0 0; padding: 10px 12px; border-radius: 8px; border: 1px solid var(--border); background: var(--bg); }
+.readout b { font-variant-numeric: tabular-nums; }
+.caption { color: var(--muted); font-size: 12.5px; margin: 10px 0 0; }
+.tip {
+  position: absolute; pointer-events: none; background: var(--tip-bg); color: var(--text);
+  border: 1px solid var(--border); border-radius: 6px; padding: 6px 8px; font-size: 12px;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.12); max-width: 260px; z-index: 5;
+}
+details { margin-top: 10px; }
+summary { cursor: pointer; color: var(--text2); }
+.tablewrap { overflow-x: auto; }
+table { border-collapse: collapse; font-size: 12.5px; margin-top: 6px; font-variant-numeric: tabular-nums; }
+th, td { border-bottom: 1px solid var(--grid); padding: 4px 8px; text-align: right; }
+th:first-child, td:first-child { text-align: left; }
+input[type=range] { width: min(320px, 100%); }
+</style>
+</head>
+<body>
+<main>
+<h1>Knowledge acquisition explorer</h1>
+<p class="lede">Three measurements from ch-12a: whether stored facts can be extracted, how fast a fact's gain fades after its last exposure, and which repetition counts degrade a model. All numbers are from the cited papers; derived quantities are labelled.</p>
+
+<div class="tabs" role="tablist">
+  <button role="tab" aria-selected="true" data-tab="a">A. Storage vs extraction</button>
+  <button role="tab" aria-selected="false" data-tab="b">B. Retention after last exposure</button>
+  <button role="tab" aria-selected="false" data-tab="c">C. Repetition band</button>
+</div>
+
+<!-- Panel A -->
+<section class="panel" id="tab-a">
+  <h2>QA accuracy on people whose questions were never trained</h2>
+  <p class="sub">GPT2 (124M) pretrained on synthetic biographies of 100,000 people; QA pairs for half the people; accuracy measured on the other half. Hover a bar for values.</p>
+  <div class="legend">
+    <span class="key"><span class="sw" style="background:var(--s1)"></span>Pretrain on biographies, then QA fine-tune</span>
+    <span class="key"><span class="sw" style="background:var(--s2)"></span>Mixed training (biographies + QA together)</span>
+  </div>
+  <div class="chart" id="chartA"></div>
+  <div class="readout" id="readA">Rows differ only in how each person's biography is written in the pretraining data. "single": one biography, fixed sentence order. "multi5": five differently worded biographies. "permute": shuffled sentences. "fullname": pronouns replaced with the full name.</div>
+  <details>
+    <summary>Table view</summary>
+    <div class="tablewrap"><table id="tableA"></table></div>
+  </details>
+  <p class="caption">Source: Physics of Language Models Part 3.1, arXiv:2309.14316v3, Figure 3 (mean over six attributes, GPT2, bioS; nine of the figure's 17 augmentation rows are shown). The majority-guess baseline for the mean is 2.7%.</p>
+</section>
+
+<!-- Panel B -->
+<section class="panel" id="tab-b" hidden>
+  <h2>Fraction of a fact's log-probability gain still retained</h2>
+  <p class="sub">OLMo-7B resumed from an intermediate checkpoint; a fictional fact is injected 10 times (every 100 steps) as the same text ("duplication") or as a new paraphrase each time ("paraphrase"). The x-axis counts training tokens after the last injection.</p>
+  <div class="controls">
+    <div class="group" id="depthBtns"><label>Probe:</label>
+      <button data-depth="mem" aria-pressed="true">Memorization</button>
+      <button data-depth="sem" aria-pressed="false">Semantic</button>
+      <button data-depth="comp" aria-pressed="false">Composition</button>
+    </div>
+    <div class="group" id="stageBtns"><label>Checkpoint:</label>
+      <button data-stage="0" aria-pressed="false">177B tokens</button>
+      <button data-stage="1" aria-pressed="true">500B</button>
+      <button data-stage="2" aria-pressed="false">1.5T</button>
+    </div>
+    <div class="group" id="batchBtns"><label>Batch:</label>
+      <button data-batch="2048" aria-pressed="true">2,048 sequences (4M tokens)</button>
+      <button data-batch="128" aria-pressed="false">128 sequences</button>
+    </div>
+  </div>
+  <div class="controls">
+    <label for="interval">Tokens since last exposure: <b id="intervalLbl"></b></label>
+    <input id="interval" type="range" min="6" max="13" step="0.05" value="10">
+  </div>
+  <div class="legend">
+    <span class="key"><span class="ln" style="background:var(--s1)"></span>Duplication</span>
+    <span class="key"><span class="ln" style="background:var(--s2)"></span>Paraphrase</span>
+  </div>
+  <div class="chart" id="chartB"></div>
+  <div class="readout" id="readB"></div>
+  <details>
+    <summary>Table view</summary>
+    <div class="tablewrap"><table id="tableB"></table></div>
+  </details>
+  <p class="caption">Source: Chang et al., arXiv:2406.11813v3. Slopes a: Table 2 (batch 2,048) and Table 10 (batch 128). x-intercepts: Table 6 and Table 11 (units log(tokens)). Each line is R(T) = a · (x₀ − log₁₀ T), clipped to [0, 1]; the base-10 reading matches the token axis of Figure 5 (derived). The authors state that the learnability threshold may differ from these x-intercepts (footnote 7).</p>
+</section>
+
+<!-- Panel C -->
+<section class="panel" id="tab-c" hidden>
+  <h2>Repeat counts where a repeated subset degrades the model</h2>
+  <p class="sub">Models trained for 100B tokens with part of the tokens drawn from repeats of a small subset. The shaded band marks repeat counts with at least 50% of the maximum degradation.</p>
+  <div class="controls">
+    <div class="group"><label for="nslider">Model parameters: <b id="nLbl"></b></label>
+    <input id="nslider" type="range" min="6" max="11.5" step="0.05" value="9"></div>
+    <div class="group"><label for="fslider">Repeated share of tokens: <b id="fLbl"></b></label>
+    <input id="fslider" type="range" min="0" max="4" step="1" value="1"></div>
+  </div>
+  <div class="legend">
+    <span class="key"><span class="ln" style="background:var(--s1)"></span>Left boundary E = 4.2e6 · N^−0.56</span>
+    <span class="key"><span class="ln" style="background:var(--s3)"></span>Right boundary E = 5.1e7 · N^−0.50</span>
+  </div>
+  <div class="chart" id="chartC"></div>
+  <div class="readout" id="readC"></div>
+  <p class="caption">Source: Hernandez et al., arXiv:2205.10487v1, §2 and Figure 4 (boundary fits aggregated over 3-90% repeated data at 100B training tokens). The subset size in the readout is derived: share × 100B tokens ÷ repeat count. Values beyond the model sizes trained in the paper are an extrapolation of the fit, which the authors present as a prediction, not a measurement.</p>
+</section>
+</main>
+
+<div class="tip" id="tip" hidden></div>
+
+<script>
+(function () {
+  const NS = 'http://www.w3.org/2000/svg';
+  const tip = document.getElementById('tip');
+  function el(name, attrs, parent) {
+    const e = document.createElementNS(NS, name);
+    for (const k in attrs) e.setAttribute(k, attrs[k]);
+    if (parent) parent.appendChild(e);
+    return e;
+  }
+  function css(v) { return getComputedStyle(document.documentElement).getPropertyValue(v).trim(); }
+  function showTip(evt, html) {
+    tip.innerHTML = html; tip.hidden = false;
+    const pad = 12, w = tip.offsetWidth, h = tip.offsetHeight;
+    let x = evt.clientX + pad + window.scrollX, y = evt.clientY + pad + window.scrollY;
+    if (evt.clientX + pad + w > window.innerWidth - 8) x = evt.clientX - w - pad + window.scrollX;
+    if (evt.clientY + pad + h > window.innerHeight - 8) y = evt.clientY - h - pad + window.scrollY;
+    tip.style.left = Math.max(4, x) + 'px'; tip.style.top = Math.max(4, y) + 'px';
+  }
+  function hideTip() { tip.hidden = true; }
+  function fmtTokens(log10) {
+    const v = Math.pow(10, log10);
+    if (v >= 1e12) return (v / 1e12).toFixed(v >= 1e13 ? 0 : 1) + 'T';
+    if (v >= 1e9) return (v / 1e9).toFixed(v >= 1e10 ? 0 : 1) + 'B';
+    if (v >= 1e6) return (v / 1e6).toFixed(v >= 1e7 ? 0 : 1) + 'M';
+    return Math.round(v).toLocaleString();
+  }
+
+  /* Tabs */
+  document.querySelectorAll('[data-tab]').forEach(b => b.addEventListener('click', () => {
+    document.querySelectorAll('[data-tab]').forEach(x => x.setAttribute('aria-selected', x === b ? 'true' : 'false'));
+    ['a', 'b', 'c'].forEach(t => { document.getElementById('tab-' + t).hidden = (t !== b.dataset.tab); });
+    renderAll();
+  }));
+
+  /* ---------- Panel A ---------- */
+  const A = [
+    ['single', 9.7, 86.6], ['single + fullname', 48.9, 85.9], ['single + permute1', 4.4, 82.5],
+    ['single + permute5', 70.0, 93.7], ['multi2', 41.1, 89.2], ['multi5', 41.0, 91.8],
+    ['multi5 + fullname', 82.4, 92.0], ['multi5 + permute', 96.6, 95.5], ['multi5 + permute + fullname', 96.2, 95.7]
+  ];
+  (function table() {
+    const t = document.getElementById('tableA');
+    t.innerHTML = '<tr><th>Pretraining data</th><th>Pretrain + QA fine-tune (%)</th><th>Mixed training (%)</th></tr>' +
+      A.map(r => `<tr><td>${r[0]}</td><td>${r[1].toFixed(1)}</td><td>${r[2].toFixed(1)}</td></tr>`).join('');
+  })();
+  function renderA() {
+    const host = document.getElementById('chartA'); host.innerHTML = '';
+    const W = Math.max(360, host.clientWidth || 600);
+    const narrow = W < 560;
+    const labelW = narrow ? 170 : 190, right = 40, top = 18, rowH = 34, bar = 11;
+    const H = top + A.length * rowH + 26;
+    const svg = el('svg', { viewBox: `0 0 ${W} ${H}`, role: 'img', 'aria-label': 'Grouped bar chart of QA accuracy by pretraining data variant' }, host);
+    const x0 = labelW, x1 = W - right;
+    const sx = v => x0 + (x1 - x0) * v / 100;
+    [0, 25, 50, 75, 100].forEach(v => {
+      el('line', { x1: sx(v), x2: sx(v), y1: top - 6, y2: H - 22, stroke: css('--grid'), 'stroke-width': 1 }, svg);
+      const t = el('text', { x: sx(v), y: H - 8, 'text-anchor': 'middle' }, svg); t.textContent = v + '%';
+    });
+    el('line', { x1: x0, x2: x0, y1: top - 6, y2: H - 22, stroke: css('--axis'), 'stroke-width': 1 }, svg);
+    A.forEach((r, i) => {
+      const yc = top + i * rowH + rowH / 2;
+      const lab = el('text', { x: labelW - 6, y: yc + 4, 'text-anchor': 'end', class: 'lbl', style: narrow ? 'font-size:11px' : '' }, svg);
+      lab.textContent = narrow ? r[0].replace(' + ', '+').replace(' + ', '+') : r[0];
+      [[r[1], '--s1', 'Pretrain + QA fine-tune'], [r[2], '--s2', 'Mixed training']].forEach((d, j) => {
+        const y = yc - bar - 1 + j * (bar + 2);
+        const w = Math.max(0, sx(d[0]) - x0);
+        const rr = Math.min(4, w / 2, bar / 2);
+        const path = `M${x0},${y} H${x0 + w - rr} Q${x0 + w},${y} ${x0 + w},${y + rr} V${y + bar - rr} Q${x0 + w},${y + bar} ${x0 + w - rr},${y + bar} H${x0} Z`;
+        el('path', { d: path, fill: css(d[1]) }, svg);
+        if (j === 0) { const vt = el('text', { x: x0 + w + 4, y: y + bar - 1 }, svg); vt.textContent = d[0].toFixed(1); }
+        const hit = el('rect', { x: x0, y: y - 1, width: x1 - x0, height: bar + 2, fill: 'transparent' }, svg);
+        hit.addEventListener('mousemove', e => showTip(e, `<b>${r[0]}</b><br>${d[2]}: ${d[0].toFixed(1)}%`));
+        hit.addEventListener('mouseleave', hideTip);
+      });
+    });
+  }
+
+  /* ---------- Panel B ---------- */
+  // [dup mem, dup sem, dup comp, para mem, para sem, para comp] per stage [early, mid, late]
+  const slope = {
+    2048: { dup: { mem: [0.26, 0.25, 0.20], sem: [0.24, 0.25, 0.21], comp: [0.18, 0.20, 0.16] },
+            para: { mem: [0.20, 0.21, 0.18], sem: [0.20, 0.23, 0.21], comp: [0.14, 0.15, 0.19] } },
+    128: { dup: { mem: [0.26, 0.31, 0.30], sem: [0.24, 0.29, 0.29], comp: [0.25, 0.26, 0.26] },
+           para: { mem: [0.26, 0.31, 0.29], sem: [0.25, 0.32, 0.30], comp: [0.27, 0.26, 0.26] } }
+  };
+  const xint = {
+    2048: { dup: { mem: [11.01, 11.02, 11.59], sem: [10.86, 10.98, 11.33], comp: [11.35, 11.32, 11.85] },
+            para: { mem: [11.34, 11.37, 12.06], sem: [11.44, 10.94, 11.47], comp: [12.05, 11.88, 11.40] } },
+    128: { dup: { mem: [9.94, 9.45, 9.62], sem: [9.87, 9.49, 9.61], comp: [9.45, 9.47, 9.33] },
+           para: { mem: [9.90, 9.44, 9.72], sem: [9.90, 9.39, 9.50], comp: [9.23, 9.28, 9.35] } }
+  };
+  const stB = { depth: 'mem', stage: 1, batch: 2048 };
+  const depthName = { mem: 'memorization', sem: 'semantic', comp: 'composition' };
+  const stageName = ['177B-token', '500B-token', '1.5T-token'];
+  function bindGroup(id, key, attr, parse) {
+    document.querySelectorAll('#' + id + ' button').forEach(b => b.addEventListener('click', () => {
+      stB[key] = parse(b.dataset[attr]);
+      document.querySelectorAll('#' + id + ' button').forEach(x => x.setAttribute('aria-pressed', x === b ? 'true' : 'false'));
+      renderB();
+    }));
+  }
+  bindGroup('depthBtns', 'depth', 'depth', v => v);
+  bindGroup('stageBtns', 'stage', 'stage', v => +v);
+  bindGroup('batchBtns', 'batch', 'batch', v => +v);
+  document.getElementById('interval').addEventListener('input', renderB);
+  const R = (a, x0, lt) => Math.max(0, Math.min(1, a * (x0 - lt)));
+  function renderB() {
+    const lt = +document.getElementById('interval').value;
+    document.getElementById('intervalLbl').textContent = fmtTokens(lt) + ' (10^' + lt.toFixed(2) + ')';
+    const host = document.getElementById('chartB'); host.innerHTML = '';
+    const W = Math.max(360, host.clientWidth || 600), H = 290;
+    const L = 46, Rm = 16, T = 12, B = 40;
+    const svg = el('svg', { viewBox: `0 0 ${W} ${H}`, role: 'img', 'aria-label': 'Line chart of retainability versus tokens since last exposure' }, host);
+    const sx = v => L + (W - L - Rm) * (v - 6) / 7, sy = v => T + (H - T - B) * (1 - v);
+    for (let v = 6; v <= 13; v++) {
+      el('line', { x1: sx(v), x2: sx(v), y1: T, y2: H - B, stroke: css('--grid'), 'stroke-width': 1 }, svg);
+      const t = el('text', { x: sx(v), y: H - B + 16, 'text-anchor': 'middle' }, svg); t.textContent = fmtTokens(v);
+    }
+    [0, 0.25, 0.5, 0.75, 1].forEach(v => {
+      el('line', { x1: L, x2: W - Rm, y1: sy(v), y2: sy(v), stroke: css('--grid'), 'stroke-width': 1 }, svg);
+      const t = el('text', { x: L - 6, y: sy(v) + 4, 'text-anchor': 'end' }, svg); t.textContent = v.toFixed(2);
+    });
+    el('line', { x1: L, x2: W - Rm, y1: sy(0), y2: sy(0), stroke: css('--axis'), 'stroke-width': 1 }, svg);
+    const xl = el('text', { x: (L + W - Rm) / 2, y: H - 6, 'text-anchor': 'middle' }, svg); xl.textContent = 'training tokens after the last exposure (log scale)';
+    const yl = el('text', { x: 12, y: T + (H - T - B) / 2, 'text-anchor': 'middle', transform: `rotate(-90 12 ${T + (H - T - B) / 2})` }, svg); yl.textContent = 'retainability R';
+    const rows = [];
+    [['dup', '--s1', 'Duplication'], ['para', '--s2', 'Paraphrase']].forEach(s => {
+      const a = slope[stB.batch][s[0]][stB.depth][stB.stage];
+      const x0 = xint[stB.batch][s[0]][stB.depth][stB.stage];
+      let d = '';
+      for (let v = 6; v <= 13.0001; v += 0.05) d += (d ? 'L' : 'M') + sx(v).toFixed(1) + ',' + sy(R(a, x0, v)).toFixed(1);
+      el('path', { d, fill: 'none', stroke: css(s[1]), 'stroke-width': 2, 'stroke-linejoin': 'round', 'stroke-linecap': 'round' }, svg);
+      const r = R(a, x0, lt);
+      el('circle', { cx: sx(lt), cy: sy(r), r: 4.5, fill: css(s[1]), stroke: css('--surface'), 'stroke-width': 2 }, svg);
+      rows.push([s[2], a, x0, r]);
+    });
+    el('line', { x1: sx(lt), x2: sx(lt), y1: T, y2: H - B, stroke: css('--axis'), 'stroke-width': 1 }, svg);
+    const hit = el('rect', { x: L, y: T, width: W - L - Rm, height: H - T - B, fill: 'transparent' }, svg);
+    hit.addEventListener('mousemove', e => {
+      const box = svg.getBoundingClientRect();
+      const v = 6 + 7 * ((e.clientX - box.left) * (W / box.width) - L) / (W - L - Rm);
+      const vv = Math.max(6, Math.min(13, v));
+      showTip(e, `<b>${fmtTokens(vv)} tokens</b><br>` + rows.map(r => `${r[0]}: R = ${R(r[1], r[2], vv).toFixed(2)}`).join('<br>'));
+    });
+    hit.addEventListener('mouseleave', hideTip);
+    document.getElementById('readB').innerHTML =
+      `${stageName[stB.stage]} checkpoint, ${depthName[stB.depth]} probes, batch ${stB.batch.toLocaleString()} sequences. ` +
+      rows.map(r => `${r[0]}: a = ${r[1].toFixed(2)}, x-intercept 10^${r[2].toFixed(2)} ≈ ${fmtTokens(r[2])} tokens, R at the selected interval = <b>${r[3].toFixed(2)}</b>`).join('. ') + '.';
+    const t = document.getElementById('tableB');
+    let html = '<tr><th>Batch / scenario / probe</th><th>a (177B)</th><th>a (500B)</th><th>a (1.5T)</th><th>x₀ (177B)</th><th>x₀ (500B)</th><th>x₀ (1.5T)</th></tr>';
+    [2048, 128].forEach(bs => ['dup', 'para'].forEach(sc => ['mem', 'sem', 'comp'].forEach(dp => {
+      html += `<tr><td>${bs} / ${sc === 'dup' ? 'duplication' : 'paraphrase'} / ${depthName[dp]}</td>` +
+        slope[bs][sc][dp].map(v => `<td>${v.toFixed(2)}</td>`).join('') + xint[bs][sc][dp].map(v => `<td>${v.toFixed(2)}</td>`).join('') + '</tr>';
+    })));
+    t.innerHTML = html;
+  }
+
+  /* ---------- Panel C ---------- */
+  const shares = [0.03, 0.10, 0.20, 0.50, 0.90];
+  const left = n => 4.2e6 * Math.pow(n, -0.56), rightB = n => 5.1e7 * Math.pow(n, -0.50);
+  document.getElementById('nslider').addEventListener('input', renderC);
+  document.getElementById('fslider').addEventListener('input', renderC);
+  function fmtNum(v) {
+    if (v >= 1e9) return (v / 1e9).toPrecision(3) + 'B';
+    if (v >= 1e6) return (v / 1e6).toPrecision(3) + 'M';
+    if (v >= 1e3) return Math.round(v).toLocaleString();
+    return v.toPrecision(3);
+  }
+  function renderC() {
+    const ln = +document.getElementById('nslider').value, n = Math.pow(10, ln);
+    const share = shares[+document.getElementById('fslider').value];
+    document.getElementById('nLbl').textContent = fmtNum(n);
+    document.getElementById('fLbl').textContent = Math.round(share * 100) + '%';
+    const host = document.getElementById('chartC'); host.innerHTML = '';
+    const W = Math.max(360, host.clientWidth || 600), H = 290;
+    const L = 70, Rm = 16, T = 12, B = 40;
+    const tick = v => ({0: '1', 1: '10', 2: '100', 3: '1,000', 4: '10,000', 5: '100,000', 6: '1M', 7: '10M', 8: '100M', 9: '1B', 10: '10B', 11: '100B'})[v];
+    const svg = el('svg', { viewBox: `0 0 ${W} ${H}`, role: 'img', 'aria-label': 'Log-log chart of the repeated-epoch band versus model size' }, host);
+    const xmin = 6, xmax = 11.5, ymin = 0, ymax = 6;
+    const sx = v => L + (W - L - Rm) * (v - xmin) / (xmax - xmin), sy = v => T + (H - T - B) * (1 - (v - ymin) / (ymax - ymin));
+    for (let v = 6; v <= 11; v++) {
+      el('line', { x1: sx(v), x2: sx(v), y1: T, y2: H - B, stroke: css('--grid'), 'stroke-width': 1 }, svg);
+      const t = el('text', { x: sx(v), y: H - B + 16, 'text-anchor': 'middle' }, svg); t.textContent = tick(v);
+    }
+    for (let v = 0; v <= 6; v++) {
+      el('line', { x1: L, x2: W - Rm, y1: sy(v), y2: sy(v), stroke: css('--grid'), 'stroke-width': 1 }, svg);
+      const t = el('text', { x: L - 6, y: sy(v) + 4, 'text-anchor': 'end' }, svg); t.textContent = tick(v);
+    }
+    el('line', { x1: L, x2: W - Rm, y1: sy(0), y2: sy(0), stroke: css('--axis'), 'stroke-width': 1 }, svg);
+    const xl = el('text', { x: (L + W - Rm) / 2, y: H - 6, 'text-anchor': 'middle' }, svg); xl.textContent = 'model parameters N (log scale)';
+    const yl = el('text', { x: 11, y: T + (H - T - B) / 2, 'text-anchor': 'middle', transform: `rotate(-90 11 ${T + (H - T - B) / 2})` }, svg); yl.textContent = 'repeated epochs E';
+    let top = '', bot = '';
+    const pts = [];
+    for (let v = xmin; v <= xmax + 1e-9; v += 0.05) {
+      const nn = Math.pow(10, v);
+      pts.push([sx(v), sy(Math.max(ymin, Math.min(ymax, Math.log10(rightB(nn))))), sy(Math.max(ymin, Math.min(ymax, Math.log10(left(nn)))))]);
+    }
+    top = pts.map((p, i) => (i ? 'L' : 'M') + p[0].toFixed(1) + ',' + p[1].toFixed(1)).join('');
+    bot = pts.slice().reverse().map(p => 'L' + p[0].toFixed(1) + ',' + p[2].toFixed(1)).join('');
+    el('path', { d: top + bot + 'Z', fill: css('--band') }, svg);
+    el('path', { d: pts.map((p, i) => (i ? 'L' : 'M') + p[0].toFixed(1) + ',' + p[2].toFixed(1)).join(''), fill: 'none', stroke: css('--s1'), 'stroke-width': 2 }, svg);
+    el('path', { d: top, fill: 'none', stroke: css('--s3'), 'stroke-width': 2 }, svg);
+    const eL = left(n), eR = rightB(n);
+    el('line', { x1: sx(ln), x2: sx(ln), y1: T, y2: H - B, stroke: css('--axis'), 'stroke-width': 1 }, svg);
+    [[eL, '--s1'], [eR, '--s3']].forEach(p => {
+      const yv = Math.log10(p[0]);
+      if (yv >= ymin && yv <= ymax) el('circle', { cx: sx(ln), cy: sy(yv), r: 4.5, fill: css(p[1]), stroke: css('--surface'), 'stroke-width': 2 }, svg);
+    });
+    const hit = el('rect', { x: L, y: T, width: W - L - Rm, height: H - T - B, fill: 'transparent' }, svg);
+    hit.addEventListener('mousemove', e => {
+      const box = svg.getBoundingClientRect();
+      const v = xmin + (xmax - xmin) * ((e.clientX - box.left) * (W / box.width) - L) / (W - L - Rm);
+      const nn = Math.pow(10, Math.max(xmin, Math.min(xmax, v)));
+      showTip(e, `<b>N = ${fmtNum(nn)}</b><br>left boundary: ${fmtNum(left(nn))} epochs<br>right boundary: ${fmtNum(rightB(nn))} epochs`);
+    });
+    hit.addEventListener('mouseleave', hideTip);
+    const tokens = share * 100e9;
+    document.getElementById('readC').innerHTML =
+      `At N = ${fmtNum(n)}, the fitted band runs from <b>${fmtNum(eL)}</b> to <b>${fmtNum(eR)}</b> repeated epochs. ` +
+      `With ${Math.round(share * 100)}% of 100B training tokens from repeats, that corresponds to a repeated subset of ` +
+      `<b>${fmtNum(tokens / eR)}</b> to <b>${fmtNum(tokens / eL)}</b> unique tokens (derived). ` +
+      `Reference point from the abstract: 800M parameters, 0.1% of data repeated 100 times with 10% of tokens repeated, degraded to about 400M-parameter performance.`;
+  }
+
+  function renderAll() {
+    if (!document.getElementById('tab-a').hidden) renderA();
+    if (!document.getElementById('tab-b').hidden) renderB();
+    if (!document.getElementById('tab-c').hidden) renderC();
+  }
+  let rt = null;
+  window.addEventListener('resize', () => { clearTimeout(rt); rt = setTimeout(renderAll, 120); });
+  if (window.matchMedia) window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', renderAll);
+  renderA(); renderB(); renderC();
+})();
+</script>
+</body>
+</html>

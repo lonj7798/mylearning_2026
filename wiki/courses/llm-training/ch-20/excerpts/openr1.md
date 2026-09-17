@@ -7,6 +7,8 @@ source_url: https://github.com/huggingface/open-r1
 created_at: "2026-04-23"
 ---
 
+> Superseded by the 2026-09 revision of read.md; kept for history.
+
 # Excerpt: Open-R1 — HuggingFace's 220K-problem math corpus and Math-Verify
 
 **Source library:** `wiki/raw-data/llm-training/papers/openr1.md`

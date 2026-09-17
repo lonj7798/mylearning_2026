@@ -2,144 +2,67 @@
 chapter: ch-14
 course: llm-training
 phase: read
-excerpt_of: Muennighoff et al. 2023 — "Scaling Data-Constrained Language Models"
+excerpt_of: wiki/raw-data/llm-training/papers/data-constrained-scaling.md
 source_url: https://arxiv.org/abs/2305.16264
-created_at: "2026-04-23"
+primary_version: arXiv:2305.16264v5 (2025-06-28; v1 2023-05)
+created_at: "2026-09-15"
+revised: 2026-09 (generality revision; replaces the 2026-04 excerpt, which used an incorrect formula)
 ---
 
-# Excerpt: Muennighoff's Data-Constrained Scaling Law
+# Excerpt: Scaling Data-Constrained Language Models (Muennighoff et al.)
 
-**Source:** `wiki/raw-data/llm-training/papers/data-constrained-scaling.md`
-**Primary paper:** Niklas Muennighoff, Alexander M. Rush, Boaz Barak, Teven Le Scao, Aleksandra Piktus, Nouamane Tazi, Sampo Pyysalo, Thomas Wolf, Colin Raffel, "Scaling Data-Constrained Language Models", 2023
-**arXiv:** https://arxiv.org/abs/2305.16264
+Verbatim quotations and equations used by ch-14 `read.md`, with loci. Authors: Niklas Muennighoff, Alexander M. Rush, Boaz Barak, Teven Le Scao, Aleksandra Piktus, Nouamane Tazi, et al. Checked against the v5 PDF on 2026-09-15. Source type: paper.
 
----
+## Abstract
+> "We find that with constrained data for a fixed compute budget, training with up to 4 epochs of repeated data yields negligible changes to loss compared to having unique data. However, with more repetition, the value of adding compute eventually decays to zero."
 
-## Bibliographic header
+## Definitions (§3)
+> "we split the Chinchilla total data term D into two parts: the number of unique tokens used, U_D, and the number of repetitions, R_D (i.e. epochs - 1). Given total training tokens D and data budget D_C these terms are simply computed as U_D = min{D_C, D} and R_D = (D/U_D) − 1."
 
-The paper trains 400 language models ranging from 10M to 9B parameters with token budgets of up to 900B tokens drawn from up to 178B unique tokens. The contribution is a *modified* Chinchilla scaling law that replaces token count `D` with an **effective-token count `D'`** that saturates with repetition.
+## Motivation for a new law (§5)
+> "their parametric fit explicitly relies on the assumption that models are trained for a single epoch only. Thus, there is no guarantee that their scaling predictions hold for repeated data."
 
-From the raw-data notes:
+## Evaluation on held-out data (§4, App. H)
+> "As repeating data can result in extreme overfitting (see Appendix H), we report loss on a held-out test set unless otherwise specified" (§4)
+> "when repeating data for multiple epochs, training loss is a bad metric as models will overfit to the limited data available" (App. H)
 
-> *"Data-constrained scaling studies how language-model training changes when the amount of unique high-quality data becomes a bottleneck. The core finding is that the value of repeating existing data versus adding lower-quality new data depends on where the model sits in the compute-data regime."*
+## Loss form and effective data (§3.1, Eq. 5-6)
+- Loss: L(N, D) = A / N′^α + B / D′^β + E, where N′ is effective parameters and D′ is effective data.
+- Eq. 5: D′ = U_D + U_D · R*_D · (1 − e^(−R_D / R*_D)).
+- Eq. 6: N′ = U_N + U_N · R*_N · (1 − e^(−R_N / R*_N)).
+> "Note that for R_D = 0 (no repetitions), D′ = U_D = D." ... "The formula implies that no matter how many times we repeat the data, we will not get a better loss than could be obtained with a single epoch on U_D + U_D R*_D fresh tokens."
+> "at R_D = R*_D, the number of effective tokens D′ is U_D + U_D R_D (1 − e^−1) which means that the U_D R_D repeated tokens are worth on average 1 − 1/e fraction of fresh ones."
 
-This is the single paper that underlies every "how many epochs should I train?" decision in 2024–2025 frontier pretraining.
+## Derivation assumption (App. A)
+> "Assume that each time a model trains on a token, it learns a 1 − δ fraction of the information in it for some constant 0 ≤ δ ≤ 1." R*_D is defined as (1 − δ)/δ, and "D′ 'plateaus' at U + R*_D U as R_D goes to infinity."
 
----
+## Fitted constants (App. A, Eq. 17)
+> "we are able to get a fairly stable fit resulting in R*_N = 5.309743 and R*_D = 15.387756. Since R*_D > R*_N, excess parameters decay faster."
+- Eq. 17: L = 521 / (U_N + 5.3 · U_N (1 − e^(−R_N/5.3)))^0.35 + 1488 / (U_D + 15.4 · U_D (1 − e^(−R_D/15.4)))^0.35 + 1.87, "where U_N = U_D · 0.051".
+- The fit uses 182 runs "with parameters varying from 7 million up to 9 billion and epochs ranging from 1 to 500" (App. A).
 
-## The core formula
+## Return (§6)
+- Figure 4 (IsoFLOP): 2.8B parameters trained for 55B tokens, 4.2B for 84B tokens, 8.7B for 178B tokens, each with several data budgets (epochs).
+> "the N = 8.7 billion parameter model trained for four epochs (D_C = 44 billion unique tokens) finishes training with only 0.5% higher validation loss than the single-epoch model (D_C = 178 billion unique tokens)."
+> "it significantly underestimates the final test loss of failing models where loss increases midway through training, such as models trained for 44 epochs (not depicted)."
+> "Meaningful gains from repeating data can be made up to around 16 epochs (R*_D) beyond which returns diminish extremely fast."
 
-The standard Chinchilla law:
+## Allocation (§5)
+> "We confirm this at scale by training the data-constrained compute-optimal model for 9.3 × 10^21 FLOPs and 25 billion unique tokens as suggested by our efficient frontier. Despite having 27% fewer parameters, this model achieves better loss and downstream performance than the model suggested by the Chinchilla scaling laws."
 
-```math
-L(N, D) = E + A / N^\alpha + B / D^\beta
-```
+## Complementary strategies (§7, 4.2B parameters, 84B total tokens)
+> "For repeating data, differences in downstream performance are insignificant for up to around 4 epochs (25% budget) and then start dropping ... Filling up to 50% of data with code (42 billion tokens) also shows no deterioration. Beyond that, performance decreases quickly on natural language tasks."
+> "Of the filtering approaches, we find perplexity-filtering to be effective, while deduplication does not help." ... "Deduplication may have value not captured in our benchmark, such as reducing memorization."
+> "we recommend reserving filtering for noisy datasets and using both code augmentation and repeating to increase data tokens."
 
-Muennighoff's data-constrained extension replaces the total-token count `D` with an **effective count** that captures the diminishing returns of repetition:
+## Training hyperparameters (App. S)
+> "For all training runs we use 1% of tokens for linear warm-up of the learning rate to a maximum learning rate of 2e-4 that is decayed to 2e-5 following a cosine schedule." ... "We use a dropout rate of 0.1, a weight decay rate of 0.1 and clip gradients at 1.0."
 
-```math
-D' = U \cdot \left(1 - \exp\left(-\frac{R}{R_T}\right)\right)
-```
+## Filtering setup (§7, App. N-O)
+> "For perplexity filtering, we select the top 25% samples with the lowest perplexity according to a language model trained on Wikipedia. This results in 44 billion tokens that are repeated for close to two epochs to reach the full data budget. For deduplication filtering, all samples with a 100-char overlap are removed resulting in 21 billion tokens that are repeated for four epochs during training."
+> "We also investigate filtering on a different noisier dataset in Appendix O, where we find it to be more effective."
 
-where:
-- `U` = unique token count in the training corpus
-- `R = D / U` = number of epochs (may be fractional)
-- `R_T` = fitted "token half-life" in epochs; empirically `R_T ≈ 4`
-
-Equivalently, the marginal value of the `k`-th repetition of a token is:
-
-```math
-w(k) = \exp\left(-\frac{k-1}{R_T}\right)
-```
-
-So the effective-token count is the sum of geometrically-decaying repeat values:
-
-```math
-D' = U \cdot \sum_{k=1}^{R} w(k) \;\approx\; U \cdot \int_0^R e^{-r/R_T}\,dr = U \cdot R_T \cdot (1 - e^{-R/R_T})
-```
-
-Note the left-hand side uses `R_T` as the scale; the integral form shows why `R_T` is called a "half-life" even though the decay is not binary (it is the characteristic scale of an exponential).
-
----
-
-## Reading the decay constant
-
-With `R_T = 4`:
-
-| `k` (epoch) | `w(k)` | Cumulative `D'(R) / U` |
-|---|---|---|
-| 1 | 1.000 | 0.221 |
-| 2 | 0.779 | 0.393 |
-| 3 | 0.607 | 0.528 |
-| 4 | 0.472 | 0.632 |
-| 5 | 0.368 | 0.713 |
-| 8 | 0.174 | 0.865 |
-| 12 | 0.050 | 0.950 |
-| 20 | 0.008 | 0.993 |
-
-**Three inflection points to memorise:**
-- `R = R_T = 4` → 63% of the asymptote absorbed. This is the "knee" of the curve — repetition past this point is deliberately cheap.
-- `R = 3 · R_T = 12` → 95% absorbed. Past here, fresh tokens (even noisy) dominate repetition.
-- `R = 5 · R_T = 20` → 99.3% absorbed. This is the wasted-compute regime.
-
-**Notice:** the formula does not claim that epoch 5 is "free" — it claims epoch 5 buys you 37% of what epoch 1 did. The integral is not zero; it is just diminishing.
-
----
-
-## The data-vs-parameter tradeoff under repetition
-
-Substituting `D'` back into the scaling law gives a *modified* compute-optimal boundary. Under pure Chinchilla, compute-optimal says `D_opt / N_opt ≈ 20`. Under data-constrained scaling with `U` fixed, beyond `R = R_T`:
-
-```
-dL/dN  ∝  −A α / N^(α+1)
-dL/dD' ∝  −B β / D'^(β+1)
-dD'/dD ∝   exp(−D/(U · R_T)) / (U · R_T)       # chain rule
-```
-
-As `D → ∞`, `dD'/dD → 0` — additional raw tokens stop buying effective tokens. So the compute-optimal model shifts: you want a *larger* model, not more repetitions. The paper states this explicitly:
-
-> *"Practical implication: 'more tokens' is ambiguous if many are repeats."*
-
-The planning consequence: if your `U` is 1T and you want to do a compute-optimal run at 3e25 FLOPs, you spend compute on a larger `N` rather than pushing `R` past 4–8.
-
----
-
-## Empirical measurements supporting R_T ≈ 4
-
-The paper fits `R_T` from a grid of (N, D, U) sweeps at 400 training runs. The fitted value varies slightly with model size — `R_T ≈ 3.5–4.5` across the 10M–9B range — with the midpoint estimate of 4 used as the canonical constant. The fit is remarkably stable: within the measurement range, no setting shows `R_T` dropping below 2 or exceeding 6.
-
-The paper also measures the alternative — *adding noisier new data* — and fits a quality-equivalence function. The summary:
-
-> *"Compares regimes with more unique data versus more repeated passes over fixed corpora."*
-
-Rough equivalence: 1 fresh token at filtering quality `q_new` is worth approximately `q_new / q_old` repeated tokens at the old corpus's quality. If your new scrape is 30% as clean as your old corpus (`q_new/q_old = 0.3`), repeating existing data beats adding new data until `w(k) < 0.3`, i.e., until epoch `k ≈ 1 − R_T · ln(0.3) ≈ 5.8`.
-
----
-
-## The corner that the paper warned about
-
-From the raw-data notes:
-
-> *"Important for frontier training because unique high-quality corpora are finite."*
-
-At the time (May 2023), this was a theoretical warning. By 2024 it was the binding constraint for every frontier lab. Llama 3's 15.6T token budget is almost exactly the total amount of high-quality English text that exists publicly; beyond it, Meta reports diminishing returns per additional scraped token. The data-constrained regime is no longer a small-scale curiosity — it is the default.
-
----
-
-## Where the formula breaks
-
-The paper is explicit about the regime of validity:
-1. **Fixed-quality corpus.** The formula assumes `U` tokens are at uniform quality. Mixing high- and low-quality tokens requires the quality-aware extension ([[scaling-laws-data-quality]] / this chapter §2).
-2. **No retention bound.** The formula is a loss-scaling fit. It says nothing about whether the model *retains* the rare facts seen only a few times — that is Allen-Zhu's territory (see [[physics-of-lm-3]]).
-3. **No contamination.** The fit assumes `U` unique tokens are *independent* samples of the target distribution. When the corpus is contaminated with synthetic data, the effective-token count drops further (see [[model-collapse]] / [[strong-model-collapse]]).
-
-Engineers in 2025 typically cap `R` at 4–8 for bulk pretraining and push to higher `R` only on the curated-cooldown stage (~50–100B tokens at 8–30 epochs). That is the Muennighoff formula being applied consciously with quality awareness layered on top.
-
----
-
-## Connections
-
-- Companion paper on quality as an axis: [[excerpts/scaling-laws-data-quality]]
-- Companion paper on retention: [[excerpts/physics-of-lm-3]]
-- Frontier recipe using the formula implicitly: [[excerpts/olmo-3-decontamination]]
-- Chapter synthesis: [[ch-14]]
+## Limitations (App. Q)
+> "In this work we focus on repeating the entire unique dataset for several epochs. Alternatively, one can repeat only a fraction of the dataset."
+> "The returns from additional epochs may heavily depend on hyperparameters such as learning rate, dropout, or the optimizer choice."
+> "More investigations of resolving data-constraints when fine-tuning LLMs may be of interest for future work."

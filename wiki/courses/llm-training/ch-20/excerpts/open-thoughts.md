@@ -7,6 +7,8 @@ source_url: https://arxiv.org/abs/2506.04178
 created_at: "2026-04-23"
 ---
 
+> Superseded by the 2026-09 revision of read.md; kept for history.
+
 # Excerpt: OpenThoughts — 1000+ ablations over the reasoning-data recipe
 
 **Source library:** `wiki/raw-data/llm-training/papers/open-thoughts.md`

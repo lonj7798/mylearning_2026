@@ -2,92 +2,30 @@
 chapter: ch-41
 course: llm-training
 phase: read
-excerpt_of: wiki/raw-data/llm-training/papers/pairrm.md
+excerpt_of: wiki/raw-data/llm-training/papers/pairrm.md (arXiv:2306.02561v3; llm-blender/PairRM model card @5b880cc)
 source_url: https://arxiv.org/abs/2306.02561
 created_at: "2026-04-23"
+revised: "2026-09-15 (generality revision; rewritten to match the verified card and primary source)"
 ---
 
-# Excerpt: PairRM — §4 of ch-41 uses as scalar-RM alternative
+# Excerpt: PairRanker and the PairRM checkpoint
 
-**Source library:** `wiki/raw-data/llm-training/papers/pairrm.md`
-**Artifact:** joint-encoder preference model + swap augmentation + tournament Best-of-N
+Used by [[read]] §3.4. Source card: [[pairrm]].
 
----
+The earlier version of this excerpt described `[CLS] x [SEP] y_A [SEP] y_B` inputs, swap-and-average inference worth 2–3 pp, an O(N log N) tournament, and a ~2 pp DPO lift from pair filtering. None of these is in the paper or model card. Corrections are below.
 
-## Why this source anchors ch-41
+## Architecture and loss (§3.2-3.3, App. A)
+- Input: `<s><source> x </s> <candidate1> y_i </s> <candidate2> y_j </s>` on DeBERTa-v3-large (400M).
+- Five-layer tanh MLPs on the source+candidate embeddings give `s^i` and `s^j`; pair score `s_ij = s^i − s^j`.
+- Per-metric BCE: `L_Q = −z_i log σ(s^i) − z_j log σ(s^j)` with `(z_i, z_j)` set by which candidate scores higher on metric Q (BARTScore on MixInstruct).
+- 5 sampled pairs per input; candidate order shuffled during training; no separate swap-and-average step or order ablation is described.
+- Aggregation: MaxLogits and MaxWins need O(N²) comparisons; one bubble-sort pass needs N − 1.
 
-§4 opens with the observation that BT's `r(x, y_A) − r(x, y_B)` is a *structural* choice — the two responses are scored independently and compared via subtraction. PairRM is the alternative: score them *jointly* so cross-attention can compare them directly. At matched performance, PairRM is ~20× smaller than scalar RMs, which is why §6's decision framework routes reranking tasks to PairRM by default.
+## Results
+- MixInstruct (N = 11): average GPT-Rank 3.20 for PairRanker vs 3.90 best single LLM, 3.50 SimCLS, 3.66 SummaReranker (Table 2). Pearson with GPT-Rank 46.98 vs 41.13 for SummaReranker (Table 3).
+- PairRM checkpoint (0.4B), model card: Auto-J 59.05 (UltraRM-13B 59.85, GPT-4 61.9); HHH-Alignment 84.62 (UltraRM-13B 83.71, GPT-4-0613 88.69); MT-Bench human judgments 59 (UltraRM-13B 56, GPT-4-0613 63.87).
+- PairRM training data: summarize_from_feedback, webgpt_comparisons, synthetic-instruct-gptj-pairwise, hh-rlhf, chatbot_arena_conversations, UltraFeedback; hyperparameters not reported.
 
----
-
-## The architectural shift §4 explains
-
-From the source (line 18):
-
-> **Joint encoding:** `f(x, y_A, y_B) → logit`; cross-attention sees both responses at once.
-
-This is the line that justifies a separate RM category in §6. Scalar BT RMs process A and B on separate forward passes — the subtraction is algebraic, not attentional. PairRM concatenates `[CLS] x [SEP] y_A [SEP] y_B [SEP]` and the transformer's self-attention compares A-tokens to B-tokens inside the same forward pass. For near-tie cases (length-matched, paraphrase-similar), that comparison is the bit of information scalar RMs throw away.
-
----
-
-## The two tricks that make it work
-
-From the source (line 19):
-
-> **Swap-augmentation:** always evaluate `(y_A, y_B)` and `(y_B, y_A)`, average logits — cancels position bias at train and inference time.
-
-From the source (line 20):
-
-> **Tournament Best-of-N:** for N candidates run O(N log N) pairwise comparisons, advance winners.
-
-Ch-41 §4 keeps both tricks as non-optional. Swap-augmentation adds 2–3 pp and removes position bias — skipping it is the #1 PairRM reproduction failure. Tournament BoN keeps the reranking tractable at N = 64 where full pairwise `O(N²)` would be 2016 forward passes instead of 6 rounds.
-
----
-
-## The performance claim §4 cites
-
-From the source (line 21):
-
-> PairRM-0.4B matches or beats scalar RMs at 7B on LLM-Blender benchmark.
-
-Ch-41 §4 treats this as the key empirical fact. The interpretation: most of the information in "which response is better" is *relative*, and cross-attention captures relative differences at parameter counts where the scalar-subtraction approach cannot.
-
----
-
-## The production use case §4 names
-
-From the source (line 22):
-
-> **Use cases beyond reranking:** preference-pair filtering for DPO (keep pairs where PairRM confidently prefers one), synthetic preference label generation, Best-of-N verification on instruction-following tasks.
-
-And (line 34):
-
-> keep `(y_w, y_l)` pairs where `PairRM(y_w, y_l) > τ`; this is a simple quality gate that has been shown to lift DPO performance ~2 pp on held-out evals.
-
-Ch-41 §4 reports this as PairRM's current production footprint: not PPO reward-shaping, but DPO pair filtering. The mental model is "PairRM is a gate, not a gradient." It screens noisy preference pairs before they become DPO training data.
-
----
-
-## The failure surface §4 still owes
-
-From the source (line 33):
-
-> inherits verbosity and position bias to some extent; swap-augmentation handles position but not verbosity — explicitly length-balance training pairs.
-
-Ch-41 §4 flags this but routes the fix to §5: if verbosity is the bias you cannot kill, use HelpSteer2's separate Verbosity head and reweight at RL time ([[nemotron-4-synthetic]]). PairRM is not the right structural answer to verbosity — it is the right structural answer to *relative comparison*.
-
----
-
-## The decision §6 derives from this excerpt
-
-§6's row: *"Reranking N candidates inline (DPO pair filtering, inference-time BoN, prompt-wise selection) → PairRM."* The reason is the joint-encoder insight in line 18 plus the size-efficiency claim in line 21. PairRM is wrong for "give me a scalar reward to shape PPO with" — that is §1's BT RM or §4's GenRM job.
-
----
-
-## Connections to the rest of ch-41
-
-- **§1** — structural alternative to [[bradley-terry-rm]]; does not use BT loss directly, uses binary cross-entropy on the joint logit.
-- **§3** — small enough to ensemble cheaply; `std_k PairRM_k` is a cheap OOD flag.
-- **§4** — sits alongside GenRM as the two non-scalar RM categories.
-- **§6** — default for reranking; not default for PPO reward-shaping.
-- **ch-44+ (DPO)** — PairRM's dominant role today is DPO pair filtering, not standalone RM.
+## Generality notes
+- No single open LLM is best: Vicuna is top-ranked on 21.22% of 5,000 instructions (Fig. 1).
+- With shuffled candidate order the ranker agrees with itself more than 90% of the time (App. C.5).

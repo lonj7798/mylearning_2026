@@ -7,6 +7,8 @@ source_url: https://arxiv.org/abs/2401.05566
 created_at: "2026-04-23"
 ---
 
+> Superseded by the 2026-09 revision of read.md; kept for history.
+
 # Excerpt: Contamination as a Weapon — The Sleeper-Agent Data Recipe
 
 **Source:** `wiki/raw-data/llm-training/papers/anthropic-sleeper-agents-data.md`

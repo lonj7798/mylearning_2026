@@ -7,6 +7,8 @@ source_url: https://arxiv.org/abs/2501.12948
 created_at: "2026-04-23"
 ---
 
+> Superseded by the 2026-09 revision of read.md; kept for history.
+
 # Excerpt: DeepSeek-R1 - the cold-start SFT ch-32 uses as its worked example
 
 **Source library:** `wiki/raw-data/llm-training/model-reports/deepseek-r1.md`

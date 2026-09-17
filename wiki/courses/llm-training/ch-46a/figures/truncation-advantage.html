@@ -1,0 +1,201 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ch-46a — Advantages under three failed-trajectory policies</title>
+<style>
+  :root{
+    --bg:#ffffff; --fg:#16181d; --muted:#5b6270; --line:#d8dce4; --panel:#f5f6f8;
+    --pos:#1f6f4a; --neg:#9a3324; --zero:#5b6270; --accent:#24486e;
+  }
+  @media (prefers-color-scheme: dark){
+    :root{ --bg:#14161a; --fg:#e8eaee; --muted:#9aa2b1; --line:#2c313a; --panel:#1b1e24;
+           --pos:#6fcf97; --neg:#e08272; --zero:#9aa2b1; --accent:#8fb6e0; }
+  }
+  *{box-sizing:border-box}
+  body{margin:0;padding:24px 18px 40px;background:var(--bg);color:var(--fg);
+       font:15px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif}
+  .wrap{max-width:860px;margin:0 auto}
+  h1{font-size:19px;margin:0 0 4px;font-weight:650}
+  p.sub{margin:0 0 20px;color:var(--muted);font-size:13.5px}
+  .panel{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:16px 18px;margin-bottom:18px}
+  .ctl{display:flex;flex-wrap:wrap;gap:18px;align-items:flex-end}
+  .ctl label{display:block;font-size:12.5px;color:var(--muted);margin-bottom:4px}
+  .ctl .field{min-width:150px;flex:1 1 150px}
+  input[type=range]{width:100%}
+  .val{font-variant-numeric:tabular-nums;font-weight:650;color:var(--fg)}
+  .warn{color:var(--neg);font-size:13px;margin-top:10px;min-height:18px}
+  .tablewrap{overflow-x:auto;margin-top:6px}
+  table{border-collapse:collapse;width:100%;min-width:520px;font-size:14px}
+  th,td{border:1px solid var(--line);padding:7px 9px;text-align:left}
+  th{background:var(--panel);font-weight:600;font-size:13px}
+  td.num{font-variant-numeric:tabular-nums;text-align:right;white-space:nowrap}
+  .pos{color:var(--pos);font-weight:650}
+  .neg{color:var(--neg);font-weight:650}
+  .zero{color:var(--zero)}
+  .bars{margin-top:14px}
+  .barrow{display:flex;align-items:center;gap:10px;margin:6px 0;font-size:13px}
+  .barlab{width:210px;color:var(--muted);flex:none}
+  .track{position:relative;flex:1;height:16px;background:var(--bg);border:1px solid var(--line);border-radius:3px}
+  .mid{position:absolute;left:50%;top:0;bottom:0;width:1px;background:var(--line)}
+  .fill{position:absolute;top:2px;bottom:2px;border-radius:2px}
+  .barval{width:64px;text-align:right;font-variant-numeric:tabular-nums;flex:none}
+  .note{font-size:12.5px;color:var(--muted);margin-top:16px}
+  code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12.5px;
+       background:var(--panel);border:1px solid var(--line);border-radius:3px;padding:1px 4px}
+  .formula{background:var(--panel);border:1px solid var(--line);border-radius:6px;
+           padding:10px 12px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:13px;margin:12px 0}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<h1>Advantages under three failed-trajectory policies</h1>
+<p class="sub">Companion to ch-46a §5. Set the composition of one rollout group and read the leave-one-out advantage
+that each rollout receives under the three policies the lab compares.</p>
+
+<div class="panel">
+  <div class="ctl">
+    <div class="field">
+      <label for="n">Rollouts per task <span class="val" id="nv">8</span></label>
+      <input id="n" type="range" min="2" max="16" step="1" value="8">
+    </div>
+    <div class="field">
+      <label for="s">Verified successes <span class="val" id="sv">2</span></label>
+      <input id="s" type="range" min="0" max="16" step="1" value="2">
+    </div>
+    <div class="field">
+      <label for="t">Truncated or timed out <span class="val" id="tv">2</span></label>
+      <input id="t" type="range" min="0" max="16" step="1" value="2">
+    </div>
+  </div>
+  <div id="comp" class="note"></div>
+  <div id="warn" class="warn"></div>
+</div>
+
+<div class="formula">
+A_i = r_i &minus; (1 / (n &minus; 1)) &middot; &Sigma;<sub>j &ne; i</sub> r_j &nbsp;&nbsp; with r_i &isin; {0, 1}
+</div>
+<p class="sub" style="margin-top:-6px">The leave-one-out advantage used by DeepSWE-Preview (no standard-deviation
+normalization). Under the third policy the group size n is reduced to the number of rollouts that reached a verdict.</p>
+
+<div class="tablewrap">
+<table>
+  <thead>
+    <tr><th>Policy</th><th class="num">Success</th><th class="num">Verified failure</th><th>Truncated rollout</th><th class="num">Trajectories with gradient</th></tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>Penalize: truncated scored 0 and trained</td>
+      <td class="num" id="p1s"></td><td class="num" id="p1f"></td><td id="p1t"></td><td class="num" id="p1g"></td>
+    </tr>
+    <tr>
+      <td>Mask loss, keep in baseline</td>
+      <td class="num" id="p2s"></td><td class="num" id="p2f"></td><td id="p2t"></td><td class="num" id="p2g"></td>
+    </tr>
+    <tr>
+      <td>Mask loss, drop from baseline</td>
+      <td class="num" id="p3s"></td><td class="num" id="p3f"></td><td id="p3t"></td><td class="num" id="p3g"></td>
+    </tr>
+  </tbody>
+</table>
+</div>
+
+<div class="bars" id="bars"></div>
+
+<p class="note">
+Reference composition n = 8 with 2 successes, 4 verified failures, and 2 truncated rollouts reproduces the table in
+ch-46a §5: 0.857 / &minus;0.286 under the first two policies, and 0.800 / &minus;0.400 when truncated rollouts are
+dropped from the baseline. When every rollout that reached a verdict carries the same reward, all advantages are 0
+and the task contributes nothing to the update; DeepSWE reports this condition as a high solve-none rate on SWE-Smith
+and SWE-Gym data (<code>deepswe</code>, §6). Advantage form and the masked terminations (max context, max
+environment steps, 20-minute generation timeout) are from the DeepSWE post §2.3 and the released script
+(<code>deepswe-recipe</code>); the post does not state whether masked trajectories stay in the baseline, which is why
+the second and third rows are both shown.
+</p>
+
+</div>
+<script>
+(function(){
+  var n=document.getElementById('n'), s=document.getElementById('s'), t=document.getElementById('t');
+  function fmt(x){ if(x===null) return '—'; return (x<0?'−':'')+Math.abs(x).toFixed(3); }
+  function cls(x){ if(x===null) return 'zero'; if(x>1e-9) return 'pos'; if(x<-1e-9) return 'neg'; return 'zero'; }
+  function put(id,x,suffix){
+    var e=document.getElementById(id);
+    e.textContent = fmt(x) + (suffix||'');
+    e.className = (e.className.indexOf('num')>=0? 'num ':'') + cls(x);
+  }
+  function loo(total, sumAll, r){
+    if(total<2) return null;
+    return r - (sumAll - r)/(total-1);
+  }
+  function draw(rows){
+    var max=0.001;
+    rows.forEach(function(r){ if(r.v!==null) max=Math.max(max, Math.abs(r.v)); });
+    var html='';
+    rows.forEach(function(r){
+      var v=r.v===null?0:r.v;
+      var frac=Math.min(1, Math.abs(v)/max)*50;
+      var left = v>=0 ? 50 : 50-frac;
+      var color = v>1e-9 ? 'var(--pos)' : (v<-1e-9 ? 'var(--neg)' : 'var(--zero)');
+      html += '<div class="barrow"><div class="barlab">'+r.label+'</div>'+
+              '<div class="track"><div class="mid"></div>'+
+              '<div class="fill" style="left:'+left+'%;width:'+Math.max(frac,0.6)+'%;background:'+color+'"></div></div>'+
+              '<div class="barval">'+fmt(r.v)+'</div></div>';
+    });
+    document.getElementById('bars').innerHTML=html;
+  }
+  function update(){
+    var N=+n.value, S=+s.value, T=+t.value;
+    s.max=N; t.max=N;
+    if(S>N){ S=N; s.value=N; }
+    if(S+T>N){ T=N-S; t.value=T; }
+    var F=N-S-T;
+    document.getElementById('nv').textContent=N;
+    document.getElementById('sv').textContent=S;
+    document.getElementById('tv').textContent=T;
+    document.getElementById('comp').textContent=
+      'Group: '+N+' rollouts = '+S+' verified success, '+F+' verified failure, '+T+' truncated or timed out.';
+
+    // Policy 1 and 2: truncated counted as reward 0 in the baseline, group size N.
+    var sumAll = S; // successes contribute 1, everything else 0
+    var a1s = loo(N, sumAll, 1), a1f = loo(N, sumAll, 0);
+    // Policy 3: truncated removed entirely, group size N - T.
+    var M = N - T;
+    var a3s = loo(M, S, 1), a3f = loo(M, S, 0);
+
+    put('p1s', S>0?a1s:null); put('p1f', F>0?a1f:null);
+    document.getElementById('p1t').innerHTML = T>0 ? '<span class="'+cls(a1f)+'">'+fmt(a1f)+'</span>, with gradient' : '—';
+    document.getElementById('p1g').textContent = N;
+
+    put('p2s', S>0?a1s:null); put('p2f', F>0?a1f:null);
+    document.getElementById('p2t').innerHTML = T>0 ? '<span class="zero">'+fmt(a1f)+'</span>, zero weight' : '—';
+    document.getElementById('p2g').textContent = N-T;
+
+    put('p3s', (S>0&&M>=2)?a3s:null); put('p3f', (F>0&&M>=2)?a3f:null);
+    document.getElementById('p3t').textContent = T>0 ? 'no advantage' : '—';
+    document.getElementById('p3g').textContent = M;
+
+    var w='';
+    if(S===0 && F===0) w='Every rollout was truncated: no rollout reaches a verdict and the task produces no update.';
+    else if(M<2) w='Fewer than two rollouts reach a verdict, so the leave-one-out baseline of the third policy is undefined.';
+    else if(S===0) w='No rollout succeeded. Every reward is 0 under all three policies, so all advantages are 0 and the task contributes nothing to the update.';
+    else if(F===0 && T===0) w='Every rollout succeeded. All rewards are 1, so all advantages are 0 and the task contributes nothing to the update.';
+    else if(F===0) w='Every rollout that reached a verdict succeeded. Under the third policy all advantages are 0. Under the first two the truncated rollouts are scored 0, so the group variance is not zero and the task still produces an update.';
+    document.getElementById('warn').textContent=w;
+
+    draw([
+      {label:'Penalize — success', v:S>0?a1s:null},
+      {label:'Penalize — verified failure', v:F>0?a1f:null},
+      {label:'Penalize — truncated', v:T>0?a1f:null},
+      {label:'Mask, drop — success', v:(S>0&&M>=2)?a3s:null},
+      {label:'Mask, drop — verified failure', v:(F>0&&M>=2)?a3f:null}
+    ]);
+  }
+  [n,s,t].forEach(function(el){ el.addEventListener('input', update); });
+  update();
+})();
+</script>
+</body>
+</html>

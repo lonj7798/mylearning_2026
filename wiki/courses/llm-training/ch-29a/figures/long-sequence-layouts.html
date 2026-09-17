@@ -1,0 +1,188 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Long-Document Sequence Layouts</title>
+<style>
+:root{
+  --bg:#fbfaf7; --fg:#1d1d1b; --muted:#5f5e58; --line:#d8d5cc; --panel:#ffffff;
+  --doc:#d9d6cc; --ev:#1f6fb2; --neg:#8a8780; --q:#b4561b; --kv:#9a3d8f;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#171716; --fg:#ecebe6; --muted:#a8a69e; --line:#3a3935; --panel:#212120;
+    --doc:#45443f; --ev:#6fb0ea; --neg:#8e8b83; --q:#eb9a5f; --kv:#d98fd0;
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#171716; --fg:#ecebe6; --muted:#a8a69e; --line:#3a3935; --panel:#212120;
+  --doc:#45443f; --ev:#6fb0ea; --neg:#8e8b83; --q:#eb9a5f; --kv:#d98fd0;
+}
+body{margin:0;background:var(--bg);color:var(--fg);font:14px/1.5 system-ui,-apple-system,"Segoe UI",sans-serif}
+.wrap{max-width:980px;margin:0 auto;padding-inline:16px;padding-block:20px}
+h1{font-size:1.35rem;margin:0 0 4px}
+h2{font-size:1rem;margin:0 0 6px}
+p.lead{color:var(--muted);margin:0 0 14px}
+.controls{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px;background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:12px}
+label{display:flex;flex-direction:column;font-size:.85rem;color:var(--muted);gap:3px}
+select,input{font:inherit;color:var(--fg);background:var(--bg);border:1px solid var(--line);border-radius:5px;padding:4px 6px}
+button{font:inherit;color:var(--fg);background:var(--panel);border:1px solid var(--line);border-radius:5px;padding:4px 10px;cursor:pointer;justify-self:start;align-self:end}
+.row{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:10px 12px;margin:12px 0}
+.row .meta{font-size:.84rem;color:var(--muted);margin-top:6px}
+.row .meta b{color:var(--fg);font-variant-numeric:tabular-nums}
+svg{display:block;width:100%;height:auto}
+.legend{display:flex;flex-wrap:wrap;gap:14px;margin:10px 0;font-size:.85rem}
+.sw{display:inline-block;width:14px;height:10px;vertical-align:middle;margin-right:5px;border-radius:2px}
+table{border-collapse:collapse;font-size:.85rem;width:100%;font-variant-numeric:tabular-nums}
+th,td{border-bottom:1px solid var(--line);padding:4px 6px;text-align:right}
+th:first-child,td:first-child{text-align:left}
+.tbl{overflow-x:auto}
+.caption{color:var(--muted);font-size:.82rem;margin-top:14px}
+</style>
+</head>
+<body>
+<div class="wrap">
+<h1>Where the evidence sits in a synthetic long sequence</h1>
+<p class="lead">Five generators from Chapter 29a, drawn on the same normalized axis (0 = first token, 1 = last token). Each bar shows the training sequence the model sees; the text under it states what the generator read and how many pieces of evidence the target depends on. Positions marked "random" are resampled with the button.</p>
+
+<div class="controls">
+  <label>Llama 3 document length (tokens)
+    <input id="llamaL" type="number" value="64000" min="16000" max="128000" step="1000"></label>
+  <label>Nemotron Nano 2 document length (tokens)
+    <input id="nemoL" type="number" value="64000" min="32001" max="524288" step="1000"></label>
+  <label>IN2 context length (tokens, 4K–32K)
+    <input id="in2L" type="number" value="16000" min="4000" max="32000" step="1000"></label>
+  <label>IN2 question type
+    <select id="in2T"><option value="1">fine-grained (1 segment)</option><option value="3">integration (3 segments shown; paper: at least 2)</option></select></label>
+  <label>KeyChain distracting chains (not reported; illustrative)
+    <input id="kcN" type="number" value="3" min="1" max="8" step="1"></label>
+  <button id="resample">Resample random positions</button>
+</div>
+
+<div class="legend">
+  <span><span class="sw" style="background:var(--doc)"></span>source text</span>
+  <span><span class="sw" style="background:var(--ev)"></span>evidence the answer depends on</span>
+  <span><span class="sw" style="background:var(--neg)"></span>distractor / hard negative (input content)</span>
+  <span><span class="sw" style="background:var(--q)"></span>question and answer</span>
+  <span><span class="sw" style="background:var(--kv)"></span>UUID key-value link</span>
+</div>
+
+<div id="rows"></div>
+
+<div class="row">
+  <h2>NExtLong: hard negatives per meta-chunk</h2>
+  <div class="controls" style="border:0;padding:0">
+    <label>Target length T (tokens)<input id="nxT" type="number" value="131072" min="8192" step="1024"></label>
+    <label>Encoding rate E (chars/token; illustrative)<input id="nxE" type="number" value="4" min="1" step="0.1"></label>
+    <label>Meta-document length S (chars; illustrative)<input id="nxS" type="number" value="20000" min="1000" step="1000"></label>
+    <label>Meta-chunks p (illustrative)<input id="nxP" type="number" value="10" min="1" step="1"></label>
+    <label>Granularity s (paper: 2048)<input id="nxs" type="number" value="2048" min="128" step="1"></label>
+  </div>
+  <div class="meta" id="nxOut"></div>
+</div>
+
+<div class="row">
+  <h2>Llama 3 SFT mix: share of examples versus share of tokens</h2>
+  <div class="tbl"><table id="mix"></table></div>
+  <div class="meta" id="mixOut"></div>
+</div>
+
+<p class="caption">Sources: Llama 3 §4.3.4 and Table 7 (arXiv:2407.21783v3); Nemotron Nano 2 §2.6 (arXiv:2508.14444v4); IN2 §2.1 (arXiv:2404.16811); NExtLong §3.1 and App. D.1 Eq. 8–12 (arXiv:2501.12766v2); LoongRL §3.1 (arXiv:2510.19363). Values marked "illustrative" are inputs chosen for the worked example in read.md, not values from a paper. Token-share and QA-count readouts are derived by this course. The bars are schematic: segment widths below one pixel are drawn at a minimum width so they stay visible.</p>
+</div>
+
+<script>
+(function(){
+  var seed = 7;
+  function rnd(){ seed = (seed * 1103515245 + 12345) % 2147483648; return seed / 2147483648; }
+  function $(id){ return document.getElementById(id); }
+  function num(id, lo, hi){ var v = parseFloat($(id).value); if (isNaN(v)) v = lo; return Math.min(hi, Math.max(lo, v)); }
+  function fmt(x){ return Math.round(x).toLocaleString('en-US'); }
+  var W = 900, H = 46, X0 = 10, BW = 880;
+
+  function bar(segs){
+    // segs: [{a:0..1, b:0..1, c:'var(--x)', label?}]
+    var s = '<svg viewBox="0 0 ' + W + ' ' + H + '" role="img" aria-label="sequence layout">';
+    s += '<rect x="' + X0 + '" y="8" width="' + BW + '" height="22" fill="var(--doc)" rx="3"></rect>';
+    segs.forEach(function(g){
+      var x = X0 + g.a * BW, w = Math.max(3, (g.b - g.a) * BW);
+      s += '<rect x="' + x.toFixed(1) + '" y="8" width="' + w.toFixed(1) + '" height="22" fill="' + g.c + '"></rect>';
+    });
+    s += '<text x="' + X0 + '" y="43" font-size="11" fill="currentColor">0</text>';
+    s += '<text x="' + (X0 + BW) + '" y="43" font-size="11" text-anchor="end" fill="currentColor">1</text>';
+    return s + '</svg>';
+  }
+
+  function render(){
+    var rows = [];
+    // 1. Llama 3 chunk QA
+    var L = num('llamaL', 16000, 128000), nC = Math.ceil(L / 8000), pick = Math.floor(rnd() * nC);
+    var qLen = 300 / (L + 300);
+    var docFrac = 1 - qLen;
+    rows.push({t:'Llama 3 SFT: QA from one random 8K chunk, trained with the whole document',
+      segs:[{a:pick * 8000 / (L + 300), b:Math.min(L, (pick + 1) * 8000) / (L + 300), c:'var(--ev)'}, {a:docFrac, b:1, c:'var(--q)'}],
+      m:'Generator reads one <b>8K</b> chunk (chunk ' + (pick + 1) + ' of ' + nC + ', 8K taken as 8,000 tokens); the trained model reads <b>' + fmt(L) + '</b>. Evidence depth ≈ <b>' + (pick * 8000 / L).toFixed(2) + '</b>. One evidence region; the question and answer follow the document (length of QA drawn schematically).'});
+    // 2. Nemotron appended QA
+    var N = num('nemoL', 32001, 524288), chunks = Math.ceil(N / 1024), nQA = Math.round(chunks * 0.1);
+    var qaTok = nQA * 150, tot = N + qaTok, segs2 = [], chosen = {};
+    while (Object.keys(chosen).length < Math.min(nQA, 40)) chosen[Math.floor(rnd() * chunks)] = 1;
+    Object.keys(chosen).forEach(function(k){ k = +k; segs2.push({a:k * 1024 / tot, b:(k + 1) * 1024 / tot, c:'var(--ev)'}); });
+    segs2.push({a:N / tot, b:1, c:'var(--q)'});
+    rows.push({t:'Nemotron Nano 2 Phase LC: 10% of 1,024-token chunks → one QA pair each, appended after the document',
+      segs:segs2,
+      m:'<b>' + fmt(chunks) + '</b> chunks → about <b>' + nQA + '</b> QA pairs (derived: 10% × chunk count). Each QA pair depends on one chunk; the QA block sits after the whole document, so the distance from a chunk to its QA pair ranges up to <b>' + fmt(N) + '</b> tokens. QA block length drawn at an assumed 150 tokens per pair (illustrative).' + (nQA > 40 ? ' Only 40 chunks are drawn.' : '')});
+    // 3. IN2
+    var L3 = num('in2L', 4000, 32000), nSeg = Math.floor(L3 / 128), k3 = +$('in2T').value, segs3 = [], used = {}, depths = [];
+    while (Object.keys(used).length < k3) used[Math.floor(rnd() * nSeg)] = 1;
+    var qa3 = 200 / (L3 + 200);
+    Object.keys(used).map(Number).sort(function(a,b){return a-b;}).forEach(function(i){
+      segs3.push({a:i * 128 / (L3 + 200), b:(i + 1) * 128 / (L3 + 200), c:'var(--ev)'}); depths.push((i / nSeg).toFixed(2));
+    });
+    segs3.push({a:1 - qa3, b:1, c:'var(--q)'});
+    rows.push({t:'IN2: 128-token evidence segment(s) shuffled among random 128-token segments',
+      segs:segs3,
+      m:'<b>' + nSeg + '</b> segments in the context; evidence segments at depths <b>' + depths.join(', ') + '</b>. Evidence is <b>' + (100 * k3 * 128 / L3).toFixed(1) + '%</b> of context tokens. Filler segments are random C4 text, not retrieved for similarity.'});
+    // 4. NExtLong interleave (schematic, p = 6 shown)
+    var segs4 = [], p = 6;
+    for (var i = 0; i < p; i++){
+      var a = i / p, m = a + (1 / p) * 0.25;
+      segs4.push({a:a, b:m, c:'var(--ev)'}); segs4.push({a:m, b:(i + 1) / p, c:'var(--neg)'});
+    }
+    rows.push({t:'NExtLong: each meta-chunk of one document followed by its top-k most similar retrieved chunks',
+      segs:segs4,
+      m:'Continued pretraining with next-token loss on all tokens. The dependent pieces (consecutive meta-chunks of one document) are separated by <b>k</b> similar distractor chunks, so predicting chunk i+1 from chunk i requires skipping the negatives. Proportions schematic (6 meta-chunks).'});
+    // 5. KeyChain
+    var nd = num('kcN', 1, 8), segs5 = [], L5 = 16384;
+    var ndocs = 20;
+    for (var d = 0; d < ndocs; d++){ if (rnd() < 0.15) segs5.push({a:d / ndocs, b:(d + 1) / ndocs, c:'var(--ev)'}); }
+    var chainLen = 3;
+    for (var c = 0; c < nd + 1; c++){
+      for (var j = 0; j < chainLen; j++){ var x = rnd() * 0.93; segs5.push({a:x, b:x + 0.004, c: c === 0 ? 'var(--kv)' : 'var(--neg)'}); }
+    }
+    segs5.push({a:0.95, b:1, c:'var(--q)'});
+    rows.push({t:'LoongRL KeyChain: the real question is hidden at the end of a UUID chain among distracting chains',
+      segs:segs5,
+      m:'Context about <b>16K</b> tokens (paper: &lt; 16,384 before insertion). <b>1</b> correct chain (purple) and <b>' + nd + '</b> distracting chains (grey); chain length ' + chainLen + ' is illustrative (not reported). The model must trace the chain, recover the question, then answer from the multi-hop documents (blue).'});
+
+    $('rows').innerHTML = rows.map(function(r){ return '<div class="row"><h2>' + r.t + '</h2>' + bar(r.segs) + '<div class="meta">' + r.m + '</div></div>'; }).join('');
+
+    // NExtLong k
+    var T = num('nxT', 8192, 4194304), E = num('nxE', 1, 10), S = num('nxS', 1000, 1e7), P = num('nxP', 1, 1000), sg = num('nxs', 128, 65536);
+    var Q = T * E * 1.5, Lc = Q - S, k = Lc / (P * sg);
+    $('nxOut').innerHTML = 'Q = T × E × w = ' + fmt(T) + ' × ' + E + ' × 1.5 = <b>' + fmt(Q) + '</b> characters; L = Q − S = <b>' + fmt(Lc) + '</b>; k = L / (p × s) = ' + fmt(Lc) + ' / (' + P + ' × ' + sg + ') = <b>' + k.toFixed(1) + '</b> hard negatives per meta-chunk (App. D.1 Eq. 8–12, w = 1.5).';
+
+    // Llama 3 mix
+    var mix = [['General English',52.66,974.0],['Code',14.89,753.3],['Multilingual',3.01,520.5],['Exam-like',8.14,297.8],['Reasoning and tools',21.19,661.6],['Long context',0.11,38135.6]];
+    var totTok = mix.reduce(function(s, r){ return s + r[1] / 100 * r[2]; }, 0);
+    var h = '<tr><th>Dataset</th><th>% of examples</th><th>Avg. tokens</th><th>% of tokens (derived)</th></tr>';
+    mix.forEach(function(r){ h += '<tr><td>' + r[0] + '</td><td>' + r[1].toFixed(2) + '%</td><td>' + r[2].toLocaleString('en-US') + '</td><td>' + (100 * r[1] / 100 * r[2] / totTok).toFixed(2) + '%</td></tr>'; });
+    $('mix').innerHTML = h;
+    $('mixOut').innerHTML = 'Weighted mean from the rows = <b>' + totTok.toFixed(1) + '</b> tokens per example (Table 7 prints 846.1; the difference comes from rounding of the printed shares). Long context is 0.11% of examples and about <b>' + (100 * 0.0011 * 38135.6 / totTok).toFixed(1) + '%</b> of SFT tokens.';
+  }
+  ['llamaL','nemoL','in2L','in2T','kcN','nxT','nxE','nxS','nxP','nxs'].forEach(function(id){ $(id).addEventListener('input', render); });
+  $('resample').addEventListener('click', function(){ seed = Math.floor(Math.random() * 1e9); render(); });
+  render();
+})();
+</script>
+</body>
+</html>

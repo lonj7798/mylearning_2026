@@ -2,233 +2,336 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>Precision Range — fp32 / fp16 / bf16 / fp8 on the Real Line</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Floating-Point Formats, Loss Scaling, and FP8 Block Scaling</title>
 <style>
-  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-         max-width: 960px; margin: 2em auto; padding: 0 1em; color: #222; }
-  h1 { font-size: 1.4em; margin-bottom: 0.2em; }
-  .subtitle { color: #666; margin-top: 0; }
-  .panel { border: 1px solid #ddd; border-radius: 6px; padding: 1em; margin: 1em 0;
-           background: #fafafa; }
-  .controls { display: flex; gap: 1em; flex-wrap: wrap; align-items: center; }
-  .control { display: flex; flex-direction: column; }
-  label { font-size: 0.85em; color: #555; margin-bottom: 0.2em; }
-  input[type="range"] { width: 320px; }
-  canvas { background: white; border: 1px solid #ccc; display: block; margin: 1em auto; }
-  .legend { display: flex; gap: 1.5em; justify-content: center; font-size: 0.9em;
-            flex-wrap: wrap; }
-  .swatch { display: inline-block; width: 12px; height: 12px; margin-right: 4px;
-            vertical-align: middle; border-radius: 2px; }
-  .value { font-variant-numeric: tabular-nums; color: #333; font-weight: 600; }
-  .note { font-size: 0.88em; color: #555; line-height: 1.5; }
-  code { background: #eef; padding: 1px 4px; border-radius: 3px; font-size: 0.9em; }
-  table.status { margin: 0.5em auto; border-collapse: collapse; font-size: 0.88em; }
-  table.status th, table.status td { padding: 4px 10px; border: 1px solid #ddd;
-                                     text-align: left; }
-  table.status th { background: #f0f0f0; }
-  .ok   { color: #2e7d32; font-weight: 600; }
-  .warn { color: #b8860b; font-weight: 600; }
-  .bad  { color: #c62828; font-weight: 600; }
+  :root {
+    --bg: #fbfbf9; --fg: #1d1d1f; --muted: #5c5c63; --panel: #ffffff; --border: #d9d9de;
+    --grid: #ececf0; --accent: #2f5fb3; --ok: #1f7a3a; --warn: #8a6100; --bad: #b3261e;
+    --band: #2f5fb3; --band-sub: #9bb4e0; --marker: #1d1d1f; --code-bg: #eef0f6;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #15161a; --fg: #e8e8ec; --muted: #a3a3ad; --panel: #1d1f24; --border: #373a42;
+      --grid: #2a2d34; --accent: #8fb0ee; --ok: #6fcf8a; --warn: #e0b54a; --bad: #f08a80;
+      --band: #6f95dd; --band-sub: #3a4d73; --marker: #e8e8ec; --code-bg: #262a33;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #15161a; --fg: #e8e8ec; --muted: #a3a3ad; --panel: #1d1f24; --border: #373a42;
+    --grid: #2a2d34; --accent: #8fb0ee; --ok: #6fcf8a; --warn: #e0b54a; --bad: #f08a80;
+    --band: #6f95dd; --band-sub: #3a4d73; --marker: #e8e8ec; --code-bg: #262a33;
+  }
+  body { margin: 0; background: var(--bg); color: var(--fg);
+         font: 15px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+  main { max-width: 980px; margin: 0 auto; padding-inline: 16px; padding-block: 24px 48px; }
+  h1 { font-size: 1.35rem; margin: 0 0 0.3rem; }
+  h2 { font-size: 1.1rem; margin: 0 0 0.4rem; }
+  p { margin: 0.4rem 0; }
+  .lede { color: var(--muted); }
+  section { background: var(--panel); border: 1px solid var(--border); border-radius: 8px;
+            padding: 16px; margin: 18px 0; }
+  .controls { display: flex; flex-wrap: wrap; gap: 12px 24px; align-items: end; margin: 10px 0; }
+  .control { display: flex; flex-direction: column; min-width: 0; flex: 1 1 220px; }
+  .control label { font-size: 0.85rem; color: var(--muted); }
+  .control input[type=range] { width: 100%; }
+  .control input[type=text] { font: inherit; padding: 4px 6px; border: 1px solid var(--border);
+                               border-radius: 4px; background: var(--bg); color: var(--fg); max-width: 12rem; }
+  .readout { font-variant-numeric: tabular-nums; font-weight: 600; }
+  .scroll { overflow-x: auto; }
+  table { border-collapse: collapse; font-size: 0.86rem; font-variant-numeric: tabular-nums; margin: 8px 0; }
+  th, td { border: 1px solid var(--border); padding: 4px 8px; text-align: left; white-space: nowrap; }
+  th { background: var(--grid); font-weight: 600; }
+  .ok { color: var(--ok); font-weight: 600; }
+  .warn { color: var(--warn); font-weight: 600; }
+  .bad { color: var(--bad); font-weight: 600; }
+  .caption { font-size: 0.82rem; color: var(--muted); margin-top: 8px; }
+  code { background: var(--code-bg); padding: 0 4px; border-radius: 3px; font-size: 0.9em; }
+  svg text { fill: var(--muted); font-size: 11px; }
+  svg .lbl { fill: var(--fg); font-weight: 600; }
+  .summary { margin-top: 6px; }
+  #strip { min-width: 640px; display: block; }
 </style>
 </head>
 <body>
+<main>
+<h1>Floating-Point Formats, Loss Scaling, and FP8 Block Scaling</h1>
+<p class="lede">Companion to ch-02 §1, §3, and §4. Every stored value on this page is computed by rounding to the nearest representable number (ties to even) in the chosen format.</p>
 
-<h1>Precision Range — fp32 / fp16 / bf16 / fp8 on the Real Line</h1>
-<p class="subtitle">
-  Each bar spans the representable positive values of a floating-point format
-  on a shared log-scale axis. Move the slider to probe a target value at
-  <span class="value" id="targetLabel">1.00e+0</span> and see which formats
-  carry it normally, with poor precision, or underflow it to zero.
-</p>
-
-<div class="panel">
+<section id="formats">
+  <h2>1. Where one value lands in each format</h2>
+  <p>Move the slider or type a positive value. The strip shows each format's subnormal range (lower-contrast bar) and normal range (higher-contrast bar) on a log axis. The table shows the stored value and its relative rounding error.</p>
   <div class="controls">
     <div class="control">
-      <label>Target value (log-scale, 1e-10 to 1e+10)</label>
-      <input type="range" id="target" min="-10" max="10" step="0.1" value="0">
+      <label for="vslider">log<sub>10</sub>(value): <span class="readout" id="vlog">0.00</span></label>
+      <input type="range" id="vslider" min="-46" max="40" step="0.05" value="0">
+    </div>
+    <div class="control" style="flex:0 1 auto">
+      <label for="vtext">value</label>
+      <input type="text" id="vtext" value="1.00012" inputmode="decimal">
     </div>
   </div>
-</div>
+  <div class="scroll"><svg id="strip" viewBox="0 0 900 230" width="100%" role="img" aria-label="Representable ranges of five floating-point formats on a log scale"></svg></div>
+  <div class="scroll">
+    <table id="fmtTable">
+      <thead><tr><th>Format</th><th>sign/exp/mantissa bits</th><th>smallest subnormal</th><th>smallest normal</th><th>largest</th><th>spacing at 1.0</th><th>stored value</th><th>relative error</th><th>status</th></tr></thead>
+      <tbody></tbody>
+    </table>
+  </div>
+  <p class="caption">E4M3 and E5M2 limits: Micikevicius et al., FP8 Formats for Deep Learning, arXiv:2209.05433 Table 1 (E4M3 has no infinity; its largest value is 448). fp32, bf16, and fp16 limits follow from their 1/8/23, 1/8/7, and 1/5/10 bit layouts and match <code>torch.finfo</code> in PyTorch 2.12.0. The default value 1.00012 is the example of Yuan et al., arXiv:2506.09501 Table 1: fp16 and bf16 both store 1.0.</p>
+</section>
 
-<canvas id="plot" width="900" height="320"></canvas>
+<section id="loss-scaling">
+  <h2>2. fp16 loss scaling</h2>
+  <p>A gradient entry <em>g</em> is computed in fp16. Multiplying the loss by <em>S</em> multiplies every gradient by <em>S</em>; the gradients are divided by <em>S</em> in fp32 before clipping and the optimizer step. If the largest gradient times <em>S</em> exceeds 65,504, fp16 produces an infinity and the step is skipped.</p>
+  <div class="controls">
+    <div class="control">
+      <label for="gslider">small gradient entry g: <span class="readout" id="gval"></span></label>
+      <input type="range" id="gslider" min="-12" max="-1" step="0.05" value="-7.83">
+    </div>
+    <div class="control">
+      <label for="gmaxslider">largest gradient entry in the step: <span class="readout" id="gmaxval"></span></label>
+      <input type="range" id="gmaxslider" min="-3" max="3" step="0.05" value="0">
+    </div>
+    <div class="control">
+      <label for="kslider">loss scale S = 2<sup>k</sup>, k = <span class="readout" id="kval"></span></label>
+      <input type="range" id="kslider" min="0" max="24" step="1" value="16">
+    </div>
+  </div>
+  <div class="scroll">
+    <table id="lsTable">
+      <thead><tr><th>Quantity</th><th>Value</th><th>Note</th></tr></thead>
+      <tbody></tbody>
+    </table>
+  </div>
+  <p class="summary" id="lsSummary"></p>
+  <p class="caption">Mechanism: Micikevicius et al., Mixed Precision Training, arXiv:1710.03740 §3.2 (loss scaling, unscaling before gradient clipping, skipping updates on overflow; constant scale factors from 8 to 32K in that paper). Update rule shown for the dynamic case uses PyTorch 2.12.0 <code>GradScaler</code> defaults (torch/amp/grad_scaler.py L123-131): init_scale 2<sup>16</sup>, backoff_factor 0.5, growth_factor 2.0, growth_interval 2000. The default g = 10<sup>-7.83</sup> is below fp16's smallest subnormal, 2<sup>-24</sup>.</p>
+</section>
 
-<div class="legend">
-  <span><span class="swatch" style="background:#2e7d32"></span>representable (normal range)</span>
-  <span><span class="swatch" style="background:#f9a825"></span>representable but coarse (near max / denormal)</span>
-  <span><span class="swatch" style="background:#c62828"></span>underflow / overflow</span>
-  <span><span class="swatch" style="background:#333"></span>target value marker</span>
-</div>
-
-<div class="panel">
-  <table class="status" id="statusTable">
-    <thead><tr><th>Format</th><th>Min positive normal</th><th>Max positive</th>
-      <th>Δ at 1.0 (2<sup>−m</sup>)</th><th>Target status</th></tr></thead>
-    <tbody></tbody>
-  </table>
-</div>
-
-<div class="panel note">
-  <strong>Why bf16 matches fp32 range.</strong> bf16 keeps all 8 exponent bits of fp32
-  and sacrifices 16 of fp32's 23 mantissa bits. Exponent bits set the dynamic range
-  (<code>~1e-38</code> to <code>3e38</code>), mantissa bits set the relative precision
-  near 1.0. So bf16 covers the same real line as fp32 but with only ~7.8e-3 relative
-  precision (vs 1.2e-7). For LLM gradients, range beats precision — which is why 2023+
-  frontier runs dropped fp16.
-  <br><br>
-  <strong>Why fp16 needs loss scaling.</strong> fp16's minimum normal is <code>~6e-8</code>.
-  A large fraction of real LLM gradients (especially in deep transformer stacks) fall
-  below <code>1e-8</code>, so they silently underflow to zero and the update vanishes.
-  Loss scaling multiplies the loss by <code>S ≈ 2^15</code> before <code>.backward()</code>
-  to shift the whole gradient distribution up into fp16's window; the optimizer
-  unscales by <code>S</code> just before stepping.
-  <br><br>
-  <strong>Why E4M3 is used for forward and E5M2 for backward.</strong> fp8-E4M3 has one
-  more mantissa bit (so finer precision) but one fewer exponent bit (narrower range,
-  up to 448). Activations and weights are bounded — LayerNorm and initialization keep
-  them near unit scale — so E4M3's range is sufficient and the extra mantissa bit helps.
-  Gradients span many orders of magnitude, so the backward pass uses E5M2: wider range
-  (up to 57344, floor ~6e-8, matching fp16) at the cost of one mantissa bit.
-</div>
+<section id="block-scaling">
+  <h2>3. FP8 E4M3: one scale per tensor versus one scale per block</h2>
+  <p>Eight values form two groups of four. Each group is scaled by s = 448 / max|x| before rounding to E4M3 and divided by s afterwards. With one scale for the whole tensor, the outlier in group B sets s for group A as well.</p>
+  <div class="controls">
+    <div class="control">
+      <label for="oslider">outlier magnitude in group B: <span class="readout" id="oval"></span></label>
+      <input type="range" id="oslider" min="0" max="4" step="0.05" value="3">
+    </div>
+  </div>
+  <div class="scroll">
+    <table id="bsTable">
+      <thead>
+        <tr><th rowspan="2">group</th><th rowspan="2">value x</th><th colspan="3">one scale for the tensor</th><th colspan="3">one scale per group</th></tr>
+        <tr><th>E4M3 code s·x</th><th>recovered</th><th>rel. error</th><th>E4M3 code s·x</th><th>recovered</th><th>rel. error</th></tr>
+      </thead>
+      <tbody></tbody>
+    </table>
+  </div>
+  <p class="summary" id="bsSummary"></p>
+  <p class="caption">Scale rule (largest magnitude mapped to the largest representable value): arXiv:2209.05433 §2. DeepSeek-V3 (arXiv:2412.19437 §3.3.2) computes this maximum online for each 1×128 activation tile and each 128×128 weight block and uses E4M3 for all FP8 tensors; groups of 4 are used here only to keep the table readable.</p>
+</section>
+</main>
 
 <script>
-// Source: wiki/raw-data/llm-training/classics/mixed-precision.md
-// Relative precision at 1.0 = 2^-mantissa_bits.
-const formats = [
-  { name: 'fp32',      color: '#1565c0', minNormal: 1.175494e-38, max: 3.402823e+38, mantBits: 23 },
-  { name: 'fp16',      color: '#6a1b9a', minNormal: 6.103516e-8,  max: 65504,        mantBits: 10 },
-  { name: 'bf16',      color: '#2e7d32', minNormal: 1.175494e-38, max: 3.389531e+38, mantBits: 7  },
-  { name: 'fp8-E4M3',  color: '#ef6c00', minNormal: 1.953125e-3,  max: 448,          mantBits: 3  },
-  { name: 'fp8-E5M2',  color: '#c62828', minNormal: 6.103516e-5,  max: 57344,        mantBits: 2  },
-];
-// Note on mins: fp8-E4M3 min normal = 2^-6; fp8-E5M2 min normal = 2^-14.
-// The read.md reports subnormal extents (2e-7 / 6e-8); the bars show min normal,
-// and subnormal tails are rendered as a yellow fade.
-const subnormalFloor = {
-  'fp32':     1e-45,
-  'fp16':     6e-8,
-  'bf16':     1e-40,
-  'fp8-E4M3': 1.953e-3 / 8,     // 2^-9  ≈ 2e-3/8
-  'fp8-E5M2': 6.103e-5 / 4,     // 2^-16
-};
+(function () {
+  const FORMATS = [
+    { name: 'fp32', e: 8, m: 23, ieee: true },
+    { name: 'bf16', e: 8, m: 7, ieee: true },
+    { name: 'fp16', e: 5, m: 10, ieee: true },
+    { name: 'fp8 E5M2', e: 5, m: 2, ieee: true },
+    { name: 'fp8 E4M3', e: 4, m: 3, ieee: false }
+  ];
+  const E4M3 = FORMATS[4], FP16 = FORMATS[2], BF16 = FORMATS[1];
 
-const cvs = document.getElementById('plot');
-const ctx = cvs.getContext('2d');
-
-const AXIS_MIN = -40, AXIS_MAX = 40;   // log10 range of x axis
-
-function xFor(val, pad, W) {
-  const l = Math.log10(val);
-  const clamped = Math.max(AXIS_MIN, Math.min(AXIS_MAX, l));
-  return pad.l + ((clamped - AXIS_MIN) / (AXIS_MAX - AXIS_MIN)) * W;
-}
-
-function fmt(x) {
-  if (x === 0) return '0';
-  const e = Math.floor(Math.log10(Math.abs(x)));
-  const m = x / Math.pow(10, e);
-  return m.toFixed(2) + 'e' + (e >= 0 ? '+' : '') + e;
-}
-
-function classify(fmtDef, target) {
-  if (target > fmtDef.max) return { cls: 'bad',  text: 'overflow (> max)' };
-  if (target >= fmtDef.minNormal) {
-    // Coarse if within ~4x of the max (rounding loses a bit) or very near the floor.
-    if (target > fmtDef.max / 4) return { cls: 'warn', text: 'normal, near max' };
-    if (target < fmtDef.minNormal * 4) return { cls: 'warn', text: 'normal, near floor' };
-    return { cls: 'ok', text: 'normal' };
+  function limits(f) {
+    const bias = Math.pow(2, f.e - 1) - 1;
+    const emin = 1 - bias;
+    const emax = f.ieee ? Math.pow(2, f.e) - 2 - bias : Math.pow(2, f.e) - 1 - bias;
+    const topMant = f.ieee ? 2 - Math.pow(2, -f.m) : 2 - Math.pow(2, 1 - f.m);
+    return { bias, emin, emax, maxVal: topMant * Math.pow(2, emax),
+             minNormal: Math.pow(2, emin), minSub: Math.pow(2, emin - f.m), spacing1: Math.pow(2, -f.m) };
   }
-  const sub = subnormalFloor[fmtDef.name];
-  if (target >= sub) return { cls: 'warn', text: 'subnormal (coarse)' };
-  return { cls: 'bad', text: 'underflow → 0' };
-}
+  FORMATS.forEach(f => { f.lim = limits(f); });
 
-function render() {
-  const tLog = +document.getElementById('target').value;
-  const target = Math.pow(10, tLog);
-  document.getElementById('targetLabel').textContent = fmt(target);
-
-  ctx.clearRect(0, 0, cvs.width, cvs.height);
-  const pad = { l: 90, r: 30, t: 30, b: 50 };
-  const W = cvs.width - pad.l - pad.r;
-  const H = cvs.height - pad.t - pad.b;
-  const rowH = H / formats.length;
-
-  // axis grid every 10 decades
-  ctx.strokeStyle = '#eee'; ctx.lineWidth = 1;
-  ctx.fillStyle = '#888'; ctx.font = '11px sans-serif'; ctx.textAlign = 'center';
-  for (let e = AXIS_MIN; e <= AXIS_MAX; e += 10) {
-    const x = xFor(Math.pow(10, e), pad, W);
-    ctx.beginPath(); ctx.moveTo(x, pad.t); ctx.lineTo(x, pad.t + H); ctx.stroke();
-    ctx.fillText('1e' + (e >= 0 ? '+' : '') + e, x, pad.t + H + 16);
+  function roundHalfEven(v) {
+    const fl = Math.floor(v), d = v - fl;
+    if (d > 0.5) return fl + 1;
+    if (d < 0.5) return fl;
+    return (fl % 2 === 0) ? fl : fl + 1;
   }
-  ctx.fillText('value (log scale)', pad.l + W / 2, pad.t + H + 36);
 
-  // bars
-  formats.forEach((f, i) => {
-    const y = pad.t + i * rowH + rowH * 0.2;
-    const bh = rowH * 0.55;
-    const xMin = xFor(f.minNormal, pad, W);
-    const xMax = xFor(f.max, pad, W);
-    // subnormal tail (yellow) from subnormalFloor → minNormal
-    const sub = subnormalFloor[f.name];
-    if (sub < f.minNormal) {
-      const xSub = xFor(sub, pad, W);
-      ctx.fillStyle = '#fff3c4';
-      ctx.fillRect(xSub, y, xMin - xSub, bh);
+  // Returns {v: stored magnitude (may be Infinity or NaN), kind}
+  function quantize(x, f) {
+    const L = f.lim, a = Math.abs(x);
+    if (a === 0) return { v: 0, kind: 'zero-input' };
+    let E = Math.floor(Math.log2(a));
+    if (Math.pow(2, E) > a) E -= 1;
+    if (Math.pow(2, E + 1) <= a) E += 1;
+    if (E > L.emax) return overflow(f);
+    const q = (E < L.emin) ? Math.pow(2, L.emin - f.m) : Math.pow(2, E - f.m);
+    const r = roundHalfEven(a / q) * q;
+    if (r > L.maxVal) {
+      const topQ = Math.pow(2, L.emax - f.m);
+      if (a >= L.maxVal + topQ / 2) return overflow(f);
+      return { v: L.maxVal, kind: 'normal' };
     }
-    // normal-range bar
-    ctx.fillStyle = f.color + '22';  // light fill
-    ctx.fillRect(xMin, y, xMax - xMin, bh);
-    ctx.strokeStyle = f.color; ctx.lineWidth = 1.5;
-    ctx.strokeRect(xMin, y, xMax - xMin, bh);
+    if (r === 0) return { v: 0, kind: 'underflow' };
+    return { v: r, kind: r < L.minNormal ? 'subnormal' : 'normal' };
+  }
+  function overflow(f) {
+    return f.ieee ? { v: Infinity, kind: 'overflow-inf' } : { v: NaN, kind: 'overflow-e4m3' };
+  }
 
-    // label
-    ctx.fillStyle = '#222'; ctx.font = 'bold 12px sans-serif'; ctx.textAlign = 'right';
-    ctx.fillText(f.name, pad.l - 10, y + bh * 0.65);
-    // mantissa precision annotation on the bar
-    ctx.fillStyle = f.color; ctx.font = '10px sans-serif'; ctx.textAlign = 'left';
-    const prec = Math.pow(2, -f.mantBits);
-    ctx.fillText('Δ≈' + prec.toExponential(1), xMin + 4, y + bh * 0.65);
+  function fmt(x, digits) {
+    if (x === Infinity) return 'inf';
+    if (Number.isNaN(x)) return 'NaN';
+    if (x === 0) return '0';
+    const d = digits === undefined ? 4 : digits;
+    const ax = Math.abs(x);
+    if (ax >= 1e-4 && ax < 1e5) return String(Number(x.toPrecision(d + 2)));
+    return x.toExponential(d);
+  }
+  function statusCell(kind) {
+    switch (kind) {
+      case 'normal': return '<td class="ok">normal</td>';
+      case 'subnormal': return '<td class="warn">subnormal (fewer significant bits)</td>';
+      case 'underflow': return '<td class="bad">rounds to 0</td>';
+      case 'overflow-inf': return '<td class="bad">overflow: inf</td>';
+      case 'overflow-e4m3': return '<td class="bad">overflow: no inf in E4M3 (NaN, or 448 if saturating)</td>';
+      default: return '<td>zero input</td>';
+    }
+  }
+
+  // ---------- Panel 1 ----------
+  const vslider = document.getElementById('vslider'), vtext = document.getElementById('vtext');
+  const AX_MIN = -46, AX_MAX = 40;
+  function renderStrip(value) {
+    const svg = document.getElementById('strip');
+    const W = 900, padL = 78, padR = 14, top = 12, rowH = 36;
+    const plotW = W - padL - padR;
+    const X = lg => padL + (Math.max(AX_MIN, Math.min(AX_MAX, lg)) - AX_MIN) / (AX_MAX - AX_MIN) * plotW;
+    let s = '';
+    for (let e = -40; e <= 40; e += 10) {
+      const x = X(e);
+      s += `<line x1="${x}" x2="${x}" y1="${top}" y2="${top + rowH * FORMATS.length}" stroke="var(--grid)"/>`;
+      s += `<text x="${x}" y="${top + rowH * FORMATS.length + 16}" text-anchor="middle">1e${e}</text>`;
+    }
+    s += `<text x="${padL + plotW / 2}" y="${top + rowH * FORMATS.length + 34}" text-anchor="middle">value (log scale)</text>`;
+    FORMATS.forEach((f, i) => {
+      const y = top + i * rowH + 8, h = rowH - 16, L = f.lim;
+      const xs = X(Math.log10(L.minSub)), xn = X(Math.log10(L.minNormal)), xm = X(Math.log10(L.maxVal));
+      s += `<rect x="${xs}" y="${y}" width="${Math.max(1, xn - xs)}" height="${h}" fill="var(--band-sub)"/>`;
+      s += `<rect x="${xn}" y="${y}" width="${Math.max(1, xm - xn)}" height="${h}" fill="var(--band)"/>`;
+      s += `<text class="lbl" x="${padL - 8}" y="${y + h / 2 + 4}" text-anchor="end">${f.name}</text>`;
+    });
+    if (value > 0) {
+      const xv = X(Math.log10(value));
+      s += `<line x1="${xv}" x2="${xv}" y1="${top - 6}" y2="${top + rowH * FORMATS.length + 2}" stroke="var(--marker)" stroke-width="2" stroke-dasharray="4 3"/>`;
+    }
+    svg.innerHTML = s;
+  }
+  function renderFormats(value) {
+    renderStrip(value);
+    const tb = document.querySelector('#fmtTable tbody');
+    tb.innerHTML = FORMATS.map(f => {
+      const L = f.lim, r = quantize(value, f);
+      const rel = (Number.isFinite(r.v) && value > 0) ? Math.abs(r.v - value) / value : NaN;
+      const relTxt = Number.isNaN(rel) ? '—' : (rel === 0 ? '0' : rel.toExponential(2));
+      return `<tr><td><strong>${f.name}</strong></td><td>1/${f.e}/${f.m}</td><td>${L.minSub.toExponential(3)}</td>` +
+             `<td>${L.minNormal.toExponential(3)}</td><td>${fmt(L.maxVal, 4)}</td><td>${L.spacing1.toExponential(2)}</td>` +
+             `<td>${fmt(r.v, 8)}</td><td>${relTxt}</td>${statusCell(r.kind)}</tr>`;
+    }).join('');
+  }
+  vslider.addEventListener('input', () => {
+    const v = Math.pow(10, +vslider.value);
+    document.getElementById('vlog').textContent = (+vslider.value).toFixed(2);
+    vtext.value = v.toExponential(4);
+    renderFormats(v);
+  });
+  vtext.addEventListener('input', () => {
+    const v = Math.abs(parseFloat(vtext.value));
+    if (!(v > 0) || !Number.isFinite(v)) return;
+    const lg = Math.log10(v);
+    vslider.value = String(Math.max(AX_MIN, Math.min(AX_MAX, lg)));
+    document.getElementById('vlog').textContent = lg.toFixed(2);
+    renderFormats(v);
   });
 
-  // target value marker
-  const xT = xFor(target, pad, W);
-  ctx.strokeStyle = '#333'; ctx.lineWidth = 2; ctx.setLineDash([4, 3]);
-  ctx.beginPath(); ctx.moveTo(xT, pad.t - 8); ctx.lineTo(xT, pad.t + H + 4); ctx.stroke();
-  ctx.setLineDash([]);
-  ctx.fillStyle = '#333'; ctx.font = 'bold 11px sans-serif'; ctx.textAlign = 'center';
-  ctx.fillText('target = ' + fmt(target), xT, pad.t - 12);
+  // ---------- Panel 2 ----------
+  const gs = document.getElementById('gslider'), gms = document.getElementById('gmaxslider'), ks = document.getElementById('kslider');
+  function renderLS() {
+    const g = Math.pow(10, +gs.value), gmax = Math.pow(10, +gms.value), k = +ks.value, S = Math.pow(2, k);
+    document.getElementById('gval').textContent = g.toExponential(3);
+    document.getElementById('gmaxval').textContent = gmax.toExponential(3);
+    document.getElementById('kval').textContent = k + ' (S = ' + S.toLocaleString('en-US') + ')';
+    const plain = quantize(g, FP16);
+    const scaled = quantize(g * S, FP16);
+    const recovered = Number.isFinite(scaled.v) ? scaled.v / S : scaled.v;
+    const big = quantize(gmax * S, FP16);
+    const bfg = quantize(g, BF16);
+    const relRec = (Number.isFinite(recovered) && recovered > 0) ? (Math.abs(recovered - g) / g).toExponential(2) : '—';
+    const rows = [
+      ['g stored in fp16, no scaling', fmt(plain.v, 6), plain.kind === 'underflow' ? '<span class="bad">rounds to 0: this entry contributes nothing to the update</span>' : plain.kind],
+      ['S·g stored in fp16', fmt(scaled.v, 6), scaled.kind],
+      ['(S·g)/S computed in fp32', fmt(recovered, 6), 'relative error ' + relRec],
+      ['S·(largest gradient) in fp16', fmt(big.v, 6), big.kind === 'overflow-inf' ? '<span class="bad">inf: overflow detected</span>' : 'finite (limit 65,504)'],
+      ['g stored in bf16, no scaling', fmt(bfg.v, 6), bfg.kind === 'underflow' ? 'rounds to 0' : 'bf16 has the fp32 exponent range']
+    ];
+    document.querySelector('#lsTable tbody').innerHTML = rows.map(r => `<tr><td>${r[0]}</td><td>${r[1]}</td><td>${r[2]}</td></tr>`).join('');
+    let msg;
+    if (big.kind === 'overflow-inf') {
+      msg = `<span class="bad">Step skipped.</span> GradScaler multiplies S by 0.5, so the next step uses S = 2<sup>${k - 1}</sup>.`;
+    } else if (scaled.kind === 'underflow') {
+      msg = `<span class="warn">Step taken, but g is still lost:</span> S·g is below half of fp16's smallest subnormal (2<sup>-25</sup>). A larger S would keep it if S·(largest gradient) stays at or below 65,504.`;
+    } else {
+      msg = `<span class="ok">Step taken and g is kept.</span> With GradScaler defaults, S doubles after 2000 consecutive steps without inf or NaN.`;
+    }
+    document.getElementById('lsSummary').innerHTML = msg;
+  }
+  [gs, gms, ks].forEach(el => el.addEventListener('input', renderLS));
 
-  // dots on each bar colored by status
-  formats.forEach((f, i) => {
-    const y = pad.t + i * rowH + rowH * 0.2 + rowH * 0.275;
-    const s = classify(f, target);
-    const color = s.cls === 'ok' ? '#2e7d32' : s.cls === 'warn' ? '#f9a825' : '#c62828';
-    ctx.fillStyle = color;
-    ctx.beginPath(); ctx.arc(xT, y, 5, 0, Math.PI * 2); ctx.fill();
-    ctx.strokeStyle = '#fff'; ctx.lineWidth = 1.5; ctx.stroke();
-  });
+  // ---------- Panel 3 ----------
+  const os = document.getElementById('oslider');
+  function renderBS() {
+    const outlier = Math.pow(10, +os.value);
+    document.getElementById('oval').textContent = fmt(outlier, 3);
+    const A = [0.004, -0.001, 0.0025, 0.0006];
+    const B = [outlier, -3.2, 0.75, 12];
+    const maxAbs = arr => arr.reduce((m, v) => Math.max(m, Math.abs(v)), 0);
+    const sT = 448 / Math.max(maxAbs(A), maxAbs(B));
+    const sA = 448 / maxAbs(A), sB = 448 / maxAbs(B);
+    let zerosT = 0, zerosG = 0, rows = '';
+    function cells(x, s) {
+      const q = quantize(x * s, E4M3);
+      const code = Math.sign(x) * q.v;
+      const rec = code / s;
+      const rel = Math.abs(rec - x) / Math.abs(x);
+      const cls = q.v === 0 ? 'bad' : '';
+      return { html: `<td class="${cls}">${fmt(code, 5)}</td><td class="${cls}">${fmt(rec, 5)}</td><td class="${cls}">${rel === 1 ? '1 (lost)' : (rel === 0 ? '0' : rel.toExponential(2))}</td>`, zero: q.v === 0 };
+    }
+    [['A', A, sA], ['B', B, sB]].forEach(([name, arr, sGroup]) => {
+      arr.forEach(x => {
+        const t = cells(x, sT), g = cells(x, sGroup);
+        if (t.zero) zerosT++;
+        if (g.zero) zerosG++;
+        rows += `<tr><td>${name}</td><td>${fmt(x, 5)}</td>${t.html}${g.html}</tr>`;
+      });
+    });
+    document.querySelector('#bsTable tbody').innerHTML = rows;
+    document.getElementById('bsSummary').innerHTML =
+      `Scale for the whole tensor s = ${fmt(sT, 4)}; scales per group s<sub>A</sub> = ${fmt(sA, 4)}, s<sub>B</sub> = ${fmt(sB, 4)}. ` +
+      `Nonzero values stored as 0: <strong>${zerosT} of 8</strong> with one scale, <strong>${zerosG} of 8</strong> with one scale per group.`;
+  }
+  os.addEventListener('input', renderBS);
 
-  // status table
-  const tbody = document.querySelector('#statusTable tbody');
-  tbody.innerHTML = '';
-  formats.forEach(f => {
-    const s = classify(f, target);
-    const prec = Math.pow(2, -f.mantBits);
-    const tr = document.createElement('tr');
-    tr.innerHTML =
-      '<td><strong>' + f.name + '</strong></td>' +
-      '<td>' + f.minNormal.toExponential(2) + '</td>' +
-      '<td>' + f.max.toExponential(2) + '</td>' +
-      '<td>' + prec.toExponential(2) + '</td>' +
-      '<td class="' + s.cls + '">' + s.text + '</td>';
-    tbody.appendChild(tr);
-  });
-}
-
-document.getElementById('target').addEventListener('input', render);
-render();
+  // initial render
+  const v0 = 1.00012;
+  vslider.value = String(Math.log10(v0));
+  document.getElementById('vlog').textContent = Math.log10(v0).toFixed(2);
+  renderFormats(v0);
+  renderLS();
+  renderBS();
+  window.__quantize = quantize; window.__FORMATS = FORMATS;
+})();
 </script>
-
 </body>
 </html>

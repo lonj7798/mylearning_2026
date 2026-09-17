@@ -8,6 +8,8 @@ source_urls:
 created_at: "2026-04-23"
 ---
 
+> Superseded by the 2026-09 revision of read.md; kept for history.
+
 # Excerpt: Cherry-LLM and the IFD score
 
 **Source library:** `wiki/raw-data/llm-training/papers/cherry-llm.md`, `wiki/raw-data/llm-training/papers/ifd.md`

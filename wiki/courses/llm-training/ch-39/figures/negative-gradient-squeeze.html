@@ -1,0 +1,178 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ch-39 — Where the pushed-down probability mass goes</title>
+<style>
+  :root { --ink:#1b1f24; --muted:#5a6270; --line:#c9cfd8; --bg:#fbfbfc; --panel:#fff;
+          --before:#9aa4b2; --after:#2e5aa8; --down:#a11d1d; --up:#2f7d32; }
+  * { box-sizing:border-box; }
+  body { margin:0; padding:18px; background:var(--bg); color:var(--ink);
+         font:15px/1.5 -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }
+  h1 { font-size:19px; margin:0 0 6px; }
+  p.sub { color:var(--muted); max-width:72ch; margin:0 0 14px; }
+  .layout { display:flex; flex-wrap:wrap; gap:16px; align-items:flex-start; }
+  .panel { background:var(--panel); border:1px solid var(--line); border-radius:6px; padding:12px; }
+  .bars { flex:2 1 460px; min-width:320px; }
+  .side { flex:1 1 280px; min-width:250px; }
+  h2 { font-size:15px; margin:0 0 10px; }
+  table { border-collapse:collapse; width:100%; font-size:13px; }
+  th, td { text-align:right; padding:4px 6px; border-bottom:1px solid #eef1f4; font-variant-numeric:tabular-nums; }
+  th:first-child, td:first-child { text-align:left; }
+  .bar { height:9px; border-radius:2px; display:block; }
+  .b-before { background:var(--before); }
+  .b-after { background:var(--after); }
+  .delta-neg { color:var(--down); }
+  .delta-pos { color:var(--up); }
+  .row { display:flex; align-items:center; gap:8px; margin:7px 0; font-size:13px; }
+  .row label { width:130px; color:var(--muted); }
+  .row input[type=range] { flex:1; }
+  .val { width:46px; text-align:right; font-variant-numeric:tabular-nums; }
+  .note { font-size:12.5px; color:var(--muted); max-width:72ch; }
+  code { font-family:ui-monospace, Menlo, Consolas, monospace; font-size:12.5px; }
+  select { font:13px inherit; padding:2px 4px; }
+  .summary { font-size:13px; font-family:ui-monospace, Menlo, Consolas, monospace;
+             background:#f3f5f8; border:1px solid var(--line); border-radius:4px; padding:8px; margin-top:10px;
+             white-space:pre-line; }
+</style>
+</head>
+<body>
+
+<h1>Where the pushed-down probability mass goes</h1>
+<p class="sub">
+  One next-token distribution over four tokens. A negative gradient on token <i>y⁻</i> changes the logits by
+  <code>Δz = −η(e_{y⁻} − p)</code>: the target logit falls by <code>η(1 − p_{y⁻})</code> and every other logit
+  rises by <code>η p_j</code>, in proportion to how likely that token already is. Adjust which token is pushed
+  down, the step size, and whether a positive step on another token is applied at the same time. The pattern
+  shown here is the squeezing effect proved for logistic regression in
+  <a href="https://arxiv.org/abs/2407.10490">Ren and Sutherland (2024)</a>, App. E.
+</p>
+
+<div class="layout">
+  <div class="panel bars">
+    <h2>Distribution before and after one step</h2>
+    <table id="tbl">
+      <thead><tr><th>token</th><th>p before</th><th>bar</th><th>p after</th><th>bar</th><th>Δp</th></tr></thead>
+      <tbody id="tbody"></tbody>
+    </table>
+    <div class="summary" id="summary"></div>
+  </div>
+
+  <div class="panel side">
+    <h2>Controls</h2>
+    <div class="row">
+      <label>push down</label>
+      <select id="neg"></select>
+    </div>
+    <div class="row">
+      <label>push up</label>
+      <select id="pos"></select>
+    </div>
+    <div class="row"><label>step size η</label><input id="eta" type="range" min="0.2" max="5" step="0.1" value="1"><span class="val" id="etaV">1.0</span></div>
+    <div class="row"><label>concentration</label><input id="temp" type="range" min="0.5" max="2.5" step="0.05" value="1"><span class="val" id="tempV">1.00</span></div>
+    <p class="note" style="margin-top:10px;">
+      "Concentration" rescales the base logits: higher values make the distribution peakier, which
+      Ren and Sutherland report makes the effect stronger. The base distribution at concentration 1.00 is
+      (0.70, 0.20, 0.08, 0.02), the worked example in the chapter's negative-feedback section.
+    </p>
+  </div>
+</div>
+
+<p class="note" style="margin-top:14px;">
+  Reading to take away: pushing down a token that is already unlikely returns almost all of its mass to the
+  current argmax, and tokens in the middle of the distribution lose mass as well. A positive step on another
+  token competes with that concentration rather than cancelling it — which is the token-level counterpart of
+  the sequence-level result in <a href="https://arxiv.org/abs/2402.13228">Pal et al. (2024)</a> §3, where the
+  DPO gradient lowers the logit of the correct token at every position after the position where the two
+  responses differ.
+</p>
+
+<script>
+(function () {
+  var NAMES = ['t1', 't2', 't3', 't4'];
+  var BASE_P = [0.70, 0.20, 0.08, 0.02];
+  var BASE_Z = BASE_P.map(function (p) { return Math.log(p); });
+  var S = { neg: 3, pos: -1, eta: 1.0, temp: 1.0 };
+
+  function softmax(z) {
+    var m = Math.max.apply(null, z);
+    var e = z.map(function (v) { return Math.exp(v - m); });
+    var s = e.reduce(function (a, b) { return a + b; }, 0);
+    return e.map(function (v) { return v / s; });
+  }
+  function before() { return softmax(BASE_Z.map(function (z) { return z * S.temp; })); }
+  function after(p) {
+    var z = BASE_Z.map(function (v) { return v * S.temp; });
+    var out = z.slice();
+    for (var j = 0; j < z.length; j++) {
+      if (S.neg >= 0) {
+        var e_neg = (j === S.neg) ? 1 : 0;
+        out[j] -= S.eta * (e_neg - p[j]);
+      }
+      if (S.pos >= 0) {
+        var e_pos = (j === S.pos) ? 1 : 0;
+        out[j] += S.eta * (e_pos - p[j]);
+      }
+    }
+    return softmax(out);
+  }
+  function fmt(x) { return x >= 0.0005 ? x.toFixed(4) : x.toExponential(1); }
+
+  function render() {
+    var p = before(), q = after(p);
+    var tb = document.getElementById('tbody');
+    tb.innerHTML = '';
+    for (var i = 0; i < NAMES.length; i++) {
+      var tr = document.createElement('tr');
+      var d = q[i] - p[i];
+      var label = NAMES[i] + (i === S.neg ? '  (pushed down)' : (i === S.pos ? '  (pushed up)' : ''));
+      tr.innerHTML =
+        '<td>' + label + '</td>' +
+        '<td>' + fmt(p[i]) + '</td>' +
+        '<td style="width:110px"><span class="bar b-before" style="width:' + (p[i] * 100).toFixed(1) + '%"></span></td>' +
+        '<td>' + fmt(q[i]) + '</td>' +
+        '<td style="width:110px"><span class="bar b-after" style="width:' + (q[i] * 100).toFixed(1) + '%"></span></td>' +
+        '<td class="' + (d < 0 ? 'delta-neg' : 'delta-pos') + '">' + (d >= 0 ? '+' : '') + d.toFixed(4) + '</td>';
+      tb.appendChild(tr);
+    }
+    var argmax = 0;
+    for (var k = 1; k < p.length; k++) if (p[k] > p[argmax]) argmax = k;
+    var lost = 0;
+    for (var m = 0; m < p.length; m++) if (m !== argmax && m !== S.pos && q[m] < p[m]) lost += (p[m] - q[m]);
+    document.getElementById('summary').textContent =
+      'argmax before the step: ' + NAMES[argmax] + ' at p = ' + fmt(p[argmax]) + '\n' +
+      'argmax after the step:  ' + NAMES[argmax] + ' at p = ' + fmt(q[argmax]) +
+      '  (Δ = ' + (q[argmax] - p[argmax] >= 0 ? '+' : '') + (q[argmax] - p[argmax]).toFixed(4) + ')\n' +
+      'mass lost by tokens other than the argmax and the pushed-up token: ' + lost.toFixed(4);
+  }
+
+  function fillSelect(id, includeNone) {
+    var sel = document.getElementById(id);
+    if (includeNone) {
+      var o = document.createElement('option');
+      o.value = '-1'; o.textContent = 'none'; sel.appendChild(o);
+    }
+    NAMES.forEach(function (n, i) {
+      var opt = document.createElement('option');
+      opt.value = String(i); opt.textContent = n; sel.appendChild(opt);
+    });
+  }
+  fillSelect('neg', true);
+  fillSelect('pos', true);
+  document.getElementById('neg').value = String(S.neg);
+  document.getElementById('pos').value = String(S.pos);
+  document.getElementById('neg').addEventListener('change', function (e) { S.neg = parseInt(e.target.value, 10); render(); });
+  document.getElementById('pos').addEventListener('change', function (e) { S.pos = parseInt(e.target.value, 10); render(); });
+  document.getElementById('eta').addEventListener('input', function (e) {
+    S.eta = parseFloat(e.target.value); document.getElementById('etaV').textContent = S.eta.toFixed(1); render();
+  });
+  document.getElementById('temp').addEventListener('input', function (e) {
+    S.temp = parseFloat(e.target.value); document.getElementById('tempV').textContent = S.temp.toFixed(2); render();
+  });
+  render();
+})();
+</script>
+
+</body>
+</html>

@@ -2,299 +2,364 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>Packed Attention — Block-Diagonal Causal Mask Visualiser</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Packed Attention Explorer</title>
 <style>
-  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-         max-width: 960px; margin: 2em auto; padding: 0 1em; color: #222; }
-  h1 { font-size: 1.4em; margin-bottom: 0.2em; }
-  .subtitle { color: #666; margin-top: 0; }
-  .panel { border: 1px solid #ddd; border-radius: 6px; padding: 1em; margin: 1em 0;
-           background: #fafafa; }
-  .controls { display: flex; gap: 0.6em; flex-wrap: wrap; align-items: center; }
-  .seqbox { display: inline-flex; align-items: center; gap: 0.3em; padding: 4px 6px;
-            border: 1px solid #cfcfcf; border-radius: 4px; background: white; }
-  .seqbox .name { font-size: 0.8em; color: #666; }
-  .seqbox .len  { font-variant-numeric: tabular-nums; font-weight: 600;
-                  min-width: 1.6em; text-align: center; color: #333; }
-  button { font: inherit; padding: 2px 8px; border: 1px solid #bbb; background: #fff;
-           border-radius: 3px; cursor: pointer; color: #333; }
-  button:hover { background: #eef; }
-  button.remove { color: #a00; border-color: #e0bcbc; }
-  button.add    { color: #070; border-color: #bce0bc; margin-left: 0.4em; }
-  .slider-row { margin-top: 0.8em; display: flex; gap: 0.6em; align-items: center; }
-  input[type="range"] { width: 220px; }
-  canvas { background: white; border: 1px solid #ccc; display: block;
-           margin: 1em auto; }
-  .legend { display: flex; gap: 1.5em; justify-content: center; font-size: 0.9em;
-            flex-wrap: wrap; }
-  .swatch { display: inline-block; width: 12px; height: 12px; margin-right: 4px;
-            vertical-align: middle; border-radius: 2px; border: 1px solid #999; }
-  .value { font-variant-numeric: tabular-nums; color: #333; font-weight: 600; }
-  .note { font-size: 0.88em; color: #555; line-height: 1.55; }
-  code { background: #eef; padding: 1px 5px; border-radius: 3px; font-size: 0.88em;
-         font-variant-numeric: tabular-nums; }
-  .arrays { display: grid; grid-template-columns: 130px 1fr; row-gap: 0.4em;
-            column-gap: 0.8em; align-items: center; margin: 0.6em 0; }
-  .arrays .label { font-size: 0.85em; color: #555; }
-  .arrays code { display: block; padding: 4px 8px; word-break: break-all; }
-  .gauge { height: 22px; border: 1px solid #aaa; border-radius: 3px; display: flex;
-           overflow: hidden; background: #eee; }
-  .gauge .data { background: #3c9c55; color: #fff; font-size: 0.8em;
-                 display: flex; align-items: center; justify-content: center; }
-  .gauge .pad  { background: #d9736a; color: #fff; font-size: 0.8em;
-                 display: flex; align-items: center; justify-content: center; }
-  .warn { color: #a33; font-size: 0.85em; }
+  :root {
+    --bg: #fbfbf9; --fg: #1f2328; --muted: #5b6168; --panel: #ffffff; --border: #d8dadd;
+    --allowed: #2f8f4e; --cross: #d9822b; --masked: #e9eaec; --pad: #f3d3cd; --boundary: #1d5fa8;
+    --warn: #a33a2b; --ok: #2f7a45; --bar: #4a74b0; --code: #eef1f5;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #16181b; --fg: #e6e8ea; --muted: #a2a8ae; --panel: #1f2226; --border: #3a3f45;
+      --allowed: #4fb472; --cross: #e59a4c; --masked: #2c3036; --pad: #5a3a35; --boundary: #6ea3e0;
+      --warn: #f08a78; --ok: #7fcf97; --bar: #7da3d8; --code: #2a2e34;
+    }
+  }
+  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: var(--bg);
+         color: var(--fg); margin: 0; padding: 1.5em 16px; line-height: 1.5; }
+  main { max-width: 980px; margin: 0 auto; }
+  h1 { font-size: 1.35em; margin: 0 0 0.2em; }
+  h2 { font-size: 1.05em; margin: 0 0 0.5em; }
+  p.lead { color: var(--muted); margin-top: 0; }
+  .panel { background: var(--panel); border: 1px solid var(--border); border-radius: 6px; padding: 0.9em 1em; margin: 1em 0; }
+  .row { display: flex; flex-wrap: wrap; gap: 0.6em; align-items: center; }
+  .seqbox { display: inline-flex; align-items: center; gap: 0.25em; padding: 3px 6px; border: 1px solid var(--border); border-radius: 4px; }
+  .seqbox .name { font-size: 0.8em; color: var(--muted); }
+  .seqbox .len { font-variant-numeric: tabular-nums; font-weight: 600; min-width: 1.6em; text-align: center; }
+  button, select { font: inherit; font-size: 0.9em; padding: 2px 8px; border: 1px solid var(--border); background: var(--panel);
+           color: var(--fg); border-radius: 3px; cursor: pointer; }
+  button:hover { border-color: var(--boundary); }
+  label { font-size: 0.9em; color: var(--muted); }
+  input[type="range"] { width: 180px; max-width: 100%; }
+  .grid2 { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 1em; }
+  @media (max-width: 760px) { .grid2 { grid-template-columns: minmax(0, 1fr); } }
+  .canvas-wrap { max-width: 100%; }
+  canvas { display: block; width: 100%; max-width: 520px; height: auto; background: var(--panel); }
+  .legend { display: flex; flex-wrap: wrap; gap: 0.4em 1.2em; font-size: 0.85em; color: var(--muted); margin-top: 0.4em; }
+  .sw { display: inline-block; width: 11px; height: 11px; margin-right: 4px; vertical-align: middle; border-radius: 2px; }
+  .arrays { display: grid; grid-template-columns: 11.5em minmax(0, 1fr); gap: 0.35em 0.7em; font-size: 0.9em; }
+  .arrays .k { color: var(--muted); }
+  code, .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 0.86em; }
+  .arrays code { background: var(--code); padding: 2px 6px; border-radius: 3px; word-break: break-all; }
+  .status { font-size: 0.9em; margin-top: 0.5em; }
+  .warn { color: var(--warn); } .ok { color: var(--ok); }
+  #hover { min-height: 2.8em; font-size: 0.88em; color: var(--muted); }
+  .bars { display: flex; align-items: flex-end; gap: 2px; height: 120px; border-bottom: 1px solid var(--border); overflow-x: auto; }
+  .bars div.b { background: var(--bar); width: 14px; flex: 0 0 auto; position: relative; }
+  .bars div.b span { position: absolute; top: -1.3em; left: 50%; transform: translateX(-50%); font-size: 0.7em; color: var(--muted); }
+  .axis { display: flex; gap: 2px; font-size: 0.7em; color: var(--muted); overflow-x: auto; }
+  .axis div { width: 14px; flex: 0 0 auto; text-align: center; }
+  .tablewrap { overflow-x: auto; }
+  table { border-collapse: collapse; font-size: 0.88em; min-width: 520px; }
+  th, td { border-bottom: 1px solid var(--border); padding: 4px 8px; text-align: right; font-variant-numeric: tabular-nums; }
+  th:first-child, td:first-child { text-align: left; }
+  .gauge { height: 20px; border: 1px solid var(--border); border-radius: 3px; display: flex; overflow: hidden; margin-top: 0.3em; }
+  .gauge .d { background: var(--allowed); color: #fff; font-size: 0.78em; display: flex; align-items: center; justify-content: center; }
+  .gauge .p { background: var(--pad); color: var(--fg); font-size: 0.78em; display: flex; align-items: center; justify-content: center; }
+  .caption { font-size: 0.82em; color: var(--muted); }
+  ul.caption { padding-left: 1.2em; }
 </style>
 </head>
 <body>
-
-<h1>Packed Attention — Block-Diagonal Causal Mask Visualiser</h1>
-<p class="subtitle">
-  Edit the sub-sequence lengths of one packed SFT block. The green cells show which
-  (query, key) pairs FlashAttention's varlen kernel keeps; grey cells are masked;
-  the red band on the right is padding. <strong>Tokens in sub-sequence k only
-  attend backward inside sub-sequence k.</strong>
-</p>
+<main>
+<h1>Packed Attention Explorer</h1>
+<p class="lead">Edit the document lengths in one packed row. Toggle the document mask and the position-id numbering, then read which query-key pairs are attended, which RoPE offsets they receive, which boundaries a padding-free framework infers from <code>position_ids</code>, how often each relative distance is trained, and each document's share of the loss. Companion to ch-04 §2-§4.</p>
 
 <div class="panel">
-  <div>
-    <span class="label" style="font-size:0.85em; color:#555;">Sub-sequence lengths (edit with +/-):</span>
-    <div class="controls" id="seqControls" style="margin-top:0.4em;"></div>
+  <div class="row" style="margin-bottom:0.5em">
+    <span class="k" style="font-size:0.9em">Document lengths:</span>
+    <span id="seqControls" class="row"></span>
   </div>
-  <div class="slider-row">
-    <label style="font-size:0.85em; color:#555;">max_seq_len</label>
-    <input type="range" id="maxLen" min="16" max="32" step="1" value="20">
-    <span class="value" id="maxLenLabel">20</span>
-    <span class="warn" id="overflowWarn"></span>
+  <div class="row">
+    <label for="rowLen">Row length</label>
+    <input type="range" id="rowLen" min="4" max="32" step="1" value="11">
+    <span id="rowLenLabel" class="mono">11</span>
+    <label><input type="checkbox" id="docMask" checked> Document mask (block-diagonal)</label>
+    <label for="posMode">position_ids</label>
+    <select id="posMode">
+      <option value="reset">reset to 0 per document</option>
+      <option value="cont">continuous across the row</option>
+    </select>
   </div>
+  <div class="row" style="margin-top:0.5em">
+    <span class="k" style="font-size:0.9em">Presets:</span>
+    <button data-preset="a">§2 example: 3, 2, 4 in a row of 11</button>
+    <button data-preset="b">§3 example: 3, 5 in a row of 8</button>
+    <button data-preset="c">Overflow: 6, 5, 4 in a row of 12</button>
+  </div>
+  <div id="overflow" class="status warn"></div>
 </div>
 
-<canvas id="mask" width="720" height="540"></canvas>
+<div class="grid2">
+  <div class="panel">
+    <h2>Attention pattern (query row i, key column j)</h2>
+    <div class="canvas-wrap"><canvas id="mask" width="520" height="520"></canvas></div>
+    <div class="legend">
+      <span><span class="sw" style="background:var(--allowed)"></span>attended, same document</span>
+      <span><span class="sw" style="background:var(--cross)"></span>attended, other document</span>
+      <span><span class="sw" style="background:var(--masked)"></span>not attended</span>
+      <span><span class="sw" style="background:var(--pad)"></span>padding</span>
+      <span><span class="sw" style="background:var(--boundary)"></span>document boundary</span>
+    </div>
+    <div id="hover">Hover over a cell to see the query and key positions and the RoPE offset.</div>
+  </div>
 
-<div class="legend">
-  <span><span class="swatch" style="background:#3c9c55"></span>valid attention (causal, same sub-seq)</span>
-  <span><span class="swatch" style="background:#e8e8e8"></span>masked (cross-seq or future)</span>
-  <span><span class="swatch" style="background:#f2c6c0; border-color:#a33"></span>PAD row/col</span>
-  <span><span class="swatch" style="background:white; border-color:#1763b0"></span>sub-seq boundary</span>
+  <div class="panel">
+    <h2>Arrays for this row</h2>
+    <div class="arrays">
+      <span class="k">true boundaries (cu_seqlens)</span><code id="cuOut"></code>
+      <span class="k">position_ids</span><code id="posOut"></code>
+      <span class="k">boundaries inferred from position_ids</span><code id="infOut"></code>
+      <span class="k">labels (T = target, × = −100)</span><code id="labOut"></code>
+    </div>
+    <div id="inferStatus" class="status"></div>
+    <div id="offsetStatus" class="status"></div>
+    <div style="margin-top:0.8em">
+      <span class="k" style="font-size:0.9em">Packing efficiency (non-padding share)</span>
+      <div class="gauge" id="gauge"><div class="d"></div><div class="p"></div></div>
+    </div>
+  </div>
 </div>
 
 <div class="panel">
-  <div class="arrays">
-    <span class="label">cu_seqlens</span>
-    <code id="cuOut"></code>
-    <span class="label">position_ids</span>
-    <code id="posOut"></code>
-    <span class="label">segment_ids</span>
-    <code id="segOut"></code>
-  </div>
-  <div style="margin-top:0.6em;">
-    <div class="label" style="font-size:0.85em; color:#555;">Padding ratio</div>
-    <div class="gauge" id="gauge"><div class="data"></div><div class="pad"></div></div>
-  </div>
+  <h2>Trained relative distances f(i) = Σ<sub>s</sub> max(|s| − i, 0)</h2>
+  <p class="caption" style="margin-top:0">Spans s are documents when the document mask is on and the whole data region when it is off. The bar at distance i counts attended query-key pairs whose tokens are i positions apart.</p>
+  <div class="bars" id="bars"></div>
+  <div class="axis" id="axis"></div>
+  <div id="fStatus" class="status"></div>
 </div>
 
-<div class="panel note">
-  <strong>What you're seeing.</strong>
-  Each green square at <code>(i, j)</code> means query token <code>i</code> is allowed to read
-  key token <code>j</code>. The rule: same sub-sequence AND <code>j &le; i</code>. Flip one
-  sub-sequence into another by editing lengths &mdash; notice the green block splits cleanly,
-  never touching off-diagonal cells.
-  <br><br>
-  <strong>Why it matters.</strong>
-  Drop the block-diagonal mask and the softmax in sub-seq 2 includes keys from sub-seq 1 in its
-  partition function <code>Z = &Sigma;<sub>j</sub> exp(q<sub>i</sub>&middot;k<sub>j</sub>)</code>.
-  Loss stays plausible; gradients silently leak between unrelated documents. A
-  <code>max_seq_len = 4096</code> dense mask is 16M entries &mdash; instead
-  <code>flash_attn_varlen_func(..., cu_seqlens_q, cu_seqlens_k, causal=True)</code> consumes only
-  the cumulative offsets shown above and computes the diagonal blocks in-kernel. Memory is
-  <code>O(&Sigma; L<sub>i</sub>)</code>, not <code>O(N&sup2;)</code>.
-  <br><br>
-  <strong>position_ids reset at every boundary.</strong>
-  RoPE uses the position for its rotation angle, and learned embeddings index into a table.
-  Forgetting the reset means sub-sequence 2's first token looks like it sits at position
-  <code>L<sub>1</sub></code>, not <code>0</code> &mdash; the model effectively sees one very long
-  conversation instead of many short ones.
+<div class="panel">
+  <h2>Per-document loss share and NEFTune scale</h2>
+  <p class="caption" style="margin-top:0">Target tokens N<sub>i</sub> count positions whose label is not −100. Following TRL's padding-free collator, the label is −100 wherever <code>position_ids</code> is 0, so N<sub>i</sub> = L<sub>i</sub> − 1 when position ids reset, and only the first token of the row loses its label when they are continuous. Token mean weights documents by N<sub>i</sub>; sequence mean (LongAlign scaling) gives each document 1/M. The last column is the NEFTune noise scale of the Transformers hook (row length) divided by the per-sequence scale of Algorithm 1, √(L<sub>i</sub> / row length).</p>
+  <div class="tablewrap"><table id="lossTable"></table></div>
 </div>
+
+<div class="panel">
+  <h2>How to read the result</h2>
+  <ul class="caption">
+    <li>With the document mask on, switching position ids between reset and continuous leaves every attended pair's RoPE offset unchanged, because RoPE attention depends only on the difference of positions. The true boundaries are unchanged too.</li>
+    <li>With continuous position ids, a framework that infers boundaries from <code>position_ids</code> finds one segment for the whole row. In that path the reset is what carries the document mask.</li>
+    <li>With the document mask off, orange cells show attention to other documents. If position ids also reset, those cross-document pairs receive offsets that do not equal their distance in the row, including negative offsets.</li>
+    <li>Turning the mask on removes long distances from f(i) unless a single document is long.</li>
+  </ul>
+  <p class="caption"><strong>Sources.</strong> Block-diagonal mask and per-sequence position ids: Krell et al. 2021, §3.2 ([[sequence-packing]]). Boundaries computed from <code>position_ids</code> and first-label masking: Kundu et al. 2024, §3.3-3.5; TRL <code>sft_trainer.py</code> L484-516 at aa89588. RoPE position ids left unadjusted under a document mask: Ding et al. 2024, App. C.1. f(i): An et al. 2024, Eq. 2 ([[string-effective-context]]). Loss shares: Tülu 3 §4.3.2 Eqs. 1-2; LongAlign §3.3 Eq. 4. NEFTune scale: Jain et al. 2023, Algorithm 1 footnote; Transformers <code>integrations/neftune.py</code> L47-50 at 05e078a. The worked numbers in ch-04 (cu_seqlens [0, 3, 5, 9]; f = [8, 6, 4, 2, 1, 0, 0, 0] vs [8, 7, 6, 5, 4, 3, 2, 1]) are reproduced by the first two presets.</p>
+</div>
+</main>
 
 <script>
-const lens = [5, 3, 7, 2];  // default sub-sequence lengths (sum = 17)
-const cvs = document.getElementById('mask');
-const ctx = cvs.getContext('2d');
+(function () {
+  var state = { lens: [3, 2, 4], rowLen: 11, docMask: true, posMode: 'reset' };
+  var cvs = document.getElementById('mask');
+  var ctx = cvs.getContext('2d');
+  var geom = { ml: 30, mt: 30, cell: 20, n: 11 };
+  var cur = null;
 
-function rebuildControls() {
-  const host = document.getElementById('seqControls');
-  host.innerHTML = '';
-  lens.forEach((L, k) => {
-    const box = document.createElement('span');
-    box.className = 'seqbox';
-    box.innerHTML =
-      '<span class="name">s' + (k+1) + '</span>' +
-      '<button data-k="'+k+'" data-d="-1">&minus;</button>' +
-      '<span class="len">' + L + '</span>' +
-      '<button data-k="'+k+'" data-d="1">+</button>' +
-      '<button class="remove" data-k="'+k+'" data-rm="1">&times;</button>';
-    host.appendChild(box);
-  });
-  const addBtn = document.createElement('button');
-  addBtn.className = 'add';
-  addBtn.textContent = '+ sub-seq';
-  addBtn.addEventListener('click', () => { lens.push(3); rebuildControls(); render(); });
-  host.appendChild(addBtn);
+  function css(name) { return getComputedStyle(document.documentElement).getPropertyValue(name).trim(); }
 
-  host.querySelectorAll('button[data-k]').forEach(b => {
-    b.addEventListener('click', () => {
-      const k = +b.dataset.k;
-      if (b.dataset.rm) {
-        if (lens.length > 1) lens.splice(k, 1);
-      } else {
-        const d = +b.dataset.d;
-        lens[k] = Math.max(1, Math.min(16, lens[k] + d));
+  function buildControls() {
+    var host = document.getElementById('seqControls');
+    host.innerHTML = '';
+    state.lens.forEach(function (L, k) {
+      var box = document.createElement('span');
+      box.className = 'seqbox';
+      box.innerHTML = '<span class="name">d' + (k + 1) + '</span>' +
+        '<button data-k="' + k + '" data-d="-1" aria-label="shorter">−</button>' +
+        '<span class="len">' + L + '</span>' +
+        '<button data-k="' + k + '" data-d="1" aria-label="longer">+</button>' +
+        '<button data-k="' + k + '" data-rm="1" aria-label="remove">×</button>';
+      host.appendChild(box);
+    });
+    var add = document.createElement('button');
+    add.textContent = '+ document';
+    add.addEventListener('click', function () { state.lens.push(3); buildControls(); render(); });
+    host.appendChild(add);
+    host.querySelectorAll('button[data-k]').forEach(function (b) {
+      b.addEventListener('click', function () {
+        var k = +b.dataset.k;
+        if (b.dataset.rm) { if (state.lens.length > 1) state.lens.splice(k, 1); }
+        else { state.lens[k] = Math.max(1, Math.min(32, state.lens[k] + (+b.dataset.d))); }
+        buildControls(); render();
+      });
+    });
+  }
+
+  function layout() {
+    var toks = [], cu = [0], used = [], total = 0, truncated = false, dropped = 0;
+    for (var k = 0; k < state.lens.length; k++) {
+      var L = state.lens[k];
+      var fit = Math.min(L, state.rowLen - total);
+      if (fit <= 0) { truncated = true; dropped += L; continue; }
+      for (var p = 0; p < fit; p++) toks.push({ doc: k, local: p, pad: false });
+      total += fit; cu.push(total); used.push({ doc: k, len: fit, orig: L });
+      if (fit < L) { truncated = true; dropped += L - fit; }
+    }
+    var padLen = state.rowLen - total;
+    for (var q = 0; q < padLen; q++) toks.push({ doc: -1, local: 0, pad: true });
+    toks.forEach(function (t, i) {
+      t.pos = t.pad ? 0 : (state.posMode === 'reset' ? t.local : i);
+      t.target = !t.pad && t.pos !== 0;
+    });
+    return { toks: toks, cu: cu, used: used, total: total, padLen: padLen, truncated: truncated, dropped: dropped };
+  }
+
+  function allowed(t, i, j) {
+    if (j > i) return false;
+    var a = t[i], b = t[j];
+    if (a.pad || b.pad) return false;
+    if (state.docMask && a.doc !== b.doc) return false;
+    return true;
+  }
+
+  function render() {
+    state.rowLen = +document.getElementById('rowLen').value;
+    state.docMask = document.getElementById('docMask').checked;
+    state.posMode = document.getElementById('posMode').value;
+    document.getElementById('rowLenLabel').textContent = state.rowLen;
+    var lay = layout(); cur = lay;
+    var t = lay.toks, N = state.rowLen;
+
+    var sum = state.lens.reduce(function (a, b) { return a + b; }, 0);
+    document.getElementById('overflow').textContent = lay.truncated
+      ? 'Documents exceed the row by ' + (sum - N) + ' tokens; ' + lay.dropped + ' tokens are cut. A wrapped layout moves them into the next row as a separate fragment; TRL "bfd" discards them; "bfd_split" packs them elsewhere as fragments.'
+      : '';
+
+    // canvas geometry
+    var side = cvs.width - 40;
+    geom.cell = Math.max(6, Math.floor(side / N));
+    geom.n = N; geom.ml = 30; geom.mt = 30;
+    var c = geom.cell;
+    ctx.clearRect(0, 0, cvs.width, cvs.height);
+    var colAllowed = css('--allowed'), colCross = css('--cross'), colMasked = css('--masked'),
+        colPad = css('--pad'), colB = css('--boundary'), colFg = css('--muted');
+    for (var i = 0; i < N; i++) {
+      for (var j = 0; j < N; j++) {
+        var fill = colMasked;
+        if (t[i].pad || t[j].pad) fill = colPad;
+        else if (allowed(t, i, j)) fill = (t[i].doc === t[j].doc) ? colAllowed : colCross;
+        ctx.fillStyle = fill;
+        ctx.fillRect(geom.ml + j * c, geom.mt + i * c, c - 1, c - 1);
       }
-      rebuildControls();
-      render();
+    }
+    ctx.strokeStyle = colB; ctx.lineWidth = 2;
+    for (var k = 1; k < lay.cu.length; k++) {
+      var p = lay.cu[k];
+      if (p >= N) continue;
+      ctx.beginPath(); ctx.moveTo(geom.ml + p * c - 0.5, geom.mt); ctx.lineTo(geom.ml + p * c - 0.5, geom.mt + N * c); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(geom.ml, geom.mt + p * c - 0.5); ctx.lineTo(geom.ml + N * c, geom.mt + p * c - 0.5); ctx.stroke();
+    }
+    ctx.fillStyle = colFg; ctx.font = '11px sans-serif'; ctx.textAlign = 'center';
+    ctx.fillText('key j', geom.ml + (N * c) / 2, 12);
+    for (var a = 0; a < N; a += (N > 16 ? 4 : 2)) ctx.fillText(String(a), geom.ml + a * c + c / 2, geom.mt - 6);
+    ctx.textAlign = 'right';
+    for (var b = 0; b < N; b += (N > 16 ? 4 : 2)) ctx.fillText(String(b), geom.ml - 5, geom.mt + b * c + c * 0.7);
+    ctx.save(); ctx.translate(10, geom.mt + (N * c) / 2); ctx.rotate(-Math.PI / 2); ctx.textAlign = 'center'; ctx.fillText('query i', 0, 0); ctx.restore();
+
+    // arrays
+    document.getElementById('cuOut').textContent = '[' + lay.cu.join(', ') + ']';
+    document.getElementById('posOut').textContent = '[' + t.map(function (x) { return x.pad ? 'P' : x.pos; }).join(', ') + ']';
+    var inferred = [];
+    for (var z = 0; z < lay.total; z++) if (t[z].pos === 0) inferred.push(z);
+    inferred.push(lay.total);
+    document.getElementById('infOut').textContent = '[' + inferred.join(', ') + ']';
+    document.getElementById('labOut').textContent = '[' + t.map(function (x) { return x.pad ? '×' : (x.target ? 'T' : '×'); }).join(', ') + ']';
+    var same = inferred.length === lay.cu.length && inferred.every(function (v, idx) { return v === lay.cu[idx]; });
+    var is = document.getElementById('inferStatus');
+    is.className = 'status ' + (same ? 'ok' : 'warn');
+    is.textContent = same
+      ? 'Inferred boundaries match the true boundaries: a padding-free kernel would apply the document mask.'
+      : 'Inferred boundaries do not match: a framework that builds cu_seqlens from position_ids would treat the row as ' + (inferred.length - 1) + ' segment(s) and attend across documents.';
+
+    // offsets vs distance for attended cross-document pairs
+    var crossPairs = 0, mismatch = 0, negative = 0;
+    for (var qi = 0; qi < N; qi++) for (var kj = 0; kj <= qi; kj++) {
+      if (!allowed(t, qi, kj) || t[qi].doc === t[kj].doc) continue;
+      crossPairs++;
+      var off = t[qi].pos - t[kj].pos;
+      if (off !== qi - kj) mismatch++;
+      if (off < 0) negative++;
+    }
+    var os = document.getElementById('offsetStatus');
+    if (state.docMask) { os.className = 'status ok'; os.textContent = 'No cross-document pairs are attended; every attended pair has RoPE offset equal to its in-document distance under either numbering.'; }
+    else { os.className = 'status warn'; os.textContent = crossPairs + ' cross-document pairs are attended; ' + mismatch + ' of them have a RoPE offset different from their row distance (' + negative + ' negative).'; }
+
+    // gauge
+    var eff = lay.total / N;
+    var g = document.getElementById('gauge');
+    g.querySelector('.d').style.flexBasis = (eff * 100).toFixed(1) + '%';
+    g.querySelector('.p').style.flexBasis = ((1 - eff) * 100).toFixed(1) + '%';
+    g.querySelector('.d').textContent = lay.total + ' tokens (' + (eff * 100).toFixed(0) + '%)';
+    g.querySelector('.p').textContent = lay.padLen > 0 ? lay.padLen + ' pad' : '';
+
+    // f(i)
+    var spans = state.docMask ? lay.used.map(function (u) { return u.len; }) : [lay.total];
+    var f = [];
+    for (var d = 0; d < N; d++) { var s = 0; spans.forEach(function (L) { s += Math.max(L - d, 0); }); f.push(s); }
+    var fmax = Math.max.apply(null, f.concat([1]));
+    var bars = document.getElementById('bars'), axis = document.getElementById('axis');
+    bars.innerHTML = ''; axis.innerHTML = '';
+    f.forEach(function (v, d) {
+      var el = document.createElement('div'); el.className = 'b';
+      el.style.height = Math.round((v / fmax) * 100) + 'px';
+      el.innerHTML = '<span>' + v + '</span>';
+      el.title = 'distance ' + d + ': ' + v + ' pairs';
+      bars.appendChild(el);
+      var ax = document.createElement('div'); ax.textContent = d; axis.appendChild(ax);
+    });
+    var totalPairs = f.reduce(function (x, y) { return x + y; }, 0);
+    var far = 0; for (var e = 3; e < N; e++) far += f[e];
+    document.getElementById('fStatus').textContent = 'f = [' + f.join(', ') + ']; attended pairs = ' + totalPairs +
+      '; pairs at distance ≥ 3 = ' + far + ' (' + (totalPairs ? (100 * far / totalPairs).toFixed(0) : 0) + '%).';
+
+    // loss table
+    var M = lay.used.length;
+    var Ns = lay.used.map(function (u) { return t.filter(function (x) { return !x.pad && x.doc === u.doc && x.target; }).length; });
+    var sumN = Ns.reduce(function (x, y) { return x + y; }, 0);
+    var html = '<tr><th>Document</th><th>L<sub>i</sub> in row</th><th>N<sub>i</sub> targets</th><th>token-mean share</th><th>sequence-mean share</th><th>NEFTune hook / per-sequence</th></tr>';
+    lay.used.forEach(function (u, idx) {
+      html += '<tr><td>d' + (u.doc + 1) + (u.len < u.orig ? ' (cut from ' + u.orig + ')' : '') + '</td><td>' + u.len + '</td><td>' + Ns[idx] +
+        '</td><td>' + (sumN ? (Ns[idx] / sumN).toFixed(3) : '—') + '</td><td>' + (1 / M).toFixed(3) +
+        '</td><td>' + Math.sqrt(u.len / N).toFixed(3) + '</td></tr>';
+    });
+    document.getElementById('lossTable').innerHTML = html;
+  }
+
+  cvs.addEventListener('mousemove', function (ev) {
+    if (!cur) return;
+    var r = cvs.getBoundingClientRect();
+    var sx = cvs.width / r.width, sy = cvs.height / r.height;
+    var x = (ev.clientX - r.left) * sx, y = (ev.clientY - r.top) * sy;
+    var j = Math.floor((x - geom.ml) / geom.cell), i = Math.floor((y - geom.mt) / geom.cell);
+    var out = document.getElementById('hover');
+    if (i < 0 || j < 0 || i >= geom.n || j >= geom.n) { out.textContent = 'Hover over a cell to see the query and key positions and the RoPE offset.'; return; }
+    var t = cur.toks, a = t[i], b = t[j];
+    if (a.pad || b.pad) { out.textContent = 'query ' + i + ', key ' + j + ': padding, not attended.'; return; }
+    var ok = allowed(t, i, j);
+    out.textContent = 'query ' + i + ' (d' + (a.doc + 1) + ', position ' + a.pos + ') → key ' + j + ' (d' + (b.doc + 1) + ', position ' + b.pos + '): ' +
+      (ok ? 'attended' : 'not attended') + '; row distance ' + (i - j) + ', RoPE offset ' + (a.pos - b.pos) + '.';
+  });
+
+  var presets = { a: { lens: [3, 2, 4], row: 11 }, b: { lens: [3, 5], row: 8 }, c: { lens: [6, 5, 4], row: 12 } };
+  document.querySelectorAll('button[data-preset]').forEach(function (btn) {
+    btn.addEventListener('click', function () {
+      var p = presets[btn.dataset.preset];
+      state.lens = p.lens.slice();
+      document.getElementById('rowLen').value = p.row;
+      buildControls(); render();
     });
   });
-}
-
-function render() {
-  const maxLen = +document.getElementById('maxLen').value;
-  document.getElementById('maxLenLabel').textContent = maxLen;
-
-  // cumulative offsets, position_ids, segment_ids (data region only)
-  const cu = [0];
-  const pos = [];
-  const seg = [];
-  let total = 0;
-  for (let k = 0; k < lens.length; k++) {
-    const L = lens[k];
-    if (total + L > maxLen) {
-      // truncate last sub-seq to fit
-      const fit = Math.max(0, maxLen - total);
-      for (let p = 0; p < fit; p++) { pos.push(p); seg.push(k); }
-      total += fit;
-      cu.push(total);
-      break;
-    }
-    for (let p = 0; p < L; p++) { pos.push(p); seg.push(k); }
-    total += L;
-    cu.push(total);
+  document.getElementById('rowLen').addEventListener('input', render);
+  document.getElementById('docMask').addEventListener('change', render);
+  document.getElementById('posMode').addEventListener('change', render);
+  if (window.matchMedia) {
+    var mq = window.matchMedia('(prefers-color-scheme: dark)');
+    if (mq.addEventListener) mq.addEventListener('change', render);
   }
-  const padLen = Math.max(0, maxLen - total);
-  // pad region: segment = -1, position = 0 (convention: pad positions pinned to 0)
-  for (let p = 0; p < padLen; p++) { pos.push(0); seg.push(-1); }
-
-  const sumL = lens.reduce((a,b)=>a+b, 0);
-  const warn = document.getElementById('overflowWarn');
-  warn.textContent = (sumL > maxLen)
-    ? '(data overflows max_seq_len by ' + (sumL - maxLen) + ' — last sub-seq truncated)'
-    : '';
-
-  // draw grid
-  const N = maxLen;
-  const margin = { l: 40, t: 40, r: 20, b: 20 };
-  const avail = Math.min(cvs.width - margin.l - margin.r,
-                         cvs.height - margin.t - margin.b);
-  const cell = Math.floor(avail / N);
-  const side = cell * N;
-  ctx.clearRect(0, 0, cvs.width, cvs.height);
-
-  // cells
-  for (let i = 0; i < N; i++) {
-    for (let j = 0; j < N; j++) {
-      const si = seg[i], sj = seg[j];
-      const inPadRow = (si === -1);
-      const inPadCol = (sj === -1);
-      let fill = '#e8e8e8';  // masked default
-      if (inPadRow || inPadCol) {
-        fill = '#f7dad4';    // pad tint
-      } else if (si === sj && j <= i) {
-        fill = '#3c9c55';    // valid causal same-seq
-      }
-      ctx.fillStyle = fill;
-      ctx.fillRect(margin.l + j*cell, margin.t + i*cell, cell - 1, cell - 1);
-    }
-  }
-
-  // sub-seq boundary lines (blue)
-  ctx.strokeStyle = '#1763b0';
-  ctx.lineWidth = 1.5;
-  for (let k = 1; k < cu.length; k++) {
-    const p = cu[k];
-    if (p > N) break;
-    ctx.beginPath();
-    ctx.moveTo(margin.l + p*cell, margin.t);
-    ctx.lineTo(margin.l + p*cell, margin.t + side);
-    ctx.stroke();
-    ctx.beginPath();
-    ctx.moveTo(margin.l,           margin.t + p*cell);
-    ctx.lineTo(margin.l + side,    margin.t + p*cell);
-    ctx.stroke();
-  }
-  // pad boundary (red)
-  if (padLen > 0 && total <= N) {
-    ctx.strokeStyle = '#a33';
-    ctx.setLineDash([4, 3]);
-    ctx.beginPath();
-    ctx.moveTo(margin.l + total*cell, margin.t);
-    ctx.lineTo(margin.l + total*cell, margin.t + side);
-    ctx.stroke();
-    ctx.beginPath();
-    ctx.moveTo(margin.l,          margin.t + total*cell);
-    ctx.lineTo(margin.l + side,   margin.t + total*cell);
-    ctx.stroke();
-    ctx.setLineDash([]);
-  }
-
-  // outer box
-  ctx.strokeStyle = '#888';
-  ctx.lineWidth = 1;
-  ctx.strokeRect(margin.l, margin.t, side, side);
-
-  // axis labels
-  ctx.fillStyle = '#555';
-  ctx.font = '11px sans-serif';
-  ctx.textAlign = 'center';
-  ctx.fillText('key token j  →', margin.l + side/2, margin.t - 20);
-  ctx.save();
-  ctx.translate(12, margin.t + side/2);
-  ctx.rotate(-Math.PI/2);
-  ctx.fillText('query token i  →', 0, 0);
-  ctx.restore();
-
-  // axis ticks every 4
-  ctx.fillStyle = '#777';
-  ctx.textAlign = 'center';
-  for (let j = 0; j < N; j += 4) {
-    ctx.fillText(j.toString(), margin.l + j*cell + cell/2, margin.t - 6);
-  }
-  ctx.textAlign = 'right';
-  for (let i = 0; i < N; i += 4) {
-    ctx.fillText(i.toString(), margin.l - 4, margin.t + i*cell + cell - 2);
-  }
-
-  // arrays + gauge
-  document.getElementById('cuOut').textContent =
-    '[' + cu.join(', ') + ']';
-  document.getElementById('posOut').textContent =
-    '[' + pos.join(', ') + ']';
-  document.getElementById('segOut').textContent =
-    '[' + seg.map(s => s === -1 ? 'P' : s).join(', ') + ']';
-
-  const dataFrac = total / maxLen;
-  const padFrac  = padLen / maxLen;
-  const gauge = document.getElementById('gauge');
-  const dEl = gauge.querySelector('.data');
-  const pEl = gauge.querySelector('.pad');
-  dEl.style.flexBasis = (dataFrac * 100).toFixed(1) + '%';
-  pEl.style.flexBasis = (padFrac  * 100).toFixed(1) + '%';
-  dEl.textContent = 'data ' + total + ' (' + (dataFrac*100).toFixed(0) + '%)';
-  pEl.textContent = (padLen > 0) ? ('pad ' + padLen + ' (' + (padFrac*100).toFixed(0) + '%)') : '';
-}
-
-document.getElementById('maxLen').addEventListener('input', render);
-rebuildControls();
-render();
+  buildControls();
+  render();
+})();
 </script>
-
 </body>
 </html>

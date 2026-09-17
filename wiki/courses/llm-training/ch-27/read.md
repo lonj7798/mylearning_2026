@@ -1,227 +1,386 @@
 <!-- chapter: ch-27
      track: synthetic
-     title: Modality — Agentic Trajectories
-     sources: [[agentinstruct]], [[agenttuning]], [[lumos]], [[fireact]], [[autoact]], [[agent-flan]], [[webarena-data]], [[swe-gym]], [[swe-rl]], [[openhands-data]], [[kimi-k2-agentic-data]], [[kimi-k2]], [[terminal-bench-trajectories]], [[explorer]]
+     kind: content
+     title: Agentic Trajectory Data
+     deps: [ch-26]
+     sources: [[agenttuning]], [[fireact]], [[excerpts/lumos]], [[autoact]], [[agent-flan]], [[agentinstruct]], [[excerpts/webarena-data]], [[excerpts/swe-gym]], [[excerpts/swe-smith]], [[r2e-gym]], [[deepswe]], [[excerpts/swe-rl]], [[kimi-k2]], [[kimi-k2-recipe]], [[eto-trial-and-error]], [[excerpts/learning-from-failure-nat]], [[swe-rebench]], [[swe-bench-illusion]], [[agentic-finetuning-misalignment]]
      figures: figures/action-space.html
+     revised: 2026-09 (generality revision)
 -->
 
-# Chapter 27 — Modality: Agentic Trajectories
+# Chapter 27 — Agentic Trajectory Data
 
-> **Core insight.** An "agent trajectory" is not a long chat. It is a sequence of `(observation, thought, action)` tuples where each action has *environmental side-effects* the next observation must reflect. This changes what data means: the dataset is not `(prompt, response)` pairs — it is *conditional on an executable world*. Every design choice in agentic post-training flows from that one structural fact: how you observe the world, what actions are legal, and how the world grades the final state.
+> **Core insight.** An agent trajectory is a sequence of model actions and environment observations that ends in an outcome an external check can score. Trajectories trained alone improve the environments they come from and fail to transfer: AgentLM-7B trained only on 1,866 agent trajectories scored 1.34 on held-in agent tasks but 0.09 on held-out agent tasks, while the same data mixed at η = 0.2 with ShareGPT scored 1.96 and 0.67 ([[agenttuning]] Table 5). On software-engineering issues, RL with a patch-similarity reward on Llama-3.3-70B-Instruct raised SWE-bench Verified to 41.0% and scored at or above the base model in all five out-of-domain categories, while an SFT baseline built from the same PR seeds scored below the base model in four of the five (strict MATH scoring) ([[excerpts/swe-rl]] Tables 1, 3). Repository diversity changed held-out results in one controlled comparison: with 700 Qwen2.5-Coder-Instruct trajectories held fixed, SWE-bench Verified resolve rate rose from 10.3% to 15.1% as the number of training repositories grew from 4 to 100 ([[excerpts/swe-smith]] §4.1, Fig. 5; model size not stated for this figure).
 >
-> **Guideline.** Pick the environment first, the teacher second, the model third. The action space defines the trajectory format, the trajectory format defines the data pipeline, and only then do teacher-model and student-model choices matter. Mixing modalities at the data stage (AgentInstruct's multi-skill pipelines, Kimi-K2's pretraining-mix injection) works; mixing modalities at the model stage (one monolithic agent LoRA on everything) does not.
+> **Guideline.** When agent trajectories are added to SFT, mix them with general instruction data and choose the share on held-out agent environments and general benchmarks, because agent-only training collapsed held-out scores at 7B and 13B ([[agenttuning]] Table 5); AgentTuning's scan selected η = 0.2 at 7B, and Agent-FLAN used a 1:1 ShareGPT-to-agent ratio with capability weights 1 : 0.25 : 0.75 ([[agent-flan]] App. A). When an executable environment and a checkable outcome exist, report pass@1 and pass@k on a held-out environment family and on a benchmark created after the training data, because SWE-bench Verified scores exceed scores on fresh tasks for the same models (39.7% vs 21.3% for DeepSeek-V3-0324, [[swe-rebench]] Table 2). When failed trajectories are used, state whether they are discarded, used as content, used as a conditioning label, or used as gradient, and compare against a success-only baseline on unseen variations, because the measured effects differ in sign across these uses (see Negative samples and negative feedback). Otherwise, discard failures and keep the filter strict, because training Llama-2-70B-chat on unfiltered self-generated trajectories scored below no fine-tuning (32.51 vs 32.84 HotpotQA F1, [[autoact]] Table 2).
 
----
+## Corrections to the version you studied
 
-## Why this chapter exists
+1. "All six were published between Oct-2023 and Apr-2024" → AgentInstruct is arXiv v1 2024-07, and it produces instruction pairs, not agent trajectories ([[agentinstruct]], Year; Findings "Agentic training").
+2. AgentTuning "Mixing ratio: 1:10 agent:ShareGPT preserves chat quality" and takeaway "[[agenttuning]]'s 1:10 rule generalizes" → the mixture weight is η = 0.2 (20% agent, 80% ShareGPT by sampling), chosen by a 0–1 scan on 7B held-out tasks; the reported ablation is agent-only vs general-only vs mixed, not 1:1 / 1:10 / 1:50 ([[agenttuning]], §2.2.2, App. A, Table 5).
+3. FireAct "~2,000 trajectories", "CoT-only 38.9, ReAct-only 37.3, Reflexion-only 35.2, three-method mix 40.0", "method-specific system prompt", "Wikipedia search" → 2,000 HotpotQA questions were used for generation; for GPT-3.5, ReAct 39.4, +CoT 41.0, +Reflexion 38.8, all three 40.0, so the three-way mix is not best; all data is converted to ReAct format and the method is chosen implicitly; the tool is Google search via SerpAPI ([[fireact]], §3, §4, Table 4).
+4. Lumos "40K tasks → 200K triples", "Lumos-O (onetime)", "~8-point drop vs ~20 for monolithic ReAct" → 55,382 planning and 55,499 grounding annotations; Lumos-O is OnePass; the unseen-task results are WebShop 50.3 average reward and InterCodeSQL 7.3% success for Lumos-I-All-13B, and no 8-vs-20 comparison appears ([[excerpts/lumos]], §4.1, Table 1e).
+5. AutoAct "self-consistency filter", "iterate… saturates by iteration 4", "~36 EM at 13B, within ~4 points of GPT-4-distilled baselines" → AutoAct keeps reward = 1 trajectories only, does not iterate, trains on 200 trajectories, and reports Llama-2-13B at 40.49 HotpotQA F1 vs 36.94 for FireAct ([[autoact]], §2.3, §3, Table 1).
+6. Agent-FLAN "four hallucination classes (format / action / parameter / relevance)", "~85K", "5× fewer hallucinated calls", "negatives generated by prompting GPT-4", "MT-Bench within 0.5" → two hallucination types (format and action), 24,703 agent samples, negatives built from 761 ToolBench queries answered by gpt-3.5-turbo with no or irrelevant tools, H_ReAct 15.6 → 9.9 and H_General 13.5 → 11.9; MT-Bench is not reported ([[agent-flan]], §4.3, App. B–C, Table 3).
+7. Agent-FLAN "custom `<tool>` tokens become markdown-code-fenced JSON" → Agent-FLAN converts Thought-Action-Action Input turns into multi-turn chat and splits JSON arguments with inserted statements ([[agent-flan]], §4.1).
+8. AgentInstruct "four stages", "43 generator agents", "25M", "3× on MATH", "refinement loop up to 3 iterations" → three flows (content transformation, seed instruction generation, refinement), 43 reading-comprehension question types, ~22M flow pairs plus ~3.8M Orca-2.5 pairs, reported gains +40% AGIEval, +19% MMLU, +54% GSM8K, +38% BBH, +45% AlpacaEval; no MATH 3× and no iteration count ([[agentinstruct]], §2, §3.1, Abstract).
+9. WebArena "five apps — GitLab, Reddit-clone (Postmill), Shopping (Magento), OpenStreetMap, Calendar" and "GPT-4 ~35%" → the sites are an e-commerce store (OneStopShop), an online-store CMS, a Reddit-style forum, GitLab, and a map, plus English Wikipedia, a calculator, and a scratchpad; there is no calendar; GPT-4 reached 14.41% vs 78.24% for humans ([[excerpts/webarena-data]], §2.2, Table 2).
+10. SWE-Gym "Qwen-2.5-Coder-7B 3.0% → 15.3% on SWE-Bench Verified… 20.3% with a verifier", "teacher Qwen-2.5-Coder-32B or Claude-3.5, K=10", "491 tasks compatible with SWE-Bench Lite", `browse` action → fine-tuning on 491 successful trajectories sampled from gpt-4o-2024-08-06 and claude-3-5-sonnet-20241022 gives Verified 1.8 → 10.6 (7B), 4.0 → 16.4 (14B), 7.0 → 20.6 (32B) and Lite 3.0 → 15.3 (32B); with a verifier, 32.0% Verified (Best@16) and 26.0% Lite; SWE-Gym Lite has 230 instances; the browser tool is disabled ([[excerpts/swe-gym]], §3.2, §4.2, Table 3, §5.1).
+11. SWE-RL "base Llama-3.1-70B-Instruct", "11M triples… GRPO G=8, β=0.02, LR 1e-6", "~1M H100-hours", "Python-primary, ≤10 files, ≤500 lines" → base Llama-3.3-70B-Instruct; ~11M raw PR instances, of which 273k are selected as RL seeds; 1,600 steps, 16k context, 32 problems × 16 rollouts per step, 512 H100 GPUs for about 32 hours; learning rate, β, and ε are not reported; the listed filters are not the paper's filters ([[excerpts/swe-rl]], §2, §3.1, App. A).
+12. SWE-RL reward "`ratio()` in [0, 1]… authors experiment with binary thresholding" → the reward is −1 for a wrongly formatted response, otherwise the `SequenceMatcher` similarity; the ablation compares against an exact-match 0/1 reward (repair 29.0 vs 34.8) ([[excerpts/swe-rl]], Eq. 1, §3.6).
+13. SWE-RL "beating DeepSeek-Coder-V2-Instruct (18.0%) and matching SWE-Gym-32B" and "HumanEval+ +6, MATH +4, BBH +3" → Table 1 lists SWE-Gym-32B at 32.0 and SWE-RL at 41.0; DeepSeek-Coder-V2 is not in the table; out-of-domain changes vs the base are HumanEval+ 76.2 → 79.9, MATH (strict) 63.2 → 73.7, MMLU 86.49 → 86.82, and BBH is not evaluated ([[excerpts/swe-rl]], Tables 1, 3).
+14. Takeaway "Rule-based dense rewards scale; execution-based sparse rewards do not (for RL, at training time)" → DeepSWE trained Qwen3-32B with RL only on a 0/1 test reward and reached 42.2% Pass@1 on SWE-bench Verified, and Kimi K2's RL runs unit tests in a sandbox supporting over 10,000 concurrent instances ([[deepswe]], §2.2, §4; [[kimi-k2]], §3.2.1).
+15. Kimi K2 "Agentic PRETRAINING data (~1T tokens)… ~3–5% of the total token budget", "planner / executor / critic, up to 5 sub-agents", takeaway "Pretrain injection beats post-training retrofit… [[kimi-k2]] argues this explicitly" → the report places its agentic data synthesis in post-training SFT; pre-training is 15.5T tokens of web text, code, mathematics, and knowledge with rephrasing; no agentic pre-training corpus and no sub-agent generator are reported ([[kimi-k2]], §2.2, §3.1.1, Verification).
+16. Kimi K2 "the model produces a rubric appropriate for the task and scores its own completion" and "combines two reward streams into a single scalar" → the K2 critic ranks actor responses by pairwise comparison against core, prescriptive, and human-annotated rubrics and is refined on verifiable-reward rollouts; a single weighted scalar is not described ([[kimi-k2]], §3.2.2, Verification).
+17. Kimi K2 "20,000+ tool library", "~65% on SWE-Bench Verified… competitive with Claude-3.5-Sonnet" → 3000+ real MCP tools plus over 20,000 synthetic tools; SWE-bench Verified 65.8 (agentic, single attempt) and 71.6 (multiple attempts), compared against Claude Sonnet 4, Claude Opus 4, GPT-4.1, and others ([[kimi-k2]], §3.1.1, Table 3).
+18. "tail to 100K+ needs FlashAttention-3-class long-context support plus gradient checkpointing" → no source cited in this chapter states this requirement (long-sequence memory choices are covered in [[ch-05]]); the sources report SWE-Gym SFT at a 32,768-token maximum context with trajectories of about 19 turns and 19,000 tokens on average, and R2E-Gym SFT at 20K context with context parallelism named as future work ([[excerpts/swe-gym]], §4.2, App. B.2; [[r2e-gym]], App. B).
+19. Cost table (AgentTuning ~$20K, FireAct ~$3K, AgentInstruct >$500K, SWE-Gym ~10K H100-hours, SWE-RL ~1M H100-hours, K2 ~1T agentic tokens) → none of these figures appears in the sources; the reported figures are SWE-RL 512 H100 GPUs for about 32 hours and SWE-smith dataset construction for $1,360 ([[excerpts/swe-rl]], §3.1; [[excerpts/swe-smith]], §2.2).
+20. "Agent SFT without negatives is an open-loop controller" and takeaway 2 that negatives are required in every agent corpus → Agent-FLAN's negatives are prompts paired with correct plain-text targets and trained with ordinary cross-entropy; at 7B they raised Agent-H HScore from 84.5 to 89.1 while T-Eval changed from 66.3 to 66.0 ([[agent-flan]], Table 3, Findings "Negative samples").
+21. "(This connects to [[front-loading-reasoning]] from ch-26.)" and "By [[ch-26]] you know how to synthesize reasoning and tool-call data" → reasoning traces are [[ch-24]]; ch-26 covers tool and function-calling data.
 
-By [[ch-26]] you know how to synthesize reasoning and tool-call data inside a single autoregressive context. An agent is the next conceptual step: the model is no longer producing a self-contained response, it is producing *one turn* in a loop where an external world — a shell, a browser, a Python kernel, a Git repo — reads its action, mutates state, and replies with an observation. The loop can run for dozens of turns; trajectories routinely hit 15K–100K tokens ([[openhands-data]], [[swe-gym]]); and the reward that matters is *whether the final world-state satisfies a predicate*, not whether any single token was fluent.
+## Why this chapter matters for a general-purpose model
 
-This chapter is the design-space map for the data side of that loop. Six lineages cover the SFT corner (AgentInstruct, AgentTuning, Lumos, FireAct, AutoAct, Agent-FLAN); two benchmarks cover the environment corner (WebArena, SWE-Gym); one frontier RL recipe shows how rule-based reward scales (SWE-RL); one frontier model report shows what a 1T-class lab actually does end-to-end (Kimi-K2). The thread tying them together is a four-axis taxonomy — environment × action space × observation format × success signal — that you will use to read any future agent paper.
+A general-purpose assistant is also used to act: run code, edit repositories, browse, and call tools over many turns. The data for this skill differs from chat data in one measurable way: each observation is produced by an environment, so the success of a trajectory can be checked by an external test instead of a judge's reading. That property makes filtering and RL possible, and it also makes narrowing easy to measure, because a model can be scored on the environments it trained on (held-in) and on environments it never saw (held-out).
 
----
+In the pipeline, agentic trajectories enter at three points. Mid-training can add repository and execution-trace data before post-training ([[ch-32d]]). SFT uses filtered teacher trajectories (this chapter, and [[ch-30b]] for mixture shares). RL uses the same environments with an outcome reward ([[ch-45b]]). This chapter covers how the trajectories are produced, how they are filtered, what share of the SFT mixture they can take, and what the sources measured about transfer.
 
-## 1. The six SFT recipes — a design-space tour
+## §1 Terms and the four axes of agent data
 
-All six were published between Oct-2023 and Apr-2024. Each picked a different axis to vary.
+**Trajectory.** A trajectory is the sequence (task, a₁, o₁, a₂, o₂, …, a_n) where each aᵢ is a model turn (thought and action) and each oᵢ is the environment's reply; AgentTuning writes it as a conversation (u₁, a₁, …, u_n, a_n) with a final reward r ∈ [0, 1] ([[agenttuning]] §2).
 
-| Paper | Year | Trajectories | Teacher | Core design move |
-|---|---|---|---|---|
-| [[agenttuning]] | 2023.10 | 1,866 | GPT-4 | **Mixing ratio**: 1:10 agent:ShareGPT preserves chat quality |
-| [[fireact]] | 2023.10 | ~2,000 | GPT-4 | **Method diversity**: CoT + ReAct + Reflexion in one corpus |
-| [[lumos]] | 2023.11 | 40K tasks → 200K triples | GPT-4 | **Module decomposition**: Plan / Ground / Execute separable heads |
-| [[autoact]] | 2024.01 | ~10K | *none* (self) | **Self-differentiation**: one base model plays Plan/Tool/Reflect |
-| [[agent-flan]] | 2024.03 | ~85K | GPT-4 | **Negative examples**: four hallucination modes explicitly corrected |
-| [[agentinstruct]] | 2024.07 | 25M | GPT-4 | **Agentic pipeline**: 43-generator flows per skill |
+**Scaffold.** A scaffold is the prompt, tool set, and control loop around the model, for example OpenHands CodeAct (bash terminal and file editor) or Agentless Mini (a fixed localize–repair–test pipeline) ([[excerpts/swe-gym]] §4.2; [[excerpts/swe-rl]] App. B).
 
-Read them as a conversation. AgentTuning establishes that a small curated corpus works if you mix it correctly. FireAct adds that *how* you collect trajectories matters — three prompting methods beat one. Lumos adds that trajectories have *internal structure* (plan / ground / execute) and that structure should show up in the training data, not be hidden inside the monolithic ReAct blob. AutoAct tests whether you even need a GPT-4 teacher — the answer is "within a narrow QA domain, no." Agent-FLAN answers a complaint none of the first four addressed: *what if the trained model hallucinates tool calls on prompts that don't need tools?* It introduces four explicit negative-example classes (format / action / parameter / relevance hallucination). Finally, AgentInstruct scales the idea to 25M pairs by making the *generation pipeline itself* a multi-agent system.
+Every agent dataset in this chapter can be described on four axes:
 
-The corpus-size column hides a critical fact. AgentTuning and FireAct sit at ~2K trajectories each; Agent-FLAN at 85K; AgentInstruct at 25M. Three orders of magnitude in four papers. The quality claim of the small-corpus papers is that **diversity of structure** (method, environment, or decomposition) compensates for volume; the scaling claim of AgentInstruct is that once the pipeline is in place, you may as well run it to exhaustion. Both claims are empirically true on their respective benchmark suites; the open question is whether small-diverse corpora hit a lower ceiling than large-pipeline corpora on held-out tasks. Agent-FLAN's ablation table hints at the answer — removing any single capability type (instruction-follow, agent-reason, generalization) costs 0.3–0.5 AgentBench points; removing negatives triples the hallucination rate. Structure matters at every scale, but at 85K+ scale the *ablation deltas* shrink, which is why you see AgentInstruct skip the decomposition debate and just scale.
-
-### 1.1 AgentInstruct's six-flow taxonomy — the pipeline-of-specialists template
-
-[[agentinstruct]] (Mitra et al. 2024, Microsoft) is the most ambitious single paper in this list. Its central abstraction is an **agentic flow** — a pipeline of specialized LLM agents where each stage has its own prompt, its own tool access, and its own output schema. The four generic stages for every skill:
-
-1. **Content Transformation** — one agent rewrites raw input (a web document, a codebase, an API spec) into a canonical intermediate structure (passage + candidate-questions list, function + test stub, schema + example call).
-2. **Seed Instruction Generation** — 10–40 *parallel* "generator" agents, each prompted to produce a distinct sub-skill (literal question / inferential question / multi-hop / numerical reasoning / …). The reading-comprehension skill alone uses **43 generator agents**, one per question category.
-3. **Instruction Refinement** — a "suggester" agent proposes improvements; an "editor" agent applies them. Loop up to 3 iterations per instruction. This is how you get diversity of *phrasing* without losing structural coverage.
-4. **Answer Generation + Validation** — GPT-4 produces the gold answer; an LLM-judge filter drops low-quality pairs.
-
-Aggregated across 17 skills (reading-comprehension, math, code, tool-use, RAG, creative-content, web-agent, long-context, …) this produced the proprietary **AgentInstruct-25M** corpus. Orca-3 (Mistral-7B base + AgentInstruct SFT) outperformed Mistral-7B-Instruct by 40% on AGIEval, 54% on GSM8K, 3× on MATH.
-
-Two takeaways for your own pipelines. First: **the generator count is a diversity knob**, not a budget waste — 43 narrow-prompt agents cover a wider sub-skill distribution than one broad-prompt agent sampled 43×. Second: **the refinement loop is non-negotiable** — single-shot GPT-4 generation plateaus fast; iterative suggester/editor adds ~3 points on hard sub-skills at ~1.5× cost.
-
-Skill-specific variants worth noting. The **tool-use flow** seeds from real API docs (not synthetic schemas), lets generator agents synthesize queries at varying tool-count complexity (1 tool → 2 tools → composed chains), and routes refinement through schema-correctness checks. The **RAG flow** uses content agents to build passage clusters, then query agents generate questions that require evidence fusion across passages. The **long-context flow** stitches documents up to 8K+ tokens before generator prompts fire. In all three, the pattern is: one *upstream* agent prepares the substrate, then *many* downstream agents sample from it at varied difficulty. This is the opposite of the self-instruct lineage's "one prompt, many samples" approach; the AgentInstruct bet is that **substrate diversity + prompt specialization** beats **one diverse prompt**.
-
-### 1.2 Lumos's Plan/Ground/Execute format spec
-
-[[lumos]] is the one you copy when designing a new agent-trajectory format. Every trajectory is decomposed into three aligned supervised targets:
-
-```
-Plan:    (task, gold_answer) → list[subtask]
-Ground:  (subtask, env_state) → action in unified grammar
-Execute: action → observation (from real env or tool)
-```
-
-The unified action grammar is explicit: `Search[query]`, `Retrieve[doc_id]`, `Calculate[expr]`, `Click[element]`, `Type[element, text]`, `Back`, `Finish[answer]`. This is the grammar Lumos trains against. Conversion from an existing dataset (HotpotQA, ALFWorld, WebShop, Mind2Web, Musique, GSM8K, MATH, StrategyQA, ScienceQA) goes through GPT-4 as an *annotator* — a prompt that takes a raw trajectory and emits the three-layer decomposition.
-
-Two training modes emerge: **Lumos-I (iterative)** replans after every observation; **Lumos-O (onetime)** plans the whole task upfront, then executes sequentially. Each module can be its own LoRA or its own head. On generalization to held-out environments, the modular decomposition costs only ~8 points versus ~20 for monolithic ReAct fine-tunes — the reason is that the *action grammar* is shared across environments even when the concrete tools differ.
-
-Use Lumos's format when your downstream plan is "swap a retriever / browser / code executor without retraining." Use AgentInstruct's format when your downstream plan is "one giant SFT blob." They are not competitors; they are different API-stability choices.
-
-The three-module decomposition also produces a cleaner supervision signal per module than a monolithic ReAct trace. The Planning module sees `(task → list[subtask])` pairs with clear structural targets; Grounding sees `(subtask + env_state → action)` where the action is constrained by the unified grammar; Execute is pure environment interaction. A 7B model can specialize each module effectively because each has a narrower output distribution than a unified ReAct agent. This is the same insight AutoAct reuses ([[autoact]] splits Plan/Tool/Reflect); it recurs in Kimi-K2's sub-agent orchestration (planner / executor / critic). **Role specialization is a persistent design pattern** across the 2023→2025 literature — keep it in your toolbox even when your final-deployment model is monolithic, because the *data* can still be role-partitioned during synthesis.
-
-### 1.3 Agent-FLAN's four hallucination classes — the negative-example ontology
-
-[[agent-flan]] is the paper to re-read if your SFT-trained agent over-calls tools in chat. It classifies hallucinated tool calls into four distinct failure modes:
-
-| Mode | Trigger | Gold response |
+| Axis | Question it answers | Examples from the sources |
 |---|---|---|
-| **Format** hallucination | Model emits malformed tool-call JSON | Corrected call *or* a text refusal |
-| **Action** hallucination | User query doesn't need a tool | Text-only answer, no call |
-| **Parameter** hallucination | Right tool, wrong args | Tool call with correct args |
-| **Relevance** hallucination | Tool list doesn't contain a needed tool | "I cannot help with this tool set" refusal |
+| Environment | What executes the action and holds state? | WebArena's self-hosted websites; a Docker image of a repository; K2's LLM tool simulator that "maintains and updates state" |
+| Action space | Which outputs are legal? | WebArena's 12 browser actions; search/replace edits; OpenHands bash + editor; MCP tool calls |
+| Observation | What does the model see after acting? | accessibility tree, screenshot, or HTML; shell output; simulated tool JSON |
+| Success signal | What decides that the trajectory is kept or rewarded? | functional checks on page or database state; hidden unit tests; similarity to the oracle patch; an LLM judge with a task rubric |
 
-Each class gets its own synthetic-negative-example pool, generated by prompting GPT-4 with common failure patterns drawn from the base model's errors. Agent-FLAN-7B cuts hallucinated tool calls on AgentBench held-out by 5× vs AgentTuning baseline. The lesson: **agent SFT without negatives is an open-loop controller**. Adding the four negative classes is the closed-loop correction.
+Sources: [[excerpts/webarena-data]] §2.3–2.4; [[excerpts/swe-gym]] §4.2; [[excerpts/swe-rl]] Eq. 1; [[kimi-k2]] §3.1.1.
 
-Agent-FLAN's second contribution — easy to miss — is **format alignment**. The paper rewrites agent trajectories to avoid special tokens and delimiters that don't appear in Llama-2 pretraining (e.g., custom `<tool>`/`</tool>` pairs become plain markdown-code-fenced JSON blocks). Keeping the training distribution close to the pretraining distribution reduces catastrophic forgetting and improves preserved-chat-quality metrics (MT-Bench within 0.5 points of base Llama-2-Chat). This is a detail the 2024 papers increasingly converged on — don't invent new tokens for agent formatting unless you're also planning to pretrain on them ([[kimi-k2-agentic-data]] does; most SFT-only papers shouldn't).
+The figure [figures/action-space.html](figures/action-space.html) lets the reader switch between four environments to compare these axes, view the AgentTuning held-in/held-out bars by model size, and compute the SWE-RL reward and group advantages for editable patches.
 
-### 1.4 FireAct — method diversity beats method depth
+**Loss masking.** In agent SFT, the loss is computed on model turns only. AgentTuning applies the loss "on model output only", ETO masks instruction and observation tokens, and multi-turn RL in DeepSWE masks environment observations ([[agenttuning]] §2.2.3; [[eto-trial-and-error]] Eq. 5; [[deepswe]] §2.3).
 
-[[fireact]] (Chen et al. 2023, Princeton + Cambridge) sits at the opposite end from AgentInstruct in scale but makes an orthogonal claim. For the same ~2K HotpotQA + Bamboogle question pool, they collect trajectories via **three** prompting methods in parallel: Chain-of-Thought (GPT-4 reasoning only), ReAct (GPT-4 with Wikipedia search in `Thought/Action/Observation` loop), Reflexion (GPT-4 attempts, reflects on failure, retries up to N=3). Each question gets one trajectory per method; each trajectory is labeled with its method name so the student can learn method-specific formatting.
+L(θ) = −(1 / Σₜ mₜ) · Σₜ mₜ · log π_θ(xₜ | x₍<t₎)
 
-The ablation is the paper's core result: CoT-only SFT hits 38.9 HotpotQA EM, ReAct-only 37.3, Reflexion-only 35.2 — but the three-method mix hits **40.0**. Strict improvement from diversity, at the same data volume. At inference, a method-specific system prompt lets the same model switch styles. The implication: **what prompting method you collect under is itself a hyperparameter**, and the training-time answer is "all of them."
+- xₜ: token t of the serialized trajectory; x₍<t₎: all earlier tokens.
+- mₜ ∈ {0, 1}: 1 if token t belongs to a model turn, 0 for system prompt, task, and observation tokens.
+- π_θ: the model being trained.
 
-### 1.5 AutoAct — the zero-teacher lower bound
+Worked example (illustrative token counts). A trajectory has 300 task tokens, three model turns of 120, 80, and 150 tokens, and three observations of 900, 1,500, and 40 tokens. The sequence has 3,090 tokens, and Σₜ mₜ = 350, so 11.3% of the tokens carry loss. If no tokens are masked, 2,740 of the 3,090 loss-bearing tokens (88.7%) are task text, shell output, and page text that the model does not produce at inference, so most of the loss measures prediction of environment output. Masking also matters for self-correction traces: a failed action that stays in context as history can be masked while the recovery turn is trained.
 
-[[autoact]] is the recipe to consult when your API budget is zero and you're OK with narrow-domain QA. A single base model (Llama-2-7B/13B) plays three roles — Plan, Tool, Reflect — via separate LoRAs, and the loop produces its own training data:
+## §2 Agent SFT designs, 2023–2024
 
-1. Meta-agent prompts the base model to classify its role for each turn.
-2. Base model rolls out trajectories on raw HotpotQA questions under each role.
-3. Self-consistency filter: keep trajectories whose final answer matches gold *or* matches self-consistency majority.
-4. Fine-tune the three LoRAs on their role-specific subsets.
-5. Iterate — retrained sub-agents generate new rollouts for the next round.
+### §2.1 AgentTuning: filtered GPT-4 trajectories and a mixture weight
 
-At 13B the AutoAct model hits ~36 EM on HotpotQA — within ~4 points of GPT-4-teacher-distilled baselines, with zero API spend. Saturates by iteration 4. The open weakness: **self-consistency anchors on the base model's biases**. If the 7B base systematically misreads a question type, no amount of iteration will correct it. This is why AutoAct's successors (and the self-improvement-at-frontier-scale papers) pair self-play with an external verifier — purely self-referential loops drift.
+**Definition.** AgentTuning fine-tunes Llama-2-chat (7B, 13B, 70B) on 1,866 GPT-4 trajectories from six AgentBench tasks mixed with ShareGPT conversations ([[agenttuning]] §2, Table 1).
 
----
+**Problem.** Open models scored an average of 0.42 on AgentBench vs 2.24 for API models, and the goal was to raise agent scores without lowering general scores ([[agenttuning]] Fig. 1b, Abstract).
 
-## 2. Environment-grounded corpora — when the world does the grading
+**Mechanism.**
+1. Collect instructions: train splits of ALFWorld, WebShop, Mind2Web, and Knowledge Graph; Self-Instruct for Operating System; task derivation from BIRD for Database (§2.1.1).
+2. Let GPT-4 act with a 1-shot example; every action has a ReAct thought (§2.1.2). ReAct is a trajectory format in which each action is preceded by a free-text reasoning step (the thought) and followed by the environment's observation.
+3. Keep trajectories with reward r = 1 (r ≥ 2/3 for Mind2Web): 35,341 instructions → 1,866 trajectories, a 5.29% keep ratio (§2.1.3, Table 1).
+4. Train on the mixture below.
 
-The 2024→2025 shift is away from teacher-distilled trajectories (which inherit the teacher's ceiling) toward **environment-grounded** trajectories where the world itself labels success.
+J(θ) = η · E₍(x,y)∼D_agent₎[log π_θ(y|x)] + (1 − η) · E₍(x,y)∼D_general₎[log π_θ(y|x)]
 
-### 2.1 WebArena — a self-hosted browser with deterministic state
+- D_agent: the 1,866 trajectories; D_general: ShareGPT; η: agent sampling ratio.
+- x: instruction and history; y: the model response; π_θ: the fine-tuned model.
+- η was scanned from 0 to 1 in steps of 0.1 on 7B and η = 0.2 was best on held-out tasks (§2.2.2).
 
-[[webarena-data]] packages five real open-source apps — GitLab, Reddit-clone (Postmill), Shopping (Magento), OpenStreetMap, Calendar — into a Docker-compose bundle with a deterministic initial DB state and per-task reset scripts. 812 tasks span retrieval, browsing, form-filling, and multi-step transactions.
+**Worked example (derived).** With batch size 64 (unit not stated in the paper, [[agenttuning]] Table 6) and η = 0.2, a batch holds 12.8 agent examples and 51.2 general examples in expectation. One pass over the 1,866 trajectories takes 1,866 / 12.8 ≈ 146 steps, during which about 7,464 general examples are drawn. The number of ShareGPT conversations actually sampled and the number of epochs are not reported.
 
-The action vocab: `click [element_id]`, `type [element_id] [text]`, `hover`, `press [key]`, `scroll`, `tab`, `new_tab`, `goto [url]`, `go_back`, `stop [answer]`. The observation is either the accessibility tree (text representation of the DOM — preferred for text-only agents) or screenshot+tree (multimodal, used in VisualWebArena).
+**Evidence.** Filtering matters: at 7B, filtered data scored held-in 1.96 / held-out 0.65 vs 1.34 / 0.47 unfiltered (Table 2). Main results and the mixture ablation are in §3.
 
-Success is a **predicate** over final URL / page content / DOM state — not a similarity to a reference trajectory. Three predicate categories: info-lookup (gold-string match), content-producing (predicate over created content), state-modifying (predicate over DB state). Trajectory-collection practice: run GPT-4 with a SeeAct-style scaffold, run the success predicate, keep only trajectories that pass. Community dataset scale: tens of thousands of successful trajectories at per-trajectory cost $5–$20 (GPT-4V).
+### §2.2 FireAct: several prompting methods in one corpus
 
-The **environment-drift** hazard is real and under-appreciated. Docker images must be pinned; app versions (GitLab, Magento) upgrading silently break tasks whose success predicates depended on old DOM structure. A dataset built on WebArena v1.0 may not be re-executable against v1.2 without re-running the success-predicate pass. For long-lived agent corpora, either pin the bundle images forever (storage cost, but reproducible) or plan periodic re-validation. A second hazard: **shortcut learning** — some tasks are solvable by URL-hacking a known-shortcut URL rather than navigating through the UI. Strict success predicates are the mitigation, but some leakage is always present, which is why the frontier numbers (GPT-4 ~35%, VisualWebArena ~20%) have a scaffold-sensitivity variance of 5–10 points.
+FireAct fine-tunes on successful GPT-4 trajectories collected with CoT, ReAct, and Reflexion prompts on HotpotQA, all converted to ReAct format ([[fireact]] §3). Fine-tuning Llama-2-7B on 500 ReAct trajectories raised HotpotQA EM from 14.8 to 26.2, and GPT-3.5 from 31.4 to 39.2 (Table 2). Adding methods does not help uniformly: for GPT-3.5, ReAct 39.4, +CoT 41.0, +Reflexion 38.8, all three 40.0 (Table 4), and the best mix differed by base model (§6, Fig. 4). Condition: one task type (QA) and one tool (Google search) ([[fireact]] §8).
 
-### 2.2 SWE-Gym — 2,438 executable GitHub issues
+### §2.3 Lumos: separate planning and grounding modules
 
-[[swe-gym]] (Pan et al. 2024, Berkeley + CMU + Apple) is the SWE-side analogue. 2,438 real GitHub issues from 11 Python repos (astropy, sympy, django, matplotlib, …), each packaged as a Docker image containing the repo at pre-PR commit + the PR's test files applied (so tests exist but code doesn't satisfy them). Hidden test command included.
+Lumos trains a planning module (task → subgoals) and a grounding module (subgoal → executable actions) on Llama-2-7B/13B; an execution module runs the tools ([[excerpts/lumos]] §2). Training annotations are produced by GPT-4 converting ground-truth reasoning steps of existing benchmarks into this format, giving 55,382 planning and 55,499 grounding annotations after filtering (§4.1). On the same data, the modular formulation scored above an integrated single-module formulation, for example HotpotQA LLM accuracy 45.9 (Lumos-I) vs 39.6 (integrated) (Table 3c). Result (single study).
 
-The action space is the **OpenHands scaffold** ([[openhands-data]]): `str_replace_editor` (view/create/str_replace/insert/undo_edit), `execute_bash` (shell + pytest), `browse` (filesystem), `finish` (submit patch). Trajectories routinely median ~15K tokens, tail past 100K for long debugging sessions.
+### §2.4 AutoAct: trajectories synthesized by the model being trained
 
-Recipe: (1) run OpenHands with a teacher (Qwen-2.5-Coder-32B or Claude-3.5) on each SWE-Gym task, up to K=10 rollouts; (2) run hidden tests, label each trajectory pass/fail; (3) filter to all-pass only; (4) rejection-sampling SFT the student. Numbers: Qwen-2.5-Coder-7B goes 3.0% → **15.3%** on SWE-Bench Verified after RS-SFT, → **20.3%** with a trained verifier doing best-of-N at inference. 32B hits **32.0%** — open SOTA at release (Dec 2024). Verifier adds +5 points over SFT alone.
+AutoAct starts from a few QA examples and a 15-tool library; the backbone model runs self-instruct, selects tools, synthesizes ReAct trajectories, keeps reward = 1 only, and is LoRA-tuned into plan, tool, and reflect agents ([[autoact]] §2.2–2.3). With Llama-2-70B-chat and 200 trajectories it reached 48.47 HotpotQA F1 vs 42.70 for FireAct trained on GPT-4 trajectories (Table 1). Removing the filter lowered F1 to 32.51, below the 32.84 of no fine-tuning (Table 2).
 
-The verifier is a separate model trained on (trajectory, success) pairs from SWE-Gym — it learns to rank trajectories by predicted success from execution-labeled data. At inference you sample K trajectories with the SFT policy, score each with the verifier, and pick the highest-scoring one. Scaling behavior: trajectory count and verifier-N both show log-linear returns on SWE-Bench Verified; no plateau visible at 32B + K=10. This is the cleanest empirical case for **execution-labeled rejection-sampling SFT** as an agent-training recipe, and the reason the OpenHands scaffold became the 2025 de facto agent data pipeline.
+### §2.5 Agent-FLAN: chat-format conversion, capability weights, and tool-hallucination samples
 
-Two SWE-Gym practicalities to remember. First, Docker-image maintenance cost is non-trivial — 2,438 images each with a full Python environment + hidden test suite + issue metadata consume storage on the order of hundreds of GB to a few TB depending on layer dedup. The "491 tasks immediately compatible with SWE-Bench Lite" subset is what you use for fast iteration during pipeline development; the full 2,438 is for production training runs. Second, **language-narrow is a real ceiling** — SWE-Gym is Python-only, and transfer to Go/Rust/TypeScript is completely untested in the published numbers. Multi-language SWE trajectories are the 2026 frontier (expect papers adding Rust cargo-integrated tasks, TypeScript jest-integrated tasks) but as of now the recipe is Python-bounded.
+Agent-FLAN reports three observations on agent tuning of Llama-2: format tokens are learned faster than content, capabilities converge at different speeds, and tuned agents hallucinate tool calls ([[agent-flan]] §3). Its responses are: convert ReAct turns to multi-turn chat (T-Eval 61.8 → 64.9), weight reasoning : retrieval : understanding at 1 : 0.25 : 0.75 (18.1M tokens instead of 37.3M, T-Eval 66.3), and add negative samples (§4.1–4.3, Table 2). T-Eval is a tool-use evaluation suite; Agent-H is the authors' tool-hallucination benchmark, and its HScore is the mean of (1 − H_ReAct) and (1 − H_General), where H_ReAct and H_General are the shares of responses that contain ReAct or general tool-call keywords on items whose correct answer is a plain reply ([[agent-flan]] §4.3). It mixes ShareGPT and agent data 1:1 and uses 24,703 agent samples (App. A, Table 6). The Llama2-7B overall score was 41.7 vs 38.2 for a same-data re-implementation of AgentTuning (Table 1). The negative samples are discussed in §7.
 
-### 2.3 Terminal-Bench trajectories and Explorer — the terminal and web trajectories
+### §2.6 AgentInstruct is not trajectory data
 
-[[terminal-bench-trajectories]] (2026) releases the full agent traces (messages, tool calls, observations) for tens of thousands of trials over Terminal-Bench 2.0 CLI tasks — turning a benchmark into a reusable trajectory corpus. [[explorer]] (Pahuja et al. 2025, MS) goes the other direction on the web side: rather than use a fixed 812-task benchmark, it *explores* the web first (broad intent generation) then refines successful trajectories into training data. Released 94K successful multimodal web trajectories across 49K unique URLs. The design pattern — **decouple intent discovery from trajectory refinement** — is now the default for web-agent data at scale.
+Microsoft's AgentInstruct uses multi-agent flows to generate ~22M instruction pairs for Orca-3; "agentic" refers to the generator, and tool use and web agent are 2 of 17 skills with no agent benchmark reported ([[agentinstruct]] §2, §3.1, Findings). It shares a name with AgentTuning's trajectory dataset and belongs with taxonomy-driven synthesis ([[ch-21]]).
 
----
+## §3 Held-in versus held-out environments
 
-## 3. SWE-RL — rule-based reward at open-source scale
+**Definition.** A held-in environment supplied training trajectories; a held-out environment did not. AgentTuning's held-out set is SciWorld, MiniWoB++, HotpotQA, WebArena, ReWOO, and Digital Card Game, and its general set is MMLU, HumanEval, GSM8K, and MT-Bench ([[agenttuning]] Table 3).
 
-[[swe-rl]] (Wei et al. 2025, Meta FAIR) is the paper that proved you don't need executable environments to do RL on SWE tasks at scale. The trick is a rule-based reward that's dense, cheap, and surprisingly hard to game:
+**Problem.** A score on held-in environments measures format and task familiarity. It does not show whether the model can act in a new environment.
 
-$$
-r = \texttt{difflib.SequenceMatcher(None, predicted\_patch, ground\_truth\_patch).ratio()}
-$$
+**Evidence ([[agenttuning]] Table 5; scores normalized per task so the average model is 1).**
 
-That's it. `difflib.SequenceMatcher.ratio()` returns a float in `[0, 1]` based on matching-block coverage. For an (issue, code_context, ground_truth_patch) triple scraped from GitHub, you have the agent emit a unified-diff patch and score it against the human PR diff. No unit tests run during training — only at eval time (SWE-Bench Verified).
-
-**The data:** 11M (issue, context, patch) triples mined from GitHub Archive BigQuery. Filters: PR merged, linked issue, ≤10 files, ≤500 lines, Python-primary, MinHash dedup. **The algorithm:** GRPO with group size G=8, KL coefficient β=0.02, LR 1e-6. **The base:** Llama-3.1-70B-Instruct. **The cost:** ~1M H100-hours.
-
-Headline result: **Llama3-SWE-RL-70B hits 41.0% on SWE-Bench Verified** — open SOTA at release, beating DeepSeek-Coder-V2-Instruct (18.0%) and matching SWE-Gym-32B. The paper's most provocative finding is out-of-domain transfer: training only on SWE pushes HumanEval+ by +6, MATH by +4, BBH by +3 over the baseline. Hypothesis: RL on software-engineering tasks teaches "long-horizon grounded planning" transferable across domains. (This connects to [[front-loading-reasoning]] from ch-26.)
-
-**Why similarity beats execution as a training signal.** Execution rewards are sparse — many tests fail for unrelated reasons (dependency version, unrelated test flakiness, setup error). Similarity reward is dense: *every* sample gets a gradient signal. The cost is gameability — a patch that copies context verbatim gets partial credit without fixing anything. Mitigation: format filters (must be a diff, must modify code, not just comments). The authors also experiment with binary thresholding vs continuous reward; continuous wins.
-
-One caveat: SWE-RL is **single-turn** — issue → patch, no file navigation, no test running mid-trajectory. Multi-turn RL on executable envs is still SWE-Gym's territory. The two recipes are complementary, not competing; SWE-RL does the cheap-dense-signal stage and SWE-Gym does the environment-grounded multi-turn stage.
-
-Decontamination deserves a paragraph. SWE-Bench Verified comes from the same GitHub universe that SWE-RL scrapes, so date-based filtering (training data predates the benchmark issues) and commit-hash blocklists are mandatory. The paper reports both. A second, subtler risk: **the similarity reward is biased toward patches that look like human diffs**, which may mask the model's ability to generate *better* patches than humans wrote. At training time this looks like ceiling behavior; at eval time on SWE-Bench Verified (which tests functional correctness via unit tests, not string similarity) the gap between training reward and eval reward shows up as a training-curve-plateau while the eval curve still climbs. Reading this mismatch correctly requires you to hold the two metrics separately in your head — something new ML practitioners on agent pipelines routinely collapse.
-
----
-
-## 4. Kimi-K2 — what a frontier lab actually does
-
-[[kimi-k2]] and [[kimi-k2-agentic-data]] (Moonshot AI, 2025) together describe the most complete public frontier-lab agentic recipe. K2 is a 1T-parameter MoE with 32B active, pretrained on 15.5T tokens with zero loss spikes using the **MuonClip** optimizer (Muon + QK-Clip — rescales Q/K projection matrices post-update to cap attention logit magnitude, which plain Muon otherwise lets drift past 1000).
-
-The agentic recipe has four stages:
-
-1. **Agentic PRETRAINING data (~1T tokens).** A synthetic environment simulator generates tens of thousands of tool schemas (web search, file ops, code exec, DB, calendar, enterprise APIs) and plausible tool-response shapes. Multi-agent simulation produces trajectories: a "user" agent issues queries, a "planner" decomposes, an "executor" emits tool calls, a "critic" reviews. Up to 5 sub-agents per trajectory. Critic-LLM rates success/coherence/tool-call validity; top-scoring trajectories enter the pretraining mix at **~3–5%** of the total token budget.
-2. **SFT.** Real-world agentic tasks (SWE-Bench-style issues, τ-bench tasks, tool-calling datasets) over the 20,000+ tool library from the K2 technical report.
-3. **Joint RL stage.** Combines two reward streams into a single scalar: **RLVR** (verifiable rewards — math, code, tool-call correctness) + **self-critique rubric reward** (the model produces a rubric appropriate for the task and scores its own completion against it). The self-critique stream is the alignment-for-open-ended-tasks component; the RLVR stream is the capability-for-verifiable-tasks component. Combined, one RL stage trains both skill slices.
-4. **Evaluation.** K2-Instruct hits **~65% on SWE-Bench Verified**, leads open models on τ-bench, competitive with Claude-3.5-Sonnet on tool-use.
-
-The contentious claim is stage 1: Moonshot argues agentic behavior is best **installed during pretraining**, not bolted on as a post-training afterthought. Mixing agent-format tokens into the pretrain distribution gives the base model a native tool-calling "vocabulary" so post-training isn't fighting the base distribution. This is the sharpest break from the SFT-only lineage in §1. Whether it generalizes is still an open empirical question — nobody outside Moonshot has reproduced the 1T-token agentic-pretrain mix at scale.
-
-Three details from the K2 report worth holding in mind. First, the self-critique rubric reward extends alignment to **open-ended** tasks where no automated verifier exists — the model generates (a) a task-appropriate rubric, then (b) its own completion, then scores completions against the rubric. Joint RL combines this with RLVR into a single scalar, so one stage trains both verifiable and open-ended skills. This is the descendant of [[constitutional-ai]]'s self-rating idea, operationalized at 1T-MoE scale. Second, **MuonClip** is not optional for trillion-scale stability — plain Muon without QK-Clip observed attention-logit max blowing past 1000 and diverging; QK-Clip rescales Q/K projection matrices after each update so the max stays below a threshold, yielding zero loss spikes across the full 15.5T-token run. Third, the **20K+ tool library** is the surface area from which both pretraining and post-training trajectories are sampled — a single tool-schema registry feeds all stages, which is why agent behavior stays coherent across the flow. The unification is as much an engineering contribution as a scientific one.
-
-A fourth detail the K2 report treats cautiously but is worth extracting: **synthetic-env mismatch**. The simulator-generated tool responses are plausible but not identical to real-world API failure modes — real APIs return `429 rate limited`, `500 upstream timeout`, partial results, stale caches; simulators tend to emit cleaner responses. This is the analogue of ALFWorld / WebShop being "stylized" versus real web. K2 mitigates by mixing in real-env trajectories during SFT (τ-bench is real; SWE-Bench-style tasks execute real code). The methodology-vs-dataset opacity is the other caveat — Moonshot publishes the *how* (four-stage flow, critic-filter, 3–5% pretrain weight) but not the *what* (the 1T-token agentic corpus itself). You can reproduce the recipe; you cannot reproduce the corpus without spending comparable dollars.
-
----
-
-## 5. Action-space design — the one table you need
-
-The action space is the single design choice that constrains everything else: observation format, trajectory length, success signal, teacher cost, and eval harness all follow. See [[figures/action-space.html]] for the interactive side-by-side.
-
-| Environment | Observation type | Action vocab | Reward signal | Typical traj length |
+| Size | Data | Held-in | Held-out | General |
 |---|---|---|---|---|
-| **Web browser** ([[webarena-data]], [[explorer]]) | Accessibility tree (text) *or* screenshot+tree (multimodal) | `click[id] / type[id,text] / hover / press / scroll / tab / new_tab / goto[url] / go_back / stop[answer]` | Predicate over URL + DOM + DB state (three categories: info-lookup, content-producing, state-modifying) | 5–30 steps, 10K–50K tokens |
-| **Terminal** ([[terminal-bench-trajectories]], [[openhands-data]]) | Shell stdout/stderr + exit code | `execute_bash[cmd]`, possibly `execute_ipython_cell` | Test-suite pass, file-state check, or CLI-predicate | 5–50 steps, 5K–40K tokens |
-| **Repo / SWE** ([[swe-gym]], [[swe-rl]], [[openhands-data]]) | File contents + dir listing + test output | `str_replace_editor.view/create/str_replace/insert/undo_edit`, `execute_bash`, `browse`, `finish` | Hidden pytest pass (SWE-Gym) *or* difflib-ratio vs gold PR (SWE-RL) | 10–100+ steps, 15K–100K tokens |
-| **Sandbox** ([[kimi-k2-agentic-data]], [[agentinstruct]] tool-use subset) | Simulated tool-response JSON | OpenAI-style `tool_calls` JSON over 20K+ schemas | Critic-LLM score + JSON-schema validity + no-repeat-loop | 1–20+ tool calls, variable |
+| 7B | agent-only | 1.34 | 0.09 | 0.22 |
+| 7B | general-only | 0.38 | 0.64 | 0.61 |
+| 7B | mixed (η = 0.2) | 1.96 | 0.67 | 0.63 |
+| 13B | agent-only | 1.57 | 0.10 | 0.19 |
+| 13B | general-only | 0.43 | 0.81 | 0.63 |
+| 13B | mixed | 2.11 | 0.78 | 0.69 |
+| 70B | agent-only | 2.47 | 0.87 | 0.83 |
+| 70B | general-only | 0.99 | 0.98 | 1.00 |
+| 70B | mixed | 2.55 | 1.40 | 0.96 |
 
-Three structural lessons from the table:
+**Worked reading.** At 7B, agent-only data raises held-in from 0.38 to 1.34 relative to general-only data, and lowers held-out from 0.64 to 0.09, an 86% drop. The mixture keeps held-out at 0.67, close to general-only (0.64), and raises held-in to 1.96. At 7B and 13B the mixture does not beat general-only on held-out (0.67 vs 0.64; 0.78 vs 0.81); only at 70B does it exceed it (1.40 vs 0.98). Result (single study; number of seeds not stated). The authors conclude that general data is needed for agent generalization (Interpretation, §3.4).
 
-- **Observation format dictates teacher cost.** Accessibility trees are cheap — text-only, GPT-4 can process them at normal rates. Screenshots are expensive — GPT-4V at $5–$20 per web trajectory. Terminal stdout is free. This is why WebArena text-mode datasets are 10× larger than VisualWebArena datasets at equal budget.
-- **Reward signal determines RL tractability.** Dense rule-based signals (SWE-RL's difflib, predicate-with-partial-credit) support RL at 11M-sample scale. Binary test-suite rewards (SWE-Gym) support rejection-sampling SFT cheaply but are sparse under RL — most samples get 0 gradient. Critic-LLM rewards (Kimi-K2, Agent-FLAN filter) are dense but drift-prone; they require self-critique rubric anchoring or fixed-scale calibration.
-- **Action vocab size trades generalization for safety.** OpenAI-style `tool_calls` JSON over 20K+ schemas is maximally general but trivially hallucinatable (Agent-FLAN's four negative classes are almost all this failure mode). A tight 10-action WebArena vocab is safer — the model can't invent a `hack_database` action because the grammar doesn't permit it.
-- **Trajectory length determines the training infrastructure.** Median 15K tokens on SWE is barely different from a normal SFT example; tail to 100K+ needs FlashAttention-3-class long-context support plus gradient checkpointing over the full trajectory. Web agents at 50K tokens sit in between. Kimi-K2's simulated-sandbox trajectories at "several thousand tokens median" are cheap to train on; SWE-Gym trajectories at 15K median are not. If you're building the data pipeline before the training stack, check the length distribution first — the training team will thank you.
+Other held-out measurements from the same period:
+- Lumos-I-All-13B on unseen tasks with new actions: WebShop 50.3 average reward and InterCodeSQL 7.3% success, with 2–3-shot examples of the new action interface ([[excerpts/lumos]] Table 1e, §4.4).
+- FireAct GPT-3.5 fine-tuned on HotpotQA scored 44.0 on Bamboogle vs 40.8 for prompting, but Llama-2-7B fine-tuned on HotpotQA scored 52.0 on StrategyQA vs 59.0 before fine-tuning ([[fireact]] Table 3, App. A.9 Table 14).
+- ETO on ScienceWorld unseen variations: SFT 53.0 → ETO 65.0 average reward ([[eto-trial-and-error]] Table 2).
+- Agent-FLAN at 7B, 13B, 70B changed MMLU, GSM8K, and HumanEval by −0.3 to +1.1 points relative to general-data training ([[agent-flan]] Table 4).
 
-A final point the table can't show: **teacher choice leaks into the action distribution**. GPT-4 has its own priors about when to navigate, when to search, when to stop. Collecting trajectories with GPT-4 as the teacher imprints those priors onto the student. Changing teacher mid-dataset (mixing Claude-3.5 and GPT-4 rollouts, as OpenHands community releases often do) diversifies the action distribution but also makes the corpus slightly inconsistent — Claude tends to write longer `think` blocks, GPT-4 tends to move faster. Either is fine; mixing needs to be labeled so downstream filtering can stratify.
+**Limits.** Held-out environments in these papers are still text games, QA, and web tasks from the same research community; none tests a different scaffold or an unseen tool protocol. [[ch-51a]] covers scaffold transfer and reliability metrics.
 
----
+**Implication.** The mixture share is a generality control that must be selected on held-out scores. When held-in scores rise while held-out scores fall, the gain is specific to the training environments and their formats and does not measure transferable agent ability (Interpretation).
 
-### 5.2 Rough cost reckoning — what each recipe actually costs
+## §4 Environment-grounded trajectories
 
-The numbers below are order-of-magnitude estimates from the papers, not precise disclosures. Hold them loosely; use them to sanity-check claims.
+### §4.1 WebArena: functional checks on self-hosted websites
 
-| Recipe | Data scale | Compute (rough) | Notes |
+WebArena is an evaluation environment of four self-hosted site categories (an e-commerce store, a Reddit-style forum, GitLab, an online-store CMS) plus a map, English Wikipedia, a calculator, and a scratchpad, delivered as Docker containers with reset scripts ([[excerpts/webarena-data]] §2.2). The observation can be HTML, a screenshot, or an accessibility tree; the action space has 12 actions: noop, click, hover, type, press, scroll, tab_focus, new_tab, tab_close, go_back, go_forward, goto (§2.3–2.4, Fig. 4). Its 812 tasks are scored by functional correctness: `exact_match`, `must_include`, or `fuzzy_match` on answers, and programmatic checks on URL or page and database state (§3). Unachievable tasks expect "N/A" (§3).
+
+GPT-4 with CoT scored 11.70% when the prompt allowed stopping on unachievable tasks and 14.41% without that hint; humans scored 78.24%; with the hint GPT-4 judged 54.9% of feasible tasks impossible (Table 2, §5.1). In the agent-training papers above, WebArena is a held-out environment (AgentTuning Table 3; Agent-FLAN §4), so it is best used as a transfer test, not a training source.
+
+### §4.2 SWE-Gym: executable repositories and rejection-sampling SFT
+
+**Definition.** SWE-Gym is 2,438 Python task instances from 11 repositories, each with a pre-installed environment and unit tests; SWE-Gym Lite is a 230-instance subset ([[excerpts/swe-gym]] §3, Table 2).
+
+**Mechanism.**
+1. Run OpenHands CodeAct (bash terminal and file editor; browser disabled) with gpt-4o-2024-08-06 and claude-3-5-sonnet-20241022 at several temperatures (§4.2).
+2. Label each trajectory by running the tests; keep successes (rejection sampling). The run produced 491 successful trajectories, averaging about 19 turns and 19,000 tokens, limited by compute budget (§4.2).
+3. Fine-tune Qwen-2.5-Coder-Instruct 7B/14B/32B: full fine-tuning, LR 1e-4, at most 5 epochs, global batch 8, max context 32,768 (App. B.2).
+
+**Worked example (yield).** gpt-4o-2024-08-06 at temperature 0 on SWE-Gym Lite with 30 max turns resolved 19 of 230 instances, an 8.26% yield (App. B.4). At this yield, 491 successful trajectories would require about 491 / 0.0826 ≈ 5,944 attempts (derived; the actual run mixed models, temperatures, and task sets).
+
+**Evidence ([[excerpts/swe-gym]] Table 3, SWE-bench Verified resolve rate).** 7B 1.8 → 10.6; 14B 4.0 → 16.4; 32B 7.0 → 20.6. Fine-tuning lowered the share of trajectories stuck repeating one action (32B Verified 29.4% → 23.8%). pass@k is the share of tasks where at least one of k sampled trajectories resolves the task; Best@k is the share resolved when a verifier picks one of k samples, so Best@k ≤ pass@k. With a trained verifier, the 32B agent reached Best@k 29.8% at k = 8 and 32.0% at k = 16, while pass@k was 37.8% at k = 8 and 42.8% at k = 16 (§5.1.1).
+
+**Limits.** Fine-tuning the 32B model on its own 868 successful trajectories plus the 491 teacher trajectories lowered Lite from 15.3% to 8.7%; the authors state that self-improvement "is not yet working" (§4.2).
+
+### §4.3 Scaling task and repository diversity
+
+SWE-smith builds environments per repository and creates tasks by breaking existing tests (LM rewrites, AST modifications, reverted PRs, combined bugs): 50k instances from 128 repositories ([[excerpts/swe-smith]] §2). Fine-tuning Qwen2.5-Coder-Instruct-32B on 5,016 Claude 3.7 Sonnet trajectories gave 40.2% on SWE-bench Verified (Table 3). With 700 trajectories held fixed, resolve rate rose from 10.3% (4 repositories) to 11.5% (25), 12.9% (50), and 15.1% (100), which the authors describe as approximately logarithmic (§4.1, Fig. 5; model size not stated). Further fine-tuning SWE-agent-LM-32B on 700 SymPy trajectories raised the SymPy subset of Verified (22 instances created after 2022-01-01, so 9.1 points is 2 instances) from 33.3% to 42.4%, while Verified without SymPy fell from 40.2% to 38.3% (Fig. 4). R2E-Gym builds 8,135 environments from commits with back-translated issue text; at 400 trajectories, synthetic problem statements scored 27.8% vs 28.0% for real GitHub issues ([[r2e-gym]] §2, §3.1).
+
+### §4.4 Contamination in agent benchmarks
+
+SWE-bench Verified draws on 12 public repositories, and model scores there exceed scores on fresh tasks. On SWE-rebench tasks created in March–April 2025, DeepSeek-V3-0324 resolved 21.3% vs 39.7% on Verified ([[swe-rebench]] Table 2). Given only the repository name and issue text, ten API models named a gold-patch file in 60–76% of Verified instances but under 53% on repositories outside SWE-bench ([[swe-bench-illusion]] §4.1). Training pipelines exclude SWE-bench repositories (SWE-RL App. A; DeepSWE §2.1), which controls training-data overlap but not what the base model saw in pre-training ([[ch-48]]).
+
+## §5 SWE-RL: RL on software-evolution data and its out-of-domain result
+
+**Definition.** SWE-RL applies GRPO (group-relative policy optimization: policy-gradient RL whose advantage is each rollout's reward normalized within its prompt's group of rollouts, [[ch-40]]) to (issue, code context, oracle patch) seeds from merged GitHub PRs, with a single-turn task: write search/replace edits given the full contents of the relevant files ([[excerpts/swe-rl]] §2, Fig. 2).
+
+**Data.** GitHub events from Jan 2015 to Aug 2024 and 4.6M cloned repositories give 24M aggregated PRs; after removing bot PRs, empty or oversized changes, and hunks flagged by CodeLlama filters, ~11M PR instances remain; 273k are selected as RL seeds (linked issue, bug-fix request, programming-file changes). Repositories used by SWE-bench are excluded (App. A, §2).
+
+**Reward.**
+
+R(o) = −1 if o has wrong format; otherwise R(o) = compare(patch_pred, patch_gt)
+
+- o: the model's rollout; patch_pred: the patch extracted from o; patch_gt: the oracle patch.
+- compare: Python `difflib.SequenceMatcher(...).ratio()` = 2M / T, where M is the number of matched characters in matching blocks and T is the total length of both strings.
+
+The GRPO advantage is Aᵢ = (rᵢ − mean(r₁…r_G)) / std(r₁…r_G) over G rollouts of the same prompt (Eq. 2).
+
+**Worked example.** Oracle line `return a-b\n` (11 characters) and prediction `return a+b\n` (11 characters) share 10 matched characters, so the ratio is 2·10 / 22 = 0.909. Take a group of four rollouts with rewards (−1, 0.2, 0.6, 0.8). The mean is 0.15 and the population standard deviation is 0.698, so the advantages are (−1.65, 0.07, 0.64, 0.93). The malformed rollout receives the largest negative advantage, and a 0.2-similarity patch receives almost zero. The paper sampled 16 rollouts per problem, so actual groups are larger ([[excerpts/swe-rl]] §3.1).
+
+**Settings.** Llama-3.3-70B-Instruct, 1,600 steps, 16k context, 32 problems × 16 rollouts per step, one Adam step per global step, 512 H100 GPUs, about 32 hours (§3.1). Evaluation uses Agentless Mini: file localization, 500 repair samples at temperature 1.0, generated reproduction tests and regression tests for reranking (§3.1, App. B).
+
+**Evidence.** SWE-bench Verified 41.0% vs 36.2% for Llama3-SWE-SFT-70B (Table 1). With oracle files and greedy decoding, repair was 5.4 (base), 29.6 (SFT), 34.8 (RL) (Table 2). The exact-match 0/1 reward reached 29.0 and its average reward stayed near zero (§3.6).
+
+**Out-of-domain result ([[excerpts/swe-rl]] Table 3; zero-shot greedy).** The SFT baseline was trained on synthetic editing data from the same seeds plus Llama 3 coding and general SFT data, 2B tokens (App. C).
+
+| Benchmark | Llama-3.3-70B-Instruct | SWE-SFT-70B | SWE-RL-70B |
 |---|---|---|---|
-| AgentTuning SFT | 1,866 trajectories + GPT-4 distill | ~$20K API + 100s of GPU-hours for SFT | Cheapest real agent recipe |
-| FireAct SFT | ~2,000 traj × 3 methods + GPT-4 | ~$3K API + SFT compute | Method-mix dominates spend |
-| AgentInstruct 25M | 25M pairs + multi-agent flows | >$500K GPT-4 API est. | Pipeline cost is the bottleneck |
-| SWE-Gym RS-SFT (32B) | 2,438 tasks × K=10 rollouts | ~10K H100-hours | Docker + teacher cost dominates |
-| SWE-RL 70B | 11M GH triples + GRPO | ~1M H100-hours | RL dominates; teacher-free |
-| Kimi-K2 agentic pretrain | ~1T agentic tokens | Part of 15.5T-token pretrain | Integrated into base training |
+| HumanEval+ | 76.2 | 73.2 | 79.9 |
+| BigCodeBench-Hard (I / C) | 28.4 / 29.1 | 25.7 / 24.3 | 28.4 / 29.1 |
+| CRUXEval (I / O) | 60.5 / 61.9 | 68.4 / 75.1 | 71.6 / 75.5 |
+| MATH (strict / lenient) | 63.2 / 70.9 | 54.0 / 71.7 | 73.7 / 73.7 |
+| MMLU | 86.49 | 85.26 | 86.82 |
 
-## 6. What you should take into ch-28
+Averaging within each of the five categories (strict MATH) and then across them gives 63.17 (base), 61.84 (SFT), 68.54 (RL) (derived). The SFT model lost points on function coding, library use, strict MATH, and MMLU and gained on CRUXEval. The authors report that improvements above 0.8 points on MMLU, 3 on CRUXEval, and 3 on MATH are individually significant (§3.5). Result (single study, one run per arm). The authors interpret RL as acquiring general reasoning while SFT steers toward the task distribution (Interpretation, §3.5); [[ch-38a]] collects other SFT-versus-RL comparisons.
 
-1. **The dataset is the environment.** Every agent-SFT paper you read, mentally reduce to `(environment, action vocab, observation format, success predicate)`. Everything else is teacher-model plumbing.
-2. **Negatives are load-bearing.** [[agent-flan]]'s four hallucination classes are not optional add-ons. Any agent corpus missing them will produce a model that over-calls tools in chat.
-3. **Mixing ratio matters more than raw agent-data volume.** [[agenttuning]]'s 1:10 rule generalizes: if agent data dominates the SFT mix, general chat quality drops; if general data dominates, agent skill never installs.
-4. **Pretrain injection beats post-training retrofit at frontier scale.** [[kimi-k2]] argues this explicitly; [[swe-rl]]'s out-of-domain transfer hints at why — agentic tokens in the base distribution change what "next token" even means.
-5. **Rule-based dense rewards scale; execution-based sparse rewards do not (for RL, at training time).** SWE-RL's 41.0% at 1M H100-hours is the existence proof. Save execution for eval.
-6. **Role specialization recurs — use it.** Lumos (Plan/Ground/Execute), AutoAct (Plan/Tool/Reflect), AgentInstruct (suggester/editor/generator), Kimi-K2 (user/planner/executor/critic). Even when your deployed model is monolithic, role-partitioning the *data* gives cleaner supervision signals.
-7. **Environment-drift is a long-lived-corpus problem.** WebArena DOM upgrades, SWE-Gym dependency drift, terminal-env library changes — pin your images, or plan periodic re-validation. Benchmarks that shipped in 2024 are not re-executable in 2026 without work.
+**Limits.** The reward is bounded by human reference patches: a correct patch that differs textually from the oracle is scored low. Training is single-turn; navigation and test execution appear only in the evaluation scaffold. Execution rewards were later used for multi-turn RL: DeepSWE trained Qwen3-32B with RL only (no SFT stage), a 0/1 test reward, and 4.5K R2E-Gym problems; Pass@1 rose from 23% to 42% over about 200 RL steps (Fig. 2), and the final model reached 42.2% Pass@1 and 71.0% Pass@16; RL on four SFT warm starts did not improve after 100 iterations ([[deepswe]] intro, §4, §6).
 
-Next chapter extends the structural shift from "conditional on executable world" to "conditional on very long context" — long-context synthesis, where the world is replaced by a 128K–1M-token document and the action is "read carefully." The action space collapses to `read(span)` + `attend(position)`, but the trajectory length (in tokens, not steps) explodes from 100K to 1M. Different modality, same structural lesson: the environment shapes the data.
+## §6 Kimi K2: agentic data synthesis in post-training
+
+**What the report describes ([[kimi-k2]] §3.1.1; [[kimi-k2-recipe]]).**
+1. Tool specs: 3000+ real MCP (Model Context Protocol, a standard interface for exposing tools to models) tools fetched from GitHub, and over 20,000 synthetic tools produced by hierarchical domain evolution (categories → application domains → tools).
+2. Agents: thousands of agents from synthesized system prompts and tool combinations.
+3. Tasks: each task has a rubric with success criteria, expected tool-use patterns, and checkpoints.
+4. Trajectories: LLM-generated user personas hold multi-turn dialogues; a tool simulator "maintains and updates state after each tool execution" and "introduces controlled stochasticity to produce varied outcomes including successes, partial failures, and edge cases".
+5. Filter: an LLM judge keeps only trajectories that meet the rubric; the authors call this large-scale rejection sampling.
+6. Real execution sandboxes are added for coding and software engineering, with test pass rates as feedback.
+
+The report states that the pipeline generates "tens of thousands of diverse and high-quality training examples"; the SFT dataset size, rejection rate, and hyperparameters are not reported ([[kimi-k2-recipe]] SFT rows).
+
+**RL stage.** A Gym-like set of verifiable-reward tasks (math, STEM, logic, instruction following with a hack-check layer, faithfulness, coding, software engineering with unit tests in a Kubernetes sandbox, safety) is combined with a self-critique rubric reward for subjective tasks, plus a per-task token budget, a PTX loss (an auxiliary supervised language-modeling loss on selected high-quality samples, added to the RL objective) and temperature decay ([[kimi-k2]] §3.2). The authors add the PTX loss to reduce forgetting and overfitting to the RL task set, without an ablation (§3.2.3).
+
+**Results.** SWE-bench Verified 51.8 agentless, 65.8 agentic single attempt, 71.6 multiple attempts; Tau2-Bench 66.1; MMLU 89.5; IFEval 89.8 (Table 3). The report notes that performance may decline on some tasks when tool use is enabled unnecessarily (§5).
+
+**What the report does not contain.** No agentic pre-training corpus, no agentic token share of pre-training, and no planner/executor/critic generator ([[kimi-k2]] Verification). Evidence on agentic data before post-training is in [[ch-32d]].
+
+## Negative samples and negative feedback
+
+This section applies the four meanings of "negative" from the course standard to agent trajectories; derivations are in [[ch-31a]] (supervised) and [[ch-43a]] (gradient).
+
+**Where negatives come from.** Failed trajectories are labeled by the environment's final reward (AgentTuning r < 1; ETO reward in [0, 1]), by hidden or generated tests (SWE-Gym, DeepSWE), by similarity to an oracle patch (SWE-RL), or by an LLM judge against a rubric (K2). False negatives occur when the task is unsolvable from its issue text or its tests are wrong; SWE-rebench removes tasks that fail validation and reruns tests to drop flaky ones, and reports no false-negative rate ([[swe-rebench]] §2.3, Findings).
+
+**What current practice does, by type.**
+
+| Type | Source and use | Measured effect |
+|---|---|---|
+| 1. Negative marginal value (discard) | AgentTuning, FireAct, AutoAct, SWE-Gym, K2 discard failures | AgentTuning 7B unfiltered data: held-out 0.47 vs 0.65 filtered (Table 2); AutoAct unfiltered 32.51 vs 32.84 no fine-tuning (Table 2) |
+| 2. Negative as content | Agent-FLAN: a tool-inducing prompt with a correct plain-text target; AgentInstruct: FAILED targets for missing APIs; SWE-Gym and R2E-Gym verifiers: failed trajectories with target "NO" | Agent-FLAN 7B: HScore 84.5 → 89.1, T-Eval 66.3 → 66.0 ([[agent-flan]] Table 3) |
+| 3. Negative as conditioning | NAT: failed trajectories trained after the suffix "Please generate a solution that **incorrectly** answers the question"; the "correctly" prompt is used at inference | Llama-2-7B, 2k positives: math average 55.90 (positives only) → 63.39 (negatives without label) → 64.64 (NAT); 13B, 5k positives: 70.76 → 69.10 → 71.28; low-quality negatives: −3.16 at 2k; random-string labels 64.04 vs Correct/Incorrect 63.55 ([[excerpts/learning-from-failure-nat]] Tables 2, 5, 7) |
+| 4. Negative as gradient | ETO: DPO ([[ch-39]]) with the agent's lower-reward trajectory as rejected; SWE-RL and DeepSWE: negative group advantages | ETO vs SFT, Llama-2-7B: WebShop 63.1 → 67.4, ScienceWorld unseen 53.0 → 65.0 ([[eto-trial-and-error]] Table 2) |
+
+**Mechanism for type 4.** For a softmax over actions, ∂ log p_y / ∂ z_j = 1[j = y] − p_j, where z_j is the logit of action j and p_j its probability. Decreasing log p_y therefore raises every other logit in proportion to its current probability. Worked example: p = (0.6, 0.3, 0.1), push down action 3. The gradient of log p₃ is (−0.6, −0.3, 0.9); one step of size 1 in the opposite direction gives p = (0.710, 0.263, 0.026). The ratio p₁/p₂ rises from 2.00 to 2.70, so the removed mass goes mostly to the action that was already most likely. When the pushed-down trajectory was already unlikely, this concentrates probability and lowers diversity ([[ch-43a]]).
+
+ETO's trajectory-level DPO loss is −log σ(β log[π_θ(e_w|u)/π_ref(e_w|u)] − β log[π_θ(e_l|u)/π_ref(e_l|u)]) (Eq. 11), where u is the task, e_w and e_l the higher- and lower-reward trajectories, π_ref the policy at the start of the iteration, β the constraint weight, and σ the sigmoid. Worked example: β = 0.1, chosen log-ratio +2.0, rejected log-ratio −3.0 → margin 0.5 → loss 0.474.
+
+**Size of effect.** No agent source isolates the share of improvement due to the rejected term. ETO's comparison against RFT also changes the loss and the chosen samples ([[eto-trial-and-error]] Findings). NAT measures negatives against a positives-only baseline and finds the gain shrinks as positives grow and reverses with low-quality negatives (Table 5, Fig. 3).
+
+**Failure modes and controls.**
+- Localize: ETO's step-level pairs built from final rewards dropped WebShop to 8.3 at LR 1e-6, β 0.1 (Table 4); its limitations note that the first wrong action is not identified.
+- Bound iterations: ETO improved in the first two iterations on WebShop and ScienceWorld and declined after the third; on ALFWorld only the first iteration improved (§4.3).
+- Anchor with behavior cloning: ETO without SFT scored 12.5 on WebShop, below the untuned 17.9 (Table 5).
+- Mask uncertain failures: DeepSWE masks trajectories that hit the context limit, step limit, or 20-minute generation timeout instead of scoring them 0 (§2.3).
+- Mask failed actions kept in context when training recovery turns (§1).
+
+**Diagnostics.** Log chosen and rejected log-probabilities separately (ETO does not report them), split training statistics by advantage sign, track entropy, and report pass@1 with pass@k at large k (SWE-Gym 32B: pass@16 42.8% vs Best@16 32.0%).
+
+**Effect on generality.** Abstention and refusal rates change with what the prompt or the training data signals about stopping. In WebArena, a prompt hint that permits stopping on unachievable tasks led GPT-4 to call 54.9% of feasible tasks impossible ([[excerpts/webarena-data]] §5.1). In the opposite direction, SFT on benign web-navigation demonstrations raised harmful-task attack success for Llama-3.1-8B-Instruct from 32.88% to 64.38% and lowered refusal from 26.03% to 6.85% ([[agentic-finetuning-misalignment]] Table 1).
+
+## Recipe
+
+| Model (exact release) | Size | Stage | Setting | Value | Source location | Status | Evidence for this value |
+|---|---|---|---|---|---|---|---|
+| AgentLM-7B / 13B / 70B | 7B–70B | SFT | Agent sampling ratio η (ShareGPT 1 − η) | 0.2 | arXiv:2310.12823v2 §2.2.2, App. A | verified 2026-09-14 ([[agenttuning]]) | η scanned 0–1 in 0.1 steps on 7B held-out; endpoints in Table 5 |
+| AgentLM-7B / 13B / 70B | 7B–70B | SFT | Trajectories; keep rule | 1,866; r = 1 (Mind2Web r ≥ 2/3) | Table 1; §2.1.3 | verified 2026-09-14 | Table 2 (7B): filtered 1.96 / 0.65 vs unfiltered 1.34 / 0.47 |
+| AgentLM-7B / 13B | 7B, 13B | SFT | Peak LR | 5e-5 | §2.2.3; App. A Table 6 | verified 2026-09-14 | no ablation reported |
+| AgentLM-70B | 70B | SFT | Peak LR | 1e-5 | §2.2.3; App. A Table 6 | verified 2026-09-14 | no ablation reported |
+| AgentLM-7B / 13B / 70B | 7B–70B | SFT | Loss masking; batch (unit not stated); sequence length | model output only; 64; 4,096 | §2.2.3; Table 6 | verified 2026-09-14 | no ablation reported |
+| Agent-FLAN (Llama2) | 7B–70B | SFT | ShareGPT : agent mix (unit not stated) | 1:1 | arXiv:2403.12881v1 App. A | verified 2026-09-14 ([[agent-flan]]) | no ablation reported |
+| Agent-FLAN (Llama2) | 7B–70B | SFT | Capability weights reasoning : retrieval : understanding | 1 : 0.25 : 0.75 | App. A | verified 2026-09-14 | Table 2 half-data ablation (7B) |
+| Agent-FLAN (Llama2) | 7B–70B | SFT | Agent samples; negative-sample source; epochs; peak LR | 24,703; 761 ToolBench queries; 1; 2e-5 | App. B Table 6; App. C; App. A Table 5 | verified 2026-09-14 | Table 3: HScore 89.1 with vs 84.5 without negatives |
+| FireAct Llama-2 / CodeLlama | 7B–34B | distill-SFT | Data; method; epochs; LR | 500 GPT-4 ReAct trajectories; LoRA int8; 30; 3e-4 | arXiv:2310.05915v1 §5, App. B.2 | verified 2026-09-14 ([[fireact]]) | Fig. 3 data sizes 100–1,000; LoRA vs full 26.2 vs 30.2 (Table 11) |
+| Lumos (Llama-2) | 7B, 13B | SFT | Planning; grounding annotations | 55,382; 55,499 | arXiv:2311.05657v3 §4.1 | verified 2026-09-15 (primary text) | Table 3: modular vs integrated formulation |
+| SWE-Gym agent (Qwen-2.5-Coder-Instruct) | 7B, 14B, 32B | distill-SFT | Trajectories; teachers | 491 successful; gpt-4o-2024-08-06, claude-3-5-sonnet-20241022 | arXiv:2412.21139 §4.2 | verified 2026-09-15 (primary text) | Fig. 5: gains up to 491 trajectories |
+| SWE-Gym agent | 7B, 14B, 32B | distill-SFT | LR; max epochs; global batch; max context | 1e-4; 5; 8; 32,768 | App. B.2 | verified 2026-09-15 (primary text) | no ablation reported |
+| SWE-agent-LM-32B (Qwen2.5-Coder-Instruct) | 32B | distill-SFT | Trajectories; teacher; LR; max epochs; max context | 5,016; Claude 3.7 Sonnet; 5e-5; 3; 32,768 | arXiv:2504.21798v2 §4, App. F.1 | verified 2026-09-15 (primary text) | §4.1 Fig. 5: repositories 4 → 100 at 700 trajectories |
+| Llama3-SWE-RL-70B | 70B | RL | Base; seeds; steps; context; prompts × rollouts per step | Llama-3.3-70B-Instruct; 273k; 1,600; 16k; 32 × 16 | arXiv:2502.18449v2 §2, §3.1 | verified 2026-09-15 (primary text) | §3.6: continuous vs exact-match reward (34.8 vs 29.0 repair) |
+| Llama3-SWE-RL-70B | 70B | RL | LR; KL β; clip ε | not reported | checked §2–3, App. A–D | not reported | — |
+| Llama3-SWE-RL-70B | 70B | RL | Compute | 512 H100 GPUs, ~32 wall-clock hours | §3.1 | verified 2026-09-15 (primary text) | not applicable |
+| Llama3-SWE-SFT-70B | 70B | SFT | Data; tokens; context | synthetic editing + Llama 3 coding and general SFT; 2B; 16k | App. C | verified 2026-09-15 (primary text) | Table 3 out-of-domain comparison |
+| DeepSWE-Preview (Qwen3-32B) | 32B | RL | Stage placement; reward; problems; compute | RL only, no SFT; 1 if selected tests pass else 0; 4.5K R2E-Gym; 64 H100 × 6 days | Together AI blog 2025-07 intro, §2.1–2.2 | verified 2026-09-14 ([[deepswe]]) | §6: RL after SFT warm starts did not improve |
+| ETO (Llama-2-7B-Chat) | 7B | preference | Loss; β; LR; iterations | trajectory-level DPO; 0.1 (WebShop, SciWorld), 0.5 (ALFWorld); 1e-6; 2 / 1 | arXiv:2403.02502v2 §4.1 | verified 2026-09-14 ([[eto-trial-and-error]]) | §4.3 Fig. 4: decline after iteration 3 |
+| NAT (Llama-2-Chat) | 7B, 13B | SFT | Epochs; batch; peak LR; schedule | 2; 64; 5e-5; cosine, 3% warmup | arXiv:2402.11651v2 §4.1 | verified 2026-09-15 (primary text) | no ablation reported |
+| Kimi-K2-Instruct | 1.04T / 32B act. | SFT | Tool repository; examples | 3000+ MCP + over 20,000 synthetic tools; "tens of thousands" | arXiv:2507.20534 §3.1.1 | verified 2026-09-14 ([[kimi-k2-recipe]]) | Fig. 9 coverage only; no ablation |
+| Kimi-K2-Instruct | 1.04T / 32B act. | SFT | Dataset size, epochs, LR, masking | not reported | §3.1; body and appendices | not reported | — |
+
+**Starting point for a small general-purpose run.** When adding a few thousand filtered agent trajectories to a 7B–70B chat model, start from η = 0.2 with loss on model outputs only and the r = 1 filter, as AgentTuning used for Llama-2-chat with ShareGPT; then rescan η on held-out environments, because the 7B and 13B mixtures did not exceed general-only data on held-out tasks. When fine-tuning a 7B–32B coder on a few hundred to a few thousand SWE trajectories, full fine-tuning at LR 1e-4 with at most 5 epochs, global batch 8, and a 32,768-token context matches the SWE-Gym setting; SWE-smith used LR 5e-5 and at most 3 epochs for 5,016 trajectories.
+
+## Generalization lens
+
+**(a) What increases breadth.**
+- Mixing general data with agent data: held-out 0.67 vs 0.09 for agent-only at 7B ([[agenttuning]] Table 5).
+- More training repositories at fixed trajectory count: 10.3% → 15.1% ([[excerpts/swe-smith]] Fig. 5).
+- RL on the same seeds instead of SFT: category mean 68.54 vs 61.84 on out-of-domain benchmarks ([[excerpts/swe-rl]] Table 3; derived).
+- Tool and agent diversity in synthesis: K2's 3000+ real and 20,000+ synthetic tools with rubric tasks, with no ablation isolating diversity ([[kimi-k2]] §3.1.1; Interpretation).
+- Unified training across task types: Lumos-I-All-13B scored above single-type variants on unseen WebShop (50.3 vs 43.8–47.3) ([[excerpts/lumos]] Table 1e).
+
+**(b) What causes narrowing or forgetting.**
+- Agent-only SFT: held-out 0.09–0.10 at 7B–13B ([[agenttuning]] Table 5).
+- SFT on SWE data: HumanEval+ 76.2 → 73.2 and strict MATH 63.2 → 54.0 ([[excerpts/swe-rl]] Table 3).
+- Repository specialization: +9.1 points on the 22-instance SymPy subset, −1.9 on the rest of Verified at 32B ([[excerpts/swe-smith]] Fig. 4).
+- Single-task QA fine-tuning: StrategyQA 59.0 → 52.0 for Llama-2-7B ([[fireact]] Table 14).
+- Safety forgetting from benign agentic SFT: refusal 26.03% → 6.85% ([[agentic-finetuning-misalignment]] Table 1).
+- Self-generated trajectories without a stronger teacher: SWE-Gym Lite 15.3% → 8.7% ([[excerpts/swe-gym]] §4.2).
+
+**(c) How to measure it at this stage.**
+- Held-in, held-out, and general scores reported separately for every data mixture ([[agenttuning]] Table 3).
+- pass@1 and pass@k at large k, with any verifier's Best@k reported separately ([[excerpts/swe-gym]] §5.1).
+- A date-filtered or outside-repository benchmark next to SWE-bench Verified ([[swe-rebench]]; [[swe-bench-illusion]]).
+- Stuck-in-loop and empty-patch rates as behavior metrics ([[excerpts/swe-gym]] Table 3).
+- Harmful-task attack success, refusal, and over-refusal on benign tasks before and after agent SFT ([[agentic-finetuning-misalignment]] App. F).
+- Known measurement errors: normalized scores in AgentTuning depend on the set of evaluated models (§3.1); WebArena success depends on prompt hints (Table 2); scaffold choice changes resolve rates for the same model, for example 7% vs 1% zero-shot for 7B with MoatlessTools vs OpenHands on Lite ([[excerpts/swe-gym]] §4.3).
+
+## Common mistakes and how to detect them
+
+| Mistake | Observable symptom | Check |
+|---|---|---|
+| Training on agent trajectories without general data | held-in agent score rises, held-out and MMLU/GSM8K fall | run the AgentTuning three-arm comparison (agent-only, general-only, mixed) on held-out environments |
+| Computing loss on observation tokens | loss dominated by long tool outputs; model imitates shell or page text | count tokens with mₜ = 1 per trajectory; expect only model turns |
+| Keeping unfiltered or low-quality self-generated trajectories | fine-tuned score below the untrained model | compare against no fine-tuning, as in AutoAct Table 2 |
+| Selecting checkpoints on SWE-bench Verified only | large gap to a fresh or outside-repository set | evaluate on SWE-rebench-style date-filtered tasks and outside repositories |
+| Reporting Best@k or pass@k as pass@1 | leaderboard number cannot be reproduced with one sample | report k, the verifier, and the scaffold with every number |
+| Scoring truncated or timed-out trajectories as failures in RL | reward collapse; long tasks penalized | mask trajectories ending by context, step, or time limit (DeepSWE compact filtering) |
+| Treating Agent-FLAN-style negatives as a negative gradient | expecting likelihood of wrong calls to fall directly | inspect the loss: correct text targets under cross-entropy are type 2 |
+| Evaluating safety only in chat after agent SFT | refusal in agent contexts falls unnoticed | measure attack success and refusal in the agent domain (WebDojo-style) |
+| Citing K2 as evidence for agentic pre-training | claim without a locus | check [[kimi-k2]] §2.2 and §3.1.1; use [[ch-32d]] sources |
+
+## Check your understanding
+
+1. At 70B, AgentTuning's mixture exceeds general-only data on held-out tasks, but at 7B and 13B it does not. Give two explanations that would produce this pattern and describe an experiment that separates them.
+2. Explain why unmasked observation tokens change what an agent SFT run optimizes, using the token counts of the §1 example.
+3. In the SWE-RL worked group, the malformed rollout dominates the standard deviation. How does this change the advantage of the best patch compared with a group where all four rollouts are well formed?
+4. The SWE-SFT baseline and SWE-RL use the same PR seeds, yet SFT lowers strict MATH by 9.2 points and RL raises it by 10.5. List the differences between the two training setups that could cause this, beyond "SFT versus RL".
+5. SWE-Gym's self-improvement run lowered Lite from 15.3% to 8.7%, while DeepSWE's RL-only run improved from 23% to 42%. What differs in how failed trajectories and on-policy samples are used in the two runs?
+6. Why does a push-down on an unlikely action concentrate probability on the most likely action, and how would that show up in pass@k at large k for an agent?
+7. K2's tool simulator introduces controlled stochasticity. What narrowing would you expect from a deterministic simulator, and which measurement from this chapter would detect it?
+8. Repository specialization on SymPy gained 9.1 points on SymPy and lost 1.9 elsewhere. Under what deployment condition is this trade acceptable, and what evaluation would you run before accepting it?
+
+## Connections
+
+- Previous: [[ch-26]] Tool and Function-Calling Data — single-call and multi-turn tool data, abstention targets, and unseen-tool splits.
+- Next: [[ch-28]] Long-Context Data Synthesis and Synthetic Evaluation Task Families.
+- Related:
+  - [[ch-24]] Reasoning-Trace Synthesis: Chain-of-Thought, Long Chain-of-Thought, and Step-Level Data
+  - [[ch-29c]] Agentic Environment and Task Synthesis at Scale
+  - [[ch-29d]] User Simulators, Trajectory Verification, and Failed Trajectories
+  - [[ch-30b]] Multi-Skill SFT Mixtures: Interference, Transfer, and Agentic and Long-Context Shares
+  - [[ch-31a]] Negative Samples in Supervised Training: Corrections, Failure Conditioning, Critiques, and Unlikelihood
+  - [[ch-32d]] Agentic Mid-Training: Repository, Execution-Trace, and Trajectory Data Before Post-Training
+  - [[ch-38a]] SFT versus RL Generalization: On-Policy Data, KL to the Base Model, and Output Diversity
+  - [[ch-39]] Offline Preference Optimization: DPO and Its Variants
+  - [[ch-40]] Group-Baseline RL: RLOO, GRPO, Dr. GRPO, DAPO, and GSPO
+  - [[ch-43a]] Negative Samples and Negative Gradients: Likelihood Displacement, Squeezing, and Negative Advantages
+  - [[ch-45b]] Multi-Turn Agentic RL: Observation Masking, Credit Assignment, and Stability
+  - [[ch-48]] Contamination Detection and Its Effect on Reported Scores
+  - [[ch-51a]] Evaluating Agent Generality and Reliability
+
+## Sources
+
+- [[agenttuning]] — trajectory filtering counts, mixture objective and η = 0.2, held-in/held-out/general Table 5, hyperparameters.
+- [[fireact]] — method-mix results, transfer to Bamboogle and StrategyQA, LoRA settings.
+- [[excerpts/lumos]] — planning/grounding formulation, annotation counts, unseen-task results (chapter excerpt verified against arXiv v3; the library card predates verification).
+- [[autoact]] — self-synthesized trajectories, reward = 1 filter, unfiltered-data ablation.
+- [[agent-flan]] — chat-format conversion, capability weights, 1:1 mix, negative samples and Agent-H.
+- [[agentinstruct]] — why it is instruction data, not trajectory data.
+- [[excerpts/webarena-data]] — sites, observation and action spaces, functional checks, GPT-4 and human success rates (chapter excerpt verified against arXiv; the library card predates verification).
+- [[excerpts/swe-gym]] — environment counts, teacher trajectories, Table 3, verifier Best@k and pass@k, self-improvement result (chapter excerpt verified against arXiv).
+- [[excerpts/swe-smith]] — task synthesis by breaking tests, repository-count scaling, specialization trade-off (chapter excerpt from arXiv v2).
+- [[r2e-gym]] — commit-based environments, synthetic vs real issue text, 20K SFT context.
+- [[deepswe]] — RL-only execution-reward training, compact filtering, SFT warm-start result.
+- [[excerpts/swe-rl]] — data curation, reward equation, settings, Tables 1–3, reward ablation (chapter excerpt verified against arXiv v2).
+- [[kimi-k2]] — tool-use data synthesis pipeline, RL gym and rubric critic, results, what the report does not contain.
+- [[kimi-k2-recipe]] — K2 SFT and RL ledger rows.
+- [[eto-trial-and-error]] — trajectory-level DPO on failures, iteration and granularity ablations.
+- [[excerpts/learning-from-failure-nat]] — failure-conditioned SFT and its dependence on positive count and negative quality (chapter excerpt from arXiv v2).
+- [[swe-rebench]] — date-filtered SWE tasks and the Verified-vs-fresh gap.
+- [[swe-bench-illusion]] — file-path memorization probe on SWE-bench Verified.
+- [[agentic-finetuning-misalignment]] — safety forgetting from benign agentic SFT.

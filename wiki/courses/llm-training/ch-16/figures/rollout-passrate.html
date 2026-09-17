@@ -2,269 +2,224 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>Rollout pass-rate filter — where the gradient signal lives</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Pass-rate filter: wasted groups, advantage mass, and domain share</title>
 <style>
-  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; max-width: 1080px; margin: 2em auto; padding: 0 1em; color: #222; background: #fafafa; }
-  h1 { font-size: 1.35em; margin-bottom: 0.2em; }
-  .subtitle { color: #666; margin-top: 0; font-size: 0.95em; }
-  .layout { display: grid; grid-template-columns: 1.3fr 1fr; gap: 1.2em; margin-top: 1.2em; }
-  .panel { border: 1px solid #dcdcdc; border-radius: 6px; background: #fff; padding: 0.9em 1.1em; }
-  h2 { font-size: 1.05em; margin: 0 0 0.6em 0; color: #333; border-bottom: 1px solid #eee; padding-bottom: 0.3em; }
-  canvas { display: block; width: 100%; height: 260px; }
-  .sliders { margin-top: 0.8em; display: grid; grid-template-columns: 1fr; gap: 0.5em; }
-  .slider-row { display: grid; grid-template-columns: 90px 1fr 56px; align-items: center; gap: 0.7em; }
-  .slider-row label { font-size: 0.9em; color: #333; font-weight: 600; }
-  .slider-row .val  { font-family: 'SF Mono', Menlo, monospace; color: #555; font-size: 0.88em; text-align: right; }
-  input[type=range] { width: 100%; }
-  .stats { list-style: none; padding: 0; margin: 0; }
-  .stats li { display: flex; justify-content: space-between; padding: 0.35em 0.1em; border-bottom: 1px dashed #eee; font-size: 0.92em; }
-  .stats li:last-child { border-bottom: none; }
-  .stats .k { color: #333; font-weight: 600; }
-  .stats .v { font-family: 'SF Mono', Menlo, monospace; color: #1b5e20; }
-  .stats .v.warn { color: #7a4a00; } .stats .v.bad { color: #8b1a1a; }
-  .note { font-size: 0.82em; color: #666; margin-top: 1em; line-height: 1.5; }
-  .zone { font-size: 0.85em; padding: 0.5em 0.7em; margin-top: 0.5em; border-left: 3px solid #888; background: #f6f6f6; border-radius: 3px; }
-  .zone.lo { border-left-color: #8b1a1a; background: #fff6f6; }
-  .zone.hi { border-left-color: #7a4a00; background: #fffaf0; }
-  .zone.ok { border-left-color: #1b5e20; background: #f2f8f3; }
-  button { font-size: 0.85em; padding: 4px 10px; margin-right: 0.4em; border: 1px solid #bbb; background: #f4f4f4; border-radius: 4px; cursor: pointer; }
-  button:hover { background: #e8e8e8; }
-  .presets { margin-top: 0.6em; font-size: 0.85em; }
-  code { background: #eef; padding: 1px 4px; border-radius: 3px; font-family: 'SF Mono', Menlo, monospace; font-size: 0.85em; }
+  :root { --fg:#1d1d1d; --muted:#5a5a5a; --line:#d8d8d8; --bg:#fbfbfb; --card:#fff;
+          --a:#1f4e79; --b:#8a4b08; --cut:#7a1f1f; }
+  body { font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Arial,sans-serif;
+         max-width:1000px; margin:0 auto; padding:24px 16px; color:var(--fg); background:var(--bg); line-height:1.5; }
+  h1 { font-size:1.3em; margin:0 0 4px 0; }
+  h2 { font-size:1.02em; margin:0 0 8px 0; border-bottom:1px solid #eee; padding-bottom:4px; }
+  p.sub { color:var(--muted); margin:0 0 18px 0; font-size:0.94em; }
+  .panel { background:var(--card); border:1px solid var(--line); border-radius:6px; padding:14px 16px; margin-bottom:18px; }
+  canvas { display:block; width:100%; height:280px; }
+  .row { display:grid; grid-template-columns:130px 1fr 74px; gap:10px; align-items:center; margin-top:8px; }
+  .row label { font-size:0.9em; font-weight:600; }
+  .row .val { font-family:Menlo,Consolas,monospace; font-size:0.86em; text-align:right; color:var(--muted); }
+  input[type=range] { width:100%; }
+  table { border-collapse:collapse; width:100%; font-size:0.88em; margin-top:10px; }
+  th,td { border:1px solid var(--line); padding:5px 8px; text-align:right; }
+  th:first-child, td:first-child { text-align:left; }
+  .legend { font-size:0.86em; color:var(--muted); margin-top:8px; }
+  .key { display:inline-block; width:22px; height:3px; vertical-align:middle; margin-right:5px; }
+  .caption { font-size:0.84em; color:var(--muted); line-height:1.6; }
+  code { font-family:Menlo,Consolas,monospace; font-size:0.86em; background:#f0f0f4; padding:1px 4px; border-radius:3px; }
+  @media (max-width:640px){ .row { grid-template-columns:100px 1fr 62px; } }
 </style>
 </head>
 <body>
 
-<h1>Rollout pass-rate filter — where the gradient signal lives</h1>
-<p class="subtitle">
-  1000 simulated prompts with pass-rates drawn from a beta-mixture
-  (reflecting real RL pools: many near-easy, many near-impossible, a thin
-  middle). Drag <code>p_lo</code> and <code>p_hi</code> to set the keep-band.
-  The right panel updates kept count, mean reward variance
-  <code>p(1&minus;p)</code> on the kept set, and the zero-gradient zones
-  dropped on each side.
+<h1>Pass-rate filter: wasted groups, advantage mass, and domain share</h1>
+<p class="sub">
+  Companion to ch-16 §2, §3 and §4. Panel 1 computes, for a binary verifier, how often a group of
+  size <code>G</code> produces no gradient and how much absolute advantage mass it produces, as a
+  function of the pass rate. Panel 2 computes what a one-sided cut does to the domain shares of a
+  two-domain pool.
 </p>
 
-<div class="layout">
-
-  <div class="panel">
-    <h2>Pass-rate distribution (1000 prompts)</h2>
-    <canvas id="hist" width="700" height="260"></canvas>
-    <div class="sliders">
-      <div class="slider-row">
-        <label for="lo">p_lo</label>
-        <input type="range" id="lo" min="0" max="100" value="10">
-        <span class="val" id="loVal">0.10</span>
-      </div>
-      <div class="slider-row">
-        <label for="hi">p_hi</label>
-        <input type="range" id="hi" min="0" max="100" value="90">
-        <span class="val" id="hiVal">0.90</span>
-      </div>
-    </div>
-    <div class="presets">
-      <button data-lo="10" data-hi="90">Tülu-3 fixed band</button>
-      <button data-lo="5"  data-hi="50">Kimi K1.5 hard-skew</button>
-      <button data-lo="20" data-hi="80">Cold-start safe</button>
-      <button data-lo="0"  data-hi="100">No filter</button>
-    </div>
+<div class="panel">
+  <h2>1. Group outcome as a function of pass rate</h2>
+  <canvas id="c1" width="920" height="280"></canvas>
+  <div class="legend">
+    <span class="key" style="background:var(--a)"></span>P(zero-variance group) = p<sup>G</sup> + (1&minus;p)<sup>G</sup> &nbsp;&nbsp;
+    <span class="key" style="background:var(--b)"></span>E[&Sigma;<sub>i</sub>|A<sub>i</sub>|] = 2(G&minus;1)&thinsp;p(1&minus;p), scaled to the same axis &nbsp;&nbsp;
+    <span class="key" style="background:var(--cut)"></span>published cut points
   </div>
-
-  <div>
-    <div class="panel">
-      <h2>Kept-set stats</h2>
-      <ul class="stats" id="stats"></ul>
-    </div>
-
-    <div class="panel" style="margin-top: 1em;">
-      <h2>Zones you are dropping</h2>
-      <div id="zones"></div>
-    </div>
+  <div class="row">
+    <label for="g">Group size G</label>
+    <input type="range" id="g" min="2" max="32" step="1" value="8">
+    <span class="val" id="gv">8</span>
   </div>
-
+  <div class="row">
+    <label for="p">Pass rate p</label>
+    <input type="range" id="p" min="0" max="100" step="1" value="90">
+    <span class="val" id="pv">0.90</span>
+  </div>
+  <table>
+    <tr><th>Quantity at the selected p and G</th><th>Value</th></tr>
+    <tr><td>P(all G samples identical, so no policy gradient)</td><td id="o1">—</td></tr>
+    <tr><td>Expected absolute advantage mass E[&Sigma;|A<sub>i</sub>|]</td><td id="o2">—</td></tr>
+    <tr><td>Same, as a fraction of its maximum over p</td><td id="o3">—</td></tr>
+    <tr><td>Rollouts spent per unit of advantage mass</td><td id="o4">—</td></tr>
+  </table>
+  <p class="caption">
+    Exact values for G = 8, computed from the two formulas: P(zero-variance) is 0.0078 at p = 0.5,
+    0.100 at p = 0.75, 0.430 at p = 0.9 and 0.663 at p = 0.95. Single-group advantage mass
+    2k(G&minus;k)/G is 4.00 at k = 4, 1.75 at k = 1 or 7, and 0 at k = 0 or 8.
+    Two cut points are drawn as dashed lines: 0.75 &mdash; Llama-Nemotron discards prompts at or above
+    this pass rate over 8 samples (arXiv:2505.00949v5 §5.1); 0.625 &mdash; Olmo 3 Think 7B discards
+    prompts solved in more than 5 of 8 rollouts (arXiv:2512.13961v2 §4.4.2). The remaining published
+    cut is at the two endpoints of the axis: DAPO keeps only groups with accuracy strictly between 0
+    and 1 (arXiv:2503.14476v2 §3.2), and Skywork-OR1 removes 0/N and N/N at N = 16
+    (arXiv:2505.22312v2 §6.2).
+  </p>
 </div>
 
-<div class="note">
-  Under GRPO/RLOO the per-prompt gradient is proportional to reward variance
-  across rollouts. For binary verifiers, variance is <code>p(1&minus;p)</code> —
-  peaks at <code>p = 0.5</code>, goes to 0 at <code>p = 0</code> and
-  <code>p = 1</code>. A prompt with <code>p ≈ 0</code> or
-  <code>p ≈ 1</code> wastes rollouts. Source:
-  <code>[[replay-buffer-rlhf]]</code>, <code>[[kimi-k1-5]]</code>,
-  <code>[[minibatch-sharing-rl]]</code>,
-  <code>[[reinforcement-learning-with-one-training-example]]</code>.
+<div class="panel">
+  <h2>2. What a one-sided cut does to domain shares</h2>
+  <canvas id="c2" width="920" height="230"></canvas>
+  <div class="row">
+    <label for="na">Domain A prompts</label>
+    <input type="range" id="na" min="1000" max="40000" step="1000" value="10000">
+    <span class="val" id="nav">10000</span>
+  </div>
+  <div class="row">
+    <label for="sa">A above the cut</label>
+    <input type="range" id="sa" min="0" max="95" step="5" value="60">
+    <span class="val" id="sav">60%</span>
+  </div>
+  <div class="row">
+    <label for="nb">Domain B prompts</label>
+    <input type="range" id="nb" min="1000" max="40000" step="1000" value="10000">
+    <span class="val" id="nbv">10000</span>
+  </div>
+  <div class="row">
+    <label for="sb">B above the cut</label>
+    <input type="range" id="sb" min="0" max="95" step="5" value="20">
+    <span class="val" id="sbv">20%</span>
+  </div>
+  <table>
+    <tr><th>Pool</th><th>Domain A</th><th>Domain B</th><th>A share</th></tr>
+    <tr><td>Before filtering</td><td id="b1">—</td><td id="b2">—</td><td id="b3">—</td></tr>
+    <tr><td>After the cut</td><td id="a1">—</td><td id="a2">—</td><td id="a3">—</td></tr>
+  </table>
+  <p class="caption">
+    The arithmetic here is an illustration with user-chosen inputs, not a measured pool: no source
+    publishes the per-domain pass-rate distribution of an RL pool. The effect it shows is reported:
+    for Tülu 3 405B, GSM8K was removed from the RLVR mixture because SFT and DPO had saturated it
+    and IFEval prompts were removed as unhelpful, leaving MATH as the only training domain
+    (arXiv:2411.15124v5 §8.1). Olmo 3 downsampled eight OMEGA subtasks by 50% after offline
+    filtering (arXiv:2512.13961v2 §4.4.2).
+  </p>
 </div>
 
 <script>
-// deterministic PRNG (mulberry32) so the histogram is reproducible
-function mulberry32(a) { return function() {
-  a |= 0; a = (a + 0x6D2B79F5) | 0; let t = a;
-  t = Math.imul(t ^ (t >>> 15), t | 1);
-  t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
-  return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-}; }
-const rand = mulberry32(20260423);
+(function () {
+  var c1 = document.getElementById('c1'), x1 = c1.getContext('2d');
+  var c2 = document.getElementById('c2'), x2 = c2.getContext('2d');
+  var g = document.getElementById('g'), p = document.getElementById('p');
+  var na = document.getElementById('na'), sa = document.getElementById('sa');
+  var nb = document.getElementById('nb'), sb = document.getElementById('sb');
 
-// Beta(a,b) via gamma-ratio; Ga via Marsaglia-Tsang.
-function gammaSample(shape) {
-  if (shape < 1) return gammaSample(shape + 1) * Math.pow(rand(), 1 / shape);
-  const d = shape - 1/3, c = 1 / Math.sqrt(9 * d);
-  while (true) {
-    let x, v;
-    do {
-      const u1 = rand(), u2 = rand();
-      x = Math.sqrt(-2 * Math.log(u1)) * Math.cos(2 * Math.PI * u2);
-      v = 1 + c * x;
-    } while (v <= 0);
-    v = v * v * v; const u = rand();
-    if (u < 1 - 0.0331 * x * x * x * x) return d * v;
-    if (Math.log(u) < 0.5 * x * x + d * (1 - v + Math.log(v))) return d * v;
+  function zeroVar(pp, G) { return Math.pow(pp, G) + Math.pow(1 - pp, G); }
+  function advMass(pp, G) { return 2 * (G - 1) * pp * (1 - pp); }
+
+  function axes(ctx, W, H, m, yLabelTop) {
+    ctx.clearRect(0, 0, W, H);
+    ctx.strokeStyle = '#bbb'; ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.moveTo(m, 10); ctx.lineTo(m, H - m); ctx.lineTo(W - 12, H - m); ctx.stroke();
+    ctx.fillStyle = '#5a5a5a'; ctx.font = '12px -apple-system, Arial, sans-serif';
+    for (var t = 0; t <= 10; t++) {
+      var xx = m + (W - 12 - m) * t / 10;
+      ctx.beginPath(); ctx.moveTo(xx, H - m); ctx.lineTo(xx, H - m + 4); ctx.stroke();
+      ctx.fillText((t / 10).toFixed(1), xx - 9, H - m + 18);
+    }
+    ctx.fillText('pass rate p', (W - m) / 2, H - 6);
+    ctx.save(); ctx.translate(12, 20); ctx.fillText(yLabelTop, 0, 0); ctx.restore();
   }
-}
-const betaSample = (a, b) => { const ga = gammaSample(a), gb = gammaSample(b); return ga / (ga + gb); };
 
-// Mixture reflecting real RL pools: 35% easy Beta(7,2), 20% impossible
-// Beta(2,8), 30% useful Beta(4,4), 15% borderline Beta(2,2).
-const N = 1000, prompts = [];
-for (let i = 0; i < N; i++) {
-  const u = rand();
-  prompts.push(u < 0.35 ? betaSample(7, 2)
-             : u < 0.55 ? betaSample(2, 8)
-             : u < 0.85 ? betaSample(4, 4)
-             :            betaSample(2, 2));
-}
-
-// histogram bins
-const NBIN = 40, bins = new Array(NBIN).fill(0);
-prompts.forEach(p => { bins[Math.min(NBIN - 1, Math.floor(p * NBIN))]++; });
-
-// DOM refs
-const canvas = document.getElementById('hist'), ctx = canvas.getContext('2d');
-const loSlide = document.getElementById('lo'),  hiSlide = document.getElementById('hi');
-const loVal = document.getElementById('loVal'), hiVal = document.getElementById('hiVal');
-const statsUl = document.getElementById('stats'), zonesEl = document.getElementById('zones');
-
-document.querySelectorAll('.presets button').forEach(btn => {
-  btn.addEventListener('click', () => {
-    loSlide.value = btn.dataset.lo;
-    hiSlide.value = btn.dataset.hi;
-    render();
-  });
-});
-loSlide.addEventListener('input', render);
-hiSlide.addEventListener('input', render);
-
-function drawHist(lo, hi) {
-  const W = canvas.width, H = canvas.height;
-  ctx.clearRect(0, 0, W, H);
-  const padL = 40, padT = 10, padR = 10, padB = 30;
-  const plotW = W - padL - padR, plotH = H - padB - padT;
-  const maxBin = Math.max(...bins);
-  // axes
-  ctx.strokeStyle = '#888'; ctx.lineWidth = 1; ctx.beginPath();
-  ctx.moveTo(padL, padT); ctx.lineTo(padL, padT + plotH);
-  ctx.lineTo(padL + plotW, padT + plotH); ctx.stroke();
-  // bars — green if inside band, grey if excluded
-  const barW = plotW / NBIN;
-  for (let i = 0; i < NBIN; i++) {
-    const p = (i + 0.5) / NBIN, h = (bins[i] / maxBin) * plotH;
-    ctx.fillStyle = (p >= lo && p <= hi) ? '#1b5e20' : '#cfd4cf';
-    ctx.fillRect(padL + i * barW + 0.5, padT + plotH - h, barW - 1, h);
+  function drawCurve(ctx, W, H, m, fn, color, scale) {
+    ctx.strokeStyle = color; ctx.lineWidth = 2; ctx.beginPath();
+    for (var i = 0; i <= 400; i++) {
+      var pp = i / 400;
+      var v = Math.min(1, fn(pp) / scale);
+      var xx = m + (W - 12 - m) * pp;
+      var yy = (H - m) - (H - m - 14) * v;
+      if (i === 0) ctx.moveTo(xx, yy); else ctx.lineTo(xx, yy);
+    }
+    ctx.stroke();
   }
-  // p(1-p) variance overlay (max 0.25, scaled to 60% of plot height)
-  ctx.strokeStyle = '#b77a00'; ctx.lineWidth = 2; ctx.beginPath();
-  for (let i = 0; i <= 100; i++) {
-    const p = i / 100, v = p * (1 - p);
-    const x = padL + p * plotW, y = padT + plotH - (v / 0.25) * plotH * 0.6;
-    if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+
+  function cutLine(ctx, W, H, m, pp, label) {
+    var xx = m + (W - 12 - m) * pp;
+    ctx.strokeStyle = '#7a1f1f'; ctx.lineWidth = 1; ctx.setLineDash([4, 4]);
+    ctx.beginPath(); ctx.moveTo(xx, 12); ctx.lineTo(xx, H - m); ctx.stroke();
+    ctx.setLineDash([]); ctx.fillStyle = '#7a1f1f'; ctx.font = '11px Menlo, monospace';
+    ctx.fillText(label, xx - 12, 10);
   }
-  ctx.stroke();
-  // band threshold lines
-  ctx.strokeStyle = '#8b1a1a'; ctx.lineWidth = 1.5; ctx.setLineDash([4, 3]);
-  [lo, hi].forEach(t => {
-    const x = padL + t * plotW; ctx.beginPath();
-    ctx.moveTo(x, padT); ctx.lineTo(x, padT + plotH); ctx.stroke();
-  });
-  ctx.setLineDash([]);
-  // x-axis ticks + overlay label
-  ctx.fillStyle = '#555'; ctx.font = '11px sans-serif'; ctx.textAlign = 'center';
-  [0, 0.25, 0.5, 0.75, 1].forEach(t =>
-    ctx.fillText(t.toFixed(2), padL + t * plotW, padT + plotH + 14));
-  ctx.textAlign = 'left'; ctx.fillStyle = '#b77a00';
-  ctx.fillText('p(1−p) — reward variance', padL + 6, padT + 14);
-}
 
-function render() {
-  const lo = (+loSlide.value) / 100;
-  let hi   = (+hiSlide.value) / 100;
-  if (hi < lo) hi = lo;                // guard
-  loVal.textContent = lo.toFixed(2);
-  hiVal.textContent = hi.toFixed(2);
+  function draw1() {
+    var G = +g.value, pp = +p.value / 100, W = c1.width, H = c1.height, m = 44;
+    document.getElementById('gv').textContent = G;
+    document.getElementById('pv').textContent = pp.toFixed(2);
+    axes(x1, W, H, m, 'scaled to [0, 1]');
+    var maxMass = advMass(0.5, G);
+    drawCurve(x1, W, H, m, function (v) { return zeroVar(v, G); }, '#1f4e79', 1);
+    drawCurve(x1, W, H, m, function (v) { return advMass(v, G); }, '#8a4b08', maxMass);
+    cutLine(x1, W, H, m, 0.625, '0.625');
+    cutLine(x1, W, H, m, 0.75, '0.75');
+    // marker at the selected p
+    var xx = m + (W - 12 - m) * pp;
+    var yy = (H - m) - (H - m - 14) * zeroVar(pp, G);
+    x1.fillStyle = '#1f4e79'; x1.beginPath(); x1.arc(xx, yy, 4, 0, 6.2832); x1.fill();
+    var yy2 = (H - m) - (H - m - 14) * (advMass(pp, G) / maxMass);
+    x1.fillStyle = '#8a4b08'; x1.beginPath(); x1.arc(xx, yy2, 4, 0, 6.2832); x1.fill();
 
-  drawHist(lo, hi);
-
-  const kept   = prompts.filter(p => p >= lo && p <= hi);
-  const nKept  = kept.length;
-  const meanVar = nKept === 0 ? 0
-    : kept.reduce((s, p) => s + p * (1 - p), 0) / nKept;
-  const nearHalf = kept.filter(p => p >= 0.35 && p <= 0.65).length;
-  const droppedLow  = prompts.filter(p => p < lo).length;
-  const droppedHigh = prompts.filter(p => p > hi).length;
-
-  const warnVar = meanVar < 0.15 ? (meanVar < 0.08 ? 'bad' : 'warn') : '';
-  const warnKept = nKept < 100 ? (nKept < 30 ? 'bad' : 'warn') : '';
-
-  statsUl.innerHTML = `
-    <li><span class="k">Kept prompts</span>
-        <span class="v ${warnKept}">${nKept} / ${N}</span></li>
-    <li><span class="k">Mean reward variance p(1−p)</span>
-        <span class="v ${warnVar}">${meanVar.toFixed(3)} / 0.250</span></li>
-    <li><span class="k">Near-0.5 (p ∈ [0.35, 0.65])</span>
-        <span class="v">${nearHalf} prompts</span></li>
-    <li><span class="k">Dropped: too easy (p &gt; p_hi)</span>
-        <span class="v warn">${droppedHigh}</span></li>
-    <li><span class="k">Dropped: too hard (p &lt; p_lo)</span>
-        <span class="v warn">${droppedLow}</span></li>
-    <li><span class="k">Effective rollouts used (K=8)</span>
-        <span class="v">${(nKept * 8).toLocaleString()}</span></li>
-  `;
-
-  let zonesHtml = '';
-  if (droppedHigh > 0) {
-    zonesHtml += `<div class="zone hi">
-      <strong>High-pass zone (p &gt; ${hi.toFixed(2)}):</strong>
-      ${droppedHigh} prompts excluded. Under GRPO/RLOO these are
-      zero-variance groups — every rollout succeeds, <code>σ = 0</code>,
-      advantage is 0. Keeping them wastes <code>${droppedHigh * 8}</code>
-      rollouts per step with zero gradient payoff.
-    </div>`;
+    var z = zeroVar(pp, G), a = advMass(pp, G);
+    document.getElementById('o1').textContent = z.toFixed(4);
+    document.getElementById('o2').textContent = a.toFixed(3);
+    document.getElementById('o3').textContent = (maxMass > 0 ? (a / maxMass * 100).toFixed(1) + '%' : '—');
+    document.getElementById('o4').textContent = (a > 1e-9 ? (G / a).toFixed(2) : 'no gradient');
   }
-  if (droppedLow > 0) {
-    zonesHtml += `<div class="zone lo">
-      <strong>Low-pass zone (p &lt; ${lo.toFixed(2)}):</strong>
-      ${droppedLow} prompts excluded. Zero-variance groups in the other
-      direction — every rollout fails. Additionally biases learned critics
-      toward pessimism (see §3.3 stale-advantage discussion).
-    </div>`;
-  }
-  if (nKept > 0 && meanVar > 0.18) {
-    zonesHtml += `<div class="zone ok">
-      <strong>Kept band is well-centered.</strong> Mean variance
-      ${meanVar.toFixed(3)} is close to the theoretical max of 0.250 at
-      <code>p = 0.5</code>. This is where policy-gradient estimators pay off.
-    </div>`;
-  }
-  if (nKept === 0) {
-    zonesHtml = `<div class="zone lo">
-      <strong>Empty keep-band.</strong> No prompts remain — the band is
-      unreachable under the current policy's pass-rate distribution.
-      Re-measure pass-rates, or widen the band, or replace the pool.
-    </div>`;
-  }
-  zonesEl.innerHTML = zonesHtml;
-}
 
-render();
+  function bar(ctx, x, y, w, h, color, label) {
+    ctx.fillStyle = color; ctx.fillRect(x, y, w, h);
+    ctx.fillStyle = '#1d1d1d'; ctx.font = '12px -apple-system, Arial, sans-serif';
+    if (w > 46) ctx.fillText(label, x + 6, y + h / 2 + 4);
+  }
+
+  function draw2() {
+    var NA = +na.value, NB = +nb.value, SA = +sa.value / 100, SB = +sb.value / 100;
+    document.getElementById('nav').textContent = NA;
+    document.getElementById('nbv').textContent = NB;
+    document.getElementById('sav').textContent = (SA * 100).toFixed(0) + '%';
+    document.getElementById('sbv').textContent = (SB * 100).toFixed(0) + '%';
+    var ka = Math.round(NA * (1 - SA)), kb = Math.round(NB * (1 - SB));
+    var W = c2.width, H = c2.height, m = 90;
+    x2.clearRect(0, 0, W, H);
+    var total0 = NA + NB, total1 = ka + kb, maxT = Math.max(total0, total1, 1);
+    var span = W - m - 20;
+    x2.fillStyle = '#5a5a5a'; x2.font = '13px -apple-system, Arial, sans-serif';
+    x2.fillText('before', 14, 56); x2.fillText('after', 14, 136);
+    bar(x2, m, 30, span * NA / maxT, 40, '#9dbbd6', 'A ' + NA);
+    bar(x2, m + span * NA / maxT, 30, span * NB / maxT, 40, '#e3c39a', 'B ' + NB);
+    bar(x2, m, 110, span * ka / maxT, 40, '#1f4e79', 'A ' + ka);
+    bar(x2, m + span * ka / maxT, 110, span * kb / maxT, 40, '#8a4b08', 'B ' + kb);
+    x2.fillStyle = '#5a5a5a'; x2.font = '12px -apple-system, Arial, sans-serif';
+    x2.fillText('kept prompts after removing everything above the cut', m, 190);
+    document.getElementById('b1').textContent = NA;
+    document.getElementById('b2').textContent = NB;
+    document.getElementById('b3').textContent = (100 * NA / total0).toFixed(1) + '%';
+    document.getElementById('a1').textContent = ka;
+    document.getElementById('a2').textContent = kb;
+    document.getElementById('a3').textContent = total1 > 0 ? (100 * ka / total1).toFixed(1) + '%' : '—';
+  }
+
+  [g, p].forEach(function (el) { el.addEventListener('input', draw1); });
+  [na, sa, nb, sb].forEach(function (el) { el.addEventListener('input', draw2); });
+  draw1(); draw2();
+})();
 </script>
 
 </body>

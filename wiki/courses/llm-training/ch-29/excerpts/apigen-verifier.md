@@ -7,6 +7,8 @@ source_url: https://arxiv.org/abs/2406.18518
 created_at: "2026-04-23"
 ---
 
+> Superseded by the 2026-09 revision of read.md; kept for history.
+
 # Excerpt: APIGen — the 3-layer verifier ch-29's Stage 3 implements
 
 **Source library:** `wiki/raw-data/llm-training/papers/apigen.md`

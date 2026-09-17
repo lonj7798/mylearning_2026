@@ -7,6 +7,8 @@ source_url: https://arxiv.org/abs/2406.06592
 created_at: "2026-04-23"
 ---
 
+> Superseded by the 2026-09 revision of read.md; kept for history.
+
 # Excerpt: OmegaPRM — divide-and-conquer MC labeling
 
 **Source library:** `wiki/raw-data/llm-training/papers/omegaprm.md`

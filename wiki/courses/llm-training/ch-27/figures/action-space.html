@@ -2,215 +2,270 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>Agent Action Spaces — web vs terminal vs repo vs sandbox</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Agent Data Axes, Held-Out Transfer, and the SWE-RL Reward</title>
 <style>
-  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-         max-width: 1200px; margin: 2em auto; padding: 0 1em; color: #222;
-         background: #fafafa; }
-  h1 { font-size: 1.4em; margin-bottom: 0.2em; }
-  .subtitle { color: #666; margin-top: 0; font-size: 0.95em; }
-  .tabs { display: flex; gap: 6px; margin: 1em 0 0.6em 0; flex-wrap: wrap; }
-  .tab {
-    padding: 8px 14px; border: 1px solid #bbb; background: #eee; cursor: pointer;
-    border-radius: 6px 6px 0 0; font-weight: 600; font-size: 0.92em;
-    color: #333; user-select: none;
+  :root { --bg:#fafafa; --fg:#1f2328; --muted:#5b636b; --card:#ffffff; --line:#d0d7de;
+          --acc:#1f5fa8; --accsoft:#e8f0fa; --mixed:#1f5fa8; --agent:#b35c00; --general:#5b7f3a; --code:#f3f4f6; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg:#16181b; --fg:#e6e8ea; --muted:#a2a9b0; --card:#1f2226; --line:#3a3f45;
+            --acc:#7fb0ea; --accsoft:#24303d; --mixed:#7fb0ea; --agent:#e59a4f; --general:#9cc27a; --code:#2a2e33; }
   }
-  .tab:hover { background: #ddd; }
-  .tab.active { background: #2b6cb0; color: #fff; border-color: #2b6cb0; }
-  .panel {
-    border: 1px solid #2b6cb0; background: #fff;
-    padding: 1em 1.2em; border-radius: 0 6px 6px 6px;
-  }
-  .panel h2 { margin-top: 0; font-size: 1.1em; color: #2b6cb0; }
-  .grid {
-    display: grid; grid-template-columns: 1fr 1fr; gap: 0.9em; margin-top: 0.8em;
-  }
-  .cell {
-    background: #f7fafc; border-left: 3px solid #2b6cb0; padding: 0.5em 0.8em;
-    border-radius: 3px;
-  }
-  .cell h3 { margin: 0 0 0.3em 0; font-size: 0.85em; color: #2b6cb0;
-             text-transform: uppercase; letter-spacing: 0.04em; }
-  .cell .body { font-size: 0.9em; line-height: 1.45; color: #222; }
-  .example {
-    margin-top: 1em; background: #1e1e2e; color: #cdd6f4;
-    padding: 0.9em 1.1em; border-radius: 4px; font-family: 'SF Mono', Menlo, monospace;
-    font-size: 0.82em; white-space: pre-wrap; line-height: 1.5; overflow-x: auto;
-  }
-  .example .role-obs { color: #94e2d5; }
-  .example .role-think { color: #f9e2af; }
-  .example .role-act { color: #f38ba8; }
-  .example .role-env { color: #a6adc8; font-style: italic; }
-  .legend {
-    margin-top: 1em; font-size: 0.82em; color: #666;
-    display: flex; gap: 1.2em; flex-wrap: wrap;
-  }
-  .legend span { display: inline-block; }
-  .legend .sw { display: inline-block; width: 10px; height: 10px;
-                border-radius: 2px; margin-right: 4px; vertical-align: middle; }
-  code { background: #eef; padding: 1px 5px; border-radius: 3px;
-         font-family: 'SF Mono', Menlo, monospace; font-size: 0.88em; }
-  .footer {
-    margin-top: 1.2em; padding-top: 0.8em; border-top: 1px solid #ddd;
-    font-size: 0.82em; color: #555; line-height: 1.5;
-  }
+  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; background: var(--bg);
+         color: var(--fg); max-width: 1080px; margin: 0 auto; padding: 1.2em 16px 2em; line-height: 1.45; }
+  h1 { font-size: 1.3em; margin: 0 0 0.2em; }
+  .sub { color: var(--muted); margin: 0 0 1em; font-size: 0.92em; }
+  .tabs { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 0.8em; }
+  button.tab { border: 1px solid var(--line); background: var(--card); color: var(--fg); padding: 7px 12px;
+               border-radius: 6px; cursor: pointer; font-size: 0.9em; }
+  button.tab.on { background: var(--acc); border-color: var(--acc); color: #fff; }
+  section { background: var(--card); border: 1px solid var(--line); border-radius: 8px; padding: 1em 1.1em; }
+  section[hidden] { display: none; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 0.7em; margin: 0.8em 0; }
+  .cell { background: var(--accsoft); border-radius: 6px; padding: 0.55em 0.75em; font-size: 0.9em; }
+  .cell h3 { margin: 0 0 0.25em; font-size: 0.78em; text-transform: uppercase; letter-spacing: 0.04em; color: var(--acc); }
+  pre { background: var(--code); padding: 0.7em 0.9em; border-radius: 6px; overflow-x: auto; font-size: 0.82em; white-space: pre-wrap; }
+  .cap { color: var(--muted); font-size: 0.82em; margin-top: 0.6em; }
+  code { background: var(--code); padding: 0 4px; border-radius: 3px; font-size: 0.9em; }
+  .row { display: flex; flex-wrap: wrap; gap: 0.6em; align-items: center; margin: 0.5em 0; }
+  select, input[type=number] { font-size: 0.9em; padding: 3px 6px; background: var(--card); color: var(--fg); border: 1px solid var(--line); border-radius: 4px; }
+  textarea { width: 100%; box-sizing: border-box; font-family: ui-monospace, Menlo, monospace; font-size: 0.85em;
+             background: var(--code); color: var(--fg); border: 1px solid var(--line); border-radius: 4px; padding: 4px 6px; }
+  table { border-collapse: collapse; width: 100%; font-size: 0.88em; }
+  th, td { border-bottom: 1px solid var(--line); padding: 4px 6px; text-align: left; vertical-align: top; }
+  .tablewrap { overflow-x: auto; }
+  .neg { color: var(--agent); font-weight: 600; }
+  .pos { color: var(--general); font-weight: 600; }
+  svg text { fill: var(--fg); font-size: 12px; }
 </style>
 </head>
 <body>
 
-<h1>Agent Action Spaces — web vs terminal vs repo vs sandbox</h1>
-<p class="subtitle">Pick an environment to see its observation type, action vocabulary, reward signal, and a walkthrough of one trajectory step.</p>
+<h1>Agent data: four axes, held-out transfer, and the SWE-RL reward</h1>
+<p class="sub">Three views for Chapter 27. Every number shown is from the cited table or section; example trajectories are labeled as illustrative.</p>
 
-<div class="tabs" id="tabs">
-  <div class="tab active" data-env="web">Web browser</div>
-  <div class="tab" data-env="term">Terminal</div>
-  <div class="tab" data-env="repo">Repo / SWE</div>
-  <div class="tab" data-env="sandbox">Sandbox (sim)</div>
+<div class="tabs" role="tablist">
+  <button class="tab on" data-t="axes">1. Four axes by environment</button>
+  <button class="tab" data-t="held">2. Held-in vs held-out (AgentTuning)</button>
+  <button class="tab" data-t="reward">3. SWE-RL reward and group advantages</button>
 </div>
 
-<div class="panel" id="panel"></div>
+<section id="axes">
+  <div class="row">
+    <label for="env">Environment:</label>
+    <select id="env">
+      <option value="webarena">WebArena (evaluation environment)</option>
+      <option value="swegym">SWE-Gym with OpenHands (SFT trajectories)</option>
+      <option value="swerl">SWE-RL (single-turn RL on PR seeds)</option>
+      <option value="k2">Kimi K2 tool-use synthesis (SFT data)</option>
+    </select>
+  </div>
+  <div id="axesBody"></div>
+</section>
 
-<div class="legend">
-  <span><span class="sw" style="background:#94e2d5"></span>observation</span>
-  <span><span class="sw" style="background:#f9e2af"></span>thought</span>
-  <span><span class="sw" style="background:#f38ba8"></span>action</span>
-  <span><span class="sw" style="background:#a6adc8"></span>environment reply</span>
-</div>
+<section id="held" hidden>
+  <div class="row">
+    <label for="size">Model size:</label>
+    <select id="size"><option>7B</option><option>13B</option><option>70B</option></select>
+  </div>
+  <svg id="bars" viewBox="0 0 640 300" width="100%" role="img" aria-label="Held-in, held-out and general scores for three data arms"></svg>
+  <div id="heldNote" class="cap"></div>
+  <p class="cap">Source: AgentTuning (arXiv:2310.12823v2) Table 5. Scores are normalized per task so the average evaluated model is 1, then averaged over held-in (ALFWorld, WebShop, Mind2Web, KG, OS, DB), held-out (SciWorld, MiniWoB++, HotpotQA, WebArena, ReWOO, Digital Card Game), and general (MMLU, HumanEval, GSM8K, MT-Bench) tasks. Mixed = agent data sampled at η = 0.2 with ShareGPT.</p>
+</section>
 
-<div class="footer">
-Sources: WebArena (Zhou 2023), OpenHands scaffold (Wang 2024), SWE-Gym (Pan 2024), SWE-RL (Wei 2025),
-Kimi K2 agentic data (Moonshot 2025). See <code>ch-27/read.md</code> §5 for the comparison table.
-</div>
+<section id="reward" hidden>
+  <p style="margin-top:0">Reward from SWE-RL Eq. 1: −1 if the response has a wrong format, otherwise <code>difflib.SequenceMatcher(None, pred, oracle).ratio()</code> = 2M / (len(pred) + len(oracle)). Advantages follow GRPO: A<sub>i</sub> = (r<sub>i</sub> − mean) / std over the group. This page uses the population standard deviation; the paper does not state which estimator is used. The similarity is computed with the same longest-matching-block procedure as Python's difflib, including its rule that ignores characters appearing in more than 1% of the oracle when the oracle has 200 or more characters.</p>
+  <label for="oracle"><strong>Oracle patch</strong></label>
+  <textarea id="oracle" rows="2"></textarea>
+  <div class="tablewrap">
+  <table>
+    <thead><tr><th style="width:52%">Rollout (predicted patch)</th><th>Format OK</th><th>M</th><th>Reward r</th><th>Advantage A</th></tr></thead>
+    <tbody id="rows"></tbody>
+  </table>
+  </div>
+  <div id="groupStats" class="cap"></div>
+  <p class="cap">The default rollouts are illustrative strings; edit any field to recompute. SWE-RL sampled 16 rollouts per problem (arXiv:2502.18449v2 §3.1); four are shown here. Source for the reward and advantage: arXiv:2502.18449v2 Eq. 1–2.</p>
+</section>
 
 <script>
-const envs = {
-  web: {
-    title: "Web browser (WebArena / VisualWebArena)",
-    obs: "Accessibility tree (text) or screenshot + tree. A11y tree is a flattened DOM with element IDs, roles, and text content — no CSS, no images by default.",
-    actions: "<code>click [id]</code>, <code>type [id] [text]</code>, <code>hover</code>, <code>press [key]</code>, <code>scroll [dir]</code>, <code>tab</code>, <code>new_tab</code>, <code>goto [url]</code>, <code>go_back</code>, <code>stop [answer]</code>",
-    reward: "Predicate over URL + page content + DB state. Three categories: info-lookup (gold-string), content-producing (predicate), state-modifying (DB assert).",
-    length: "5–30 steps. 10K–50K tokens per trajectory. Multimodal variants 2× bigger.",
-    example: [
-      ["obs", "[button 12] 'Create issue'\n[textbox 18] title=''\n[textbox 22] description=''"],
-      ["think", "I need to create a new issue with title 'Login bug' and description 'Users cannot log in'."],
-      ["act", "click [12]"],
-      ["env", "(page reloads; issue form now visible)"],
-      ["obs", "[textbox 18] title=''  (focused)"],
-      ["act", "type [18] Login bug"],
-      ["env", "(title field populated)"],
-      ["act", "type [22] Users cannot log in"],
-      ["act", "click [submit]"],
-      ["env", "(URL changes to /issues/42 — success predicate: URL matches /issues/N and title==Login bug PASSES)"],
-    ],
+// ---------- Tab switching ----------
+document.querySelectorAll("button.tab").forEach(b => b.addEventListener("click", () => {
+  document.querySelectorAll("button.tab").forEach(x => x.classList.toggle("on", x === b));
+  document.querySelectorAll("section").forEach(s => s.hidden = (s.id !== b.dataset.t));
+}));
+
+function esc(s) { return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;"); }
+
+// ---------- View 1: axes ----------
+const ENVS = {
+  webarena: {
+    env: "Self-hosted e-commerce store, Reddit-style forum, GitLab, online-store CMS, map, English Wikipedia, calculator, scratchpad; Docker containers with reset scripts to a deterministic initial state.",
+    act: "12 actions: noop, click(elem), hover(elem), type(elem, text), press(key_comb), scroll(dir), tab_focus(index), new_tab, tab_close, go_back, go_forward, goto(URL). Elements are chosen by ID or coordinates.",
+    obs: "URL, open tabs, and the focused page as HTML, a screenshot, or an accessibility tree (optionally limited to the viewport).",
+    succ: "Answers: exact_match, must_include, or fuzzy_match (LLM). Other tasks: programmatic checks of URL, page content, or database state. Unachievable tasks expect \"N/A\".",
+    nums: "812 tasks from 241 templates. GPT-4 14.41% success (no stop hint) vs human 78.24%. Used as a held-out environment by AgentTuning and Agent-FLAN.",
+    ex: [["obs", "[1582] button 'Add to Cart'  ... (accessibility tree excerpt)"], ["act", "click [1582]"], ["obs", "(page updates)"], ["act", "... further actions ..."], ["check", "program checks resulting page / database state"]],
+    src: "WebArena arXiv:2307.13854v4 §2.2–2.4, §3, Table 2. The click [1582] line follows the paper's §2.4 example; the rest is illustrative."
   },
-  term: {
-    title: "Terminal (Terminal-Bench / OpenHands bash track)",
-    obs: "stdout + stderr streams + exit code + CWD. No DOM, no structured schema — just text and return codes.",
-    actions: "<code>execute_bash [cmd]</code>, optionally <code>execute_ipython_cell [code]</code>. That's the whole API. Composition happens inside the bash invocations themselves (<code>|</code>, <code>&amp;&amp;</code>, <code>$(...)</code>).",
-    reward: "Test-suite pass, file-state check, or CLI predicate (file exists, process running, port listening). No partial credit by default.",
-    length: "5–50 steps. 5K–40K tokens. Debug-heavy trajectories can tail longer.",
-    example: [
-      ["obs", "Task: Create a file named /tmp/hello.txt containing 'hi' and verify its sha256."],
-      ["think", "I'll write the file with echo, then hash with sha256sum."],
-      ["act", "execute_bash: echo 'hi' > /tmp/hello.txt"],
-      ["env", "(exit 0, no output)"],
-      ["act", "execute_bash: sha256sum /tmp/hello.txt"],
-      ["env", "98ea6e4f216f2fb4b69fff9b3a44842c... /tmp/hello.txt"],
-      ["think", "Task complete. Exit code 0 on sha256sum confirms file exists with expected content."],
-      ["act", "finish"],
-      ["env", "(predicate test: does /tmp/hello.txt exist with sha256==... ? PASS)"],
-    ],
+  swegym: {
+    env: "One Docker image per task with pre-installed dependencies and unit tests; 2,438 instances from 11 Python repositories (Lite: 230).",
+    act: "OpenHands CodeActAgent: bash terminal and file editor. The browser tool is disabled.",
+    obs: "Command output, file contents, error messages.",
+    succ: "Unit tests pass after the agent's patch; only successful trajectories are kept for SFT (rejection sampling).",
+    nums: "491 successful trajectories from gpt-4o-2024-08-06 and claude-3-5-sonnet-20241022, about 19 turns and 19,000 tokens each. Qwen-2.5-Coder-32B Verified 7.0% → 20.6%; with a verifier 32.0% Best@16.",
+    ex: [["obs", "Issue text + repository at the base commit"], ["act", "bash: grep -rn \"parse_date\" src/"], ["obs", "src/utils/dates.py:41: def parse_date(s):"], ["act", "edit src/utils/dates.py (replace one line)"], ["act", "bash: python -m pytest tests/test_dates.py"], ["check", "hidden unit tests run on the final repository state → keep or discard"]],
+    src: "SWE-Gym arXiv:2412.21139v2 §3, §4.2, Table 3, §5.1. Example commands are illustrative."
   },
-  repo: {
-    title: "Repo / SWE (SWE-Gym / SWE-Bench / OpenHands)",
-    obs: "File contents (on view), directory listing, test output, issue text. Observation is implicit state of the filesystem.",
-    actions: "<code>str_replace_editor.view / create / str_replace / insert / undo_edit</code>, <code>execute_bash</code>, <code>browse</code>, <code>think</code>, <code>finish</code>. Composable: edit then run tests then edit again.",
-    reward: "SWE-Gym: hidden pytest pass (binary). SWE-RL: <code>difflib.SequenceMatcher.ratio()</code> vs gold PR patch (dense, [0,1]).",
-    length: "10–100+ steps. 15K–100K tokens. Long debugging sessions tail past 100K.",
-    example: [
-      ["obs", "Issue: DataFrame.groupby().sum() returns wrong dtype for float32 input.\nRepo: pandas @ 8af2a3b.\nHidden test: tests/test_groupby_dtype.py"],
-      ["act", "str_replace_editor view pandas/core/groupby/ops.py"],
-      ["env", "lines 412-428: def _aggregate(...): ... return result.astype(self.dtype)"],
-      ["think", "Bug is in the astype cast — should preserve input dtype, not self.dtype."],
-      ["act", "str_replace_editor str_replace pandas/core/groupby/ops.py 'result.astype(self.dtype)' 'result.astype(input.dtype)'"],
-      ["act", "execute_bash: pytest tests/test_groupby_dtype.py -x"],
-      ["env", "PASSED tests/test_groupby_dtype.py::test_float32_sum_preserves_dtype"],
-      ["act", "finish  (submit patch)"],
-      ["env", "(hidden test suite: all pass → trajectory labeled SUCCESS)"],
-    ],
+  swerl: {
+    env: "No execution during training. The prompt contains the issue and the full contents of changed files plus predicted relevant files from a GitHub PR.",
+    act: "One response: <think> reasoning, then search/replace edits in <solution>. Single turn.",
+    obs: "None within an episode.",
+    succ: "−1 for wrong format; otherwise difflib similarity to the oracle patch. Tests are run only at evaluation, inside the Agentless Mini scaffold.",
+    nums: "~11M filtered PR instances, 273k RL seeds; Llama-3.3-70B-Instruct, 1,600 steps, 32 problems × 16 rollouts; SWE-bench Verified 41.0%.",
+    ex: [["obs", "[User] issue text + code context → generate search/replace edits"], ["act", "<think> ... </think> <solution> SEARCH/REPLACE block </solution>"], ["check", "reward = similarity(predicted patch, oracle patch) or −1"]],
+    src: "SWE-RL arXiv:2502.18449v2 §2, Eq. 1, §3.1, App. A–B. The prompt shape follows Fig. 2; content is illustrative."
   },
-  sandbox: {
-    title: "Sandbox (Kimi-K2 synthetic simulator / AgentInstruct tool-use)",
-    obs: "Simulated tool-response JSON. No real API hit — a larger teacher model invents a plausible response shape.",
-    actions: "OpenAI-style <code>tool_calls</code> JSON over a registry of 20,000+ schemas (web search, file ops, DB, calendar, enterprise APIs, custom). One schema per tool; call-args validated against schema.",
-    reward: "Critic-LLM score + JSON-schema validity + no-repeat-loop + end-to-end task-coherence check. Dense but drift-prone.",
-    length: "1–20+ tool calls. Trajectory length varies wildly by task type; median a few thousand tokens.",
-    example: [
-      ["obs", "User query: 'Book a meeting with Alice next Thursday at 2pm and email her the agenda.'"],
-      ["think", "Need two tools: calendar.create_event and email.send. Plan calendar first, then email."],
-      ["act", "tool_call: calendar.create_event({title:'Meeting w/ Alice', start:'2026-04-30T14:00', attendees:['alice@corp.com']})"],
-      ["env", "{'event_id':'evt_9821','status':'created','join_url':'...'}  (simulated)"],
-      ["act", "tool_call: email.send({to:'alice@corp.com', subject:'Thursday agenda', body:'See you at 2pm — agenda attached.', attachments:[]})"],
-      ["env", "{'message_id':'msg_4412','status':'delivered'}  (simulated)"],
-      ["think", "Both actions succeeded. Summarize for user."],
-      ["act", "Meeting booked for Thursday 2pm, email sent to Alice with agenda."],
-      ["env", "(critic score: 4.8/5 — coherent plan, correct tool order, valid args. Kept in training mix.)"],
-    ],
-  },
+  k2: {
+    env: "An LLM tool simulator that maintains state across calls and adds controlled stochasticity (successes, partial failures, edge cases); real execution sandboxes for coding and software engineering.",
+    act: "Tool calls over 3000+ real MCP tools and over 20,000 synthetic tools, used by thousands of generated agents.",
+    obs: "Simulator outputs and LLM-simulated user turns with generated personas.",
+    succ: "An LLM judge keeps trajectories that meet the task rubric (success criteria, expected tool-use patterns, checkpoints); test pass rates in real sandboxes.",
+    nums: "\"Tens of thousands\" of training examples; dataset size, rejection rate, and SFT hyperparameters not reported. Used in post-training SFT, not pre-training.",
+    ex: [["obs", "[simulated user] request in a persona's style"], ["act", "tool_call(name, arguments)"], ["obs", "[simulator] stateful result, sometimes a partial failure"], ["act", "... further calls and replies ..."], ["check", "LLM judge vs task rubric → keep or discard"]],
+    src: "Kimi K2 arXiv:2507.20534 §3.1.1. Example structure is illustrative."
+  }
 };
-
-const panel = document.getElementById("panel");
-const tabs = document.getElementById("tabs");
-
-function render(key) {
-  const e = envs[key];
-  const steps = e.example.map(([role, text]) => {
-    const cls = role === "obs" ? "role-obs" :
-                role === "think" ? "role-think" :
-                role === "act" ? "role-act" : "role-env";
-    const label = role === "obs" ? "[obs]    " :
-                  role === "think" ? "[think]  " :
-                  role === "act" ? "[action] " :
-                  "[env]    ";
-    // escape HTML
-    const safe = text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-    return `<span class="${cls}">${label}${safe}</span>`;
-  }).join("\n");
-
-  panel.innerHTML = `
-    <h2>${e.title}</h2>
+function renderAxes() {
+  const e = ENVS[document.getElementById("env").value];
+  const ex = e.ex.map(([r, t]) => `[${r.padEnd(5)}] ${esc(t)}`).join("\n");
+  document.getElementById("axesBody").innerHTML = `
     <div class="grid">
-      <div class="cell">
-        <h3>Observation type</h3>
-        <div class="body">${e.obs}</div>
-      </div>
-      <div class="cell">
-        <h3>Action vocabulary</h3>
-        <div class="body">${e.actions}</div>
-      </div>
-      <div class="cell">
-        <h3>Reward signal</h3>
-        <div class="body">${e.reward}</div>
-      </div>
-      <div class="cell">
-        <h3>Typical length</h3>
-        <div class="body">${e.length}</div>
-      </div>
+      <div class="cell"><h3>Environment</h3>${esc(e.env)}</div>
+      <div class="cell"><h3>Action space</h3>${esc(e.act)}</div>
+      <div class="cell"><h3>Observation</h3>${esc(e.obs)}</div>
+      <div class="cell"><h3>Success signal</h3>${esc(e.succ)}</div>
     </div>
-    <div class="example">${steps}</div>
-  `;
+    <div class="cell" style="background:transparent;border:1px solid var(--line)"><h3>Reported numbers</h3>${esc(e.nums)}</div>
+    <p class="cap" style="margin-bottom:0.2em">Illustrative trajectory shape (not taken from a released dataset):</p>
+    <pre>${ex}</pre>
+    <p class="cap">Source: ${esc(e.src)}</p>`;
 }
+document.getElementById("env").addEventListener("change", renderAxes);
+renderAxes();
 
-tabs.addEventListener("click", (ev) => {
-  const t = ev.target.closest(".tab");
-  if (!t) return;
-  document.querySelectorAll(".tab").forEach(x => x.classList.remove("active"));
-  t.classList.add("active");
-  render(t.dataset.env);
+// ---------- View 2: held-in / held-out bars ----------
+const T5 = { // AgentTuning Table 5: [held-in, held-out, general]
+  "7B":  { "agent-only": [1.34, 0.09, 0.22], "general-only": [0.38, 0.64, 0.61], "mixed": [1.96, 0.67, 0.63] },
+  "13B": { "agent-only": [1.57, 0.10, 0.19], "general-only": [0.43, 0.81, 0.63], "mixed": [2.11, 0.78, 0.69] },
+  "70B": { "agent-only": [2.47, 0.87, 0.83], "general-only": [0.99, 0.98, 1.00], "mixed": [2.55, 1.40, 0.96] }
+};
+const ARMS = [["agent-only", "var(--agent)"], ["general-only", "var(--general)"], ["mixed", "var(--mixed)"]];
+const GROUPS = ["Held-in", "Held-out", "General"];
+function renderBars() {
+  const size = document.getElementById("size").value, d = T5[size];
+  const W = 640, H = 300, left = 40, bottom = 250, top = 20, maxV = 2.8;
+  const y = v => bottom - (v / maxV) * (bottom - top);
+  let s = "";
+  [0, 0.5, 1, 1.5, 2, 2.5].forEach(t => {
+    s += `<line x1="${left}" x2="${W - 10}" y1="${y(t)}" y2="${y(t)}" stroke="var(--line)" stroke-width="1"/>`;
+    s += `<text x="${left - 6}" y="${y(t) + 4}" text-anchor="end">${t}</text>`;
+  });
+  const gw = (W - left - 20) / 3, bw = 44;
+  GROUPS.forEach((g, gi) => {
+    const gx = left + gi * gw + (gw - 3 * bw - 16) / 2;
+    ARMS.forEach(([arm, col], ai) => {
+      const v = d[arm][gi], x = gx + ai * (bw + 8);
+      s += `<rect x="${x}" y="${y(v)}" width="${bw}" height="${bottom - y(v)}" fill="${col}" rx="2"><title>${arm} ${g}: ${v}</title></rect>`;
+      s += `<text x="${x + bw / 2}" y="${y(v) - 4}" text-anchor="middle">${v.toFixed(2)}</text>`;
+    });
+    s += `<text x="${left + gi * gw + gw / 2}" y="${bottom + 18}" text-anchor="middle">${g}</text>`;
+  });
+  ARMS.forEach(([arm, col], ai) => {
+    s += `<rect x="${left + ai * 150}" y="${H - 22}" width="12" height="12" fill="${col}"/><text x="${left + ai * 150 + 18}" y="${H - 12}">${arm}</text>`;
+  });
+  document.getElementById("bars").innerHTML = s;
+  const a = d["agent-only"], g = d["general-only"], m = d["mixed"];
+  const drop = ((g[1] - a[1]) / g[1] * 100).toFixed(0);
+  document.getElementById("heldNote").innerHTML =
+    `At ${size}: agent-only raises held-in from ${g[0]} to ${a[0]} relative to general-only, and changes held-out from ${g[1]} to ${a[1]} (${drop}% lower). ` +
+    `The mixture scores ${m[1]} held-out vs ${g[1]} for general-only.`;
+}
+document.getElementById("size").addEventListener("change", renderBars);
+renderBars();
+
+// ---------- View 3: difflib ratio + GRPO advantages ----------
+// Port of difflib.SequenceMatcher matching blocks (isjunk=None, autojunk=True).
+function matchedChars(a, b) {
+  const n = b.length, b2j = new Map();
+  for (let j = 0; j < n; j++) { const c = b[j]; if (!b2j.has(c)) b2j.set(c, []); b2j.get(c).push(j); }
+  if (n >= 200) { const ntest = Math.floor(n / 100) + 1; for (const [c, idx] of [...b2j]) if (idx.length > ntest) b2j.delete(c); }
+  function longest(alo, ahi, blo, bhi) {
+    let besti = alo, bestj = blo, bestsize = 0, j2len = new Map();
+    for (let i = alo; i < ahi; i++) {
+      const newj2len = new Map(), js = b2j.get(a[i]) || [];
+      for (const j of js) {
+        if (j < blo) continue;
+        if (j >= bhi) break;
+        const k = (j2len.get(j - 1) || 0) + 1;
+        newj2len.set(j, k);
+        if (k > bestsize) { besti = i - k + 1; bestj = j - k + 1; bestsize = k; }
+      }
+      j2len = newj2len;
+    }
+    while (besti > alo && bestj > blo && a[besti - 1] === b[bestj - 1]) { besti--; bestj--; bestsize++; }
+    while (besti + bestsize < ahi && bestj + bestsize < bhi && a[besti + bestsize] === b[bestj + bestsize]) bestsize++;
+    return [besti, bestj, bestsize];
+  }
+  let total = 0; const queue = [[0, a.length, 0, n]];
+  while (queue.length) {
+    const [alo, ahi, blo, bhi] = queue.pop();
+    const [i, j, k] = longest(alo, ahi, blo, bhi);
+    if (k) {
+      total += k;
+      if (alo < i && blo < j) queue.push([alo, i, blo, j]);
+      if (i + k < ahi && j + k < bhi) queue.push([i + k, ahi, j + k, bhi]);
+    }
+  }
+  return total;
+}
+const DEFAULTS = [
+  { t: "retrun a-b", ok: false },
+  { t: "if b:\n    return a", ok: true },
+  { t: "return a - b", ok: true },
+  { t: "return a+b", ok: true }
+];
+document.getElementById("oracle").value = "return a-b";
+const rowsEl = document.getElementById("rows");
+DEFAULTS.forEach((d, i) => {
+  const tr = document.createElement("tr");
+  tr.innerHTML = `<td><textarea rows="2" data-i="${i}">${esc(d.t)}</textarea></td>
+    <td><input type="checkbox" data-ok="${i}" ${d.ok ? "checked" : ""} aria-label="format ok ${i + 1}"></td>
+    <td id="m${i}"></td><td id="r${i}"></td><td id="a${i}"></td>`;
+  rowsEl.appendChild(tr);
 });
-
-render("web");
+function renderReward() {
+  const oracle = document.getElementById("oracle").value;
+  const r = DEFAULTS.map((_, i) => {
+    const pred = rowsEl.querySelector(`textarea[data-i="${i}"]`).value;
+    const ok = rowsEl.querySelector(`input[data-ok="${i}"]`).checked;
+    const M = matchedChars(pred, oracle), T = pred.length + oracle.length;
+    document.getElementById("m" + i).textContent = ok ? M : "–";
+    return ok ? (T ? 2 * M / T : 1) : -1;
+  });
+  const mean = r.reduce((x, y) => x + y, 0) / r.length;
+  const sd = Math.sqrt(r.reduce((x, y) => x + (y - mean) ** 2, 0) / r.length);
+  r.forEach((v, i) => {
+    document.getElementById("r" + i).textContent = v.toFixed(3);
+    const A = sd > 0 ? (v - mean) / sd : 0, el = document.getElementById("a" + i);
+    el.textContent = A.toFixed(2); el.className = A < 0 ? "neg" : "pos";
+  });
+  document.getElementById("groupStats").textContent =
+    `Group mean ${mean.toFixed(3)}, population std ${sd.toFixed(3)}. ` +
+    (sd === 0 ? "All rewards are equal, so every advantage is 0 and the group contributes no policy-gradient signal." :
+     "Negative advantages push the rollout's likelihood down (negative as gradient); a malformed rollout at −1 enlarges the std and shrinks the other advantages.");
+}
+document.getElementById("reward").addEventListener("input", renderReward);
+renderReward();
 </script>
-
 </body>
 </html>

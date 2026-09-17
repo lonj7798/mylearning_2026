@@ -2,128 +2,60 @@
 chapter: ch-25
 course: llm-training
 phase: read
-excerpt_of: Ding et al. 2023 — "Enhancing Chat Language Models by Scaling High-quality Instructional Conversations"
-source_url: https://arxiv.org/abs/2305.14233
+excerpt_of: Ding et al. — "Enhancing Chat Language Models by Scaling High-quality Instructional Conversations" and the thunlp/UltraChat README (library cards [[ultrachat-pipeline]] and [[ultrachat-construction]] are not verified; quotations below are taken from the primary sources)
+source_url: https://arxiv.org/abs/2305.14233 ; https://github.com/thunlp/UltraChat (README on main, fetched 2026-09-15)
+primary_version: arXiv:2305.14233v1 (2023-05)
 created_at: "2026-04-23"
+revised_at: "2026-09-15 (rewritten from the primary sources for the 2026-09 revision of read.md)"
 ---
 
-# Excerpt: UltraChat — The Three-Sector Taxonomy and the Two-Model Protocol
+# Excerpt: UltraChat — sector construction, user simulation, and statistics
 
-**Source:** `wiki/raw-data/llm-training/papers/ultrachat-construction.md`, `wiki/raw-data/llm-training/papers/ultrachat-pipeline.md`
-**Primary paper:** Ding et al. (Tsinghua + OpenBMB), 2023
-**arXiv:** https://arxiv.org/abs/2305.14233 ; dataset: https://huggingface.co/datasets/stingning/ultrachat
+Authors: Ning Ding, Yulin Chen, Bokai Xu, Yujia Qin, Zhi Zheng, Shengding Hu, et al. (Tsinghua University). Used by ch-25 `read.md` §1, §3, and the Recipe.
 
----
+## Paper vs README numbers
+| Item | Paper (arXiv v1 §4.1–4.3) | README |
+|---|---|---|
+| Sector I subtopics | "30 to 50 subtopics or related concepts" per topic | "1100+ subtopics" |
+| Sector I questions | "10 different questions for each subtopic ... 10 more questions based on each original question"; "approximately 500,000 questions as opening lines" | "up to 10 specific questions" per subtopic; entity branch "200k specific questions and 250k general questions along with the 50k meta-questions" |
+| Sector II instructions | instructions for 20 types; "approximately 80% ... fed back ... to generate more detailed instructions" | "200 different instructions" per type; "80% of the instructions are further expanded" |
+| Sector III materials | "we collect 10,000 text pieces from the C4 corpus ... five distinct instructions ... the concatenated set of 500,000 pieces serves as the opening lines" | "~10w diverse materials from C4" (10w = 100,000); "up to 5 questions/instructions" |
+| Rounds | Fig. 1: "3~7 rounds of generation" (Sector I) | Sector I "3~7-round"; Sectors II and III "2~4-round" |
 
-## Why this source anchors ch-25 §2
+The paper's Sector III numbers are internally inconsistent (10,000 × 5 = 50,000, not 500,000). Per-sector dialogue counts are not reported in the paper.
 
-UltraChat is the paper that turns multi-turn dialogue synthesis into a *design problem* rather than a trick. Where Baize picks seeds from existing pools and relies on one LLM's self-coherence, UltraChat (1) **pre-enumerates a topic taxonomy** before any generation happens, and (2) **uses two separate model calls** for user and assistant. Both moves become the default for every subsequent large-scale pipeline.
+## Design principle (§4)
+> "While the core to ensuring data diversity is to ensure the diversity of opening lines and user response style, this section will mainly focus on the construction and design of how to obtain a diverse set of opening lines and how to prompt the user properly."
 
-From the source:
+README: "The general idea of UltraChat is to use separate LLMs to generate opening lines, simulate users and respond to queries."
 
-> *"The dataset card says UltraChat uses `two separate ChatGPT Turbo APIs`, one for generating user queries and one for generating responses."*
+## Sector I user prompt (§4.1)
+> "we provide the user model with carefully crafted prompts that explicitly ask the model to respond concisely and meaningfully, taking into account the context of the ongoing dialogue history."
 
-> *"The repo also states that the system does not directly use internet prompts as prompts for generation, except that one sector starts from existing source material."*
-
----
-
-## The three-sector taxonomy — verbatim structure
-
-From [[ultrachat-pipeline]]:
-
-> *"Sector 1 — Questions about the World: starts from 30 representative meta topics, expands them into 1100+ subtopics, for each subtopic generates up to 10 specific questions."*
->
-> *"A second branch covers common entities: the repo says they gather the top-frequent 10,000 named entities from Wikidata, generate 5 meta-questions per entity, then expand each into 10 specific questions and 20 related general questions."*
->
-> *"Dialogues in this sector are then rolled out as 3-7 rounds using the two models iteratively."*
-
-> *"Sector 2 — Writing and Creation: starts from 20 writing/creation types. For each type, generates 200 instructions that ask an assistant to create text. The repo states that 80% of these instructions are expanded and detailed further. Each generated instruction becomes the initial user input for a 2-4 round dialogue."*
-
-> *"Sector 3 — Assistance on Existent Materials: starts from existing source passages rather than pure blank-sheet prompts. The repo says it extracts about ~100k diverse materials from C4. For each material, the pipeline generates up to 5 questions or instructions. It then combines the material with those questions via manually designed templates to form the initial user turn. Each such seed becomes a 2-4 round dialogue."*
-
-**Notice:** the taxonomy is not a post-hoc categorization of generated data. It is the *input* to generation. The counts (30 / 1,100+ / 10K / 20 / 100K) are all *pre-decided*. This is the "taxonomy-first" pattern — enumerate coverage before generating content.
-
----
-
-## The two-model loop — why two calls
-
-From [[ultrachat-pipeline]]:
-
-> *"Top-level pipeline: (1) Define a broad conversation taxonomy split into three sectors. (2) Build sector-specific prompt scaffolds instead of one generic generation prompt. (3) Use one model call to generate or simulate the next user turn. (4) Use a second model call to answer as the assistant. (5) Iterate this process to form a multi-turn conversation. (6) Apply post-processing and filtering before release."*
-
-The critical step is (3)+(4): **two calls per turn**. Compare with Baize, which makes *one call for the entire dialogue*. The consequences of the split:
-
-- **Friction.** The assistant LLM does not see the user LLM's internal planning; it only sees the emitted user turn. If the emitted turn is ambiguous or slightly off-topic, the assistant *reacts* to what was actually said, introducing realistic misunderstanding.
-- **Role specialization.** The user-side system prompt can instruct *"behave as a user: short, sometimes imprecise, curious"* without the assistant-side generation inheriting that style. Baize's single call cannot separate these.
-- **Cost.** Two calls per turn × 4–7 turns ≈ 8–14 API calls per dialogue. At 1.5M dialogues this multiplied into a much larger bill than Baize's 111.5K × 1 call, but by 2023 Turbo pricing it was still tractable.
-
-The trade-off Baize chose (one call, save cost, accept homogeneity) and UltraChat chose (two calls, pay more, gain friction) is the same trade-off every production pipeline re-litigates at scale.
-
----
-
-## Multi-turn by history-conditioning
-
-From [[ultrachat-pipeline]]:
-
-> *"Multi-turn construction logic: UltraChat matters because it is not just synthetic instruction-response pairs. The public recipe repeatedly conditions on dialogue history so the generated user asks follow-up questions, requests revisions, changes constraints, or continues discussion after seeing the assistant answer."*
-
-The generation loop (paraphrased as code):
-
+## Sector III templates (Table 4)
 ```
-history = [seed_user_turn]                     # from sector scaffold
-for round in range(R_s):                       # R_1 ∈ [3,7], R_{2,3} ∈ [2,4]
-    a = assistant_LLM.generate(system=assistant_prompt_s,
-                                history=history)
-    history.append(a)
-    u = user_LLM.generate(system=user_prompt_s,
-                           history=history)
-    history.append(u)
+{text}\n{instruction}
+{text} {instruction}
+{instruction} Answer according to: {text}
+{text} Based on the passage above, {instruction}
+{instruction}: {text}
+Given the text: {text}\n{instruction}
+{instruction}\nGenerate according to: {text}
 ```
 
-Each turn conditions on the full dialogue so far. This is what makes the user turn a *follow-up* (asking revisions, changing constraints, continuing) rather than a topic-independent restart. Without history-conditioning, the user LLM would produce a sequence of unrelated questions — the pipeline would generate K independent single-turn dialogues, not a K-turn multi-turn dialogue.
+## User simulation and refinement (§4.4)
+> "It has been observed that when the user model is solely provided with the current dialogue history, it tends to assume the role of an AI assistant. This 'role exchange' situation can significantly impact the coherence of the multi-turn conversation. To address this, in addition to presenting the dialogue history, we include prompts explicitly instructing the model to adopt various user personalities."
 
----
+> "To enhance the realism of user responses, we specifically exclude excessively polite statements such as 'Thank you,' 'Thanks,' and the 'You're welcome' response in the subsequent model-generated output."
 
-## What is *not* published — the filter stage
+## Statistics (Table 5)
+| Dataset | #Dialogue | Avg. #Turns | Avg. Dialog Length (tokens) | Avg. Utt. Length (tokens) | Lexical Diversity | Topic Diversity (↓) | Coherence | User Simulation |
+|---|---|---|---|---|---|---|---|---|
+| SODA | 1,486,869 | 3.6 | 231.8 | 22.5 | 38.6 | 0.797 | 8.48 | No |
+| Baize | 210,311 | 3.1 | 293.9 | 52.8 | 67.1 | 0.751 | 9.06 | Yes |
+| UltraChat | 1,468,352 | 3.8 | 1467.4 | 309.3 | 74.3 | 0.702 | 9.06 | Yes |
 
-From [[ultrachat-pipeline]]:
+Caption: lexical diversity is MTLD averaged per utterance; topic diversity is average pairwise cosine distance of OpenAI embeddings on 10,000 samples; coherence is scored by ChatGPT from 1 to 10.
 
-> *"Filtering and post-processing: the public sources confirm that the generated dialogues undergo `post-processing and filtering`, but they do not publish a thresholded quality-control pipeline with exact rejection rules, reward-model scoring, or classifier-based filters."*
-
-This is the canonical gap. UltraChat publishes its taxonomy and its generation loop transparently; its filter is a blackbox. The practitioner reading is:
-
-- **Generation protocol is transferable.** You can replicate UltraChat's sector structure with any teacher pair today (GPT-4o, Claude Sonnet, Llama-3.1-405B).
-- **Filter heuristics are teacher-specific.** Whatever UltraChat threw away was tuned against GPT-3.5-Turbo's 2023-era failure modes. Reapplying the same thresholds to modern teachers would discard different failures, keep others.
-
----
-
-## Data shape
-
-From [[ultrachat-pipeline]]:
-
-> *"Data shape: the released dataset card says each example is a JSON dictionary with:*
-> *- `id`: sample identifier*
-> *- `data`: a list of alternating turns*
->
-> *The list format stores the conversation as raw utterance strings rather than message objects with explicit roles. The public preview shows list lengths from 4 to 14."*
-
-List lengths 4–14 is consistent with `R_s ∈ [2, 7]` rounds × 2 turns per round. A preview with a length-6 list is a 3-round Q-world dialogue; a length-14 is a 7-round tail-end of the Q-world distribution.
-
-**Notice:** the flat-list format (no explicit role tags in the data) means downstream consumers must reconstruct roles by position (even index = user, odd = assistant). This is a minor but real source of bugs in downstream mixers that mis-align the alternation.
-
----
-
-## Why UltraChat's moves became the default
-
-- **Taxonomy-first.** Every 2024+ pipeline (Persona-Hub, GLAN, Magpie variants, SystemChat) enumerates *something* before generating. The "something" varies (topics, personas, constraints, tasks) but the enumerate-first pattern is universal.
-- **Two-model user/assistant split.** Carried into CAMEL, APIGen-MT, ToolACE; inverted in some cases (one model with two role prompts switched in the same call) but the *separation of the generator* from the *role* is now standard.
-- **Split-by-family release.** Downstream mixes weight sectors independently. [[smol-talk]] uses only UltraChat's Q-world portion, weighting writing and assistance lower.
-
----
-
-## Connections
-
-- Chapter synthesis: [[ch-25]] §2.
-- Precursor with one model: [[excerpts/baize-self-chat]].
-- Role-pair diversity successor: [[excerpts/camel-inception-prompting]].
-- Persona-conditioned 2024 extension: [[excerpts/system-prompt-diversity]].
+## UltraLLaMA (§4.6)
+> "we break down each dialogue into smaller sequences, limiting them to a maximum length of 2048 tokens. During the training process, we only calculate the loss for the model's responses. ... The model is trained with 128 A100 GPUs and the total batch size is 512."

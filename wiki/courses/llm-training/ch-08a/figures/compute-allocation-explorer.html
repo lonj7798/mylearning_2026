@@ -1,0 +1,374 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Compute Allocation Explorer</title>
+<style>
+  :root {
+    --bg: #fbfaf7;
+    --panel: #ffffff;
+    --ink: #1f2328;
+    --muted: #5b636d;
+    --line: #d9dde2;
+    --grid: #eceef1;
+    --opt: #1f6feb;
+    --inf: #b35c00;
+    --train: #6f42c1;
+    --serve: #1a7f37;
+    --ref: #8a8f98;
+    --warn: #cf222e;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #14171b;
+      --panel: #1c2026;
+      --ink: #e6e8eb;
+      --muted: #9aa3ad;
+      --line: #343a42;
+      --grid: #262b32;
+      --opt: #6ea8fe;
+      --inf: #f0a35e;
+      --train: #b294f5;
+      --serve: #56d364;
+      --ref: #7d8590;
+      --warn: #ff7b72;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #14171b;
+    --panel: #1c2026;
+    --ink: #e6e8eb;
+    --muted: #9aa3ad;
+    --line: #343a42;
+    --grid: #262b32;
+    --opt: #6ea8fe;
+    --inf: #f0a35e;
+    --train: #b294f5;
+    --serve: #56d364;
+    --ref: #7d8590;
+    --warn: #ff7b72;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--ink);
+    font: 15px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  }
+  main { max-width: 900px; margin: 0 auto; padding: 24px 16px 40px; }
+  h1 { font-size: 1.35rem; margin: 0 0 4px; }
+  h2 { font-size: 1.02rem; margin: 0 0 8px; }
+  p.lead { color: var(--muted); margin: 0 0 16px; }
+  .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 16px; margin-bottom: 16px; }
+  .controls { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 14px; }
+  label { display: block; font-size: 0.85rem; color: var(--muted); margin-bottom: 4px; }
+  input[type="range"] { width: 100%; }
+  select, button {
+    font: inherit; color: var(--ink); background: var(--bg);
+    border: 1px solid var(--line); border-radius: 6px; padding: 5px 8px; width: 100%;
+  }
+  button { cursor: pointer; width: auto; margin: 6px 8px 0 0; }
+  .val { font-variant-numeric: tabular-nums; font-weight: 600; }
+  .row { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; }
+  .charts { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 16px; }
+  svg { width: 100%; height: auto; display: block; }
+  svg text { fill: var(--muted); font-size: 11px; }
+  .axis { stroke: var(--line); }
+  .gridline { stroke: var(--grid); }
+  .tablewrap { overflow-x: auto; }
+  table { border-collapse: collapse; width: 100%; font-variant-numeric: tabular-nums; font-size: 0.84rem; }
+  th, td { text-align: right; padding: 4px 6px; border-bottom: 1px solid var(--line); white-space: nowrap; }
+  th:first-child, td:first-child { text-align: left; }
+  th { color: var(--muted); font-weight: 600; }
+  .sw { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 6px; vertical-align: middle; }
+  .note { color: var(--muted); font-size: 0.88rem; margin: 8px 0 0; }
+  .ladder { display: grid; grid-template-columns: minmax(120px, 230px) 72px 1fr; gap: 4px 10px; align-items: center; font-size: 0.86rem; }
+  .ladder .bar { height: 10px; background: var(--grid); border-radius: 3px; position: relative; }
+  .ladder .bar span { position: absolute; left: 0; top: 0; bottom: 0; border-radius: 3px; background: var(--ref); }
+  .ladder .num { text-align: right; font-variant-numeric: tabular-nums; }
+  .ladder .plan-opt span { background: var(--opt); }
+  .ladder .plan-inf span { background: var(--inf); }
+  .ladder .evidence span { background: var(--warn); }
+  figcaption { color: var(--muted); font-size: 0.85rem; }
+  @media (max-width: 480px) {
+    .ladder { grid-template-columns: minmax(100px, 1fr) 60px; }
+    .ladder .bar { grid-column: 1 / -1; }
+  }
+</style>
+</head>
+<body>
+<main>
+  <h1>Compute Allocation Explorer</h1>
+  <p class="lead">Set a training budget, a fitted loss law, and an expected lifetime inference volume. The page computes the loss-optimal split of the budget into parameters N and training tokens D, and the model size that reaches the same loss at the lowest training-plus-inference cost. Accompanies ch-08a §5 and the worked allocation exercise in §9.</p>
+
+  <section class="panel" aria-label="Controls">
+    <div class="controls">
+      <div>
+        <label for="c">Training budget C (FLOPs, C ≈ 6ND)</label>
+        <input id="c" type="range" min="19" max="26" step="any" value="22.0899051">
+        <div class="val" id="cval"></div>
+      </div>
+      <div>
+        <label for="law">Loss law L(N, D) = E + A/N<sup>α</sup> + B/D<sup>β</sup></label>
+        <select id="law">
+          <option value="besiroglu">Besiroglu et al. refit (Eq. 3)</option>
+          <option value="hoffmann">Hoffmann et al. as printed (App. D.2)</option>
+          <option value="sardana">Sardana et al. analysis values (App. A)</option>
+        </select>
+        <div class="note" id="lawval"></div>
+      </div>
+      <div>
+        <label for="inf">Lifetime inference tokens D<sub>inf</sub> (input + output)</label>
+        <input id="inf" type="range" min="9" max="14" step="any" value="12.30103">
+        <div class="row"><span class="val" id="infval"></span>
+          <label style="margin:0 0 0 12px; display:inline"><input id="noinf" type="checkbox"> no inference</label></div>
+      </div>
+    </div>
+    <div>
+      <button id="preset1" type="button">Chapter exercise: 1.23 × 10^22 FLOPs, refit law, 2 × 10^12 inference tokens</button>
+      <button id="preset2" type="button">Sardana et al. Fig. 1: 13B-Chinchilla quality, 2 × 10^12 inference tokens</button>
+    </div>
+  </section>
+
+  <section class="panel" aria-label="Plans">
+    <h2>Two plans that reach the same pre-training loss</h2>
+    <div class="tablewrap">
+      <table>
+        <thead><tr><th>Plan</th><th>N (params)</th><th>D (tokens)</th><th>D/N</th><th>Train FLOPs</th><th>Infer. FLOPs</th><th>Total FLOPs</th><th>Loss</th></tr></thead>
+        <tbody id="plans"></tbody>
+      </table>
+    </div>
+    <p class="note" id="summary"></p>
+  </section>
+
+  <section class="charts">
+    <figure class="panel" style="margin:0">
+      <h2>IsoFLOP curve at budget C</h2>
+      <svg id="iso" viewBox="0 0 420 260" role="img" aria-label="Loss versus model size at fixed training compute"></svg>
+      <figcaption>Loss L(N, C/6N) for model sizes from N<sub>opt</sub>/30 to 30·N<sub>opt</sub>. Blue dot: loss-optimal size. Orange line: size of the inference-aware plan (trained on more than C).</figcaption>
+    </figure>
+    <figure class="panel" style="margin:0">
+      <h2>Lifetime FLOPs at equal loss</h2>
+      <svg id="cost" viewBox="0 0 420 260" role="img" aria-label="Training, inference and total FLOPs versus model size at fixed loss"></svg>
+      <figcaption>For each N, D is set so that L(N, D) equals the loss-optimal plan's loss. Purple: 6ND. Green: 2N·D<sub>inf</sub>. Black: total. Orange dot: minimum total.</figcaption>
+    </figure>
+  </section>
+
+  <section class="panel" aria-label="Tokens per parameter">
+    <h2>Tokens per parameter: current plans and reported runs</h2>
+    <div class="ladder" id="ladder"></div>
+    <p class="note">Log scale from 1 to 20,000. Gray: reported training runs (ratios derived from printed token and parameter counts). Red: the only post-training measurements in this chapter; parameter counts are nominal model names. No fitted law links tokens per parameter to fine-tunability; the OLMo-1B checkpoints come from one run with different final learning rates, a confound the authors state (§3.2).</p>
+  </section>
+
+  <figcaption>
+    Sources: loss-law form and printed coefficients, Hoffmann et al. 2022 (arXiv:2203.15556 Eq. 2, App. D.2, Table 1) [[chinchilla-compute-optimal]]; refit coefficients, Besiroglu et al. 2024 (arXiv:2404.10102 Eq. 3) [[chinchilla-replication]]; inference cost model 6·N·D + 2·N·D<sub>inf</sub> and analysis values α = 0.336, β = 0.283, Sardana et al. 2023 (arXiv:2401.00448 §2 Eq. 3, App. A) [[beyond-chinchilla-inference-scaling]]; Llama 3.1 405B and scaling-law plan, arXiv:2407.21783 §1, §3.2.1 [[llama-3]]; SmolLM2, arXiv:2502.02737 §4, §6 [[smollm2]]; OLMo post-training results, arXiv:2503.19206 §2, §3.1 [[overtrained-lms-harder-to-finetune]]; M = 640 run, arXiv:2403.08540 §4 [[overtraining-downstream-scaling]]. Plans are computed by this page from the selected law; they are not reported by any source except the Sardana et al. Fig. 1 preset (reported: a 7B model, 17% fewer FLOPs).
+  </figcaption>
+</main>
+<script>
+(function () {
+  "use strict";
+  var LAWS = {
+    besiroglu: { E: 1.8172, A: 482.01, B: 2085.43, al: 0.3478, be: 0.3658, name: "Besiroglu et al. refit" },
+    hoffmann:  { E: 1.69,   A: 406.4,  B: 410.7,   al: 0.34,   be: 0.28,   name: "Hoffmann et al. as printed" },
+    sardana:   { E: 1.69,   A: 406.4,  B: 410.7,   al: 0.336,  be: 0.283,  name: "Sardana et al. analysis values" }
+  };
+  function loss(p, N, D) { return p.E + p.A / Math.pow(N, p.al) + p.B / Math.pow(D, p.be); }
+  function lossOptimal(p, C) {
+    var G = Math.pow((p.al * p.A) / (p.be * p.B), 1 / (p.al + p.be));
+    var a = p.be / (p.al + p.be), b = p.al / (p.al + p.be);
+    var N = G * Math.pow(C / 6, a), D = Math.pow(C / 6, b) / G;
+    return { N: N, D: D, a: a };
+  }
+  function tokensForLoss(p, N, ell) {
+    var r = ell - p.E - p.A / Math.pow(N, p.al);
+    return r > 0 ? Math.pow(p.B / r, 1 / p.be) : Infinity;
+  }
+  function totalCost(p, N, ell, Dinf) { return 6 * N * tokensForLoss(p, N, ell) + 2 * N * Dinf; }
+  function inferenceOptimal(p, ell, Dinf, Nopt) {
+    var Nmin = Math.pow(p.A / (ell - p.E), 1 / p.al);
+    var lo = Math.log(Nmin * 1.000001), hi = Math.log(Nopt * 4);
+    var g = (Math.sqrt(5) - 1) / 2;
+    var x1 = hi - g * (hi - lo), x2 = lo + g * (hi - lo);
+    var f1 = totalCost(p, Math.exp(x1), ell, Dinf), f2 = totalCost(p, Math.exp(x2), ell, Dinf);
+    for (var i = 0; i < 200; i++) {
+      if (f1 < f2) { hi = x2; x2 = x1; f2 = f1; x1 = hi - g * (hi - lo); f1 = totalCost(p, Math.exp(x1), ell, Dinf); }
+      else { lo = x1; x1 = x2; f1 = f2; x2 = lo + g * (hi - lo); f2 = totalCost(p, Math.exp(x2), ell, Dinf); }
+    }
+    var N = Math.exp((lo + hi) / 2);
+    return { N: N, D: tokensForLoss(p, N, ell) };
+  }
+  function computePlans(lawKey, C, Dinf) {
+    var p = LAWS[lawKey];
+    var o = lossOptimal(p, C);
+    var ell = loss(p, o.N, o.D);
+    var q = inferenceOptimal(p, ell, Dinf, o.N);
+    return { p: p, opt: o, ell: ell, inf: q,
+      optTotal: 6 * o.N * o.D + 2 * o.N * Dinf,
+      infTotal: 6 * q.N * q.D + 2 * q.N * Dinf };
+  }
+  var api = { LAWS: LAWS, loss: loss, lossOptimal: lossOptimal, tokensForLoss: tokensForLoss, inferenceOptimal: inferenceOptimal, computePlans: computePlans };
+  if (typeof module !== "undefined" && module.exports) { module.exports = api; }
+  if (typeof document === "undefined") { return; }
+
+  function sci(x, d) {
+    if (!isFinite(x)) return "∞";
+    if (x === 0) return "0";
+    var e = Math.floor(Math.log10(Math.abs(x)));
+    var m = x / Math.pow(10, e);
+    if (m >= 9.995) { m = m / 10; e += 1; }
+    return m.toFixed(d === undefined ? 2 : d) + " × 10^" + e;
+  }
+  function human(x) {
+    if (x >= 1e12) return (x / 1e12).toFixed(x >= 1e13 ? 1 : 2) + "T";
+    if (x >= 1e9) return (x / 1e9).toFixed(x >= 1e10 ? 1 : 2) + "B";
+    if (x >= 1e6) return (x / 1e6).toFixed(0) + "M";
+    return x.toFixed(0);
+  }
+  function el(tag, attrs, text) {
+    var n = document.createElementNS("http://www.w3.org/2000/svg", tag);
+    for (var k in attrs) n.setAttribute(k, attrs[k]);
+    if (text !== undefined) n.textContent = text;
+    return n;
+  }
+  var $ = function (id) { return document.getElementById(id); };
+  var cIn = $("c"), lawIn = $("law"), infIn = $("inf"), noInf = $("noinf");
+
+  function logTicks(min, max) {
+    var t = [], s = Math.ceil(Math.log10(min)), e = Math.floor(Math.log10(max));
+    for (var k = s; k <= e; k++) t.push(Math.pow(10, k));
+    return t;
+  }
+  function frame(svg, xmin, xmax, ymin, ymax, ylabel, xlabel, yfmt) {
+    while (svg.firstChild) svg.removeChild(svg.firstChild);
+    var L = 58, R = 12, T = 12, B = 40, W = 420, H = 260;
+    var X = function (x) { return L + (Math.log10(x) - Math.log10(xmin)) / (Math.log10(xmax) - Math.log10(xmin)) * (W - L - R); };
+    var Y = function (y) { return T + (1 - (y - ymin) / (ymax - ymin)) * (H - T - B); };
+    logTicks(xmin, xmax).forEach(function (v) {
+      svg.appendChild(el("line", { x1: X(v), x2: X(v), y1: T, y2: H - B, "class": "gridline" }));
+      svg.appendChild(el("text", { x: X(v), y: H - B + 14, "text-anchor": "middle" }, human(v)));
+    });
+    for (var i = 0; i <= 4; i++) {
+      var yv = ymin + (ymax - ymin) * i / 4;
+      svg.appendChild(el("line", { x1: L, x2: W - R, y1: Y(yv), y2: Y(yv), "class": "gridline" }));
+      svg.appendChild(el("text", { x: L - 6, y: Y(yv) + 4, "text-anchor": "end" }, yfmt(yv)));
+    }
+    svg.appendChild(el("line", { x1: L, x2: W - R, y1: H - B, y2: H - B, "class": "axis" }));
+    svg.appendChild(el("line", { x1: L, x2: L, y1: T, y2: H - B, "class": "axis" }));
+    svg.appendChild(el("text", { x: (L + W - R) / 2, y: H - 6, "text-anchor": "middle" }, xlabel));
+    var yl = el("text", { x: 12, y: (T + H - B) / 2, "text-anchor": "middle", transform: "rotate(-90 12 " + ((T + H - B) / 2) + ")" }, ylabel);
+    svg.appendChild(yl);
+    return { X: X, Y: Y };
+  }
+  function path(svg, pts, color, width, dash) {
+    var d = pts.map(function (q, i) { return (i ? "L" : "M") + q[0].toFixed(1) + " " + q[1].toFixed(1); }).join(" ");
+    var a = { d: d, fill: "none", stroke: color, "stroke-width": width || 2 };
+    if (dash) a["stroke-dasharray"] = dash;
+    svg.appendChild(el("path", a));
+  }
+  function cssVar(name) { return getComputedStyle(document.documentElement).getPropertyValue(name).trim(); }
+
+  function render() {
+    var C = Math.pow(10, parseFloat(cIn.value));
+    var Dinf = noInf.checked ? 0 : Math.pow(10, parseFloat(infIn.value));
+    var key = lawIn.value;
+    var r = computePlans(key, C, Dinf), p = r.p;
+    $("cval").textContent = sci(C) + " FLOPs";
+    $("infval").textContent = noInf.checked ? "0 tokens" : sci(Dinf) + " tokens";
+    $("lawval").textContent = "E = " + p.E + ", A = " + p.A + ", B = " + p.B + ", α = " + p.al + ", β = " + p.be + "; exponent a = β/(α+β) = " + r.opt.a.toFixed(4);
+
+    var rows = [
+      ["Loss-optimal (Eq. 4)", "--opt", r.opt.N, r.opt.D, r.optTotal],
+      ["Inference-aware, same loss", "--inf", r.inf.N, r.inf.D, r.infTotal]
+    ];
+    var tb = $("plans"); tb.innerHTML = "";
+    rows.forEach(function (w) {
+      var tr = document.createElement("tr");
+      var cells = [
+        '<span class="sw" style="background:var(' + w[1] + ')"></span>' + w[0],
+        human(w[2]), human(w[3]), (w[3] / w[2]).toFixed(1),
+        sci(6 * w[2] * w[3]), sci(2 * w[2] * Dinf), sci(w[4]), loss(p, w[2], w[3]).toFixed(4)
+      ];
+      cells.forEach(function (c) { var td = document.createElement("td"); td.innerHTML = c; tr.appendChild(td); });
+      tb.appendChild(tr);
+    });
+    var saving = 100 * (r.optTotal - r.infTotal) / r.optTotal;
+    var half = loss(p, r.opt.N / 2, C / (6 * r.opt.N / 2)), dbl = loss(p, r.opt.N * 2, C / (6 * r.opt.N * 2));
+    $("summary").textContent = "Inference-aware plan: " + saving.toFixed(1) + "% fewer lifetime FLOPs, " +
+      (100 * (6 * r.inf.N * r.inf.D / C - 1)).toFixed(1) + "% more training FLOPs than C. At budget C, loss is " +
+      half.toFixed(4) + " at 0.5 × N_opt and " + dbl.toFixed(4) + " at 2 × N_opt (minimum " + r.ell.toFixed(4) + ")." +
+      (r.inf.D / r.inf.N > 10000 ? " Warning: the inference-aware plan exceeds 10,000 tokens per parameter, the largest ratio trained by Sardana et al.; their refits found that laws fitted at typical ratios overestimate the loss reduction from extra tokens at extreme ratios (§5)." : "");
+
+    // IsoFLOP chart
+    var iso = $("iso"), nmin = r.opt.N / 30, nmax = r.opt.N * 30, pts = [], ys = [];
+    for (var i = 0; i <= 120; i++) {
+      var N = nmin * Math.pow(nmax / nmin, i / 120), l = loss(p, N, C / (6 * N));
+      pts.push([N, l]); ys.push(l);
+    }
+    var ylo = Math.min.apply(null, ys), yhi = Math.max.apply(null, ys), pad = (yhi - ylo) * 0.06;
+    var f = frame(iso, nmin, nmax, ylo - pad, yhi + pad, "loss (nats/token)", "parameters N (log)", function (v) { return v.toFixed(2); });
+    path(iso, pts.map(function (q) { return [f.X(q[0]), f.Y(q[1])]; }), cssVar("--ink"), 2);
+    if (r.inf.N >= nmin && r.inf.N <= nmax) path(iso, [[f.X(r.inf.N), f.Y(ylo - pad)], [f.X(r.inf.N), f.Y(yhi + pad)]], cssVar("--inf"), 2, "5 4");
+    iso.appendChild(el("circle", { cx: f.X(r.opt.N), cy: f.Y(r.ell), r: 5, fill: cssVar("--opt") }));
+
+    // cost chart
+    var cost = $("cost"), cmin = Math.max(r.inf.N / 6, Math.pow(p.A / (r.ell - p.E), 1 / p.al) * 1.15), cmax = r.opt.N * 6;
+    var tr = [], sv = [], tt = [], all = [];
+    for (var j = 0; j <= 120; j++) {
+      var n = cmin * Math.pow(cmax / cmin, j / 120), d = tokensForLoss(p, n, r.ell);
+      var a1 = 6 * n * d, a2 = 2 * n * Dinf;
+      tr.push([n, a1]); sv.push([n, a2]); tt.push([n, a1 + a2]); all.push(a1 + a2);
+    }
+    var cap = Math.min(Math.max.apply(null, all), r.optTotal * 3);
+    var g = frame(cost, cmin, cmax, 0, cap * 1.05, "FLOPs", "parameters N (log)", function (v) { return v === 0 ? "0" : sci(v, 1).replace(" × 10^", "e"); });
+    var clip = function (q) { return [g.X(q[0]), g.Y(Math.min(q[1], cap * 1.05))]; };
+    path(cost, tr.map(clip), cssVar("--train"), 2);
+    if (Dinf > 0) path(cost, sv.map(clip), cssVar("--serve"), 2);
+    path(cost, tt.map(clip), cssVar("--ink"), 2.5);
+    cost.appendChild(el("circle", { cx: g.X(r.opt.N), cy: g.Y(Math.min(r.optTotal, cap * 1.05)), r: 5, fill: cssVar("--opt") }));
+    cost.appendChild(el("circle", { cx: g.X(r.inf.N), cy: g.Y(Math.min(r.infTotal, cap * 1.05)), r: 5, fill: cssVar("--inf") }));
+
+    // ladder
+    var refs = [
+      ["Chinchilla 70B (1.4T tokens)", 20, "ref"],
+      ["Llama 3.1 405B (15.6T tokens)", 15.6e12 / 405e9, "ref"],
+      ["Llama 3 scaling-law plan (402B, 16.55T)", 16.55e12 / 402e9, "ref"],
+      ["OLMo-2-7B: no degradation seen up to 3T tokens", 3e12 / 7e9, "evidence"],
+      ["Gadre et al. 1.4B at M = 640 (900B)", 640, "ref"],
+      ["OLMo-1B: degradation beyond 2.5T tokens", 2.5e12 / 1e9, "evidence"],
+      ["SmolLM2-1.7B (~11T tokens)", 11e12 / 1.7e9, "ref"],
+      ["Sardana et al. longest run (150M)", 10000, "ref"],
+      ["SmolLM2-135M (2T tokens)", 2e12 / 135e6, "ref"],
+      ["This page: loss-optimal plan", r.opt.D / r.opt.N, "plan-opt"],
+      ["This page: inference-aware plan", r.inf.D / r.inf.N, "plan-inf"]
+    ];
+    refs.sort(function (x, y) { return x[1] - y[1]; });
+    var lad = $("ladder"); lad.innerHTML = "";
+    refs.forEach(function (w) {
+      var name = document.createElement("div"); name.textContent = w[0];
+      var num = document.createElement("div"); num.className = "num"; num.textContent = w[1] >= 100 ? Math.round(w[1]).toLocaleString("en-US") : w[1].toFixed(1);
+      var bar = document.createElement("div"); bar.className = "bar " + w[2];
+      var s = document.createElement("span");
+      s.style.width = Math.max(1, Math.min(100, 100 * Math.log10(Math.max(1, w[1])) / Math.log10(20000))) + "%";
+      bar.appendChild(s);
+      lad.appendChild(name); lad.appendChild(num); lad.appendChild(bar);
+    });
+  }
+  [cIn, lawIn, infIn, noInf].forEach(function (x) { x.addEventListener("input", render); x.addEventListener("change", render); });
+  $("preset1").addEventListener("click", function () {
+    cIn.value = String(Math.log10(1.23e22)); lawIn.value = "besiroglu"; infIn.value = String(Math.log10(2e12)); noInf.checked = false; render();
+  });
+  $("preset2").addEventListener("click", function () {
+    var p = LAWS.sardana, lo = 19, hi = 26;
+    for (var i = 0; i < 80; i++) { var mid = (lo + hi) / 2; if (lossOptimal(p, Math.pow(10, mid)).N < 13e9) lo = mid; else hi = mid; }
+    cIn.value = String((lo + hi) / 2); lawIn.value = "sardana"; infIn.value = String(Math.log10(2e12)); noInf.checked = false; render();
+  });
+  if (window.matchMedia) {
+    var mq = window.matchMedia("(prefers-color-scheme: dark)");
+    if (mq.addEventListener) mq.addEventListener("change", render);
+  }
+  render();
+})();
+</script>
+</body>
+</html>

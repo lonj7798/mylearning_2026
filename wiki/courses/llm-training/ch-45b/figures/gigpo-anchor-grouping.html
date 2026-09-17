@@ -1,0 +1,247 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>GiGPO anchor-state grouping — ch-45b</title>
+<style>
+  :root{
+    --bg:#fbfbf9; --fg:#1b1b1a; --muted:#5d5d59; --line:#d8d6cf; --panel:#f3f2ee;
+    --anchor:#8a5a2b; --pos:#2e7d4f; --neg:#a8402c; --step:#2f6f8f; --ep:#6a4c93;
+  }
+  @media (prefers-color-scheme: dark){
+    :root{ --bg:#14140f; --fg:#eceae4; --muted:#a6a49c; --line:#3a3933; --panel:#1e1e18;
+           --anchor:#d8a76a; --pos:#68c08c; --neg:#e08a76; --step:#6fb3d2; --ep:#b39ddb; }
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--fg);
+       font:14px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif}
+  .wrap{max-width:920px;margin:0 auto;padding-block:24px;padding-left:16px;padding-right:16px}
+  h1{font-size:19px;margin:0 0 4px}
+  h2{font-size:15px;margin:22px 0 8px;font-weight:600}
+  p.sub{color:var(--muted);margin:0 0 18px}
+  .panel{background:var(--panel);border:1px solid var(--line);border-radius:6px;padding:14px 16px;margin-bottom:16px}
+  .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px 20px}
+  label{display:block;font-size:12.5px;color:var(--muted);margin-bottom:3px}
+  input[type=range]{width:100%}
+  input[type=number]{width:70px;padding:3px 5px;background:var(--bg);color:var(--fg);
+                     border:1px solid var(--line);border-radius:4px;font:inherit}
+  select{padding:3px 5px;background:var(--bg);color:var(--fg);border:1px solid var(--line);border-radius:4px;font:inherit}
+  .val{color:var(--fg);font-variant-numeric:tabular-nums;font-weight:600}
+  svg{max-width:100%;height:auto;display:block}
+  .diagwrap{overflow-x:auto;border:1px solid var(--line);border-radius:6px;padding:10px;background:var(--panel)}
+  table{border-collapse:collapse;width:100%;font-size:13px;min-width:600px}
+  th,td{border-bottom:1px solid var(--line);padding:5px 8px;text-align:right;font-variant-numeric:tabular-nums}
+  th:first-child,td:first-child{text-align:left}
+  th{color:var(--muted);font-weight:600;font-size:12px}
+  .tblwrap{overflow-x:auto}
+  .pos{color:var(--pos)} .neg{color:var(--neg)}
+  .note{font-size:12.5px;color:var(--muted)}
+  code{background:var(--panel);padding:1px 4px;border-radius:3px;font-size:12.5px}
+  footer{border-top:1px solid var(--line);margin-top:26px;padding-top:12px;font-size:12.5px;color:var(--muted)}
+  .eq{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12.5px;background:var(--panel);
+      border:1px solid var(--line);border-radius:4px;padding:8px 10px;overflow-x:auto}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<h1>GiGPO: two levels of advantage from one set of rollouts</h1>
+<p class="sub">Four rollouts of one shopping task reach the same search-results page at step 3. Change where each
+rollout ends and whether it succeeds, and compare the episode advantage (what GRPO would give) with the step
+advantage GiGPO adds. Figure for <a href="../read.md">ch-45b</a> §4.1.</p>
+
+<div class="diagwrap">
+<svg viewBox="0 0 700 220" role="img" aria-label="Four trajectories sharing one anchor state at step 3">
+  <defs>
+    <marker id="ar" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto">
+      <path d="M0 0 L8 4 L0 8 z" fill="currentColor"/>
+    </marker>
+  </defs>
+  <g id="diag" fill="currentColor" stroke="currentColor"></g>
+</svg>
+</div>
+
+<div class="panel">
+  <div class="grid">
+    <div>
+      <label>Discount &gamma;: <span class="val" id="vG"></span></label>
+      <input type="range" id="g" min="0.5" max="1" step="0.01" value="0.95">
+    </div>
+    <div>
+      <label>Step-advantage weight &omega;: <span class="val" id="vW"></span></label>
+      <input type="range" id="w" min="0" max="2" step="0.05" value="1">
+    </div>
+    <div>
+      <label>Normalization F<sub>norm</sub></label>
+      <select id="fn">
+        <option value="one" selected>1 (leave-one-out style)</option>
+        <option value="std">standard deviation (GRPO style)</option>
+      </select>
+    </div>
+  </div>
+  <div class="grid" style="margin-top:10px" id="rowctl"></div>
+</div>
+
+<h2>Advantages</h2>
+<div class="tblwrap">
+<table id="tbl">
+  <thead><tr>
+    <th>Rollout</th><th>Action at the anchor state</th><th>Ends at step T</th><th>Terminal reward</th>
+    <th>R<sub>3</sub> = &gamma;<sup>T&minus;3</sup>&middot;r</th><th>A<sup>S</sup></th><th>A<sup>E</sup></th>
+    <th>A = A<sup>E</sup> + &omega;A<sup>S</sup></th>
+  </tr></thead>
+  <tbody></tbody>
+</table>
+</div>
+<p class="note" id="note"></p>
+
+<h2>The equations</h2>
+<div class="eq">
+A^E(τ_i) = ( R(τ_i) − mean{R(τ_j)}_{j=1..N} ) / F_norm({R(τ_j)})                        (Eq. 3)<br>
+G^S(s̃)  = { (a_t^(i), R_t^(i)) : s_t^(i) = s̃, 1 ≤ i ≤ N, 1 ≤ t ≤ T }                     (Eq. 4, Eq. 6)<br>
+R_t^(i)  = Σ_{k=t..T} γ^(k−t) · r_k^(i)                                                 (Eq. 5)<br>
+A^S(a_t^(i)) = ( R_t^(i) − mean{R_t ∈ G^S(s̃)} ) / F_norm({R_t ∈ G^S(s̃)})                 (Eq. 7)<br>
+A(a_t^(i))   = A^E(τ_i) + ω · A^S(a_t^(i))                                              (Eq. 8)
+</div>
+
+<footer>
+<p><b>Source.</b> Equations, the WebShop example and the settings are from "Group-in-Group Policy Optimization for
+LLM Agent Training", arXiv:2505.10978v3 (§4.1, §4.2, §4.3, Figure 3, §5.1). The paper sets ω = 1 "with no further
+tuning" and N = 8 for ALFWorld and WebShop. Anchor grouping "incurs no extra rollouts: it is entirely offline and
+requires only lightweight key-based grouping using hashmaps" (§4.2); measured cost is 0.01 s for grouping plus
+0.53 s for the step advantages against 362.83 s per iteration for rollout, log-probability computation and the
+policy update (§5.6). The discount value used in the paper's experiments is not printed; 0.95 here is the
+figure's default, not a source value. Rewards are terminal in this example, so r_k = 0 for k &lt; T.</p>
+</footer>
+</div>
+
+<script>
+(function(){
+  var rollouts=[
+    {name:"τ1", act:"click 1st item", T:5, r:1},
+    {name:"τ2", act:"click 2nd item", T:7, r:1},
+    {name:"τ3", act:"click Next Page", T:8, r:0},
+    {name:"τ4", act:"click Next Page", T:8, r:0}
+  ];
+  var ANCHOR=3;
+
+  var ctl=document.getElementById("rowctl");
+  rollouts.forEach(function(ro,i){
+    var d=document.createElement("div");
+    d.innerHTML='<label>'+ro.name+' — ends at step, terminal reward</label>'+
+      '<input type="number" min="'+ANCHOR+'" max="20" step="1" value="'+ro.T+'" data-i="'+i+'" data-k="T"> '+
+      '<select data-i="'+i+'" data-k="r"><option value="1"'+(ro.r?" selected":"")+'>reward 1</option>'+
+      '<option value="0"'+(ro.r?"":" selected")+'>reward 0</option></select>';
+    ctl.appendChild(d);
+  });
+
+  function mean(a){ return a.reduce(function(x,y){return x+y;},0)/a.length; }
+  function std(a){ var m=mean(a); return Math.sqrt(mean(a.map(function(v){return (v-m)*(v-m);}))); }
+  function norm(a,mode){ if(mode==="std"){ var s=std(a); return s>1e-9?s:1; } return 1; }
+
+  function render(){
+    var g=+document.getElementById("g").value;
+    var w=+document.getElementById("w").value;
+    var mode=document.getElementById("fn").value;
+    document.getElementById("vG").textContent=g.toFixed(2);
+    document.getElementById("vW").textContent=w.toFixed(2);
+
+    var Rs=rollouts.map(function(ro){ return Math.pow(g, Math.max(0,ro.T-ANCHOR))*ro.r; });
+    var Rt=rollouts.map(function(ro){ return ro.r; });
+    var mS=mean(Rs), nS=norm(Rs,mode);
+    var mE=mean(Rt), nE=norm(Rt,mode);
+
+    var tb=document.querySelector("#tbl tbody"); tb.innerHTML="";
+    var tot=[];
+    rollouts.forEach(function(ro,i){
+      var aS=(Rs[i]-mS)/nS, aE=(Rt[i]-mE)/nE, a=aE+w*aS;
+      tot.push(a);
+      function c(v){ return '<span class="'+(v>1e-9?"pos":(v<-1e-9?"neg":""))+'">'+(v>=0?"+":"")+v.toFixed(3)+"</span>"; }
+      var tr=document.createElement("tr");
+      tr.innerHTML="<td>"+ro.name+"</td><td style='text-align:left'>"+ro.act+"</td><td>"+ro.T+"</td><td>"+ro.r+
+        "</td><td>"+Rs[i].toFixed(4)+"</td><td>"+c(aS)+"</td><td>"+c(aE)+"</td><td>"+c(a)+"</td>";
+      tb.appendChild(tr);
+    });
+
+    // note
+    var succ=[],fail=[];
+    rollouts.forEach(function(ro,i){ (ro.r?succ:fail).push(i); });
+    var msg=[];
+    if(succ.length>=2){
+      var d=Math.abs(tot[succ[0]]-tot[succ[1]]);
+      msg.push("Two rollouts succeeded, so GRPO gives their actions at this state the identical advantage "+
+        ((Rt[succ[0]]-mE)/nE).toFixed(3)+". GiGPO separates them by "+d.toFixed(3)+
+        ", because the one that reached the goal in fewer steps has the higher discounted return from the shared state.");
+    }
+    if(Math.abs(g-1)<1e-9){
+      msg.push("At γ = 1 the discount carries no information about length, so both successes receive the same step advantage and GiGPO reduces to the episode signal on this example.");
+    }
+    if(w===0) msg.push("At ω = 0 the step term is switched off and the column A equals the GRPO-style episode advantage.");
+    if(std(Rs)<1e-9) msg.push("Every action in the anchor group has the same discounted return, so the step advantage is 0 for all of them — the case the paper describes as degrading to GRPO (§6).");
+    document.getElementById("note").textContent=msg.join(" ");
+
+    drawDiagram();
+  }
+
+  function drawDiagram(){
+    var g=document.getElementById("diag");
+    while(g.firstChild) g.removeChild(g.firstChild);
+    var SV="http://www.w3.org/2000/svg";
+    function add(tag,attrs,text){
+      var e=document.createElementNS(SV,tag);
+      for(var k in attrs) e.setAttribute(k,attrs[k]);
+      if(text!==undefined) e.textContent=text;
+      g.appendChild(e); return e;
+    }
+    var maxT=Math.max.apply(null,rollouts.map(function(r){return r.T;}));
+    var x0=60, x1=660, cols=Math.max(maxT,4);
+    var dx=(x1-x0)/cols;
+    // step axis labels
+    for(var s=1;s<=cols;s++){
+      add("text",{x:x0+(s-0.5)*dx, y:16, "text-anchor":"middle", "font-size":"10",
+                  fill:"currentColor", stroke:"none", opacity:"0.6"}, "step "+s);
+    }
+    rollouts.forEach(function(ro,i){
+      var y=44+i*44;
+      add("text",{x:10,y:y+4,"font-size":"12",fill:"currentColor",stroke:"none"}, ro.name);
+      add("line",{x1:x0,y1:y,x2:x0+ro.T*dx,y2:y,stroke:"currentColor","stroke-width":"1.2",
+                  opacity:"0.45","marker-end":"url(#ar)"});
+      for(var s=1;s<=ro.T;s++){
+        var cx=x0+(s-0.5)*dx;
+        var isAnchor=(s===ANCHOR);
+        add("circle",{cx:cx,cy:y,r:isAnchor?7:4,
+                      fill:isAnchor?"var(--anchor)":"var(--bg)",
+                      stroke:isAnchor?"var(--anchor)":"currentColor","stroke-width":"1.4"});
+      }
+      var endx=x0+(ro.T-0.5)*dx;
+      add("text",{x:endx+14,y:y+4,"font-size":"11",fill:ro.r?"var(--pos)":"var(--neg)",stroke:"none"},
+          ro.r?"reward 1":"reward 0");
+      add("text",{x:x0+(ANCHOR-0.5)*dx,y:y-12,"text-anchor":"middle","font-size":"10",
+                  fill:"var(--anchor)",stroke:"none"}, ro.act.replace("click ",""));
+    });
+    add("text",{x:x0+(ANCHOR-0.5)*dx,y:212,"text-anchor":"middle","font-size":"11",
+                fill:"var(--anchor)",stroke:"none"}, "anchor state s̃ (same search-results page)");
+  }
+
+  document.getElementById("rowctl").addEventListener("input",function(e){
+    var t=e.target, i=t.getAttribute("data-i"), k=t.getAttribute("data-k");
+    if(i===null) return;
+    var v=+t.value;
+    if(k==="T") v=Math.max(ANCHOR,Math.min(20,Math.round(v)));
+    rollouts[+i][k]=v; render();
+  });
+  document.getElementById("rowctl").addEventListener("change",function(e){
+    var t=e.target, i=t.getAttribute("data-i"), k=t.getAttribute("data-k");
+    if(i===null) return;
+    rollouts[+i][k]=+t.value; render();
+  });
+  ["g","w","fn"].forEach(function(id){
+    document.getElementById(id).addEventListener("input",render);
+    document.getElementById(id).addEventListener("change",render);
+  });
+  render();
+})();
+</script>
+</body>
+</html>

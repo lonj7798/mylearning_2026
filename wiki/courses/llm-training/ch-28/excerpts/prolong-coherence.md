@@ -7,6 +7,8 @@ source_url: https://arxiv.org/abs/2410.02660
 created_at: "2026-04-23"
 ---
 
+> Superseded by the 2026-09 revision of read.md; kept for history.
+
 # Excerpt: ProLong — the document-coherence filter and the 20B-token budget
 
 **Source:** `wiki/raw-data/llm-training/papers/prolong.md`

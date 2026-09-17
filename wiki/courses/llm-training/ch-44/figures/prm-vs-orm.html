@@ -2,241 +2,233 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>PRM vs ORM vs RLVR — Eval Delta and Label Cost Explorer (ch-44)</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ch-44 — Monte-Carlo step labels and solution-score aggregation</title>
 <style>
-  :root { --bg:#fafaf7; --panel:#fff; --ink:#1b1b1b; --dim:#6a6a6a; --line:#d8d8d4;
-          --accent:#1e4f79; --orm:#8a2f2f; --prm:#2f6d3f; --rlvr:#9a6a1a; --code:#f2f1ec; }
-  body { background:var(--bg); color:var(--ink); font-family:-apple-system,"Helvetica Neue",Arial,sans-serif;
-         font-variant-numeric:tabular-nums; max-width:1080px; margin:24px auto; padding:0 20px; line-height:1.45; }
-  h1 { font-size:20px; margin:0 0 4px 0; }
-  h2 { font-size:14px; margin:18px 0 6px 0; color:var(--accent); letter-spacing:0.4px; }
-  .sub { color:var(--dim); font-size:13px; margin-bottom:18px; }
-  .wrap { display:grid; grid-template-columns:320px 1fr; gap:18px; }
-  .panel { background:var(--panel); border:1px solid var(--line); padding:14px 16px; border-radius:4px; }
-  .ctrl { margin-bottom:14px; }
-  .ctrl label { font-size:12px; color:var(--dim); display:block; margin-bottom:4px; text-transform:uppercase; letter-spacing:0.6px; }
-  .ctrl .row { display:flex; align-items:center; gap:10px; }
-  .ctrl input[type="range"] { flex:1; }
-  .ctrl .val { font-size:13px; min-width:56px; text-align:right; }
-  .ctrl select { width:100%; padding:6px 8px; border:1px solid var(--line); background:#fff; font:inherit; font-size:13px; border-radius:3px; }
-  canvas { width:100%; height:240px; display:block; background:#fff; border:1px solid var(--line); border-radius:3px; }
-  table { width:100%; border-collapse:collapse; font-size:12px; margin-top:8px; }
-  th, td { border:1px solid var(--line); padding:4px 8px; text-align:left; }
-  th { background:#f1efe8; font-weight:600; }
-  .legend { display:flex; gap:16px; font-size:12px; margin-top:8px; }
-  .swatch { display:inline-block; width:10px; height:10px; border-radius:2px; margin-right:4px; vertical-align:middle; }
-  .small { font-size:12px; color:var(--dim); }
-  pre { background:var(--code); padding:8px 10px; border-radius:3px; font-size:12px;
-        white-space:pre-wrap; border-left:3px solid var(--accent); margin:8px 0; }
+  :root {
+    --bg: #fafaf8; --panel: #ffffff; --ink: #1f2328; --muted: #5b6470; --rule: #d9dde3;
+    --fp: #c2410c; --fn: #1d5fa8; --ok: #1f7a4d; --grid: #eceef1; --accent: #1d5fa8;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #16181c; --panel: #1e2126; --ink: #e6e8eb; --muted: #a0a8b3; --rule: #353a42;
+      --fp: #f0883e; --fn: #6aa6e8; --ok: #4cc38a; --grid: #2a2e35; --accent: #6aa6e8;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #16181c; --panel: #1e2126; --ink: #e6e8eb; --muted: #a0a8b3; --rule: #353a42;
+    --fp: #f0883e; --fn: #6aa6e8; --ok: #4cc38a; --grid: #2a2e35; --accent: #6aa6e8;
+  }
+  body { margin: 0; background: var(--bg); color: var(--ink);
+         font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+  main { max-width: 960px; margin: 0 auto; padding-block: 20px 40px; padding-inline: 16px; }
+  h1 { font-size: 19px; margin: 0 0 4px; }
+  h2 { font-size: 15px; margin: 0 0 6px; }
+  p.sub { color: var(--muted); margin: 0 0 16px; }
+  .panel { background: var(--panel); border: 1px solid var(--rule); border-radius: 8px; padding: 16px; margin-bottom: 18px; }
+  .controls { display: flex; flex-wrap: wrap; gap: 14px 22px; margin: 8px 0 12px; }
+  .ctl { display: flex; flex-direction: column; min-width: 150px; flex: 1 1 150px; }
+  .ctl label { font-size: 12px; color: var(--muted); }
+  .ctl output { font-family: ui-monospace, "SF Mono", Menlo, monospace; }
+  input[type=range] { width: 100%; }
+  input[type=text] { font: inherit; color: var(--ink); background: var(--bg); border: 1px solid var(--rule); border-radius: 6px; padding: 4px 8px; width: 100%; box-sizing: border-box; }
+  button { font: inherit; color: var(--ink); background: var(--panel); border: 1px solid var(--rule); border-radius: 6px; padding: 3px 8px; cursor: pointer; }
+  .row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+  svg { width: 100%; height: auto; display: block; }
+  table { border-collapse: collapse; width: 100%; font-size: 13px; margin-top: 10px; }
+  th, td { border: 1px solid var(--rule); padding: 5px 8px; text-align: left; }
+  th { color: var(--muted); font-weight: 600; }
+  .readout { font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 12.5px; background: var(--bg);
+             border: 1px solid var(--rule); border-radius: 6px; padding: 8px 10px; margin-top: 10px; white-space: pre-wrap; overflow-x: auto; }
+  .cap { font-size: 12.5px; color: var(--muted); margin-top: 10px; }
+  .axis text, .lbl { fill: var(--muted); font-size: 11px; }
+  .gridline { stroke: var(--grid); }
+  .axisline { stroke: var(--muted); }
+  .scroll { overflow-x: auto; }
 </style>
 </head>
 <body>
+<main>
+<h1>Monte-Carlo step labels and solution-score aggregation</h1>
+<p class="sub">Companion to ch-44 read.md §2.2 (panel A) and §1.4 with §3.5 (panel B).</p>
 
-<h1>PRM vs ORM vs RLVR — Eval Delta and Label Cost</h1>
-<p class="sub">Chapter 44 companion. Panel A plots the predicted eval score for three selection / training regimes as you vary base-model capability, PRM quality, and Best-of-N. Panel B compares label cost per one percentage point of eval gain across PRM800K, Math-Shepherd, OmegaPRM, and RLVR. The model is calibrated to the Lightman 2023 (MATH-500) and Lambert 2024 (Tulu-3) numbers in the read.md; it is an intuition tool, not a predictor.</p>
+<section class="panel">
+  <h2>A. Error rates of a hard Monte-Carlo step label</h2>
+  <div class="controls">
+    <div class="ctl"><label for="p">p — one completion from a <em>correct</em> step reaches the gold answer <output id="pV"></output></label>
+      <input id="p" type="range" min="0.02" max="0.90" step="0.01" value="0.15"></div>
+    <div class="ctl"><label for="q">q — one completion from an <em>incorrect</em> step still reaches it <output id="qV"></output></label>
+      <input id="q" type="range" min="0.00" max="0.50" step="0.01" value="0.10"></div>
+    <div class="ctl"><label for="n">N — completions per step <output id="nV"></output></label>
+      <input id="n" type="range" min="1" max="32" step="1" value="8"></div>
+  </div>
+  <div class="row">
+    <button type="button" data-p="0.15" data-q="0.10" data-n="8">§2.2 worked example</button>
+    <button type="button" data-p="0.05" data-q="0.10" data-n="8">weak completer (small p)</button>
+    <button type="button" data-p="0.40" data-q="0.20" data-n="16">strong completer, N = 16</button>
+  </div>
+  <svg id="svgA" viewBox="0 0 640 320" role="img" aria-label="False-negative and false-positive rates against the number of completions"></svg>
+  <div class="readout" id="readA"></div>
+  <p class="cap">Curves are the two binomial expressions in read.md §2.2: P(false negative) = (1 − p)^N on a correct step, P(false positive) = 1 − (1 − q)^N on an incorrect step, under the hard label "correct if any completion reaches the gold answer" (threshold 0, as recommended in arXiv:2501.07301v2 §3.1.4). p and q are set by the reader; they are not measured values. The measured anchor is Math-Shepherd (arXiv:2312.08935v3 §5.2, Fig. 4a): hard labels from a LLaMA2-70B completer are 86% accurate against 160 human-labelled GSM8K steps at N = 4, and accuracy declines for larger N, which the authors attribute to false positives.</p>
+</section>
 
-<div class="wrap">
-
-  <div class="panel">
-    <h2>Controls</h2>
-
-    <div class="ctrl">
-      <label>Base-model pass@1 (percent)</label>
-      <div class="row">
-        <input type="range" id="base" min="5" max="90" step="1" value="35">
-        <span class="val" id="base_v">35</span>
-      </div>
-      <div class="small">Cobbe 2021 GSM8K-6B ~ 20; Llama-3.1-8B-Instruct MATH ~ 42; Gemini Pro 1.0 MATH ~ 51.</div>
-    </div>
-
-    <div class="ctrl">
-      <label>PRM quality (AUC-like, 0..1)</label>
-      <div class="row">
-        <input type="range" id="prmq" min="0.50" max="0.99" step="0.01" value="0.85">
-        <span class="val" id="prmq_v">0.85</span>
-      </div>
-      <div class="small">PRM800K on MATH-500 behaves around 0.88-0.92; Math-Shepherd PRMs ~0.80-0.86; below 0.70 the PRM selector is worse than majority.</div>
-    </div>
-
-    <div class="ctrl">
-      <label>Best-of-N samples</label>
-      <div class="row">
-        <input type="range" id="bon" min="0" max="11" step="1" value="6">
-        <span class="val" id="bon_v">64</span>
-      </div>
-      <div class="small">Lightman 2023 headline runs were N=1860; practical eval often uses N=64 or 256.</div>
-    </div>
-
-    <div class="ctrl">
-      <label>Task type</label>
-      <select id="task">
-        <option value="math">Math (MATH-500, GSM8K-like)</option>
-        <option value="code">Code (unit-test verifiable)</option>
-        <option value="swe">SWE patches (difflib ratio)</option>
-      </select>
-      <div class="small">Task type only affects Panel B cost bars and the RLVR applicability badge in Panel A.</div>
-    </div>
-
-    <h2>Anchor points (ch-44)</h2>
-    <table>
-      <tr><th>Anchor</th><th>Value</th></tr>
-      <tr><td>Majority (Lightman 2023)</td><td>69.6</td></tr>
-      <tr><td>ORM Best-of-1860</td><td>72.4</td></tr>
-      <tr><td>PRM Best-of-1860</td><td>78.2</td></tr>
-      <tr><td>Math-Shepherd GSM8K verify</td><td>77.9 -> 89.1</td></tr>
-      <tr><td>OmegaPRM MATH (Gemini Pro)</td><td>51.0 -> 69.4</td></tr>
-      <tr><td>Tulu-3 RLVR GSM8K delta</td><td>+5..+10 pp</td></tr>
-      <tr><td>SWE-RL SWE-Bench Verified</td><td>41.0</td></tr>
+<section class="panel">
+  <h2>B. Product, minimum, and last-step scoring of a solution</h2>
+  <div class="controls">
+    <div class="ctl"><label for="sa">Solution A — per-step P(positive), comma separated</label>
+      <input id="sa" type="text" value="0.95, 0.90, 0.85, 0.60, 0.98"></div>
+    <div class="ctl"><label for="sb">Solution B — per-step P(positive), comma separated</label>
+      <input id="sb" type="text" value="0.90, 0.90, 0.90, 0.90, 0.90, 0.90, 0.90, 0.90, 0.90"></div>
+  </div>
+  <div class="row">
+    <button type="button" data-a="0.95, 0.90, 0.85, 0.60, 0.98" data-b="0.90, 0.90, 0.90, 0.90, 0.90, 0.90, 0.90, 0.90, 0.90">§1.4 worked example</button>
+    <button type="button" data-a="0.99, 0.99, 0.99, 0.35" data-b="0.80, 0.80, 0.80, 0.80">late error against uniform doubt</button>
+  </div>
+  <div class="scroll">
+    <table id="tblB">
+      <thead><tr><th>Solution</th><th>Steps</th><th>Product</th><th>Minimum</th><th>Last step</th></tr></thead>
+      <tbody></tbody>
     </table>
   </div>
-
-  <div class="panel">
-    <h2>Panel A — Eval score under each regime</h2>
-    <canvas id="evalChart" width="720" height="240"></canvas>
-    <div class="legend">
-      <span><span class="swatch" style="background:#6a6a6a"></span>Majority / base pass@1</span>
-      <span><span class="swatch" style="background:var(--orm)"></span>ORM Best-of-N</span>
-      <span><span class="swatch" style="background:var(--prm)"></span>PRM Best-of-N</span>
-      <span><span class="swatch" style="background:var(--rlvr)"></span>RLVR (pass@1 after training)</span>
-    </div>
-    <pre id="report">loading...</pre>
-
-    <h2>Panel B — Label cost per 1pp eval gain</h2>
-    <canvas id="costChart" width="720" height="180"></canvas>
-    <div class="small" id="cost_note">Cost bars: lower is better. PRM800K cost is per-step human labor ~ 10x outcome labeling. MC-based PRMs (Math-Shepherd, OmegaPRM) cost compute instead of humans. RLVR cost is verifier engineering (amortized) + zero per-example label.</div>
-  </div>
-
-</div>
+  <svg id="svgB" viewBox="0 0 640 220" role="img" aria-label="Per-step scores of the two solutions"></svg>
+  <div class="readout" id="readB"></div>
+  <p class="cap">Scores are arbitrary reader input. The three aggregators are the ones used in the literature: the product of per-step P(positive) with neutral counted as positive is the PRM800K default (arXiv:2305.20050v1 App. F.2, where best-of-1860 gives 78.2 for the product and 77.6 for the minimum, and the paper notes a slight bias against solutions with more steps); the minimum is used by Math-Shepherd (arXiv:2312.08935v3 §3.4); the last-step score is the one recommended for Monte-Carlo-trained PRMs, whose per-step values already estimate future success (arXiv:2501.07301v2 §3.2.4, Fig. 9).</p>
+</section>
 
 <script>
-(function() {
-  const el = id => document.getElementById(id);
-  const base = el("base"), prmq = el("prmq"), bon = el("bon"), task = el("task");
-  const base_v = el("base_v"), prmq_v = el("prmq_v"), bon_v = el("bon_v");
-  const report = el("report");
-  const ec = el("evalChart"), cc = el("costChart");
-  const ectx = ec.getContext("2d"), cctx = cc.getContext("2d");
-
-  function bonVal() { return Math.pow(2, parseInt(bon.value, 10)); } // 1..2048
-
-  // Simplified monotonic model calibrated to the chapter anchors.
-  // pass@N under iid sampling: p_at_N = 1 - (1 - p1)^N
-  // selector of quality q: prob of picking a correct solution given at least one exists
-  //     p_select_correct = p_at_N * (q + (1-q) * p_at_N)   // crude: q controls how reliably selector picks correct when present
-  // ORM quality = 0.65; RLVR models pass@1 lift through a saturating logistic in KL-clamped regime.
-  function evalScore(p1, q, N) {
-    const p_at_N = 1 - Math.pow(1 - p1, N);
-    return p_at_N * (q + (1 - q) * p_at_N);
+(function () {
+  var $ = function (id) { return document.getElementById(id); };
+  var SVGNS = "http://www.w3.org/2000/svg";
+  function el(name, attrs, text) {
+    var n = document.createElementNS(SVGNS, name);
+    for (var k in attrs) { n.setAttribute(k, attrs[k]); }
+    if (text !== undefined) { n.textContent = text; }
+    return n;
   }
-  function rlvrPass1(p1, taskType) {
-    // RLVR gains saturate: small base -> small lift, mid base -> biggest absolute lift, high base -> compression.
-    // Calibrated so Tulu-3 GSM8K 84.7 -> 89..95 and Llama-SWE-RL 18 -> 41 feel right.
-    const capFactor = taskType === "swe" ? 1.6 : (taskType === "code" ? 1.3 : 1.0);
-    const bump = capFactor * 0.25 * Math.sin(Math.PI * Math.min(1, p1));
-    return Math.min(0.97, p1 + bump);
-  }
+  function clear(svg) { while (svg.firstChild) { svg.removeChild(svg.firstChild); } }
 
-  function drawEvalChart() {
-    const p1 = parseInt(base.value, 10) / 100;
-    const q = parseFloat(prmq.value);
-    const N = bonVal();
-    const ormQ = 0.62;
-    const maj = p1; // trivially, pass@1 ~ majority on single-sample regime
-    const orm = evalScore(p1, ormQ, N);
-    const prm = evalScore(p1, q, N);
-    const rlvr = rlvrPass1(p1, task.value);
-
-    base_v.textContent = (p1 * 100).toFixed(0);
-    prmq_v.textContent = q.toFixed(2);
-    bon_v.textContent = N;
-
-    // Axes + bars
-    const W = ec.width, H = ec.height, M = 28;
-    ectx.clearRect(0, 0, W, H);
-    ectx.strokeStyle = "#ccc"; ectx.beginPath();
-    ectx.moveTo(M, H - M); ectx.lineTo(W - 10, H - M); ectx.stroke();
-    for (let y = 0; y <= 100; y += 20) {
-      const yy = H - M - (y / 100) * (H - 2 * M);
-      ectx.strokeStyle = "#eee"; ectx.beginPath();
-      ectx.moveTo(M, yy); ectx.lineTo(W - 10, yy); ectx.stroke();
-      ectx.fillStyle = "#888"; ectx.font = "11px sans-serif";
-      ectx.fillText(y + "%", 2, yy + 4);
+  /* ---------- Panel A ---------- */
+  var NMAX = 32;
+  function drawA() {
+    var p = parseFloat($("p").value), q = parseFloat($("q").value), n = parseInt($("n").value, 10);
+    $("pV").textContent = p.toFixed(2); $("qV").textContent = q.toFixed(2); $("nV").textContent = n;
+    var svg = $("svgA"); clear(svg);
+    var L = 52, R = 620, T = 18, B = 268;
+    var x = function (k) { return L + (k - 1) / (NMAX - 1) * (R - L); };
+    var y = function (v) { return B - v * (B - T); };
+    var i;
+    for (i = 0; i <= 5; i++) {
+      var v = i / 5;
+      svg.appendChild(el("line", { x1: L, x2: R, y1: y(v), y2: y(v), class: "gridline", "stroke-width": 1 }));
+      svg.appendChild(el("text", { x: L - 8, y: y(v) + 4, class: "lbl", "text-anchor": "end" }, v.toFixed(1)));
     }
-    const labels = ["majority / pass@1", "ORM Bo" + N, "PRM Bo" + N, "RLVR pass@1"];
-    const vals = [maj, orm, prm, rlvr];
-    const colors = ["#6a6a6a", "#8a2f2f", "#2f6d3f", "#9a6a1a"];
-    const bw = (W - M - 20) / vals.length;
-    for (let i = 0; i < vals.length; i++) {
-      const x = M + 10 + i * bw;
-      const h = vals[i] * (H - 2 * M);
-      ectx.fillStyle = colors[i];
-      ectx.fillRect(x, H - M - h, bw * 0.7, h);
-      ectx.fillStyle = "#1b1b1b"; ectx.font = "12px sans-serif";
-      ectx.fillText((vals[i] * 100).toFixed(1), x + 4, H - M - h - 4);
-      ectx.fillStyle = "#555"; ectx.font = "11px sans-serif";
-      ectx.fillText(labels[i], x, H - M + 14);
+    svg.appendChild(el("line", { x1: L, x2: R, y1: B, y2: B, class: "axisline", "stroke-width": 1 }));
+    for (i = 1; i <= NMAX; i += 4) {
+      svg.appendChild(el("text", { x: x(i), y: B + 16, class: "lbl", "text-anchor": "middle" }, String(i)));
     }
-
-    // Report
-    const gapPRM = (prm - orm) * 100;
-    const gapRLVR = (rlvr - orm) * 100;
-    const applicable = (task.value !== "swe") ? "applicable (math/code verifier)" :
-                       "applicable via rule-based reward (SWE-RL difflib ratio)";
-    report.textContent =
-      "task           = " + task.value + "\n" +
-      "base pass@1    = " + (p1*100).toFixed(1) + "%\n" +
-      "PRM quality    = " + q.toFixed(2) + "\n" +
-      "N (Best-of-N)  = " + N + "\n" +
-      "-------------------------------------------\n" +
-      "majority       = " + (maj*100).toFixed(1) + "\n" +
-      "ORM Bo" + N + (N<10?"     ":N<100?"    ":N<1000?"   ":"  ") + "= " + (orm*100).toFixed(1) + "\n" +
-      "PRM Bo" + N + (N<10?"     ":N<100?"    ":N<1000?"   ":"  ") + "= " + (prm*100).toFixed(1) + "  (PRM-ORM gap = " + gapPRM.toFixed(1) + " pp)\n" +
-      "RLVR pass@1    = " + (rlvr*100).toFixed(1) + "  (RLVR-ORM gap at N=1 = " + gapRLVR.toFixed(1) + " pp)\n" +
-      "RLVR: " + applicable;
-  }
-
-  function drawCostChart() {
-    // Approximate label-cost per 1pp gain (arbitrary units, task-dependent).
-    // Calibration: PRM800K ~ 10x outcome labeling cost; Math-Shepherd ~ K*L rollouts; OmegaPRM ~ K*log(L); RLVR zero labels but verifier-engineering overhead.
-    const t = task.value;
-    const rows = (t === "math") ? [
-      ["PRM800K (human)",       100, "#8a2f2f"],
-      ["Math-Shepherd (MC)",     38, "#b5793b"],
-      ["OmegaPRM (D&C MC)",      22, "#2f6d3f"],
-      ["RLVR (verifier only)",    6, "#1e4f79"],
-    ] : (t === "code") ? [
-      ["PRM800K (human)",       160, "#8a2f2f"],
-      ["Math-Shepherd (MC)",     55, "#b5793b"],
-      ["OmegaPRM (D&C MC)",      30, "#2f6d3f"],
-      ["RLVR (unit tests)",      12, "#1e4f79"],
-    ] : [
-      ["PRM800K (human)",       300, "#8a2f2f"],
-      ["Math-Shepherd (MC)",    140, "#b5793b"],
-      ["OmegaPRM (D&C MC)",      80, "#2f6d3f"],
-      ["SWE-RL (difflib)",        4, "#1e4f79"],
-    ];
-
-    const W = cc.width, H = cc.height, M = 28;
-    cctx.clearRect(0, 0, W, H);
-    const maxv = Math.max.apply(null, rows.map(r => r[1]));
-    for (let i = 0; i < rows.length; i++) {
-      const y = M + i * ((H - 2 * M) / rows.length);
-      const w = (rows[i][1] / maxv) * (W - 260);
-      cctx.fillStyle = rows[i][2];
-      cctx.fillRect(200, y, w, 18);
-      cctx.fillStyle = "#1b1b1b"; cctx.font = "12px sans-serif";
-      cctx.fillText(rows[i][0], 10, y + 14);
-      cctx.fillText(rows[i][1] + " units / 1pp", 205 + w + 6, y + 14);
+    svg.appendChild(el("text", { x: (L + R) / 2, y: B + 34, class: "lbl", "text-anchor": "middle" }, "completions per step N"));
+    svg.appendChild(el("text", { x: 14, y: (T + B) / 2, class: "lbl", "text-anchor": "middle",
+      transform: "rotate(-90 14 " + ((T + B) / 2) + ")" }, "probability of a wrong label"));
+    function path(f, color) {
+      var d = "", k;
+      for (k = 1; k <= NMAX; k++) { d += (k === 1 ? "M" : "L") + x(k).toFixed(1) + " " + y(f(k)).toFixed(1); }
+      svg.appendChild(el("path", { d: d, fill: "none", stroke: color, "stroke-width": 2 }));
     }
-    cctx.fillStyle = "#888"; cctx.font = "11px sans-serif";
-    cctx.fillText("(relative cost; lower is better)", 10, H - 8);
+    var fn = function (k) { return Math.pow(1 - p, k); };
+    var fp = function (k) { return 1 - Math.pow(1 - q, k); };
+    path(fn, "var(--fn)");
+    path(fp, "var(--fp)");
+    svg.appendChild(el("line", { x1: x(n), x2: x(n), y1: T, y2: B, stroke: "var(--muted)", "stroke-width": 1, "stroke-dasharray": "4 3" }));
+    svg.appendChild(el("circle", { cx: x(n), cy: y(fn(n)), r: 4, fill: "var(--fn)" }));
+    svg.appendChild(el("circle", { cx: x(n), cy: y(fp(n)), r: 4, fill: "var(--fp)" }));
+    svg.appendChild(el("rect", { x: L + 8, y: T + 4, width: 12, height: 3, fill: "var(--fn)" }));
+    svg.appendChild(el("text", { x: L + 26, y: T + 9, class: "lbl" }, "false negative on a correct step: (1 − p)^N"));
+    svg.appendChild(el("rect", { x: L + 8, y: T + 22, width: 12, height: 3, fill: "var(--fp)" }));
+    svg.appendChild(el("text", { x: L + 26, y: T + 27, class: "lbl" }, "false positive on an incorrect step: 1 − (1 − q)^N"));
+    $("readA").textContent =
+      "N = " + n + "\n" +
+      "P(correct step labelled negative)   = (1 − " + p.toFixed(2) + ")^" + n + " = " + fn(n).toFixed(3) + "\n" +
+      "P(incorrect step labelled positive) = 1 − (1 − " + q.toFixed(2) + ")^" + n + " = " + fp(n).toFixed(3) + "\n" +
+      "Raising N lowers the first rate and raises the second.";
   }
+  ["p", "q", "n"].forEach(function (id) { $(id).addEventListener("input", drawA); });
+  Array.prototype.forEach.call(document.querySelectorAll("[data-p]"), function (b) {
+    b.addEventListener("click", function () {
+      $("p").value = b.dataset.p; $("q").value = b.dataset.q; $("n").value = b.dataset.n; drawA();
+    });
+  });
 
-  function redraw() { drawEvalChart(); drawCostChart(); }
-  [base, prmq, bon, task].forEach(e => e.addEventListener("input", redraw));
-  redraw();
+  /* ---------- Panel B ---------- */
+  function parseList(s) {
+    return s.split(",").map(function (t) { return parseFloat(t); })
+            .filter(function (v) { return isFinite(v) && v >= 0 && v <= 1; });
+  }
+  function agg(v) {
+    var prod = v.reduce(function (a, b) { return a * b; }, 1);
+    var min = v.reduce(function (a, b) { return Math.min(a, b); }, 1);
+    return { prod: prod, min: min, last: v[v.length - 1] };
+  }
+  function drawB() {
+    var A = parseList($("sa").value), Bv = parseList($("sb").value);
+    var tb = $("tblB").querySelector("tbody");
+    while (tb.firstChild) { tb.removeChild(tb.firstChild); }
+    var rows = [["A", A], ["B", Bv]];
+    var vals = {};
+    rows.forEach(function (r) {
+      if (r[1].length === 0) { return; }
+      var a = agg(r[1]); vals[r[0]] = a;
+      var tr = document.createElement("tr");
+      [r[0], String(r[1].length), a.prod.toFixed(4), a.min.toFixed(4), a.last.toFixed(4)].forEach(function (c) {
+        var td = document.createElement("td"); td.textContent = c; tr.appendChild(td);
+      });
+      tb.appendChild(tr);
+    });
+    var svg = $("svgB"); clear(svg);
+    var L = 44, R = 620, T = 16, Bb = 170;
+    var maxSteps = Math.max(A.length, Bv.length, 1);
+    var x = function (i) { return L + (maxSteps === 1 ? 0.5 : i / (maxSteps - 1)) * (R - L); };
+    var y = function (v) { return Bb - v * (Bb - T); };
+    var i;
+    for (i = 0; i <= 4; i++) {
+      var v = i / 4;
+      svg.appendChild(el("line", { x1: L, x2: R, y1: y(v), y2: y(v), class: "gridline", "stroke-width": 1 }));
+      svg.appendChild(el("text", { x: L - 8, y: y(v) + 4, class: "lbl", "text-anchor": "end" }, v.toFixed(2)));
+    }
+    svg.appendChild(el("line", { x1: L, x2: R, y1: Bb, y2: Bb, class: "axisline", "stroke-width": 1 }));
+    svg.appendChild(el("text", { x: (L + R) / 2, y: Bb + 32, class: "lbl", "text-anchor": "middle" }, "step index"));
+    function series(v, color, label, dy) {
+      if (v.length === 0) { return; }
+      var d = "", k;
+      for (k = 0; k < v.length; k++) { d += (k === 0 ? "M" : "L") + x(k).toFixed(1) + " " + y(v[k]).toFixed(1); }
+      svg.appendChild(el("path", { d: d, fill: "none", stroke: color, "stroke-width": 2 }));
+      for (k = 0; k < v.length; k++) { svg.appendChild(el("circle", { cx: x(k), cy: y(v[k]), r: 3.5, fill: color })); }
+      svg.appendChild(el("rect", { x: L + 8, y: T + dy, width: 12, height: 3, fill: color }));
+      svg.appendChild(el("text", { x: L + 26, y: T + dy + 5, class: "lbl" }, label));
+    }
+    series(A, "var(--ok)", "solution A", 4);
+    series(Bv, "var(--accent)", "solution B", 20);
+    for (i = 0; i < maxSteps; i++) {
+      svg.appendChild(el("text", { x: x(i), y: Bb + 15, class: "lbl", "text-anchor": "middle" }, String(i + 1)));
+    }
+    var out = "";
+    if (vals.A && vals.B) {
+      out += "product ranks " + (vals.A.prod >= vals.B.prod ? "A above B" : "B above A") + "\n";
+      out += "minimum ranks " + (vals.A.min >= vals.B.min ? "A above B" : "B above A") + "\n";
+      out += "last step ranks " + (vals.A.last >= vals.B.last ? "A above B" : "B above A") + "\n";
+      out += "Aggregator choice changes the selected solution whenever these lines disagree.";
+    } else {
+      out = "Enter per-step probabilities in [0, 1] for both solutions.";
+    }
+    $("readB").textContent = out;
+  }
+  ["sa", "sb"].forEach(function (id) { $(id).addEventListener("input", drawB); });
+  Array.prototype.forEach.call(document.querySelectorAll("[data-a]"), function (b) {
+    b.addEventListener("click", function () { $("sa").value = b.dataset.a; $("sb").value = b.dataset.b; drawB(); });
+  });
+
+  drawA(); drawB();
 })();
 </script>
-
+</main>
 </body>
 </html>

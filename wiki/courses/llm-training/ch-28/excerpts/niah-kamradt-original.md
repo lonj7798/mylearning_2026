@@ -7,6 +7,8 @@ source_url: https://github.com/gkamradt/LLMTest_NeedleInAHaystack
 created_at: "2026-04-23"
 ---
 
+> Superseded by the 2026-09 revision of read.md; kept for history.
+
 # Excerpt: The Kamradt NIAH — what went viral, and why it over-reports effective context
 
 **Source:** `wiki/raw-data/llm-training/papers/needle-in-haystack-data.md`

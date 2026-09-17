@@ -1,220 +1,383 @@
 <!-- chapter: ch-37
      track: rl
      kind: content
-     title: Policy-Gradient Foundations
-     deps: [ch-36]
-     sources: [[vanilla-pg]], [[trpo]], [[ppo]], [[rloo]], [[reinforce-plus-plus]],
-              [[lilianweng-rlhf]], [[nathan-lambert-rl-overview]], [[costa-huang-ppo-details]],
-              [[maximum-entropy-rl]]
+     title: Policy-Gradient Foundations for Language Models
+     deps: [ch-41]
+     sources: [[vanilla-pg]], [[rloo]], [[trpo]], [[ppo]], [[maximum-entropy-rl]], [[rls-razor]],
+              [[sft-memorizes-rl-generalizes]], [[rlhf-generalisation-diversity]], [[rlvr-beyond-base-model]],
+              [[raft-reinforce-rej-minimalist]], [[reinforce-plus-plus]], [[dr-grpo]], [[grpo]],
+              [[entropy-mechanism-llm-rl]], [[loop-appworld]], [[trl-grpo]], [[john-schulman-kl-tricks]]
      figures: figures/pg-variance.html
-     opens: rl-track (ch-37..ch-46)
+     revised: 2026-09 (generality revision)
 -->
 
-# Chapter 37 — Policy-Gradient Foundations
+# Chapter 37 — Policy-Gradient Foundations for Language Models
 
-> **Core insight.** RL for LLMs is not a different beast from supervised learning — it is supervised learning with a *chosen* per-sample weight. The policy-gradient theorem reduces to a single identity: `∇_θ J(θ) = E[∇_θ log π_θ(a|s) · A(s,a)]`. Every modern LLM-RL algorithm — PPO, TRPO, RLOO, GRPO, REINFORCE++ — is a different choice of (a) what `A(s,a)` is, (b) how you estimate it from samples, and (c) what regulariser you tack on to keep `π_θ` near a reference. The algorithm family is a second-order concern; the first-order concern is variance in the `A` estimator, because variance is what decides whether a batch of gradients moves the model or cancels itself out.
+> **Core insight.** The policy-gradient estimator increases the log-probability of the model's own sampled responses in proportion to an advantage, the reward minus a baseline. The baseline does not change the expected gradient when it does not depend on the sampled response, but it decides which individual samples are pushed up and which are pushed down: with 0/1 rewards and b = 0 no sample is pushed down. Because the gradient is an SFT gradient on self-generated samples, on-policy RL changes the model less than SFT on external targets; in controlled studies this came with less forgetting ([[rls-razor]]) and better transfer to unseen rule variants ([[sft-memorizes-rl-generalizes]]), and with lower output diversity ([[rlhf-generalisation-diversity]]) and lower coverage at large k ([[rlvr-beyond-base-model]]).
 >
-> **Guideline.** Before picking an RL algorithm, know (1) which form of the score-function estimator you are using (per-timestep vs per-sequence, causal vs full-trajectory), (2) which baseline subtracts the action-independent floor (none / moving average / learned V / leave-one-out / group-mean / global-batch), and (3) whether the regulariser is a KL-to-reference penalty *inside the reward* (RLHF canon) or a separate KL constraint / entropy bonus *in the loss* (classical RL, GRPO). Defaulting to PPO because "PPO works" is how you spend a quarter debugging an advantage estimator whose variance scales with sequence length.
+> **Guideline.** When several responses per prompt can be sampled, use a leave-one-out baseline, because it is exactly unbiased, unlike group-mean subtraction (scaled by (G − 1)/G) and group-std normalization (prompt-dependent scale); at G = 2 it can raise variance above b = 0 (§2), so use it with G ≥ 4. When group mean or group standard deviation is used instead, treat the result as a per-prompt reweighting and report it. When negative advantages are used, bound or anchor them (clipping, a KL or NLL term, on-policy sampling), because a negative weight on log π has no lower limit. When RL is used to build a general model, evaluate three splits (training reward, held-out prompts from the training distribution, other domains) and report pass@1 together with pass@k at large k.
 
----
+## Why this chapter matters for a general-purpose model
 
-## Why this chapter exists
+The pipeline in this course runs pre-training → mid-training → SFT → preference optimization → RL → evaluation. This chapter opens the policy-optimization part. ch-41 built the reward model R(x, y). This chapter defines the gradient that turns R into parameter updates; ch-38 adds the KL-controlled PPO recipe, ch-39 removes sampling with offline preference losses, and ch-40 compares group-baseline methods.
 
-This is the opening chapter of the RL track. The SFT track (ch-30 … ch-36) produced a frozen `checkpoint-final` that is about to become `π_ref` — the reference policy every RL method in the next ten chapters regularises against. Before introducing TRPO, PPO, DPO, GRPO, or RLVR, we need the one object they all share: the score-function estimator of a policy gradient. Nathan Lambert's framing ([[nathan-lambert-rl-overview]]) puts it cleanly — "the field has converged on a small set of algorithmic templates (PPO, DPO, GRPO)" — so this chapter is the template. Everything that follows is a specialisation.
+Three facts from this chapter decide whether RL makes a model broader or narrower:
 
-Four deliverables by the end of the chapter: (1) a derivation of `∇J(θ) = E[∇log π · A]` that you can reproduce on paper; (2) a proof that subtracting any baseline `b(s)` is unbiased and reduces variance; (3) an understanding of *why* LM-RL is structurally simpler than robotics RL (and why that simplicity kills half of PPO's machinery, per [[rloo]]); (4) a working mental model of entropy regularisation — what it fixes, what it papers over.
+1. The gradient only touches prompts that are sampled. Behavior on other prompts changes only through shared parameters. The prompt distribution (ch-16) is therefore a design choice for generality, not a detail.
+2. The samples are the model's own. This limits how far each update moves the model (§5), which is the proposed reason RL forgot less than SFT in [[rls-razor]].
+3. The objective rewards concentration on high-reward responses. Diversity and large-k coverage can fall even while pass@1 rises (§6).
 
----
+## §1 The objective and the log-derivative estimator
 
-## §1 The policy gradient theorem — derivation
-
-Let `π_θ(a|s)` be a stochastic policy and `J(θ) = E_{τ ∼ π_θ}[R(τ)]` the expected return over trajectories `τ = (s_0, a_0, r_0, s_1, a_1, r_1, …)`. We want `∇_θ J(θ)`. The probability of a trajectory under `π_θ` factorises:
-
-```
-p_θ(τ) = ρ_0(s_0) · Π_t π_θ(a_t | s_t) · P(s_{t+1} | s_t, a_t)
-```
-
-Only the middle factor depends on `θ`. The **log-prob trick** (score-function identity) is:
+**Definition.** A policy π_θ(y | x) is the language model's distribution over responses y given a prompt x. The RL objective is the expected reward over a prompt distribution D:
 
 ```
-∇_θ p_θ(τ) = p_θ(τ) · ∇_θ log p_θ(τ) = p_θ(τ) · Σ_t ∇_θ log π_θ(a_t | s_t)
+J(θ) = E_{x∼D} E_{y∼π_θ(·|x)} [ R(x, y) ]
 ```
 
-The initial-state and transition terms have no `θ`, so they contribute zero gradient. Pushing `∇_θ` through the expectation:
+- θ: model parameters. D: the training prompt distribution. R(x, y): scalar reward (reward model, verifier, or environment).
+
+**Problem.** The sampling distribution π_θ depends on θ, so the gradient cannot be obtained by differentiating R inside a fixed expectation. R is often not differentiable (a verifier returns 0 or 1).
+
+**Mechanism.** The log-derivative identity ∇_θ π_θ(y|x) = π_θ(y|x) ∇_θ log π_θ(y|x) moves the gradient onto the log-probability:
 
 ```
-∇_θ J(θ) = ∇_θ ∫ p_θ(τ) R(τ) dτ
-         = ∫ ∇_θ p_θ(τ) · R(τ) dτ
-         = ∫ p_θ(τ) · [Σ_t ∇_θ log π_θ(a_t | s_t)] · R(τ) dτ
-         = E_{τ∼π_θ}[ Σ_t ∇_θ log π_θ(a_t | s_t) · R(τ) ]
+∇_θ J(θ) = E_{x∼D} Σ_y ∇_θ π_θ(y|x) R(x, y)
+         = E_{x∼D} E_{y∼π_θ(·|x)} [ R(x, y) ∇_θ log π_θ(y|x) ]
+∇_θ log π_θ(y|x) = Σ_{t=1}^{T} ∇_θ log π_θ(y_t | x, y_<t)
 ```
 
-This is the **score-function (REINFORCE) estimator**, first written down in this connectionist form by Williams 1992 ([[vanilla-pg]]). The estimator is *unbiased*: `E[∇̂J] = ∇J` with one sampled trajectory. It is also *high-variance*: the variance of a sum-of-log-prob-gradients-times-one-scalar-return grows with trajectory length and with the scale of `R`.
+- y_t: token t of the response; T: response length; y_<t: tokens before t.
 
-### Causal form (return-to-go)
+This is the REINFORCE estimator of [[vanilla-pg]] applied to a whole response. [[rloo]] §2.2 models the full generation as one action for this reason: the reward is given only for the complete response (Eq. 6).
 
-The future cannot influence the past. `R(τ) = Σ_{t'} r_{t'}` can be split: for `t' < t` the reward is independent of `a_t`, so those terms contribute zero in expectation. This yields the **causal** form used in every modern implementation ([[vanilla-pg]] §Technical Details):
+**Causal form for per-step rewards.** In a trajectory with rewards r_t at every step, a reward received before step t does not depend on the action at t, so its term has zero expectation. The estimator becomes Σ_t ∇ log π(a_t | s_t) G_t with the return-to-go G_t = Σ_{t′≥t} γ^{t′−t} r_{t′}. With a single terminal reward and γ = 1, G_t = R(x, y) for every t, and the causal form equals the sequence form above.
 
-```
-∇_θ J(θ) = E[ Σ_t ∇_θ log π_θ(a_t | s_t) · G_t ]   where   G_t = Σ_{t'≥t} γ^{t'−t} r_{t'}
-```
+**Only sampled prompts receive gradient.** The Monte-Carlo estimate averages over a batch of prompts drawn from D. A prompt type that never appears in D contributes no term. Its behavior changes only through parameters shared with the sampled prompts; whether that change helps or hurts is an empirical question (Generalization lens).
 
-`G_t` is the **return-to-go** from step `t`. Dropping the past-reward terms strictly reduces variance without introducing bias.
+**Worked example (checkable by hand).** A prompt has two possible answers. The policy is p = σ(θ) for "correct" (reward 1) and 1 − p for "wrong" (reward 0), with p = 0.2. The true gradient is dJ/dθ = p(1 − p) = 0.16. The score is d log p/dθ = 1 − p = 0.8 for "correct" and d log(1 − p)/dθ = −p = −0.2 for "wrong". The single-sample estimate is 0.8 with probability 0.2 and 0 with probability 0.8. Its mean is 0.2 × 0.8 = 0.16, equal to the true gradient. Its variance is 0.2 × 0.64 − 0.16² = 0.1024.
 
----
+**Evidence and limits.** The identity is exact for any R. The estimator is unbiased only when y is sampled from the current π_θ; reusing samples from an older policy requires importance weights (§3, ch-38).
 
-## §2 Baselines and the variance-reduction proof
+**Implication for a general model.** J is defined by D. A model trained on a narrow D is optimized for that D; nothing in the estimator protects prompts outside it.
 
-For any function `b(s)` that does not depend on the action:
+## §2 Baselines: variance and bias
 
-```
-E_{a∼π_θ(·|s)}[ ∇_θ log π_θ(a|s) · b(s) ]
-    = b(s) · Σ_a π_θ(a|s) · ∇_θ log π_θ(a|s)
-    = b(s) · Σ_a ∇_θ π_θ(a|s)
-    = b(s) · ∇_θ Σ_a π_θ(a|s)
-    = b(s) · ∇_θ 1
-    = 0
-```
+**Definition.** A baseline b is subtracted from the reward: the estimator uses the advantage A = R(x, y) − b.
 
-So the **baseline-augmented** estimator is still unbiased ([[vanilla-pg]] Theorem 1):
+**Problem.** The variance of R ∇ log π is large when rewards have a large common offset. In the §1 example, 80% of samples carry no signal and 20% carry a large one.
+
+**Mechanism (unbiasedness condition).** If b does not depend on the sampled y (it may depend on x):
 
 ```
-∇_θ J(θ) = E[ Σ_t ∇_θ log π_θ(a_t|s_t) · (G_t − b(s_t)) ]
+E_{y∼π_θ}[ b ∇_θ log π_θ(y|x) ] = b Σ_y ∇_θ π_θ(y|x) = b ∇_θ Σ_y π_θ(y|x) = b ∇_θ 1 = 0
 ```
 
-**Why it reduces variance.** Let `X = ∇log π · G` and `X' = ∇log π · (G − b)`. Both have the same mean. The variance of a coordinate of `X'` is:
+So E[(R − b) ∇ log π] = ∇J. The minimum-variance constant baseline per coordinate i is b* = E[R s_i²] / E[s_i²], with s_i the i-th component of the score ∇ log π.
 
-```
-Var(X'_i) = Var(X_i) − 2 · Cov(X_i, ∇log π_i · b) + Var(∇log π_i · b)
-```
+**Worked example (continued).** With b = 0.2 (the expected reward J): correct gives (1 − 0.2)(0.8) = 0.64, wrong gives (0 − 0.2)(−0.2) = 0.04. Mean 0.2 × 0.64 + 0.8 × 0.04 = 0.16, variance 0.0832 − 0.0256 = 0.0576. With b* = E[R s²]/E[s²] = (0.2 × 0.64)/(0.2 × 0.64 + 0.8 × 0.04) = 0.128/0.16 = 0.8: correct gives 0.2 × 0.8 = 0.16 and wrong gives (−0.8)(−0.2) = 0.16, so the variance is 0. All three baselines (0, 0.2, 0.8) give mean 0.16. The zero variance is specific to a one-parameter, two-action case; it shows that b = E[R] is not the minimum-variance constant in general.
 
-The minimum-variance constant baseline per coordinate is `b* = E[G · (∇log π_i)^2] / E[(∇log π_i)^2]`, the `∇log π`-weighted mean return. In practice any `b(s)` close to `E[G | s]` cuts variance dramatically — which is why the *value function* `V^π(s) = E_π[G | s]` is the canonical baseline, and why the "advantage" `A(s,a) = Q^π(s,a) − V^π(s)` is what everyone puts in the estimator instead of the raw return.
+**Sample-based baselines in LLM RL.** With G responses y_1..y_G per prompt and rewards r_1..r_G:
 
-### The menagerie of baselines
-
-| Method | Baseline | Where it lives | Source |
+| Baseline for sample i | Depends on y_i? | Expected gradient | Source |
 |---|---|---|---|
-| Raw REINFORCE | 0 | — | [[vanilla-pg]] |
-| REINFORCE w/ moving avg | `b̄ = (1/S) Σ_s R_s` | scalar EMA | [[vanilla-pg]] |
-| Actor-critic / A2C | `V_φ(s)` | learned head | §3 below |
-| PPO | `V_φ(s)` + GAE | learned head + λ knob | [[ppo]] |
-| RLOO | `(1/(k−1)) Σ_{j≠i} R(y_j, x)` | leave-one-out across rollouts | [[rloo]] |
-| GRPO | `(r_i − mean(r)) / std(r)` over group G | group z-score | [[reinforce-plus-plus]] |
-| REINFORCE++ | `(G − mean_B(G)) / std_B(G)` over full batch | global z-score | [[reinforce-plus-plus]] |
+| b = 0 | no | ∇J | [[vanilla-pg]] |
+| moving average of past rewards | no (past batches) | ∇J | [[rloo]] Eq. 8 |
+| learned value V_φ(x) (critic) | no | ∇J (variance depends on V_φ error) | [[ppo]] Eq. 9–12 |
+| leave-one-out: (1/(G−1)) Σ_{j≠i} r_j | no | ∇J | [[rloo]] §2.3 |
+| group mean (1/G) Σ_j r_j, includes r_i | yes | ((G−1)/G) ∇J | [[dr-grpo]] App. A |
+| (r_i − group mean) / group std | yes | prompt-dependent multiple of ∇J | [[reinforce-plus-plus]] App. A.1, [[dr-grpo]] §3.1 |
 
-All are unbiased because all are action-independent given the conditioning state (prompt `x` for LLMs). They differ only in *variance* and in *how much sampling / memory / compute* they cost. [[rloo]]'s contribution was precisely the observation that, once you have `k ≥ 2` rollouts per prompt, the leave-one-out baseline is statistically better than a learned `V_φ(s)` *and* removes the value network from the system entirely — ~50% memory footprint of PPO with strictly higher win-rate on TL;DR and HH-RLHF at matched KL.
+The group-mean row follows from r_i − mean = ((G − 1)/G)(r_i − mean_{−i}): the group-mean advantage is the leave-one-out advantage times (G − 1)/G. [[dr-grpo]] App. A states the same relation as "(G/(G−1))·Ã equals the RLOO advantage". A constant factor is equivalent to a smaller learning rate. The std division is not a constant: the std depends on r_i and on how many responses in the group are correct. [[reinforce-plus-plus]] App. A.1 (Theorem 1) proves the resulting advantage is biased for any finite N ≥ 2, and [[dr-grpo]] §3.1 names the effect a difficulty bias: questions whose rewards are almost all 1 or all 0 have small std and receive larger weight.
 
-### LLM-specific form — one advantage per sequence
+**Worked example: group of 4 with 0/1 reward.** Prompt P1 has one correct response: rewards (1, 0, 0, 0).
+- b = 0: advantages (1, 0, 0, 0).
+- Group mean 0.25: (0.75, −0.25, −0.25, −0.25).
+- Leave-one-out: correct 1 − 0 = 1; each wrong 0 − 1/3 = −0.333. Multiplying by 3/4 gives the group-mean values.
+- Group std with the n − 1 denominator (PyTorch's default, used by TRL's `rewards.view(-1, num_generations).std(dim=1)`, [[trl-grpo]] L2127–2149): sqrt((0.75² + 3 × 0.25²)/3) = 0.5, so advantages (1.5, −0.5, −0.5, −0.5).
 
-For a sequence `y = (y_1, …, y_T)` sampled autoregressively from `π_θ(·|x)` with terminal reward `R(x, y)` ([[vanilla-pg]] §LLM-specific form):
+Prompt P2 has two correct responses: rewards (1, 1, 0, 0), mean 0.5, std sqrt(4 × 0.25/3) = 0.577, advantage of a correct response 0.5/0.577 = 0.866. After std division a correct response on P1 receives weight 1.5 and one on P2 receives 0.866; after mean subtraction only, the weights are 0.75 and 0.5.
 
-```
-∇_θ J = E_{y∼π_θ(·|x)}[ R(x, y) · Σ_t ∇_θ log π_θ(y_t | x, y_<t) ]
-```
+Taking the expectation over groups (enumerated exactly; this course's calculation, not a source result): for G = 8 and binary reward, the std-normalized estimator equals 1.736 ∇J for a prompt with success probability 0.5 and 2.313 ∇J for a prompt with success probability 0.05 or 0.95, a relative weight of 1.33. The group-mean estimator is 0.875 ∇J for every success probability.
 
-The sum `Σ_t ∇_θ log π_θ(y_t | x, y_<t) = ∇_θ log π_θ(y | x)` is exactly the SFT cross-entropy gradient with sign flipped, weighted by `R(x, y)`. **That is the whole algorithm**: run generation, compute a per-sequence weight, do a weighted SFT step. [[rloo]] is this expression plus a leave-one-out baseline, nothing more.
+**Variance of sample-based baselines.** A baseline estimated from other samples adds its own noise. For one prompt with four responses of probabilities (0.5, 0.3, 0.15, 0.05), responses 2 and 4 correct (J = 0.35), and G = 4, the exact total variance of the logit-gradient estimator is 0.0551 with b = 0, 0.0233 with b = J, and 0.0414 with leave-one-out. For G = 2 leave-one-out gives 0.155, above b = 0 (0.110). With responses 1, 2, 4 correct (J = 0.85) and G = 4, b = 0 gives 0.113 and leave-one-out 0.034. A leave-one-out baseline reduces variance most when the expected reward is far from 0 and G is not small.
 
----
+**[figures/pg-variance.html](figures/pg-variance.html)** — lets the reader change G, the response probabilities, and the correct set, and read off each baseline's advantages, the exact expected gradient as a multiple of ∇J, and the exact variance.
 
-## §3 Actor-critic: trading bias for variance
+**Evidence.** On TL;DR (Pythia-6.9B) and Anthropic-HH (Pythia-6.9B, Llama-7B), GPT-4 win rates against reference completions were RLOO k = 4: 77.9 / 43.7 / 64.1, REINFORCE with a moving-average baseline: 70.7 / 37.9 / 55.3, PPO: 67.6 / 29.2 / 32.0 ([[rloo]] Table 1; Result, single study; checkpoint with the highest test reward). In AppWorld with Qwen2.5-32B-Instruct, a leave-one-out PPO variant scored 71.3 task goal completion without std normalization and 61.9 with it ([[loop-appworld]] Table 1, best run; Result, single study).
 
-Monte-Carlo `G_t` is unbiased but high-variance (it sums `T − t` noisy rewards). A **bootstrapped** estimator substitutes a learned value function:
+**Conditions and limits.** The unbiasedness statements are exact for the gradient of J on one prompt. Clipping, length normalization, and several updates per batch change the estimator further (ch-40). The win rates in [[rloo]] compare full methods, not baselines in isolation.
 
-```
-Â_t^{(1)} = r_t + γ V_φ(s_{t+1}) − V_φ(s_t)     (TD residual; biased if V_φ ≠ V^π, low variance)
-Â_t^{(∞)} = G_t − V_φ(s_t)                       (MC advantage; unbiased, high variance)
-```
+**Implication for a general model.** Std normalization changes how much each prompt contributes to the update. With a mixed-difficulty or multi-domain prompt set, this changes the effective data mixture without any change to D.
 
-[[ppo]] §Technical Details gives the **GAE** interpolation that runs the full spectrum:
+## §3 Actor-critic, bootstrapping, and trust regions
+
+**Definition.** An actor-critic method learns a value function V_φ(s) (the critic) and uses it both as a baseline and to bootstrap returns. Bootstrapping replaces future rewards with a value estimate.
+
+**Problem.** Monte-Carlo returns are unbiased, but for long trajectories with rewards at many steps their variance grows with the number of summed rewards.
+
+**Mechanism and formulas.** [[ppo]] uses truncated generalized advantage estimation (GAE, Eq. 11–12):
 
 ```
 δ_t = r_t + γ V_φ(s_{t+1}) − V_φ(s_t)
-Â_t^{GAE(λ)} = δ_t + (γλ) δ_{t+1} + (γλ)^2 δ_{t+2} + …
+Â_t = δ_t + (γλ) δ_{t+1} + … + (γλ)^{T−t+1} δ_{T−1}
 ```
 
-`λ = 1` recovers Monte-Carlo (unbiased, high variance). `λ = 0` recovers 1-step TD (biased by `V_φ`'s error, low variance). The RLHF default is `λ = 0.95, γ = 1.0` ([[ppo]] canonical hparams, [[lilianweng-rlhf]] RLHF defaults). `γ = 1.0` — undiscounted — because, per [[lilianweng-rlhf]], "rewards concentrate at EOS" in LLM RL: there is exactly one non-zero per-step reward (the RM score at the end-of-sequence token), so any `γ < 1` just throws signal away.
+- r_t: reward at step t; γ: discount; λ ∈ [0, 1]: GAE parameter; T: segment length.
 
-**The bias-variance tradeoff is quantitative.** Assume `V_φ` has mean-squared error `ε^2` against `V^π`. Then the bias of `Â_t^{(1)}` is `O(ε)` per step; over a T-step sum it compounds to `O(Tε)` in the worst case. The variance of the MC estimator scales with `Σ_{t'≥t} Var(r_{t'})` — for LLMs with a single terminal reward this is `Var(R)` regardless of T, so the MC estimator's variance is *bounded*. This is a crucial LLM-specific observation: unlike robotics where long horizons force you to bootstrap, LLM terminal-reward structure makes the unbiased MC estimator competitive — which is exactly why [[rloo]] argues you can drop `V_φ` entirely.
+With λ = 1 the estimate is the finite-horizon return minus V_φ(s_t) ([[ppo]] §5); it is unbiased for any V_φ. With λ = 0 it is the one-step residual δ_t, which is biased whenever V_φ ≠ V^π.
 
----
+**Worked example.** A 3-token response has a single terminal reward 1 at t = 3, γ = 1, and a critic that has not yet learned to distinguish states and predicts 0.6 at every state. With λ = 1: Â_1 = 1 − 0.6 = 0.4. With λ = 0: Â_1 = 0 + V(s_2) − V(s_1) = 0.6 − 0.6 = 0, so the first token receives no signal although the response succeeded. The bias comes from the critic error, not from sampling.
 
-## §4 Why LM-RL is special
+**Variance and sequence length.** A terminal reward does not make the sequence-level estimator's variance independent of length. The estimator is R · Σ_t s_t with s_t = ∇ log π(y_t | x, y_<t). The score terms have zero conditional mean, so E[‖Σ_t s_t‖²] = Σ_t E[‖s_t‖²], which grows with T. A bounded R does not remove this growth.
 
-Classical RL papers (TRPO, PPO, SAC) were written for robotics and games. Four structural properties of LLM post-training break the assumptions those papers optimised for. [[rloo]] §Key Contributions is the clearest enumeration; the list below summarises and extends it with the [[reinforce-plus-plus]] and [[lilianweng-rlhf]] refinements.
+**Evidence.** For PPO on Llama-7B with Anthropic-HH, training reward decreased monotonically as λ was lowered from 1.0 through 0.95 and 0.5 to 0.0 ([[rloo]] §3.1, Fig. 1; Result, single study). The authors attribute this to the pre-trained initialization concentrating probability on few tokens, so that bias is not worth the variance reduction (Interpretation). In AppWorld, PPO with a learned critic diverged for λ_GAE ∈ {0.95, 0.99, 0.999} and was most stable at 1.0 ([[loop-appworld]] App. C).
 
-**(a) Deterministic dynamics.** Given the prefix `(x, y_<t)` and the KV cache, there is no stochastic environment transition — the only randomness is the sampling of `y_t` from `π_θ(·|x, y_<t)`. Bellman-equation stochasticity vanishes. The variance-reduction machinery built to handle environment stochasticity (target networks, double Q, clipped double-Q) is *irrelevant* for LMs.
+**Trust regions.** Several gradient steps on one batch make the samples off-policy. [[trpo]] bounds the true return by a surrogate: η(π̃) ≥ L_π(π̃) − C · D_KL^max(π, π̃), C = 4εγ/(1 − γ)², ε = max |A_π| (Eq. 9), and in practice maximizes the surrogate subject to an average KL constraint ≤ δ, with δ = 0.01 in all experiments (Eq. 12–13, §8.1). [[ppo]] replaces the constraint with a clipped ratio (Eq. 7). Both control the step between consecutive policies; the KL to a fixed reference policy in RLHF is a different quantity (ch-38).
 
-**(b) Full-trajectory rewards.** Almost every LLM RL reward is terminal: one scalar `R(x, y)` after `y_T = EOS`. Per-step rewards exist only when you add a shaped KL term or a process-reward model ([[prm800k]], [[math-shepherd]]). For terminal-only rewards, `G_t = R(x, y)` for every `t`, so the causal per-step gradient collapses to `R(x, y) · ∇_θ log π_θ(y | x)` — the LLM-specific form from §2.
+**Conditions and limits.** Target networks and double or clipped-double Q-learning address instability and overestimation when a value function is bootstrapped from its own estimates. They are relevant when a critic is trained and irrelevant for critic-free methods; they do not concern stochastic environment transitions.
 
-**(c) Very long episodes, very short batches.** A rollout might be 2K–32K tokens ([[ppo]] MuJoCo: T=2048 per actor vs. 32K tokens in a modern RLHF run). Per-token advantages are highly correlated along a sequence — they share the same terminal reward. [[reinforce-plus-plus]] argues this correlation is why global batch normalisation outperforms group-local normalisation: variance in per-prompt group-means is itself high-variance when k is small.
+**Implication for a general model.** A critic trained on one prompt distribution is another model that must generalize. Critic-free estimators remove that dependency; they do not remove the dependency on D.
 
-**(d) Discrete actions over a 100K-way vocabulary.** Policy entropy, clip thresholds, and KL divergences are all computed over a categorical with `|V| ≈ 128K`. Exact KL `Σ_y π(y|x) log(π(y|x)/π_ref(y|x))` is tractable per token and is the default for token-level KL ([[lilianweng-rlhf]] KL penalty implementation, [[reinforce-plus-plus]] k1 estimator).
+## §4 The baseline decides the sign of each update
 
-Concretely, what these four properties kill from the PPO recipe: the value network becomes optional ([[rloo]] removes it, [[reinforce-plus-plus]] removes it, GRPO removes it). GAE becomes redundant when rewards are terminal (`λ=1` is free of bias). K>1 epochs per rollout are often counterproductive — PPO-clip's trust region gets violated fast when each rollout is a 4K-token sequence; [[rloo]] uses K=1. What survives: the **score-function estimator**, the **baseline**, and the **KL-to-reference regulariser**. Those three objects are the minimum viable LLM-RL method, and the next ten chapters are arguments about how to build each one.
+**Definition.** A sample is pushed down (its log-probability receives negative weight) when its advantage R − b is negative.
 
----
+**Problem.** Whether a training method uses negative gradients is often described as a property of the algorithm. For the policy-gradient family it is set by the reward coding and the baseline.
 
-## §5 The entropy term — regulariser or bandaid
+**Mechanism.**
+1. With rewards in {0, 1} and b = 0, every advantage is 0 or 1. Incorrect samples receive zero weight: the update is SFT on correct self-generated samples. [[rls-razor]] §5.1 calls this "1–0 Reinforce" and states it "is equivalent to sampling from the model and performing SFT on correct answers only". This is the objective of rejection-sampling fine-tuning when samples are fresh ([[raft-reinforce-rej-minimalist]] RAFT, Eq. 1; ch-31).
+2. With rewards in {−1, +1} and b = 0, incorrect samples have advantage −1. [[raft-reinforce-rej-minimalist]] §5 describes this as "fine-tuning on the positive samples and unlearning on the negative samples".
+3. With any baseline between the lowest and highest reward in the group, low-reward samples receive negative advantages. In the §2 example, the group mean turns three zero-weight samples into three −0.25 samples.
+4. Reward design can create negatives without a baseline: GeneralPoints gives r = −1, −2, or −3 for different failures ([[sft-memorizes-rl-generalizes]] App. A.3).
 
-Classical RL adds an **entropy bonus** to the loss: `+ c2 · H(π_θ(·|s))`. The stated purpose is to keep the policy from collapsing onto a single action before it has explored enough. [[ppo]] uses `c2 = 0.01` on MuJoCo; CleanRL's Atari config uses the same. [[maximum-entropy-rl]] derives the deep reason — the optimal max-ent policy is `π*(a|s) ∝ exp(Q(s,a)/α)`, a soft Boltzmann whose temperature `α` is the entropy coefficient. The soft-Q value function is `V(s) = α · log Σ_a exp(Q(s,a)/α)`, and auto-α tuning (SAC-v2) adjusts `α` to hit a *target entropy* `H̄`.
-
-**In LLM-RL, the entropy-bonus story is different.** [[lilianweng-rlhf]] states it bluntly: "entropy bonus is often dropped in RLHF because KL regularization to reference policy already regularizes the policy toward a stochastic distribution." The canonical InstructGPT-style objective is:
+**Asymmetry between positive and negative weights.** Consider one term A log π(y) and a softmax over logits z:
 
 ```
-L_RLHF(θ) = −E_{y∼π_θ(·|x)}[ R(x, y) ] + β · KL( π_θ(·|x) || π_ref(·|x) )
+∂ log π(y) / ∂ z_j = 1[j = y] − π(j)
 ```
 
-The KL term is simultaneously a trust-region constraint and an entropy lower-bound: `KL(π_θ || π_ref) = E_π_θ[log π_θ − log π_ref] = −H(π_θ) − E_π_θ[log π_ref]`. So penalising KL-to-reference directly bounds `−H(π_θ)` from below (given `π_ref`'s support) — the policy cannot collapse entropy without paying KL cost. An explicit `+ c2 · H(π)` on top is mostly redundant.
+- For A > 0 the term is maximized at π(y) = 1, where log π(y) = 0. The gradient on z_y is A(1 − π(y)), which shrinks to 0 as π(y) → 1. The positive update saturates.
+- For A < 0 the term A log π(y) → +∞ as π(y) → 0. The gradient on z_y is A(1 − π(y)) → A, which does not shrink. The negative update has no fixed point short of π(y) = 0.
 
-**When is an entropy bonus a bandaid?** Two symptoms, both documented. (1) *Entropy collapse* — per-token entropy drives toward zero mid-training, the policy degenerates to greedy, and RL stalls. Causes include a too-small β (KL is not actually constraining), a mis-scaled reward (one high-reward mode swallows the mass), or on-policy staleness. Adding an entropy bonus *masks* this instead of fixing the reward / KL config. (2) *Reasoning RL (R1-style) distribution collapse* — [[nathan-lambert-rl-overview]] notes that length-normalisation artefacts in GRPO can cause shorter responses to be preferred monotonically, contracting the policy. Again the fix is the loss — [[dr-grpo]] corrects the normalisation — not an entropy patch.
+**Evidence.**
+- On math with Qwen2.5-Math-7B-base and LLaMA-3.2-3B-instruct (average@16 on MATH500, Minerva Math, OlympiadBench), RAFT++ (positives only) reached 56.1 and 27.6, GRPO 56.3 and 28.4, REINFORCE with ±1 reward 53.9 and 24.2 ([[raft-reinforce-rej-minimalist]] Table 1; Result, single study, no seeds reported). RAFT++ entropy fell faster than GRPO's and GRPO overtook it later in training (§5.1, Fig. 2–3).
+- On Science Q&A with Qwen 2.5 3B-Instruct, 1–0 Reinforce matched GRPO on the learning–forgetting trade-off, and SimPO (offline, with negatives) matched SFT ([[rls-razor]] §5.1, Fig. 4; Result, single study, values given as plots).
 
-**When is it a real regulariser?** When exploration is genuinely the bottleneck and KL-to-reference is too weak (`π_ref` itself is low-entropy on the relevant prompts). [[maximum-entropy-rl]]'s auto-α against a target entropy is the principled solution: set `H̄` to a fraction of the SFT model's per-token entropy, let `α` adjust. Most production RLHF stacks do neither — they leave `c2 = 0` and trust KL-to-ref — and that is the right default for ch-38 onward. The entropy term is a tool to reach for when you *observe* entropy collapse, not a default to ship.
+**Conditions and limits.** In expectation the sign pattern does not change the gradient (§2). It changes the finite-sample update, its interaction with clipping, and the entropy trajectory. The two studies above measure different outcomes (benchmark accuracy and entropy versus forgetting); neither measures the share of improvement due to negatives.
 
----
+**Implication for a general model.** A baseline that creates negative advantages on every group with mixed rewards applies an unbounded push-down to many samples per step. Controls for this are in "Negative samples and negative feedback".
 
-## §6 What this template lets us predict about the rest of the track
+## §5 The RL gradient as SFT on the model's own samples
 
-The template `∇J = E[∇log π · A] + regulariser` collapses the next ten chapters into a table of knobs.
+**Definition.** The SFT loss on a target distribution π_β is L_SFT = −E_{x∼D, y∼π_β}[log π_θ(y|x)]. The policy-gradient loss is L_RL = −E_{x∼D, y∼π_θ}[A(x, y) log π_θ(y|x)], with gradients taken only through log π_θ ([[rls-razor]] §5.1).
 
-| Chapter | Algorithm | `A` estimator | Regulariser | Distinctive component |
-|---|---|---|---|---|
-| ch-38 | TRPO / PPO / InstructGPT | GAE-λ with `V_φ` | per-token KL-to-ref `β` | clipped ratio / trust region |
-| ch-39 | DPO / IPO / KTO / SimPO / ORPO | closed-form; no explicit `A` | implicit via `β` | offline, no rollouts |
-| ch-40 | GRPO / Dr. GRPO | group-mean `(r_i − μ_G)/σ_G` | per-token KL (k3) | no value net; group rollouts |
-| ch-41 | RLOO / REINFORCE++ | leave-one-out or global-batch z-score | KL as shaped reward | critic-free |
-| ch-42 | RLVR (verifier rewards) | same as GRPO/PPO | KL-to-ref | deterministic `r(x,y)=v(x,y)` |
-| ch-43 | Process-reward RL | per-step `r_t` from PRM | KL-to-ref | per-step credit assignment |
-| ch-44 | Iterative / online RLHF | flywheel over rounds | KL-to-ref (fresh) | loop structure |
-| ch-45 | Self-play / RLAIF | RM or model-judge reward | KL-to-ref | signal source |
-| ch-46 | Track capstone | — | — | — |
+**Problem.** Fine-tuning on a new task can lower performance on earlier tasks (forgetting). The question is whether the training method, at equal new-task accuracy, affects how much is forgotten.
 
-Every row is the same equation. The algorithmic literature looks bigger than it is because nobody writes the equation down twice — they write a new paper around the knob they changed.
+**Mechanism.** The two losses differ in two places: the sampling distribution (π_θ versus fixed external targets) and the weight (A, which can be negative, versus 1). An RL update increases the probability of responses that already have non-negligible probability under the current model. SFT can move probability to responses the model would not sample.
 
----
+**Formula (idealized case).** For a binary reward and a base policy p over a finite set, the distribution closest to p in KL among fully correct distributions is p restricted to correct responses and renormalized, and its KL from p is −log P_p(correct) ([[rls-razor]] App. A, Lemma A.1). [[rls-razor]] Theorem 5.2 states that, under regularity conditions and a convex policy family, policy gradient from π_0 converges to argmin_{π optimal} KL(π ‖ π_0).
 
-## Companion visualization
+**Worked example.** A base model gives four answers probabilities (0.5, 0.3, 0.15, 0.05); answers 2 and 4 are correct, so P(correct) = 0.35.
+- KL-minimal correct policy: (0, 0.3/0.35, 0, 0.05/0.35) = (0, 0.857, 0, 0.143). KL to the base = −log 0.35 = 1.05 nats.
+- SFT on annotations that always use answer 4: target (0, 0, 0, 1). KL to the base = −log 0.05 = 3.00 nats.
+Both policies are fully correct; the SFT target is 2.85× further in KL.
 
-**[figures/pg-variance.html](figures/pg-variance.html)** — interactive gradient-variance simulator. Pick a baseline type (none / constant / value-function / leave-one-out) and watch the per-iteration variance curve of the estimator on a small simulated RLHF-like problem (k rollouts per prompt, terminal reward). The curves make concrete why [[rloo]]'s leave-one-out beats a moving-average baseline at small k, and why global-batch normalisation ([[reinforce-plus-plus]]) beats group-local normalisation when k is 1–2. Use it *before* reading ch-38 — the variance argument is what drives every algorithm choice that follows.
+**Evidence.**
+- Qwen 2.5 3B-Instruct trained on math (Open-Reasoner-Zero questions), Chemistry L-3 of SciKnowEval, and ToolAlpaca, with GRPO (binary reward, no KL term) and SFT over hyperparameter sweeps: at matched new-task accuracy, RL kept prior-task scores (HellaSwag, TruthfulQA, MMLU, IFEval, WinoGrande, HumanEval) nearly unchanged while SFT lowered them, most strongly on math ([[rls-razor]] §3.1, Fig. 2; Result, single study, values given as plots). Forgetting was predicted by the KL between the fine-tuned and base policy on the new task, quadratic fit R² = 0.71 in the LLM experiments (§4, Fig. 11).
+- In the paper's toy setting (ParityMNIST, a 3-layer MLP), SFT on an analytically constructed KL-minimal fully correct distribution forgot less than RL ([[rls-razor]] §4, Fig. 3; the construction requires knowing the base model's full output distribution and was not run on the LLM tasks).
+- Llama-3.2-Vision-11B, SFT-initialized, then PPO or further SFT: on GeneralPoints with an unseen face-card rule, out-of-distribution success went from 11.5% to 15.0% after RL and to 3.4% after SFT; on V-IRL-L with an unseen action space, from 80.8% to 91.8% after RL and to 1.3% after SFT ([[sft-memorizes-rl-generalizes]] §5.1; Result, single study). End-to-end RL without the SFT initialization failed to improve because the base model's outputs could not be parsed for reward (§5.4).
+- Replicated direction: both studies find RL retains or transfers better than SFT on external targets. They differ in model, task, and metric (forgetting of prior benchmarks versus rule-variant OOD accuracy).
 
----
+**Conditions and limits.** Both studies use one base model each. The SFT targets were generated by a different model (DeepSeek-R1 or GPT-4o in [[rls-razor]] App. B.1) or task demonstrations; SFT on self-generated targets is a different case (ch-31). [[rls-razor]] §7: "we still lack a mechanistic account of why larger KL shifts on the new task disrupt prior knowledge". ch-30a records a report in which the KL–forgetting relation does not always hold (Open question).
+
+**Implication for a general model.** On-policy sampling is a forgetting control in its own right. A new capability that the model cannot sample at all cannot be reached by on-policy RL; that case needs SFT or distillation first (ch-31, ch-38a).
+
+## §6 Reverse-KL-regularized reward, entropy, and diversity
+
+**Definition.** RLHF maximizes reward minus a KL penalty to a reference policy π_ref (usually the SFT model):
+
+```
+max_π E_{x∼D} [ E_{y∼π}[R(x, y)] − β KL(π(·|x) ‖ π_ref(·|x)) ]
+π*(y|x) = π_ref(y|x) exp(R(x, y)/β) / Z(x)
+```
+
+- β > 0: KL coefficient; Z(x) = Σ_y π_ref(y|x) exp(R(x, y)/β). The second line is the maximizer, obtained by writing the objective as −β KL(π ‖ π*) + β log Z. [[maximum-entropy-rl]] Eq. 4 has the same exponential target with Q in place of R and no reference policy (Interpretation of the relation).
+
+**Why "reverse" and mode-seeking.** KL(π ‖ π_ref) = Σ_y π(y) log(π(y)/π_ref(y)) weights the log-ratio by π. Placing mass where π_ref is small costs a large amount. Removing mass from responses that π_ref supports costs nothing for those responses, because their terms are multiplied by π(y) = 0. The penalty therefore allows the policy to drop responses.
+
+**Worked example.** π_ref = (0.5, 0.3, 0.2), rewards (1, 0, 0). With β = 2: π* = (0.623, 0.227, 0.151), entropy 0.917 nats (π_ref: 1.030), KL 0.030. With β = 0.5: π* = (0.881, 0.072, 0.048), entropy 0.446, KL 0.328. Among the two zero-reward responses the ratio stays 1.5 in both cases: the exact optimum preserves π_ref's shape among equal-reward responses and concentrates mass on higher-reward ones.
+
+**KL does not give a lower bound on entropy.** KL(π ‖ π_ref) = −H(π) + CE(π, π_ref), with CE(π, π_ref) = −Σ_y π(y) log π_ref(y). KL ≥ 0 gives H(π) ≤ CE(π, π_ref), an upper bound. Example: π_ref = (0.9, 0.1), π = (1, 0). KL = log(1/0.9) = 0.105 nats and H(π) = 0. A peaked π_ref allows collapse at low KL cost.
+
+**Evidence on diversity.**
+- PPO with β_KL = 0.05 on LLaMA 7B: RLHF generalized better out of distribution than SFT and "significantly reduces output diversity compared to SFT across a variety of measures" ([[rlhf-generalisation-diversity]] Abstract). On OPT-6.7B summarisation, per-input EAD was 0.07 for RLHF and 0.79 for SFT (App. J.4 Table 11); across-input EAD was 0.87 for both (Table 12).
+- Increasing the KL coefficient lowered performance and also lowered per-input diversity ([[rlhf-generalisation-diversity]] §6.3, App. I; Result, single study). A larger β did not recover diversity in that setting.
+- In RLVR runs on math, adding an entropy loss L − αH(π_θ) with α = 0.0001 or 0.001 had minor effect on entropy, α = 0.01 caused entropy explosion, and α = 0.005 stabilized entropy without outperforming the other baselines; reference-KL coefficients 0.001–0.1 stabilized entropy but lowered accuracy ([[entropy-mechanism-llm-rl]] §4.1, Fig. 9–10; the model used for these two sweeps is not stated). For vanilla policy gradient on a softmax, the entropy change is ≈ −η Cov(log π(a), π(a) A(a)) (Theorem 1): raising an already probable action with positive advantage lowers entropy.
+
+**Entropy bonus in classical RL.** [[ppo]] Eq. 9 includes an entropy term c_2 S[π_θ](s_t). The MuJoCo experiments used no entropy bonus (§6.1); c_2 = 0.01 is the Atari value (Table 5). [[maximum-entropy-rl]] builds entropy into the objective and reports that a small reward scale gave a near-uniform policy and a large scale a near-deterministic policy stuck in poor local minima (§5.2, Fig. 3b).
+
+**KL in practice is a single-sample estimate.** Implementations do not compute the full-vocabulary KL. PPO-style RLHF adds a per-token log-ratio log(π/π_ref) of the sampled token to the reward ([[reinforce-plus-plus]] Eq. 4); GRPO adds π_ref/π − log(π_ref/π) − 1 of the sampled token to the loss ([[grpo]] Eq. 4). These are the k1 and k3 estimators of [[john-schulman-kl-tricks]]. ch-38 and ch-43 compare them.
+
+**pass@k: the metric that detects lost coverage.** Definition: a problem is solved at k if at least one of k samples is correct. With n ≥ k samples and c correct, the unbiased estimator ([[rlvr-beyond-base-model]] App. A.2) is:
+
+```
+pass@k = E_x [ 1 − C(n − c, k) / C(n, k) ]
+```
+
+Worked example: n = 10, c = 2, k = 5 gives 1 − C(8, 5)/C(10, 5) = 1 − 56/252 = 0.778.
+
+Evidence: Qwen2.5-7B trained with GRPO on 2,000 Omni-MATH-Rule problems raised MATH500 pass@1 from 34.5 to 74.4 while pass@256 went from 96.2 to 97.2; on the in-domain Omni-MATH test, pass@256 went from 69.1 to 68.3 ([[rlvr-beyond-base-model]] Table 3). Longer GRPO training raised Omni-MATH-Train pass@1 from 26.1 (step 150) to 42.5 (step 450) while pass@256 fell from 66.3 to 64.3 (Table 4). On AIME24 at k = 1024, 13.3% of problems were solved by the base model and not by the SimpleRLZoo RL model, and 0.0% the other way (Table 2). The authors interpret RLVR as raising the probability of paths the base model could already sample (Interpretation). [[reinforce-plus-plus]] v9 Table 2 reports that GRPO trained on 30 AIME-24 questions reached 95.0 train pass@1 and 0.4 AIME-25 pass@16 (model not stated; Result, single study).
+
+**Implication for a general model.** Report entropy, per-input diversity, and pass@k at large k alongside reward. A rising pass@1 with a flat or falling pass@k indicates concentration rather than new capability.
+
+## §7 When the environment returns tokens: the agentic exception
+
+**Definition.** In agentic RL the model emits an action (text, a tool call), the environment returns an observation (tool output, verifier message), and the observation is appended to the context before the next action.
+
+**Problem.** The single-turn setting has deterministic transitions: the next state is the prefix plus the sampled token. With tools, the next state depends on the environment, which can be stochastic or stateful. Observation tokens are in the sequence but are not sampled from π_θ.
+
+**Mechanism.**
+1. The trajectory probability is p(τ) = Π_t π_θ(a_t | s_t) · P(s_{t+1} | s_t, a_t). The transition factor P has no θ, so its log-derivative is 0 and the §1 estimator remains unbiased.
+2. Only action tokens belong in Σ log π_θ. [[loop-appworld]] formulates AppWorld as a POMDP in which environment tokens are appended to the state but only LLM-emitted tokens enter the likelihood (§4.1, Eq. 6–8). TRL sets `tool_mask` to 0 for tool-result tokens and excludes them from the loss and the importance ratio ([[trl-grpo]] L1472, L1638–1648, L2425).
+3. Including observation tokens in the loss would add an SFT term on environment text with weight A, which is not part of ∇J.
+4. Environment randomness adds reward variance that a prompt-level baseline cannot remove, and a terminal reward is shared by all turns (credit assignment).
+
+**Evidence.** In AppWorld (Qwen2.5-32B-Instruct, LoRA, 72 training tasks), importance weights per token scored 71.3 task goal completion, per turn 64.1, per trajectory 53.3 ([[loop-appworld]] Table 1, best run; three-run means in Table 2 keep the order). In GeneralPoints, the verifier's text is appended to the prompt (sequential revision); more verification steps under the same compute gave larger OOD gains: +0.48% (1 step), +2.15% (3), +2.99% (5), +5.99% (10) ([[sft-memorizes-rl-generalizes]] §3, §5.5).
+
+**Conditions and limits.** AppWorld lacks non-determinism, transient failures, and unsolvable tasks ([[loop-appworld]] §6). Critics, turn-level values, and observation handling are treated in ch-45b.
+
+**Implication for a general model.** Tool outputs vary across environments. A policy trained on one tool environment is evaluated on others (Test-Challenge in AppWorld includes unseen apps: 21.0 → 45.7 after LOOP, [[loop-appworld]] Table 1).
+
+## Negative samples and negative feedback
+
+This section uses the four meanings of "negative" from the course standard. Policy gradient uses meaning (4), **negative as gradient**: a negative advantage lowers the sample's log-probability. Rejection sampling with b = 0 uses the **discard** option.
+
+**Where negatives come from.** A verifier (Math-Verify in [[raft-reinforce-rej-minimalist]] and [[dr-grpo]]), a reward model score below the baseline ([[rloo]]), unit tests passed as a fraction ([[loop-appworld]] App. D), or a shaped environment penalty ([[sft-memorizes-rl-generalizes]] App. A.3). False-negative rates are not reported in these sources. [[rlvr-beyond-base-model]] §2.2 notes the reverse error at large k in math: a wrong chain of thought can reach the correct answer.
+
+**What current practice does.** RAFT/RAFT++ and 1–0 Reinforce discard failures. REINFORCE with ±1 rewards, RLOO, GRPO, and PPO push failures down. Reinforce-Rej discards prompts whose responses are all correct or all incorrect and pushes down failures in mixed groups ([[raft-reinforce-rej-minimalist]] §5).
+
+**Mechanism.** For one sampled token y with advantage A < 0 and step η, the logit update is Δz_k = η A (1[k = y] − p_k). The first-order probability change is
+
+```
+Δp_j ≈ η A p_j (1[j = y] − p_j − p_y + Σ_k p_k²)
+```
+
+For an unsampled j this is positive only when p_j > Σ_k p_k² − p_y. Worked example: p = (0.6, 0.3, 0.1), sampled y = token 3, A = −1, η = 1. The threshold is 0.46 − 0.1 = 0.36. Exact softmax after the update: (0.710, 0.263, 0.026). Token 3 lost 0.074, token 1 gained 0.110, and token 2 lost 0.037. Mass removed from an unlikely sample moves to the most likely alternative, and other alternatives can also lose mass. Panel C of [figures/pg-variance.html](figures/pg-variance.html) lets the reader repeat this for other probabilities. ch-39 and ch-43a develop this effect (squeezing, likelihood displacement).
+
+**Evidence of benefit and of failure modes.**
+- Benefit: GRPO overtook RAFT++ late in training, and RAFT++ entropy fell faster; the authors conclude negatives help maintain exploration (Interpretation; [[raft-reinforce-rej-minimalist]] §5.1).
+- Cost without filtering: REINFORCE with ±1 reward scored 53.9 and 24.2 versus 56.4 and 28.5 for Reinforce-Rej on the two models (Table 1). In the ablation on LLaMA-3.2-3B-instruct, removing prompts whose responses were all wrong gave the largest reward gain over vanilla REINFORCE, while removing all-correct prompts changed little (Fig. 4 and its caption).
+- Forgetting: on-policy data, not negatives, separated RL from SFT in [[rls-razor]] §5.1.
+- Share of improvement attributable to negatives: not measured by any source cited here.
+
+**Controls.**
+1. Keep samples on-policy or bound the ratio: PPO clips the ratio at 1 − ε when Â < 0, so lowering a probability below (1 − ε)π_old gives no further gain ([[ppo]] §3, Fig. 1).
+2. Use a baseline that yields zero advantage when all rewards are equal (group mean or leave-one-out), so a group in which every sample failed produces no push-down. In TRL the mean subtraction already gives 0 for such a group, and the division adds 1 × 10⁻⁴ to the group std so it stays finite ([[trl-grpo]] L2147–2149); the zero-std flag itself is logged, not used to zero the advantage (L2150, L2186).
+3. Anchor with a KL term or a positive NLL term (ch-38, ch-43a).
+4. Filter or down-weight uninformative groups (Reinforce-Rej).
+
+**Diagnostics.** Log mean advantage and mean log-probability separately for A > 0 and A < 0 samples; log policy entropy; log the fraction of zero-std groups (`frac_reward_zero_std` in [[trl-grpo]]); report pass@1 and pass@k at large k on held-out prompts.
+
+**Effect on generality.** Negatives may preserve entropy ([[raft-reinforce-rej-minimalist]]), which bears on coverage; unbounded push-down concentrates mass on the most likely alternatives, which bears on diversity. The effect on calibration, hallucination, and over-refusal is not measured in these sources.
+
+## Recipe
+
+Rows quote the policy-gradient settings that the cited sources state. Loci were checked on the dates shown.
+
+| Model (exact release) | Size | Stage | Setting | Value | Source location | Status | Evidence for this value |
+|---|---|---|---|---|---|---|---|
+| PPO-Clip, MuJoCo 1M-timestep benchmark | MLP 2×64 | RL | entropy coefficient c_2 | not used (no entropy bonus) | arXiv:1707.06347v2 §6.1 ([[ppo]]) | verified 2026-09-14 | not applicable |
+| PPO-Clip, MuJoCo | MLP 2×64 | RL | clip ε | 0.2 | arXiv:1707.06347v2 §6.1 Table 1 | verified 2026-09-14 | Table 1: 0.82 vs 0.76 (ε = 0.1), 0.70 (ε = 0.3); 7 tasks × 3 seeds |
+| PPO-Clip, Atari (49 games) | not reported | RL | c_1; c_2 | 1; 0.01 | arXiv:1707.06347v2 App. A Table 5 | verified 2026-09-14 | no ablation reported |
+| TRPO experiments | not applicable | RL | KL step size δ | 0.01 ("for all experiments") | arXiv:1502.05477 §8.1 ([[trpo]]) | verified 2026-09-15 | no ablation reported |
+| RLOO / PPO / RAFT runs, TL;DR | Pythia-6.9B | RL | β (KL in reward); rollout batch; step batch; steps | 0.03; 512; 256; 600 | arXiv:2402.14740v2 App. C ([[rloo]]) | verified 2026-09-15 | no ablation reported |
+| same, Anthropic-HH | Pythia-6.9B | RL | β; steps | 0.10; 393 | arXiv:2402.14740v2 App. C | verified 2026-09-15 | no ablation reported |
+| same, all datasets | Pythia-6.9B, Llama-7B | RL | LR; warm-up; gradient steps per batch; k | constant 1 × 10⁻⁶; 3% linear; 2; 2 or 4 | App. C; Table 1 | verified 2026-09-15 | LR sweep {1e-6, 1e-5, 2e-5} (RAFT, RLOO) and {1e-6, 1e-5} (PPO, Vanilla PG); Table 1 k = 4 vs k = 2 |
+| GRPO for forgetting study | Qwen 2.5 3B-Instruct | RL | KL coefficient; group size; prompts per generation; μ; loss type | 0; 64; 8; {1, 2}; Dr. GRPO | arXiv:2509.04259v1 App. B Table 2 ([[rls-razor]]) | verified 2026-09-15 | Pareto frontier over sweep (Fig. 2) |
+| same | Qwen 2.5 3B-Instruct | RL | LR sweep; schedule; warm-up; epochs | {1e-5 … 5e-5}; constant with warm-up; 50 steps; 1 | App. B Table 2 | verified 2026-09-15 | Pareto frontier over sweep |
+| RLHF (PPO) for diversity study | LLaMA 7B | RL | β_KL (KL in reward) | 0.05 | arXiv:2310.06452v3 §4 Eq. 1 ([[rlhf-generalisation-diversity]]) | verified 2026-09-15 | App. I sweep: higher β lowered per-input diversity and performance |
+| RAFT, RAFT++, GRPO, Reinforce-Rej | Qwen2.5-Math-7B-base, LLaMA-3.2-3B-instruct | RL | prompts per iteration; responses per prompt; mini-batch; LR; max tokens | 1,024; 4; 512; 1 × 10⁻⁶; 4,096 | arXiv:2504.11343v2 §4 ([[raft-reinforce-rej-minimalist]]) | verified 2026-09-15 | Table 1 caption: batch, mini-batch and actor LR were tuned per algorithm and refers to an appendix that v2 does not contain, so the per-algorithm values are not available |
+| GRPO / PPO / RLOO comparison | Qwen2.5-7B (base) | RL | KL; LR; prompts per step; responses per prompt; max length; temperature | removed; constant 1 × 10⁻⁶; 256; 8; 8,192; 1.0 | arXiv:2504.13837v5 §4.3 ([[rlvr-beyond-base-model]]) | verified 2026-09-15 | no ablation reported |
+| pass@k evaluation, same study | Qwen2.5 and LLaMA-3.1-8B | eval-gate | n samples; temperature; top-p; max tokens | 128 or 1,024 (largest k plotted); 0.6; 0.95; 16,384 | arXiv:2504.13837v5 §3, App. A.2 | verified 2026-09-15 | not applicable |
+| Dr. GRPO runs (Oat-Zero) | 1.5B–7B | RL | responses per question; temperature; KL coefficients; clip ε; LR | 8; 1.0; 0.0; 0.2; 1 × 10⁻⁶ constant | arXiv:2503.20783v2 App. G Table 6 ([[dr-grpo]]) | verified 2026-09-14 | no ablation reported |
+| Entropy-loss sweep (model not stated) | not reported (checked §4.1, Fig. 9 caption, §2.2) | RL | entropy-loss coefficient α in L − αH | 0.0001, 0.001 minor effect; 0.005 stable, not better; 0.01 entropy explosion | arXiv:2505.22617v1 §4.1 Fig. 9 ([[entropy-mechanism-llm-rl]]) | verified 2026-09-14 | Fig. 9 |
+
+**Starting point for a small general-purpose run.** The following values each come from a verified row above, under the stated conditions. For a 3B–7B model with verifiable rewards: constant LR 1 × 10⁻⁶ (Qwen2.5-7B and Qwen2.5-Math-7B runs in [[rlvr-beyond-base-model]] and [[raft-reinforce-rej-minimalist]]), 4–8 responses per prompt (same rows), temperature 1.0 for rollouts ([[rlvr-beyond-base-model]], [[dr-grpo]]), no entropy bonus (PPO MuJoCo; the entropy-loss sweep found no gain), and a leave-one-out or mean-only baseline (§2). The KL coefficient depends on the goal: 0 was used in the reasoning and forgetting studies above; 0.03–0.10 in the RLHF reward-model runs of [[rloo]]. Evaluate pass@1 and pass@k with n ≥ 128 on held-out prompts. None of these runs tested these values for a multi-domain general model.
+
+## Generalization lens
+
+**(a) What increases breadth.**
+- On-policy updates: at matched new-task accuracy, RL forgot less than SFT on external targets ([[rls-razor]] Fig. 2) and transferred to unseen rules and visual variants where SFT did not ([[sft-memorizes-rl-generalizes]] §5.1–5.2). Result, replicated in direction across two studies.
+- More environment feedback per episode: more verification steps gave larger OOD gains at equal compute ([[sft-memorizes-rl-generalizes]] §5.5).
+- Out-of-distribution robustness from RLHF: better OOD preference scores than SFT, particularly as the distribution shift grows ([[rlhf-generalisation-diversity]] Abstract, §6.1).
+
+**(b) What causes narrowing or forgetting.**
+- Reduced per-input diversity after RLHF ([[rlhf-generalisation-diversity]] Table 11), not recovered by a larger KL coefficient (§6.3).
+- Reduced large-k coverage after RLVR and with longer training ([[rlvr-beyond-base-model]] Tables 3–4).
+- Overfitting to a small prompt set: GRPO on 30 AIME-24 questions reached 95.0 train pass@1 and 0.4 AIME-25 pass@16 ([[reinforce-plus-plus]] v9 Table 2).
+- Implicit reweighting of prompts by std normalization (§2), which changes the effective mixture.
+- Prompt types absent from D receive no gradient (§1).
+
+**(c) How to measure it for this stage.** Use three evaluation splits for every RL run in this track:
+1. **Training reward** on the prompts being optimized (detects optimization failure, not generality).
+2. **Held-out prompts from the same distribution**, with pass@1 and pass@k at n ≥ 128 (detects overfitting and coverage loss).
+3. **Prompts from other domains and prior-capability benchmarks** (for example the six benchmarks in [[rls-razor]] §3.1), plus per-input diversity (detects forgetting and narrowing).
+Known measurement errors: pass@k at large k in math counts lucky guesses ([[rlvr-beyond-base-model]] §2.2); diversity metrics did not separate models on long instruction-following outputs ([[rlhf-generalisation-diversity]] §6.2); win rates from an LLM judge were not checked against human preferences in [[rloo]] (Limitations).
+
+## Common mistakes and how to detect them
+
+| Mistake | Observable symptom | Check |
+|---|---|---|
+| Treating group-mean or group-std advantages as unbiased | Effective learning rate changes with group size; easy and hard prompts dominate updates | Compute the expected scale (G−1)/G and the per-prompt std weight; compare with leave-one-out (figure panel B) |
+| Assuming a KL penalty prevents entropy collapse | Entropy falls while KL to the reference stays small | Log H(π) and CE(π, π_ref) separately; check π_ref's entropy on training prompts |
+| Adding an entropy bonus by default | Entropy rises without accuracy gain, or rises without bound | Sweep the coefficient on a held-out split; compare with c_2 = 0 ([[entropy-mechanism-llm-rl]] Fig. 9) |
+| Including tool or observation tokens in the policy loss | Model reproduces tool output text; loss decreases on tokens the model did not generate | Verify the loss mask is 0 on observation tokens ([[trl-grpo]] `tool_mask`) |
+| Reporting only training reward or pass@1 | Gains on training prompts with flat or falling pass@k on held-out prompts | Report the three splits in the Generalization lens |
+| Using ±1 rewards with no filtering or anchor | Log-probability of rejected samples falls fast; probability of unrelated tokens drops | Log log π separately for A > 0 and A < 0; track entropy |
+| Stating "the estimator's variance is bounded because the reward is terminal" | Gradient norm variance grows with response length | Plot gradient-norm variance against response length bins |
+| Bootstrapping with an untrained critic (λ < 1) | Reward stalls or diverges early | Compare λ = 1 against lower λ, as in [[rloo]] Fig. 1 and [[loop-appworld]] App. C |
+
+## Check your understanding
+
+1. In the §1 two-action example, explain why b = 0.8 gives zero variance and why this would not hold with three possible answers.
+2. The group-mean baseline multiplies the expected gradient by (G − 1)/G. Explain why this is harmless on one prompt but std normalization is not harmless across prompts of different difficulty.
+3. With 0/1 rewards and b = 0, no sample is pushed down. Explain why the expected gradient is still the same as with a leave-one-out baseline, and what does change in training.
+4. Explain why a negative advantage on an already unlikely token can lower the probability of a moderately likely token, using the first-order Δp formula.
+5. Explain the causal chain from "samples come from π_θ" to "less forgetting than SFT", and name the evidence that on-policy data, not negative gradients, is the factor in [[rls-razor]].
+6. KL(π ‖ π_ref) is small in a run whose entropy collapsed. Explain how this is possible.
+7. A run shows pass@1 rising from 30 to 45 while pass@256 falls from 70 to 66. State what the model gained and what it lost, and which evaluation split should come next.
+8. In a tool-use trajectory, explain why the transition probabilities do not bias the policy gradient but observation tokens must still be masked.
 
 ## Connections
 
-- **ch-36 (SFT capstone)** — the `checkpoint-final` from the packed SFT run is `π_ref` for every RL chapter in this track. Every regularisation term in this chapter's template is a distance-to-that-checkpoint penalty.
-- **ch-38 (KL-Controlled RLHF)** — TRPO's monotonic-improvement bound ([[trpo]]) and PPO's clipped surrogate ([[ppo]]) are the first two specialisations of the template. InstructGPT is PPO + per-token KL-to-ref.
-- **ch-39 (Offline preference)** — DPO replaces the sample-based `∇J` with a closed form under Bradley-Terry preferences; no `π_θ` rollouts at train time.
-- **ch-40 / ch-41 (GRPO / RLOO / REINFORCE++)** — three critic-free specialisations, each picking a different baseline.
-- **ch-42 (RLVR)** — replaces the learned reward model with a deterministic verifier; the policy-gradient structure is unchanged.
-- **ch-47..ch-53 (Eval, Reward, Judge)** — the reward signal `R(x, y)` in this chapter is exactly what those chapters are about constructing.
+- **Previous: ch-41 — Reward Modeling: Bradley–Terry, Over-Optimization, and Reward-Model Generalization.** Provides R(x, y); reward-model errors enter the estimator as advantage errors.
+- **Next: ch-38 — KL-Controlled RLHF: PPO, InstructGPT, and the Alignment Tax.** Adds the clipped surrogate, the per-token KL in the reward, and the alignment-tax measurements.
+- **ch-38a — SFT versus RL Generalization: On-Policy Data, KL to the Base Model, and Output Diversity.** Full treatment of [[rls-razor]], [[sft-memorizes-rl-generalizes]], and [[rlhf-generalisation-diversity]].
+- **ch-39 — Offline Preference Optimization: DPO and Its Variants.** Uses the KL-regularized optimum of §6 without sampling.
+- **ch-40 — Group-Baseline RL: RLOO, GRPO, Dr. GRPO, DAPO, and GSPO.** Implements the baselines of §2 with clipping and length normalization.
+- **ch-16 — RL Prompt Distribution: Difficulty Filtering, Domain Breadth, and Prompt Reuse.** Designs D from §1.
+- **ch-43 — Entropy, Output Diversity, and KL Control in RL.** Continues §6.
+- **ch-43a — Negative Samples and Negative Gradients: Likelihood Displacement, Squeezing, and Negative Advantages.** Continues the negative-feedback section.
+- **ch-45b — Multi-Turn Agentic RL: Observation Masking, Credit Assignment, and Stability.** Continues §7.
+- **ch-30a — Forgetting and Alignment Tax in Fine-Tuning: Measurement and Control** and **ch-31 — Rejection Sampling, Self-Generated Data, Cold Start, and SFT–RL Alternation.** Background for §4–§5.
 
-## Further reading
+## Sources
 
-- [[vanilla-pg]] — Williams 1992. The policy-gradient theorem, the baseline-invariance theorem, and the eligibility/score function. The source this chapter's §1 and §2 derive.
-- [[trpo]] — Schulman 2015. Monotonic-improvement bound + KL trust region. First step from "score function" to "trust-region policy optimisation".
-- [[ppo]] — Schulman 2017. Clipped surrogate, combined actor-critic loss, GAE. Canonical hparams.
-- [[rloo]] — Ahmadian 2024. LLM-RL does not need the value network, GAE, clip, or K>1 epochs; leave-one-out baseline beats PPO at ~50% memory.
-- [[reinforce-plus-plus]] — Hu 2025. Global batch advantage normalisation; the `k=1` critic-free recipe.
-- [[lilianweng-rlhf]] — RLHF tutorial; `r_total = r(x,y)·1[y=EOS] − β·log(π/π_ref)`, reward whitening, and why entropy bonus is usually dropped.
-- [[nathan-lambert-rl-overview]] — algorithm-to-reward-signal framing; reward-signal source is the first-order choice.
-- [[costa-huang-ppo-details]] — the 37-trick implementation reference; what makes the paper reproduce.
-- [[maximum-entropy-rl]] — SAC's `π*(a|s) ∝ exp(Q/α)`, auto-α tuning, target entropy `H̄`.
+- [[vanilla-pg]] — REINFORCE update with a reinforcement baseline (§1–§2).
+- [[rloo]] — sequence-as-action form, leave-one-out estimator, λ sweep, win rates, training settings (§1–§3, Recipe).
+- [[trpo]] — improvement bound, KL-constrained surrogate, δ = 0.01 (§3, Recipe).
+- [[ppo]] — GAE, clipped surrogate, entropy coefficient by domain (§3, §6, negative-feedback controls, Recipe).
+- [[maximum-entropy-rl]] — maximum-entropy objective and reward-scale sensitivity (§6).
+- [[rls-razor]] — on-policy updates and forgetting, 1–0 Reinforce vs GRPO vs SimPO, KL-minimal theory (§4–§5, Recipe).
+- [[sft-memorizes-rl-generalizes]] — rule and visual OOD after RL vs SFT, sequential revision, verification steps, reward design (§4, §5, §7).
+- [[rlhf-generalisation-diversity]] — RLHF generalization and diversity, KL sweep (§6, Generalization lens).
+- [[rlvr-beyond-base-model]] — pass@k estimator, pass@1 vs pass@256 tables (§6, Recipe).
+- [[raft-reinforce-rej-minimalist]] — positives-only vs ±1 REINFORCE vs GRPO, entropy, prompt filtering (§4, negative-feedback section, Recipe).
+- [[reinforce-plus-plus]] — bias of the GRPO advantage, KL log-ratio in the reward, small-set overfitting (§2, §6).
+- [[dr-grpo]] — (G−1)/G relation to RLOO, difficulty bias, run settings (§2, Recipe).
+- [[grpo]] — GRPO advantage and k3 KL term in the loss (§6).
+- [[entropy-mechanism-llm-rl]] — entropy change under policy gradient, entropy-loss and KL sweeps (§6, Recipe).
+- [[loop-appworld]] — POMDP with observation tokens, importance-weight granularity, std normalization cost (§2, §3, §7).
+- [[trl-grpo]] — group std computation, zero-std handling, `tool_mask` (§2, §7, diagnostics).
+- [[john-schulman-kl-tricks]] — names of the k1 and k3 KL estimators (§6).

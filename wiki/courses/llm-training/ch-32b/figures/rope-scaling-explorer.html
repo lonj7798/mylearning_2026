@@ -1,0 +1,202 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>RoPE Scaling Explorer</title>
+<style>
+:root{
+  --bg:#fbfaf7; --fg:#1d1d1b; --muted:#5f5e58; --line:#d8d5cc; --panel:#ffffff;
+  --pi:#1f6fb2; --ntk:#b4561b; --yarn:#2f8a4c; --orig:#6b6b6b; --mark:#9a3d8f;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#171716; --fg:#ecebe6; --muted:#a8a69e; --line:#3a3935; --panel:#212120;
+    --pi:#6fb0ea; --ntk:#eb9a5f; --yarn:#6fcf8d; --orig:#b0b0b0; --mark:#d98fd0;
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#171716; --fg:#ecebe6; --muted:#a8a69e; --line:#3a3935; --panel:#212120;
+  --pi:#6fb0ea; --ntk:#eb9a5f; --yarn:#6fcf8d; --orig:#b0b0b0; --mark:#d98fd0;
+}
+body{margin:0;background:var(--bg);color:var(--fg);font:14px/1.5 system-ui,-apple-system,"Segoe UI",sans-serif}
+.wrap{max-width:980px;margin:0 auto;padding-inline:16px;padding-block:20px}
+h1{font-size:1.35rem;margin:0 0 4px}
+p.lead{color:var(--muted);margin:0 0 16px}
+.controls{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:10px;background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:12px}
+label{display:flex;flex-direction:column;font-size:.85rem;color:var(--muted);gap:3px}
+select,input{font:inherit;color:var(--fg);background:var(--bg);border:1px solid var(--line);border-radius:5px;padding:4px 6px}
+.presets{display:flex;flex-wrap:wrap;gap:6px;margin:10px 0}
+button{font:inherit;color:var(--fg);background:var(--panel);border:1px solid var(--line);border-radius:5px;padding:4px 10px;cursor:pointer}
+button:hover{border-color:var(--muted)}
+.readout{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:8px;margin:12px 0}
+.readout div{background:var(--panel);border:1px solid var(--line);border-radius:6px;padding:8px}
+.readout b{display:block;font-size:1.05rem;font-variant-numeric:tabular-nums}
+.readout span{font-size:.8rem;color:var(--muted)}
+.chart{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:8px;margin:12px 0;overflow-x:auto}
+.chart h2{font-size:1rem;margin:4px 6px}
+svg{display:block;width:100%;height:auto;min-width:320px}
+svg text{fill:var(--muted);font-size:11px}
+.legend{display:flex;flex-wrap:wrap;gap:14px;margin:4px 6px;font-size:.85rem}
+.sw{display:inline-block;width:14px;height:3px;vertical-align:middle;margin-right:5px}
+.caption{color:var(--muted);font-size:.82rem;margin-top:14px}
+</style>
+</head>
+<body>
+<div class="wrap">
+<h1>RoPE scaling explorer</h1>
+<p class="lead">Per-dimension frequency change under Position Interpolation (PI), NTK-aware base scaling, and NTK-by-parts / YaRN, for a chosen head dimension, RoPE base, original length L, and scale factor s = L′/L.</p>
+
+<div class="controls">
+  <label>Head dimension d
+    <select id="d"><option>64</option><option>96</option><option selected>128</option></select></label>
+  <label>RoPE base b
+    <input id="b" type="number" value="10000" min="100" step="any"></label>
+  <label>Original length L (tokens)
+    <input id="L" type="number" value="4096" min="256" step="1"></label>
+  <label>Scale factor s = L′/L
+    <input id="s" type="number" value="4" min="1" step="0.5"></label>
+  <label>Ramp α (rotations)
+    <input id="alpha" type="number" value="1" min="0" step="0.5"></label>
+  <label>Ramp β (rotations)
+    <input id="beta" type="number" value="32" min="1" step="1"></label>
+</div>
+<div class="presets">
+  <button data-p="llama2">Llama 2 7B, 4K → 16K (s = 4)</button>
+  <button data-p="yarn64">Yarn-Llama-2, 4K → 64K (s = 16)</button>
+  <button data-p="olmo3">Olmo 3 script: base 500K, 8K, s = 8</button>
+  <button data-p="phi3">Phi3-mini: d 96, 2K → 128K (s = 64)</button>
+</div>
+
+<div class="readout" id="readout"></div>
+
+<div class="chart">
+  <h2>Frequency multiplier θ′ᵢ / θᵢ by dimension index i (log₂ scale)</h2>
+  <div class="legend">
+    <span><i class="sw" style="background:var(--pi)"></i>PI: 1/s for every i</span>
+    <span><i class="sw" style="background:var(--ntk)"></i>NTK-aware: s^(−2i/(d−2))</span>
+    <span><i class="sw" style="background:var(--yarn)"></i>NTK-by-parts / YaRN: (1−γ)/s + γ</span>
+  </div>
+  <svg id="c1" viewBox="0 0 900 300" role="img" aria-label="Frequency multiplier by dimension"></svg>
+</div>
+
+<div class="chart">
+  <h2>Wavelength λᵢ = 2π / θᵢ by dimension index (log₁₀ tokens)</h2>
+  <div class="legend">
+    <span><i class="sw" style="background:var(--orig)"></i>original</span>
+    <span><i class="sw" style="background:var(--pi)"></i>PI</span>
+    <span><i class="sw" style="background:var(--yarn)"></i>YaRN</span>
+    <span><i class="sw" style="background:var(--mark)"></i>dashed: L and L′</span>
+  </div>
+  <svg id="c2" viewBox="0 0 900 300" role="img" aria-label="Wavelength by dimension"></svg>
+</div>
+
+<p class="caption">Formulas: PI f′(x, m) = f(x, m/s) (Chen et al. 2023, Position Interpolation, Eq. 4); NTK-aware b′ = b·s^(d/(d−2)) and NTK-by-parts r = L/λ, γ(r) = 0 if r &lt; α, 1 if r &gt; β, linear otherwise, θ′ = (1−γ)θ/s + γθ; YaRN temperature √(1/t) = 0.1 ln s + 1 (Peng et al., YaRN, §3.1–3.3, Eqs. 10–15; α = 1, β = 32 recommended there for the Llama family). Preset values: Llama 2 base 10,000 and 4K window (YaRN §2.1, §4.1); Olmo 3 YaRN factor 8, beta_fast 32, beta_slow 1, old_context_len 8192 and rope_theta 500,000 from OLMo-core @66f768b; Phi3-mini d = 96, base 10,000, 2,048 → 128K (LongRoPE2 §2.2, §2.4). The chart shows the rule each method applies. It does not show model quality; the measured short- and long-context effects are in read.md §2 and §4.</p>
+</div>
+
+<script>
+(function(){
+  var $ = function(id){ return document.getElementById(id); };
+  var presets = {
+    llama2:{d:128,b:10000,L:4096,s:4,alpha:1,beta:32},
+    yarn64:{d:128,b:10000,L:4096,s:16,alpha:1,beta:32},
+    olmo3:{d:128,b:500000,L:8192,s:8,alpha:1,beta:32},
+    phi3:{d:96,b:10000,L:2048,s:64,alpha:1,beta:32}
+  };
+  function css(v){ return getComputedStyle(document.documentElement).getPropertyValue(v).trim(); }
+  function params(){
+    return {d:+$('d').value, b:Math.max(+$('b').value,2), L:Math.max(+$('L').value,1),
+            s:Math.max(+$('s').value,1), alpha:Math.max(+$('alpha').value,0), beta:Math.max(+$('beta').value,0.001)};
+  }
+  function compute(p){
+    var n = p.d/2, rows = [];
+    for (var i=0;i<n;i++){
+      var theta = Math.pow(p.b, -2*i/p.d);
+      var lam = 2*Math.PI/theta;
+      var r = p.L/lam;
+      var g = r < p.alpha ? 0 : (r > p.beta ? 1 : (r - p.alpha)/(p.beta - p.alpha));
+      rows.push({i:i, lam:lam, r:r, pi:1/p.s, ntk:Math.pow(p.s, -2*i/(p.d-2)), yarn:(1-g)/p.s + g});
+    }
+    return rows;
+  }
+  function fmt(x){
+    if (x >= 1e6) return (x/1e6).toFixed(2)+'M';
+    if (x >= 1e4) return Math.round(x).toLocaleString('en-US');
+    if (x >= 100) return x.toFixed(0);
+    return x.toFixed(3);
+  }
+  function svgEl(tag, attrs){
+    var e = document.createElementNS('http://www.w3.org/2000/svg', tag);
+    for (var k in attrs) e.setAttribute(k, attrs[k]);
+    return e;
+  }
+  function plot(svg, rows, series, yMin, yMax, yTicks, hlines){
+    while (svg.firstChild) svg.removeChild(svg.firstChild);
+    var W=900,H=300,ml=56,mr=14,mt=12,mb=36, n=rows.length;
+    var x = function(i){ return ml + (W-ml-mr)*i/(n-1); };
+    var y = function(v){ return mt + (H-mt-mb)*(yMax - v)/(yMax - yMin); };
+    var line = css('--line');
+    yTicks.forEach(function(t){
+      svg.appendChild(svgEl('line',{x1:ml,x2:W-mr,y1:y(t.v),y2:y(t.v),stroke:line,'stroke-width':1}));
+      var tx = svgEl('text',{x:ml-6,y:y(t.v)+4,'text-anchor':'end'}); tx.textContent=t.label; svg.appendChild(tx);
+    });
+    for (var k=0;k<=4;k++){
+      var i = Math.round((n-1)*k/4);
+      var tx = svgEl('text',{x:x(i),y:H-16,'text-anchor':'middle'}); tx.textContent='i = '+i; svg.appendChild(tx);
+    }
+    (hlines||[]).forEach(function(h){
+      if (h.v < yMin || h.v > yMax) return;
+      svg.appendChild(svgEl('line',{x1:ml,x2:W-mr,y1:y(h.v),y2:y(h.v),stroke:css('--mark'),'stroke-dasharray':'5 4','stroke-width':1.5}));
+      var tx = svgEl('text',{x:W-mr-4,y:y(h.v)-4,'text-anchor':'end'}); tx.textContent=h.label; svg.appendChild(tx);
+    });
+    series.forEach(function(se){
+      var d='';
+      rows.forEach(function(r,idx){
+        var v = Math.min(Math.max(se.f(r), yMin), yMax);
+        d += (idx? 'L':'M') + x(idx).toFixed(1) + ' ' + y(v).toFixed(1) + ' ';
+      });
+      svg.appendChild(svgEl('path',{d:d,fill:'none',stroke:css(se.color),'stroke-width':se.w||2.2,'stroke-dasharray':se.dash||''}));
+    });
+  }
+  function render(){
+    var p = params(), rows = compute(p), log2 = Math.log2, log10 = Math.log10;
+    var bprime = p.b*Math.pow(p.s, p.d/(p.d-2));
+    var keep = rows.filter(function(r){return r.r > p.beta;}).length;
+    var full = rows.filter(function(r){return r.r < p.alpha;}).length;
+    var longer = rows.filter(function(r){return r.lam > p.L;}).length;
+    var temp = 0.1*Math.log(p.s)+1;
+    $('readout').innerHTML =
+      '<div><b>'+fmt(p.L*p.s)+'</b><span>target length L′ = s·L</span></div>'+
+      '<div><b>'+fmt(bprime)+'</b><span>NTK-aware base b′ = b·s^(d/(d−2))</span></div>'+
+      '<div><b>'+keep+' / '+full+' / '+(rows.length-keep-full)+'</b><span>YaRN dimensions kept (r &gt; β) / divided by s (r &lt; α) / on the ramp</span></div>'+
+      '<div><b>'+longer+' of '+rows.length+'</b><span>dimensions with wavelength &gt; L (a full period is never seen at length L)</span></div>'+
+      '<div><b>'+temp.toFixed(4)+'</b><span>YaRN √(1/t) = 0.1 ln s + 1</span></div>';
+    var ls = log2(p.s), lo = -Math.max(ls,1)*1.05;
+    var ticks = []; for (var t=0; t>=Math.ceil(lo); t--) ticks.push({v:t,label:(t===0?'1':'2^'+t)});
+    plot($('c1'), rows, [
+      {f:function(r){return log2(r.pi);}, color:'--pi'},
+      {f:function(r){return log2(r.ntk);}, color:'--ntk'},
+      {f:function(r){return log2(r.yarn);}, color:'--yarn', w:3}
+    ], lo, 0.15, ticks);
+    var maxL = log10(rows[rows.length-1].lam*p.s)*1.02, minL = 0.5;
+    var t2 = []; for (var e=1; e<=Math.floor(maxL); e++) t2.push({v:e,label:'10^'+e});
+    plot($('c2'), rows, [
+      {f:function(r){return log10(r.lam);}, color:'--orig', dash:'3 3'},
+      {f:function(r){return log10(r.lam/r.pi);}, color:'--pi'},
+      {f:function(r){return log10(r.lam/r.yarn);}, color:'--yarn', w:3}
+    ], minL, maxL, t2, [{v:log10(p.L),label:'L = '+fmt(p.L)},{v:log10(p.L*p.s),label:'L′ = '+fmt(p.L*p.s)}]);
+  }
+  ['d','b','L','s','alpha','beta'].forEach(function(id){ $(id).addEventListener('input', render); });
+  Array.prototype.forEach.call(document.querySelectorAll('button[data-p]'), function(btn){
+    btn.addEventListener('click', function(){
+      var p = presets[btn.getAttribute('data-p')];
+      for (var k in p) $(k).value = p[k];
+      render();
+    });
+  });
+  if (window.matchMedia) window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', render);
+  render();
+})();
+</script>
+</body>
+</html>

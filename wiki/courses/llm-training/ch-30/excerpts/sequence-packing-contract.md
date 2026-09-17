@@ -2,116 +2,53 @@
 chapter: ch-30
 course: llm-training
 phase: read
-excerpt_of: wiki/raw-data/llm-training/papers/sequence-packing.md
+excerpt_of: arXiv:2107.02027v2; arXiv:2407.09105v6; arXiv:2410.08081v3
 source_url: https://arxiv.org/abs/2107.02027
 created_at: "2026-04-23"
+revised: "2026-09-15 (generality revision; rewritten from primary sources)"
 ---
 
-# Excerpt: Sequence packing as a correctness contract, not a speed hack
+# Excerpt: Packing — what three studies measured
 
-**Source library:** `wiki/raw-data/llm-training/papers/sequence-packing.md`
-**Anchor paper:** Krell, Kosec, Perez, Fitzgibbon 2021 — "Efficient Sequence Packing without Cross-Contamination"
-**Ablation counterpart:** [[packed-vs-unpacked-ablation]] (attested equivalence when masks are correct)
+Used by [[read]] §4. The earlier version of this excerpt quoted a throughput formula, a 0.01-nat diagnostic, and four failure modes from the card `packed-vs-unpacked-ablation`, which has no primary source; none of those items appears below.
 
----
+## 1. Krell, Kosec, Perez, Fitzgibbon (arXiv:2107.02027v2) — BERT, not decoder SFT
 
-## Why this source anchors ch-30
+Abstract (verbatim): padding is such "that up to 50% of all tokens can be padding. In less common, but not extreme, cases (e.g. GLUE-cola with sequence length 128), the ratio is up to 89%." The 50% figure refers to Wikipedia BERT pre-training data. The packed model is kept equivalent to the unpacked one with a block-diagonal attention mask and per-sequence position indices (§3.2.1-3.2.2; card [[sequence-packing]]).
 
-Packing is ch-30's axis #4. It looks like a throughput optimisation and almost everyone treats it that way in their head. The source argues — and the 2021–2024 ablations confirm — that packing's correctness contract (block-diagonal attention + per-sub-sequence position reset) is *more* consequential than its speedup. When the contract holds, packing is a free 2–3×. When any part of the contract breaks, packing silently contaminates SFT and downstream evals look "mysteriously" worse than the unpacked baseline.
+Ablation (§4.2.1): without the position adjustment, "the loss and accuracy almost match. However, the accuracy stalls at 71.8% and does not reach the target accuracy of 72.1%." BERT uses learned absolute position embeddings, so this result does not transfer directly to rotary embeddings.
 
-The framing in ch-30 is deliberate: packing is not just about bandwidth, it is the first place in the SFT stack where the tokenizer's abstraction leaks into attention kernels and you must reason about both layers at once.
+## 2. Kundu, Lee, Wynter, Ganti, Mishra (IBM Research), "Enhancing Training Efficiency Using Packing with Flash Attention" (arXiv:2407.09105v6)
 
----
+Mechanism (§3.3, verbatim): "we modify the models' _flash_attention_forward(), adding the argument position_ids and extracting the number of examples in the batch from the position_ids. When attention_mask is None in the case of number of examples > batch size, we compute cu_seq_len from position_ids and use the flash_attn_varlen_func()." Boundaries are therefore derived from `position_ids` in this implementation.
 
-## The attested padding fraction — why we pack at all
+Setting (§4.1): FLAN 20K subset, one epoch, gradient accumulation 2, maximum sequence length 4096, mini-batch 4 per GPU. Table 2, Mistral-7B:
 
-From `sequence-packing.md`, abstract:
+| Batching | pos_id | Rows | Tokens/s | Validation loss |
+|---|---|---|---|---|
+| padding | no | 19,961 | 742 | 1.129 |
+| packing to sequence length, no position IDs | no | 2,294 | 2,986 | 1.306 |
+| offline packing to bs × msl rows, with position IDs | yes | 585 | 3,010 | 1.284 |
+| online mini-batch packing, with position IDs | yes | 19,961 | 1,408 | 1.127 |
 
-> Up to 50% (and in extreme cases 89%) of tokens in BERT/GLUE-style fine-tuning are padding.
+Llama-2 rows in the same table: 1.266, 1.579, 1.578, 1.262. Across the 10 models of Table 2, validation loss of packing without position IDs minus offline packing with position IDs ranges from −0.089 (Phi-2: 3.375 vs 3.464) to +0.170 (Falcon: 2.585 vs 2.415); the two rows also differ in row count.
 
-Modern SFT datasets are worse. Instruction datasets have long-tailed length distributions: median ~300 tokens, 95th percentile ~2000, `L_max` typically 2048 or 4096. Without packing, every short sample gets padded to `L_max` and the attention kernel wastes compute on padding tokens that contribute nothing to the loss (their labels are `-100`). Packing is the mechanical fix.
+Table 4 (§4.3, Mistral-7B, FLAN 20K, one epoch; bs, msl, gas as printed) compares the two at identical step counts: FixedLengthPacking (2, 4096, 32), 35 steps, validation loss 1.294 against FixedLengthPacking+PosID 1.221; (2, 4096, 4), 281 steps, 1.252 against 1.170. Padding at 311 steps gave 1.117 (2, 4096, 32). The authors attribute the remaining gap of offline packing to "the fewer number of optimisation update steps performed". Explanation (§4.1, verbatim): "Due to the fact that far fewer optimisation steps are taken with such maximal packing, the loss does not decrease as fast, and its effect is confirmed by the validation loss ("VLoss") after one epoch." Mini-batch packing "achieves the same optimal loss pattern and hence validation loss, as the inefficient padding-based approach." Benefits are consistent across architectures "with the exception of Gemma-7B and Qwen1.5-MoE-A2.7B".
 
----
+## 3. Wang, Wang, Wang, Li, Hovy, Guo, "Packing Analysis: Packing Is More Appropriate for Large Models or Datasets in Supervised Fine-tuning" (arXiv:2410.08081v3)
 
-## The three-field packing contract — quoted verbatim
+Setting (§4.1.2, Table 2): LLaMA-3-8B and LLaMA-3-70B; LR 1e-5; maximum length 4096; warmup ratio 0.2; 4 epochs (8B) or 3 epochs (70B); loss only on tokens after the assistant header. The paper does not state that attention is reset between packed conversations; §3.3.3 argues that the [EOS] token separates samples.
 
-From `sequence-packing.md`, §Mechanics of a packed block:
+Table 3, average benchmark score, padding / random packing / greedy packing:
 
-> Given n short sequences s_1, …, s_n with lengths L_1, …, L_n (Σ L_i ≤ L_max), concatenate along the sequence axis:
-> `packed = [s_1 | s_2 | … | s_n | PAD]`
-> with:
-> - `cu_seqlens = [0, L_1, L_1+L_2, …, Σ L_i]` — cumulative start offsets.
-> - `position_ids` reset to 0 at each sequence boundary.
-> - Attention mask: token t in sequence i can attend to tokens in sequence i only, with causal structure inside.
+| Data | 8B | 70B |
+|---|---|---|
+| WildChat (GPT-4), 69K | 49.58 / 49.46 / 50.6 | 61.50 / 65.97 / 65.92 |
+| Open-source 1M | 54.3 / 54.95 / 55.05 | 66.12 / 67.26 / 67.54 |
 
-These three fields — `cu_seqlens`, `position_ids`, attention mask — are the contract. Ch-30's §4 lifts them verbatim into the `packed_batch.py` code block.
-
-## Notice: the FlashAttention varlen API is the contract made practical
-
-From `sequence-packing.md`, §FlashAttention varlen interface:
-
-> Modern implementations use `flash_attn_varlen_func(q, k, v, cu_seqlens_q, cu_seqlens_k, max_seqlen)` which computes block-diagonal causal attention **without materializing the full (L_max × L_max) mask**. Memory: O(sum L_i) not O(L_max²).
-
-This is the key. Naive implementations of "block-diagonal mask" allocate an `L_max × L_max` boolean and pass it to dense attention. That costs `L_max²` memory *per head*; at `L_max = 4096` and 32 heads × 32 layers, you are materialising 10+ GB just for the mask. FlashAttention varlen avoids the allocation entirely — it reads `cu_seqlens` and branches inside the kernel.
-
-Practical consequence: you must call `flash_attn_varlen_func`, not `flash_attn_func`. The latter is the dense API and ignores `cu_seqlens`. [[packed-vs-unpacked-ablation]] lists this as failure mode #4.
-
----
-
-## SPFHP — the bin-packing algorithm that actually gets used
-
-From `sequence-packing.md`, §SPFHP algorithm:
-
-> 1. Compute length histogram of dataset.
-> 2. Greedy: iterate over bins, fill each with the longest remaining sequence first; for each subsequent fit, pick the longest sequence that still fits (shortest gap).
-> 3. Achieves near-optimal packing ratio (>99% fill) in O(N log N).
-
-Notice what SPFHP does *not* do: it does not shuffle within a pack. The order of sub-sequences in a block is deterministic given the length histogram. This matters for reproducibility — two runs with the same seed and same data will produce the same packed blocks, and so the same loss trajectory. If your SFT run is non-deterministic, the non-determinism is not in the packing; it is in the batching-across-packs or in the optimizer.
-
-NNLSHP (the non-negative least squares variant) solves the bin-packing problem more globally but is rarely used in production SFT stacks — SPFHP's 99% fill ratio is good enough and its linear-time complexity is a big win on large mixes.
-
----
-
-## The four failure modes — from [[packed-vs-unpacked-ablation]]
-
-The ablation counterpart documents four specific ways packing breaks, and ch-30's §4 lifts them as a numbered list:
-
-> 1. **Missing block-diagonal mask** — tokens in sub-sequence 2 attend to sub-sequence 1 → cross-document leakage → subtle quality drop on multi-turn evals.
-> 2. **Un-reset position IDs** — sub-sequence 2 sees positions L_1..L_1+L_2 instead of 0..L_2 → RoPE is effectively position-shifted.
-> 3. **Label mask not re-applied per sub-sequence** — prompt tokens of sub-sequence 2 contribute to loss → looks like packed is worse, really a masking bug.
-> 4. **Using flash_attn_func (dense) instead of flash_attn_varlen_func** — no mask → silent contamination.
-
-Failure 2 is the most pedagogically interesting. RoPE encodes position as rotation angles; position 0 is the identity rotation, position L_1 is already far along the rotation curve. If sub-sequence 2 starts at position L_1 instead of 0, the model sees its first token as though it were mid-document. At inference the model generates starting from position 0, so there is a train/test mismatch even though no token ever leaked across boundaries.
-
----
-
-## The diagnostic — how to check the contract holds
-
-From [[packed-vs-unpacked-ablation]], §Diagnostic procedure:
-
-> 1. Train a 100-step unpacked baseline; record train loss curve and first-batch logits.
-> 2. Train a 100-step packed run with identical data and seed; compare loss curves.
-> 3. Differences > 0.01 nats at matching step indicate a mask/pos-ID bug, not a "packing hurts" phenomenon.
-
-This is the SFT-axis equivalent of Karpathy's "overfit one batch" sanity check. The 0.01 nat threshold is tight because the mathematical equivalence is exact when the contract holds; any gap is a bug.
-
----
-
-## The throughput-model formula
-
-From `sequence-packing.md` / [[packed-vs-unpacked-ablation]]:
-
-```
-speedup ≈ L_max / avg(L_i)
-```
-
-Ch-30's HTML companion implements this directly, with a realised-vs-raw discount for FlashAttention overhead and memory-bandwidth ceiling. The typical SFT-mix pair `L_max = 4096, avg(L_i) = 600` → raw 6.8×, realised ~3×. That matches Tülu-3's attested "2.5× throughput, no quality delta."
-
----
+Table 5: 70B on WildChat (GPT-4), 9,533 s with padding against 3,749 s with random packing. §5.3: packing a single-turn set (filtered 200K OpenHermes 2.5) gave a MATH drop that returned to normal after adding 1/40 to 1/20 multi-turn conversations. No seeds or run-to-run variance are reported.
 
 ## Connections
 
-- [[excerpts/loss-masking-regimes]] — label mask is the third of the three fields in the contract.
-- [[excerpts/tulu-3-sft-recipe]] — the 2.5× throughput claim lives there; this excerpt is the mechanism.
-- [[ch-30]] — §4 is entirely built on this source.
-- [[ch-36]] (SFT lab) — the diagnostic becomes a hard gate: the lab cannot launch until the 100-step packed vs unpacked loss curves match within 0.01 nats.
+- [[read]] §4; [[ch-04]] for packing mechanics.
+- [[smol-training-playbook]] — SmolLM3 packing throughput and small-data effect.

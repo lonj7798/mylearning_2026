@@ -5,120 +5,53 @@ phase: read
 excerpt_of: wiki/raw-data/llm-training/papers/apigen.md
 source_url: https://arxiv.org/abs/2406.18518
 created_at: "2026-04-23"
+revised: "2026-09-15 (rewritten against arXiv v1 and the verified card; the earlier version contained a per-layer ablation table that is not in the paper)"
 ---
 
-# Excerpt: APIGen — the three-layer verifier
+# Excerpt: APIGen — three-stage verification of single-turn function-calling data
 
-**Source library:** `wiki/raw-data/llm-training/papers/apigen.md`
-**Paper:** Liu, Hoang, Zhang, Zhu, Lan, Kokane et al. 2024, "APIGen: Automated Pipeline for Generating Verifiable and Diverse Function-Calling Datasets" (Salesforce AI Research, NeurIPS 2024).
+**Source library:** `wiki/raw-data/llm-training/papers/apigen.md` (verified 2026-09-14)
+**Paper:** Liu, Hoang, Zhang, Zhu, Lan, Kokane et al., "APIGen: Automated Pipeline for Generating Verifiable and Diverse Function-Calling Datasets", arXiv:2406.18518 v1 (2024-06). The arXiv record lists no venue.
 
----
+## Pipeline (§3.1–§3.3, Fig. 2)
 
-## Why this source anchors ch-26
+1. Sample APIs, seed QA examples, and a prompt template. Templates include ambiguous or misspelled requests (§3.3). The sampling ranges are not reported.
+2. An LLM generator writes JSON with "query" and "answer" fields; one call can return several QA pairs (App. B.1).
+3. Stage 1, format checker: the output must parse and use only functions and arguments present in the sampled APIs (§3.2).
+4. Stage 2, execution checker: Python functions run in a subprocess; REST APIs are called and status codes read. Type errors, invalid parameters, runtime errors, timeouts, and missing arguments are removed (§3.2). No timeout value is reported.
+5. Stage 3, semantic checker: another LLM sees functions, query, calls, and execution results and returns `{"thought", "pass": yes/no}` (App. B.2). The checker model is not named.
+6. Verified samples are added back to the seed pool (§3.1).
 
-APIGen is the chapter's verifier-first thesis made concrete. The paper's claim — synthetic function-calling data is trustable *iff* every sample clears three independent checks — is both a methodological stance and a working pipeline that produced `xLAM-function-calling-60k`, the dataset on which Salesforce trained xLAM-7B to the #1 BFCL-V1 slot among <13B models.
+API library: 3,539 cleaned ToolBench REST APIs plus 134 Python functions = 3,673, merged into 21 categories (§4.1).
 
-Ch-26 §3 reconstructs the three-layer ablation table as the chapter's single most-cited empirical result. This excerpt walks through each layer's operational definition and the rejection-rate composition that produces the ~40% end-to-end filter.
+## Filtering statistics (Table 1; 40,000 target samples per generator, temperature 0.7)
 
----
+| Generator | Verified | Fail format | Fail execution | Fail semantic | Pass rate |
+|---|---|---|---|---|---|
+| DeepSeek-Coder-33B-Inst | 13,769 | 4,311 | 15,496 | 6,424 | 34.42% |
+| Mixtral-8x7B-Inst | 15,385 | 3,311 | 12,341 | 7,963 | 38.46% |
+| Mixtral-8x22B-Inst | 26,384 | 1,680 | 5,073 | 6,863 | 65.96% |
+| DeepSeek-V2-Chat (236B) | 33,659 | 817 | 3,359 | 2,165 | 84.15% |
 
-## The pipeline in sequence
+The Mixtral-8x7B-Inst row sums to 39,000; its printed pass rate equals 15,385 / 40,000 (source inconsistency).
 
-From source lines 23–41:
+The released xlam-function-calling-60k (about 60,000 samples) comes from Mixtral-8x22B-Inst and DeepSeek-V2-Chat only (§4.2). A human check of 600 released samples found 28 with minor issues (App. A.3). License: CC BY 4.0 (App. A.1).
 
-> **Step 1 — API curation:** start from ToolBench's 16K APIs but keep only the 3,673 APIs with executable reference implementations (Python mock or real endpoints under Salesforce control).
->
-> **Step 2 — Seed sampling:** for each generation, sample (k=1–3) functions from the 3,673 pool. Diversity sampler weights rare API categories higher.
->
-> **Step 3 — Query + solution generation:** prompt DeepSeek-Coder-V2-Instruct or GPT-4 (authors ablate both) with the sampled functions and ask for:
->   - A natural-language user query.
->   - The gold function-call sequence as structured JSON.
->
-> **Step 4 — 3-layer verification:**
->   - **Format check:** JSON must parse, fields must match function schema, types enforced.
->   - **Execution check:** run the call(s) against the reference implementations; must not raise.
->   - **Semantic check:** LLM-as-judge (GPT-4) is shown the query + the call + the execution result, and must answer "yes" to "does the call correctly fulfill the query?"
->
-> **Step 5 — Dedup:** MinHash on (query, call) pairs.
+## Models and results (§5.1, Table 2, Fig. 5)
 
-The 3,673-API floor is the pipeline's hard ceiling. APIGen only accepts APIs with executable reference implementations because the execution check is load-bearing (the −11 BFCL-point ablation below). This is why APIGen is narrower than ToolBench's 16K: the verifier gates the corpus size.
+- xLAM-1B (FC) from DeepSeek-Coder-1.3B-instruct; xLAM-7B (FC) from DeepSeek-Coder-7B-instruct-v1.5.
+- BFCL leaderboard of 2024-06-15: xLAM-7B (FC) rank 6, overall 85.65; xLAM-1B (FC) rank 24, 74.41; GPT-3.5-Turbo-0125 (FC) rank 33, 63.88.
+- Filtering ablation (Fig. 5): the data rejected at stage 3 or stage 2 is added back to the training set. Printed deltas: xLAM-7B −4.06 (+Fail Semantic), −5.94 (+Fail Execution); xLAM-1B −9.59 and −12.17. There is no format-stage arm and no "remove one stage" table. The text does not say whether the +Fail Execution arm also contains the semantic failures.
+- Relevance data: 8,000 examples whose target is an empty call or a refusal when tools cannot answer or arguments are missing (App. B.3).
+- SFT settings (App. B.3): LR 5e-6, cosine, 50 warmup steps, 4 epochs, AdamW, cutoff length 2048, per-device batch 6, gradient accumulation 2, bf16, 8 × A100 40GB.
 
----
+## Not reported
 
-## The ablation table that justifies each layer
-
-From source lines 52–54:
-
-> Ablation: removing semantic check → –6% BFCL-V1; removing execution → –11%; removing format → –18%. All three layers are load-bearing.
-
-Ch-26 §3.2 reads this table as a composition argument.
-
-| Verifier config | BFCL-V1 overall | Δ |
-|---|---|---|
-| Full 3-layer (format + execution + semantic) | **88.24** | — |
-| Remove semantic check | 82.2 | −6.0 |
-| Remove execution check | 77.3 | −10.9 |
-| Remove format check | 70.1 | −18.1 |
-
-Three observations.
-
-- **Format-only lands at the Glaive ceiling.** Glaive V2 ([[glaive-function-calling]]) applies only format validation and produces derivative models that top out around BFCL 70. The 70.1 "format only" APIGen number matches Glaive-trained Hermes-2-Pro (~70% BFCL-V1). *The 2023 format-only ceiling is real and measurable.*
-- **Execution is the biggest single-layer lift.** Removing it costs 11 points, more than format (which was already validated) and more than semantic. This is why APIGen's 3,673-API subset is the binding constraint — Salesforce could not add more APIs without sacrificing executability, and execution is the largest single verifier contribution.
-- **Semantic catches the residual 6%.** After format and execution, the surviving errors are "parses and runs but answers the wrong question" — wrong unit, wrong target, right function with wrong arg semantics. The GPT-4 judge is the only cheap way to catch these.
-
-**The stacking order matters.** Format runs first because it's free (pure schema validation on generated JSON). Execution runs second because it's cheap (~$0.001/call in a Python sandbox). Semantic runs last because it's expensive (~$0.01/call GPT-4 judge). Cumulative acceptance decays across the stack: ~75% pass format, of those ~90% pass execution (cumulative ~68%), of those ~88% pass semantic (cumulative ~60%). Total rejection rate ≈ 40%.
-
----
-
-## What the pipeline produces
-
-From source lines 34–47:
-
-> **Output shape:** 60,000 samples covering four data types:
->   - Simple (1 call, 1 function).
->   - Multiple (1 call, multiple candidate functions — correct one must be chosen).
->   - Parallel (≥2 calls in same turn to same function).
->   - Parallel-multiple (≥2 calls across multiple functions).
-> - **Teacher model:** DeepSeek-Coder-V2-Instruct (primary) and GPT-4 (comparison).
-> - **Cost / compute:** ~$8K in teacher API + ~10K GPU-hours for execution sandbox.
-> - **API registry size:** 3,673 executable APIs (21 categories).
-> - **Exact verification rules:**
->   - **Format:** valid JSON; required params present; types match schema (int / str / bool / enum / list).
->   - **Execution:** Python sandbox with 5 sec timeout; call must return without exception.
->   - **Semantic:** GPT-4 judge prompt requires "Yes" / "No" verdict with reasoning; only "Yes" accepted.
-
-The four data types map directly to BFCL-V1's first four scoring categories ([[bfcl]]). This is the explicit sense in which "whoever sets the eval taxonomy sets the data-generation taxonomy" — APIGen's four types are BFCL-V1 simple / multiple / parallel / parallel-multiple.
-
----
-
-## Hallucination: the number that sold xLAM
-
-From source line 48:
-
-> **Hallucination-rate measurement:** the 3-layer filter rejects ~40% of raw generations; post-filter, hallucination rate on BFCL-V1 is <3% for xLAM-7B (vs ~15% for ToolLLaMA).
-
-A 5× reduction in hallucination rate is the result that moved practitioners from ToolBench/ToolLLaMA to APIGen/xLAM in the second half of 2024. The <3% number is achievable only because the execution layer removes calls that parse but reference non-existent APIs or take impossible arguments, and the semantic layer removes "right function, wrong intent" cases.
-
----
-
-## Limits the paper names explicitly
-
-From source lines 57–62:
-
-> - **Executable-API requirement** limits scale — the pipeline is bottlenecked on having reference implementations.
-> - **LLM-judge blind spots:** GPT-4 judge occasionally accepts semantically-close-but-wrong calls (e.g. wrong unit passed to a conversion function).
-> - **No multi-turn:** APIGen generates single-turn function calls only. Addressed in [[apigen-mt]].
-> - **License:** CC-BY-NC-4.0 — non-commercial.
-
-Each of these maps to a later paper in the chapter. ToolACE ([[toolace]]) addresses the executable-API bottleneck with TSS self-evolution (26K APIs, mostly LLM-simulated responses). APIGen-MT ([[apigen-mt]]) addresses multi-turn. The LLM-judge blind-spot is an open problem: no paper in the chapter claims to fix it, which is why relevance-detection rates even for frontier models top out around 90%.
-
----
+Semantic-checker model, execution timeout, API and example sampling ranges, total SFT examples, global batch, held-out-API evaluation, any non-function-calling benchmark (§5). Generation is single-turn only (§6).
 
 ## Connections
 
-- Direct predecessor: [[toolllm]] — provides the 16K-API substrate that APIGen curates to 3,673.
-- Ablation baseline: [[glaive-function-calling]] — the format-only pipeline whose ceiling the APIGen ablation table matches at 70%.
-- Downstream consumer: [[xlam]] — the model family trained on xLAM-FC-60k.
-- Multi-turn extension: [[apigen-mt]] — blueprint-then-rollout adds verifiability to multi-turn.
-- Broader-coverage alternative: [[toolace]] — 26K APIs via self-evolution, with a dual-layer (rule + model) verifier instead of APIGen's three.
-- Evaluation target: [[bfcl]] — the benchmark APIGen's four data types are explicitly matched against.
+- [[toolllm]] — source of the REST APIs.
+- [[bfcl]] — the only evaluation benchmark; query styles follow its categories (§3.3).
+- [[xlam]] — model family name and training pipeline.
+- [[apigen-mt]] — multi-turn follow-up.

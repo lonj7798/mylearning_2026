@@ -2,239 +2,225 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>APIGen 3-Layer Verifier — Interactive Walkthrough</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Tool-Data Filtering, pass^k, Tool-Call Reward, and Name Masking</title>
+<!-- ch-26 figure, revised 2026-09 (generality revision). Replaces an earlier version that showed an APIGen
+     per-layer ablation table and per-stage pass rates that are not in the paper. -->
 <style>
-  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-         max-width: 1120px; margin: 2em auto; padding: 0 1em; color: #222;
-         background: #fafafa; }
-  h1 { font-size: 1.35em; margin-bottom: 0.15em; }
-  .subtitle { color: #666; margin-top: 0; font-size: 0.92em; line-height: 1.5; }
-  .note { color: #555; font-size: 0.85em; margin-top: 0.4em; font-style: italic; }
-
-  .pipeline { display: grid; grid-template-columns: 1fr 1fr 1fr 0.9fr;
-              gap: 0.7em; margin-top: 1.4em; }
-  .stage { border: 2px solid #dcdcdc; border-radius: 8px; background: #fff;
-           padding: 0.8em 0.9em; cursor: pointer; transition: all 0.15s ease;
-           position: relative; }
-  .stage:hover { border-color: #5a7dbd; background: #f4f7fc; }
-  .stage.active { border-color: #2e5daa; background: #e9f0fb; box-shadow: 0 2px 6px rgba(40,80,160,0.15); }
-  .stage.final { border-color: #6b8f52; background: #f0f6eb; cursor: default; }
-  .stage.final:hover { background: #f0f6eb; }
-  .stage .idx { font-size: 0.72em; color: #888; font-weight: 600; letter-spacing: 0.4px; }
-  .stage .title { font-weight: 700; font-size: 1.02em; margin-top: 0.15em; }
-  .stage .desc { font-size: 0.8em; color: #555; margin-top: 0.35em; line-height: 1.45; }
-  .stage .pr { font-family: 'SF Mono', Menlo, monospace; font-size: 0.78em;
-               margin-top: 0.55em; color: #2e5daa; font-weight: 600; }
-  .stage.final .pr { color: #3e5e29; }
-  .arrow { font-size: 1.6em; color: #bbb; align-self: center; text-align: center; }
-
-  .flow-row { display: grid;
-              grid-template-columns: 1fr 20px 1fr 20px 1fr 20px 0.9fr;
-              gap: 0.5em; margin-top: 1.4em; align-items: stretch; }
-
-  .panel { border: 1px solid #dcdcdc; border-radius: 6px; background: #fff;
-           padding: 0.9em 1.1em; margin-top: 1.2em; }
-  .panel h2 { font-size: 1.05em; margin: 0 0 0.5em 0; color: #333;
-              border-bottom: 1px solid #eee; padding-bottom: 0.3em; }
-  .panel h3 { font-size: 0.92em; margin: 0.9em 0 0.4em 0; color: #2e5daa; }
-
-  pre { background: #f6f6f9; border: 1px solid #e3e3e8; border-radius: 4px;
-        padding: 0.7em 0.9em; font-size: 0.82em; overflow-x: auto; line-height: 1.45; }
-  code { font-family: 'SF Mono', Menlo, monospace; }
-  .reject { border-left: 4px solid #c03030; background: #fff6f6; }
-  .accept { border-left: 4px solid #3e8c3e; background: #f2fbf0; }
-
-  .metrics { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 0.6em;
-             margin-top: 0.7em; }
-  .metric { background: #f4f6fa; border: 1px solid #e0e5ee; border-radius: 4px;
-            padding: 0.55em 0.7em; }
-  .metric .label { font-size: 0.73em; color: #666; letter-spacing: 0.3px; }
-  .metric .value { font-family: 'SF Mono', Menlo, monospace; font-weight: 700;
-                   font-size: 1.15em; color: #222; margin-top: 0.15em; }
-  .metric.bad .value { color: #8b1a1a; }
-  .metric.good .value { color: #1b5e20; }
-
-  .hint { background: #fffbe8; border: 1px solid #e8d88a; border-radius: 4px;
-          padding: 0.6em 0.85em; font-size: 0.87em; margin-top: 0.7em; color: #5a4500; }
-
-  footer { margin-top: 2em; padding-top: 1em; border-top: 1px solid #ddd;
-           font-size: 0.8em; color: #888; }
-
-  .accept-bar { display: flex; align-items: center; margin-top: 0.3em; gap: 0.4em; font-size: 0.78em; }
-  .bar-outer { flex: 1; height: 8px; background: #e4e4e8; border-radius: 4px; overflow: hidden; }
-  .bar-inner { height: 100%; background: linear-gradient(to right, #6aa86a, #3e8c3e); }
+  :root { --bg:#fafafa; --panel:#ffffff; --ink:#1f2328; --muted:#5b6470; --line:#d8dde3;
+          --ok:#2f7d4f; --fmt:#8a6d1d; --exe:#b3452f; --sem:#6a4aa5; --accent:#2d5fa8; --code:#f3f5f8; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg:#16181c; --panel:#1f2227; --ink:#e6e8eb; --muted:#9aa3ad; --line:#353a42;
+            --ok:#5fb884; --fmt:#d2b35a; --exe:#e07a62; --sem:#a98ce0; --accent:#7fa8e6; --code:#262a31; }
+  }
+  * { box-sizing: border-box; }
+  body { margin:0; padding:1.2em 16px 2em; background:var(--bg); color:var(--ink);
+         font:15px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+  main { max-width: 980px; margin: 0 auto; }
+  h1 { font-size:1.3em; margin:0 0 .2em; }
+  h2 { font-size:1.05em; margin:0 0 .5em; }
+  p { margin:.4em 0; }
+  .muted { color:var(--muted); font-size:.88em; }
+  section { background:var(--panel); border:1px solid var(--line); border-radius:8px; padding:1em 1.1em; margin-top:1em; }
+  label { font-size:.9em; }
+  select, input[type=number] { font:inherit; padding:.2em .3em; background:var(--panel); color:var(--ink); border:1px solid var(--line); border-radius:4px; }
+  input[type=number] { width:4.5em; }
+  .row { display:flex; flex-wrap:wrap; gap:.6em 1.2em; align-items:center; margin:.5em 0; }
+  .bar { display:flex; width:100%; height:28px; border-radius:4px; overflow:hidden; border:1px solid var(--line); }
+  .bar div { height:100%; }
+  .legend { display:flex; flex-wrap:wrap; gap:.4em 1em; font-size:.85em; margin-top:.4em; }
+  .sw { display:inline-block; width:.8em; height:.8em; border-radius:2px; margin-right:.3em; vertical-align:-1px; }
+  table { border-collapse:collapse; font-size:.88em; margin-top:.5em; }
+  th, td { border:1px solid var(--line); padding:.25em .55em; text-align:right; }
+  th:first-child, td:first-child { text-align:left; }
+  .scroll { overflow-x:auto; }
+  pre { background:var(--code); border:1px solid var(--line); border-radius:4px; padding:.6em .8em; font-size:.82em; overflow-x:auto; margin:.4em 0; }
+  code { font-family: "SF Mono", Menlo, Consolas, monospace; }
+  .out { font-family: "SF Mono", Menlo, Consolas, monospace; font-size:.9em; }
+  svg text { fill: var(--ink); font-size: 11px; }
+  .grid2 { display:grid; grid-template-columns: 1fr 1fr; gap: .8em; }
+  @media (max-width: 640px) { .grid2 { grid-template-columns: 1fr; } }
+  button { font:inherit; padding:.2em .7em; border:1px solid var(--line); border-radius:4px; background:var(--panel); color:var(--ink); cursor:pointer; }
 </style>
 </head>
 <body>
+<main>
+<h1>Tool and function-calling data: four calculators</h1>
+<p class="muted">Companion to ch-26 read.md. Panel A uses published counts; panels B–D compute the formulas in the chapter for inputs you choose. Every published number cites its source below the panel.</p>
 
-<h1>APIGen 3-Layer Verifier — Interactive Walkthrough</h1>
-<p class="subtitle">
-  APIGen (Salesforce, 2024) accepts a synthetic function-calling sample <em>iff</em> it clears three
-  independent checks, in sequence. Each stage rejects a different failure mode; removing any one
-  costs a measurable fraction of BFCL-V1 score.
-  <br><strong>Click a stage</strong> to see a concrete reject example, pass rate, and the cumulative
-  cost of removing that layer from the full pipeline.
-</p>
-
-<div class="pipeline">
-  <div class="stage" data-stage="format">
-    <div class="idx">STAGE 1</div>
-    <div class="title">Format check</div>
-    <div class="desc">JSON parses. Required fields present. Types match schema (int / str / bool / enum / list).</div>
-    <div class="pr">~75% pass · free</div>
+<!-- Panel A -->
+<section id="panelA">
+  <h2>A. Where APIGen samples fail, by generator</h2>
+  <div class="row">
+    <label for="gen">Generator (40,000 target samples each)</label>
+    <select id="gen"></select>
   </div>
-  <div class="stage" data-stage="execution">
-    <div class="idx">STAGE 2</div>
-    <div class="title">Execution check</div>
-    <div class="desc">Run the call in a Python sandbox with 5-s timeout against the reference implementation.</div>
-    <div class="pr">~90% pass · ~$0.001 / call</div>
+  <div class="bar" id="stack" aria-label="stacked bar of verified and failed samples"></div>
+  <div class="legend">
+    <span><span class="sw" style="background:var(--ok)"></span>verified</span>
+    <span><span class="sw" style="background:var(--fmt)"></span>failed format</span>
+    <span><span class="sw" style="background:var(--exe)"></span>failed execution</span>
+    <span><span class="sw" style="background:var(--sem)"></span>failed semantic</span>
   </div>
-  <div class="stage" data-stage="semantic">
-    <div class="idx">STAGE 3</div>
-    <div class="title">Semantic check</div>
-    <div class="desc">GPT-4 judge sees (query, call, result) and must answer &ldquo;Yes&rdquo;.</div>
-    <div class="pr">~88% pass · ~$0.01 / call</div>
+  <p class="out" id="stackText"></p>
+  <div class="scroll">
+  <table>
+    <caption class="muted" style="text-align:left">Add-back ablation (Fig. 5): change in BFCL overall when rejected data is added to training</caption>
+    <tr><th>Model</th><th>+ data that failed semantic check</th><th>+ data that failed execution check</th></tr>
+    <tr><td>xLAM-7B (FC)</td><td>−4.06</td><td>−5.94</td></tr>
+    <tr><td>xLAM-1B (FC)</td><td>−9.59</td><td>−12.17</td></tr>
+  </table>
   </div>
-  <div class="stage final" data-stage="final">
-    <div class="idx">GOLD</div>
-    <div class="title">Accepted</div>
-    <div class="desc">Added to xLAM-FC-60k after MinHash dedup on (query, call).</div>
-    <div class="pr">~60% end-to-end acceptance</div>
+  <p class="muted">Source: APIGen, arXiv:2406.18518 v1, Table 1 (counts, temperature 0.7) and Fig. 5 (printed deltas). The paper has no arm that removes the format check and no table that removes one stage at a time. The released 60K set uses only Mixtral-8x22B-Inst and DeepSeek-V2-Chat outputs (§4.2). The Mixtral-8x7B-Inst row of Table 1 sums to 39,000, while its printed pass rate (38.46%) is 15,385 / 40,000; the bar uses the printed counts.</p>
+</section>
+
+<!-- Panel B -->
+<section id="panelB">
+  <h2>B. pass^k and pass@k from repeated trials</h2>
+  <p>For each task, run n trials and count c successes. τ-bench defines <code>pass^k = mean over tasks of C(c,k)/C(n,k)</code> (all k sampled trials succeed) and <code>pass@k = 1 − mean of C(n−c,k)/C(n,k)</code> (at least one succeeds).</p>
+  <div class="row">
+    <label>n trials per task <input type="number" id="nTrials" min="1" max="16" value="4"></label>
+    <label>successes per task, comma-separated <input id="cList" value="3,4" style="width:10em;font:inherit;padding:.2em .3em;background:var(--panel);color:var(--ink);border:1px solid var(--line);border-radius:4px"></label>
   </div>
-</div>
+  <div class="scroll"><svg id="passChart" width="560" height="220" role="img" aria-label="pass^k and pass@k versus k"></svg></div>
+  <div class="scroll"><table id="passTable"></table></div>
+  <p class="muted">Default input reproduces the chapter's worked example (n = 4; tasks with 3 and 4 successes). Source for the definitions: τ-bench, arXiv:2406.12045 v1, §3. Published reference point: gpt-4o function calling on τ-retail has pass^1 above 60% and pass^8 below 25% (Fig. 4).</p>
+</section>
 
-<div class="accept-bar">
-  <span style="color:#666;">Cumulative acceptance, raw&nbsp;→&nbsp;gold:</span>
-  <div class="bar-outer"><div class="bar-inner" style="width: 60%;"></div></div>
-  <span style="font-family:'SF Mono',Menlo,monospace; color:#1b5e20; font-weight:600;">~60%</span>
-</div>
-
-<div class="panel" id="detail-panel">
-  <h2 id="panel-title">Click a stage above</h2>
-  <div id="panel-body">
-    <p style="color:#666; font-size:0.9em;">
-      Each stage catches a different class of error. The composition is not a single "reject rate"
-      — format is cheap and high-yield, execution is expensive and load-bearing, semantic is the
-      narrow gate at the end. Click any stage to see what it actually rejects.
-    </p>
-    <div class="metrics">
-      <div class="metric">
-        <div class="label">APIs in corpus</div><div class="value">3,673</div>
-      </div>
-      <div class="metric">
-        <div class="label">Gold samples after filter</div><div class="value">60,000</div>
-      </div>
-      <div class="metric">
-        <div class="label">Total rejection</div><div class="value">~40%</div>
-      </div>
-    </div>
+<!-- Panel C -->
+<section id="panelC">
+  <h2>C. ToolRL reward for one predicted call</h2>
+  <p>One ground-truth call with K arguments; one predicted call with the same K argument keys proposed. Adjust what matches.</p>
+  <div class="row">
+    <label>K arguments <input type="number" id="K" min="0" max="8" value="2"></label>
+    <label><input type="checkbox" id="nameOk" checked> function name correct</label>
+    <label>argument names matched <input type="number" id="keysOk" min="0" max="8" value="2"></label>
+    <label>argument values matched <input type="number" id="valsOk" min="0" max="8" value="1"></label>
+    <label><input type="checkbox" id="fmtOk" checked> output format correct</label>
   </div>
-</div>
+  <pre id="rewardOut"></pre>
+  <p class="muted">Formula: ToolRL, arXiv:2504.13958 v1, §3.3. r_param for one call is the Jaccard overlap of key sets; with K keys proposed and m matched it is m/(2K − m). If the name is wrong the call is not matched to the ground truth in this simplified panel, so r_param and r_value are set to 0 (the paper computes the best matching over all calls). Default input is the chapter's worked example.</p>
+</section>
 
-<div class="panel">
-  <h2>Why each layer earns its keep — BFCL-V1 ablation</h2>
-  <pre>Full 3-layer (format + execution + semantic) : 88.24  ←  baseline
-Remove semantic check                        : 82.24  (−6.0)
-Remove execution check                       : 77.34  (−10.9)
-Remove format check                          : 70.14  (−18.1)  ← Glaive-era ceiling</pre>
-  <p class="note">
-    Format alone lands at the 2023 Glaive-style open-FC ceiling (~70%). Execution adds the
-    biggest single-layer lift (+11). Semantic catches the residual 6% — calls that run without
-    error but answer the wrong question (wrong unit, wrong target, right function with wrong arg
-    semantics). Only an LLM judge or a human catches these.
-  </p>
-</div>
-
-<footer>
-  Source: APIGen (Liu et al. 2024, <a href="https://arxiv.org/abs/2406.18518">arXiv:2406.18518</a>).
-  Companion to <code>wiki/courses/llm-training/ch-26/read.md</code> §3.
-</footer>
+<!-- Panel D -->
+<section id="panelD">
+  <h2>D. Function masking as in Hammer</h2>
+  <p>Hammer replaces function names and parameter names with random strings, randomizes default values into the description, and applies the same mapping to the label. The model must then choose a function from its description.</p>
+  <div class="row"><button id="remask">Draw a new mask</button><label><input type="checkbox" id="showMask" checked> show masked version</label></div>
+  <div class="grid2">
+    <pre id="schemaOut"></pre>
+    <pre id="labelOut"></pre>
+  </div>
+  <p class="muted">Mechanism: Hammer, arXiv:2410.04587, §4.1. String lengths follow the released <code>train/data_processing.py</code>: function names 5–15 characters and parameter names 4–10 characters from [A-Za-z0-9_.]; each copy of an example is masked with probability 2/3. The example tool below is illustrative, not from the Hammer data.</p>
+</section>
+</main>
 
 <script>
-const STAGES = {
-  format: {
-    title: "Stage 1 — Format check",
-    pass: "~75% of raw generations pass",
-    cost: "free (pure JSON/schema validation)",
-    cumulativePass: 75,
-    removedPenalty: "−18.1 BFCL-V1",
-    catches: "Malformed JSON · wrong field name · type mismatch · missing required arg",
-    reject: {
-      query: "Convert 100 US dollars to euros.",
-      call:  '{"name": "currency_convert", "arguments": {"amount": "100", "from": "USD", "to": "EUR"}}',
-      whyReject: 'Schema declares <code>amount: int</code>. The string <code>"100"</code> fails the type check even though it "looks right." Rejected before execution.'
-    },
-    lesson: "Format is the cheap high-yield pre-gate. 70% of the final score's headroom lives above this layer — but the layer itself costs nothing, so it runs first.",
-  },
-  execution: {
-    title: "Stage 2 — Execution check",
-    pass: "~90% of format-passers also execute cleanly",
-    cost: "~$0.001/call (Python sandbox, 5-s timeout)",
-    cumulativePass: 68,
-    removedPenalty: "−10.9 BFCL-V1",
-    catches: "Runtime exceptions · timeout · stale API key · null-handling bugs · unknown city / id / resource",
-    reject: {
-      query: "What's the weather in Zzyzx, California?",
-      call:  '{"name": "get_weather", "arguments": {"location": "Zzyzx, CA", "units": "metric"}}',
-      whyReject: "Reference implementation throws <code>LocationNotFoundError</code>. The call parses and the schema matches, but the argument has no real-world referent. A format-only filter would accept this; execution catches it."
-    },
-    lesson: "Execution is the load-bearing stage. Removing it costs 11 BFCL points — the biggest single-layer hit. This is why APIGen bottlenecked on 3,673 APIs with reference implementations rather than reusing ToolBench's 16K.",
-  },
-  semantic: {
-    title: "Stage 3 — Semantic check",
-    pass: "~88% of execution-passers get a 'Yes' from GPT-4",
-    cost: "~$0.01/call (GPT-4 judge prompt)",
-    cumulativePass: 60,
-    removedPenalty: "−6.0 BFCL-V1",
-    catches: "Right function, wrong argument semantics · wrong unit · wrong target · lucky-success (parsed + ran but satisfies a different query)",
-    reject: {
-      query: "How far is it from Paris to Berlin in miles?",
-      call:  '{"name": "distance", "arguments": {"from": "Paris", "to": "Berlin", "units": "kilometers"}}',
-      whyReject: "Parses. Executes (returns 878 km). But the user asked for <em>miles</em>, not kilometers. GPT-4 judge says &ldquo;No — units mismatch.&rdquo; Only the semantic layer catches this."
-    },
-    lesson: "Semantic is the narrow residual. Only 6 BFCL points of benefit, but they are the points that separate a format-verified corpus from a judge-verified one. This is the layer APIGen added that ToolBench lacked.",
-  },
-  final: {
-    title: "End state — the gold 60K",
-    pass: "~60% cumulative end-to-end acceptance",
-    cost: "implicit across all three stages",
-    cumulativePass: 60,
-    removedPenalty: "—",
-    catches: "—",
-    reject: null,
-    lesson: "To produce 60K gold samples, APIGen generates ~100K raw. The 60K dataset is not 'teacher output' — it is 'teacher output that survived a 40% strict gate.' xLAM-7B (Mistral base, APIGen-60k SFT) takes #1 on BFCL-V1 among <13B models at 88.24% overall, beating ToolLLaMA by ~20 points."
-  },
-};
+(function(){
+  // ---------- Panel A ----------
+  var gens = [
+    {name:"DeepSeek-Coder-33B-Inst", pr:"34.42%", v:13769, f:4311, e:15496, s:6424},
+    {name:"Mixtral-8x7B-Inst", pr:"38.46%", v:15385, f:3311, e:12341, s:7963},
+    {name:"Mixtral-8x22B-Inst", pr:"65.96%", v:26384, f:1680, e:5073, s:6863},
+    {name:"DeepSeek-V2-Chat (236B)", pr:"84.15%", v:33659, f:817, e:3359, s:2165}
+  ];
+  var sel = document.getElementById("gen");
+  gens.forEach(function(g,i){ var o=document.createElement("option"); o.value=i; o.textContent=g.name; sel.appendChild(o); });
+  function pct(x,t){ return (100*x/t).toFixed(2)+"%"; }
+  function drawA(){
+    var g = gens[+sel.value], tot = g.v+g.f+g.e+g.s, fails = g.f+g.e+g.s;
+    var parts = [[g.v,"var(--ok)"],[g.f,"var(--fmt)"],[g.e,"var(--exe)"],[g.s,"var(--sem)"]];
+    var bar = document.getElementById("stack"); bar.innerHTML="";
+    parts.forEach(function(p){ var d=document.createElement("div"); d.style.width=(100*p[0]/tot)+"%"; d.style.background=p[1]; bar.appendChild(d); });
+    document.getElementById("stackText").textContent =
+      "total "+tot.toLocaleString()+" | verified "+g.v.toLocaleString()+" (printed pass rate "+g.pr+") | failed format "+g.f.toLocaleString()+
+      " | failed execution "+g.e.toLocaleString()+" | failed semantic "+g.s.toLocaleString()+
+      " | share of failures at execution "+pct(g.e,fails);
+  }
+  sel.addEventListener("change", drawA); drawA();
 
-const panelTitle = document.getElementById('panel-title');
-const panelBody  = document.getElementById('panel-body');
-document.querySelectorAll('.stage').forEach(el => {
-  el.addEventListener('click', () => {
-    document.querySelectorAll('.stage').forEach(s => s.classList.remove('active'));
-    el.classList.add('active');
-    const s = STAGES[el.dataset.stage];
-    panelTitle.textContent = s.title;
-    let html = '';
-    html += `<div class="metrics">`;
-    html += `  <div class="metric"><div class="label">Pass rate</div><div class="value">${s.pass}</div></div>`;
-    html += `  <div class="metric"><div class="label">Cost per call</div><div class="value">${s.cost}</div></div>`;
-    html += `  <div class="metric bad"><div class="label">Remove → BFCL-V1 Δ</div><div class="value">${s.removedPenalty}</div></div>`;
-    html += `</div>`;
-    html += `<h3>What this layer catches</h3>`;
-    html += `<p style="font-size:0.9em; color:#333;">${s.catches}</p>`;
-    if (s.reject) {
-      html += `<h3>Concrete reject example</h3>`;
-      html += `<pre class="reject"><strong>Query:</strong> ${s.reject.query}\n<strong>Call:</strong>  ${s.reject.call}</pre>`;
-      html += `<p style="font-size:0.88em; color:#444;"><strong>Why rejected:</strong> ${s.reject.whyReject}</p>`;
+  // ---------- Panel B ----------
+  function comb(n,k){ if(k<0||k>n) return 0; var r=1; for(var i=1;i<=k;i++){ r = r*(n-k+i)/i; } return r; }
+  function drawB(){
+    var n = Math.max(1, Math.min(16, parseInt(document.getElementById("nTrials").value)||1));
+    var cs = document.getElementById("cList").value.split(",").map(function(s){return parseInt(s.trim());}).filter(function(x){return !isNaN(x);});
+    cs = cs.map(function(c){ return Math.max(0, Math.min(n, c)); });
+    var tbl = document.getElementById("passTable"), svg = document.getElementById("passChart");
+    if(!cs.length){ tbl.innerHTML="<tr><td>enter at least one success count</td></tr>"; svg.innerHTML=""; return; }
+    var rows = "<tr><th>k</th><th>pass^k</th><th>pass@k</th></tr>", hat=[], at=[];
+    for(var k=1;k<=n;k++){
+      var h=0,a=0; cs.forEach(function(c){ h += comb(c,k)/comb(n,k); a += 1 - comb(n-c,k)/comb(n,k); });
+      h/=cs.length; a/=cs.length; hat.push(h); at.push(a);
+      rows += "<tr><td>"+k+"</td><td>"+h.toFixed(3)+"</td><td>"+a.toFixed(3)+"</td></tr>";
     }
-    html += `<div class="hint"><strong>Lesson:</strong> ${s.lesson}</div>`;
-    html += `<div class="accept-bar" style="margin-top:0.8em;"><span style="color:#666;">Cumulative acceptance after this stage:</span>`;
-    html += `<div class="bar-outer"><div class="bar-inner" style="width:${s.cumulativePass}%;"></div></div>`;
-    html += `<span style="font-family:'SF Mono',Menlo,monospace; color:#1b5e20; font-weight:600;">~${s.cumulativePass}%</span></div>`;
-    panelBody.innerHTML = html;
-  });
-});
-</script>
+    tbl.innerHTML = rows;
+    var W=560,H=220,L=40,R=110,T=12,B=30, pw=W-L-R, ph=H-T-B;
+    function x(k){ return L + (n===1 ? pw/2 : (k-1)*pw/(n-1)); }
+    function y(v){ return T + (1-v)*ph; }
+    var s = "";
+    [0,0.25,0.5,0.75,1].forEach(function(v){ s += '<line x1="'+L+'" x2="'+(L+pw)+'" y1="'+y(v)+'" y2="'+y(v)+'" stroke="var(--line)"/><text x="'+(L-6)+'" y="'+(y(v)+4)+'" text-anchor="end">'+v.toFixed(2)+'</text>'; });
+    for(var kk=1;kk<=n;kk++){ s += '<text x="'+x(kk)+'" y="'+(H-12)+'" text-anchor="middle">'+kk+'</text>'; }
+    s += '<text x="'+(L+pw/2)+'" y="'+(H-1)+'" text-anchor="middle">k</text>';
+    function line(arr,color,dash){ var d=""; arr.forEach(function(v,i){ d += (i?"L":"M")+x(i+1)+" "+y(v); });
+      var out='<path d="'+d+'" fill="none" stroke="'+color+'" stroke-width="2"'+(dash?' stroke-dasharray="5 4"':'')+'/>';
+      arr.forEach(function(v,i){ out += '<circle cx="'+x(i+1)+'" cy="'+y(v)+'" r="3" fill="'+color+'"/>'; }); return out; }
+    s += line(at,"var(--accent)",true) + line(hat,"var(--exe)",false);
+    s += '<line x1="'+(W-R+12)+'" x2="'+(W-R+34)+'" y1="30" y2="30" stroke="var(--exe)" stroke-width="2"/><text x="'+(W-R+40)+'" y="34">pass^k</text>';
+    s += '<line x1="'+(W-R+12)+'" x2="'+(W-R+34)+'" y1="50" y2="50" stroke="var(--accent)" stroke-width="2" stroke-dasharray="5 4"/><text x="'+(W-R+40)+'" y="54">pass@k</text>';
+    svg.innerHTML = s;
+  }
+  ["nTrials","cList"].forEach(function(id){ document.getElementById(id).addEventListener("input", drawB); }); drawB();
 
+  // ---------- Panel C ----------
+  function drawC(){
+    var K = Math.max(0, Math.min(8, parseInt(document.getElementById("K").value)||0));
+    var nameOk = document.getElementById("nameOk").checked, fmtOk = document.getElementById("fmtOk").checked;
+    var m = Math.max(0, Math.min(K, parseInt(document.getElementById("keysOk").value)||0));
+    var v = Math.max(0, Math.min(m, parseInt(document.getElementById("valsOk").value)||0));
+    var rName = nameOk ? 1 : 0;
+    var rParam = (!nameOk) ? 0 : (K===0 ? 1 : m/(2*K-m));
+    var rValue = nameOk ? v : 0;
+    var Smax = 1 + 1 + K, rMatch = rName + rParam + rValue;
+    var Rc = 6*rMatch/Smax - 3, Rf = (fmtOk?1:0) + Rc;
+    document.getElementById("rewardOut").textContent =
+      "r_name  = "+rName.toFixed(3)+"\n"+
+      "r_param = "+rParam.toFixed(3)+(nameOk && K>0 ? "   (Jaccard "+m+"/"+(2*K-m)+")" : "")+"\n"+
+      "r_value = "+rValue+"   (values matched; only keys that match can have matching values)\n"+
+      "S_max   = 1 + |G| + sum|keys| = 1 + 1 + "+K+" = "+Smax+"\n"+
+      "R_correct = 6 * "+rMatch.toFixed(3)+" / "+Smax+" - 3 = "+Rc.toFixed(3)+"\n"+
+      "R_format  = "+(fmtOk?1:0)+"\n"+
+      "R_final   = "+Rf.toFixed(3)+"   (range -3 to 4)";
+  }
+  ["K","nameOk","keysOk","valsOk","fmtOk"].forEach(function(id){ var el=document.getElementById(id); el.addEventListener("input", drawC); el.addEventListener("change", drawC); }); drawC();
+
+  // ---------- Panel D ----------
+  var letters = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz_.0123456789";
+  var seed = 12;
+  function rnd(){ seed = (seed * 1103515245 + 12345) % 2147483648; return seed / 2147483648; }
+  function rstr(lo,hi){ var n = lo + Math.floor(rnd()*(hi-lo+1)), s=""; for(var i=0;i<n;i++){ s += letters[Math.floor(rnd()*letters.length)]; } return s; }
+  var tool = {name:"get_exchange_rate", description:"Return the exchange rate between two currencies.",
+              params:[{name:"base_currency", type:"string", desc:"ISO 4217 code of the currency to convert from", def:"USD"},
+                      {name:"target_currency", type:"string", desc:"ISO 4217 code of the currency to convert to", def:"EUR"}]};
+  var query = "How many yen is one British pound worth today?";
+  var mask = null;
+  function newMask(){ mask = {fn:rstr(5,15), p:tool.params.map(function(){ return rstr(4,10); }), d:tool.params.map(function(){ return rstr(3,3).toUpperCase(); })}; }
+  function drawD(){
+    var on = document.getElementById("showMask").checked;
+    var name = on ? mask.fn : tool.name;
+    var props = tool.params.map(function(p,i){
+      var desc = on ? p.desc + " (default: " + mask.d[i] + ")" : p.desc;
+      return '    "' + (on ? mask.p[i] : p.name) + '": {"type": "' + p.type + '", "description": "' + desc + '"' + (on ? "" : ', "default": "' + p.def + '"') + '}';
+    }).join(",\n");
+    document.getElementById("schemaOut").textContent =
+      "// candidate tool\n{\n  \"name\": \"" + name + "\",\n  \"description\": \"" + tool.description + "\",\n  \"parameters\": {\n" + props + "\n  }\n}";
+    document.getElementById("labelOut").textContent =
+      "// user query\n" + query + "\n\n// target label\n[{\"name\": \"" + name + "\", \"arguments\": {\"" +
+      (on ? mask.p[0] : tool.params[0].name) + "\": \"GBP\", \"" + (on ? mask.p[1] : tool.params[1].name) + "\": \"JPY\"}}]";
+  }
+  document.getElementById("remask").addEventListener("click", function(){ newMask(); drawD(); });
+  document.getElementById("showMask").addEventListener("change", drawD);
+  newMask(); drawD();
+})();
+</script>
 </body>
 </html>

@@ -2,165 +2,42 @@
 chapter: ch-09
 course: llm-training
 phase: read
-excerpt_of: wiki/raw-data/llm-training/model-reports/llama-3.md
+excerpt_of: wiki/raw-data/llm-training/model-reports/llama-3.md and llama-3-recipe.md (cards verified 2026-09-14)
 source_url: https://arxiv.org/abs/2407.21783
+primary_version: arXiv:2407.21783v3 (2024-11-23; v1 2024-07)
 created_at: "2026-04-23"
+revised_at: "2026-09-15"
 ---
 
-# Excerpt: Llama 3 — the 15.6T closed corpus and what a non-disclosure actually tells you
+# Excerpt: The Llama 3 Herd of Models — pretraining data mix
 
-**Source library:** `wiki/raw-data/llm-training/model-reports/llama-3.md`
-**Paper:** Grattafiori et al. 2024, "The Llama 3 Herd of Models" (Meta).
+Quotations from the Llama 3 report used by ch-09 `read.md`, matching the verified library cards. Byline: Llama Team, AI @ Meta.
 
----
+## Web data filtering (§3.1.1)
+> "These include using fast classifiers such as fasttext (Joulin et al., 2017) trained to recognize if a given text would be referenced by Wikipedia (Touvron et al., 2023a), as well as more compute-intensive Roberta-based classifiers (Liu et al., 2019a) trained on Llama 2 predictions."
 
-## Why this source anchors ch-09 §4 and §6
+> "Similar to DeepSeek-AI et al. (2024), we build domain-specific pipelines that extract code and math-relevant web pages."
 
-Llama 3's tech report is the 2024 *canonical closed-mix reference*. 15.6 T pretraining tokens, no source-mix table, no per-stage token budget breakdown for the pretraining corpus, no filter-order disclosure. But unlike [[qwen-3-5]] (no tech report at all) or even [[deepseek-v3]] (token total + infrastructure focus), Llama 3's paper is *long and detailed* — it just systematically avoids the data section.
+## Determining the data mix (§3.1.2)
+> "Our main tools in determining this data mix are knowledge classification and scaling law experiments."
 
-This makes Llama 3 the teaching example for ch-09 §6's "how to read a data section *for what it does not say*." The paper is informative about capabilities, architectures, and post-training; the gaps around pretraining data are the signal.
+> "Knowledge classification. We develop a classifier to categorize the types of information contained in our web data to more effectively determine a data mix. We use this classifier to downsample data categories that are over-represented on the web, for example, arts and entertainment."
 
----
+> "Scaling laws for data mix. To determine the best data mix, we perform scaling law experiments in which we train several small models on a data mix and use that to predict the performance of a large model on that mix (see Section 3.2.1). We repeat this process multiple times for different data mixes to select a new data mix candidate. Subsequently, we train a larger model on this candidate data mix and evaluate the performance of that model on several key benchmarks."
 
-## What the paper says about pretraining data
+> "Data mix summary. Our final data mix contains roughly 50% of tokens corresponding to general knowledge, 25% of mathematical and reasoning tokens, 17% code tokens, and 8% multilingual tokens."
 
-From the source (lines 58-62):
+## Annealing as data evaluation (§3.1.3)
+> "We measure the value of such datasets by annealing the learning rate of a 50% trained Llama 3 8B model linearly to 0 on 40B tokens. In those experiments, we assign 30% weight to the new dataset and the remaining 70% weight to the default data mix."
 
-> ### Scale
-> - **Pretraining:** 15.6T tokens, 8K native context, 8-way sequence parallel for long-context extension.
-> - **405B compute:** 3.8e25 FLOPs.
-> - **Post-training compute:** not disclosed as a standalone number; post-training is "a small fraction" of pretraining compute.
+## Mix changes during training (§3.4.1)
+> "We made a several adjustments to the pre-training data mix during training to improve model performance on particular downstream tasks. In particular, we increased the percentage of non-English data during pre-training to improve the multilingual performance of Llama 3. We also upsample mathematical data to improve the model's mathematical reasoning performance, we added more recent web data in the later stages of pre-training to advance the model's knowledge cut-off, and we downsampled subsets of the pre-training data that were later identified as being lower quality."
 
-One token count. No source mix. No filter pipeline. No per-snapshot CommonCrawl decision. No code/math/books percentage. The Meta paper's data section (roughly §3.1 of the full arXiv version) reads as carefully written *not* to disclose the mix while still claiming the credit for the scale.
+## Scale
+Llama 3.1 405B was pre-trained on 15.6T tokens with 3.8 × 10^25 FLOPs (Abstract, §1; card).
 
-What it *does* say, in broad terms:
+## Not reported
+Per-source shares, the definition of "general knowledge", the list of knowledge-classifier categories beyond the example given, the results of the mix scaling-law experiments, and the percentages of the mix adjustments during training.
 
-- The pretraining corpus covers "a large amount of knowledge" (unquantified).
-- There are "multilingual" tokens (not tabulated).
-- There is code (not percentaged).
-- There are "high-quality" sources (undefined).
-- Decontamination is performed against eval sets (method not detailed).
-- PII filtering is mentioned (classes not listed).
-
-Compare the equivalent section in [[dolma]]'s paper: six stages, per-stage thresholds, per-source sub-pipelines, ablation tables, filter-order justification, tooling released. The Llama 3 paper's data section is a deliberate choice, not an omission from lack of space.
-
----
-
-## The four axes, applied to Llama 3
-
-Ch-09 §6's four-axis framework:
-
-1. **Token count**: 15.6 T. Disclosed.
-2. **Composition**: not disclosed. No source-mix table.
-3. **Licence regime**: proprietary. Implicit Regime B (per-document mixed licence, fair-use defense) for the web slice; Regime C (licensed content) possibly; not stated.
-4. **Disclosure granularity**: token-total-only.
-
-Compared to the open counterparts at similar token scale:
-
-- **[[fineweb]] (15 T)**: full pipeline, 100% web, per-dump MinHash, FineWeb-Edu classifier, datatrove codebase, all ablation checkpoints.
-- **[[dolma]] (3 T)** and **[[olmo-2]] OLMo-Mix-1124 (3.9 T)**: full per-source percentages, six-stage cascade, ablations.
-
-The comparison makes the 2020 → 2026 disclosure shift sharp. Llama 3 at 15.6T is a black box; FineWeb at 15T is an open book. Matched-token-count, order-of-magnitude-different disclosure.
-
----
-
-## Why the non-disclosure is signal, not noise
-
-Four reasons to read into the silence, in order of how much the paper itself admits:
-
-**1. Competitive moat.** Meta has stated in other contexts (e.g., Meta's AI Research blog posts and Yann LeCun's public statements) that pretraining data is a core differentiator. Llama 3's performance on MMLU, GSM8K, and code benchmarks is competitive with GPT-4 and DeepSeek-V3; any of that competitive edge that comes from *data* is in the mix. Disclosing the mix gives it up.
-
-**2. Synthetic-data attribution is hard.** The source is explicit about synthetic data in post-training:
-
-> - Heavy synthetic-data generation for coding, math, multilingual, reasoning, long-context, tool use, and factuality — each capability gets a dedicated synthetic pipeline.
-
-But the paper does not say how much synthetic data was in *pretraining*. Modern frontier pretraining corpora almost certainly include large synthetic slices (textbooks-distilled material à la Phi, math chain-of-thought à la Qwen2.5-Math, code synthesis à la StarCoder v2). If your synthetic slice is generated by your own model, "disclosing the mix" now means disclosing the generator's outputs, which are themselves proprietary. Llama 3's silence around this particular aspect is consistent with the whole field's silence.
-
-**3. Licence liability surface.** Books3's legacy (see [[excerpts/the-pile]]) is the case study. Published mix percentages create discoverable targets; silence makes discovery the adversary's problem. Meta is a defendant in multiple 2024-2025 copyright suits; it is not going to publish which books, which code repositories, or which news sources it used.
-
-**4. Enterprise and opt-out questions.** The 2024-2025 period saw active opt-out movements (CC directives, HaveIBeenTrained, NYT robots.txt, AI training clauses in Reddit and StackOverflow terms). Disclosing which sources were included and when exposes the lab to "why is X in there when X asked to opt out on date D" questions. Silence is safer.
-
-For ch-09 §5's licence-governance discussion: Llama 3 is where the *silent default* pattern is most visible. The paper does not mention any specific opt-out register. It also does not mention inclusion of specific content providers. The combination is a deliberate policy.
-
----
-
-## What the paper *does* disclose, and why that's the useful signal
-
-The Llama 3 paper's data content is really in the capability sections, not the pretraining section. From the source (lines 17-22):
-
-> ## Key Contributions
-> - Iterative 6-round post-training recipe: SFT -> Rejection Sampling -> DPO, re-mined every round from current best checkpoint.
-> - DPO with auxiliary NLL loss (coeff 0.2) on chosen sequences to prevent chosen-logprob collapse.
-> - Reward-model-gated rejection sampling with K=10–30 samples per prompt as the main SFT data filter.
-> - Heavy synthetic-data generation for coding, math, multilingual, reasoning, long-context, tool use, and factuality — each capability gets a dedicated synthetic pipeline.
-> - Llama Guard 3 trained jointly as the safety classifier.
-> - Full disclosure of failure modes (preference-data noise, multi-turn dialog drift) in the data section.
-
-The *post-training* data story is relatively detailed. Per-capability synthetic pipelines are named (code, math, multilingual, reasoning, long-context, tool use, factuality). Rejection-sampling parameters are disclosed (K=10-30, T=0.6-1.0). DPO hyperparameters (LR 1e-5, beta 0.1, NLL coeff 0.2) are disclosed.
-
-This tells you something: Meta's strategic decision is to disclose *post-training* methodology (where the six-round flywheel and NLL-stabilized DPO are novel-enough to claim credit) and *not* pretraining composition (where the corpus is the moat). Every closed lab makes a similar trade-off; the locus of what's disclosable shifts.
-
-For ch-09's reader: when a report is long but data-silent, read it for what *is* disclosed — that disclosure identifies where the lab considers its legitimate credit-claim to be. Llama 3 claims credit for post-training discipline, not data curation. Qwen 3 claims credit for unified thinking mode + multilingual scale. DeepSeek-V3 claims credit for systems-level training efficiency. The silences are complementary.
-
----
-
-## Reverse-engineering the mix — what you can and can't infer
-
-You cannot reconstruct the Llama 3 pretraining mix from the report. You *can* constrain it.
-
-**Upper bounds:**
-- Can't be 100% CC, because the paper explicitly claims strong code and math performance; pure CC under-represents these.
-- Can't include Books3 (post-litigation).
-- Can't include un-deduplicated data (15.6T is too large for realistic dedup to have failed badly).
-
-**Likely inclusions (inferred from capability claims):**
-- FineWeb-quality web slice (CC classifier-filtered; Meta has published separate 2024-era work on LLM-labeled quality filters for their own stack).
-- Large code slice (Llama 3's code-gen scores imply >5% code; possibly 10-20% at 15.6T).
-- Math corpus (symbolic + word-problem + CoT-synthetic).
-- Licensed news and reference (Meta has signed content deals; amount undisclosed).
-- Wikipedia and upsampled reference.
-- Multilingual web (Llama 3 supports 8 languages natively; implies ≥5% non-English).
-
-**Likely exclusions (inferred):**
-- Major shadow-library books (Books3 lineage).
-- Heavily-opted-out domains (CCBot opt-outs from major news sites post-2023).
-- Low-quality forum content (Llama 3's MMLU/ARC scores imply aggressive quality filtering).
-
-This exercise is fair use of a tech-report reading: it's not reconstruction, it's bound-constraint. For ch-09 §6's exercise ("read the capability claims to constrain the mix"), Llama 3 is the canonical case.
-
----
-
-## The 15.6T vs 15T headline — an (almost) matched comparison
-
-| | Llama 3 | FineWeb |
-|---|---|---|
-| Tokens | 15.6 T | 15.0 T |
-| Composition | undisclosed | 100% web (CC 96 snapshots) |
-| Code / math / books / academic | implied, unquantified | zero (web-only by design) |
-| Disclosure | token total | full pipeline + classifier + ablations |
-| 405B-equivalent compute | 3.8e25 FLOPs | ablated at small scale only |
-
-At matched token count, the performance delta between a Llama-3-sized model trained on Llama 3's corpus vs on FineWeb+code+math supplements is a direct measurement of "closed mix's composition advantage." Published 8B-scale ablations ([[fineweb]] ablations; follow-up community work) suggest the delta is in the 3-5 pp range on MMLU after FineWeb-Edu classifier-filtering is applied. The ~5 pp gap is the closed-lab's 2024 data moat.
-
-This is a concrete empirical number that ch-09 §6 makes possible. Before FineWeb, you couldn't do this comparison — there was no matched-scale open reference. After FineWeb, the disclosure gap has a measurable size.
-
----
-
-## What to take from Llama 3 for ch-09
-
-1. **Closed-disclosure is signal, not noise.** The four reasons (moat, synthetic, licence, opt-out) are consistent and compound.
-2. **Long tech reports can still be data-silent.** Read the *capability* and *post-training* sections for what the lab is willing to claim credit for.
-3. **The silence is the 2024 frontier signature.** [[qwen-3]] and [[deepseek-v3]] follow the same pattern; [[qwen-3-5]] takes it further.
-4. **Bound-constraint is fair; reconstruction is not.** You can constrain what's in the mix, not reconstruct it.
-5. **Matched-scale open references change the conversation.** FineWeb (15T) vs Llama 3 (15.6T) is the reference comparison; the ~5 pp delta is the closed moat.
-
----
-
-## Connections
-
-- [[excerpts/fineweb]] — the matched-scale open reference; the disclosure-gap is newly measurable.
-- [[excerpts/dolma]] — the counter-thesis; reproducibility as scientific contribution.
-- [[excerpts/qwen-3]] — the next closed report; 36T with stage-level-only disclosure.
-- [[excerpts/olmo-3]] — the maximum-open 2025 counterpart; three stages fully budgeted.
-- [[excerpts/the-pile]] — the 2020 full-disclosure baseline; Llama 3 is the 2024 full-non-disclosure extreme.
-- [[ch-09]] — §4 (closed-disclosure reasoning), §6 (reading a data section for what it doesn't say), §7 (matched-scale comparison).
+## Correction to earlier ch-09 material
+The April 2026 version of ch-09 stated that the Llama 3 report gives "token total only; no mix". §3.1.2 gives the final category mix and the method used to choose it.

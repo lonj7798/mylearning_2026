@@ -1,0 +1,180 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Clipping and Loss-Scale Order</title>
+<style>
+  :root {
+    --bg: #fbfaf7; --panel: #ffffff; --ink: #1f2328; --muted: #5b6470; --rule: #d9dde3;
+    --good: #2e7d32; --bad: #b3261e; --barA: #1f6fb2; --barB: #b35c00; --track: #eceff3;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #16181c; --panel: #1e2127; --ink: #e6e8eb; --muted: #a3abb6; --rule: #353a43;
+      --good: #7cc47f; --bad: #f28b82; --barA: #6cb2ef; --barB: #f0a24f; --track: #2a2e35;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #16181c; --panel: #1e2127; --ink: #e6e8eb; --muted: #a3abb6; --rule: #353a43;
+    --good: #7cc47f; --bad: #f28b82; --barA: #6cb2ef; --barB: #f0a24f; --track: #2a2e35;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink);
+         font: 15px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+  main { max-width: 920px; margin: 0 auto; padding-block: 20px 40px; padding-inline: 16px; }
+  h1 { font-size: 1.3rem; margin: 0 0 4px; }
+  .sub { color: var(--muted); margin: 0 0 16px; }
+  .panel { background: var(--panel); border: 1px solid var(--rule); border-radius: 8px; padding: 12px 14px; margin: 12px 0; }
+  .controls { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 12px 20px; }
+  .ctl { display: flex; flex-direction: column; min-width: 0; }
+  .ctl label { font-size: 0.82rem; color: var(--muted); margin-bottom: 3px; }
+  select, input[type=number] { font: inherit; color: var(--ink); background: var(--panel); border: 1px solid var(--rule); border-radius: 6px; padding: 4px 6px; max-width: 100%; }
+  .cols { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 12px; }
+  .col h2 { font-size: 1rem; margin: 0 0 6px; }
+  .steps { margin: 0; padding-left: 20px; font-size: 0.9rem; }
+  .steps li { margin: 3px 0; }
+  .kv { display: grid; grid-template-columns: 1fr auto; gap: 2px 10px; font-size: 0.9rem; margin-top: 8px; }
+  .kv span:nth-child(even) { font-variant-numeric: tabular-nums; font-weight: 600; text-align: right; }
+  .bar { height: 10px; background: var(--track); border-radius: 5px; overflow: hidden; margin: 4px 0 2px; }
+  .bar > div { height: 100%; }
+  .verdict { margin-top: 8px; font-size: 0.9rem; font-weight: 600; }
+  .ok { color: var(--good); } .no { color: var(--bad); }
+  .note { font-size: 0.9rem; }
+  .note p { margin: 6px 0; }
+  code { font-size: 0.88em; }
+</style>
+</head>
+<body>
+<main>
+<h1>Clipping and loss-scale order</h1>
+<p class="sub">With fp16 loss scaling, <code>backward()</code> produces gradients multiplied by the loss scale S. This calculator compares clipping after <code>scaler.unscale_</code> (the documented order) with clipping before it, and shows what the optimizer receives.</p>
+
+<div class="panel controls">
+  <div class="ctl">
+    <label for="S">Loss scale S</label>
+    <select id="S">
+      <option value="1">1 (bf16, no GradScaler)</option>
+      <option value="256">2^8 = 256</option>
+      <option value="4096">2^12 = 4,096</option>
+      <option value="65536" selected>2^16 = 65,536 (GradScaler init_scale)</option>
+    </select>
+  </div>
+  <div class="ctl">
+    <label for="g">True gradient global norm ‖g‖</label>
+    <input id="g" type="number" min="0.001" step="0.1" value="0.8">
+  </div>
+  <div class="ctl">
+    <label for="c">max_norm c</label>
+    <input id="c" type="number" min="0.01" step="0.1" value="1.0">
+  </div>
+  <div class="ctl">
+    <label for="N">Number of parameters N</label>
+    <select id="N">
+      <option value="1e8">1e8</option>
+      <option value="1e9" selected>1e9</option>
+      <option value="7e9">7e9</option>
+    </select>
+  </div>
+  <div class="ctl">
+    <label for="eps">AdamW ε</label>
+    <select id="eps">
+      <option value="1e-8" selected>1e-8</option>
+      <option value="1e-5">1e-5</option>
+      <option value="1e-15">1e-15</option>
+    </select>
+  </div>
+</div>
+
+<div class="cols">
+  <div class="panel col" id="colA">
+    <h2>Documented order</h2>
+    <ol class="steps">
+      <li><code>scaler.scale(loss).backward()</code> → norm S·‖g‖</li>
+      <li><code>scaler.unscale_(optimizer)</code> → norm ‖g‖</li>
+      <li><code>clip_grad_norm_(params, c)</code></li>
+      <li><code>scaler.step(optimizer)</code>; <code>scaler.update()</code></li>
+    </ol>
+    <div class="kv" id="kvA"></div>
+    <div class="verdict" id="vA"></div>
+  </div>
+  <div class="panel col" id="colB">
+    <h2>Clip before unscale</h2>
+    <ol class="steps">
+      <li><code>scaler.scale(loss).backward()</code> → norm S·‖g‖</li>
+      <li><code>clip_grad_norm_(params, c)</code> on scaled gradients</li>
+      <li><code>scaler.step(optimizer)</code> unscales inside the step</li>
+      <li><code>scaler.update()</code></li>
+    </ol>
+    <div class="kv" id="kvB"></div>
+    <div class="verdict" id="vB"></div>
+  </div>
+</div>
+
+<div class="panel note">
+  <p><strong>Formulas.</strong> Clip coefficient = min(1, c / (norm + 10⁻⁶)) (PyTorch v2.5.0 <code>torch/nn/utils/clip_grad.py</code> L105-L109). Norm the optimizer receives: documented order ‖g‖·coef(‖g‖); clip before unscale S·‖g‖·coef(S·‖g‖)/S. Relative SGD step = received norm / ‖g‖.</p>
+  <p><strong>AdamW estimate (simplified).</strong> If every coordinate has the same magnitude, the per-coordinate gradient is r = received norm / √N. In steady state |m̂| ≈ √v̂ ≈ r, so the update is α·r/(r + ε) instead of about α. This assumption is a simplification for hand calculation; real gradients are not uniform across coordinates, so coordinates with small gradients are affected more than this estimate shows.</p>
+  <p><strong>Sources.</strong> The unscale-then-clip order and the statement that clipping scaled gradients makes the threshold invalid are from PyTorch <code>docs/source/notes/amp_examples.rst</code> (v2.5.0, L67-L106); <code>init_scale = 2.0**16</code> is from <code>torch/amp/grad_scaler.py</code> L122. See ch-01 §5.</p>
+</div>
+</main>
+
+<script>
+(function () {
+  function fmt(x) {
+    if (x === 0) return '0';
+    var a = Math.abs(x);
+    if (a >= 0.01 && a < 1e5) return (Math.round(x * 1000) / 1000).toLocaleString('en-US');
+    return x.toExponential(2);
+  }
+  function coef(norm, c) { return Math.min(1, c / (norm + 1e-6)); }
+  function kv(id, rows) {
+    document.getElementById(id).innerHTML = rows.map(function (r) { return '<span>' + r[0] + '</span><span>' + r[1] + '</span>'; }).join('');
+  }
+  function bar(frac, color) {
+    var w = Math.max(0.5, Math.min(100, frac * 100));
+    return '<div class="bar"><div style="width:' + w + '%;background:' + color + '"></div></div>';
+  }
+  function render() {
+    var S = +document.getElementById('S').value;
+    var g = Math.max(1e-6, +document.getElementById('g').value || 0.8);
+    var c = Math.max(1e-6, +document.getElementById('c').value || 1);
+    var N = +document.getElementById('N').value;
+    var eps = +document.getElementById('eps').value;
+
+    var coefA = coef(g, c), recvA = g * coefA;
+    var coefB = coef(S * g, c), recvB = S * g * coefB / S;
+
+    function adamFrac(recv) { var r = recv / Math.sqrt(N); return { r: r, f: r / (r + eps) }; }
+    var aA = adamFrac(recvA), aB = adamFrac(recvB);
+    var intended = adamFrac(g * coefA).f;
+
+    kv('kvA', [
+      ['norm seen by clip', fmt(g)], ['clip coefficient', fmt(coefA)],
+      ['norm passed to optimizer', fmt(recvA)], ['relative SGD step', fmt(recvA / g)],
+      ['per-coordinate r', fmt(aA.r)], ['AdamW update / α (estimate)', fmt(aA.f)]
+    ]);
+    document.getElementById('kvA').insertAdjacentHTML('beforeend', '<span style="grid-column:1/3">' + bar(aA.f, 'var(--barA)') + '</span>');
+    document.getElementById('vA').innerHTML = coefA < 1
+      ? '<span class="ok">Clipping is active because ‖g‖ &gt; c; the threshold applies to true gradients.</span>'
+      : '<span class="ok">No clipping because ‖g‖ ≤ c; the gradient passes unchanged.</span>';
+
+    kv('kvB', [
+      ['norm seen by clip', fmt(S * g)], ['clip coefficient', fmt(coefB)],
+      ['norm passed to optimizer', fmt(recvB)], ['relative SGD step', fmt(recvB / g)],
+      ['per-coordinate r', fmt(aB.r)], ['AdamW update / α (estimate)', fmt(aB.f)]
+    ]);
+    document.getElementById('kvB').insertAdjacentHTML('beforeend', '<span style="grid-column:1/3">' + bar(aB.f, 'var(--barB)') + '</span>');
+    var same = Math.abs(recvB - recvA) / recvA < 1e-6;
+    document.getElementById('vB').innerHTML = same
+      ? '<span class="ok">Same result as the documented order for these inputs.</span>'
+      : '<span class="no">Clipping triggers on the scaled norm: the optimizer receives a gradient ' + fmt(recvA / recvB) + '× smaller than intended (AdamW estimate ' + fmt(aB.f) + 'α versus ' + fmt(intended) + 'α).</span>';
+  }
+  ['S', 'g', 'c', 'N', 'eps'].forEach(function (id) {
+    document.getElementById(id).addEventListener('input', render);
+    document.getElementById(id).addEventListener('change', render);
+  });
+  render();
+})();
+</script>
+</body>
+</html>

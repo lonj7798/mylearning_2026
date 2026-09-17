@@ -4,68 +4,19 @@ course: llm-training
 phase: read
 excerpt_of: wiki/raw-data/llm-training/blogs/costa-huang-ppo-details.md
 source_url: https://iclr-blog-track.github.io/2022/03/25/ppo-implementation-details/
-created_at: "2026-04-23"
+revised_at: "2026-09-15"
 ---
 
-# Excerpt: Costa-Huang's 37 tricks — the LLM-RL subset
+# Excerpt: The 37 Implementation Details of PPO: core details and their evidence
 
-**Source library:** `wiki/raw-data/llm-training/blogs/costa-huang-ppo-details.md`
-**Artifact:** 37 implementation tricks + 2024 RLHF-specific follow-up.
+Checked against the ICLR Blog Track post (2022-03-25) on 2026-09-15. Used in read.md §1, §3, §9. The library card numbers its items differently from the post (for example it lists value-loss clipping as item 4); the numbering below follows the post. The RLHF-specific follow-up is [[n-implementation-details-rlhf-ppo]].
 
----
+## The 13 core details, in the post's order
+1. Vectorized architecture. 2. Orthogonal initialization of weights and constant initialization of biases. 3. Adam epsilon 1e-5. 4. Adam learning-rate annealing. 5. Generalized Advantage Estimation. 6. Mini-batch updates (shuffle and split). 7. Normalization of advantages, "at the minibatch level instead of the whole batch level". 8. Clipped surrogate objective. 9. Value function loss clipping. 10. Overall loss and entropy bonus. 11. Global gradient clipping (norm 0.5). 12. Debug variables. 13. Shared and separate MLP networks for policy and value.
+The post also lists 9 details for continuous-action robotics tasks, 5 LSTM details, and others.
 
-## Why this source anchors ch-38
-
-Ch-38 §6 filters the 37-item catalog down to the 5–7 tricks that actually change outcomes in LLM-RL. The filtering is what makes the source useful — the original list is MuJoCo-first; many items are no-ops in a language-model setting (no observations to normalize, orthogonal init dominated by pretrained weights).
-
----
-
-## The source's own LLM-specific filter
-
-From the source:
-
-> **RLHF-specific follow-up highlights:**
-> - Whitening the scalar reward before injecting into the PPO reward stream.
-> - Handling per-token vs per-sequence log-prob correctly when computing the ratio.
-> - KL-to-reference is added to per-token reward, not to loss, in the canonical impl (equivalent but commonly mis-coded).
-> - Value head initialization: start from the RM's value head to avoid warmup regression.
-
-Ch-38 §6 uses these four as the core of its 7-item list, augmented with advantage whitening, value-loss clipping, ratio-clip bounds, and global gradient clipping.
-
----
-
-## The tricks ch-38 promotes as load-bearing
-
-From the source's item list, ch-38 §6 carries:
-
-> 1. **Orthogonal initialization + layer scaling** — policy and value heads initialized with orthogonal matrix and specific gain.
-> 4. **Value function loss clipping** — clip value predictions around the old value (mirrors policy ratio clipping).
-> 5. **Advantage normalization** — per-minibatch whitening of advantages.
-> 6. **Generalized Advantage Estimation (GAE)** with lambda ~0.95.
-> 7. **Global gradient clipping** at max-norm 0.5 (RL) or 1.0 (RLHF typical).
-> 10. **PPO clip epsilon** 0.2 is the most common default.
-
-Ch-38 §6 frames these as: advantage whitening, value-loss clipping, ratio clip bounds, global grad clip. Plus from the follow-up: KL-in-reward, value-head-from-RM, length normalization.
-
----
-
-## Tricks ch-38 explicitly demotes for LLM-RL
-
-Not in the critical-path 7:
-
-- **Observation normalization** — "In LLM RLHF the analog is reward whitening." (Directly quoted reasoning in the source.) Observations don't exist as such in LLM-RL.
-- **Orthogonal init** — pretraining init dominates; orthogonal init of the policy head is already a byproduct of the LM head init.
-- **LR annealing** — RLHF LRs are tiny (1e-6 to 1e-5); cosine decay is typical but the delta to no-anneal is much smaller than in 3e-4 MuJoCo PPO.
-- **Minibatch shuffle** — standard and uncontested; not where bugs live.
-
----
-
-## Why this filter matters
-
-The 37-item list has a reputation as a "PPO bible," but applied naively to LLM-RL it wastes effort on knobs that don't move numbers. Ch-38's curation is the answer to "which of these should I debug first when my RLHF run is misbehaving?"
-
----
-
-## What ch-38 keeps, changes, drops
-
-Keeps: advantage whitening, value-loss clipping, ratio clip bounds, global grad clip, KL-in-reward, value-head-from-RM, length normalization. Changes: elevates length normalization (not explicit in the source; comes from [[verl-ppo-loss]]'s `loss_agg_mode`). Drops: 30 of the 37 items as MuJoCo-specific or dominated by pretraining init.
+## Evidence quoted in the post (control and Atari tasks, not language models)
+- Detail 7: Andrychowicz et al. "find per-minibatch advantage normalization to not affect performance much".
+- Detail 8: Engstrom et al. "find the PPO's clipped objective to have similar performance to TRPO's objective when they controlled other implementation details to be the same".
+- Detail 9: L^V = max[(V_θt − V_targ)², (clip(V_θt, V_θt−1 − ε, V_θt−1 + ε) − V_targ)²]; Engstrom et al. "find no evidence that the value function loss clipping helps with the performance"; Andrychowicz et al. "suggest value function loss clipping even hurts performance".
+- Detail 11: global gradient clipping offers "a small performance boost".

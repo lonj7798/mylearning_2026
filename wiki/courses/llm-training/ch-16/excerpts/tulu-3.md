@@ -7,6 +7,8 @@ source_url: https://arxiv.org/abs/2411.15124
 created_at: "2026-04-23"
 ---
 
+> Superseded by the 2026-09 revision of read.md; kept for history.
+
 # Excerpt: Tülu 3 — the open-source RLVR prompt-curation recipe
 
 **Source library:** `wiki/raw-data/llm-training/model-reports/tulu-3.md`

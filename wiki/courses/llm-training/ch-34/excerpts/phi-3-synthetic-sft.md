@@ -7,6 +7,8 @@ source_url: https://arxiv.org/abs/2404.14219
 created_at: "2026-04-23"
 ---
 
+> Superseded by the 2026-09 revision of read.md; kept for history.
+
 # Excerpt: Phi-3 — synthetic-heavy pretraining that blurs the SFT boundary
 
 **Source library:** `wiki/raw-data/llm-training/model-reports/phi-3.md`

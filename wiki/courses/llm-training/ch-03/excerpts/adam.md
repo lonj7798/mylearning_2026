@@ -7,6 +7,8 @@ source_url: https://arxiv.org/abs/1412.6980 ; https://arxiv.org/abs/1711.05101
 created_at: "2026-04-23"
 ---
 
+> Superseded by the 2026-09 revision of read.md; kept for history.
+
 # Excerpt: Adam × Schedules — Why Warmup Exists Because of Bias Correction
 
 **Sources:**

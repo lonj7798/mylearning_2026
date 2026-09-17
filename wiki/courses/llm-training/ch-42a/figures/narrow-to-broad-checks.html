@@ -1,0 +1,129 @@
+<title>Narrow-to-Broad Checks</title>
+<style>
+:root{
+  --bg:#fafaf8; --panel:#ffffff; --ink:#1d1d1b; --muted:#5f5f5a; --line:#dcdcd6;
+  --good:#2f7d4f; --bad:#b5452f; --accent:#3f64a8; color-scheme:light;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#161614; --panel:#1f1f1c; --ink:#ecece6; --muted:#a4a49c; --line:#3a3a35;
+    --good:#5fb784; --bad:#e27a62; --accent:#7f9fe0; color-scheme:dark;
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#161614; --panel:#1f1f1c; --ink:#ecece6; --muted:#a4a49c; --line:#3a3a35;
+  --good:#5fb784; --bad:#e27a62; --accent:#7f9fe0; color-scheme:dark;
+}
+body{background:var(--bg);color:var(--ink);font:15px/1.55 system-ui,-apple-system,"Segoe UI",sans-serif;margin:0;padding-inline:16px;padding-block:20px}
+main{max-width:900px;margin:0 auto}
+h1{font-size:1.3rem;margin:0 0 .3rem}
+h2{font-size:1.05rem;margin:0 0 .4rem}
+p{margin:.35rem 0}
+.caption{color:var(--muted);font-size:.9rem}
+section{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:14px 16px;margin:16px 0}
+.controls{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:10px 18px;margin:.6rem 0}
+label{display:flex;flex-direction:column;font-size:.9rem;color:var(--muted);gap:4px}
+input[type=range]{width:100%}
+.val{color:var(--ink);font-weight:600}
+table{border-collapse:collapse;font-size:.9rem;margin-top:.5rem;width:100%}
+td,th{border:1px solid var(--line);padding:4px 9px;text-align:right;font-variant-numeric:tabular-nums}
+th{text-align:left;color:var(--muted);font-weight:600}
+td.l,th.l{text-align:left}
+.bar-wrap{position:relative;height:16px;border:1px solid var(--line);border-radius:4px;background:transparent;min-width:120px}
+.bar{position:absolute;left:0;top:0;bottom:0;border-radius:3px}
+.note{font-size:.9rem;margin-top:.55rem}
+.ok{color:var(--good)} .no{color:var(--bad)}
+.scroll{overflow-x:auto}
+@media (max-width:520px){ td,th{padding:3px 6px} }
+</style>
+<main>
+<h1>Narrow-to-broad checks: inoculation model and rare-behaviour detection</h1>
+<p class="caption">Companion to ch-42a §3 and §10. Panel A evaluates the linear model of inoculation prompting stated in Wichers et al. 2025 (arXiv:2510.05024) App. H (Eq. 3-5) on values you set. Panel B computes how many evaluation samples a broad-behaviour check needs before a rare behaviour is likely to appear at all. All numbers on this page are computed from the inputs; they are not measurements from any paper.</p>
+
+<section>
+<h2>Panel A. Inoculation prompting under the paper's linear model</h2>
+<p class="caption">Two traits are learned from the same oversight signal: an undesired trait (for example hard-coding to pass tests) and a desired trait (for example writing working code). T*(O) is the level that training converges to under that oversight. T(M₀, C₀) is the initial model's level with a neutral prompt; T(M₀, C_s) is its level when the inoculation instruction is present. k is the ratio between the effect measured without the instruction and with it (k = 1 means the training effect transfers unchanged).</p>
+<div class="controls">
+  <label>Undesired trait: oversight level T*(O) <span class="val" id="bOv">0.90</span><input type="range" id="bO" min="0" max="1" step="0.01" value="0.90"></label>
+  <label>Undesired trait: initial, neutral prompt <span class="val" id="bNv">0.05</span><input type="range" id="bN" min="0" max="1" step="0.01" value="0.05"></label>
+  <label>Undesired trait: initial, with instruction <span class="val" id="bIv">0.60</span><input type="range" id="bI" min="0" max="1" step="0.01" value="0.60"></label>
+  <label>Desired trait: oversight level T*(O) <span class="val" id="gOv">0.80</span><input type="range" id="gO" min="0" max="1" step="0.01" value="0.80"></label>
+  <label>Desired trait: initial, neutral prompt <span class="val" id="gNv">0.30</span><input type="range" id="gN" min="0" max="1" step="0.01" value="0.30"></label>
+  <label>Desired trait: initial, with instruction <span class="val" id="gIv">0.30</span><input type="range" id="gI" min="0" max="1" step="0.01" value="0.30"></label>
+  <label>Transfer ratio k <span class="val" id="kv">0.50</span><input type="range" id="k" min="0.05" max="1" step="0.05" value="0.50"></label>
+</div>
+<div class="scroll">
+<table>
+  <tr><th class="l">Trait</th><th>Neutral training</th><th>Inoculated training</th><th>Change</th><th class="l">Level after inoculated training</th></tr>
+  <tr><td class="l">Undesired</td><td id="bBase">—</td><td id="bIP">—</td><td id="bDelta">—</td><td><div class="bar-wrap"><div class="bar" id="bBar" style="background:var(--bad)"></div></div></td></tr>
+  <tr><td class="l">Desired</td><td id="gBase">—</td><td id="gIP">—</td><td id="gDelta">—</td><td><div class="bar-wrap"><div class="bar" id="gBar" style="background:var(--good)"></div></div></td></tr>
+</table>
+</div>
+<p class="note" id="cond4">—</p>
+<p class="note" id="cond5">—</p>
+<p class="caption">Neutral training is the same model with s absent, so C_s = C₀ and k = 1 by definition: the trait moves all the way to T*(O). Under the inoculation prompt the trait moves by k(T*(O) − T(M₀, C_s)) instead (Eq. 3). Eq. 4 asks whether the instruction already elicits the undesired trait at least as strongly as the oversight rewards it; Eq. 5 asks whether the desired trait is left nearly untouched by the instruction. The paper reports Pearson correlations of 0.57-0.90 between how strongly a prompt elicits a behaviour and how well it inoculates, which supports using the model to rank candidate prompts rather than to predict the resulting trait level.</p>
+</section>
+
+<section>
+<h2>Panel B. How many samples a rare-behaviour check needs</h2>
+<p class="caption">A broad behavioural evaluation that draws n independent samples observes a behaviour with true per-sample rate p at least once with probability 1 − (1 − p)ⁿ. Reference rates: reward tampering in Denison et al. 2024 (arXiv:2406.10162) is 45/32,768 = 0.137% and tampering plus test editing 7/32,768 = 0.021%; the helpful-only baseline is 0 in 100,000.</p>
+<div class="controls">
+  <label>True rate p <span class="val" id="pv">0.137%</span><input type="range" id="p" min="-5" max="-1" step="0.02" value="-2.8625"></label>
+  <label>Samples n <span class="val" id="nv">1000</span><input type="range" id="n" min="1" max="5" step="0.02" value="3"></label>
+</div>
+<div class="scroll">
+<table>
+  <tr><th class="l">Quantity</th><th>Value</th></tr>
+  <tr><td class="l">Expected count n·p</td><td id="exp">—</td></tr>
+  <tr><td class="l">P(at least one observation)</td><td id="pAtLeast">—</td></tr>
+  <tr><td class="l">P(zero observations)</td><td id="pZero">—</td></tr>
+  <tr><td class="l">Samples needed for P(at least one) = 0.95</td><td id="nNeed">—</td></tr>
+  <tr><td class="l">If zero are seen: 95% upper bound on p (rule of three, 3/n)</td><td id="rule3">—</td></tr>
+</table>
+</div>
+<p class="note" id="bNote">—</p>
+</section>
+</main>
+<script>
+(function(){
+  var f=function(id){return document.getElementById(id);};
+  var pct=function(x){return (100*x).toFixed(1)+"%";};
+  function renderA(){
+    var bO=+f("bO").value,bN=+f("bN").value,bI=+f("bI").value;
+    var gO=+f("gO").value,gN=+f("gN").value,gI=+f("gI").value,k=+f("k").value;
+    f("bOv").textContent=bO.toFixed(2); f("bNv").textContent=bN.toFixed(2); f("bIv").textContent=bI.toFixed(2);
+    f("gOv").textContent=gO.toFixed(2); f("gNv").textContent=gN.toFixed(2); f("gIv").textContent=gI.toFixed(2);
+    f("kv").textContent=k.toFixed(2);
+    var bIP=bN+k*(bO-bI), gIP=gN+k*(gO-gI);
+    bIP=Math.max(0,Math.min(1,bIP)); gIP=Math.max(0,Math.min(1,gIP));
+    f("bBase").textContent=pct(bO); f("bIP").textContent=pct(bIP); f("bDelta").textContent=pct(bIP-bN);
+    f("gBase").textContent=pct(gO); f("gIP").textContent=pct(gIP); f("gDelta").textContent=pct(gIP-gN);
+    f("bBar").style.width=(100*bIP)+"%"; f("gBar").style.width=(100*gIP)+"%";
+    var c4=bI>=bO;
+    f("cond4").innerHTML='Eq. 4 (undesired trait no higher than before training): '+(c4?'<span class="ok">satisfied</span>':'<span class="no">not satisfied</span>')+
+      ' — the instruction elicits '+pct(bI)+' and the oversight rewards '+pct(bO)+'.';
+    var rhs=gO+(1/k)*(gN-gO); var c5=gI<=rhs;
+    f("cond5").innerHTML='Eq. 5 (desired trait still fully learned): '+(c5?'<span class="ok">satisfied</span>':'<span class="no">not satisfied</span>')+
+      ' — the instruction elicits '+pct(gI)+' and the bound is '+pct(rhs)+'. With k = '+k.toFixed(2)+', '+
+      (k<1?'part of the desired capability learned under the instruction does not transfer to the neutral prompt.':'the training effect transfers unchanged.');
+  }
+  function renderB(){
+    var p=Math.pow(10,+f("p").value), n=Math.round(Math.pow(10,+f("n").value));
+    f("pv").textContent=(100*p).toFixed(p<0.0005?4:3)+"%";
+    f("nv").textContent=n.toLocaleString();
+    var pz=Math.pow(1-p,n);
+    f("exp").textContent=(n*p).toFixed(2);
+    f("pAtLeast").textContent=(100*(1-pz)).toFixed(1)+"%";
+    f("pZero").textContent=(100*pz).toFixed(1)+"%";
+    var need=Math.ceil(Math.log(0.05)/Math.log(1-p));
+    f("nNeed").textContent=need.toLocaleString();
+    f("rule3").textContent=(100*3/n).toFixed(4)+"%";
+    f("bNote").textContent="At this rate, an evaluation of "+n.toLocaleString()+" samples misses the behaviour entirely "+
+      (100*pz).toFixed(1)+"% of the time, and "+need.toLocaleString()+" samples are needed before a single observation is 95% likely. A run that reports zero events out of "+
+      n.toLocaleString()+" is consistent with any rate up to "+(100*3/n).toFixed(4)+"%.";
+  }
+  ["bO","bN","bI","gO","gN","gI","k"].forEach(function(id){f(id).addEventListener("input",renderA);});
+  ["p","n"].forEach(function(id){f(id).addEventListener("input",renderB);});
+  renderA(); renderB();
+})();
+</script>

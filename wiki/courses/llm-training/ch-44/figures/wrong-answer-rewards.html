@@ -1,0 +1,249 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ch-44 — Wrong-answer rewards, abstention, and group advantages</title>
+<style>
+  :root {
+    --bg: #fafaf8; --panel: #ffffff; --ink: #1f2328; --muted: #5b6470; --rule: #d9dde3;
+    --pos: #1f7a4d; --neg: #c2410c; --abs: #1d5fa8; --mask: #8a8f98; --grid: #eceef1; --accent: #1d5fa8;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #16181c; --panel: #1e2126; --ink: #e6e8eb; --muted: #a0a8b3; --rule: #353a42;
+      --pos: #4cc38a; --neg: #f0883e; --abs: #6aa6e8; --mask: #7c828c; --grid: #2a2e35; --accent: #6aa6e8;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #16181c; --panel: #1e2126; --ink: #e6e8eb; --muted: #a0a8b3; --rule: #353a42;
+    --pos: #4cc38a; --neg: #f0883e; --abs: #6aa6e8; --mask: #7c828c; --grid: #2a2e35; --accent: #6aa6e8;
+  }
+  body { margin: 0; background: var(--bg); color: var(--ink);
+         font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+  main { max-width: 960px; margin: 0 auto; padding-block: 20px 40px; padding-inline: 16px; }
+  h1 { font-size: 19px; margin: 0 0 4px; }
+  h2 { font-size: 15px; margin: 0 0 6px; }
+  p.sub { color: var(--muted); margin: 0 0 16px; }
+  .panel { background: var(--panel); border: 1px solid var(--rule); border-radius: 8px; padding: 16px; margin-bottom: 18px; }
+  .controls { display: flex; flex-wrap: wrap; gap: 14px 22px; margin: 8px 0 12px; }
+  .ctl { display: flex; flex-direction: column; min-width: 150px; flex: 1 1 150px; }
+  .ctl label { font-size: 12px; color: var(--muted); }
+  .ctl output { font-family: ui-monospace, "SF Mono", Menlo, monospace; }
+  input[type=range] { width: 100%; }
+  select, button { font: inherit; color: var(--ink); background: var(--panel); border: 1px solid var(--rule); border-radius: 6px; padding: 3px 8px; }
+  button { cursor: pointer; }
+  .row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+  svg { width: 100%; height: auto; display: block; }
+  table { border-collapse: collapse; width: 100%; font-size: 13px; margin-top: 10px; }
+  th, td { border: 1px solid var(--rule); padding: 5px 8px; text-align: left; }
+  th { color: var(--muted); font-weight: 600; }
+  .readout { font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 12.5px; background: var(--bg);
+             border: 1px solid var(--rule); border-radius: 6px; padding: 8px 10px; margin-top: 10px; white-space: pre-wrap; overflow-x: auto; }
+  .cap { font-size: 12.5px; color: var(--muted); margin-top: 10px; }
+  .lbl { fill: var(--muted); font-size: 11px; }
+  .gridline { stroke: var(--grid); }
+  .axisline { stroke: var(--muted); }
+  .scroll { overflow-x: auto; }
+</style>
+</head>
+<body>
+<main>
+<h1>Wrong-answer rewards, abstention, and group advantages</h1>
+<p class="sub">Companion to ch-44 read.md, section "Negative samples and negative feedback".</p>
+
+<section class="panel">
+  <h2>A. One group of rollouts under a chosen reward function</h2>
+  <div class="controls">
+    <div class="ctl"><label for="nc">correct rollouts <output id="ncV"></output></label><input id="nc" type="range" min="0" max="8" step="1" value="2"></div>
+    <div class="ctl"><label for="nw">wrong rollouts <output id="nwV"></output></label><input id="nw" type="range" min="0" max="8" step="1" value="6"></div>
+    <div class="ctl"><label for="na">abstentions <output id="naV"></output></label><input id="na" type="range" min="0" max="8" step="1" value="0"></div>
+    <div class="ctl"><label for="nt">truncated rollouts <output id="ntV"></output></label><input id="nt" type="range" min="0" max="8" step="1" value="0"></div>
+  </div>
+  <div class="controls">
+    <div class="ctl"><label for="rc">reward for correct <output id="rcV"></output></label><input id="rc" type="range" min="1" max="10" step="1" value="1"></div>
+    <div class="ctl"><label for="rw">reward for wrong <output id="rwV"></output></label><input id="rw" type="range" min="-3" max="0" step="0.5" value="0"></div>
+    <div class="ctl"><label for="ra">reward for abstaining <output id="raV"></output></label><input id="ra" type="range" min="-1" max="1" step="0.1" value="0"></div>
+    <div class="ctl"><label for="trunc">truncated rollouts</label>
+      <select id="trunc">
+        <option value="mask">masked (no gradient)</option>
+        <option value="wrong">scored as wrong</option>
+        <option value="pen">scored −10 (non-EOS penalty)</option>
+      </select></div>
+    <div class="ctl"><label for="norm">advantage</label>
+      <select id="norm">
+        <option value="std">(r − mean) / std</option>
+        <option value="mean">r − mean (no std division)</option>
+      </select></div>
+  </div>
+  <div class="row">
+    <button type="button" data-set="1,10,0,0,0,2,6,0,0">Case 1: reward 10/0, 2 of 8 correct</button>
+    <button type="button" data-set="1,1,-1,0,0,2,6,0,0">Case 2: reward +1/−1, same outcomes</button>
+    <button type="button" data-set="1,1,-1,0,0,2,3,3,0">Case 3: with 3 abstentions</button>
+    <button type="button" data-set="1,1,0,0,0,2,3,3,0">Case 4: abstention scored like a wrong answer</button>
+  </div>
+  <div class="scroll">
+    <table id="tbl">
+      <thead><tr><th>Outcome</th><th>Count</th><th>Reward</th><th>Advantage</th></tr></thead>
+      <tbody></tbody>
+    </table>
+  </div>
+  <svg id="svg" viewBox="0 0 640 180" role="img" aria-label="Advantage per outcome class"></svg>
+  <div class="readout" id="read"></div>
+  <p class="cap">Advantages follow the group-relative form used by GRPO, A_i = (r_i − mean(r)) / std(r) (arXiv:2402.03300v3), with the mean-only variant of Dr. GRPO and DeepSeek-V3.2 as the second option (arXiv:2512.02556 §3.1). Masked rollouts are excluded from both the statistics and the loss, which is DeepSWE's compact filtering (together.ai/blog/deepswe §2.3). The −10 option is Tülu 3's penalty for a response that does not end with an EOS token (arXiv:2411.15124v5 Table 21). Reward magnitudes are reader-set; Tülu 3 uses 10 for a correct answer and 0 otherwise (§6, Eq. 8).</p>
+</section>
+
+<section class="panel">
+  <h2>B. The abstention threshold implied by the wrong-answer penalty</h2>
+  <div class="controls">
+    <div class="ctl"><label for="w">wrong-answer penalty w (reward −w) <output id="wV"></output></label><input id="w" type="range" min="0" max="9" step="0.25" value="1"></div>
+  </div>
+  <svg id="svgB" viewBox="0 0 640 260" role="img" aria-label="Expected reward of answering against correctness probability"></svg>
+  <div class="readout" id="readB"></div>
+  <p class="cap">With reward +1 for a correct answer, −w for a wrong answer, and 0 for an abstention, answering has expected reward p − w(1 − p), which is positive exactly when p > w / (1 + w). The equivalent instruction in arXiv:2509.04664v1 §4.2 states a confidence target t with penalty t/(1 − t); the values printed there are t = 0.5 with penalty 1, t = 0.75 with penalty 2 (the formula gives 3), and t = 0.9 with penalty 9. That paper's claim is about evaluation scoring; the translation to an RL reward is the course's extension.</p>
+</section>
+
+<script>
+(function () {
+  var $ = function (id) { return document.getElementById(id); };
+  var SVGNS = "http://www.w3.org/2000/svg";
+  function el(name, attrs, text) {
+    var n = document.createElementNS(SVGNS, name);
+    for (var k in attrs) { n.setAttribute(k, attrs[k]); }
+    if (text !== undefined) { n.textContent = text; }
+    return n;
+  }
+  function clear(svg) { while (svg.firstChild) { svg.removeChild(svg.firstChild); } }
+
+  var ids = ["nc", "nw", "na", "nt", "rc", "rw", "ra"];
+  function draw() {
+    var nc = +$("nc").value, nw = +$("nw").value, na = +$("na").value, nt = +$("nt").value;
+    var rc = +$("rc").value, rw = +$("rw").value, ra = +$("ra").value;
+    var mode = $("trunc").value, norm = $("norm").value;
+    ids.forEach(function (id) { $(id + "V").textContent = $(id).value; });
+
+    var classes = [
+      { name: "correct", n: nc, r: rc, color: "var(--pos)", used: true },
+      { name: "wrong", n: nw, r: rw, color: "var(--neg)", used: true },
+      { name: "abstain", n: na, r: ra, color: "var(--abs)", used: true },
+      { name: "truncated", n: nt,
+        r: (mode === "mask" ? null : (mode === "wrong" ? rw : -10)),
+        color: "var(--mask)", used: mode !== "mask" }
+    ];
+    var used = classes.filter(function (c) { return c.n > 0 && c.used; });
+    var total = used.reduce(function (a, c) { return a + c.n; }, 0);
+    var mean = 0, sd = 0;
+    if (total > 0) {
+      used.forEach(function (c) { mean += c.n * c.r; });
+      mean /= total;
+      used.forEach(function (c) { sd += c.n * Math.pow(c.r - mean, 2); });
+      sd = Math.sqrt(sd / total);
+    }
+    classes.forEach(function (c) {
+      if (c.n === 0) { c.adv = null; return; }
+      if (!c.used) { c.adv = "masked"; return; }
+      if (total === 0) { c.adv = null; return; }
+      if (norm === "mean") { c.adv = c.r - mean; }
+      else { c.adv = (sd > 1e-9) ? (c.r - mean) / sd : 0; }
+    });
+
+    var tb = $("tbl").querySelector("tbody");
+    while (tb.firstChild) { tb.removeChild(tb.firstChild); }
+    classes.forEach(function (c) {
+      if (c.n === 0) { return; }
+      var tr = document.createElement("tr");
+      var advTxt = (c.adv === "masked") ? "masked" : (c.adv === null ? "—" : c.adv.toFixed(3));
+      [c.name, String(c.n), (c.r === null ? "no gradient" : String(c.r)), advTxt].forEach(function (t) {
+        var td = document.createElement("td"); td.textContent = t; tr.appendChild(td);
+      });
+      tb.appendChild(tr);
+    });
+
+    var svg = $("svg"); clear(svg);
+    var L = 100, R = 620, T = 16, B = 140, zero = (T + B) / 2;
+    var maxAbs = 0.5;
+    classes.forEach(function (c) { if (typeof c.adv === "number") { maxAbs = Math.max(maxAbs, Math.abs(c.adv)); } });
+    svg.appendChild(el("line", { x1: L, x2: R, y1: zero, y2: zero, class: "axisline", "stroke-width": 1 }));
+    svg.appendChild(el("text", { x: R, y: zero - 6, class: "lbl", "text-anchor": "end" }, "advantage 0"));
+    var shown = classes.filter(function (c) { return c.n > 0; });
+    var bw = shown.length > 0 ? (R - L) / shown.length : 0;
+    shown.forEach(function (c, i) {
+      var cx = L + bw * (i + 0.5);
+      if (typeof c.adv === "number") {
+        var h = (Math.abs(c.adv) / maxAbs) * (zero - T - 8);
+        svg.appendChild(el("rect", {
+          x: cx - 22, y: c.adv >= 0 ? zero - h : zero, width: 44, height: Math.max(h, 1), fill: c.color, opacity: "0.85"
+        }));
+        svg.appendChild(el("text", { x: cx, y: c.adv >= 0 ? zero - h - 6 : zero + h + 14, class: "lbl", "text-anchor": "middle" },
+          c.adv.toFixed(2)));
+      } else {
+        svg.appendChild(el("text", { x: cx, y: zero - 8, class: "lbl", "text-anchor": "middle" }, "masked"));
+      }
+      svg.appendChild(el("text", { x: cx, y: B + 18, class: "lbl", "text-anchor": "middle" }, c.name + " ×" + c.n));
+    });
+
+    var lines = [];
+    lines.push("rollouts entering the update: " + total + (mode === "mask" && nt > 0 ? " (" + nt + " masked)" : ""));
+    lines.push("mean reward = " + (total ? mean.toFixed(3) : "—") + "   std = " + (total ? sd.toFixed(3) : "—"));
+    if (total > 0 && sd < 1e-9) { lines.push("all retained rollouts share one reward: every advantage is 0, so this group contributes no gradient."); }
+    if (na > 0 && Math.abs(ra - rw) < 1e-9) { lines.push("abstention and a wrong answer carry the same reward: nothing in the update prefers abstaining."); }
+    if (na > 0 && ra > rw && typeof classes[2].adv === "number" && classes[2].adv > 0) {
+      lines.push("abstention has a positive advantage in this group: the policy is being trained to abstain on prompts like this one.");
+    }
+    $("read").textContent = lines.join("\n");
+  }
+  ids.forEach(function (id) { $(id).addEventListener("input", draw); });
+  $("trunc").addEventListener("change", draw);
+  $("norm").addEventListener("change", draw);
+  Array.prototype.forEach.call(document.querySelectorAll("[data-set]"), function (b) {
+    b.addEventListener("click", function () {
+      var v = b.dataset.set.split(",").map(Number);
+      $("rc").value = v[1]; $("rw").value = v[2]; $("ra").value = v[3];
+      $("nt").value = v[4]; $("nc").value = v[5]; $("nw").value = v[6]; $("na").value = v[7];
+      draw();
+    });
+  });
+
+  function drawB() {
+    var w = parseFloat($("w").value);
+    $("wV").textContent = w.toFixed(2);
+    var svg = $("svgB"); clear(svg);
+    var L = 56, R = 620, T = 16, B = 200;
+    var x = function (p) { return L + p * (R - L); };
+    var lo = -Math.max(1, w), hi = 1;
+    var y = function (v) { return B - (v - lo) / (hi - lo) * (B - T); };
+    var i;
+    for (i = 0; i <= 4; i++) {
+      var v = lo + (hi - lo) * i / 4;
+      svg.appendChild(el("line", { x1: L, x2: R, y1: y(v), y2: y(v), class: "gridline", "stroke-width": 1 }));
+      svg.appendChild(el("text", { x: L - 8, y: y(v) + 4, class: "lbl", "text-anchor": "end" }, v.toFixed(2)));
+    }
+    svg.appendChild(el("line", { x1: L, x2: R, y1: y(0), y2: y(0), class: "axisline", "stroke-width": 1 }));
+    svg.appendChild(el("text", { x: (L + R) / 2, y: B + 34, class: "lbl", "text-anchor": "middle" }, "correctness probability p"));
+    for (i = 0; i <= 10; i += 2) {
+      svg.appendChild(el("text", { x: x(i / 10), y: B + 16, class: "lbl", "text-anchor": "middle" }, (i / 10).toFixed(1)));
+    }
+    var d = "", p;
+    for (i = 0; i <= 100; i++) {
+      p = i / 100;
+      d += (i === 0 ? "M" : "L") + x(p).toFixed(1) + " " + y(p - w * (1 - p)).toFixed(1);
+    }
+    svg.appendChild(el("path", { d: d, fill: "none", stroke: "var(--accent)", "stroke-width": 2 }));
+    var t = w / (1 + w);
+    svg.appendChild(el("line", { x1: x(t), x2: x(t), y1: T, y2: B, stroke: "var(--neg)", "stroke-width": 1, "stroke-dasharray": "4 3" }));
+    svg.appendChild(el("text", { x: x(t) + 6, y: T + 14, class: "lbl" }, "threshold p = " + t.toFixed(3)));
+    svg.appendChild(el("text", { x: L + 8, y: T + 14, class: "lbl" }, "expected reward of answering: p − w(1 − p)"));
+    $("readB").textContent =
+      "w = " + w.toFixed(2) + "\n" +
+      "answer only when p > w / (1 + w) = " + t.toFixed(3) + "\n" +
+      "equivalent confidence target t in arXiv:2509.04664v1 §4.2: t = " + t.toFixed(3) + " (penalty t/(1 − t) = " + w.toFixed(2) + ")\n" +
+      "w = 0 → always answer; w = 1 → p > 0.5; w = 2 → p > 0.667; w = 9 → p > 0.9";
+  }
+  $("w").addEventListener("input", drawB);
+
+  draw(); drawB();
+})();
+</script>
+</main>
+</body>
+</html>

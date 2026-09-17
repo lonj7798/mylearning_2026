@@ -7,6 +7,8 @@ source_url: https://arxiv.org/abs/2501.12948 ; https://github.com/deepseek-ai/De
 created_at: "2026-04-23"
 ---
 
+> Superseded by the 2026-09 revision of read.md; kept for history.
+
 # Excerpt: R1-Distill — what the 800K corpus actually is and why SFT-only works
 
 **Source libraries:** `wiki/raw-data/llm-training/papers/deepseek-r1.md`, `wiki/raw-data/llm-training/model-reports/deepseek-r1.md`, `wiki/raw-data/llm-training/blogs/deepseek-r1-distill-synth.md`

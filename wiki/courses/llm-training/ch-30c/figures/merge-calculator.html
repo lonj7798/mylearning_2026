@@ -1,0 +1,235 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Task-Vector Merge Calculator</title>
+<style>
+  :root {
+    --bg: #fbfaf7; --fg: #1d1d1f; --muted: #5f6368; --line: #d9d6cf; --panel: #ffffff;
+    --pos: #1f6f43; --neg: #a3322a; --trim: #b8b3a8; --accent: #2c5aa0; --hl: #fff4d6;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #17181a; --fg: #e8e6e1; --muted: #a3a09a; --line: #3a3b3e; --panel: #202124;
+            --pos: #6cc28f; --neg: #ef8a80; --trim: #6d6a64; --accent: #8fb4ef; --hl: #3a3320; }
+  }
+  body { background: var(--bg); color: var(--fg); font: 14px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif;
+         margin: 0; padding: 16px; }
+  main { max-width: 1040px; margin: 0 auto; }
+  h1 { font-size: 20px; margin: 0 0 4px; }
+  h2 { font-size: 15px; margin: 18px 0 6px; }
+  p { margin: 6px 0; }
+  .muted { color: var(--muted); }
+  .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 12px; margin: 10px 0; }
+  .controls { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 8px 16px; }
+  label { display: block; font-size: 13px; }
+  input[type=range] { width: 100%; }
+  .scroll { overflow-x: auto; }
+  table { border-collapse: collapse; font-variant-numeric: tabular-nums; min-width: 760px; }
+  th, td { border-bottom: 1px solid var(--line); padding: 3px 6px; text-align: right; white-space: nowrap; }
+  th:first-child, td:first-child { text-align: left; }
+  td input { width: 58px; font: inherit; text-align: right; background: transparent; color: var(--fg);
+             border: 1px solid var(--line); border-radius: 4px; padding: 1px 3px; }
+  .pos { color: var(--pos); } .neg { color: var(--neg); } .trim { color: var(--trim); text-decoration: line-through; }
+  .conflict { background: var(--hl); }
+  .rowhead { font-weight: 600; }
+  .sep td { border-top: 2px solid var(--line); }
+  button { font: inherit; padding: 3px 10px; border-radius: 5px; border: 1px solid var(--line);
+           background: var(--panel); color: var(--fg); cursor: pointer; }
+  .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 8px; }
+  .stat { border: 1px solid var(--line); border-radius: 6px; padding: 8px; }
+  code { font-size: 12.5px; }
+  figcaption { font-size: 12.5px; color: var(--muted); margin-top: 10px; }
+</style>
+</head>
+<body>
+<main>
+<h1>Task-vector merge calculator</h1>
+<p class="muted">Edit three task vectors τ<sub>t</sub> = θ<sub>ft</sub><sup>t</sup> − θ<sub>pre</sub> (10 parameters each) and compare how
+averaging, Task Arithmetic, TIES-Merging and DARE combine them. Highlighted columns have a sign conflict: two tasks move
+the same parameter in opposite directions.</p>
+
+<div class="panel">
+  <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center">
+    <span class="muted">Presets:</span>
+    <button id="presetA">Sign conflict + small entries</button>
+    <button id="presetB">Mostly disjoint tasks</button>
+  </div>
+  <div class="scroll"><table id="inputs"></table></div>
+</div>
+
+<div class="panel controls">
+  <label>Task Arithmetic λ: <b id="lamTAv"></b><input id="lamTA" type="range" min="0.1" max="1.5" step="0.05" value="0.4"></label>
+  <label>TIES keep top-k %: <b id="kv"></b><input id="k" type="range" min="10" max="100" step="10" value="20"></label>
+  <label>TIES λ: <b id="lamTIESv"></b><input id="lamTIES" type="range" min="0.1" max="2" step="0.05" value="1"></label>
+  <label>DARE drop rate p: <b id="pv"></b><input id="p" type="range" min="0" max="0.95" step="0.05" value="0.5"></label>
+  <label>DARE mask seed: <b id="seedv"></b><input id="seed" type="range" min="1" max="50" step="1" value="7"></label>
+  <label>DARE + Task Arithmetic λ: <b id="lamDAREv"></b><input id="lamDARE" type="range" min="0.1" max="1.5" step="0.05" value="0.5"></label>
+</div>
+
+<div class="panel">
+  <h2>Merged task vectors (added to θ<sub>pre</sub>)</h2>
+  <div class="scroll"><table id="out"></table></div>
+</div>
+
+<div class="panel">
+  <h2>Diagnostics</h2>
+  <div class="stats" id="stats"></div>
+</div>
+
+<figcaption>
+Formulas: averaging θ<sub>m</sub> = (1/n)Σθ<sub>t</sub>, which equals θ<sub>pre</sub> + (1/n)Στ<sub>t</sub> when all models share θ<sub>pre</sub>;
+Task Arithmetic θ<sub>m</sub> = θ<sub>pre</sub> + λΣτ<sub>t</sub> (Ilharco et al., ICLR 2023, §2; excerpt task-arithmetic);
+TIES: trim each τ<sub>t</sub> to its top-k% magnitudes, elect γ = sgn(Στ̂<sub>t</sub>), average only entries whose sign equals γ, scale by λ
+(Yadav et al., NeurIPS 2023, Algorithm 1; defaults k = 20 and λ = 1 are the paper's no-validation setting, §5 and App. C.4;
+the Task Arithmetic default λ = 0.4 is the no-validation value used in that paper's §5);
+DARE: drop each delta with probability p and rescale survivors by 1/(1 − p), then merge with Task Arithmetic
+(Yu et al., ICML 2024, Eqs. 1-3). The vectors are illustrative numbers, not weights from any model.
+Trimming keeps round(k/100 × 10) entries per task (minimum 1); ties are broken by parameter index.
+The "projection ratio" (m·τ<sub>t</sub>)/(τ<sub>t</sub>·τ<sub>t</sub>) is a geometric proxy for how much of task t's direction survives;
+it is not an accuracy, and the papers measure merges with task accuracy instead.
+</figcaption>
+</main>
+
+<script>
+(function () {
+  const D = 10, N = 3;
+  const PRESETS = {
+    A: [[0.50, 0.02, -0.30, 0.01, 0.00, 0.40, -0.02, 0.03, 0.00, 0.10],
+        [0.40, -0.01, 0.00, 0.35, 0.02, -0.05, 0.00, -0.03, 0.25, 0.01],
+        [-0.60, 0.03, 0.20, -0.02, 0.45, 0.00, 0.01, 0.02, -0.01, -0.15]],
+    B: [[0.40, 0.30, 0.00, 0.00, 0.00, 0.00, 0.02, 0.00, 0.00, 0.00],
+        [0.00, 0.00, 0.35, 0.25, 0.00, 0.00, 0.00, 0.01, 0.00, 0.00],
+        [0.00, 0.00, 0.00, 0.00, -0.30, 0.45, 0.00, 0.00, -0.01, 0.02]]
+  };
+  let tau = PRESETS.A.map(r => r.slice());
+  const $ = id => document.getElementById(id);
+  const fmt = x => (Math.abs(x) < 5e-5 ? "0" : x.toFixed(3));
+  const cls = x => (Math.abs(x) < 5e-5 ? "" : x > 0 ? "pos" : "neg");
+  const sgn = x => (x > 0 ? 1 : x < 0 ? -1 : 0);
+
+  function mulberry32(a) {
+    return function () {
+      a |= 0; a = (a + 0x6D2B79F5) | 0;
+      let t = Math.imul(a ^ (a >>> 15), 1 | a);
+      t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+      return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    };
+  }
+
+  function conflicts(vs) {
+    const out = [];
+    for (let i = 0; i < D; i++) {
+      let p = false, n = false;
+      vs.forEach(v => { if (v[i] > 0) p = true; if (v[i] < 0) n = true; });
+      out.push(p && n);
+    }
+    return out;
+  }
+
+  function trim(v, kPct) {
+    const keep = Math.max(1, Math.round(kPct / 100 * D));
+    const idx = v.map((x, i) => i).sort((a, b) => Math.abs(v[b]) - Math.abs(v[a]) || a - b);
+    const kept = new Set(idx.slice(0, keep).filter(i => v[i] !== 0));
+    return v.map((x, i) => (kept.has(i) ? x : 0));
+  }
+
+  function dareMask(v, p, rand) {
+    return v.map(x => (rand() < p ? 0 : x / (1 - p)));
+  }
+
+  function dot(a, b) { return a.reduce((s, x, i) => s + x * b[i], 0); }
+  function norm(a) { return Math.sqrt(dot(a, a)); }
+
+  function buildInputs() {
+    let h = "<tr><th>Parameter</th>" + Array.from({ length: D }, (_, i) => `<th>${i + 1}</th>`).join("") + "</tr>";
+    const cf = conflicts(tau);
+    for (let t = 0; t < N; t++) {
+      h += `<tr><td class="rowhead">τ<sub>${t + 1}</sub></td>` + tau[t].map((x, i) =>
+        `<td class="${cf[i] ? "conflict" : ""}"><input data-t="${t}" data-i="${i}" type="number" step="0.01" value="${x}"></td>`).join("") + "</tr>";
+    }
+    $("inputs").innerHTML = h;
+    $("inputs").querySelectorAll("input").forEach(el => el.addEventListener("input", e => {
+      const v = parseFloat(e.target.value);
+      tau[+e.target.dataset.t][+e.target.dataset.i] = isFinite(v) ? v : 0;
+      render(false);
+    }));
+  }
+
+  function row(label, v, opts = {}) {
+    const cf = opts.cf || [];
+    return `<tr class="${opts.sep ? "sep" : ""}"><td class="rowhead">${label}</td>` + v.map((x, i) => {
+      const trimmed = opts.orig && opts.orig[i] !== 0 && x === 0;
+      const c = trimmed ? "trim" : cls(x);
+      const shown = opts.signs ? (x > 0 ? "+" : x < 0 ? "−" : "0") : trimmed ? fmt(opts.orig[i]) : fmt(x);
+      return `<td class="${c} ${cf[i] ? "conflict" : ""}">${shown}</td>`;
+    }).join("") + "</tr>";
+  }
+
+  function render(rebuild) {
+    if (rebuild) buildInputs();
+    else {
+      const cf = conflicts(tau);
+      $("inputs").querySelectorAll("input").forEach(el => {
+        el.parentElement.className = cf[+el.dataset.i] ? "conflict" : "";
+      });
+    }
+    const lamTA = +$("lamTA").value, k = +$("k").value, lamTIES = +$("lamTIES").value;
+    const p = +$("p").value, seed = +$("seed").value, lamDARE = +$("lamDARE").value;
+    $("lamTAv").textContent = lamTA.toFixed(2); $("kv").textContent = k + "%";
+    $("lamTIESv").textContent = lamTIES.toFixed(2); $("pv").textContent = p.toFixed(2);
+    $("seedv").textContent = seed; $("lamDAREv").textContent = lamDARE.toFixed(2);
+
+    const sum = Array.from({ length: D }, (_, i) => tau.reduce((s, v) => s + v[i], 0));
+    const avg = sum.map(x => x / N);
+    const ta = sum.map(x => lamTA * x);
+
+    const trimmed = tau.map(v => trim(v, k));
+    const elect = Array.from({ length: D }, (_, i) => sgn(trimmed.reduce((s, v) => s + v[i], 0)));
+    const ties = Array.from({ length: D }, (_, i) => {
+      const vals = trimmed.map(v => v[i]).filter(x => x !== 0 && sgn(x) === elect[i]);
+      return vals.length ? lamTIES * vals.reduce((s, x) => s + x, 0) / vals.length : 0;
+    });
+
+    const rand = mulberry32(seed * 9973);
+    const dare = tau.map(v => dareMask(v, p, rand));
+    const dareSum = Array.from({ length: D }, (_, i) => dare.reduce((s, v) => s + v[i], 0));
+    const dareTA = dareSum.map(x => lamDARE * x);
+
+    const cfBefore = conflicts(tau), cfAfter = conflicts(trimmed);
+    let h = "<tr><th>Row</th>" + Array.from({ length: D }, (_, i) => `<th>${i + 1}</th>`).join("") + "</tr>";
+    h += row("Average (λ = 1/3)", avg, { cf: cfBefore });
+    h += row(`Task Arithmetic (λ = ${lamTA.toFixed(2)})`, ta, { cf: cfBefore });
+    trimmed.forEach((v, t) => { h += row(`TIES trim τ<sub>${t + 1}</sub> (struck = reset to 0)`, v, { orig: tau[t], sep: t === 0, cf: cfAfter }); });
+    h += row("TIES elected sign", elect, { cf: cfAfter, signs: true });
+    h += row(`TIES merge (λ = ${lamTIES.toFixed(2)})`, ties, { cf: cfAfter });
+    dare.forEach((v, t) => { h += row(`DARE τ̂<sub>${t + 1}</sub> (struck = dropped)`, v, { orig: tau[t], sep: t === 0 }); });
+    h += row(`DARE + Task Arithmetic (λ = ${lamDARE.toFixed(2)})`, dareTA, {});
+    $("out").innerHTML = h;
+
+    // DARE expectation check over many masks
+    const R = 4000, r2 = mulberry32(12345);
+    const acc = tau.map(() => new Array(D).fill(0));
+    for (let s = 0; s < R; s++) tau.forEach((v, t) => { const m = dareMask(v, p, r2); m.forEach((x, i) => acc[t][i] += x / R); });
+    let maxDev = 0; acc.forEach((v, t) => v.forEach((x, i) => { maxDev = Math.max(maxDev, Math.abs(x - tau[t][i])); }));
+
+    const methods = [["Average", avg], ["Task Arithmetic", ta], ["TIES", ties], ["DARE + TA", dareTA]];
+    const proj = m => tau.map(v => { const d = dot(v, v); return d ? (dot(m, v) / d).toFixed(2) : "n/a"; }).join(" / ");
+    $("stats").innerHTML =
+      `<div class="stat"><b>Sign conflicts</b><br>before trimming: ${cfBefore.filter(Boolean).length} of ${D} parameters<br>after TIES trimming: ${cfAfter.filter(Boolean).length} of ${D}</div>` +
+      `<div class="stat"><b>Projection ratio onto τ<sub>1</sub> / τ<sub>2</sub> / τ<sub>3</sub></b><br>` +
+      methods.map(([n, m]) => `${n}: ${proj(m)}`).join("<br>") + `</div>` +
+      `<div class="stat"><b>Merged vector L2 norm</b><br>` + methods.map(([n, m]) => `${n}: ${norm(m).toFixed(3)}`).join("<br>") +
+      `<br>task vectors: ${tau.map(v => norm(v).toFixed(3)).join(" / ")}</div>` +
+      `<div class="stat"><b>DARE rescaling check</b><br>mean of τ̂ over ${R} random masks vs τ: max |difference| = ${maxDev.toFixed(4)}` +
+      `<br>(E[τ̂] = τ because each entry survives with probability 1 − p and is multiplied by 1/(1 − p))</div>`;
+  }
+
+  ["lamTA", "k", "lamTIES", "p", "seed", "lamDARE"].forEach(id => $(id).addEventListener("input", () => render(false)));
+  $("presetA").addEventListener("click", () => { tau = PRESETS.A.map(r => r.slice()); render(true); });
+  $("presetB").addEventListener("click", () => { tau = PRESETS.B.map(r => r.slice()); render(true); });
+  render(true);
+})();
+</script>
+</body>
+</html>

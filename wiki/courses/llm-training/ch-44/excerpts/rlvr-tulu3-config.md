@@ -2,117 +2,71 @@
 chapter: ch-44
 course: llm-training
 phase: read
-excerpt_of: wiki/raw-data/llm-training/papers/rlvr-tulu3.md
+excerpt_of: arXiv:2411.15124v5 (Tülu 3: Pushing Frontiers in Open Language Model Post-Training), §6 and Tables 21-23
 source_url: https://arxiv.org/abs/2411.15124
 created_at: "2026-04-23"
+revised: "2026-09-15 (generality revision; rewritten from the primary source because the library cards [[rlvr-tulu3]] and [[tulu-3]] predate the 2026-09 audits and state RLVR domains and gains the paper does not support)"
 ---
 
-# Excerpt: RLVR — skip the reward model
+# Excerpt: Tülu 3 RLVR, read from the paper
 
-**Source library:** `wiki/raw-data/llm-training/papers/rlvr-tulu3.md`, `wiki/raw-data/llm-training/model-reports/tulu-3.md`
-**Anchor paper:** Lambert et al. 2024 — "Tülu 3: Pushing Frontiers in Open Language Model Post-Training"
+Used by [[read]] §5, the Recipe table, and the negatives section. Checked on 2026-09-15 against arXiv:2411.15124v5.
 
----
+## Objective and reward (§6, Eq. 7-8)
+```
+max_πθ  E_{y ~ πθ(x)} [ R_RLVR(x, y) ] = [ v(x, y) − β KL[ πθ(y|x) ‖ π_ref(y|x) ] ]
 
-## Why this source anchors ch-44
+v(x, y) = α   if correct
+        = 0   otherwise
+```
+- "We set α = 10 based on pilot experiments and did not tune it further" (§6). The reward is not 0/1; a correct answer is worth 10.
+- The optimizer is PPO, applied after preference finetuning (§6).
 
-Tülu-3 is the first fully open recipe that ships a concrete RLVR implementation with every hyperparameter disclosed. If process supervision is the step-level escape hatch from RM-based training, RLVR is the outcome-level one — and Tülu-3 is where the numbers live.
+## Domains and prompts (§6.1, Table 22)
+| Prompt set | Count | Verification |
+|---|---|---|
+| GSM8K train | 7,473 | 8-shot CoT prompt, extract the final number, compare with the label |
+| MATH train | 7,500 | 3-shot CoT prompt, extract the answer, "flex" MATH evaluation logic |
+| IF verifiable | 14,973 | one verification function per constraint template from the IFEval taxonomy |
+| Total | 29,946 | — |
 
----
+There is no code verifier in the Tülu 3 RLVR stage. Code execution feedback appears once, in footnote 17, as related work that the paper leaves to future work.
 
-## The formal reward — verbatim
+## Implementation details (§6.2)
+1. The value model is initialized from a general reward model trained on UltraFeedback; Figure 21 reports this beats initializing from the DPO policy on GSM8K and on the average score.
+2. Dropout is set to 0 so that rollout-phase and learning-phase log-probabilities match.
+3. Training runs multiple epochs over the prompt set (about 13 epochs in the GSM8K-only ablation, 100,000 / 7,473); prompts are shuffled between epochs; checkpoints are inspected every 40-100 steps.
+4. **Non-EOS penalty**: a sampled response that does not end with an EOS token receives −10.
+5. Advantages are whitened (mean subtracted, divided by the standard deviation).
+- Adding reward-model scores on top of verifiable rewards performed worse on GSM8K and was noisier on the average score (§6.2.1, Fig. 22).
+- Lower β produces larger KL and, in these runs, lower average scores; Appendix B.4 shows over-optimized outputs from high-KL IFEval runs (§6.2.1, Fig. 21).
 
-From `rlvr-tulu3.md` §Key Contributions:
+## Hyperparameters (Table 21, RLVR column, and its caption)
+| Setting | Value |
+|---|---|
+| γ; GAE λ | 1.0; 0.95 |
+| Mini-batches N_mb; clip ε; value coefficient c1; grad-norm clip | 1; 0.2; 0.1; 1.0 |
+| LR (schedule) | 3e-7 linear (1e-7 for 70B) |
+| Effective batch size | 224 (640 for 70B) |
+| PPO update iterations K | 4 |
+| Response length | 2,048 (1,024 for GSM8K only) |
+| Max prompt length; generation temperature | 2,048; 1.0 |
+| Total episodes | 100,000 |
+| KL coefficient β (swept) | [0.1, 0.05, 0.03, 0.01] |
+| Warm-up ratio ω (swept) | [0.0, 0.1] |
+| Penalty for a response without EOS | −10.0 |
+| Final 8B run | β = 0.05, ω = 0.0 (Table 21 caption) |
+| Final 70B run | β = 0.07, ω = 0.07 (Table 21 caption); §6.4 text writes β = 0.7, 0.1 warmup ratio, 2,048 response length, 400,000 episodes, 640 effective batch — a conflict inside the paper |
+| Compute | final 8B RL run 65 hours on 8 GPUs; 70B 60 hours on 48 GPUs; 405B 46 hours on 256 GPUs (§6.3) |
 
-> **Formal RLVR setup:** for a prompt `x` paired with a verifier `v: (x, y) → {0, 1}`, the reward is simply `r(x, y) = v(x, y)` — no RM.
+The value 10,000,000 episodes in the library card [[tulu-3]] is not in the paper.
 
-That is the entire contribution, at the formula level. Every implementation detail (verifier domains, PPO config, KL coefficient) follows from picking this functional form.
+## Results (Table 23)
+| Benchmark | Llama 3.1 8B Instruct | Tülu 3 8B DPO | Tülu 3 8B RLVR | Llama 3.1 70B Instruct | Tülu 3 70B DPO | Tülu 3 70B RLVR |
+|---|---|---|---|---|---|---|
+| GSM8K (8-shot CoT) | 83.4 | 84.3 | 87.6 | 93.7 | 93.5 | 93.5 |
+| MATH (4-shot CoT, flex) | 42.5 | 42.0 | 43.7 | 56.4 | 62.3 | 63.0 |
+| IFEval (strict) | 80.6 | 81.1 | 82.4 | 88.0 | 82.6 | 83.2 |
+| Average of 11 evaluations | 62.2 | 64.4 | 64.8 | 73.4 | 75.9 | 76.0 |
 
----
-
-## The three verifier domains — verbatim
-
-From `rlvr-tulu3.md` §Key Contributions:
-
-> **Three verifier domains used in Tülu 3:**
->   - *Math:* extract the final numeric/symbolic answer and compare to the reference using a tolerant grader (SymPy / normalized string match on MATH, exact integer match on GSM8K).
->   - *Constrained instruction following:* IFEval-style constraints ("respond in JSON", "use exactly 3 bullet points") checked with regex / parsers.
->   - *Code:* run model-generated code against unit tests in a sandbox; reward = 1 iff all tests pass.
-
-Three patterns worth separating:
-
-| Verifier | Cost per call | Failure mode |
-|----------|---------------|---------------|
-| Math (SymPy) | ~1 ms | grader accepts "42" inside prose |
-| IFEval regex | ~ms | regex under- or over-matches |
-| Code unit tests | seconds + sandbox | timeouts, flaky tests, undefined behaviour |
-
-The first two are effectively free; the third is the budget constraint for RLVR-code runs. Tülu-3 runs code verifiers with isolate-style sandboxes and a 5 s per-rollout timeout.
-
----
-
-## The PPO config — verbatim from tulu-3.md
-
-From `tulu-3.md` §Technical Details — RLVR:
-
-> **Algorithm:** PPO (not GRPO).
-> **Learning rate:** 3e-7
-> **Beta (KL coeff):** 0.05
-> **Clip epsilon:** 0.2
-> **PPO update epochs (K):** 4
-> **Mini-batches per update (N_mb):** 1
-> **GAE lambda:** 0.95; **gamma:** 1.0 (episodic)
-> **Local mini batch size:** 32; **local rollout batch size:** 32.
-> **Total episodes:** 10,000,000.
-
-And the verifier list:
-
-> **Verifiers used:**
->   - GSM8K / MATH: exact-match / sympy equivalence.
->   - IFEval: constraint-satisfaction checker.
->   - Code tasks: unit-test execution.
-
-This is the `open-instruct` RLVR config block, reproducible from the released repo. The `LR = 3e-7` is an order of magnitude below a typical SFT learning rate precisely because a 0/1 reward with small KL has high variance — see ch-43 for why large steps under small KL blow up entropy.
-
----
-
-## Why Goodhart's gap is zero — verbatim
-
-From `rlvr-tulu3.md` §Key Contributions:
-
-> **Why it sidesteps reward hacking:** the verifier is a fixed, interpretable function. There is no proxy RM to drift; there is no OOD region where the reward spuriously rises. Goodhart's gap (see **[[reward-model-overoptimization]]**) is mechanically zero on verifiable prompts.
-
-The "mechanically zero" phrase is strong and precise. It is zero because the proxy is the target — there is no gap between what you measure and what you want, only a gap between what you measure and what you *intended* to measure (the verifier-bug class). From `rlvr-tulu3.md` §Technical Details:
-
-> **Failure mode to watch:** if the verifier has loopholes (string-match math graders that accept "42" inside prose), RLVR can hack those loopholes. Treat verifier engineering like unit-test engineering.
-
-That is the one non-zero risk: the verifier itself is a program, and programs have bugs. The hacking is deterministic and auditable once found, which is not true of RM drift.
-
----
-
-## What RLVR actually buys — verbatim
-
-From `tulu-3.md`:
-
-> Measured gains relative to DPO-only checkpoint: +5–10pp on GSM8K, +~4pp on IFEval, neutral-to-positive on other evals. No reward hacking observed because the verifier is ground-truth.
-
-The gains are modest — RLVR is not a revolution on top of DPO; it is a clean, hack-proof marginal improvement on tasks where a verifier exists. The revolutionary claim is in the *risk* profile, not the absolute delta: gains without a Goodhart surface.
-
----
-
-## Prompt curation — verbatim
-
-From `rlvr-tulu3.md` §Key Contributions:
-
-> **Prompt curation:** only prompts with a verifier + a known reference answer enter the RLVR set; RLHF/DPO handles the rest.
-
-Carry this into ch-46 lab framing. The RLVR prompt set is curated *before* training — there is no "this prompt is ambiguous, try the RM instead" fallback at training time. Every prompt in the RLVR set has a verifier implementation and a reference answer. Everything else is handled in earlier stages (DPO).
-
----
-
-## Carry into ch-44
-
-- §6 of read.md uses the exact formula `r(x, y) = v(x, y) in {0, 1}` and the full Tülu-3 config block.
-- The `+5..+10 pp` GSM8K delta is the benchmark the ch-46 lab's RLVR option has to reach.
-- "Verifier engineering is unit-test engineering" is the risk framing used in §6.
-- Connects back to ch-42 (reward hacking) by explaining why RLVR reduces Goodhart's gap to mechanically zero — the taxonomy of ch-42 is about learned RMs, and RLVR removes the learned RM.
+- §6.4: single 8B runs reached GSM8K 89.4 and IFEval 84.8, but scored worse elsewhere and were not selected. At 70B the report describes modest IFEval and MATH gains and no GSM8K gain, with GSM8K near saturation, and notes that the 70B run keeps KL below 1 throughout.

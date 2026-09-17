@@ -1,0 +1,270 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Softmax Update Explorer</title>
+<style>
+:root{
+  --bg:#fbfaf7; --panel:#ffffff; --ink:#1d1d1f; --muted:#5f6368; --line:#d9d6cf;
+  --before:#9aa5b1; --after:#2f6fb0; --gain:#1f8a4c; --loss:#b3261e; --accent:#2f6fb0;
+  --t0:#2f6fb0; --t1:#c26a00; --t2:#1f8a4c; --t3:#8e3fb0;
+}
+@media (prefers-color-scheme: dark){
+  :root{
+    --bg:#16181b; --panel:#1f2226; --ink:#e8e6e1; --muted:#a3a7ad; --line:#3a3e44;
+    --before:#6b7480; --after:#6fa8e0; --gain:#5cc88a; --loss:#f08a82; --accent:#6fa8e0;
+    --t0:#6fa8e0; --t1:#f0a24a; --t2:#5cc88a; --t3:#c78ae0;
+  }
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font:14px/1.5 system-ui,-apple-system,"Segoe UI",sans-serif}
+.wrap{max-width:980px;margin:0 auto;padding-inline:16px;padding-block:20px 40px}
+h1{font-size:20px;margin:0 0 4px}
+p.lead{margin:0 0 16px;color:var(--muted)}
+.grid{display:grid;grid-template-columns:minmax(0,300px) minmax(0,1fr);gap:16px}
+@media (max-width:760px){.grid{grid-template-columns:minmax(0,1fr)}}
+.panel{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:12px 14px}
+.panel h2{font-size:14px;margin:0 0 8px}
+label{display:block;font-size:13px;margin:8px 0 2px}
+input[type=range]{width:100%}
+select,button{font:inherit;color:var(--ink);background:var(--panel);border:1px solid var(--line);border-radius:6px;padding:4px 8px}
+button{cursor:pointer}
+.row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.val{font-variant-numeric:tabular-nums;color:var(--muted);font-size:12px}
+table{border-collapse:collapse;width:100%;font-variant-numeric:tabular-nums;font-size:13px}
+th,td{text-align:right;padding:4px 6px;border-bottom:1px solid var(--line)}
+th:first-child,td:first-child{text-align:left}
+.pos{color:var(--gain)} .neg{color:var(--loss)}
+.formula{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12.5px;background:var(--bg);border:1px solid var(--line);border-radius:6px;padding:6px 8px;margin:6px 0;white-space:pre-wrap}
+.scroll{overflow-x:auto}
+svg text{fill:var(--ink);font-size:11px}
+.summary{margin-top:8px;font-size:13px}
+.caption{margin-top:16px;font-size:12.5px;color:var(--muted)}
+.hide{display:none}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Softmax update explorer: where probability mass goes</h1>
+  <p class="lead">Four tokens A, B, C, D with adjustable logits. Choose a loss, apply gradient steps directly to the logits, and compare the next-token distribution before and after. The defaults reproduce the worked examples in §2 and §5 of read.md (logits 2, 1, 0, −1; step size 1).</p>
+
+  <div class="grid">
+    <div class="panel">
+      <h2>Controls</h2>
+      <div id="logitControls"></div>
+      <label for="mode">Loss applied to the logits</label>
+      <select id="mode">
+        <option value="ce">SFT cross-entropy on the target</option>
+        <option value="push">Push-down: minimize log p(negative)</option>
+        <option value="ul">Unlikelihood: −α·log(1 − p(negative))</option>
+        <option value="cringe">CRINGE: contrast negative with a top-k token</option>
+      </select>
+      <div id="targetBox">
+        <label for="target">Target token (cross-entropy)</label>
+        <select id="target"></select>
+      </div>
+      <div id="negBox" class="hide">
+        <label for="negtok">Negative token</label>
+        <select id="negtok"></select>
+      </div>
+      <div id="alphaBox" class="hide">
+        <label for="alpha">α (weight of the negative term) <span class="val" id="alphaV"></span></label>
+        <input id="alpha" type="range" min="0.1" max="3" step="0.1" value="1">
+      </div>
+      <div id="kBox" class="hide">
+        <label for="k">k (candidates for the sampled positive) <span class="val" id="kV"></span></label>
+        <input id="k" type="range" min="1" max="3" step="1" value="1">
+      </div>
+      <label for="eta">Step size η <span class="val" id="etaV"></span></label>
+      <input id="eta" type="range" min="0.1" max="3" step="0.1" value="1">
+      <label for="steps">Number of steps <span class="val" id="stepsV"></span></label>
+      <input id="steps" type="range" min="1" max="30" step="1" value="1">
+      <div class="row" style="margin-top:10px">
+        <button id="reset">Reset to chapter example</button>
+      </div>
+    </div>
+
+    <div class="panel">
+      <h2>Distribution before and after</h2>
+      <div class="formula" id="formula"></div>
+      <div class="scroll"><svg id="bars" viewBox="0 0 560 210" width="100%" role="img" aria-label="Bar chart of token probabilities before and after the update"></svg></div>
+      <div class="scroll">
+        <table id="tbl">
+          <thead><tr><th>Token</th><th>logit</th><th>p before</th><th>∂L/∂z (step 1)</th><th>p after</th><th>Δp</th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+      <div class="summary" id="summary"></div>
+      <h2 style="margin-top:14px">Probability of each token across steps</h2>
+      <div class="scroll"><svg id="traj" viewBox="0 0 560 190" width="100%" role="img" aria-label="Line chart of token probabilities over update steps"></svg></div>
+    </div>
+  </div>
+
+  <p class="caption">
+    Mechanics. For softmax probabilities p = softmax(z), the cross-entropy loss −log p<sub>y</sub> has gradient ∂L/∂z<sub>j</sub> = p<sub>j</sub> − 1[j = y]. Minimizing log p<sub>k</sub> for a negative token k has gradient 1[j = k] − p<sub>j</sub>, so every other logit rises by η·p<sub>j</sub>: the most likely token gains the most. The unlikelihood term −log(1 − p<sub>k</sub>) (Welleck et al., arXiv:1908.04319, Eq. 3; gradient in App. A, Eq. 12) has gradient p<sub>k</sub> on z<sub>k</sub> and −p<sub>k</sub>·p<sub>j</sub>/(1 − p<sub>k</sub>) on the others, so its size shrinks as p<sub>k</sub> → 0. The CRINGE term log(1 + exp(s<sub>k</sub> − s<sub>+</sub>)) (Adolphs et al., arXiv:2211.05826, Eq. 3–5) contrasts the negative logit with one positive token sampled from the model's top-k tokens other than k; this page applies the expected update over that top-k sample. Updates act on the four logits directly, not on network weights, so shared-parameter effects such as likelihood displacement across related responses are not shown (see read.md §2 and §5.6).
+  </p>
+</div>
+
+<script>
+(function(){
+  var NAMES=["A","B","C","D"];
+  var COLORS=["var(--t0)","var(--t1)","var(--t2)","var(--t3)"];
+  var DEFAULT={z:[2,1,0,-1],mode:"ce",target:1,neg:3,alpha:1,k:1,eta:1,steps:1};
+  var st=JSON.parse(JSON.stringify(DEFAULT));
+  var $=function(id){return document.getElementById(id);};
+
+  function softmax(z){var m=Math.max.apply(null,z);var e=z.map(function(v){return Math.exp(v-m);});var s=e.reduce(function(a,b){return a+b;},0);return e.map(function(v){return v/s;});}
+
+  function grad(z){
+    var p=softmax(z), n=z.length, g=new Array(n).fill(0), j;
+    if(st.mode==="ce"){ for(j=0;j<n;j++) g[j]=p[j]-(j===st.target?1:0); }
+    else if(st.mode==="push"){ for(j=0;j<n;j++) g[j]=(j===st.neg?1:0)-p[j]; }
+    else if(st.mode==="ul"){
+      var pk=Math.min(p[st.neg],1-1e-12);
+      for(j=0;j<n;j++) g[j]=st.alpha*(j===st.neg?pk:-pk*p[j]/(1-pk));
+    } else if(st.mode==="cringe"){
+      var idx=[]; for(j=0;j<n;j++) if(j!==st.neg) idx.push(j);
+      idx.sort(function(a,b){return z[b]-z[a];});
+      var top=idx.slice(0,st.k);
+      var zm=Math.max.apply(null,top.map(function(i){return z[i];}));
+      var w=top.map(function(i){return Math.exp(z[i]-zm);}); var ws=w.reduce(function(a,b){return a+b;},0);
+      top.forEach(function(i,t){
+        var q=w[t]/ws; var s=1/(1+Math.exp(-(z[st.neg]-z[i])));
+        g[st.neg]+=st.alpha*q*s; g[i]-=st.alpha*q*s;
+      });
+    }
+    return g;
+  }
+
+  function run(){
+    var z=st.z.slice(), hist=[softmax(z)], g1=null;
+    for(var s=0;s<st.steps;s++){
+      var g=grad(z); if(s===0) g1=g;
+      z=z.map(function(v,j){return v-st.eta*g[j];});
+      hist.push(softmax(z));
+    }
+    return {z:z,hist:hist,g1:g1};
+  }
+
+  function fmt(x,d){return (x>=0?"":"−")+Math.abs(x).toFixed(d);}
+  function sfmt(x,d){return (x>0?"+":(x<0?"−":""))+Math.abs(x).toFixed(d);}
+
+  function buildControls(){
+    var box=$("logitControls"); box.innerHTML="";
+    NAMES.forEach(function(nm,i){
+      var l=document.createElement("label"); l.htmlFor="z"+i;
+      l.innerHTML="logit z<sub>"+nm+"</sub> <span class='val' id='zv"+i+"'></span>";
+      var r=document.createElement("input"); r.type="range"; r.min="-4"; r.max="4"; r.step="0.1"; r.id="z"+i; r.value=st.z[i];
+      r.addEventListener("input",function(){st.z[i]=parseFloat(r.value);render();});
+      box.appendChild(l); box.appendChild(r);
+    });
+    ["target","negtok"].forEach(function(id){
+      var s=$(id); s.innerHTML="";
+      NAMES.forEach(function(nm,i){var o=document.createElement("option");o.value=i;o.textContent=nm;s.appendChild(o);});
+    });
+  }
+
+  function syncInputs(){
+    NAMES.forEach(function(_,i){$("z"+i).value=st.z[i];});
+    $("mode").value=st.mode; $("target").value=st.target; $("negtok").value=st.neg;
+    $("alpha").value=st.alpha; $("k").value=st.k; $("eta").value=st.eta; $("steps").value=st.steps;
+  }
+
+  function drawBars(p0,p1){
+    var svg=$("bars"), W=560, H=210, padL=36, padB=26, top=10, n=4, gw=(W-padL-10)/n, bw=gw*0.32;
+    var h=H-padB-top, out="";
+    [0,0.25,0.5,0.75,1].forEach(function(t){
+      var y=top+h*(1-t);
+      out+="<line x1='"+padL+"' x2='"+(W-6)+"' y1='"+y+"' y2='"+y+"' stroke='var(--line)' stroke-width='1'/>";
+      out+="<text x='"+(padL-6)+"' y='"+(y+4)+"' text-anchor='end'>"+t.toFixed(2)+"</text>";
+    });
+    for(var i=0;i<n;i++){
+      var x=padL+i*gw+gw*0.15;
+      var h0=h*p0[i], h1=h*p1[i];
+      out+="<rect x='"+x+"' y='"+(top+h-h0)+"' width='"+bw+"' height='"+h0+"' fill='var(--before)'/>";
+      out+="<rect x='"+(x+bw+4)+"' y='"+(top+h-h1)+"' width='"+bw+"' height='"+h1+"' fill='var(--after)'/>";
+      out+="<text x='"+(x+bw+2)+"' y='"+(H-8)+"' text-anchor='middle'>"+NAMES[i]+"</text>";
+      out+="<text x='"+(x+bw/2)+"' y='"+(top+h-h0-3)+"' text-anchor='middle'>"+p0[i].toFixed(3)+"</text>";
+      out+="<text x='"+(x+bw*1.5+4)+"' y='"+(top+h-h1-3)+"' text-anchor='middle'>"+p1[i].toFixed(3)+"</text>";
+    }
+    out+="<rect x='"+(W-150)+"' y='12' width='10' height='10' fill='var(--before)'/><text x='"+(W-136)+"' y='21'>before</text>";
+    out+="<rect x='"+(W-90)+"' y='12' width='10' height='10' fill='var(--after)'/><text x='"+(W-76)+"' y='21'>after</text>";
+    svg.innerHTML=out;
+  }
+
+  function drawTraj(hist){
+    var svg=$("traj"), W=560, H=190, padL=36, padB=24, top=8, h=H-padB-top, w=W-padL-12, out="";
+    var n=hist.length-1||1;
+    [0,0.5,1].forEach(function(t){
+      var y=top+h*(1-t);
+      out+="<line x1='"+padL+"' x2='"+(W-6)+"' y1='"+y+"' y2='"+y+"' stroke='var(--line)'/>";
+      out+="<text x='"+(padL-6)+"' y='"+(y+4)+"' text-anchor='end'>"+t.toFixed(1)+"</text>";
+    });
+    out+="<text x='"+(padL+w/2)+"' y='"+(H-4)+"' text-anchor='middle'>step (0 to "+(hist.length-1)+")</text>";
+    for(var i=0;i<4;i++){
+      var d="";
+      hist.forEach(function(p,s){var x=padL+w*s/n, y=top+h*(1-p[i]); d+=(s?"L":"M")+x.toFixed(1)+" "+y.toFixed(1);});
+      out+="<path d='"+d+"' fill='none' stroke='"+COLORS[i]+"' stroke-width='2'/>";
+      var last=hist[hist.length-1][i];
+      out+="<text x='"+(W-8)+"' y='"+(top+h*(1-last)+4)+"' text-anchor='end' style='fill:"+COLORS[i]+"'>"+NAMES[i]+"</text>";
+    }
+    svg.innerHTML=out;
+  }
+
+  function render(){
+    $("targetBox").classList.toggle("hide",st.mode!=="ce");
+    $("negBox").classList.toggle("hide",st.mode==="ce");
+    $("alphaBox").classList.toggle("hide",!(st.mode==="ul"||st.mode==="cringe"));
+    $("kBox").classList.toggle("hide",st.mode!=="cringe");
+    NAMES.forEach(function(_,i){$("zv"+i).textContent=fmt(st.z[i],1);});
+    $("alphaV").textContent=st.alpha.toFixed(1); $("kV").textContent=st.k; $("etaV").textContent=st.eta.toFixed(1); $("stepsV").textContent=st.steps;
+
+    var F={
+      ce:"L = −log p_y      ∂L/∂z_j = p_j − 1[j = y]",
+      push:"L = log p_k      ∂L/∂z_j = 1[j = k] − p_j   (no lower bound on L)",
+      ul:"L = −α·log(1 − p_k)   ∂L/∂z_k = α·p_k,  ∂L/∂z_j = −α·p_k·p_j/(1 − p_k)  (j ≠ k)",
+      cringe:"L = α·log(1 + exp(s_k − s_+)),  s_+ sampled from top-k tokens ≠ k   ∂L/∂s_k = α·σ(s_k − s_+) = −∂L/∂s_+"
+    };
+    $("formula").textContent=F[st.mode];
+
+    var r=run(), p0=r.hist[0], p1=r.hist[r.hist.length-1];
+    drawBars(p0,p1); drawTraj(r.hist);
+    var tb=$("tbl").querySelector("tbody"), rows="";
+    for(var i=0;i<4;i++){
+      var dp=p1[i]-p0[i];
+      rows+="<tr><td>"+NAMES[i]+"</td><td>"+fmt(st.z[i],2)+"</td><td>"+p0[i].toFixed(3)+"</td><td>"+sfmt(r.g1[i],3)+"</td><td>"+p1[i].toFixed(3)+"</td><td class='"+(dp>=0?"pos":"neg")+"'>"+sfmt(dp,3)+"</td></tr>";
+    }
+    tb.innerHTML=rows;
+
+    var gains=[0,1,2,3].map(function(i){return {i:i,d:p1[i]-p0[i]};});
+    gains.sort(function(a,b){return b.d-a.d;});
+    var top=gains[0], msg="";
+    if(st.mode==="ce"){
+      msg="Target "+NAMES[st.target]+" changes by "+sfmt(p1[st.target]-p0[st.target],3)+". Non-target logits were lowered in proportion to their probability; the largest decrease is on the most likely non-target token.";
+    } else {
+      var k=st.neg, lost=p0[k]-p1[k];
+      msg="Negative token "+NAMES[k]+" loses "+lost.toFixed(3)+" probability. The largest gain goes to "+NAMES[top.i]+" ("+sfmt(top.d,3)+").";
+      if(st.mode==="push" && p0[k]<Math.max.apply(null,p0)) msg+=" Because each other logit rises by η·p_j, pushing down a token that is not the most likely one increases the gap between the most likely token and the rest.";
+      if(st.mode==="ul") msg+=" The gradient on z_"+NAMES[k]+" equals α·p_"+NAMES[k]+", so it becomes small once the negative token is unlikely.";
+      if(st.mode==="cringe") msg+=" Only the negative logit and the top-k candidate logits move; tokens outside the top-k keep their logits.";
+    }
+    $("summary").textContent=msg;
+  }
+
+  function bind(){
+    $("mode").addEventListener("change",function(e){st.mode=e.target.value;render();});
+    $("target").addEventListener("change",function(e){st.target=parseInt(e.target.value,10);render();});
+    $("negtok").addEventListener("change",function(e){st.neg=parseInt(e.target.value,10);render();});
+    $("alpha").addEventListener("input",function(e){st.alpha=parseFloat(e.target.value);render();});
+    $("k").addEventListener("input",function(e){st.k=parseInt(e.target.value,10);render();});
+    $("eta").addEventListener("input",function(e){st.eta=parseFloat(e.target.value);render();});
+    $("steps").addEventListener("input",function(e){st.steps=parseInt(e.target.value,10);render();});
+    $("reset").addEventListener("click",function(){st=JSON.parse(JSON.stringify(DEFAULT));syncInputs();render();});
+  }
+
+  buildControls(); syncInputs(); bind(); render();
+})();
+</script>
+</body>
+</html>

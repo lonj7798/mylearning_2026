@@ -2,289 +2,277 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>Entropy Dynamics and KL Estimator Variance (ch-43)</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Entropy change by advantage sign, and the k1/k2/k3 estimators (ch-43)</title>
 <style>
-  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-         max-width: 1200px; margin: 1.4em auto; padding: 0 1em; color: #1f1f1f;
-         background: #fafafa; }
-  h1 { font-size: 1.3em; margin-bottom: 0.25em; }
-  h2 { font-size: 1.0em; margin: 0 0 0.6em 0; color: #2b2b2b;
-       border-bottom: 1px solid #ececec; padding-bottom: 0.3em; }
-  .subtitle { color: #5a5a5a; margin-top: 0; font-size: 0.92em; line-height: 1.5; }
-  .layout { display: grid; grid-template-columns: 1fr 1fr; gap: 1.2em; margin-top: 1em; }
-  .panel { border: 1px solid #dcdcdc; border-radius: 6px; background: #fff;
-           padding: 0.9em 1em; }
-  .controls { display: flex; flex-wrap: wrap; gap: 0.5em; margin-bottom: 0.6em;
-              font-size: 0.88em; }
-  .controls button { font-family: 'SF Mono', Menlo, monospace; font-size: 0.82em;
-                     padding: 0.3em 0.7em; border: 1px solid #aaa; border-radius: 4px;
-                     background: #f4f6fa; cursor: pointer; }
-  .controls button.selected { background: #2e5aa8; color: #fff; border-color: #2e5aa8; }
-  .controls label { display: flex; align-items: center; gap: 0.3em;
-                    font-family: 'SF Mono', Menlo, monospace; font-size: 0.82em; }
-  svg { width: 100%; height: 320px; display: block; }
-  .grid line { stroke: #e8e8e8; stroke-width: 1; }
-  .axis { stroke: #555; stroke-width: 1; }
-  .axis-label { font-family: 'SF Mono', Menlo, monospace; font-size: 10px; fill: #555; }
-  .axis-title { font-family: 'SF Mono', Menlo, monospace; font-size: 11px; fill: #222; }
-  .line { fill: none; stroke-width: 2; }
-  .collapse-line { stroke: #c22; stroke-dasharray: 4 3; stroke-width: 1.2; }
-  .collapse-label { font-family: 'SF Mono', Menlo, monospace; font-size: 10px; fill: #c22; }
-  .legend { font-size: 0.82em; color: #333; margin-top: 0.4em; line-height: 1.6;
-            font-family: 'SF Mono', Menlo, monospace; }
-  .legend .chip { display: inline-block; width: 14px; height: 3px;
-                  margin-right: 4px; vertical-align: middle; border-radius: 1px; }
-  .caption { font-size: 0.86em; color: #333; margin-top: 0.6em; line-height: 1.5;
-             background: #f5f7fb; padding: 0.5em 0.7em; border-radius: 4px;
-             border-left: 3px solid #2e5aa8; }
-  code { background: #eef; padding: 1px 4px; border-radius: 3px;
-         font-family: 'SF Mono', Menlo, monospace; font-size: 0.85em; }
-  .stat-row { display: flex; justify-content: space-between;
-              font-family: 'SF Mono', Menlo, monospace; font-size: 0.82em;
-              padding: 0.2em 0; border-bottom: 1px dotted #ddd; }
-  .stat-row:last-child { border-bottom: none; }
-  .stat-row .lbl { color: #2a2a2a; }
-  .stat-row .val { color: #204080; font-weight: 600; }
+  :root {
+    --bg: #fbfbfa; --panel: #ffffff; --ink: #1d1d1b; --muted: #5a5a57; --line: #d9d9d4;
+    --accent: #23558f; --pos: #1f7a4d; --neg: #9c3024; --grid: #ebebe6;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #16171a; --panel: #1e2024; --ink: #e9e9e6; --muted: #a6a69f; --line: #34363b;
+            --accent: #7fa9de; --pos: #63c295; --neg: #e08a7e; --grid: #2a2c31; }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink);
+         font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+         line-height: 1.5; }
+  .wrap { max-width: 1100px; margin: 0 auto; padding-block: 24px; padding-left: 16px; padding-right: 16px; }
+  h1 { font-size: 1.25rem; margin: 0 0 6px; }
+  h2 { font-size: 1.02rem; margin: 0 0 10px; padding-bottom: 6px; border-bottom: 1px solid var(--line); }
+  p.lede { color: var(--muted); margin: 0 0 18px; font-size: 0.92rem; }
+  .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 8px;
+           padding: 14px 16px; margin-bottom: 18px; }
+  .controls { display: flex; flex-wrap: wrap; gap: 14px; align-items: center; margin-bottom: 12px;
+              font-size: 0.85rem; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+  .controls label { display: flex; align-items: center; gap: 6px; }
+  input[type=range] { width: 150px; }
+  button { font: inherit; font-size: 0.82rem; padding: 4px 10px; border-radius: 5px;
+           border: 1px solid var(--line); background: var(--bg); color: var(--ink); cursor: pointer; }
+  button.on { background: var(--accent); border-color: var(--accent); color: #fff; }
+  table { border-collapse: collapse; width: 100%; font-size: 0.85rem;
+          font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+  th, td { border-bottom: 1px solid var(--line); padding: 5px 8px; text-align: right; }
+  th:first-child, td:first-child { text-align: left; }
+  thead th { color: var(--muted); font-weight: 600; }
+  .scroll { overflow-x: auto; }
+  svg { width: 100%; height: 230px; display: block; }
+  .bar-pos { fill: var(--pos); }
+  .bar-neg { fill: var(--neg); }
+  .bar-base { fill: var(--accent); fill-opacity: 0.32; }
+  .tick { font: 10px ui-monospace, monospace; fill: var(--muted); }
+  .cap { font-size: 0.85rem; color: var(--muted); margin-top: 10px; }
+  .num { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+  .quad { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 10px; margin-top: 12px; }
+  .cell { border: 1px solid var(--line); border-radius: 6px; padding: 8px 10px; font-size: 0.83rem; }
+  .cell .v { font-family: ui-monospace, monospace; font-size: 0.95rem; }
+  code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.85em; }
 </style>
 </head>
 <body>
+<div class="wrap">
 
-<h1>Entropy Dynamics and KL Estimator Variance</h1>
-<p class="subtitle">
-  Companion figure for ch-43. <b>Panel 1</b>: policy entropy H(&pi;) vs training step under four interventions;
-  the red dashed line is the H &lt; 0.1 collapse threshold from [[entropy-mechanism-llm-rl]]. <b>Panel 2</b>:
-  per-sample variance of the k1 / k2 / k3 KL estimators from [[john-schulman-kl-tricks]] as you vary the
-  gap between q (current policy) and p (reference). Curves are illustrative and match the shapes attested in
-  the papers; absolute numbers are pedagogical.
+<h1>Entropy change by advantage sign, and the k1 / k2 / k3 estimators</h1>
+<p class="lede">
+  Companion figure for ch-43. Panel 1 computes the exact entropy change of one softmax position under a single
+  policy-gradient update, so the four-quadrant rule of §3 can be checked directly. Panel 2 re-runs the
+  Monte-Carlo comparison of the KL estimators from Schulman's 2020 post and prints the same two quantities the
+  post reports. Every number below is computed in the page; no curve is drawn from a published figure.
 </p>
 
-<div class="layout">
-
 <div class="panel">
-  <h2>Panel 1 &mdash; Entropy curve vs intervention</h2>
-  <div class="controls" id="entropy-controls">
-    <button data-mode="none" class="selected">none (vanilla GRPO)</button>
-    <button data-mode="entropy-bonus">flat entropy bonus (c_H = 1e-2)</button>
-    <button data-mode="clip-cov">Clip-Cov (top 2%)</button>
-    <button data-mode="kl-cov">KL-Cov (beta_KL on top 2%)</button>
+  <h2>Panel 1 &mdash; one update, one position: exact &Delta;H</h2>
+  <div class="controls">
+    <span>distribution:</span>
+    <button data-dist="skew" class="on">0.70 / 0.20 / 0.06 / 0.03 / 0.01</button>
+    <button data-dist="flat">0.30 / 0.25 / 0.20 / 0.15 / 0.10</button>
+    <button data-dist="peaked">0.90 / 0.05 / 0.03 / 0.015 / 0.005</button>
   </div>
-  <svg id="entropy-svg" viewBox="0 0 540 320" preserveAspectRatio="xMidYMid meet"></svg>
-  <div class="legend">
-    <span><span class="chip" style="background:#2e5aa8"></span>H(&pi;) per-token entropy (nats)</span>
-    &nbsp;|&nbsp;
-    <span><span class="chip collapse-line" style="background:#c22;border-top:1.5px dashed #c22;width:20px;height:0"></span> H = 0.1 collapse</span>
+  <div class="controls">
+    <label>sampled token
+      <select id="tok"></select>
+    </label>
+    <label>advantage A
+      <input type="range" id="adv" min="-20" max="20" step="1" value="10">
+      <span class="num" id="advv">+1.0</span>
+    </label>
+    <label>step size &eta;
+      <input type="range" id="eta" min="1" max="20" step="1" value="5">
+      <span class="num" id="etav">0.50</span>
+    </label>
   </div>
-  <div class="caption" id="entropy-caption"></div>
+
+  <svg id="bars" viewBox="0 0 560 230" preserveAspectRatio="xMidYMid meet" role="img"
+       aria-label="probability before and after the update"></svg>
+
+  <div class="quad">
+    <div class="cell">entropy before<br><span class="v" id="h0"></span> nats</div>
+    <div class="cell">entropy after<br><span class="v" id="h1"></span> nats</div>
+    <div class="cell">exact &Delta;H<br><span class="v" id="dh"></span></div>
+    <div class="cell">first-order &minus;Cov(log &pi;, &Delta;z)<br><span class="v" id="cov"></span></div>
+  </div>
+
+  <div class="scroll" style="margin-top:12px">
+    <table>
+      <thead><tr><th>token</th><th>&pi; before</th><th>&pi; after</th><th>&Delta;&pi;</th><th>log &pi;</th></tr></thead>
+      <tbody id="tbody"></tbody>
+    </table>
+  </div>
+
+  <p class="cap" id="cap1"></p>
+  <p class="cap">
+    Update rule: <code>&Delta;z_j = &eta;&middot;A&middot;(1[j = a] &minus; &pi;_j)</code>, the exact gradient of
+    <code>log &pi;_a</code> with respect to the logits, then a softmax. The first-order prediction is Lemma 1 of
+    <code>entropy-mechanism-llm-rl</code> (arXiv:2505.22617v1 &sect;3.1):
+    <code>&Delta;H &asymp; &minus;Cov_{a~&pi;}(log &pi;(a), &Delta;z_a)</code>. The comparison point named in the
+    chapter is the policy's mean log-probability, <code>&Sigma;_j &pi;_j log &pi;_j = &minus;H</code>.
+  </p>
 </div>
 
 <div class="panel">
-  <h2>Panel 2 &mdash; k1 / k2 / k3 estimator variance</h2>
+  <h2>Panel 2 &mdash; k1, k2, k3 on the post's own experiment</h2>
   <div class="controls">
-    <label>gap &epsilon; = log(p/q):
-      <input type="range" id="eps-slider" min="0" max="150" value="30" step="1">
-      <span id="eps-val">0.30</span>
+    <label>shift between q and p
+      <input type="range" id="mu" min="1" max="20" step="1" value="1">
+      <span class="num" id="muv">0.10</span>
     </label>
-    <button id="resample">resample 1000 draws</button>
+    <label>samples
+      <select id="nsamp">
+        <option value="100000">100,000</option>
+        <option value="1000000" selected>1,000,000</option>
+      </select>
+    </label>
+    <button id="run">resample</button>
   </div>
-  <svg id="kl-svg" viewBox="0 0 540 320" preserveAspectRatio="xMidYMid meet"></svg>
-  <div class="legend">
-    <span><span class="chip" style="background:#c22"></span>k1 = &minus;log r</span>
-    &nbsp;
-    <span><span class="chip" style="background:#2a8"></span>k2 = &frac12;&middot;(log r)&sup2;</span>
-    &nbsp;
-    <span><span class="chip" style="background:#2e5aa8"></span>k3 = r &minus; 1 &minus; log r</span>
+  <div class="scroll">
+    <table>
+      <thead><tr><th>estimator</th><th>mean</th><th>bias / true KL</th><th>stdev / true KL</th><th>min</th></tr></thead>
+      <tbody id="klbody"></tbody>
+    </table>
   </div>
-  <div id="kl-stats" style="margin-top:0.5em"></div>
-  <div class="caption">
-    Scatter: 1000 single-sample KL estimates for Bernoulli-ish q and p with <code>log(p/q) ~ Normal(&epsilon;, 0.5)</code>.
-    True KL(q&Vert;p) is roughly &epsilon; when &epsilon; is small. Note: k1 crosses zero; k2 and k3 never do.
-    As &epsilon; grows, k1's variance explodes (tail draws give huge |log r|); k2 stays close to k3 near r=1 but
-    biases away; k3 keeps both non-negativity and low variance in the operating regime of PPO/GRPO after a few steps.
-  </div>
+  <p class="cap" id="cap2"></p>
+  <p class="cap">
+    Setup as in the post: <code>p = N(0, 1)</code>, <code>q = N(&mu;, 1)</code>, samples drawn from
+    <code>q</code>, <code>r = p(x)/q(x)</code>, true <code>KL(q, p) = &mu;&sup2;/2</code>. Reported in
+    <code>john-schulman-kl-tricks</code> (joschu.net/blog/kl-approx.html, 2020-03-07): at true KL 0.005,
+    bias/true and stdev/true are 0 and 20 (k1), 0.002 and 1.42 (k2), 0 and 1.42 (k3); at true KL 0.5 they are
+    0 and 2 (k1), 0.25 and 1.73 (k2), 0 and 1.7 (k3). Set the shift to 0.10 and 1.00 to compare.
+  </p>
 </div>
 
 </div>
 
 <script>
-// ---------------------------------------------------------------
-// Panel 1: entropy vs step under four interventions
-// ---------------------------------------------------------------
-const STEPS = 600;
+// ---------- Panel 1 ----------
+const DISTS = {
+  skew:   [0.70, 0.20, 0.06, 0.03, 0.01],
+  flat:   [0.30, 0.25, 0.20, 0.15, 0.10],
+  peaked: [0.90, 0.05, 0.03, 0.015, 0.005]
+};
+let dist = 'skew';
 
-function simulateEntropy(mode) {
-  // h: per-token entropy in nats. Covariance-burn base rate decays with h toward a small floor.
-  const H = new Array(STEPS);
-  let h = 2.4;
-  for (let t = 0; t < STEPS; t++) {
-    const baseBurn = 0.012 * Math.max(h - 0.02, 0);
-    const noise = (Math.random() - 0.5) * 0.015;
-    let delta = -baseBurn + noise;
-    if (mode === 'entropy-bonus') {
-      delta += 0.0055 * Math.max(2.5 - h, 0);       // symmetric bonus — weak arrest at LLM scale
-    } else if (mode === 'clip-cov') {
-      delta += Math.max(0, Math.min(0.010, 0.015 * (1.5 - Math.max(h, 0))));  // top-2% gradient detach
-    } else if (mode === 'kl-cov') {
-      delta += Math.max(0, Math.min(0.008, 0.012 * (1.5 - Math.max(h, 0))));  // k3 on outliers
-    }
-    h = Math.max(0.01, h + delta);
-    H[t] = h;
-  }
-  return H;
+const ent = p => -p.reduce((s, x) => s + x * Math.log(x), 0);
+const softmax = z => { const m = Math.max(...z); const e = z.map(v => Math.exp(v - m));
+                       const s = e.reduce((a, b) => a + b, 0); return e.map(v => v / s); };
+
+function fillTokens() {
+  const sel = document.getElementById('tok');
+  const p = DISTS[dist];
+  const keep = Math.min(+sel.value || 0, p.length - 1);
+  sel.innerHTML = p.map((v, i) => `<option value="${i}">token ${i + 1} (π = ${v})</option>`).join('');
+  sel.value = String(keep);
 }
 
-function drawEntropyPanel(mode) {
-  const svg = document.getElementById('entropy-svg');
-  const W = 540, Ht = 320;
-  const M = { l: 52, r: 16, t: 14, b: 34 };
-  const plotW = W - M.l - M.r, plotH = Ht - M.t - M.b;
-  const data = simulateEntropy(mode);
-  const xMin = 0, xMax = STEPS - 1;
-  const yMin = 0, yMax = 2.6;
-
-  let parts = '';
-  for (let y = 0; y <= 2.5; y += 0.5) {
-    const yp = M.t + plotH * (1 - (y - yMin) / (yMax - yMin));
-    parts += `<line class="grid" x1="${M.l}" y1="${yp}" x2="${W - M.r}" y2="${yp}"/>`
-          +  `<text class="axis-label" x="${M.l - 6}" y="${yp + 3}" text-anchor="end">${y.toFixed(1)}</text>`;
+function drawBars(p0, p1) {
+  const W = 560, H = 230, L = 40, R = 12, T = 12, B = 30;
+  const pw = W - L - R, ph = H - T - B;
+  const maxY = Math.max(...p0, ...p1, 0.05) * 1.15;
+  let s = '';
+  for (let i = 0; i <= 4; i++) {
+    const y = T + ph * (1 - i / 4), v = (maxY * i / 4);
+    s += `<line x1="${L}" y1="${y}" x2="${W - R}" y2="${y}" stroke="var(--grid)"/>`;
+    s += `<text class="tick" x="${L - 6}" y="${y + 3}" text-anchor="end">${v.toFixed(2)}</text>`;
   }
-  for (let x = 0; x <= STEPS; x += 100) {
-    const xp = M.l + plotW * (x - xMin) / (xMax - xMin);
-    parts += `<line class="grid" x1="${xp}" y1="${M.t}" x2="${xp}" y2="${Ht - M.b}"/>`
-          +  `<text class="axis-label" x="${xp}" y="${Ht - M.b + 14}" text-anchor="middle">${x}</text>`;
+  const n = p0.length, slot = pw / n;
+  for (let i = 0; i < n; i++) {
+    const x = L + slot * i + slot * 0.18, bw = slot * 0.28;
+    const h0 = ph * p0[i] / maxY, h1 = ph * p1[i] / maxY;
+    s += `<rect class="bar-base" x="${x}" y="${T + ph - h0}" width="${bw}" height="${h0}"/>`;
+    const cls = p1[i] >= p0[i] ? 'bar-pos' : 'bar-neg';
+    s += `<rect class="${cls}" x="${x + bw + 3}" y="${T + ph - h1}" width="${bw}" height="${h1}"/>`;
+    s += `<text class="tick" x="${L + slot * i + slot / 2}" y="${H - B + 16}" text-anchor="middle">t${i + 1}</text>`;
   }
-  const collapseY = M.t + plotH * (1 - (0.1 - yMin) / (yMax - yMin));
-  parts += `<line class="collapse-line" x1="${M.l}" y1="${collapseY}" x2="${W - M.r}" y2="${collapseY}"/>`
-        +  `<text class="collapse-label" x="${W - M.r - 4}" y="${collapseY - 4}" text-anchor="end">H = 0.1 (collapse)</text>`
-        +  `<line class="axis" x1="${M.l}" y1="${M.t}" x2="${M.l}" y2="${Ht - M.b}"/>`
-        +  `<line class="axis" x1="${M.l}" y1="${Ht - M.b}" x2="${W - M.r}" y2="${Ht - M.b}"/>`
-        +  `<text class="axis-title" x="${M.l - 38}" y="${M.t + plotH / 2}" transform="rotate(-90 ${M.l - 38} ${M.t + plotH / 2})">H(pi) nats</text>`
-        +  `<text class="axis-title" x="${M.l + plotW / 2}" y="${Ht - 6}" text-anchor="middle">training step</text>`;
-  let d = '';
-  for (let t = 0; t < STEPS; t++) {
-    const xp = M.l + plotW * (t - xMin) / (xMax - xMin);
-    const yp = M.t + plotH * (1 - (Math.min(data[t], yMax) - yMin) / (yMax - yMin));
-    d += (t === 0 ? 'M' : 'L') + xp.toFixed(1) + ' ' + yp.toFixed(1) + ' ';
-  }
-  svg.innerHTML = parts + `<path class="line" d="${d}" stroke="#2e5aa8"/>`;
-
-  // caption depending on mode
-  const captions = {
-    'none':
-      'Vanilla GRPO: H decays exponentially from ~2.4 nats and punches through the 0.1 collapse threshold ' +
-      'within a few hundred steps. This is the shape Cui 2025 Fig. 1 shows across PPO / GRPO / RLOO / Reinforce++.',
-    'entropy-bonus':
-      'Flat entropy bonus c_H = 1e-2: decay slows but does not stop. The bonus treats every token ' +
-      'symmetrically while the collapse is driven by a thin tail of high p*A tokens. Reward ceiling also ' +
-      'drops because the bonus pushes mass toward tokens that do not help the task.',
-    'clip-cov':
-      'Clip-Cov: detach gradient on top 2% of tokens by p*A each batch. The entropy trajectory stabilizes ' +
-      'above the collapse threshold while the bulk of the distribution keeps updating. Cui 2025 Table of ' +
-      'interventions shows several-point AIME/MATH accuracy gains over vanilla GRPO.',
-    'kl-cov':
-      'KL-Cov: apply a token-level k3 KL penalty on the same top 2% outliers instead of zeroing their gradient. ' +
-      'Slightly softer than Clip-Cov; preserves more gradient flow at the cost of a slower entropy rescue. ' +
-      'Same mechanism, different surgical tool.'
-  };
-  document.getElementById('entropy-caption').textContent = captions[mode];
+  s += `<text class="tick" x="${L}" y="${H - 4}">pale bar: before &nbsp; solid bar: after</text>`;
+  document.getElementById('bars').innerHTML = s;
 }
 
-document.querySelectorAll('#entropy-controls button').forEach(btn => {
-  btn.addEventListener('click', () => {
-    document.querySelectorAll('#entropy-controls button').forEach(b => b.classList.remove('selected'));
-    btn.classList.add('selected');
-    drawEntropyPanel(btn.dataset.mode);
-  });
-});
-drawEntropyPanel('none');
+function update1() {
+  const p0 = DISTS[dist];
+  const a = +document.getElementById('tok').value;
+  const A = +document.getElementById('adv').value / 10;
+  const eta = +document.getElementById('eta').value / 10;
+  document.getElementById('advv').textContent = (A >= 0 ? '+' : '') + A.toFixed(1);
+  document.getElementById('etav').textContent = eta.toFixed(2);
 
-// ---------------------------------------------------------------
-// Panel 2: k1 / k2 / k3 variance as a function of gap
-// ---------------------------------------------------------------
-function gaussian() {
-  // Box-Muller
-  const u1 = Math.random() || 1e-9;
-  const u2 = Math.random();
-  return Math.sqrt(-2 * Math.log(u1)) * Math.cos(2 * Math.PI * u2);
+  const z = p0.map(Math.log);
+  const dz = p0.map((pj, j) => eta * A * ((j === a ? 1 : 0) - pj));
+  const p1 = softmax(z.map((v, j) => v + dz[j]));
+
+  const H0 = ent(p0), H1 = ent(p1);
+  const mlp = p0.reduce((s, pj) => s + pj * Math.log(pj), 0);
+  const mdz = p0.reduce((s, pj, j) => s + pj * dz[j], 0);
+  const cov = p0.reduce((s, pj, j) => s + pj * (Math.log(pj) - mlp) * (dz[j] - mdz), 0);
+
+  document.getElementById('h0').textContent = H0.toFixed(4);
+  document.getElementById('h1').textContent = H1.toFixed(4);
+  document.getElementById('dh').textContent = (H1 - H0 >= 0 ? '+' : '') + (H1 - H0).toFixed(4);
+  document.getElementById('cov').textContent = (-cov >= 0 ? '+' : '') + (-cov).toFixed(4);
+
+  document.getElementById('tbody').innerHTML = p0.map((pj, j) =>
+    `<tr><td>t${j + 1}${j === a ? ' (sampled)' : ''}</td><td>${pj.toFixed(4)}</td><td>${p1[j].toFixed(4)}</td>` +
+    `<td>${(p1[j] - pj >= 0 ? '+' : '') + (p1[j] - pj).toFixed(4)}</td><td>${Math.log(pj).toFixed(3)}</td></tr>`).join('');
+
+  const above = Math.log(p0[a]) > mlp;
+  const dir = H1 - H0 < 0 ? 'falls' : 'rises';
+  const others = p1.map((v, j) => v - p0[j]).map((d, j) => ({ j, d })).filter(o => o.j !== a);
+  const biggest = others.reduce((m, o) => Math.abs(o.d) > Math.abs(m.d) ? o : m, others[0]);
+  document.getElementById('cap1').innerHTML =
+    `The sampled token has <code>log &pi;_a = ${Math.log(p0[a]).toFixed(3)}</code>, which is ` +
+    `${above ? 'above' : 'below'} the mean log-probability <code>${mlp.toFixed(3)}</code>, and the advantage is ` +
+    `${A >= 0 ? 'positive' : 'negative'}, so entropy ${dir}. The largest opposing change is on token ` +
+    `t${biggest.j + 1} (${(biggest.d >= 0 ? '+' : '') + biggest.d.toFixed(4)}): the mass a softmax removes or ` +
+    `adds is redistributed in proportion to the remaining probabilities.`;
+
+  drawBars(p0, p1);
 }
 
-function drawKLPanel(epsilon) {
-  const svg = document.getElementById('kl-svg');
-  const W = 540, Ht = 320;
-  const M = { l: 52, r: 16, t: 14, b: 34 };
-  const plotW = W - M.l - M.r, plotH = Ht - M.t - M.b;
-  const N = 1000;
-  const ests = { k1: [], k2: [], k3: [] };
+document.querySelectorAll('[data-dist]').forEach(b => b.addEventListener('click', () => {
+  document.querySelectorAll('[data-dist]').forEach(x => x.classList.remove('on'));
+  b.classList.add('on'); dist = b.dataset.dist; fillTokens(); update1();
+}));
+['tok', 'adv', 'eta'].forEach(id => document.getElementById(id).addEventListener('input', update1));
+fillTokens(); update1();
+
+// ---------- Panel 2 ----------
+function normal() {
+  let u = 0, v = 0;
+  while (u === 0) u = Math.random();
+  while (v === 0) v = Math.random();
+  return Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * v);
+}
+
+function update2() {
+  const mu = +document.getElementById('mu').value / 10;
+  const N = +document.getElementById('nsamp').value;
+  document.getElementById('muv').textContent = mu.toFixed(2);
+  const trueKL = mu * mu / 2;
+
+  const acc = { k1: [0, 0, Infinity], k2: [0, 0, Infinity], k3: [0, 0, Infinity] };
   for (let i = 0; i < N; i++) {
-    const logr = epsilon + 0.5 * gaussian();
-    const r = Math.exp(logr);
-    ests.k1.push(-logr);
-    ests.k2.push(0.5 * logr * logr);
-    ests.k3.push(r - 1 - logr);
-  }
-  const stats = (a) => {
-    const n = a.length, mean = a.reduce((x, y) => x + y, 0) / n;
-    const varr = a.reduce((x, y) => x + (y - mean) * (y - mean), 0) / n;
-    return { mean, std: Math.sqrt(varr), min: Math.min.apply(null, a), max: Math.max.apply(null, a) };
-  };
-  const s1 = stats(ests.k1), s2 = stats(ests.k2), s3 = stats(ests.k3);
-  const yLo = Math.min(s1.min, 0) - 0.3;
-  const yHi = Math.max(s1.max, s2.max, s3.max) + 0.3;
-  let parts = '';
-  for (let i = 0; i <= 6; i++) {
-    const yv = yLo + (yHi - yLo) * i / 6;
-    const yp = M.t + plotH * (1 - i / 6);
-    parts += `<line class="grid" x1="${M.l}" y1="${yp}" x2="${W - M.r}" y2="${yp}"/>`
-          +  `<text class="axis-label" x="${M.l - 6}" y="${yp + 3}" text-anchor="end">${yv.toFixed(2)}</text>`;
-  }
-  parts += `<line class="axis" x1="${M.l}" y1="${M.t}" x2="${M.l}" y2="${Ht - M.b}"/>`
-        +  `<line class="axis" x1="${M.l}" y1="${Ht - M.b}" x2="${W - M.r}" y2="${Ht - M.b}"/>`
-        +  `<text class="axis-title" x="${M.l - 38}" y="${M.t + plotH / 2}" transform="rotate(-90 ${M.l - 38} ${M.t + plotH / 2})">estimator value</text>`
-        +  `<text class="axis-title" x="${M.l + plotW / 2}" y="${Ht - 6}" text-anchor="middle">sample index (1..1000)</text>`;
-  const zeroY = M.t + plotH * (1 - (0 - yLo) / (yHi - yLo));
-  if (zeroY > M.t && zeroY < Ht - M.b) {
-    parts += `<line class="collapse-line" stroke="#888" x1="${M.l}" y1="${zeroY}" x2="${W - M.r}" y2="${zeroY}"/>`
-          +  `<text class="axis-label" x="${W - M.r - 4}" y="${zeroY - 3}" text-anchor="end" fill="#888">0 (k1 crosses here)</text>`;
-  }
-  const colors = { k1: '#c22', k2: '#2a8', k3: '#2e5aa8' };
-  ['k1', 'k2', 'k3'].forEach((k, idx) => {
-    const off = (idx - 1) * 1.2;
-    for (let i = 0; i < N; i += 2) {
-      const xp = M.l + plotW * ((i + off) / N);
-      const v = ests[k][i];
-      const yp = M.t + plotH * (1 - (v - yLo) / (yHi - yLo));
-      if (yp > M.t && yp < Ht - M.b) {
-        parts += `<circle cx="${xp.toFixed(1)}" cy="${yp.toFixed(1)}" r="1.4" fill="${colors[k]}" fill-opacity="0.55"/>`;
-      }
+    const x = mu + normal();                        // x ~ q = N(mu, 1)
+    const logr = (-0.5 * x * x) - (-0.5 * (x - mu) * (x - mu));   // log p(x) - log q(x)
+    const vals = { k1: -logr, k2: 0.5 * logr * logr, k3: Math.exp(logr) - 1 - logr };
+    for (const k of ['k1', 'k2', 'k3']) {
+      const v = vals[k];
+      acc[k][0] += v; acc[k][1] += v * v; if (v < acc[k][2]) acc[k][2] = v;
     }
-  });
-  svg.innerHTML = parts;
-
-  // stats panel
-  document.getElementById('kl-stats').innerHTML = `
-    <div class="stat-row"><span class="lbl">true KL(q&Vert;p) &asymp;</span>
-      <span class="val">${(epsilon + 0.125).toFixed(3)}</span></div>
-    <div class="stat-row"><span class="lbl">k1 mean &plusmn; std</span>
-      <span class="val" style="color:#c22">${s1.mean.toFixed(3)} &plusmn; ${s1.std.toFixed(3)}</span></div>
-    <div class="stat-row"><span class="lbl">k2 mean &plusmn; std</span>
-      <span class="val" style="color:#2a8">${s2.mean.toFixed(3)} &plusmn; ${s2.std.toFixed(3)}</span></div>
-    <div class="stat-row"><span class="lbl">k3 mean &plusmn; std</span>
-      <span class="val" style="color:#2e5aa8">${s3.mean.toFixed(3)} &plusmn; ${s3.std.toFixed(3)}</span></div>
-    <div class="stat-row"><span class="lbl">k1 min (signed)</span>
-      <span class="val" style="color:#c22">${s1.min.toFixed(3)}</span></div>
-    <div class="stat-row"><span class="lbl">k3 min (always &ge; 0)</span>
-      <span class="val" style="color:#2e5aa8">${s3.min.toFixed(3)}</span></div>
-  `;
+  }
+  const rows = ['k1', 'k2', 'k3'].map(k => {
+    const mean = acc[k][0] / N;
+    const sd = Math.sqrt(Math.max(acc[k][1] / N - mean * mean, 0));
+    return `<tr><td>${k}</td><td>${mean.toFixed(5)}</td><td>${((mean - trueKL) / trueKL).toFixed(3)}</td>` +
+           `<td>${(sd / trueKL).toFixed(2)}</td><td>${acc[k][2].toFixed(4)}</td></tr>`;
+  }).join('');
+  document.getElementById('klbody').innerHTML = rows;
+  document.getElementById('cap2').innerHTML =
+    `True KL(q, p) = &mu;&sup2;/2 = <code>${trueKL.toFixed(5)}</code>. k1 and k3 are unbiased; k2's bias grows ` +
+    `with the shift. The min column shows the property that decides whether a penalty can go negative on a ` +
+    `single sample: k1 reaches negative values, k2 and k3 never do.`;
 }
-
-function currentEps() { return parseFloat(document.getElementById('eps-slider').value) / 100; }
-document.getElementById('eps-slider').addEventListener('input', () => {
-  const e = currentEps();
-  document.getElementById('eps-val').textContent = e.toFixed(2);
-  drawKLPanel(e);
-});
-document.getElementById('resample').addEventListener('click', () => drawKLPanel(currentEps()));
-drawKLPanel(currentEps());
+document.getElementById('mu').addEventListener('input', update2);
+document.getElementById('nsamp').addEventListener('change', update2);
+document.getElementById('run').addEventListener('click', update2);
+update2();
 </script>
-
 </body>
 </html>

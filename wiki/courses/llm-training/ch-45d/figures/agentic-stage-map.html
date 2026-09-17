@@ -1,0 +1,242 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ch-45d — Cross-lab agentic stage map</title>
+<style>
+  :root {
+    --bg: #fbfbf9; --fg: #1d1d1f; --muted: #6b6b70; --line: #d8d8d2;
+    --card: #ffffff; --accent: #2f5d8a; --accent-soft: #e6eef6;
+    --nr: #f3f1ec; --nr-fg: #8a8a86;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; padding: 20px 16px 48px; background: var(--bg); color: var(--fg);
+         font: 14px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }
+  .wrap { max-width: 1180px; margin: 0 auto; }
+  h1 { font-size: 20px; margin: 0 0 4px; }
+  p.sub { color: var(--muted); margin: 0 0 18px; max-width: 78ch; }
+  .legend { display: flex; flex-wrap: wrap; gap: 14px; margin: 0 0 14px; font-size: 12.5px; color: var(--muted); }
+  .swatch { display: inline-block; width: 12px; height: 12px; border-radius: 3px; vertical-align: -1px; margin-right: 5px; border: 1px solid var(--line); }
+  .s-yes { background: var(--accent-soft); }
+  .s-no { background: var(--nr); }
+  .tablebox { overflow-x: auto; border: 1px solid var(--line); border-radius: 8px; background: var(--card); }
+  table { border-collapse: collapse; width: 100%; min-width: 900px; }
+  th, td { border-bottom: 1px solid var(--line); padding: 8px 10px; text-align: left; vertical-align: top; font-size: 12.8px; }
+  thead th { position: sticky; top: 0; background: var(--card); font-weight: 600; border-bottom: 2px solid var(--line); }
+  tbody th { font-weight: 600; white-space: nowrap; }
+  td.cell { cursor: pointer; }
+  td.cell:hover { background: #f0f5fa; }
+  td.cell.sel { outline: 2px solid var(--accent); outline-offset: -2px; }
+  .chip { display: inline-block; padding: 2px 7px; border-radius: 4px; background: var(--accent-soft); border: 1px solid #cddced; }
+  .chip.nr { background: var(--nr); color: var(--nr-fg); border-color: var(--line); }
+  .detail { margin-top: 16px; border: 1px solid var(--line); border-radius: 8px; background: var(--card); padding: 14px 16px; min-height: 120px; }
+  .detail h2 { font-size: 15px; margin: 0 0 6px; }
+  .detail .locus { color: var(--muted); font-size: 12.5px; margin-top: 8px; }
+  .detail ul { margin: 6px 0 0; padding-left: 20px; }
+  .detail li { margin: 3px 0; }
+  .caption { margin-top: 14px; color: var(--muted); font-size: 12.5px; max-width: 86ch; }
+  code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; background: #f4f4f0; padding: 1px 4px; border-radius: 3px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Where each open recipe puts agentic capability</h1>
+  <p class="sub">Rows are model reports; columns are the six stages at which a report can place agentic training.
+  Select any cell to read what that report states for that stage, with its locus. Cells marked
+  <span class="chip nr">not reported</span> mean the report does not describe that stage for agentic data, not that the stage was skipped.</p>
+
+  <div class="legend">
+    <span><span class="swatch s-yes"></span>stage described for agentic capability</span>
+    <span><span class="swatch s-no"></span>not reported</span>
+  </div>
+
+  <div class="tablebox">
+    <table>
+      <thead>
+        <tr>
+          <th>Model report</th>
+          <th>Pre-training</th>
+          <th>Mid-training</th>
+          <th>SFT</th>
+          <th>Specialist / expert RL</th>
+          <th>Main RL</th>
+          <th>Final distillation</th>
+        </tr>
+      </thead>
+      <tbody id="body"></tbody>
+    </table>
+  </div>
+
+  <div class="detail" id="detail">
+    <h2>Select a cell</h2>
+    <p>Each entry quotes what the report states for that model and stage, with the section or table it comes from.</p>
+  </div>
+
+  <p class="caption">Sources: Kimi K2 (arXiv:2507.20534v2), Kimi K2.5 (arXiv:2602.02276v2), Kimi K3 (arXiv:2607.24653v2),
+  GLM-4.5 (arXiv:2508.06471v1), GLM-5 (arXiv:2602.15763v2), DeepSeek-V3.2 (arXiv:2512.02556v1),
+  Qwen3-Coder blog (2025-07-22), Qwen3-Coder-Next report (2026-03-03), Nemotron 3 Super report (2026-04-03),
+  Tongyi DeepResearch (arXiv:2510.24701), MiniMax Forge post (2026-02-13), DeepSWE blog (2025-07-02).
+  All values are read at the loci shown; no value is estimated.</p>
+</div>
+
+<script>
+var STAGES = ["pretrain","midtrain","sft","specialist","rl","distill"];
+var ROWS = [
+ {model:"Kimi K2 (1.04T/32B)",
+  pretrain:{v:null},
+  midtrain:{v:"annealing + long-context only",d:["400B tokens at 4k, then 60B at 32k, then YaRN to 128k.","The report does not state that agentic trajectories enter pre-training or annealing."],l:"arXiv:2507.20534v2 §2.5"},
+  sft:{v:"3000+ MCP tools, 20,000+ synthetic tools",d:["Thousands of agents built from synthesized system prompts and tool combinations; each task carries a rubric.","Trajectories generated with LLM-simulated users and a stateful tool simulator, filtered by an LLM judge.","Real execution sandboxes added for coding and software engineering.","Size given only as “tens of thousands” of training examples."],l:"§3.1.1"},
+  specialist:{v:null},
+  rl:{v:"one joint RL stage: verifiable gym + self-critique rubric",d:["Math, STEM, logic, instruction following, faithfulness, coding, software engineering, safety.","Software-engineering sandbox supports over 10,000 concurrent instances.","Per-sample token budget by task type, truncation plus penalty; auxiliary PTX loss; temperature decay."],l:"§3.2.1-§3.2.3"},
+  distill:{v:null}},
+
+ {model:"Kimi K2.5 (built on K2)",
+  pretrain:{v:"vision corpus includes GUI/agent trajectories",d:["Joint text-vision pre-training continues from a near-end K2 checkpoint over an additional 15T vision-text tokens at 4K.","The vision corpus includes an agent category: GUI screenshots and action trajectories across desktop, mobile and web, with human-annotated demonstrations.","No token share is printed for that category."],l:"arXiv:2602.02276v2 §4.3, App. B.3"},
+  midtrain:{v:"high-quality data + long-context activation",d:["Third pre-training stage performs long-context activation with mid-training data, extending context by YaRN interpolation.","Token counts per stage are not printed."],l:"§4.3"},
+  sft:{v:"zero-vision SFT: text-only data",d:["Candidate responses synthesized from K2, K2 Thinking and in-house expert models.","Text-only SFT alone activates visual tool use; image manipulation is proxied through IPython.","Adding human-designed visual trajectories at this stage is reported to hurt generalization."],l:"§2.2, §4.4.1"},
+  specialist:{v:"ability-based domain experts inside RL",d:["RL domains are organized by ability (knowledge, reasoning, coding, agentic), not by modality.","The report does not describe a separate distillation stage that merges them."],l:"§2.3"},
+  rl:{v:"joint text-vision RL + PARL for Agent Swarm",d:["Token-level log-ratio clipping [α, β] zeroes gradients outside the interval regardless of advantage sign.","Toggle alternates budget-limited and full-budget phases; 25-30% fewer output tokens on K2 Thinking.","PARL trains only the orchestrator; subagents are frozen intermediate checkpoints.","Rollout Manager orchestrates up to 100,000 concurrent agent tasks."],l:"§3, §4.4.2, App. D"},
+  distill:{v:null}},
+
+ {model:"Kimi K3 (2.8T/104B)",
+  pretrain:{v:null},
+  midtrain:{v:"cooldown context 256K → 1M",d:["Context curriculum: 8K → 64K in pre-training, 256K → 1M during cooldown.","Long-context data is synthesized by permuting and concatenating documents and sub-tasks.","No agentic trajectory injection is described for pre-training."],l:"arXiv:2607.24653v2 §3.3, §3.4"},
+  sft:{v:"cold start from prior-Kimi specialist models",d:["Trajectories synthesized by domain-specialized models from earlier Kimi releases, with multi-stage verification and human-in-the-loop annotation.","Serialized with an XTML-based chat template.","Quantization-aware training runs from SFT onward."],l:"§4.1.1"},
+  specialist:{v:"9 experts = 3 domains × 3 reasoning efforts",d:["Domains: general tasks, general agents, coding agents.","Efforts: low, high, max, produced by annealing the budget multiplier τ.","Trajectories from all nine experts are collected for SFT and for distillation."],l:"§4.1.2"},
+  rl:{v:"partial rollout across iterations; budget reward −1",d:["Generation pauses once a fraction λ of the N×K trajectories finishes; paused rollouts resume first next iteration.","Reward is overridden to −1 when total tokens exceed τ·b₀(x).","Unified white-box environment instantiates Kimi Code, Claude Code, Codex, OpenClaw and Hermes to avoid harness overfit."],l:"§4.1.2, §4.2.1"},
+  distill:{v:"Multi-Teacher On-Policy Distillation (MOPD)",d:["Per-token reward clip(sg[log(π_teacher/π_θ)], −R_max, R_max) replaces the task reward.","Top-k distillation objectives were tried with no clear advantage in convergence or final performance."],l:"§4.1.3, Eq. 15"}},
+
+ {model:"GLM-4.5 (355B/32B)",
+  pretrain:{v:null},
+  midtrain:{v:"500B repo code / 500B reasoning / 100B agent+long",d:["Repo-level code at 32K; synthetic reasoning at 32K; long documents and large-scale synthetic agent trajectories at 128K.","Best-fit packing is used only in mid-training."],l:"arXiv:2508.06471v1 §2.3, Figure 3"},
+  sft:{v:"four-step agentic pipeline, millions of samples",d:["Collect frameworks, real APIs, MCP servers and LLM-simulated tools; synthesize single- and multi-step tasks; generate trajectories with an LLM user simulator; keep only trajectories multiple judge agents mark complete.","Overall SFT at up to 128K context."],l:"§3.1"},
+  specialist:{v:"Reasoning, Agent, General-chat experts",d:["Stage 1 trains three experts by cold-start SFT then RL.","Stage 2 distills them into one hybrid-reasoning model."],l:"§3"},
+  rl:{v:"agentic RL on web search and SWE",d:["Group-wise objective over K traces; loss on model-generated tokens only.","Rewards: final-answer accuracy (search) and unit tests (SWE); wrong tool-call format halts the trace at reward 0.","Iterative self-distillation: when RL plateaus, cold-start data is replaced by RL-model responses and SFT is repeated."],l:"§3.3.1-§3.3.2"},
+  distill:{v:"unified SFT distills the three experts",d:["Millions of expert samples merge the Reasoning, Agent and General-chat experts into one model.","Function-calling end-to-end experts are distilled into the main model in general RL."],l:"§3.1, §3.4"}},
+
+ {model:"GLM-5 (744B/40B)",
+  pretrain:{v:null},
+  midtrain:{v:"32K (1T) → 128K (500B) → 200K (50B)",d:["Long documents and synthetic agent trajectories up-sampled at the later stages.","Issue–PR corpus: ~10M pairs, ~160B unique tokens after filtering.","A 200K stage after the 128K stage improved results even inside the 128K window."],l:"arXiv:2602.15763v2 §2.3"},
+  sft:{v:"expanded Agent and Coding share; 202,752-token context",d:["Three categories: General Chat, Reasoning, Coding & Agent.","Three thinking characteristics: interleaved, preserved, turn-level.","Erroneous trajectory segments are retained but masked out of the loss."],l:"§3.1"},
+  specialist:{v:"slide-generation expert (RL + RFT)",d:["A specialized slide-generation expert is trained by RL with a three-level reward, then folded back by rejection-sampling fine-tuning.","No general set of domain experts is described."],l:"§4.2.5"},
+  rl:{v:"sequential: Reasoning RL → Agentic RL → General RL",d:["Reasoning RL: GRPO + IcePop, no KL term, β=2, ε_low=0.2, ε_high=0.28, on-policy, group 32, batch 32.","Agentic RL: fully asynchronous, token-in-token-out gateway, double-sided token clipping against rollout log-probabilities, staleness filter w′ − w₀ > τ, environment-failure exclusion with group padding.","Over 10k verifiable SWE environments across 9 languages; thousands of terminal environments."],l:"§3.2-§3.3, §4.1-§4.2"},
+  distill:{v:"on-policy cross-stage distillation",d:["Teachers are the final checkpoints of earlier stages; advantage is replaced by sg[log(π_teacher/π_θ)].","Group size 1, batch size 1024.","Stated purpose: recover skills lost to cumulative degradation across sequential RL stages."],l:"§3.5, Eq. 2"}},
+
+ {model:"DeepSeek-V3.2",
+  pretrain:{v:null},
+  midtrain:{v:"sparse-attention continued training, 943.7B tokens",d:["Two stages from V3.1-Terminus: dense indexer warm-up (1000 steps × 16 sequences of 128K = 2.1B tokens), then sparse training (15000 steps × 480 sequences of 128K = 943.7B tokens).","Data distribution aligned with the 128K extension data of V3.1-Terminus; no agentic corpus is described here."],l:"arXiv:2512.02556v1 §2.1.1"},
+  sft:{v:"prompt-based cold start for tool use in thinking",d:["System prompts per task type; the combined prompt permits up to 20 Python executions inside <think>.","Reasoning content is removed only when a new user message arrives; tool outputs alone keep it."],l:"§3.2.1-§3.2.2, App. B"},
+  specialist:{v:"6 agentic/reasoning domains + writing and general QA",d:["Specialists fine-tuned from the same V3.2 base for mathematics, programming, general logical reasoning, general agentic tasks, agentic coding, agentic search, plus writing and general QA, in thinking and non-thinking modes.","Each specialist is trained with large-scale RL."],l:"§3"},
+  rl:{v:"one mixed RL stage (reasoning + agent + alignment)",d:["Advantage R_i − mean(R) without std division; unbiased K3 KL estimate; Off-Policy Sequence Masking for negative-advantage sequences; Keep Routing; Keep Sampling Mask.","Agent tasks: 24,667 code-agent, 50,275 search-agent, 4,417 general-agent, 5,908 code-interpreter; 1,827 synthesized general-agent environments.","RL budget exceeds 10% of pre-training cost; thousands of steps."],l:"§3, §3.1, Table 1"},
+  distill:{v:"specialist data distilled before RL",d:["Different generator models produce thinking and non-thinking data.","The distilled model scores slightly below the specialists; the gap is removed by the later RL stage. No numbers are printed."],l:"§3"}},
+
+ {model:"Qwen3-Coder (480B/35B)",
+  pretrain:{v:"7.5T tokens at 70% code ratio",d:["Native 256K context, 1M with YaRN; repo-scale and pull-request data.","Qwen2.5-Coder used to clean and rewrite noisy data.","Agentic trajectories are not described as pre-training data."],l:"Qwen blog 2025-07-22, Pre-Training"},
+  midtrain:{v:null},
+  sft:{v:null},
+  specialist:{v:null},
+  rl:{v:"code RL + long-horizon agent RL, 20,000 parallel environments",d:["Execution-driven code RL on automatically scaled test cases.","Long-horizon RL for multi-turn tool use; the stated bottleneck is environment scaling.","The blog reports that code RL also brought gains to other tasks, without numbers."],l:"Qwen blog, Post-Training"},
+  distill:{v:null}},
+
+ {model:"Qwen3-Coder-Next (80B/3B)",
+  pretrain:{v:null},
+  midtrain:{v:"~600B repo-level tokens at 262,144 context",d:["Guiding principle: introduce the minimum synthetic data required, because heavy synthetic data causes over-specialization, reduced response diversity and weaker adaptation.","GitHub language coverage raised from 92 to 370 languages.","Multi-turn agentic trajectories from six scaffolds, generated by the 480B teacher and rule-filtered.","Reformatting web documents raised Evalplus 54.38 → 63.09, MultiplE 36.02 → 48.35, CRUX-Eval 57.13 → 58.94."],l:"report 2026-03-03 §3.1, Table 1"},
+  sft:{v:"execution-verified trajectories + pairwise judge",d:["A Mini-SWE-agent user simulator executes proposed code and judges from compiler and runtime feedback.","Pairwise checklist judge ranks n candidates per request."],l:"§4.1"},
+  specialist:{v:"4 experts: WebDev, UX, Single-turn QA, SWE",d:["All experts start from the same model and differ in data, recipe and evaluation.","SWE expert: SFT and RL prompts fully disjoint; pass-rate filtering keeps informative failures.","Reward shaping adds an unfinished-trajectory penalty and a turn-level tool-format penalty."],l:"§4.2"},
+  rl:{v:"~800K verifiable SWE tasks over 9+ languages",d:["Issue–PR mining plus bug injection into containerized repositories; non-functional verifiers filtered automatically.","MegaFlow orchestration on Kubernetes; each task is an Argo workflow.","Reward-hacking blocker on tool calls that combine a repository link with git/curl/wget."],l:"§2.1-§2.2, §4.2.4"},
+  distill:{v:"expert distillation into the SFT model",d:["WebDev, UX, Single-turn RL and SWE experts are distilled into one deployment model, so that no expert routing is needed at serving time."],l:"§4.2.5"}},
+
+ {model:"Nemotron 3 Super (120B/12B)",
+  pretrain:{v:"25T tokens, 80% phase 1 / 20% phase 2",d:["Phase 1: 20T tokens for diversity and coverage. Phase 2: 5T tokens of high-quality data.","The pre-training data section lists no agentic trajectory corpus; agentic data is kept for post-training."],l:"report 2026-04-03 Abstract, §1, §2.3"},
+  midtrain:{v:null},
+  sft:{v:"7M samples / 80B tokens, agentic share enlarged",d:["Conversational tool use: 279,116 conversations across 838 domains, against 15,588 across 5 domains in Nemotron 3 Nano.","General-purpose tool use: 1.5M trajectories. Terminal use: 84,864 samples. Agentic CLI: ~15k tasks plus ~3k SWE and 10k web-development tasks.","CLI traces recorded from Qwen3-Coder-480B and MiniMax M2.5 across Codex, OpenCode, Qwen Code CLI and Stirrup."],l:"§3.1.1-§3.1.2, Figure 12"},
+  specialist:{v:null},
+  rl:{v:"3 stages: 21-environment RLVR → SWE-RL → RLHF",d:["Unified RLVR across 21 environments and 37 datasets; 256 prompts × 16 responses, batch 4096, one update per rollout; max generation 49K then 64K.","Stated result: training on all environments simultaneously yields stable gains, while single-environment training causes severe regressions on other benchmarks.","SWE-RL is separated for throughput; OpenCode and Codex tool formats are implemented inside OpenHands for multi-harness training.","PivotRL reuses offline SFT trajectories at uncertain turns for all agentic domains."],l:"§3.2.1-§3.2.4"},
+  distill:{v:null}},
+
+ {model:"Tongyi DeepResearch (30.5B/3.3B)",
+  pretrain:{v:null},
+  midtrain:{v:"Agentic CPT, 32K then 128K",d:["Second stage introduces long-sequence (64K-128K) agentic behaviour data.","A small proportion of general pre-training data is interleaved throughout, to preserve foundational generalization.","Data covers the whole agent loop: question synthesis, planning, reasoning and decision actions."],l:"arXiv:2510.24701 §3.3.1-§3.3.2"},
+  sft:{v:"cold start in ReAct and context-management modes",d:["Stage 1 at 40K with all context-management samples; stage 2 at 128K with ReAct samples of 40K-128K plus a small 40K portion for stability."],l:"§3.4.2"},
+  specialist:{v:null},
+  rl:{v:"strictly on-policy GRPO variant, binary answer reward",d:["Token-level loss, clip-higher, leave-one-out advantage, importance ratio fixed at 1.0.","No format reward, because the cold start already fixes the format.","Truncated over-length negatives are excluded from the loss after unfiltered negatives caused policy collapse.","Simulated environment: offline 2024 Wikipedia with local RAG tools."],l:"§3.4.3"},
+  distill:{v:"model merging as the final step",d:["Variants derived from the same pre-trained model are combined by averaging or interpolation."],l:"§3.4.4"}},
+
+ {model:"MiniMax-M2.5 (Forge)",
+  pretrain:{v:null},
+  midtrain:{v:null},
+  sft:{v:null},
+  specialist:{v:null},
+  rl:{v:"unified mixed-domain CISPO over 100,000+ scaffolds",d:["Reasoning, General QA and Agent domains are mixed in one stage; the stated reason is that multi-stage RL often causes negative transfer between domains.","Context management is modelled as an agent action inside the RL loop, so inference-time truncation is not a distribution shift.","Composite reward: process reward, task-completion-time reward, reward-to-go normalization.","Windowed FIFO scheduling; prefix-tree merging reported at 40x training speedup."],l:"Forge post 2026-02-13 §2-§4"},
+  distill:{v:null}},
+
+ {model:"DeepSWE-Preview (32B)",
+  pretrain:{v:null},
+  midtrain:{v:null},
+  sft:{v:"none: RL directly from Qwen3-32B",d:["The blog reports that RL after SFT on Claude-Sonnet 3.7/4 trajectories did not improve after 100 iterations."],l:"DeepSWE blog 2025-07-02, intro and §6"},
+  specialist:{v:null},
+  rl:{v:"GRPO++ on 4.5K R2E-Gym problems, 64 H100 × 6 days",d:["Clip high, no KL loss, no reward std, length normalization by max context, leave-one-out advantage, compact filtering, no entropy loss.","Compact filtering masks trajectories ending by context limit, step limit or a 20-minute generation timeout.","Pass@1 rose from 23% to 42% over about 200 RL steps."],l:"DeepSWE blog §2.1-§2.3, §4"},
+  distill:{v:null}}
+];
+
+var LABELS = {pretrain:"Pre-training", midtrain:"Mid-training", sft:"SFT", specialist:"Specialist / expert RL", rl:"Main RL", distill:"Final distillation"};
+
+var body = document.getElementById('body');
+var detail = document.getElementById('detail');
+var selected = null;
+
+ROWS.forEach(function(row, ri) {
+  var tr = document.createElement('tr');
+  var th = document.createElement('th');
+  th.textContent = row.model;
+  tr.appendChild(th);
+  STAGES.forEach(function(st) {
+    var td = document.createElement('td');
+    var e = row[st];
+    td.className = 'cell';
+    var span = document.createElement('span');
+    if (!e || !e.v) {
+      span.className = 'chip nr';
+      span.textContent = 'not reported';
+    } else {
+      span.className = 'chip';
+      span.textContent = e.v;
+    }
+    td.appendChild(span);
+    td.addEventListener('click', function() { show(ri, st, td); });
+    tr.appendChild(td);
+  });
+  body.appendChild(tr);
+});
+
+function show(ri, st, td) {
+  if (selected) selected.classList.remove('sel');
+  selected = td; td.classList.add('sel');
+  var row = ROWS[ri], e = row[st];
+  var h = document.createElement('h2');
+  h.textContent = row.model + ' — ' + LABELS[st];
+  detail.innerHTML = '';
+  detail.appendChild(h);
+  if (!e || !e.v) {
+    var p = document.createElement('p');
+    p.textContent = 'The report does not describe this stage for agentic capability. Absence here is absence of a statement, not evidence that the stage was skipped.';
+    detail.appendChild(p);
+    return;
+  }
+  var lead = document.createElement('p');
+  lead.textContent = e.v;
+  detail.appendChild(lead);
+  if (e.d) {
+    var ul = document.createElement('ul');
+    e.d.forEach(function(x) { var li = document.createElement('li'); li.textContent = x; ul.appendChild(li); });
+    detail.appendChild(ul);
+  }
+  var loc = document.createElement('div');
+  loc.className = 'locus';
+  loc.textContent = 'Locus: ' + e.l;
+  detail.appendChild(loc);
+}
+</script>
+</body>
+</html>

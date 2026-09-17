@@ -7,6 +7,8 @@ source_url: https://arxiv.org/abs/2304.12244
 created_at: "2026-04-23"
 ---
 
+> Superseded by the 2026-09 revision of read.md; kept for history.
+
 # Excerpt: Evol-Instruct — five In-Depth operators plus one In-Breadth operator, verbatim
 
 **Source library:** `wiki/raw-data/llm-training/papers/evol-instruct.md`

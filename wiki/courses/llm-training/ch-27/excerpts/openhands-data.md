@@ -7,6 +7,8 @@ source_url: https://arxiv.org/abs/2407.16741
 created_at: "2026-04-23"
 ---
 
+> Superseded by the 2026-09 revision of read.md; kept for history.
+
 # Excerpt: OpenHands — unified action abstractions across SWE / web / data-science
 
 **Source library:** `wiki/raw-data/llm-training/papers/openhands-data.md`

@@ -7,6 +7,8 @@ source_url: https://arxiv.org/abs/2505.24864
 created_at: "2026-04-23"
 ---
 
+> Superseded by the 2026-09 revision of read.md; kept for history.
+
 # Excerpt: ProRL — reference-policy resets as curriculum in prompt space
 
 **Source library:** `wiki/raw-data/llm-training/papers/prorl.md`

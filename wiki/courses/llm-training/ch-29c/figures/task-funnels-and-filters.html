@@ -1,0 +1,148 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Environment Task Funnels and Difficulty Filters</title>
+<style>
+:root{
+  --bg:#fbfaf7; --panel:#ffffff; --ink:#1d1d1b; --muted:#5d5d58; --line:#d9d6ce;
+  --a:#2f6db5; --b:#c2572b; --c:#3a8a5a; --d:#8a5cb8; --bar:#2f6db5; --bar2:#a9c4e6;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#171716; --panel:#212120; --ink:#ecebe6; --muted:#a9a8a1; --line:#3a3936;
+    --a:#7fb0ee; --b:#ee9467; --c:#7fcb9b; --d:#c3a0ea; --bar:#7fb0ee; --bar2:#34506f;
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#171716; --panel:#212120; --ink:#ecebe6; --muted:#a9a8a1; --line:#3a3936;
+  --a:#7fb0ee; --b:#ee9467; --c:#7fcb9b; --d:#c3a0ea; --bar:#7fb0ee; --bar2:#34506f;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font:14px/1.5 system-ui,-apple-system,Segoe UI,Roboto,sans-serif;padding-inline:16px;padding-block:20px}
+main{max-width:960px;margin:0 auto}
+h1{font-size:1.3rem;margin:0 0 4px}
+h2{font-size:1.05rem;margin:0 0 8px}
+p{margin:6px 0}
+.muted{color:var(--muted)}
+section{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:14px;margin:14px 0}
+label{display:inline-flex;gap:6px;align-items:center;margin:4px 12px 4px 0;flex-wrap:wrap}
+select,input[type=range]{max-width:100%}
+.row{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+.stage{margin:8px 0}
+.stage .name{font-size:.9rem}
+.track{background:var(--bar2);height:18px;border-radius:3px;position:relative;overflow:hidden}
+.fill{background:var(--bar);height:100%}
+.nums{font-size:.82rem;color:var(--muted)}
+.chartwrap{overflow-x:auto}
+svg text{fill:var(--ink);font-size:12px}
+table{border-collapse:collapse;width:100%;font-size:.88rem}
+td,th{border-bottom:1px solid var(--line);padding:4px 6px;text-align:left}
+.sw{display:inline-block;width:10px;height:10px;border-radius:2px;margin-right:6px;vertical-align:middle}
+code{font-size:.85em}
+</style>
+</head>
+<body>
+<main>
+<h1>Environment task funnels and difficulty filters</h1>
+<p class="muted">Companion to ch-29c read.md §3 and §5. Panel A shows how many candidates survive each construction stage in five published pipelines. Panel B shows the probability that a task survives a rollout-based difficulty filter, as a function of the per-attempt solve rate p of the filtering model.</p>
+
+<section id="funnel">
+<h2>A. Construction funnels (numbers as printed in each source)</h2>
+<div class="row"><label>Pipeline <select id="pipe"></select></label></div>
+<div id="stages"></div>
+<p class="nums" id="funnelsrc"></p>
+</section>
+
+<section id="filters">
+<h2>B. Survival probability under rollout filters</h2>
+<p class="muted">Assumes each attempt on a task succeeds independently with probability p. This independence assumption is a simplification made by this figure; attempts from one model on one task are correlated in practice.</p>
+<div class="row">
+  <label>p (per-attempt solve rate) <input id="p" type="range" min="0" max="1" step="0.01" value="0.10"><span id="pv"></span></label>
+  <label>k for "at least one success in k" <input id="k" type="range" min="1" max="200" step="1" value="100"><span id="kv"></span></label>
+  <label>G for "neither all fail nor all succeed" <input id="g" type="range" min="2" max="32" step="1" value="8"><span id="gv"></span></label>
+</div>
+<div class="chartwrap"><svg id="chart" viewBox="0 0 640 300" style="width:100%;max-width:640px;height:auto" role="img" aria-label="Survival probability curves"></svg></div>
+<table>
+<thead><tr><th>Rule</th><th>Formula</th><th>Keep probability at p</th><th>Source using this rule</th></tr></thead>
+<tbody id="tbl"></tbody>
+</table>
+</section>
+<p class="nums">Sources: SWE-Gym arXiv:2412.21139v2 §3.1; SWE-rebench arXiv:2505.20411v2 §2.1, §2.4; TOUCAN arXiv:2510.01179v1 §3.1; QUEST arXiv:2605.24218v1 App. A.1 Table 4; Agent-World arXiv:2604.18292v1 §3.1.1; DeepSeek-V3.2 arXiv:2512.02556v1 §3.2.3; GLM-5 arXiv:2602.15763v2 §4.2.3; Tongyi DeepResearch arXiv:2510.24701v3 §3.4.3.</p>
+</main>
+<script>
+(function(){
+  var PIPES = {
+    "SWE-Gym (human-configured environments)": {
+      src: "SWE-Gym v2 §3.1: 64,689 raw instances from 358 repositories; about 200 human annotation hours and 10,000 CPU core hours; 2,438 validated instances from 11 repositories.",
+      stages: [["Raw issue-PR instances (358 repositories)", 64689], ["Validated executable instances (11 repositories)", 2438]]
+    },
+    "SWE-rebench (automated installation and validation)": {
+      src: "SWE-rebench §2.1, §2.4: about 450,000 issue-linked PRs; about 153,400 after task filters; 21,336 valid after installation and execution validation.",
+      stages: [["Issue-linked PR candidates", 450000], ["After task filters", 153400], ["Valid after install + fail-before/pass-after validation", 21336]]
+    },
+    "TOUCAN (real MCP servers)": {
+      src: "TOUCAN §3.1: about 2,800 crawled servers; 871 (30.6%) remote and credential-free; 495 after per-tool test questions.",
+      stages: [["Crawled MCP servers", 2800], ["Remote, no API keys", 871], ["Tools pass test questions", 495]]
+    },
+    "QUEST objective research tasks": {
+      src: "QUEST App. A.1 Table 4: 17,000 generated; 8,737 after rubric refinement; 6,230 after rubric-tree verification; 5,934 after removing erroneous evaluation scripts.",
+      stages: [["Generated objective tasks", 17000], ["After rubric refinement", 8737], ["After rubric-tree verification", 6230], ["After removing erroneous Python scripts", 5934]]
+    },
+    "QUEST open-ended research tasks": {
+      src: "QUEST App. A.1 Table 4: 3,000 generated; 2,856 valid format; 2,498 qualified; 2,227 after reference-report score filter.",
+      stages: [["Generated open-ended tasks", 3000], ["Valid format", 2856], ["Qualified", 2498], ["Reference report score kept", 2227]]
+    }
+  };
+  var sel = document.getElementById('pipe');
+  Object.keys(PIPES).forEach(function(k){ var o=document.createElement('option'); o.textContent=k; sel.appendChild(o); });
+  function fmt(n){ return n.toLocaleString('en-US'); }
+  function drawFunnel(){
+    var P = PIPES[sel.value], box = document.getElementById('stages'); box.innerHTML='';
+    var first = P.stages[0][1];
+    P.stages.forEach(function(s,i){
+      var d=document.createElement('div'); d.className='stage';
+      var prev = i? P.stages[i-1][1] : s[1];
+      var step = i? (100*s[1]/prev).toFixed(1)+'% of previous stage; ' : '';
+      d.innerHTML = '<div class="name">'+s[0]+'</div><div class="track"><div class="fill" style="width:'+Math.max(0.4,100*s[1]/first)+'%"></div></div>'+
+        '<div class="nums">'+fmt(s[1])+' &middot; '+step+(100*s[1]/first).toFixed(2)+'% of first stage</div>';
+      box.appendChild(d);
+    });
+    document.getElementById('funnelsrc').textContent = P.src + ' Percentages are derived by this figure from the printed counts.';
+  }
+  sel.addEventListener('change', drawFunnel); drawFunnel();
+
+  function comb(n,r){ var c=1; for(var i=1;i<=r;i++){ c=c*(n-r+i)/i; } return c; }
+  var RULES = [
+    {name:"At least 1 success in k", color:"--a", f:function(p,k,g){ return 1-Math.pow(1-p,k); }, formula:"1 − (1 − p)^k", src:"DeepSeek-V3.2 general-agent tasks: non-zero pass@100 (§3.2.3)"},
+    {name:"At least 2 successes in 5", color:"--b", f:function(p){ return 1-Math.pow(1-p,5)-5*p*Math.pow(1-p,4); }, formula:"1 − (1 − p)^5 − 5p(1 − p)^4", src:"Agent-World task filter: ≥ 2 of 5 ReAct runs (§3.1.1)"},
+    {name:"Neither all fail nor all succeed in G", color:"--c", f:function(p,k,g){ return 1-Math.pow(p,g)-Math.pow(1-p,g); }, formula:"1 − p^G − (1 − p)^G", src:"Tongyi DeepResearch RL set: drop always-fail and always-succeed problems (§3.4.3; G not printed)"},
+    {name:"Zero successes in 8 (tool-free model)", color:"--d", f:function(p){ return Math.pow(1-p,8); }, formula:"(1 − p)^8", src:"GLM-5 search tasks stage 1: remove if a tool-free model answers in ≥ 1 of 8 (§4.2.3)"}
+  ];
+  var W=640,H=300,L=46,R=12,T=12,B=40;
+  function x(p){ return L+(W-L-R)*p; } function y(v){ return T+(H-T-B)*(1-v); }
+  function css(v){ return getComputedStyle(document.documentElement).getPropertyValue(v).trim(); }
+  function drawChart(){
+    var p=+document.getElementById('p').value, k=+document.getElementById('k').value, g=+document.getElementById('g').value;
+    document.getElementById('pv').textContent=p.toFixed(2); document.getElementById('kv').textContent=k; document.getElementById('gv').textContent=g;
+    var s='';
+    for(var t=0;t<=10;t+=2){ var v=t/10; s+='<line x1="'+L+'" x2="'+(W-R)+'" y1="'+y(v)+'" y2="'+y(v)+'" stroke="'+css('--line')+'"/><text x="'+(L-6)+'" y="'+(y(v)+4)+'" text-anchor="end">'+v.toFixed(1)+'</text>'; s+='<text x="'+x(v)+'" y="'+(H-B+16)+'" text-anchor="middle">'+v.toFixed(1)+'</text>'; }
+    s+='<text x="'+((L+W-R)/2)+'" y="'+(H-6)+'" text-anchor="middle">per-attempt solve rate p</text>';
+    s+='<text x="12" y="'+((T+H-B)/2)+'" text-anchor="middle" transform="rotate(-90 12 '+((T+H-B)/2)+')">keep probability</text>';
+    RULES.forEach(function(r){
+      var d=''; for(var i=0;i<=200;i++){ var q=i/200; d+=(i?'L':'M')+x(q).toFixed(1)+' '+y(r.f(q,k,g)).toFixed(1); }
+      s+='<path d="'+d+'" fill="none" stroke="'+css(r.color)+'" stroke-width="2"/>';
+    });
+    s+='<line x1="'+x(p)+'" x2="'+x(p)+'" y1="'+T+'" y2="'+(H-B)+'" stroke="'+css('--muted')+'" stroke-dasharray="4 3"/>';
+    document.getElementById('chart').innerHTML=s;
+    var tb=''; RULES.forEach(function(r){ tb+='<tr><td><span class="sw" style="background:'+css(r.color)+'"></span>'+r.name+'</td><td><code>'+r.formula+'</code></td><td>'+r.f(p,k,g).toFixed(3)+'</td><td>'+r.src+'</td></tr>'; });
+    document.getElementById('tbl').innerHTML=tb;
+  }
+  ['p','k','g'].forEach(function(id){ document.getElementById(id).addEventListener('input', drawChart); });
+  drawChart();
+  if (window.matchMedia) { try { window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', drawChart); } catch(e){} }
+})();
+</script>
+</body>
+</html>

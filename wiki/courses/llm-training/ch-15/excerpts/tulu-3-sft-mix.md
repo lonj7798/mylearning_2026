@@ -7,6 +7,8 @@ source_url: https://arxiv.org/abs/2411.15124 ; https://huggingface.co/datasets/a
 created_at: "2026-04-23"
 ---
 
+> Superseded by the 2026-09 revision of read.md; kept for history.
+
 # Excerpt: Tülu 3 SFT Mix — skill-targeted annotation at 939K
 
 **Source library:** `wiki/raw-data/llm-training/papers/tulu-3-sft-mix.md`

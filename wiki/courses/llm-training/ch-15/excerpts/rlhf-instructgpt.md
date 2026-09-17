@@ -4,91 +4,48 @@ course: llm-training
 phase: read
 excerpt_of: wiki/raw-data/llm-training/papers/rlhf-instructgpt.md
 source_url: https://arxiv.org/abs/2203.02155
+primary_version: arXiv:2203.02155v1 (2022-03)
 created_at: "2026-04-23"
+revised_at: "2026-09-15 (rewritten from the primary text; the earlier version of this excerpt contained unsupported claims)"
 ---
 
-# Excerpt: InstructGPT — the original human-annotation recipe
+# Excerpt: Training language models to follow instructions with human feedback (InstructGPT), human-data sections
 
-**Source library:** `wiki/raw-data/llm-training/papers/rlhf-instructgpt.md`
-**Year / authors:** 2022 / Ouyang, Wu, Jiang, Christiano, Leike, Lowe et al. (OpenAI).
+Authors: Long Ouyang, Jeff Wu, Xu Jiang, Diogo Almeida, Carroll L. Wainwright, Pamela Mishkin, et al. (OpenAI). Source type: paper. Read in the v1 PDF text on 2026-09-15 for ch-15 §1, §2, §4, §7 and Recipe. Training hyperparameters for PPO are covered in ch-38, not here.
 
----
+## Prompt source and splits (§3.2, App. A)
+- Prompts were submitted to an earlier InstructGPT model on the API Playground; production API data was not used (§3.2).
+- Deduplication by long common prefix; at most 200 prompts per user ID; train, validation and test splits made by user ID; PII filtered in the training split (§3.2).
+- "Our dataset is over 96% English" (§3.3).
+- Table 6 (number of prompts):
 
-## Why this source anchors ch-15
+| Split | SFT labeler | SFT customer | RM labeler | RM customer | PPO customer |
+|---|---|---|---|---|---|
+| train | 11,295 | 1,430 | 6,623 | 26,584 | 31,144 |
+| valid | 1,550 | 103 | 3,488 | 14,399 | 16,185 |
 
-InstructGPT is not a rubric paper. It is a training paper. But every later annotation operation — [[hh-rlhf]]'s two-campaign collection, [[ultrafeedback-construction]]'s 17-model fleet, [[tulu-3-sft-mix]]'s 939K skill-targeted mix, [[prm800k]]'s step-level labels — descends from choices InstructGPT made about *how a human being contributes a signal*. The prompt taxonomy, the K=4-9 ranking protocol, the labeler guidelines, and the SFT-RM-PPO three-stage template are all in this paper. Ch-15 §3 (adjudication workflow), §4 (preference sampling), and §6 (operational reality) are all expansions of operational choices this paper froze.
+- Table 1 (use-case categories of the API prompt dataset): Generation 45.6%, Open QA 12.4%, Brainstorming 11.2%, Chat 8.4%, Rewrite 6.6%, Summarization 4.2%, Classification 3.5%, Other 3.5%, Closed QA 2.6%, Extract 1.9%.
+- §4.1: classification and QA are "about 18%" of use; open-ended generation and brainstorming "about 57%".
 
----
+## Labelers (§3.4, App. B.1)
+- "a team of about 40 contractors on Upwork and through ScaleAI" (§3.4).
+- Screening criteria (App. B.1): (1) agreement with researchers on sensitive speech flagging; (2) agreement with researcher rankings of model completions; (3) sensitive demonstration writing rated on a 1-7 Likert scale; (4) self-assessed ability to identify sensitive speech for different groups. "soft cutoffs at 75% agreement on sensitive speech flagging and comparisons, and a 6/7 demonstration score."
+- Onboarding, "detailed instructions for each task", and "answer labeler questions in a shared chat room" (§3.4).
+- Instructions "evolved over the course of the project" and were amended "when they were confusing or inconsistent" (App. B.2).
+- Priority order: during training data labeling, helpfulness to the user was the most important criterion; in final evaluations, truthfulness and harmlessness were prioritized (§3.4, App. B.2). App. B.2 notes the risk that models "could over-generalize and refuse innocuous instructions".
 
-## The three-stage data flow, annotation-side only
+## Agreement (§3.4, §4.1, §5.2, §5.3)
+- "training labelers agree with each-other 72.6 ± 1.5% of the time, while for held-out labelers this number is 77.3 ± 1.3%. For comparison, in the summarization work of Stiennon et al. (2020) researcher-researcher agreement was 73 ± 4%." (§3.4)
+- Held-out labelers "do not undergo a screening test" (§3.4).
+- RM generalization across labeler groups: 5 labeler groups, 5-fold cross-validation, 3 seeds: "accuracy of 69.6 ± 0.9% on predicting the preferences of labelers in the held-out group, a small decrease from their 72.4 ± 0.4% accuracy on ... their training set" (§4.1).
+- §5.2: labelers are "mostly English-speaking people living in the United States or Southeast Asia"; "we found the inter-labeler agreement to be about 73%".
+- §5.3: "most comparisons are only labeled by 1 contractor for cost reasons"; "In cases of disagreement, aligning to the average labeler preference may not be desirable."
 
-The body of the paper gives the training-side story. Strip it to just the annotation surface and you get:
+## Comparison collection and RM loss (§3.5)
+- Labelers rank K = 4 to K = 9 responses per prompt, giving C(K,2) comparisons.
+- "if we simply shuffle the comparisons into one dataset, a single pass over the dataset caused the reward model to overfit"; all C(K,2) comparisons from a prompt are trained as a single batch element.
+- Eq. 1: loss(θ) = −(1/C(K,2)) E_(x,y_w,y_l)~D [log σ(r_θ(x,y_w) − r_θ(x,y_l))].
+- Only 6B RMs were used (§3.5).
 
-```
-# rlhf-instructgpt.md, derived from §3 and Figure 2
-Stage 1 — SFT demonstrations
-  - 13K prompts sampled from the OpenAI API + labeler-generated seeds.
-  - Labelers write the *desired output* directly. No model-in-the-loop.
-  - Rubric: "helpful, honest, harmless"; detailed labeler guidelines.
-  - One label per item.
-
-Stage 2 — Preference rankings
-  - 33K prompts; for each, the SFT model samples K ∈ {4..9} completions.
-  - A labeler ranks the K from best to worst (full order, not pairwise).
-  - That generates C(K,2) pairs per prompt: K=4 → 6 pairs, K=9 → 36.
-  - Same rubric; inter-labeler consistency monitored via held-out overlap.
-
-Stage 3 — (no human annotation; PPO consumes stage-2 RM)
-```
-
-Notice: **Stage 2's K=4-9 ranking protocol is the highest-bandwidth way to extract preference signal per unit of annotator attention.** One annotator-hour that ranks 30 prompts at K=5 produces 300 pairwise preference judgements. The same hour of pairwise annotation produces ~30-60 pairs depending on response length. The K-way ranking wins 5–10× on throughput because the cognitive cost of reading the prompt is amortized across all K responses. This is the reason every follow-up project — [[ultrafeedback-construction]]'s "4 responses per prompt," [[tulu-3-sft-mix]]'s skill submixes — also picks K between 4 and 9.
-
-The cost of the K-way ranking is that the pairs within a prompt are *not independent*. A pair `(rank 1 vs rank 2)` is a close call; `(rank 1 vs rank 5)` is not. The paper handles this explicitly:
-
-> Train all pairs from the same prompt in the same minibatch (otherwise overfits quickly).
-
-This is the 2022 discovery that ch-15 §4's close-pair-mining section is a 2024-era refinement of: the information in K-way ranking is uneven across pairs, and the training pipeline must respect that.
-
----
-
-## The labeler guidelines are the rubric
-
-Section 3.4 of the paper ("Data collection") is short but load-bearing:
-
-> We collaborated closely with labelers over the course of the project. We had an onboarding process to train labelers on the project, wrote detailed instructions for each task, and answered labeler questions in a shared chat room.
-
-Read that paragraph with ch-15 §1 and §2 in mind. "Detailed instructions" is the rubric document. "Onboarding process" is the calibration session that establishes κ ≥ 0.6. "Shared chat room" is the edge-case-resolution venue that feeds new exemplars into the rubric. "Over the course of the project" is the rubric-drift problem — the rubric is not static, and the labelers who grew into version N-1 need to be re-oriented to version N.
-
-The paper reports labeler-labeler agreement of **72.6% ± 1.5%** on a held-out comparison set. That is κ ≈ 0.45 under balanced marginals — Landis-Koch "moderate." The InstructGPT result is that a 72.6% inter-rater agreement was sufficient to lift a 1.3B model above 175B GPT-3 on instruction-following preference, which is the empirical data point that says **you do not need κ > 0.8 to do useful RLHF — but you do need to measure and report κ so that downstream consumers know the noise floor**.
-
----
-
-## The PPO-ptx aside is about an annotation-era alignment tax
-
-Equation 2, the PPO-ptx objective, includes a `γ · L_ptx` pretraining-mix term. The paper's justification is that PPO against a preference RM *regresses on public NLP benchmarks* unless you mix pretraining gradient back in. Read through the ch-15 lens: this is a consequence of the annotation distribution. Labelers ranked completions on a skewed prompt distribution — customer queries from the OpenAI API, heavily chat-shaped. Optimizing against that narrow distribution causes the model to forget the broad pretraining distribution. The fix is not to fix the rubric; it is to explicitly counter the narrowness with a pretraining blend.
-
-The modern successor is broader annotation distributions ([[tulu-3-sft-mix]] explicitly balances chat / math / code / safety / multilingual) which eliminates the need for γ because the annotation distribution is already close to the pretraining distribution in capability coverage. The 2024–2025 moves from PPO-ptx → RLVR → DPO+RLVR are all responses to the same underlying observation: get the annotation distribution right, and the alignment tax shrinks.
-
----
-
-## The numbers worth carrying
-
-| Quantity | Value | Why ch-15 cares |
-|---|---|---|
-| SFT prompts | 13K | Minimum viable SFT set for a small lab; 50-100× below [[tulu-3-sft-mix]] |
-| RM prompts | 33K | K=4-9 ranking → ~200K pairs; the canonical annotation batch size |
-| RM size | 6B | Small — the RM is absorbing annotation noise, not approximating truth |
-| β (KL coeff) | 0.02 | How much the RM signal matters vs staying close to SFT |
-| Labeler agreement | 72.6% | The 2022 baseline; every later project reports against it |
-| Clip ε, PPO | 0.2 | Stability margin; unchanged in 2025 |
-
----
-
-## Connections
-
-- [[excerpts/hh-rlhf]] — the public-release generalization; two-axis (helpful × harmless) extension of InstructGPT's single-axis rubric.
-- [[excerpts/ultrafeedback-construction]] — the synthetic-judge replacement for the K=4-9 ranking protocol.
-- [[excerpts/tulu-3-sft-mix]] — the 2024 skill-targeted expansion; 939K vs InstructGPT's 13K+33K.
-- [[excerpts/prm800k]] — step-level granularity pushed to the limit; the other end of the annotation-scope axis.
-- [[excerpts/judge-llm-bias]] — the 80% judge-human agreement ceiling that InstructGPT's 72.6% labeler-labeler agreement sets as the human reference point.
-- [[ch-15]] — this excerpt is the backbone of §1 (rubric-as-product) and §3 (adjudication tiers); Stage-2's K-way ranking is the ancestor of §4's close-pair mining.
+## Coverage result (§4.1)
+- 175B InstructGPT outputs were preferred over the FLAN-finetuned 175B model 78 ± 4% of the time and over the T0-finetuned model 79 ± 4%. The authors attribute this to public NLP datasets covering tasks that are easy to evaluate automatically and having low input diversity.

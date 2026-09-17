@@ -2,78 +2,43 @@
 chapter: ch-40
 course: llm-training
 phase: read
-excerpt_of: wiki/raw-data/llm-training/papers/rloo.md
+excerpt_of: arXiv:2402.14740v2 (Back to Basics: Revisiting REINFORCE-Style Optimization for Learning from Human Feedback in LLMs); library card [[rloo]]
 source_url: https://arxiv.org/abs/2402.14740
 created_at: "2026-04-23"
+revised: "2026-09-15 (generality revision; rewritten from the primary source because the library card has no Verification section)"
 ---
 
-# Excerpt: RLOO — the paper that killed PPO's critic
+# Excerpt: RLOO — the leave-one-out baseline and what the paper actually measured
 
-**Source library:** `wiki/raw-data/llm-training/papers/rloo.md`
-**Artifact:** Ahmadian et al. 2024, "Back to Basics: Revisiting REINFORCE-Style Optimization for Learning from Human Feedback in LLMs."
+Used by [[read]] §1, §2, and the Recipe. Authors: Arash Ahmadian, Chris Cremer, Matthias Gallé, Marzieh Fadaee, Julia Kreutzer, Olivier Pietquin, Ahmet Üstün, Sara Hooker (Cohere For AI). Text read from arXiv v2 (26 Feb 2024) on 2026-09-15.
 
----
+## Estimator (§2.3)
+```
+(1/k) Σ_i [ R(y^(i), x) − (1/(k−1)) Σ_{j≠i} R(y^(j), x) ] ∇ log π(y^(i) | x),   y^(1..k) i.i.d. ~ π_θ(·|x)
+```
+The paper attributes the estimator to Kool et al. 2019 and describes the baseline as "akin to a parameter-free value-function, but estimated at each training step". KL control is applied inside the reward: `R(x, y) = r_φ(x, y) − β log(π_θ/π_ref)` (Eq. 3), following InstructGPT.
 
-## Why this source anchors ch-40
+## Results (Table 1: simulated win-rate against reference completions)
+| Method | TL;DR | HH (Pythia) | HH (Llama) |
+|---|---|---|---|
+| RLOO (k=4) | 77.9 | 43.7 | 64.1 |
+| RAFT (k=4) | 73.2 | 42.1 | 63.3 |
+| RLOO (k=2) | 74.2 | 47.6 | 62.2 |
+| RAFT (k=2) | 72.1 | 37.7 | 58.4 |
+| REINFORCE with baseline | 70.7 | 37.9 | 55.3 |
+| Vanilla PG | 70.4 | 36.4 | 52.3 |
+| PPO | 67.6 | 29.2 | 32.0 |
+| DPO | 66.6 | 39.0 | 61.9 |
 
-RLOO is the load-bearing paper for the entire §2–§8 narrative. It is the one that *stated the problem* — PPO's components assume stochastic dynamics and multi-step credit assignment that do not hold in LLM RLHF — and proposed the minimum-viable fix: k-sample REINFORCE with a leave-one-out baseline. Every subsequent paper in the chapter (REINFORCE++, GRPO, Dr.GRPO) either tweaks the baseline (global / group / no-std) or keeps everything else RLOO-identical.
+RLOO k=4 exceeds PPO by 10.3, 14.5, and 32.1 points on the three settings (§5.2). Averaged over the three pairings, RLOO wins 61.3 (k=2) and 61.9 (k=4) against RAFT's 56.1 and 59.5.
 
----
+## Settings (App. "Preference Training")
+Pythia-6.9B on TL;DR and Anthropic-HH; Llama-7B on Anthropic-HH; context length 512 tokens for SFT and RM training. TL;DR: 600 steps, rollout batch 512, step batch 256, β = 0.03. HH (Pythia): 393 steps, same batches, β = 0.10. Llama: rollout and step batch 2048 over 2 epochs. Constant LR 1e-6 with 3% linear warm-up, chosen from a sweep of {1e-6, 1e-5, 2e-5}; two gradient steps per batch.
 
-## The derivation ch-40 §2 quotes line-by-line
+## The clipping observation (§3.2) and its scope
+"We empirically found in our RLHF setting that the loss is actually clipped on average < 5% of the time per batch, throughout training across all dataset and base-model pairings", and removing clipping "gives a slight boost in performance". This holds for two gradient steps per rollout batch on short generations; recipes that take 16 updates per rollout batch ([[dapo]], [[deepseek-r1-recipe]]) or four ([[gspo]]) are further off-policy within a batch, and there the clip bound is active.
 
-Source lines 34–37 give the estimator; ch-40 reconstructs the derivation:
-
-1. Start from REINFORCE with a constant baseline: `∇J = E[(R − b) · ∇log π]`. Any baseline `b` independent of `y` leaves the gradient unbiased — standard policy-gradient result.
-2. Make `b` depend on the *other* samples to share information: `b_i = (1/(k−1)) Σ_{j≠i} R_j`. Since `b_i` is a deterministic function of `{R_j : j ≠ i}`, and those depend on `{y_j : j ≠ i}` which are independent of `y_i` given `x`, `b_i ⊥ y_i | x` — still unbiased.
-3. Variance reduction: `b_i` is the minimum-variance unbiased estimator of `E[R]` using the other k-1 samples. Tighter than any moving-average baseline.
-
----
-
-## The k=2 limit ch-40 highlights
-
-With k=2, `b_1 = R_2` and `b_2 = R_1`. The advantage for sample 1 is `R_1 − R_2`; for sample 2 is `R_2 − R_1`. They are mirror images. This is why RLOO at k=2 is "online DPO without the log-sigmoid" — the same pairwise preference signal, taken as a raw policy-gradient step rather than binarized.
-
----
-
-## What ch-40 §2's table came from
-
-Source lines 45–51 enumerate what RLOO removes relative to PPO. Ch-40 reproduces the table verbatim because it is the single cleanest statement in the literature of "what was PPO overhead for LLMs." Value network gone, GAE gone, clip gone, epochs=1. Only the leave-one-out baseline and the per-token KL-shaped reward remain.
-
----
-
-## Attested hyperparameters ch-40 uses
-
-Source lines 54–62:
-
-| Knob | Value (attested) |
-|------|------------------|
-| k (rollouts per prompt) | 2 or 4 (main: k=4) |
-| KL coef β | 0.05 (tuned on Pareto curve) |
-| Learning rate | 1e-6 to 3e-6 (AdamW) |
-| Batch size (prompts) | 32–64 |
-| Sampling T | 1.0 |
-| Max new tokens | 53 (TL;DR), 256 (HH) |
-
-Ch-40 reports these as RLOO's defaults. Note the batch size is *much smaller* than GRPO's 1024 prompts — RLOO is a small-batch method; GRPO scaled it up.
-
----
-
-## Empirical dominance over PPO (§1 of ch-40 references this)
-
-Source lines 20–25 and Figure 3: RLOO dominates PPO's Pareto frontier at every KL budget on TL;DR and HH-RLHF. The win rate gap is 5–20% at matched KL. This is the evidence ch-40 §1 uses to claim "PPO's overhead is a tax, not a feature, for LLM RLHF."
-
----
-
-## The relationship-to-GRPO paragraph
-
-Source lines 64–65 explicitly states: "GRPO's advantage `(r_i − mean(r))/std(r)` over a group of G is equivalent (up to scaling) to RLOO's leave-one-out when G is large." Ch-40 §6 turns this into the equivalence-in-the-limit table: RLOO (large k) ≈ GRPO without /std without clip ≈ Dr.GRPO. This paragraph is the theoretical bridge between the two lineages.
-
----
-
-## Connections to the rest of the track
-
-- [[grpo]], [[dr-grpo]] — the successors that inherited the leave-one-out idea.
-- [[reinforce-plus-plus]] — same family, global normalization, k=1 variant.
-- [[ppo]] — the baseline this paper systematically strips.
-- [[on-off-policy-rlhf]] — why the field moved back to online methods, which made RLOO possible.
+## Corrections to the library card made here
+- The card's hyperparameter table (β 0.05, LR 1e-6–3e-6, batch 32–64 prompts, temperature 1.0, max new tokens 53/256) is not what the appendix prints; the values above are.
+- "Removes the value network → ~50% memory footprint" and "beats PPO by 5–20% win rate" are not stated in this form; the measured win-rate gaps are 10.3–32.1 points and no memory measurement is reported.
+- The card's "equivalent (up to scaling) when G is large" phrasing understates an exact relation: the leave-one-out and mean-subtracted advantages differ by the factor `k/(k−1)` at every `k` ([[dr-grpo]] App. A).

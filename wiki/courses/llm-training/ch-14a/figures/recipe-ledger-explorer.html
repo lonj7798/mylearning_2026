@@ -1,0 +1,269 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Recipe Ledger Explorer</title>
+<style>
+  :root {
+    color-scheme: light;
+    --surface-0: #f6f5f2; --surface-1: #fcfcfb; --surface-2: #efede8;
+    --border: #d9d6cf; --grid: #e4e2dd;
+    --text-primary: #111110; --text-secondary: #4f4e4a; --text-muted: #6f6d67;
+    --s1: #2a6fc9; --s2: #c05a1c; --s3: #2d8a4e; --s4: #8a3fb0; --s5: #9a6a00;
+    --s6: #c0392b; --s7: #16808a; --s8: #6b6b66; --s9: #c2336f;
+    --focus: #2a6fc9;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      color-scheme: dark;
+      --surface-0: #131312; --surface-1: #1b1b1a; --surface-2: #242422;
+      --border: #3a3a37; --grid: #2e2e2c;
+      --text-primary: #f4f3ef; --text-secondary: #c4c3ba; --text-muted: #9a998f;
+      --s1: #5b9bec; --s2: #e08043; --s3: #5cbf7d; --s4: #b77ddb; --s5: #d9a93a;
+      --s6: #e8675a; --s7: #45b7c1; --s8: #a3a39b; --s9: #e7699e;
+      --focus: #5b9bec;
+    }
+  }
+  :root[data-theme="dark"] {
+    color-scheme: dark;
+    --surface-0: #131312; --surface-1: #1b1b1a; --surface-2: #242422;
+    --border: #3a3a37; --grid: #2e2e2c;
+    --text-primary: #f4f3ef; --text-secondary: #c4c3ba; --text-muted: #9a998f;
+    --s1: #5b9bec; --s2: #e08043; --s3: #5cbf7d; --s4: #b77ddb; --s5: #d9a93a;
+    --s6: #e8675a; --s7: #45b7c1; --s8: #a3a39b; --s9: #e7699e;
+    --focus: #5b9bec;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--surface-0); color: var(--text-primary);
+         font: 14px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; }
+  main { max-width: 980px; margin: 0 auto; padding: 20px 16px 40px; }
+  h1 { font-size: 20px; margin: 0 0 4px; }
+  h2 { font-size: 16px; margin: 0 0 8px; }
+  p { margin: 0 0 8px; color: var(--text-secondary); }
+  .card { background: var(--surface-1); border: 1px solid var(--border); border-radius: 8px;
+          padding: 14px; margin-top: 16px; }
+  .controls { display: flex; flex-wrap: wrap; gap: 8px 20px; margin: 6px 0 10px; }
+  .controls fieldset { border: 0; padding: 0; margin: 0; display: flex; flex-wrap: wrap; gap: 4px 12px; align-items: center; }
+  .controls legend { float: left; margin-right: 8px; color: var(--text-muted); font-size: 12px; }
+  label { cursor: pointer; }
+  input:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+  .chart { width: 100%; overflow-x: auto; }
+  svg { display: block; width: 100%; height: auto; min-width: 640px; }
+  .axis text, .tick { fill: var(--text-muted); font-size: 11px; }
+  .gridline { stroke: var(--grid); stroke-width: 1; }
+  .axisline { stroke: var(--border); stroke-width: 1; }
+  .legend { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 4px 12px; margin-top: 8px; }
+  .legend label { display: flex; align-items: center; gap: 6px; font-size: 13px; color: var(--text-secondary); }
+  .sw { width: 22px; height: 0; border-top: 3px solid; flex: none; }
+  .sw.dash { border-top-style: dashed; }
+  .caption { font-size: 12px; color: var(--text-muted); margin-top: 10px; }
+  .readout { font-size: 12px; color: var(--text-secondary); min-height: 18px; }
+  .barlabel { fill: var(--text-secondary); font-size: 12px; }
+  .barval { fill: var(--text-primary); font-size: 12px; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Recipe ledger explorer</h1>
+  <p>Learning-rate schedules and token budgets of the open pretraining runs compared in ch-14a, drawn from the verified or derived ledger rows. Dashed lines are derived under stated assumptions or come from a conflicting artifact.</p>
+
+  <section class="card" aria-labelledby="lr-h">
+    <h2 id="lr-h">1. Learning-rate schedules as run</h2>
+    <div class="controls">
+      <fieldset><legend>x-axis</legend>
+        <label><input type="radio" name="xmode" value="tokens" checked> tokens seen (T)</label>
+        <label><input type="radio" name="xmode" value="frac"> fraction of the run</label>
+      </fieldset>
+      <fieldset><legend>y-axis</legend>
+        <label><input type="radio" name="ymode" value="rel" checked> fraction of peak LR</label>
+        <label><input type="radio" name="ymode" value="abs"> absolute LR</label>
+      </fieldset>
+    </div>
+    <div class="chart"><svg id="lr" viewBox="0 0 900 380" role="img" aria-label="Learning-rate schedules of open pretraining runs"></svg></div>
+    <div class="readout" id="lr-read" aria-live="polite"></div>
+    <div class="legend" id="lr-legend"></div>
+    <p class="caption">Warmups (40 to 8,000 steps) are not drawn. Llama 3.1 405B: 8e-5 peak, cosine to 8e-7 over 1,200,000 steps, batch 4M → 8M → 16M tokens, final 40M tokens linear to 0 (arXiv:2407.21783 §3.4.1, §3.4.3); the token-to-step mapping assumes the 15.6T tokens all ran under that batch schedule, which puts the stop at 96% of the step horizon. DeepSeek-V3: arXiv:2412.19437 §4.2. OLMo 2: Table 3 and the official-1124 YAMLs (the 13B YAML variant shows the stage-1 3e-4 peak followed by the stage-2 9e-5 start). Olmo 3 7B: OLMo-core pretrain-1 and pretrain-2 scripts at 66f768b (ends at 3.93e-5; Table 35 prints 3.0e-5). Olmo 3 32B: Fig. 4 description (cosine over 5.93T truncated at 5.5T), which gives 6.70e-5 at the stop; the caption prints 6.210e-5. SmolLM2 1.7B: arXiv:2502.02737 §4.1, §4.5. SmolLM3 3B: nanotron configs at a48fa61 and the stage-1 values before commit 4bc9468. nanochat: base_train.py defaults at f527f76 (fraction axis only).</p>
+  </section>
+
+  <section class="card" aria-labelledby="tpp-h">
+    <h2 id="tpp-h">2. Tokens per parameter, with the parameter convention named</h2>
+    <div class="controls">
+      <fieldset><legend>DeepSeek-V3 N</legend>
+        <label><input type="radio" name="dsn" value="total" checked> total (671B)</label>
+        <label><input type="radio" name="dsn" value="active"> activated per token (37B)</label>
+      </fieldset>
+    </div>
+    <div class="chart"><svg id="tpp" viewBox="0 0 900 430" role="img" aria-label="Tokens per parameter by checkpoint on a log scale"></svg></div>
+    <p class="caption">Ratios are derived: D / N. Llama 3.1 405B 15.6T / 405B; Llama 3.1 8B uses the model card's shared "15T+" (lower bound); DeepSeek-V3 14.8T; OLMo 2 7B one path to a soup ingredient 3.90T + 50B with N from the release name; Olmo 3 7B 5.93T + 100B + 50B; Gemma 3 D includes image tokens and N is embedding + non-embedding without the vision encoder (Table 1); MiniCPM-2.4B N is non-embedding (Table 2); SmolLM3 11.2T (blog); SmolLM2 1.7B 11T; nanochat d24 is the speedrun's target ratio to "scaling params" (transformer matrices + lm_head). No ratio here was chosen by a published ablation.</p>
+  </section>
+</main>
+<script>
+(function () {
+  "use strict";
+  var css = function (v) { return getComputedStyle(document.documentElement).getPropertyValue(v).trim(); };
+  var cosw = function (peak, af, w, T, s) {
+    var emin = peak * af;
+    if (s < w) return peak;               // warmup not drawn
+    if (s >= T) return emin;
+    return emin + (peak - emin) * (1 + Math.cos(Math.PI * (s - w) / (T - w))) / 2;
+  };
+  var lin = function (a, b, t0, t1) { return function (t) { return a + (b - a) * (t - t0) / (t1 - t0); }; };
+  var cst = function (v) { return function () { return v; }; };
+
+  // Llama 3.1 405B: tokens (T) -> step, derived
+  var llamaStep = function (t) {
+    if (t <= 0.000252) return t / 4e-6;
+    if (t <= 2.87) return 63 + (t - 0.000252) / 8e-6;
+    return 63 + 358718.5 + (t - 2.87) / 16e-6;
+  };
+  var llamaLR = function (t) { return cosw(8e-5, 0.01, 8000, 1200000, llamaStep(t)); };
+  var olmo3s7 = function (t) {
+    var s = t / 4.194304e-6, peak = 3e-4, emin = 3e-5;
+    if (s <= 597046) return cosw(peak, 0.1, 2000, 1192093, s);
+    var w = 597046, T = 1668931, c = s - w, tt = T - w;
+    return emin + (peak - emin) * (1 + Math.cos(Math.PI * (c + tt) / (2 * tt))) / 2;
+  };
+
+  var S = [
+    { id: "llama", name: "Llama 3.1 405B (derived step mapping)", col: "--s1", dash: true, peak: 8e-5,
+      seg: [[0, 15.56, llamaLR], [15.56, 15.6, function (t) { return lin(llamaLR(15.56), 0, 15.56, 15.6)(t); }]] },
+    { id: "dsv3", name: "DeepSeek-V3 (671B / 37B act.)", col: "--s2", peak: 2.2e-4,
+      seg: [[0, 10, cst(2.2e-4)], [10, 14.3, function (t) { return 2.2e-5 + 1.98e-4 * (1 + Math.cos(Math.PI * (t - 10) / 4.3)) / 2; }],
+            [14.3, 14.633, cst(2.2e-5)], [14.633, 14.8, cst(7.3e-6)]] },
+    { id: "olmo2-7", name: "OLMo 2 7B (YAML stage 1 + seed-42 stage 2)", col: "--s3", peak: 3e-4,
+      seg: [[0, 3.895, function (t) { return cosw(3e-4, 0.1, 0.0083886, 5, t); }], [3.895, 3.945, lin(6.1499e-5, 0, 3.895, 3.945)]] },
+    { id: "olmo2-13", name: "OLMo 2 13B (Table 3 peak 9e-4)", col: "--s4", peak: 9e-4,
+      seg: [[0, 5.0001, function (t) { return cosw(9e-4, 0.1, 0.0083886, 5, t); }], [5.0001, 5.1001, lin(9e-5, 0, 5.0001, 5.1001)]] },
+    { id: "olmo2-13y", name: "OLMo 2 13B (released YAMLs: 3e-4, then 9e-5)", col: "--s4", dash: true, peak: 3e-4,
+      seg: [[0, 5.0001, function (t) { return cosw(3e-4, 0.1, 0.0083886, 5, t); }], [5.0001, 5.1001, lin(9e-5, 0, 5.0001, 5.1001)]] },
+    { id: "olmo3-7", name: "Olmo 3 7B (scripts, derived; ends 3.93e-5)", col: "--s5", dash: true, peak: 3e-4,
+      seg: [[0, 5.92997, olmo3s7]] },
+    { id: "olmo3-32", name: "Olmo 3 32B (Fig. 4 description, derived)", col: "--s6", dash: true, peak: 6e-4,
+      seg: [[0, 5.5, function (t) { return cosw(6e-4, 0.1, 2000, 706912, t / 8.388608e-6); }]] },
+    { id: "smol2", name: "SmolLM2 1.7B (WSD, 10% decay)", col: "--s7", peak: 5e-4,
+      seg: [[0, 10, cst(5e-4)], [10, 11, lin(5e-4, 0, 10, 11)]] },
+    { id: "smol3", name: "SmolLM3 3B (configs at a48fa61)", col: "--s9", peak: 2e-4,
+      seg: [[0, 9.9043, cst(2e-4)], [9.9043, 11.1359, lin(2e-4, 0, 9.9043, 11.1359)]] },
+    { id: "smol3-pre", name: "SmolLM3 3B (stage-1 config before 4bc9468)", col: "--s9", dash: true, peak: 2e-4,
+      seg: [[0, 6.1342, cst(2e-4)], [6.1342, 7.5497, lin(2e-4, 0, 6.1342, 7.5497)]] },
+    { id: "nano", name: "nanochat default (fraction axis only)", col: "--s8", peak: 1, fracOnly: true,
+      seg: [[0, 0.35, cst(1)], [0.35, 1, function (x) { var p = (1 - x) / 0.65; return p + (1 - p) * 0.05; }]] }
+  ];
+  var on = {}; S.forEach(function (s) { on[s.id] = !(s.id === "smol3-pre" || s.id === "olmo2-13y"); });
+
+  var NS = "http://www.w3.org/2000/svg";
+  var el = function (name, attrs, parent) {
+    var e = document.createElementNS(NS, name);
+    for (var k in attrs) e.setAttribute(k, attrs[k]);
+    if (parent) parent.appendChild(e);
+    return e;
+  };
+  var mode = function (n) { return document.querySelector('input[name="' + n + '"]:checked').value; };
+
+  function sample(s) {
+    var pts = [];
+    s.seg.forEach(function (g) {
+      var n = Math.max(2, Math.round(160 * (g[1] - g[0]) / (s.seg[s.seg.length - 1][1] || 1)) + 2);
+      for (var i = 0; i <= n; i++) { var t = g[0] + (g[1] - g[0]) * i / n; pts.push([t, g[2](t)]); }
+    });
+    return pts;
+  }
+
+  function drawLR() {
+    var svg = document.getElementById("lr"); svg.innerHTML = "";
+    var xm = mode("xmode"), ym = mode("ymode");
+    var W = 900, H = 380, L = 64, R = 16, T = 12, B = 40;
+    var vis = S.filter(function (s) { return on[s.id] && !(s.fracOnly && (xm === "tokens" || ym === "abs")); });
+    var xmax = xm === "tokens" ? 16 : 1;
+    var ymax = ym === "rel" ? 1 : 1e-3;
+    var X = function (v) { return L + (W - L - R) * v / xmax; };
+    var Y = function (v) { return T + (H - T - B) * (1 - v / ymax); };
+    var g = el("g", { "class": "axis" }, svg), i, v;
+    for (i = 0; i <= 5; i++) {
+      v = ymax * i / 5;
+      el("line", { x1: L, x2: W - R, y1: Y(v), y2: Y(v), "class": "gridline" }, g);
+      var lab = ym === "rel" ? (v * 100).toFixed(0) + "%" : (v === 0 ? "0" : v.toExponential(1));
+      el("text", { x: L - 6, y: Y(v) + 4, "text-anchor": "end" }, g).textContent = lab;
+    }
+    var nt = xm === "tokens" ? 8 : 5;
+    for (i = 0; i <= nt; i++) {
+      v = xmax * i / nt;
+      el("line", { x1: X(v), x2: X(v), y1: T, y2: H - B, "class": "gridline" }, g);
+      el("text", { x: X(v), y: H - B + 16, "text-anchor": "middle" }, g).textContent = xm === "tokens" ? v + "T" : (v * 100).toFixed(0) + "%";
+    }
+    el("line", { x1: L, x2: W - R, y1: H - B, y2: H - B, "class": "axisline" }, g);
+    el("text", { x: (L + W - R) / 2, y: H - 6, "text-anchor": "middle" }, g).textContent = xm === "tokens" ? "tokens seen (trillions)" : "fraction of the run's tokens";
+    vis.forEach(function (s) {
+      var pts = sample(s), end = s.seg[s.seg.length - 1][1];
+      var d = pts.map(function (p, k) {
+        var xv = s.fracOnly ? p[0] : (xm === "tokens" ? p[0] : p[0] / end);
+        var yv = s.fracOnly ? p[1] : (ym === "rel" ? p[1] / s.peak : p[1]);
+        return (k ? "L" : "M") + X(xv).toFixed(1) + " " + Y(Math.min(yv, ymax)).toFixed(1);
+      }).join(" ");
+      el("path", { d: d, fill: "none", stroke: css(s.col), "stroke-width": 2, "stroke-dasharray": s.dash ? "6 4" : "none" }, svg);
+    });
+    var hidden = S.filter(function (s) { return on[s.id] && s.fracOnly && (xm === "tokens" || ym === "abs"); });
+    document.getElementById("lr-read").textContent = hidden.length ? "nanochat is hidden: its token budget depends on model depth and its LR differs by parameter group." : "";
+  }
+
+  function legend() {
+    var box = document.getElementById("lr-legend"); box.innerHTML = "";
+    S.forEach(function (s) {
+      var lab = document.createElement("label");
+      var cb = document.createElement("input"); cb.type = "checkbox"; cb.checked = on[s.id];
+      cb.addEventListener("change", function () { on[s.id] = cb.checked; drawLR(); });
+      var sw = document.createElement("span"); sw.className = "sw" + (s.dash ? " dash" : ""); sw.style.borderTopColor = css(s.col);
+      lab.appendChild(cb); lab.appendChild(sw); lab.appendChild(document.createTextNode(s.name));
+      box.appendChild(lab);
+    });
+  }
+
+  function drawTPP() {
+    var svg = document.getElementById("tpp"); svg.innerHTML = "";
+    var ds = mode("dsn") === "total" ? { r: 22.1, n: "DeepSeek-V3 (per total parameter)" } : { r: 400, n: "DeepSeek-V3 (per activated parameter)" };
+    var rows = [
+      { n: "nanochat d24 speedrun (scaling params, target)", r: 8 },
+      ds,
+      { n: "Llama 3.1 405B", r: 38.5 },
+      { n: "MiniCPM-2.4B (non-embedding)", r: 450 },
+      { n: "Gemma 3 27B (text + image tokens)", r: 518 },
+      { n: "OLMo 2 7B (one path, 3.95T)", r: 564 },
+      { n: "Olmo 3 7B (6.08T incl. mid + long-context)", r: 869 },
+      { n: "Gemma 3 4B (text + image tokens)", r: 1030 },
+      { n: "Llama 3.1 8B (lower bound, 15T+)", r: 1875, lb: true },
+      { n: "Gemma 3 1B (text + image tokens)", r: 2000 },
+      { n: "SmolLM3 3B (11.2T, blog)", r: 3733 },
+      { n: "SmolLM2 1.7B (11T)", r: 6471 }
+    ];
+    rows.sort(function (a, b) { return a.r - b.r; });
+    var W = 900, L = 300, R = 70, T = 24, rowH = 32;
+    var X = function (v) { return L + (W - L - R) * Math.log10(v) / 4; };
+    var g = el("g", { "class": "axis" }, svg);
+    [1, 10, 100, 1000, 10000].forEach(function (v) {
+      el("line", { x1: X(v), x2: X(v), y1: T - 6, y2: T + rowH * rows.length, "class": "gridline" }, g);
+      el("text", { x: X(v), y: T - 10, "text-anchor": "middle" }, g).textContent = v.toLocaleString("en-US");
+    });
+    el("line", { x1: X(20), x2: X(20), y1: T - 6, y2: T + rowH * rows.length, stroke: css("--text-muted"), "stroke-dasharray": "3 3" }, svg);
+    el("text", { x: X(20) + 4, y: T + rowH * rows.length + 16, "class": "tick" }, svg).textContent = "20 (Hoffmann et al., as quoted by MiniCPM §4.5)";
+    rows.forEach(function (row, k) {
+      var y = T + k * rowH;
+      el("text", { x: L - 8, y: y + 20, "text-anchor": "end", "class": "barlabel" }, svg).textContent = row.n;
+      el("rect", { x: X(1), y: y + 7, width: Math.max(1, X(row.r) - X(1)), height: 18, rx: 3, fill: css(row.lb ? "--s8" : "--s1") }, svg);
+      el("text", { x: X(row.r) + 6, y: y + 20, "class": "barval" }, svg).textContent = (row.lb ? "≥ " : "") + row.r.toLocaleString("en-US");
+    });
+  }
+
+  document.querySelectorAll('input[name="xmode"], input[name="ymode"]').forEach(function (r) { r.addEventListener("change", drawLR); });
+  document.querySelectorAll('input[name="dsn"]').forEach(function (r) { r.addEventListener("change", drawTPP); });
+  function all() { legend(); drawLR(); drawTPP(); }
+  all();
+  if (window.matchMedia) {
+    var mq = window.matchMedia("(prefers-color-scheme: dark)");
+    if (mq.addEventListener) mq.addEventListener("change", all);
+  }
+  new MutationObserver(all).observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] });
+})();
+</script>
+</body>
+</html>

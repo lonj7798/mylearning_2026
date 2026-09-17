@@ -1,0 +1,221 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Language Budget Explorer (ch-13a)</title>
+<style>
+:root {
+  color-scheme: light;
+  --bg: #f7f6f3;
+  --surface: #fcfcfb;
+  --text: #0b0b0b;
+  --text2: #52514e;
+  --muted: #7a7973;
+  --grid: #e3e2de;
+  --border: #dcdbd6;
+  --s1: #2a78d6;
+  --s2: #eb6834;
+  --s3: #1baf7a;
+  --s4: #8a5cd1;
+  --accent-bg: #eef3fb;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --bg: #121211;
+    --surface: #1a1a19;
+    --text: #ffffff;
+    --text2: #c3c2b7;
+    --muted: #9a998f;
+    --grid: #2c2c2a;
+    --border: #33332f;
+    --s1: #3987e5;
+    --s2: #d95926;
+    --s3: #199e70;
+    --s4: #9d74dd;
+    --accent-bg: #1d2735;
+  }
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --bg: #121211;
+  --surface: #1a1a19;
+  --text: #ffffff;
+  --text2: #c3c2b7;
+  --muted: #9a998f;
+  --grid: #2c2c2a;
+  --border: #33332f;
+  --s1: #3987e5;
+  --s2: #d95926;
+  --s3: #199e70;
+  --s4: #9d74dd;
+  --accent-bg: #1d2735;
+}
+* { box-sizing: border-box; }
+[hidden] { display: none !important; }
+body {
+  margin: 0; background: var(--bg); color: var(--text);
+  font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+}
+.wrap { max-width: 980px; margin: 0 auto; padding-inline: 16px; padding-block: 20px 40px; }
+h1 { font-size: 1.35rem; margin: 0 0 4px; }
+h2 { font-size: 1.1rem; margin: 0 0 6px; }
+p.lead { color: var(--text2); margin: 0 0 18px; }
+.panel { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 16px; margin-bottom: 20px; }
+.controls { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 10px 16px; margin: 10px 0 14px; }
+label { display: block; color: var(--text2); font-size: 13px; }
+input[type="number"], select {
+  font: inherit; color: var(--text); background: var(--bg); border: 1px solid var(--border);
+  border-radius: 6px; padding: 4px 8px; width: 100%; margin-top: 2px;
+}
+input[type="range"] { width: 100%; }
+.val { font-variant-numeric: tabular-nums; color: var(--text); font-weight: 600; }
+.tablebox { overflow-x: auto; }
+table { border-collapse: collapse; font-size: 13px; min-width: 520px; width: 100%; }
+th, td { text-align: right; padding: 5px 8px; border-bottom: 1px solid var(--grid); font-variant-numeric: tabular-nums; }
+th:first-child, td:first-child { text-align: left; }
+th { color: var(--text2); font-weight: 600; }
+.bars { margin-top: 14px; }
+.barrow { display: grid; grid-template-columns: minmax(120px, 170px) 1fr minmax(64px, auto); gap: 8px; align-items: center; margin: 5px 0; }
+.barname { color: var(--text2); font-size: 13px; }
+.bartrack { background: var(--grid); border-radius: 4px; height: 14px; position: relative; overflow: hidden; }
+.barfill { height: 100%; border-radius: 4px; }
+.barnum { font-size: 13px; font-variant-numeric: tabular-nums; text-align: right; }
+.ref { position: absolute; top: -2px; bottom: -2px; width: 2px; background: var(--text2); opacity: 0.6; }
+.caption { color: var(--text2); font-size: 13px; margin-top: 10px; }
+.note { color: var(--muted); font-size: 12.5px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+<h1>Language budget explorer</h1>
+<p class="lead">Panel A applies the ATLAS iso-loss multipliers for adding languages. Panel B applies measured tokenizer premiums to a context window and a token budget. Both panels use only values printed in the cited sources; the inputs you type are your own planning numbers.</p>
+
+<section class="panel" aria-labelledby="pa">
+<h2 id="pa">A. Adding languages without raising per-language loss</h2>
+<div class="controls">
+  <label>Current number of languages K
+    <input id="k" type="number" min="1" max="1000" step="1" value="8">
+  </label>
+  <label>Coverage multiplier r (K → rK): <span class="val" id="rv">4</span>
+    <input id="r" type="range" min="1" max="16" step="0.5" value="4">
+  </label>
+  <label>Current parameters N (billions)
+    <input id="n" type="number" min="0.01" step="0.1" value="2">
+  </label>
+  <label>Current total training tokens D (billions)
+    <input id="d" type="number" min="1" step="10" value="400">
+  </label>
+</div>
+<div class="tablebox">
+<table aria-describedby="capA">
+  <thead><tr><th>Quantity</th><th>Before</th><th>After</th><th>Multiplier</th></tr></thead>
+  <tbody id="tA"></tbody>
+</table>
+</div>
+<div class="bars" id="bA" aria-hidden="true"></div>
+<p class="caption" id="capA">Multipliers from the ATLAS curse-of-multilinguality fit, all-language exponents: parameters r<sup>0.243</sup>, total tokens r<sup>0.728</sup>, tokens per language r<sup>−0.272</sup>; compute is shown as the product of the parameter and token multipliers (6ND), which the card rounds to r<sup>0.970</sup>. Printed checkpoints (Fig. 5): 2K → tokens ×1.66, params ×1.18; 4K → ×2.74, ×1.4; 8K → ×4.54, ×1.66; 16K → ×7.52, ×1.96. Setting: MADLAD-400, uniform sampling over 4 to 50 languages, models up to 8B, held-out loss only; skewed mixtures and downstream accuracy were not fitted. Source: Longpre et al., arXiv:2510.22037 §5, App. B.7 (library card atlas-multilingual-scaling-laws).</p>
+</section>
+
+<section class="panel" aria-labelledby="pb">
+<h2 id="pb">B. Tokenizer premium: content per window and tokens per unit of content</h2>
+<div class="controls">
+  <label>Tokenizer (FLORES-200 premium relative to English)
+    <select id="tok">
+      <option value="cl100k">cl100k_base (ChatGPT / GPT-4), Table 1</option>
+      <option value="xlmr">XLM-R, Table 4</option>
+      <option value="byt5">ByT5 UTF-8 bytes, Table 5</option>
+    </select>
+  </label>
+  <label>Context window (tokens)
+    <input id="ctx" type="number" min="128" step="512" value="4096">
+  </label>
+  <label>English-token budget for one unit of content (billions)
+    <input id="bud" type="number" min="0.1" step="1" value="10">
+  </label>
+</div>
+<div class="tablebox">
+<table aria-describedby="capB">
+  <thead><tr><th>Language</th><th>Premium</th><th>English-token content per window</th><th>Tokens for the same content (B)</th></tr></thead>
+  <tbody id="tB"></tbody>
+</table>
+</div>
+<div class="bars" id="bB" aria-hidden="true"></div>
+<p class="caption" id="capB">Premium = tokens for a sentence in the language divided by tokens for its English translation, measured on the FLORES-200 parallel corpus. Content per window = window ÷ premium; tokens for the same content = budget × premium. The vertical line marks premium 1.0 (English). Languages whose text is more than 10% UNK for a tokenizer are not listed by the source. FLORES-200 contains English-centric names, which the authors note may favor English. Source: Petrov et al., arXiv:2305.15425, Tables 1, 4, 5 (chapter excerpt tokenizer-language-unfairness).</p>
+</section>
+<p class="note">Figure for ch-13a, llm-training course, 2026-09 revision. No network requests.</p>
+</div>
+<script>
+(function () {
+  var EXP_N = 0.243, EXP_D = 0.728;
+  var PREM = {
+    cl100k: [["English",1.00],["Portuguese",1.48],["Spanish",1.55],["German",1.58],["French",1.60],["Italian",1.64],["Chinese (Simplified)",1.91],["Japanese",2.30],["Vietnamese",2.45],["Bulgarian",2.64],["Standard Arabic",3.04],["Burmese",11.70],["Dzongkha",12.33],["Odia",12.48],["Shan",15.05]],
+    xlmr: [["Yue Chinese",0.93],["Indonesian",0.94],["Chinese (Simplified)",0.97],["English",1.00],["Japanese",1.11],["Bulgarian",1.16],["Standard Arabic",1.18],["Italian",1.19],["Uyghur",1.41],["Central Kanuri",2.60],["Kabiyè",2.98],["Shan",4.43]],
+    byt5: [["Yue Chinese",0.87],["Chinese (Traditional)",0.89],["Chinese (Simplified)",0.93],["English",1.00],["Italian",1.19],["Japanese",1.27],["Tok Pisin",1.28],["Tumbuka",1.32],["Standard Arabic",1.60],["Bulgarian",1.89],["Standard Tibetan",3.31],["Burmese",3.51],["Dzongkha",3.64],["Shan",3.94]]
+  };
+  function $(id) { return document.getElementById(id); }
+  function num(el, fallback) { var v = parseFloat(el.value); return isFinite(v) && v > 0 ? v : fallback; }
+  function fmt(x, dg) {
+    if (!isFinite(x)) return "–";
+    if (Math.abs(x) >= 1000) return x.toLocaleString("en-US", { maximumFractionDigits: 0 });
+    return x.toLocaleString("en-US", { minimumFractionDigits: dg, maximumFractionDigits: dg });
+  }
+  function el(tag, cls, text) { var e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; }
+  function barRow(parent, name, frac, color, label, refFrac) {
+    var row = el("div", "barrow");
+    row.appendChild(el("div", "barname", name));
+    var track = el("div", "bartrack");
+    var fill = el("div", "barfill");
+    fill.style.width = Math.max(0, Math.min(100, frac * 100)).toFixed(2) + "%";
+    fill.style.background = color;
+    track.appendChild(fill);
+    if (refFrac != null) { var ref = el("div", "ref"); ref.style.left = (refFrac * 100).toFixed(2) + "%"; track.appendChild(ref); }
+    row.appendChild(track);
+    row.appendChild(el("div", "barnum", label));
+    parent.appendChild(row);
+  }
+  function renderA() {
+    var K = Math.round(num($("k"), 8)), r = num($("r"), 4), N = num($("n"), 2), D = num($("d"), 400);
+    $("rv").textContent = fmt(r, 1).replace(/\.0$/, "");
+    var mN = Math.pow(r, EXP_N), mD = Math.pow(r, EXP_D), mPer = mD / r, mC = mN * mD;
+    var K2 = K * r;
+    var rows = [
+      ["Languages", fmt(K, 0), fmt(K2, K2 % 1 ? 1 : 0), "×" + fmt(r, 2)],
+      ["Parameters (B)", fmt(N, 2), fmt(N * mN, 2), "×" + fmt(mN, 3)],
+      ["Total tokens (B)", fmt(D, 1), fmt(D * mD, 1), "×" + fmt(mD, 3)],
+      ["Tokens per language (B)", fmt(D / K, 2), fmt(D * mD / K2, 2), "×" + fmt(mPer, 3)],
+      ["Compute, 6ND (relative)", "1.00", fmt(mC, 2), "×" + fmt(mC, 3)]
+    ];
+    var tb = $("tA"); tb.textContent = "";
+    rows.forEach(function (rw) { var tr = el("tr"); rw.forEach(function (c) { tr.appendChild(el("td", null, c)); }); tb.appendChild(tr); });
+    var bA = $("bA"); bA.textContent = "";
+    var mx = Math.max(mC, mD, mN, 1);
+    barRow(bA, "Parameters", mN / mx, "var(--s1)", "×" + fmt(mN, 2), 1 / mx);
+    barRow(bA, "Total tokens", mD / mx, "var(--s2)", "×" + fmt(mD, 2), 1 / mx);
+    barRow(bA, "Tokens per language", mPer / mx, "var(--s3)", "×" + fmt(mPer, 2), 1 / mx);
+    barRow(bA, "Compute", mC / mx, "var(--s4)", "×" + fmt(mC, 2), 1 / mx);
+  }
+  function renderB() {
+    var key = $("tok").value, ctx = num($("ctx"), 4096), bud = num($("bud"), 10);
+    var data = PREM[key] || PREM.cl100k;
+    var tb = $("tB"); tb.textContent = "";
+    var bB = $("bB"); bB.textContent = "";
+    var mx = Math.max.apply(null, data.map(function (d) { return d[1]; }));
+    data.forEach(function (d) {
+      var tr = el("tr");
+      tr.appendChild(el("td", null, d[0]));
+      tr.appendChild(el("td", null, fmt(d[1], 2)));
+      tr.appendChild(el("td", null, fmt(ctx / d[1], 0)));
+      tr.appendChild(el("td", null, fmt(bud * d[1], 1)));
+      tb.appendChild(tr);
+      barRow(bB, d[0], d[1] / mx, d[1] <= 1.0001 ? "var(--s3)" : "var(--s1)", fmt(d[1], 2), 1 / mx);
+    });
+  }
+  ["k", "r", "n", "d"].forEach(function (id) { $(id).addEventListener("input", renderA); });
+  ["tok", "ctx", "bud"].forEach(function (id) { $(id).addEventListener("input", renderB); $(id).addEventListener("change", renderB); });
+  renderA(); renderB();
+})();
+</script>
+</body>
+</html>

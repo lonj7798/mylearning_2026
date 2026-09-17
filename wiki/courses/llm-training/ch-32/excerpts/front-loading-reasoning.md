@@ -7,6 +7,8 @@ source_url: https://arxiv.org/abs/2510.03264
 created_at: "2026-04-23"
 ---
 
+> Superseded by the 2026-09 revision of read.md; kept for history.
+
 # Excerpt: Front-Loading Reasoning - the asymmetric-allocation rule ch-32 inherits
 
 **Source library:** `wiki/raw-data/llm-training/papers/front-loading-reasoning.md`

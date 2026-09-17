@@ -1,267 +1,179 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
 <head>
-<meta charset="UTF-8" />
-<title>Ch-32 - Multi-Stage Pipeline Explorer</title>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Mid-Training Stage Explorer</title>
 <style>
-  :root {
-    --bg: #0f1115; --panel: #171a21; --text: #e6e8eb;
-    --muted: #8a95a4; --accent: #5ec8ff; --warn: #ffb86b;
-    --good: #7dd87d; --bad: #ff6b6b; --grid: #2a2f3a;
-    --web: #4a5a7a; --math: #ff9f5e; --code: #7dd87d;
-    --longdoc: #b48cf2; --instruct: #5ec8ff; --pref: #e56b96;
+:root{
+  --bg:#fbfaf7; --panel:#ffffff; --ink:#1d1d1f; --muted:#5f6368; --line:#d9d6cf;
+  --stable:#8a97a6; --decay:#2f6fb0; --lc:#8e3fb0; --post:#c26a00; --gain:#1f8a4c; --loss:#b3261e;
+}
+@media (prefers-color-scheme: dark){
+  :root{
+    --bg:#16181b; --panel:#1f2226; --ink:#e8e6e1; --muted:#a3a7ad; --line:#3a3e44;
+    --stable:#76808c; --decay:#6fa8e0; --lc:#c78ae0; --post:#f0a24a; --gain:#5cc88a; --loss:#f08a82;
   }
-  * { box-sizing: border-box; }
-  body {
-    margin: 0; padding: 20px; background: var(--bg); color: var(--text);
-    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-    font-size: 13px;
-  }
-  h1 { font-size: 16px; margin: 0 0 4px 0; }
-  p.sub { color: var(--muted); margin: 0 0 14px 0; font-size: 12px; }
-  .controls {
-    background: var(--panel); padding: 12px 16px; border-radius: 6px;
-    margin-bottom: 16px; display: flex; flex-wrap: wrap;
-    gap: 18px; align-items: center;
-  }
-  .toggle { display: flex; gap: 4px; }
-  .toggle button {
-    background: #232833; border: 1px solid #2a2f3a; color: var(--text);
-    padding: 6px 12px; border-radius: 4px; cursor: pointer; font-size: 12px;
-  }
-  .toggle button.active {
-    background: var(--accent); color: #0f1115; border-color: var(--accent);
-    font-weight: 600;
-  }
-  .toggle-label { color: var(--muted); font-size: 11px; margin-right: 4px; }
-  .scale {
-    font-size: 11px; color: var(--muted); display: flex; gap: 10px; align-items: center;
-  }
-  .scale select {
-    background: #232833; border: 1px solid #2a2f3a; color: var(--text);
-    padding: 3px 6px; border-radius: 3px; font-size: 11px;
-  }
-  .panel {
-    background: var(--panel); padding: 16px; border-radius: 6px; margin-bottom: 14px;
-  }
-  .gantt {
-    display: flex; flex-direction: column; gap: 8px;
-  }
-  .row {
-    display: grid; grid-template-columns: 130px 1fr 130px;
-    gap: 8px; align-items: center;
-  }
-  .row .name {
-    font-size: 12px; color: var(--text); font-weight: 500;
-    text-align: right; padding-right: 6px;
-  }
-  .bar-track {
-    position: relative; background: #0b0d11; border-radius: 3px;
-    height: 36px; overflow: hidden; border: 1px solid var(--grid);
-  }
-  .bar {
-    position: absolute; top: 0; bottom: 0; left: 0;
-    display: flex; border-radius: 2px; overflow: hidden;
-    transition: width 300ms ease;
-  }
-  .seg {
-    height: 100%; display: flex; align-items: center; justify-content: center;
-    font-size: 10px; color: #0f1115; font-weight: 600;
-    overflow: hidden; white-space: nowrap;
-  }
-  .seg.web { background: var(--web); color: var(--text); }
-  .seg.math { background: var(--math); }
-  .seg.code { background: var(--code); }
-  .seg.longdoc { background: var(--longdoc); }
-  .seg.instruct { background: var(--instruct); }
-  .seg.pref { background: var(--pref); color: var(--text); }
-  .row .tokens {
-    font-size: 11px; color: var(--accent); font-variant-numeric: tabular-nums;
-    text-align: left; padding-left: 6px;
-  }
-  .row .tokens .eval {
-    display: block; color: var(--muted); font-size: 10px; font-weight: 400;
-    margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-  }
-  .legend {
-    display: flex; gap: 12px; flex-wrap: wrap; font-size: 11px;
-    color: var(--muted); margin-top: 12px;
-  }
-  .legend span.sw {
-    display: inline-block; width: 10px; height: 10px; border-radius: 2px;
-    margin-right: 4px; vertical-align: middle;
-  }
-  .caption {
-    font-size: 11px; color: var(--muted); line-height: 1.6; margin-top: 12px;
-  }
-  .note {
-    background: #151821; border-left: 3px solid var(--warn); color: var(--text);
-    padding: 8px 12px; font-size: 11px; border-radius: 3px; margin-top: 8px;
-  }
-  .note b { color: var(--warn); }
-  .axis {
-    display: flex; justify-content: space-between; font-size: 10px;
-    color: var(--muted); margin-top: 6px; padding: 0 138px 0 130px;
-  }
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font:14px/1.5 system-ui,-apple-system,"Segoe UI",sans-serif}
+.wrap{max-width:1000px;margin:0 auto;padding-inline:16px;padding-block:20px 40px}
+h1{font-size:20px;margin:0 0 4px}
+h2{font-size:15px;margin:0 0 6px}
+p.lead{margin:0 0 16px;color:var(--muted)}
+.panel{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:12px 14px;margin-bottom:16px}
+.row{display:flex;gap:6px;flex-wrap:wrap;margin:6px 0 10px}
+button{font:inherit;font-size:13px;color:var(--ink);background:var(--panel);border:1px solid var(--line);border-radius:6px;padding:4px 10px;cursor:pointer}
+button[aria-pressed="true"]{border-color:var(--decay);box-shadow:inset 0 0 0 1px var(--decay);font-weight:600}
+.stage{display:grid;grid-template-columns:minmax(0,170px) minmax(0,1fr);gap:4px 12px;padding:8px 0;border-top:1px solid var(--line)}
+@media (max-width:640px){.stage{grid-template-columns:minmax(0,1fr)}}
+.sname{font-weight:600}
+.bar{height:14px;border-radius:3px;margin:3px 0}
+.meta{font-size:12.5px;color:var(--muted)}
+.num{font-variant-numeric:tabular-nums}
+.key{display:flex;gap:14px;flex-wrap:wrap;font-size:12px;color:var(--muted);margin-top:6px}
+.key span::before{content:"";display:inline-block;width:10px;height:10px;border-radius:2px;margin-right:5px;vertical-align:-1px;background:var(--c)}
+.scroll{overflow-x:auto}
+table{border-collapse:collapse;width:100%;font-variant-numeric:tabular-nums;font-size:13px;min-width:460px}
+th,td{text-align:right;padding:4px 6px;border-bottom:1px solid var(--line)}
+th:first-child,td:first-child{text-align:left}
+.pos{color:var(--gain)} .neg{color:var(--loss)}
+.mbar{display:inline-block;height:10px;background:var(--decay);border-radius:2px;vertical-align:middle}
+.caption{font-size:12px;color:var(--muted);margin-top:8px}
 </style>
 </head>
 <body>
+<div class="wrap">
+<h1>Mid-training stage explorer</h1>
+<p class="lead">Panel A lists the stages that follow the stable pre-training phase in six documented runs, with token counts, learning-rate phase, data change, and each stage's share of the tokens seen by the end of that stage. Panel B shows how the length of an end-of-training domain-upsampling window changes targeted and general benchmarks.</p>
 
-<h1>Chapter 32 - Multi-Stage Pipeline Explorer</h1>
-<p class="sub">Five-stage Gantt: pretrain -> mid-train -> long-context -> SFT -> RL. Select a lab to see its token allocation and data-mix composition per stage. Width encodes token budget on a log scale.</p>
-
-<div class="controls">
-  <span class="toggle-label">Configuration:</span>
-  <div class="toggle" id="cfg">
-    <button data-cfg="olmo3" class="active">OLMo 3 7B</button>
-    <button data-cfg="llama3">Llama 3 405B</button>
-    <button data-cfg="r1">DeepSeek-R1</button>
-    <button data-cfg="phi4">Phi-4-reasoning</button>
-  </div>
-  <div class="scale">
-    <label>Width scale:</label>
-    <select id="scale">
-      <option value="log" selected>log10</option>
-      <option value="linear">linear</option>
-    </select>
-  </div>
+<div class="panel">
+<h2>A. Stage budgets and what changes at each stage</h2>
+<div class="row" id="models" role="group" aria-label="Select a run"></div>
+<div id="stages"></div>
+<div class="key">
+  <span style="--c:var(--stable)">stable or main pre-training</span>
+  <span style="--c:var(--decay)">decay / anneal / mid-training</span>
+  <span style="--c:var(--lc)">long-context extension</span>
+  <span style="--c:var(--post)">reasoning mid-training</span>
+</div>
+<p class="caption">Bar length uses a log<sub>10</sub> token scale from 10M to 20T tokens, so a bar twice as long is not twice the tokens. "Share" = stage tokens ÷ cumulative tokens at the end of the stage, computed from the printed values (derived). Sources: Llama 3 arXiv:2407.21783v3 §3.4.2–3.4.3; OLMo 2 arXiv:2501.00656v3 §2.3, Table 3; Olmo 3 arXiv:2512.13961v2 Table 13, §3.6 and OLMo-core@66f768b midtrain/long-context scripts; SmolLM3 blog (2025-07-08); OctoThinker arXiv:2506.20512v1 Tables 3–4; Blakeney et al. arXiv:2406.03476v1 §3.2.</p>
 </div>
 
 <div class="panel">
-  <div class="gantt" id="gantt"></div>
-  <div class="axis">
-    <span>0</span><span id="axisMax">16T tokens</span>
-  </div>
-  <div class="legend">
-    <span><span class="sw" style="background: var(--web);"></span>web/general</span>
-    <span><span class="sw" style="background: var(--math);"></span>math</span>
-    <span><span class="sw" style="background: var(--code);"></span>code</span>
-    <span><span class="sw" style="background: var(--longdoc);"></span>long-doc</span>
-    <span><span class="sw" style="background: var(--instruct);"></span>instruction/CoT</span>
-    <span><span class="sw" style="background: var(--pref);"></span>preference/RL</span>
-  </div>
-  <div class="note" id="note"></div>
+<h2>B. Duration of domain upsampling at the end of a 1T-token run (7B)</h2>
+<div class="row" id="du" role="group" aria-label="Select upsampling duration"></div>
+<div class="scroll"><table id="dutab"></table></div>
+<p class="caption">Values from Blakeney et al., arXiv:2406.03476v1 Table 6 (one run per setting; no variance reported). The upsampling mix removes large-scale Common Crawl and sets small-scale Common Crawl 30%, domain-specific 35%, code 35% (Table 4). Δ is the difference from the 0% run.</p>
+</div>
 </div>
 
-<div class="caption" id="caption"></div>
-
 <script>
-// stage configs. mix values = fractions summing to 1; tokens in absolute token count.
-// "na" means the stage is inherited or not applicable for this lab (rendered empty).
-const CFGS = {
-  olmo3: {
-    label: "OLMo 3 7B (model-flow, 2025)",
-    stages: [
-      {name: "pretrain",     tokens: 5.9e12, mix: {web:0.55, math:0.08, code:0.20, longdoc:0.05, instruct:0.12, pref:0.0}, eval: "OLMES broad, MMLU"},
-      {name: "mid-training", tokens: 1.0e11, mix: {web:0.15, math:0.30, code:0.25, longdoc:0.10, instruct:0.20, pref:0.0}, eval: "GSM8K, MATH, MMLU-Pro, HumanEval+"},
-      {name: "long-context", tokens: 5.0e10, mix: {web:0.05, math:0.05, code:0.25, longdoc:0.60, instruct:0.05, pref:0.0}, eval: "NIAH, RULER, BABILong"},
-      {name: "SFT",          tokens: 3.0e9,  mix: {web:0.0,  math:0.10, code:0.15, longdoc:0.05, instruct:0.70, pref:0.0}, eval: "MT-Bench, IFEval, format"},
-      {name: "DPO+RLVR",     tokens: 1.5e9,  mix: {web:0.0,  math:0.05, code:0.10, longdoc:0.0,  instruct:0.25, pref:0.60}, eval: "AIME, Codeforces, reward-audit"},
-    ],
-    note: "<b>OLMo 3:</b> explicit mid-train + long-context stages, each with its own Dolmino/Longmino mix (100B / 50B). Cold-start SFT is Dolci-SFT; full recipe is Base -> Think."
-  },
-  llama3: {
-    label: "Llama 3 405B (herd paper, 2024)",
-    stages: [
-      {name: "pretrain",     tokens: 1.56e13, mix: {web:0.55, math:0.08, code:0.25, longdoc:0.04, instruct:0.08, pref:0.0}, eval: "MMLU, HellaSwag, HumanEval"},
-      {name: "mid-training", tokens: 3.0e11,  mix: {web:0.20, math:0.20, code:0.25, longdoc:0.15, instruct:0.20, pref:0.0}, eval: "annealing stage (scale undisclosed)"},
-      {name: "long-context", tokens: 8.0e11,  mix: {web:0.20, math:0.05, code:0.30, longdoc:0.40, instruct:0.05, pref:0.0}, eval: "NIAH 128K, RULER (effective ~96K)"},
-      {name: "SFT",          tokens: 1.0e10,  mix: {web:0.0,  math:0.10, code:0.15, longdoc:0.001,instruct:0.749,pref:0.0}, eval: "6-round rejection-sampled SFT"},
-      {name: "DPO+RLVR",     tokens: 5.0e9,   mix: {web:0.0,  math:0.05, code:0.10, longdoc:0.0,  instruct:0.25, pref:0.60}, eval: "6-round DPO, NLL-stabilized"},
-    ],
-    note: "<b>Llama 3:</b> long-context is proportionally massive (~800B tokens ~ 5% of pretrain), RoPE base rescaled 10K -> 500K across six sub-stages 8K -> 128K. Long-SFT kept at 0.1%."
-  },
-  r1: {
-    label: "DeepSeek-R1 (post-V3, 2025)",
-    stages: [
-      {name: "pretrain",     tokens: 1.48e13, mix: {web:0.50, math:0.10, code:0.25, longdoc:0.04, instruct:0.11, pref:0.0}, eval: "inherited from V3"},
-      {name: "mid-training", tokens: 1.5e11,  mix: {web:0.10, math:0.35, code:0.30, longdoc:0.10, instruct:0.15, pref:0.0}, eval: "inherited from V3"},
-      {name: "long-context", tokens: 2.0e11,  mix: {web:0.10, math:0.10, code:0.30, longdoc:0.45, instruct:0.05, pref:0.0}, eval: "inherited from V3 (128K)"},
-      {name: "SFT",          tokens: 4.0e9,   mix: {web:0.0,  math:0.15, code:0.10, longdoc:0.0,  instruct:0.75, pref:0.0}, eval: "~800K cold-start (600K reason + 200K other)"},
-      {name: "DPO+RLVR",     tokens: 8.0e9,   mix: {web:0.0,  math:0.30, code:0.20, longdoc:0.0,  instruct:0.15, pref:0.35}, eval: "reasoning-RL (GRPO 32K gen) + alignment-RL"},
-    ],
-    note: "<b>DeepSeek-R1:</b> inherits pretrain + mid-train + long-context from V3 (grey-labeled; no independent run). R1's novelty is entirely post-V3: cold-start SFT + multi-stage RL."
-  },
-  phi4: {
-    label: "Phi-4-reasoning (synthetic-heavy, 2025)",
-    stages: [
-      {name: "pretrain",     tokens: 9.0e12, mix: {web:0.20, math:0.25, code:0.25, longdoc:0.05, instruct:0.25, pref:0.0}, eval: "MMLU, targeted synthetic evals"},
-      {name: "mid-training", tokens: 5.0e11, mix: {web:0.05, math:0.40, code:0.20, longdoc:0.05, instruct:0.30, pref:0.0}, eval: "MATH, HumanEval+, MMLU-Pro"},
-      {name: "long-context", tokens: 4.0e10, mix: {web:0.10, math:0.10, code:0.25, longdoc:0.50, instruct:0.05, pref:0.0}, eval: "NIAH (moderate window)"},
-      {name: "SFT",          tokens: 1.0e10, mix: {web:0.0,  math:0.25, code:0.15, longdoc:0.02, instruct:0.58, pref:0.0}, eval: "long-CoT SFT, format"},
-      {name: "DPO+RLVR",     tokens: 3.0e9,  mix: {web:0.0,  math:0.30, code:0.20, longdoc:0.0,  instruct:0.20, pref:0.30}, eval: "preference + verifiable"},
-    ],
-    note: "<b>Phi-4-reasoning:</b> pretrain mix blurs into mid-training (synthetic-heavy); mid-training is proportionally large. The 'can better data skip mid-training?' thought experiment pushed one step further."
+(function(){
+  var MODELS = {
+    "Llama 3.1 405B": {note:"The report places long-context training and annealing in the final stages of the 15.6T-token pre-training run; it does not print a total that excludes them.",
+      stages:[
+      {k:"stable", name:"Pre-training", tok:15.6e12, cum:15.6e12, share:false, lr:"AdamW, peak 8e-5, cosine to 8e-7 over 1.2M steps", data:"~50% general, 25% math and reasoning, 17% code, 8% multilingual", src:"§3.1.2, §3.4.1"},
+      {k:"lc", name:"Long-context (inside pre-training)", tok:800e9, cum:15.6e12, lr:"not printed", data:"six stages 8K → 128K; advance when short-context evals recover and needle-in-a-haystack is solved", src:"§3.4.2"},
+      {k:"decay", name:"Annealing (final tokens)", tok:40e6, cum:15.6e12, lr:"linear to 0 at 128K context", data:"upsample very high-quality sources; Polyak averaging of checkpoints", src:"§3.4.3"}]},
+    "OLMo 2 7B": {note:"Three 50B mid-training runs with different data orders start from the same checkpoint and are averaged; the share uses one run.",
+      stages:[
+      {k:"stable", name:"Stage 1 pre-training", tok:3.90e12, cum:3.90e12, share:false, lr:"peak 3e-4, cosine over 5T truncated after 4T", data:"OLMo-Mix-1124", src:"§2.3, Table 3"},
+      {k:"decay", name:"Stage 2 mid-training (per run)", tok:50e9, cum:3.95e12, lr:"linear to 0", data:"Dolmino 50B: DCLM 47.2%, FLAN 16.6%, math 20.8%, Wiki 7.11%, peS2o 5.85%, StackExchange 2.45%", src:"§2.3, Table 13"}]},
+    "Olmo 3 7B": {note:"Cumulative token counts are the values printed in Table 13.",
+      stages:[
+      {k:"stable", name:"Stage 1 pre-training", tok:5.9e12, cum:5.9e12, share:false, lr:"not quoted here", data:"Dolma 3 Mix", src:"Table 13"},
+      {k:"decay", name:"Stage 2 mid-training", tok:100e9, cum:6.0e12, lr:"AdamW lr 2.07e-4, linear to 0, no warmup, optimizer state loaded", data:"Dolmino 100B from a 2.19T pool; web+PDF 32.5%, code 20%, math 19.2%, QA 13.9%, thinking traces 8.34%, instruction 6.1%", src:"Table 5; midtrain.py L40–43, L80"},
+      {k:"lc", name:"Stage 3 long-context", tok:50e9, cum:6.05e12, lr:"linear to 0 after 200 warmup steps", data:"34% long documents + 66% Dolmino short data; YaRN on full-attention layers; 8K → 65K", src:"§3.6, §3.6.3; long-context.py L50, L81"}]},
+    "SmolLM3 3B": {note:"The blog prints 11.2T pre-training tokens overall and 11.1T as the end of stage 3; cumulative counts below use 11.1T. The learning-rate schedule of the long-context and reasoning mid-training stages is not stated.",
+      stages:[
+      {k:"stable", name:"Stages 1–2 (stable)", tok:10e12, cum:10e12, share:false, lr:"WSD, lr 2e-4, 2,000 warmup steps", data:"web 85% → 75%; code and math raised in stage 2", src:"blog: Training Configuration"},
+      {k:"decay", name:"Stage 3 decay", tok:1.1e12, cum:11.1e12, lr:"linear to 0 over final 10% of steps", data:"web 63%, code 24%, math 13% with instruction and reasoning datasets", src:"blog: Stage 3"},
+      {k:"lc", name:"Long-context extension", tok:100e9, cum:11.2e12, lr:"not stated", data:"4k → 32k (θ 1.5M, 50B), 32k → 64k (θ 5M, 50B)", src:"blog: Long Context extension"},
+      {k:"post", name:"Reasoning mid-training", tok:140e9, cum:11.34e12, lr:"not stated", data:"35B tokens of reasoning traces × 4 epochs; ChatML template", src:"blog: Reasoning Mid-training"}]},
+    "OctoThinker-3B": {note:"Starts from Llama-3.2-3B-Base; the paper does not print the base model's pre-training tokens, so shares are not computed.",
+      stages:[
+      {k:"decay", name:"Stable mid-training", tok:200e9, cum:null, lr:"constant 2e-5, no warmup, 50,000 steps", data:"MegaMath-Web-Pro-Max 72.5%, DCLM 10%, text-code blocks 10%, QA 5%, code 2.5%", src:"Tables 2–3"},
+      {k:"decay", name:"Decay (per branch)", tok:20e9, cum:null, lr:"cosine 2e-5 → 2e-6, 5,000 steps", data:"web 55%, instruction 10%, DCLM 5%, QA 30% (long-CoT, short-CoT, or hybrid branch)", src:"Tables 4–5"}]},
+    "MPT-style 7B (Blakeney et al.)": {note:"One reported run per setting, no seeds or variance reported; the upsampling window is part of a fixed 1T-token budget.",
+      stages:[
+      {k:"stable", name:"Baseline mix", tok:0.8e12, cum:0.8e12, share:false, lr:"inverse square root schedule", data:"large-scale CC 34.35%, small-scale CC 36.70%, domain-specific 7.17%, code 21.78%", src:"Table 1, Table 2"},
+      {k:"decay", name:"Domain upsampling (final 20%)", tok:0.2e12, cum:1.0e12, lr:"not stated for the window", data:"large-scale CC 0%, small-scale CC 30%, domain-specific 35%, code 35%", src:"§3.2, Table 4"}]}
+  };
+  var COLORS = {stable:"var(--stable)", decay:"var(--decay)", lc:"var(--lc)", post:"var(--post)"};
+  function fmt(t){
+    if(t>=1e12){ var s=(t/1e12).toFixed(2); if(s.indexOf(".")>=0) s=s.replace(/0+$/,"").replace(/\.$/,""); return s+"T"; }
+    if(t>=1e9) return (t/1e9).toFixed(0)+"B";
+    return (t/1e6).toFixed(0)+"M";
   }
-};
-
-const state = { cfg: "olmo3", scale: "log" };
-
-function fmtTokens(t) {
-  if (t >= 1e12) return (t/1e12).toFixed(1).replace(/\.0$/, "") + "T";
-  if (t >= 1e9) return (t/1e9).toFixed(1).replace(/\.0$/, "") + "B";
-  if (t >= 1e6) return (t/1e6).toFixed(1).replace(/\.0$/, "") + "M";
-  return t.toString();
-}
-
-function barWidthFrac(tokens, maxTokens, scale) {
-  if (tokens <= 0) return 0;
-  if (scale === "linear") return tokens / maxTokens;
-  // log scale: map log10(tokens) onto [log10(1e9), log10(maxTokens)] -> [0, 1]
-  const lo = Math.log10(1e9);
-  const hi = Math.log10(maxTokens);
-  const v = Math.log10(tokens);
-  return Math.max(0.02, (v - lo) / (hi - lo));
-}
-
-function render() {
-  const cfg = CFGS[state.cfg];
-  const maxTokens = Math.max(...Object.values(CFGS).flatMap(c => c.stages.map(s => s.tokens)));
-  const root = document.getElementById("gantt");
-  root.innerHTML = "";
-  cfg.stages.forEach(s => {
-    const row = document.createElement("div");
-    row.className = "row";
-    const wFrac = barWidthFrac(s.tokens, maxTokens, state.scale);
-    const wPct = (wFrac * 100).toFixed(2);
-    const segsHtml = Object.entries(s.mix)
-      .filter(([, f]) => f > 0.001)
-      .map(([k, f]) => `<div class="seg ${k}" style="width:${(f*100).toFixed(1)}%" title="${k}: ${(f*100).toFixed(0)}%">${f >= 0.1 ? Math.round(f*100) : ""}</div>`)
-      .join("");
-    row.innerHTML = `
-      <div class="name">${s.name}</div>
-      <div class="bar-track">
-        <div class="bar" style="width:${wPct}%">${segsHtml}</div>
-      </div>
-      <div class="tokens">${fmtTokens(s.tokens)}<span class="eval">${s.eval}</span></div>
-    `;
-    root.appendChild(row);
+  function pct(x){
+    if(x>=0.01) return (x*100).toFixed(2)+"%";
+    return (x*100).toPrecision(2)+"%";
+  }
+  var lo = Math.log10(1e7), hi = Math.log10(2e13);
+  function el(tag, cls, text){ var e=document.createElement(tag); if(cls) e.className=cls; if(text!=null) e.textContent=text; return e; }
+  var mbox = document.getElementById("models"), sbox = document.getElementById("stages");
+  function render(name){
+    Array.prototype.forEach.call(mbox.children, function(b){ b.setAttribute("aria-pressed", b.textContent===name ? "true" : "false"); });
+    sbox.innerHTML = "";
+    var m = MODELS[name];
+    sbox.appendChild(el("p","meta",m.note));
+    m.stages.forEach(function(s){
+      var d = el("div","stage");
+      var left = el("div");
+      left.appendChild(el("div","sname",s.name));
+      var shareText = (s.share===false || s.cum===null) ? "share: n/a" : "share: "+pct(s.tok/s.cum);
+      left.appendChild(el("div","meta num",fmt(s.tok)+" tokens · "+shareText));
+      var right = el("div");
+      var bar = el("div","bar");
+      var w = Math.max(2, (Math.log10(s.tok)-lo)/(hi-lo)*100);
+      bar.style.width = w.toFixed(1)+"%";
+      bar.style.background = COLORS[s.k];
+      bar.setAttribute("aria-hidden","true");
+      right.appendChild(bar);
+      right.appendChild(el("div","meta","LR: "+s.lr));
+      right.appendChild(el("div","meta","Data: "+s.data));
+      right.appendChild(el("div","meta","Locus: "+s.src));
+      d.appendChild(left); d.appendChild(right);
+      sbox.appendChild(d);
+    });
+  }
+  Object.keys(MODELS).forEach(function(n, i){
+    var b = el("button", null, n); b.type="button";
+    b.addEventListener("click", function(){ render(n); });
+    mbox.appendChild(b);
   });
-  document.getElementById("axisMax").textContent = fmtTokens(maxTokens) + " tokens";
-  document.getElementById("note").innerHTML = cfg.note;
-  const totalTokens = cfg.stages.reduce((a, s) => a + s.tokens, 0);
-  document.getElementById("caption").innerHTML =
-    `<b>${cfg.label}.</b> Total tokens across stages: ${fmtTokens(totalTokens)}. ` +
-    `Bar widths use ${state.scale} scale; each bar's internal stacked fill shows the data-mix composition for that stage. ` +
-    `The eval-gate label beside each bar names the benchmark suite used to decide the stage is done. ` +
-    `Toggle configurations to see how the same five stages are allocated differently across labs.`;
-}
+  render("Olmo 3 7B");
 
-document.querySelectorAll("#cfg button").forEach(b => {
-  b.addEventListener("click", () => {
-    document.querySelectorAll("#cfg button").forEach(x => x.classList.remove("active"));
-    b.classList.add("active");
-    state.cfg = b.dataset.cfg;
-    render();
+  var DU = ["0%","5%","10%","20%","30%"];
+  var METRICS = [
+    ["MMLU (5-shot)", [35.69,40.20,43.19,42.59,41.78]],
+    ["GSM8K (8-shot)", [14.71,16.98,20.47,22.97,24.56]],
+    ["HumanEval (pass@1)", [17.23,18.50,20.39,23.40,24.17]],
+    ["Gauntlet Core Average", [35.37,37.63,38.46,39.32,38.89]],
+    ["Language Understanding", [61.52,61.05,60.41,60.08,60.35]],
+    ["Reading Comprehension", [37.02,41.23,43.35,45.45,42.50]]
+  ];
+  var dbox = document.getElementById("du"), tab = document.getElementById("dutab");
+  function renderDU(i){
+    Array.prototype.forEach.call(dbox.children, function(b, j){ b.setAttribute("aria-pressed", j===i ? "true" : "false"); });
+    var tokens = [0,50,100,200,300][i];
+    var h = "<thead><tr><th>Benchmark</th><th>0%</th><th>"+DU[i]+" ("+tokens+"B tokens)</th><th>Δ</th><th>Best duration in Table 6</th><th></th></tr></thead><tbody>";
+    METRICS.forEach(function(r){
+      var v = r[1], d = v[i]-v[0];
+      var best = 0; v.forEach(function(x, j){ if(x>v[best]) best=j; });
+      var cls = d>0.005 ? "pos" : (d<-0.005 ? "neg" : "");
+      h += "<tr><td>"+r[0]+"</td><td>"+v[0].toFixed(2)+"</td><td>"+v[i].toFixed(2)+"</td><td class='"+cls+"'>"+(d>=0?"+":"")+d.toFixed(2)+"</td><td>"+DU[best]+"</td><td><span class='mbar' style='width:"+Math.round(v[i])+"px'></span></td></tr>";
+    });
+    tab.innerHTML = h+"</tbody>";
+  }
+  DU.forEach(function(lbl, i){
+    var b = el("button", null, lbl); b.type="button";
+    b.addEventListener("click", function(){ renderDU(i); });
+    dbox.appendChild(b);
   });
-});
-document.getElementById("scale").addEventListener("change", e => {
-  state.scale = e.target.value;
-  render();
-});
-
-render();
+  renderDU(3);
+})();
 </script>
-
 </body>
 </html>

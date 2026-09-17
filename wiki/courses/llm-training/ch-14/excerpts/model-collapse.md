@@ -7,6 +7,8 @@ source_url: https://www.nature.com/articles/s41586-024-07566-y ; https://arxiv.o
 created_at: "2026-04-23"
 ---
 
+> Superseded by the 2026-09 revision of read.md; kept for history.
+
 # Excerpt: Model Collapse — From Curse-of-Recursion to 1% Contamination Flatlining
 
 **Source:** `wiki/raw-data/llm-training/papers/model-collapse.md`, `wiki/raw-data/llm-training/papers/strong-model-collapse.md`

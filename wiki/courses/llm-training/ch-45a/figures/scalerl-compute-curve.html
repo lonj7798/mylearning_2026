@@ -1,0 +1,298 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>RL compute-performance fit and the crossover — ch-45a</title>
+<style>
+:root{
+  --bg:#f7f7f5; --panel:#ffffff; --ink:#1d1d1f; --muted:#5b5b60; --line:#d9d9de;
+  --accent:#1f6fb5; --c1:#1f6fb5; --c1-bg:#dcebf8; --c2:#7a5a1e; --c2-bg:#f5ead3;
+  --absent:#6a6a72; --absent-bg:#efeff1; --warn:#b4472c; --warn-bg:#f7e0d9; --grid:#e6e6ea;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#16171a; --panel:#1f2024; --ink:#ececef; --muted:#a3a3ab; --line:#34353b;
+    --accent:#7fb6e8; --c1:#7fb6e8; --c1-bg:#1d3346; --c2:#d8bb7a; --c2-bg:#3a3020;
+    --absent:#9a9aa2; --absent-bg:#2a2b30; --warn:#ec9a82; --warn-bg:#45271f; --grid:#2c2d33;
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#16171a; --panel:#1f2024; --ink:#ececef; --muted:#a3a3ab; --line:#34353b;
+  --accent:#7fb6e8; --c1:#7fb6e8; --c1-bg:#1d3346; --c2:#d8bb7a; --c2-bg:#3a3020;
+  --absent:#9a9aa2; --absent-bg:#2a2b30; --warn:#ec9a82; --warn-bg:#45271f; --grid:#2c2d33;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font:14px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;padding:16px}
+main{max-width:1000px;margin:0 auto}
+h1{font-size:1.25em;margin:0 0 4px}
+h2{font-size:1.02em;margin:0 0 8px}
+p{margin:6px 0}
+.sub{color:var(--muted)}
+section{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:14px 16px;margin:14px 0}
+label{font-size:.92em}
+select,input[type=number]{font:inherit;color:var(--ink);background:var(--panel);border:1px solid var(--line);border-radius:6px;padding:5px 8px;max-width:100%}
+input[type=range]{width:100%;accent-color:var(--accent)}
+.curves{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:14px}
+.curvebox{border:1px solid var(--line);border-radius:6px;padding:10px 12px}
+.curvebox.one{border-left:4px solid var(--c1)}
+.curvebox.two{border-left:4px solid var(--c2)}
+.row{margin-top:8px}
+.row .k{display:flex;justify-content:space-between;font-size:.86em;color:var(--muted)}
+.row .k b{color:var(--ink);font-variant-numeric:tabular-nums}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px;margin-top:12px}
+.cell{border:1px solid var(--line);border-radius:6px;padding:9px 10px}
+.cell .k{font-size:.82em;color:var(--muted);display:block}
+.cell .v{font-size:1.16em;font-weight:600;margin-top:2px;display:block;font-variant-numeric:tabular-nums}
+.tag{display:inline-block;font-size:.72em;border-radius:4px;padding:1px 6px;margin-top:5px}
+.t-one{color:var(--c1);background:var(--c1-bg)}
+.t-two{color:var(--c2);background:var(--c2-bg)}
+.t-neutral{color:var(--absent);background:var(--absent-bg)}
+.t-warn{color:var(--warn);background:var(--warn-bg)}
+.eq{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:.9em;background:var(--absent-bg);border:1px solid var(--line);border-radius:6px;padding:8px 10px;margin-top:10px;overflow-x:auto}
+.note{margin-top:10px;font-size:.92em;color:var(--muted)}
+.plotwrap{overflow-x:auto}
+svg{display:block;width:100%;height:auto;min-width:560px}
+.caption{color:var(--muted);font-size:.87em;margin-top:12px}
+ul{margin:6px 0 0 18px;padding:0}
+li{margin:3px 0}
+</style>
+</head>
+<body>
+<main>
+<h1>RL compute-performance fit and the crossover</h1>
+<p class="sub">Two fitted runs are drawn on the same compute axis. Move <code>A</code>, <code>B</code> and
+<code>C_mid</code>, or load a fitted row from ScaleRL Table 1, and read where the two curves cross. Companion to
+ch-45a §5.</p>
+
+<section>
+  <div class="eq">R_C &minus; R_0 = (A &minus; R_0) &times; 1 / (1 + (C_mid / C)<sup>B</sup>)</div>
+  <p class="note">
+    <code>R_C</code> is the pass rate (mean@16) on an i.i.d. validation set after <code>C</code> GPU-hours of RL;
+    <code>R_0</code> is the starting checkpoint's pass rate; <code>A</code> is the asymptotic pass rate;
+    <code>B</code> is the scaling exponent, larger meaning a faster rise through the mid-range; <code>C_mid</code>
+    is the compute at the midpoint. Model and training data are held fixed within one fit.
+  </p>
+  <div class="row" style="margin-top:12px">
+    <label for="r0">Shared starting pass rate R_0: <b id="r0v">0.00</b></label>
+    <input type="range" id="r0" min="0" max="0.5" step="0.01" value="0">
+    <p class="note">R_0 is set here, not read from the source: the fitted R_0 values of the ScaleRL runs are not
+    recorded in this chapter's excerpt. Only the shape of the comparison depends on it.</p>
+  </div>
+</section>
+
+<section>
+  <h2>The two runs</h2>
+  <div class="curves">
+    <div class="curvebox one">
+      <label for="p1">Curve 1 <select id="p1"></select></label>
+      <div class="row"><span class="k">A (asymptote) <b id="a1v"></b></span><input type="range" id="a1" min="0.3" max="0.9" step="0.005"></div>
+      <div class="row"><span class="k">B (exponent) <b id="b1v"></b></span><input type="range" id="b1" min="0.5" max="3" step="0.01"></div>
+      <div class="row"><span class="k">C_mid (GPU-hours) <b id="m1v"></b></span><input type="range" id="m1" min="0" max="1000" step="1"></div>
+    </div>
+    <div class="curvebox two">
+      <label for="p2">Curve 2 <select id="p2"></select></label>
+      <div class="row"><span class="k">A (asymptote) <b id="a2v"></b></span><input type="range" id="a2" min="0.3" max="0.9" step="0.005"></div>
+      <div class="row"><span class="k">B (exponent) <b id="b2v"></b></span><input type="range" id="b2" min="0.5" max="3" step="0.01"></div>
+      <div class="row"><span class="k">C_mid (GPU-hours) <b id="m2v"></b></span><input type="range" id="m2" min="0" max="1000" step="1"></div>
+    </div>
+  </div>
+  <div class="row" style="margin-top:14px">
+    <label for="bud">Budget C being compared: <b id="budv"></b> GPU-hours</label>
+    <input type="range" id="bud" min="0" max="1000" step="1" value="560">
+  </div>
+  <div class="plotwrap"><svg id="plot" viewBox="0 0 760 420" role="img" aria-label="Pass rate against RL compute for two fitted runs"></svg></div>
+  <div class="grid" id="cells"></div>
+  <p class="note" id="verdict"></p>
+</section>
+
+<section>
+  <h2>What this shows about a recipe row</h2>
+  <ul>
+    <li>A run with the smaller <code>C_mid</code> reaches most of its own gain earlier; a run with the larger
+      <code>A</code> ends higher. When one run has both a smaller <code>C_mid</code> and a smaller <code>A</code>,
+      the two curves cross exactly once, and the ranking of the two recipes depends on the budget.</li>
+    <li>ScaleRL's fitted batch-512 and batch-2048 rows are that case: C_mid 2,818 against 10,909 and A 0.605
+      against 0.645. With a common R_0 the crossing falls between the 16,000 and 100,000 GPU-hour budgets quoted
+      in ch-45a §5.</li>
+    <li>The 16,000-GPU-hour ablation budget of the study is marked on the axis. A leave-one-out ablation measured
+      at that budget separates axes that move <code>B</code> from axes that move <code>A</code> only when the two
+      curves have not yet crossed.</li>
+  </ul>
+  <p class="caption">Presets are the fitted (C_mid, B, A) triples of arXiv:2510.13786v1 Table 1, as recorded in
+  <code>excerpts/scalerl.md</code>. The Scout row is a Llama-4 Scout 17B&times;16 MoE run; the other rows are 8B
+  dense. The error margin on A is &plusmn;0.02, from three repeated runs (Fig. 8a). Curves outside the fitted
+  windows are extrapolations of the fit, not measurements.</p>
+</section>
+</main>
+
+<script>
+"use strict";
+var PRESETS = [
+  {n:"ScaleRL bs512 (8B dense)", A:0.605, B:1.77, M:2818},
+  {n:"ScaleRL bs2048 (8B dense)", A:0.645, B:1.70, M:10909},
+  {n:"ScaleRL-Scout (17B×16 MoE)", A:0.710, B:1.65, M:4242},
+  {n:"ScaleRL math+code, math curve", A:0.595, B:2.05, M:2896},
+  {n:"ScaleRL math+code, code curve", A:0.615, B:1.09, M:1675},
+  {n:"custom", A:null, B:null, M:null}
+];
+var CMIN = 1000, CMAX = 300000;            // GPU-hour axis
+var MMIN = 500, MMAX = 40000;              // C_mid slider range
+
+function sl2log(v, lo, hi){ return Math.exp(Math.log(lo) + (v/1000)*(Math.log(hi)-Math.log(lo))); }
+function log2sl(x, lo, hi){ return 1000*(Math.log(x)-Math.log(lo))/(Math.log(hi)-Math.log(lo)); }
+function fmt(x){ return x>=10000 ? Math.round(x/100)*100 : Math.round(x); }
+function R(C, r0, A, B, M){ return r0 + (A - r0) / (1 + Math.pow(M/C, B)); }
+function frac(C, B, M){ return 1 / (1 + Math.pow(M/C, B)); }
+
+var el = function(id){ return document.getElementById(id); };
+var S = {
+  1:{A:0.605,B:1.77,M:2818},
+  2:{A:0.645,B:1.70,M:10909}
+};
+
+[1,2].forEach(function(i){
+  var sel = el("p"+i);
+  PRESETS.forEach(function(p, k){
+    var o = document.createElement("option");
+    o.value = String(k); o.textContent = p.n; sel.appendChild(o);
+  });
+  sel.value = String(i-1);
+  sel.addEventListener("change", function(){
+    var p = PRESETS[+sel.value];
+    if (p.A === null) return;
+    S[i] = {A:p.A, B:p.B, M:p.M};
+    push(i); draw();
+  });
+  ["a","b","m"].forEach(function(t){
+    el(t+i).addEventListener("input", function(){
+      if (t === "a") S[i].A = +el("a"+i).value;
+      if (t === "b") S[i].B = +el("b"+i).value;
+      if (t === "m") S[i].M = sl2log(+el("m"+i).value, MMIN, MMAX);
+      el("p"+i).value = String(PRESETS.length-1);
+      draw();
+    });
+  });
+});
+
+function push(i){
+  el("a"+i).value = S[i].A;
+  el("b"+i).value = S[i].B;
+  el("m"+i).value = log2sl(S[i].M, MMIN, MMAX);
+}
+push(1); push(2);
+
+el("r0").addEventListener("input", draw);
+el("bud").addEventListener("input", draw);
+
+function crossing(r0){
+  var lo = CMIN, hi = CMAX;
+  var f = function(C){ return R(C,r0,S[1].A,S[1].B,S[1].M) - R(C,r0,S[2].A,S[2].B,S[2].M); };
+  var a = f(lo), b = f(hi);
+  if (a === 0) return lo;
+  if (a*b > 0) return null;
+  for (var k=0; k<80; k++){
+    var mid = Math.exp((Math.log(lo)+Math.log(hi))/2);
+    if (f(lo)*f(mid) <= 0) hi = mid; else lo = mid;
+  }
+  return Math.exp((Math.log(lo)+Math.log(hi))/2);
+}
+
+function draw(){
+  var r0 = +el("r0").value;
+  var bud = sl2log(+el("bud").value, CMIN, CMAX);
+  el("r0v").textContent = r0.toFixed(2);
+  el("budv").textContent = fmt(bud).toLocaleString();
+  [1,2].forEach(function(i){
+    el("a"+i+"v").textContent = S[i].A.toFixed(3);
+    el("b"+i+"v").textContent = S[i].B.toFixed(2);
+    el("m"+i+"v").textContent = fmt(S[i].M).toLocaleString();
+  });
+
+  var W=760,H=420,L=64,Rr=18,T=18,Bm=54;
+  var yMax = Math.max(0.8, S[1].A, S[2].A) + 0.05;
+  var X = function(C){ return L + (Math.log(C)-Math.log(CMIN))/(Math.log(CMAX)-Math.log(CMIN))*(W-L-Rr); };
+  var Y = function(v){ return T + (1 - v/yMax)*(H-T-Bm); };
+
+  var parts = [];
+  parts.push('<rect x="0" y="0" width="'+W+'" height="'+H+'" fill="none"/>');
+
+  // grid + x ticks
+  var xticks = [1000,3000,10000,16000,30000,100000,300000];
+  xticks.forEach(function(t){
+    var x = X(t);
+    parts.push('<line x1="'+x.toFixed(1)+'" y1="'+T+'" x2="'+x.toFixed(1)+'" y2="'+(H-Bm)+'" stroke="var(--grid)" stroke-width="1"/>');
+    parts.push('<text x="'+x.toFixed(1)+'" y="'+(H-Bm+16)+'" font-size="11" fill="var(--muted)" text-anchor="middle">'+(t>=1000?(t/1000)+"k":t)+'</text>');
+  });
+  for (var v=0; v<=yMax+1e-9; v+=0.1){
+    var y = Y(v);
+    parts.push('<line x1="'+L+'" y1="'+y.toFixed(1)+'" x2="'+(W-Rr)+'" y2="'+y.toFixed(1)+'" stroke="var(--grid)" stroke-width="1"/>');
+    parts.push('<text x="'+(L-8)+'" y="'+(y+4).toFixed(1)+'" font-size="11" fill="var(--muted)" text-anchor="end">'+v.toFixed(1)+'</text>');
+  }
+  parts.push('<line x1="'+L+'" y1="'+(H-Bm)+'" x2="'+(W-Rr)+'" y2="'+(H-Bm)+'" stroke="var(--line)" stroke-width="1.5"/>');
+  parts.push('<line x1="'+L+'" y1="'+T+'" x2="'+L+'" y2="'+(H-Bm)+'" stroke="var(--line)" stroke-width="1.5"/>');
+  parts.push('<text x="'+(W/2)+'" y="'+(H-14)+'" font-size="12" fill="var(--muted)" text-anchor="middle">RL compute C (GPU-hours, log scale)</text>');
+  parts.push('<text transform="translate(16,'+((H-Bm+T)/2)+') rotate(-90)" font-size="12" fill="var(--muted)" text-anchor="middle">pass rate R_C (mean@16)</text>');
+
+  // 16k ablation budget marker
+  var x16 = X(16000);
+  parts.push('<line x1="'+x16.toFixed(1)+'" y1="'+T+'" x2="'+x16.toFixed(1)+'" y2="'+(H-Bm)+'" stroke="var(--absent)" stroke-width="1" stroke-dasharray="2 4"/>');
+  parts.push('<text x="'+(x16+4).toFixed(1)+'" y="'+(T+12)+'" font-size="10.5" fill="var(--muted)">16k: ablation budget</text>');
+
+  // curves
+  [1,2].forEach(function(i){
+    var d = "", n = 240;
+    for (var k=0; k<=n; k++){
+      var C = Math.exp(Math.log(CMIN) + (k/n)*(Math.log(CMAX)-Math.log(CMIN)));
+      var pt = X(C).toFixed(1) + "," + Y(R(C,r0,S[i].A,S[i].B,S[i].M)).toFixed(1);
+      d += (k===0?"M":"L") + pt + " ";
+    }
+    parts.push('<path d="'+d.trim()+'" fill="none" stroke="var(--c'+i+')" stroke-width="2.4"/>');
+    parts.push('<line x1="'+L+'" y1="'+Y(S[i].A).toFixed(1)+'" x2="'+(W-Rr)+'" y2="'+Y(S[i].A).toFixed(1)+'" stroke="var(--c'+i+')" stroke-width="1" stroke-dasharray="5 5" opacity="0.65"/>');
+    parts.push('<text x="'+(W-Rr-4)+'" y="'+(Y(S[i].A)-5).toFixed(1)+'" font-size="10.5" fill="var(--c'+i+')" text-anchor="end">A = '+S[i].A.toFixed(3)+'</text>');
+  });
+
+  // budget line and readouts
+  var xb = X(bud);
+  parts.push('<line x1="'+xb.toFixed(1)+'" y1="'+T+'" x2="'+xb.toFixed(1)+'" y2="'+(H-Bm)+'" stroke="var(--accent)" stroke-width="1.5"/>');
+  [1,2].forEach(function(i){
+    var yv = Y(R(bud,r0,S[i].A,S[i].B,S[i].M));
+    parts.push('<circle cx="'+xb.toFixed(1)+'" cy="'+yv.toFixed(1)+'" r="4.5" fill="var(--c'+i+')"/>');
+  });
+
+  // crossing
+  var cx = crossing(r0);
+  if (cx !== null){
+    var xc = X(cx), yc = Y(R(cx,r0,S[1].A,S[1].B,S[1].M));
+    parts.push('<circle cx="'+xc.toFixed(1)+'" cy="'+yc.toFixed(1)+'" r="6" fill="none" stroke="var(--warn)" stroke-width="2"/>');
+    parts.push('<text x="'+(xc+9).toFixed(1)+'" y="'+(yc+4).toFixed(1)+'" font-size="10.5" fill="var(--warn)">crossing at '+fmt(cx).toLocaleString()+'</text>');
+  }
+
+  el("plot").innerHTML = parts.join("");
+
+  // numeric panel
+  var r1 = R(bud,r0,S[1].A,S[1].B,S[1].M), r2 = R(bud,r0,S[2].A,S[2].B,S[2].M);
+  var f1 = frac(bud,S[1].B,S[1].M), f2 = frac(bud,S[2].B,S[2].M);
+  var cells = [
+    {k:"Curve 1 pass rate at C", v:r1.toFixed(3), t:"t-one"},
+    {k:"Curve 2 pass rate at C", v:r2.toFixed(3), t:"t-two"},
+    {k:"Curve 1 share of its own gain", v:(f1*100).toFixed(1)+"%", t:"t-one"},
+    {k:"Curve 2 share of its own gain", v:(f2*100).toFixed(1)+"%", t:"t-two"},
+    {k:"Difference at C", v:(r1-r2>=0?"+":"")+(r1-r2).toFixed(3), t:"t-neutral"},
+    {k:"Crossing compute", v: cx===null ? "none in 1k–300k" : fmt(cx).toLocaleString()+" GPU-h", t: cx===null?"t-neutral":"t-warn"}
+  ];
+  el("cells").innerHTML = cells.map(function(c){
+    return '<div class="cell"><span class="k">'+c.k+'</span><span class="v">'+c.v+'</span>'+
+           '<span class="tag '+c.t+'">'+(c.t==="t-warn"?"depends on budget":"computed from the fit")+'</span></div>';
+  }).join("");
+
+  var lead = Math.abs(r1-r2) < 5e-4 ? "The two fits are level at this budget." :
+    (r1 > r2 ? "Curve 1 is ahead at this budget." : "Curve 2 is ahead at this budget.");
+  var tail = cx === null ? " The ranking does not change anywhere on the plotted range."
+    : " The ranking reverses at " + fmt(cx).toLocaleString() + " GPU-hours, so a comparison reported at one budget does not carry to the other side of that point.";
+  el("verdict").textContent = lead + tail;
+}
+draw();
+</script>
+</body>
+</html>

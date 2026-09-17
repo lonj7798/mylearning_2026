@@ -1,253 +1,282 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-<meta charset="UTF-8" />
-<title>Ch-34 — Lab Comparison Radar: Qwen 2.5 / Qwen 3 / OLMo 2 / OLMo 3 / Phi 3 / Phi 4</title>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Stage Deltas and SFT Ledger</title>
 <style>
   :root {
-    --bg: #0f1115; --panel: #171a21; --text: #e6e8eb; --muted: #8a95a4;
-    --accent: #5ec8ff; --grid: #2a2f3a;
-    --c-qwen25: #ffb86b;
-    --c-qwen3:  #ff6b9d;
-    --c-olmo2:  #7dd87d;
-    --c-olmo3:  #5ec8ff;
-    --c-phi3:   #c29bff;
-    --c-phi4:   #ffe066;
+    --bg: #f7f7f5; --panel: #ffffff; --text: #1d1f23; --muted: #5d6470; --line: #d9dce1;
+    --pos: #2f6db5; --neg: #c4502b; --zero: #8a8f98;
+    --rep: #dbe8f6; --rep-text: #173a63; --nr: #eeeeec; --nr-text: #6b7078; --conf: #f6e2c9; --conf-text: #7a4210;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #16181c; --panel: #1f2227; --text: #e7e9ec; --muted: #9aa2ad; --line: #353a42;
+      --pos: #6ea8e8; --neg: #ee8a66; --zero: #8a8f98;
+      --rep: #213650; --rep-text: #cfe1f7; --nr: #2a2d33; --nr-text: #9aa2ad; --conf: #4a3520; --conf-text: #f3d2ae;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #16181c; --panel: #1f2227; --text: #e7e9ec; --muted: #9aa2ad; --line: #353a42;
+    --pos: #6ea8e8; --neg: #ee8a66; --zero: #8a8f98;
+    --rep: #213650; --rep-text: #cfe1f7; --nr: #2a2d33; --nr-text: #9aa2ad; --conf: #4a3520; --conf-text: #f3d2ae;
   }
   * { box-sizing: border-box; }
-  body {
-    margin: 0; padding: 20px; background: var(--bg); color: var(--text);
-    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-    font-size: 13px;
-  }
-  h1 { font-size: 17px; margin: 0 0 4px 0; }
-  p.sub { color: var(--muted); margin: 0 0 16px 0; font-size: 12px; max-width: 900px; line-height: 1.5; }
-  .wrap { display: grid; grid-template-columns: 1fr 340px; gap: 20px; }
-  .panel {
-    background: var(--panel); padding: 16px; border-radius: 6px;
-  }
-  canvas { display: block; background: #0b0d11; border-radius: 4px; width: 100%; height: 560px; }
-  .legend { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
-  .lab-pill {
-    display: inline-flex; align-items: center; gap: 6px;
-    padding: 5px 10px; border-radius: 14px; font-size: 11px;
-    background: #232833; cursor: pointer; user-select: none;
-    border: 1px solid #2a2f3a;
-  }
-  .lab-pill.off { opacity: 0.35; }
-  .lab-pill .sw { width: 10px; height: 10px; border-radius: 50%; display: inline-block; }
-  .info { font-size: 12px; line-height: 1.55; }
-  .info h2 { font-size: 13px; color: var(--accent); margin: 0 0 8px 0; }
-  .info table { width: 100%; border-collapse: collapse; margin-top: 8px; font-size: 11px; }
-  .info th, .info td { text-align: left; padding: 4px 6px; border-bottom: 1px solid var(--grid); }
-  .info th { color: var(--muted); font-weight: 500; }
-  .info code { font-size: 11px; color: var(--accent); }
-  .caption { font-size: 11px; color: var(--muted); margin-top: 10px; line-height: 1.55; }
+  body { margin: 0; background: var(--bg); color: var(--text);
+    font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+  main { max-width: 1040px; margin: 0 auto; padding-block: 20px 40px; padding-inline: 16px; }
+  h1 { font-size: 20px; margin: 0 0 4px; }
+  h2 { font-size: 16px; margin: 0 0 8px; }
+  p { margin: 0 0 10px; }
+  .muted { color: var(--muted); }
+  section { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 16px; margin-top: 16px; }
+  .controls { display: flex; flex-wrap: wrap; gap: 10px 16px; align-items: end; margin-bottom: 12px; }
+  label { display: flex; flex-direction: column; font-size: 12px; color: var(--muted); gap: 3px; min-width: 0; max-width: 100%; flex: 1 1 180px; }
+  label.wide { flex: 2 1 320px; }
+  select { font: inherit; color: var(--text); background: var(--bg); border: 1px solid var(--line); border-radius: 6px;
+    padding: 5px 8px; width: 100%; max-width: 100%; }
+  .chart { overflow-x: auto; }
+  svg text { fill: var(--text); font-size: 12px; }
+  svg .axis { stroke: var(--line); }
+  svg .zero { stroke: var(--zero); }
+  .caption { font-size: 12px; color: var(--muted); margin-top: 8px; }
+  .summary { font-size: 13px; margin: 6px 0 0; }
+  .grid-wrap { overflow-x: auto; }
+  table { border-collapse: collapse; font-size: 12px; min-width: 860px; }
+  th, td { border: 1px solid var(--line); padding: 5px 6px; vertical-align: top; text-align: left; }
+  th { background: var(--bg); font-weight: 600; }
+  td.rep { background: var(--rep); color: var(--rep-text); }
+  td.nr { background: var(--nr); color: var(--nr-text); }
+  td.conf { background: var(--conf); color: var(--conf-text); }
+  .legend { display: flex; flex-wrap: wrap; gap: 12px; font-size: 12px; margin: 6px 0 10px; }
+  .sw { display: inline-block; width: 12px; height: 12px; border-radius: 2px; vertical-align: -2px; margin-right: 4px;
+    border: 1px solid var(--line); }
 </style>
 </head>
 <body>
+<main>
+<h1>Stage deltas and SFT ledger</h1>
+<p class="muted">Companion to ch-34. Part 1 plots the change in each benchmark between two stages of one report table, sorted from largest gain to largest loss. Part 2 shows which SFT settings each report prints. All values are copied from the tables named in the captions; nothing is interpolated.</p>
 
-<h1>Chapter 34 — Lab Comparison Radar</h1>
-<p class="sub">
-Six axes, six labs. Click a pill to toggle. Hover near an axis label to read the per-lab attested numbers. The radar shape is the <em>design stance</em>: Phi skews toward synthetic-%, Qwen 3 toward hybrid-thinking, OLMo 3 toward multi-round + long-context, OLMo 2 is the Tülu baseline shape.
-</p>
-
-<div class="wrap">
-  <div class="panel">
-    <canvas id="radar" width="900" height="560"></canvas>
-    <div class="legend" id="legend"></div>
-    <p class="caption">
-      Axes (0-1 normalized; higher = more of that property): <strong>SFT-scale</strong> log-tokens;
-      <strong>synthetic-%</strong> teacher-generated fraction of SFT+pretrain-shaping data;
-      <strong>LR tier</strong> (Qwen DPO 7e-7 = high; OLMo RLVR 3e-7 = mid; others inferred);
-      <strong>multi-round</strong> number of distinct SFT + DPO passes (Qwen 3 four-stage = 4; OLMo 3 branches = 4);
-      <strong>long-context</strong> max SFT sequence length (Qwen 2.5 = 262K; OLMo 3 Longmino = long);
-      <strong>hybrid-thinking</strong> whether one checkpoint carries /think + /no_think.
-    </p>
+<section id="deltas">
+  <h2>1. Stage deltas</h2>
+  <div class="controls">
+    <label class="wide">Report table <select id="ds"></select></label>
+    <label>From <select id="from"></select></label>
+    <label>To <select id="to"></select></label>
   </div>
+  <div class="chart"><svg id="svg" role="img" aria-label="Per-benchmark score change between two stages"></svg></div>
+  <p class="summary" id="summary"></p>
+  <p class="caption" id="caption"></p>
+</section>
 
-  <div class="panel info" id="info">
-    <h2>Select a lab to inspect</h2>
-    <p>Click a pill to toggle; hover the pill to see that lab's attested per-axis numbers below.</p>
+<section id="ledger">
+  <h2>2. SFT ledger coverage</h2>
+  <div class="legend">
+    <span><span class="sw" style="background:var(--rep)"></span>reported at the locus</span>
+    <span><span class="sw" style="background:var(--nr)"></span>not reported (source checked)</span>
+    <span><span class="sw" style="background:var(--conf)"></span>conflict between two statements</span>
   </div>
-</div>
+  <div class="grid-wrap"><table id="grid"></table></div>
+  <p class="caption">Loci: Qwen2.5 arXiv:2412.15115v2 §4.1; Qwen3 arXiv:2505.09388v1 §4.1, §4.3; OLMo 2 arXiv:2501.00656v3 §5, Table 17, open-instruct@098424c finetune_7b.sh; Olmo 3 arXiv:2512.13961v2 §4.2, Tables 17, 47, App. A.6.1; Tülu 3 arXiv:2411.15124v5 §4.3, Table 11; Llama 3.1 arXiv:2407.21783v3 §4.1.3, §4.1.5, Table 7; SmolLM3 huggingface.co/blog/smollm3; DeepSeek-V3 arXiv:2412.19437v2 §5.1; Phi-4 arXiv:2412.08905v1 §4.1; Phi-4-reasoning arXiv:2504.21318v1 §3; Phi-3 arXiv:2404.14219v4 §2.</p>
+</section>
+</main>
 
 <script>
-const AXES = ["SFT-scale","synthetic-%","LR tier","multi-round","long-context","hybrid-thinking"];
-// values normalized to [0,1]; "nd" = not-disclosed, estimated as 0.3 placeholder
-const LABS = [
-  { key:"qwen25", name:"Qwen 2.5", color:getCSS("--c-qwen25"), v:[0.85, 0.50, 0.90, 0.55, 0.95, 0.00],
-    notes:{
-      "SFT-scale":"1M examples across SFT+DPO+GRPO stages",
-      "synthetic-%":"mixed; SFT-resample preference construction is on-policy synthetic",
-      "LR tier":"DPO LR 7e-7 (attested); SFT LR nd",
-      "multi-round":"SFT two-phase + DPO + GRPO = 3 (phases) / 2 (rounds)",
-      "long-context":"SFT Phase 2 up to 262,144 tokens",
-      "hybrid-thinking":"no — single-mode model"
-    }},
-  { key:"qwen3",  name:"Qwen 3",  color:getCSS("--c-qwen3"),  v:[0.75, 0.70, 0.55, 0.95, 0.70, 1.00],
-    notes:{
-      "SFT-scale":"cold-start + fusion SFT; sizes nd",
-      "synthetic-%":"heavy; long-CoT traces and synthetic math/code",
-      "LR tier":"nd (AdamW defaults inferred)",
-      "multi-round":"four stages: cold-start SFT → reasoning RL → fusion SFT → general RL",
-      "long-context":"pretrain long-context stage at 32K; SFT bound nd",
-      "hybrid-thinking":"YES — /think and /no_think on one checkpoint"
-    }},
-  { key:"olmo2",  name:"OLMo 2",  color:getCSS("--c-olmo2"),  v:[0.80, 0.40, 0.50, 0.55, 0.30, 0.00],
-    notes:{
-      "SFT-scale":"~939K prompts (OLMo-variant of Tülu 3 mix)",
-      "synthetic-%":"Tülu 3 synthetic fraction; lower than Phi line",
-      "LR tier":"RLVR LR 3e-7; SFT LR Tülu defaults re-tuned",
-      "multi-round":"SFT + DPO + RLVR = 3",
-      "long-context":"SFT bounded by Tülu 3 chat lengths; pretrain 4K→32K",
-      "hybrid-thinking":"no"
-    }},
-  { key:"olmo3",  name:"OLMo 3",  color:getCSS("--c-olmo3"),  v:[0.80, 0.40, 0.50, 1.00, 0.85, 0.30],
-    notes:{
-      "SFT-scale":"Dolci suite; per-branch sizes nd",
-      "synthetic-%":"Dolci synthetic fraction per branch; not itemized",
-      "LR tier":"inherits Tülu 3 / OLMo 2 defaults",
-      "multi-round":"four branches (Base / Think / Instruct / RL-Zero) × SFT+DPO+RLVR each",
-      "long-context":"Longmino stage at long-context (639B-token long-doc pool, 50B sampled)",
-      "hybrid-thinking":"partial — Think branch is a separate checkpoint, not a toggle"
-    }},
-  { key:"phi3",   name:"Phi 3",   color:getCSS("--c-phi3"),   v:[0.45, 0.85, 0.40, 0.40, 0.20, 0.00],
-    notes:{
-      "SFT-scale":"size not itemized publicly",
-      "synthetic-%":"Phase-2 pretraining is primarily synthetic; SFT also curated synthetic + human",
-      "LR tier":"nd",
-      "multi-round":"Phase1 pretrain + Phase2 pretrain + SFT + DPO(+safety slice) = 4 stages but 2 post-train rounds",
-      "long-context":"mini 4K native (128K LongRope variant)",
-      "hybrid-thinking":"no"
-    }},
-  { key:"phi4",   name:"Phi 4",   color:getCSS("--c-phi4"),   v:[0.95, 0.95, 0.50, 0.65, 0.60, 0.45],
-    notes:{
-      "SFT-scale":"Phi-4-reasoning: 1.4M prompts, ~16B SFT tokens (~8.3B unique)",
-      "synthetic-%":"~400B unweighted synthetic tokens; SFT traces o3-mini-generated",
-      "LR tier":"nd",
-      "multi-round":"Phi-4-base pretrain/post + Phi-4-reasoning SFT + 90 GRPO steps",
-      "long-context":"SFT traces at 32K context (o3-mini high-thinking)",
-      "hybrid-thinking":"partial — reasoning-only model; /think emitted by default"
-    }}
+const olmo2Rows = ["AVG","AlpacaEval 2","BBH","DROP","GSM8K","IFEval","MATH","MMLU","Safety","PopQA","TruthfulQA"];
+function byRows(rows, cols) { return rows.map((r, i) => [r, cols.map(c => c[i])]); }
+
+const DATA = [
+  { name: "Qwen3-32B by post-training stage (Qwen3 Table 22)",
+    cols: ["Stage 2 · thinking", "Stage 3 · thinking", "Stage 3 · non-thinking", "Stage 4 · thinking", "Stage 4 · non-thinking"],
+    def: [0, 3],
+    rows: [
+      ["LiveBench 2024-11-25", [68.6, 70.9, 57.1, 74.9, 59.8]],
+      ["Arena-Hard", [86.8, 89.4, 88.5, 93.8, 92.8]],
+      ["CounterFactQA (in-house)", [50.4, 61.3, 64.3, 68.1, 66.4]],
+      ["IFEval strict prompt", [73.0, 78.4, 78.4, 85.0, 83.2]],
+      ["Multi-IF", [61.4, 64.6, 65.2, 73.0, 70.7]],
+      ["LengthCtrl (in-house)", [62.6, 70.6, 84.9, 73.5, 87.3]],
+      ["ThinkFollow (in-house, one score per stage)", [null, 88.7, 88.7, 98.9, 98.9]],
+      ["BFCL v3", [69.0, 68.4, 61.5, 70.3, 63.0]],
+      ["ToolUse (in-house)", [63.3, 70.4, 73.2, 85.5, 86.5]],
+      ["MMLU-Redux", [91.4, 91.0, 86.7, 90.9, 85.7]],
+      ["GPQA-Diamond", [68.8, 69.0, 50.4, 68.4, 54.6]],
+      ["AIME'24", [83.8, 81.9, 28.5, 81.4, 31.0]],
+      ["LiveCodeBench v5", [68.4, 67.2, 31.1, 65.7, 31.3]]
+    ],
+    cap: "Source: Qwen3 Technical Report, arXiv:2505.09388v1 Table 22. One score per stage; no variance reported. AIME scores average 64 samples per question (§4.6). Stage 2 has no non-thinking mode." },
+  { name: "Qwen3-8B: RL versus on-policy distillation (Qwen3 Table 21)",
+    cols: ["Off-policy distillation", "+ Reinforcement learning", "+ On-policy distillation"],
+    def: [0, 2],
+    rows: [
+      ["AIME'24", [55.0, 67.6, 74.4]], ["AIME'24 pass@64", [90.0, 90.0, 93.3]],
+      ["AIME'25", [42.8, 55.5, 65.5]], ["AIME'25 pass@64", [83.3, 83.3, 86.7]],
+      ["MATH500", [92.4, 94.8, 97.0]], ["LiveCodeBench v5", [42.0, 52.9, 60.3]],
+      ["MMLU-Redux", [86.4, 86.9, 88.3]], ["GPQA-Diamond", [55.6, 61.3, 63.3]]
+    ],
+    cap: "Source: arXiv:2505.09388v1 Table 21. Both runs start from the same off-policy distilled checkpoint and use math and code queries only. GPU hours: 17,920 (RL), 1,800 (on-policy distillation)." },
+  { name: "OLMo 2 7B Instruct by stage (OLMo 2 Table 16)",
+    cols: ["SFT", "DPO", "Instruct (RLVR)"], def: [0, 2],
+    rows: byRows(olmo2Rows, [[51.4,10.2,49.6,59.6,74.6,66.9,25.3,61.1,94.6,23.6,48.6],[55.9,27.9,51.1,60.2,82.6,73.0,30.3,60.8,93.7,23.5,56.0],[56.5,29.1,51.4,60.5,85.1,72.3,32.5,61.3,93.3,23.2,56.5]]),
+    cap: "Source: OLMo 2, arXiv:2501.00656v3 Table 16. AlpacaEval 2 is length-controlled win rate; Safety is the Tülu 3 safety average." },
+  { name: "OLMo 2 13B Instruct by stage (OLMo 2 Table 16)",
+    cols: ["SFT", "DPO", "Instruct (RLVR)"], def: [0, 2],
+    rows: byRows(olmo2Rows, [[56.6,11.5,59.9,71.3,76.3,68.6,29.5,68.0,94.3,29.4,57.1],[62.0,38.3,61.4,71.5,82.3,80.2,35.2,67.9,90.3,29.0,63.9],[63.4,39.5,63.0,71.5,87.4,82.6,39.2,68.5,89.7,28.8,64.3]]),
+    cap: "Source: arXiv:2501.00656v3 Table 16. The 13B model ran three RLVR passes (mixed, GSM8K, MATH) (§5, Fig. 13)." },
+  { name: "OLMo 2 32B Instruct by stage (OLMo 2 Table 16)",
+    cols: ["SFT", "DPO", "Instruct (RLVR)"], def: [1, 2],
+    rows: byRows(olmo2Rows, [[61.7,16.9,69.7,77.2,78.4,72.4,35.9,76.1,93.8,35.4,61.3],[68.8,44.1,70.2,77.5,85.7,83.8,46.8,78.0,91.9,36.4,73.5],[68.8,42.8,70.6,78.0,87.6,85.6,49.7,77.3,85.9,37.5,73.2]]),
+    cap: "Source: arXiv:2501.00656v3 Table 16. The 32B RLVR stage used GRPO (§5)." },
+  { name: "Olmo 3 7B Instruct by stage (Olmo 3 Table 26)",
+    cols: ["SFT", "DPO", "Final (RL)"], def: [1, 2],
+    rows: [
+      ["MATH", [65.1, 79.6, 87.3]], ["AIME 2024", [6.7, 23.5, 44.3]], ["AIME 2025", [7.2, 20.4, 32.5]],
+      ["OMEGA", [14.4, 22.8, 28.9]], ["BigBenchHard", [51.0, 69.3, 71.2]], ["ZebraLogic", [18.0, 28.4, 32.9]],
+      ["AGI Eval English", [59.2, 64.0, 64.4]], ["HumanEvalPlus", [69.8, 72.9, 77.2]], ["MBPP+", [56.5, 55.9, 60.2]],
+      ["LiveCodeBench v3", [20.0, 18.8, 29.5]], ["IFEval", [81.7, 82.0, 85.6]], ["IFBench", [27.4, 29.3, 32.3]],
+      ["MMLU", [67.1, 69.1, 69.1]], ["PopQA", [16.5, 20.7, 14.1]], ["GPQA", [30.0, 37.9, 40.4]],
+      ["AlpacaEval 2 LC", [21.8, 43.3, 40.9]], ["SimpleQA (with tools)", [74.2, 79.8, 79.3]],
+      ["LitQA2 (with tools)", [38.0, 43.3, 38.2]], ["BFCL", [48.9, 49.6, 49.8]], ["Safety", [89.5, 89.9, 87.6]]
+    ],
+    cap: "Source: Olmo 3, arXiv:2512.13961v2 Table 26. Each number averages three evaluation runs." },
+  { name: "Phi-4 post-training stages (Phi-4 Table 9)",
+    cols: ["SFT", "DPO stage 1 (pivotal tokens)", "DPO stage 2 only (judge-guided)", "phi-4 (stage 1 + 2)"], def: [1, 3],
+    rows: [
+      ["MMLU", [82.8, 84.8, 84.2, 84.8]], ["GPQA", [47.3, 53.6, 52.4, 56.1]], ["MATH", [77.1, 80.5, 77.6, 80.4]],
+      ["HumanEval", [79.5, 81.6, 81.5, 82.6]], ["MGSM", [80.8, 80.8, 81.5, 80.6]], ["SimpleQA", [3.7, 2.9, 2.9, 3.0]],
+      ["DROP", [82.8, 86.1, 71.8, 75.5]], ["MMLUPro", [61.9, 70.0, 67.2, 70.4]], ["HumanEval+", [77.9, 81.9, 81.4, 82.8]],
+      ["ArenaHard", [56.7, 66.5, 69.8, 75.4]], ["IFEval", [66.2, 63.0, 63.0, 63.0]], ["PhiBench (internal)", [48.2, 54.5, 53.0, 56.2]]
+    ],
+    cap: "Source: Phi-4 Technical Report, arXiv:2412.08905v1 Table 9 (simple-evals). Each DPO stage contains 1-5% hallucination and safety data. SimpleQA here is the simple-evals score, not the correct/incorrect/not-attempted split of Fig. 6." },
+  { name: "Phi-4 to Phi-4-reasoning on general benchmarks (Phi-4-reasoning Table 2)",
+    cols: ["Phi-4", "Phi-4-reasoning (SFT)", "Phi-4-reasoning-plus (SFT + RL)"], def: [0, 1],
+    rows: [
+      ["FlenQA 3K", [82.0, 97.7, 97.9]], ["IFEval Strict", [62.3, 83.4, 84.9]], ["ArenaHard", [68.1, 73.3, 79.0]],
+      ["HumanEvalPlus", [83.5, 92.9, 92.3]], ["MMLUPro", [71.5, 74.3, 76.0]],
+      ["Kitab no-context precision", [19.3, 23.2, 27.6]], ["Kitab with-context precision", [88.5, 93.8, 93.6]],
+      ["Kitab no-context recall", [8.2, 4.9, 6.3]], ["Kitab with-context recall", [68.1, 74.8, 75.4]],
+      ["Toxigen toxic category", [72.6, 86.7, 77.3]], ["Toxigen neutral category", [90.0, 84.7, 90.5]],
+      ["PhiBench 2.21", [58.2, 70.6, 74.2]]
+    ],
+    cap: "Source: Phi-4-reasoning Technical Report, arXiv:2504.21318v1 Table 2. Reasoning models evaluated at temperature 0.8 and Phi-4 at 0.0, so decoding differs between columns." },
+  { name: "Qwen2.5-7B-Instruct: 128K model to 1M model (Qwen2.5-1M Table 6)",
+    cols: ["Qwen2.5-7B-Instruct", "Qwen2.5-7B-Instruct-1M"], def: [0, 1],
+    rows: [
+      ["MMLU-Pro", [56.3, 54.3]], ["MMLU-redux", [75.4, 74.8]], ["LiveBench 0831", [35.9, 35.2]], ["GPQA", [36.4, 41.4]],
+      ["MATH", [75.5, 72.9]], ["GSM8K", [91.6, 91.7]], ["HumanEval", [84.8, 86.0]], ["MBPP", [79.2, 75.9]],
+      ["MultiPL-E", [70.4, 72.4]], ["LiveCodeBench", [28.7, 28.0]], ["IFEval", [71.2, 73.0]], ["Arena-Hard", [52.0, 48.1]]
+    ],
+    cap: "Source: Qwen2.5-1M Technical Report, arXiv:2501.15383v1 Table 6. The two columns are separately released models; the authors describe their short-task performance as similar (§6.2). MT-Bench (10-point scale) is omitted from the bars: 8.75 → 8.30." },
+  { name: "Qwen2.5-14B-Instruct: 128K model to 1M model (Qwen2.5-1M Table 6)",
+    cols: ["Qwen2.5-14B-Instruct", "Qwen2.5-14B-Instruct-1M"], def: [0, 1],
+    rows: [
+      ["MMLU-Pro", [63.7, 63.3]], ["MMLU-redux", [80.0, 80.7]], ["LiveBench 0831", [44.4, 44.6]], ["GPQA", [45.5, 39.9]],
+      ["MATH", [80.0, 79.5]], ["GSM8K", [94.8, 94.8]], ["HumanEval", [83.5, 88.4]], ["MBPP", [82.0, 80.2]],
+      ["MultiPL-E", [72.8, 77.1]], ["LiveCodeBench", [42.6, 38.6]], ["IFEval", [81.0, 84.3]], ["Arena-Hard", [68.3, 70.2]]
+    ],
+    cap: "Source: arXiv:2501.15383v1 Table 6. The two columns are separately released models; the authors describe their short-task performance as similar (§6.2). MT-Bench (10-point scale) is omitted from the bars: 8.88 → 8.89." },
+  { name: "Qwen3-235B-A22B hybrid (non-thinking) to Instruct-2507 (model card)",
+    cols: ["Qwen3-235B-A22B, non-thinking mode", "Qwen3-235B-A22B-Instruct-2507"], def: [0, 1],
+    rows: [
+      ["MMLU-Pro", [75.2, 83.0]], ["GPQA", [62.9, 77.5]], ["SimpleQA", [12.2, 54.3]], ["AIME25", [24.7, 70.3]],
+      ["LiveCodeBench v6", [32.9, 51.8]], ["IFEval", [83.2, 88.7]], ["Arena-Hard v2", [52.0, 79.2]], ["BFCL-v3", [68.0, 70.9]]
+    ],
+    cap: "Source: huggingface.co/Qwen/Qwen3-235B-A22B-Instruct-2507 model card, Performance table (read 2026-09-15). Not a controlled comparison: the 2507 model also changed data, including long-tail knowledge coverage." }
 ];
-const ACTIVE = new Set(LABS.map(l=>l.key));
-let HOVER_LAB = null;
 
-function getCSS(v){ return getComputedStyle(document.documentElement).getPropertyValue(v).trim(); }
+const $ = id => document.getElementById(id);
+const dsSel = $("ds"), fromSel = $("from"), toSel = $("to");
+DATA.forEach((d, i) => dsSel.add(new Option(d.name, i)));
 
-const canvas = document.getElementById("radar");
-const ctx = canvas.getContext("2d");
-function resizeCanvas(){
-  const dpr = window.devicePixelRatio || 1;
-  const rect = canvas.getBoundingClientRect();
-  canvas.width = rect.width * dpr;
-  canvas.height = rect.height * dpr;
-  ctx.setTransform(dpr,0,0,dpr,0,0);
+function fillCols() {
+  const d = DATA[+dsSel.value];
+  fromSel.innerHTML = ""; toSel.innerHTML = "";
+  d.cols.forEach((c, i) => { fromSel.add(new Option(c, i)); toSel.add(new Option(c, i)); });
+  fromSel.value = d.def[0]; toSel.value = d.def[1];
 }
 
-function draw(){
-  resizeCanvas();
-  const W = canvas.getBoundingClientRect().width;
-  const H = canvas.getBoundingClientRect().height;
-  const cx = W/2, cy = H/2;
-  const R = Math.min(W,H)/2 - 70;
-  const N = AXES.length;
+function fmt(x) { return (x > 0 ? "+" : x < 0 ? "−" : "±") + Math.abs(x).toFixed(1); }
+function f1(x) { return Number(x).toFixed(1); }
 
-  ctx.clearRect(0,0,W,H);
 
-  // grid rings
-  ctx.strokeStyle = getCSS("--grid");
-  ctx.lineWidth = 1;
-  for (let k=1;k<=5;k++){
-    ctx.beginPath();
-    for (let i=0;i<N;i++){
-      const a = -Math.PI/2 + i*2*Math.PI/N;
-      const r = R*k/5;
-      const x = cx+r*Math.cos(a), y = cy+r*Math.sin(a);
-      if (i===0) ctx.moveTo(x,y); else ctx.lineTo(x,y);
-    }
-    ctx.closePath(); ctx.stroke();
-  }
-
-  // axes + labels
-  ctx.fillStyle = getCSS("--muted");
-  ctx.font = "12px -apple-system, sans-serif";
-  ctx.textAlign = "center";
-  for (let i=0;i<N;i++){
-    const a = -Math.PI/2 + i*2*Math.PI/N;
-    const xE = cx+R*Math.cos(a), yE = cy+R*Math.sin(a);
-    ctx.strokeStyle = getCSS("--grid");
-    ctx.beginPath(); ctx.moveTo(cx,cy); ctx.lineTo(xE,yE); ctx.stroke();
-    const lx = cx+(R+28)*Math.cos(a), ly = cy+(R+28)*Math.sin(a);
-    ctx.fillText(AXES[i], lx, ly+4);
-  }
-
-  // lab polygons
-  for (const lab of LABS){
-    if (!ACTIVE.has(lab.key)) continue;
-    const isHover = HOVER_LAB === lab.key;
-    ctx.beginPath();
-    for (let i=0;i<N;i++){
-      const a = -Math.PI/2 + i*2*Math.PI/N;
-      const r = R*lab.v[i];
-      const x = cx+r*Math.cos(a), y = cy+r*Math.sin(a);
-      if (i===0) ctx.moveTo(x,y); else ctx.lineTo(x,y);
-    }
-    ctx.closePath();
-    ctx.fillStyle = hexToRgba(lab.color, isHover ? 0.35 : 0.15);
-    ctx.fill();
-    ctx.strokeStyle = lab.color;
-    ctx.lineWidth = isHover ? 2.5 : 1.5;
-    ctx.stroke();
-
-    // vertex dots
-    for (let i=0;i<N;i++){
-      const a = -Math.PI/2 + i*2*Math.PI/N;
-      const r = R*lab.v[i];
-      const x = cx+r*Math.cos(a), y = cy+r*Math.sin(a);
-      ctx.fillStyle = lab.color;
-      ctx.beginPath(); ctx.arc(x,y, isHover ? 3.5 : 2.5, 0, 2*Math.PI); ctx.fill();
-    }
-  }
-}
-
-function hexToRgba(hex, a){
-  hex = hex.replace("#",""); if (hex.length===3){ hex = hex.split("").map(c=>c+c).join(""); }
-  const r=parseInt(hex.slice(0,2),16), g=parseInt(hex.slice(2,4),16), b=parseInt(hex.slice(4,6),16);
-  return `rgba(${r},${g},${b},${a})`;
-}
-
-// legend
-const legendDiv = document.getElementById("legend");
-for (const lab of LABS){
-  const pill = document.createElement("span");
-  pill.className = "lab-pill";
-  pill.innerHTML = `<span class="sw" style="background:${lab.color}"></span>${lab.name}`;
-  pill.addEventListener("click", ()=>{
-    if (ACTIVE.has(lab.key)) { ACTIVE.delete(lab.key); pill.classList.add("off"); }
-    else { ACTIVE.add(lab.key); pill.classList.remove("off"); }
-    draw();
+function draw() {
+  const d = DATA[+dsSel.value], a = +fromSel.value, b = +toSel.value;
+  const items = [], skipped = [];
+  d.rows.forEach(([name, v]) => {
+    if (v[a] == null || v[b] == null) { skipped.push(name); return; }
+    items.push({ name, x: v[a], y: v[b], delta: Math.round((v[b] - v[a]) * 10) / 10 });
   });
-  pill.addEventListener("mouseenter", ()=>{ HOVER_LAB = lab.key; renderInfo(lab); draw(); });
-  pill.addEventListener("mouseleave", ()=>{ HOVER_LAB = null; draw(); });
-  legendDiv.appendChild(pill);
+  items.sort((p, q) => q.delta - p.delta);
+  const svg = $("svg");
+  const avail = Math.max(300, (svg.parentNode && svg.parentNode.clientWidth) || 900);
+  const narrow = avail < 640;
+  const W = narrow ? avail : Math.min(avail, 980);
+  const labelW = narrow ? 0 : 250, valW = narrow ? 0 : 110;
+  const chartW = W - labelW - valW - 10;
+  const rowH = narrow ? 44 : 26, top = 28, H = top + items.length * rowH + 16;
+  svg.setAttribute("viewBox", `0 0 ${W} ${H}`);
+  svg.setAttribute("width", W); svg.setAttribute("height", H);
+  const maxAbs = Math.max(1, ...items.map(it => Math.abs(it.delta)));
+  const x0 = labelW + chartW / 2, scale = (chartW / 2 - 52) / maxAbs;
+  let s = "";
+  s += `<text x="${x0 - maxAbs * scale}" y="16" text-anchor="middle" style="fill:var(--muted)">−${maxAbs.toFixed(1)}</text>`;
+  s += `<text x="${x0}" y="16" text-anchor="middle" style="fill:var(--muted)">0</text>`;
+  s += `<text x="${x0 + maxAbs * scale}" y="16" text-anchor="middle" style="fill:var(--muted)">+${maxAbs.toFixed(1)}</text>`;
+  s += `<line class="zero" x1="${x0}" x2="${x0}" y1="${top - 6}" y2="${H - 10}" stroke-width="1"/>`;
+  items.forEach((it, i) => {
+    const y = top + i * rowH;
+    const barY = narrow ? y + 20 : y + 5, textY = narrow ? y + 32 : y + 16;
+    const w = Math.abs(it.delta) * scale;
+    const color = it.delta > 0 ? "var(--pos)" : it.delta < 0 ? "var(--neg)" : "var(--zero)";
+    const bx = it.delta >= 0 ? x0 : x0 - w;
+    if (narrow) {
+      s += `<text x="2" y="${y + 13}">${it.name} <tspan style="fill:var(--muted)">${f1(it.x)} → ${f1(it.y)}</tspan></text>`;
+    } else {
+      s += `<text x="${labelW - 8}" y="${y + 16}" text-anchor="end">${it.name}</text>`;
+      s += `<text x="${labelW + chartW + 10}" y="${y + 16}" style="fill:var(--muted)">${f1(it.x)} → ${f1(it.y)}</text>`;
+    }
+    s += `<rect x="${bx}" y="${barY}" width="${Math.max(w, 1.5)}" height="16" rx="2" style="fill:${color}"><title>${it.name}: ${f1(it.x)} → ${f1(it.y)} (${fmt(it.delta)})</title></rect>`;
+    const tx = it.delta >= 0 ? x0 + w + 6 : x0 - w - 6;
+    s += `<text x="${tx}" y="${textY}" text-anchor="${it.delta >= 0 ? "start" : "end"}">${fmt(it.delta)}</text>`;
+  });
+  svg.innerHTML = s;
+  const up = items.filter(i => i.delta > 0).length, down = items.filter(i => i.delta < 0).length, same = items.length - up - down;
+  $("summary").textContent = a === b ? "Choose two different stages." :
+    `${d.cols[a]} → ${d.cols[b]}: ${up} benchmarks rose, ${down} fell, ${same} unchanged.` +
+    (skipped.length ? ` Not shown (no score in one column): ${skipped.join(", ")}.` : "");
+  $("caption").textContent = d.cap;
 }
 
-function renderInfo(lab){
-  const info = document.getElementById("info");
-  let html = `<h2>${lab.name}</h2><table><thead><tr><th>Axis</th><th>Value</th><th>Attested</th></tr></thead><tbody>`;
-  for (let i=0;i<AXES.length;i++){
-    html += `<tr><td>${AXES[i]}</td><td><code>${lab.v[i].toFixed(2)}</code></td><td>${lab.notes[AXES[i]]}</td></tr>`;
-  }
-  html += `</tbody></table><p class="caption" style="margin-top:10px">Values are normalized 0–1 for radar plotting; the Attested column carries the raw-data source content.</p>`;
-  info.innerHTML = html;
-}
+dsSel.addEventListener("change", () => { fillCols(); draw(); });
+fromSel.addEventListener("change", draw);
+toSel.addEventListener("change", draw);
+fillCols(); draw();
+if (window.matchMedia) window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", draw);
+if (window.addEventListener) window.addEventListener("resize", draw);
 
-window.addEventListener("resize", draw);
-draw();
-renderInfo(LABS[0]);
+const COLS = ["Examples or tokens", "Epochs", "Peak LR and schedule", "Batch", "Packing", "Loss masking", "Max length", "Checkpoint rule"];
+const R = "rep", N = "nr", C = "conf";
+const LEDGER = [
+  ["Qwen2.5 Instruct 0.5B-72B", [[C, "over 1 million (§4.1); §1: 1 million across SFT, DPO, GRPO"], [R, "2"], [R, "7e-6 → 7e-7, shape not stated"], [N, "not reported"], [N, "not reported"], [N, "not reported"], [R, "32,768"], [N, "not reported"]]],
+  ["Qwen3 flagship (cold start, fusion)", [[N, "not reported"], [N, "not reported"], [N, "not reported"], [N, "not reported"], [N, "not reported"], [N, "not reported"], [N, "not reported"], [N, "not reported"]]],
+  ["OLMo-2-1124-7B-SFT", [[C, "939,104 prompts (paper mixture); released script names the -0225 mixture"], [R, "2"], [C, "2e-5 linear (paper, script; YAML 1.0e-5); warmup 0.03 (script) vs 0.3 (Table 17 caption)"], [R, "128 sequences"], [N, "not reported"], [N, "not reported"], [R, "4,096 (released script)"], [R, "LR sweep scored by development average; 1 then up to 4 seeds"]]],
+  ["Olmo 3 7B Think SFT", [[R, "2,268,468 prompts; 45.4B Total Tokens"], [R, "2"], [R, "5e-5"], [R, "1,048,576 tokens"], [R, "document packing"], [N, "mentioned, rule not stated"], [R, "32,768"], [R, "LR sweep, evaluation suite, vibe tests; 32B final is a merge"]]],
+  ["Llama-3.1-Tulu-3-8B-SFT", [[R, "939,344 prompts"], [R, "2"], [C, "5e-6 linear, warmup 0.03; chosen with sum loss, pinned command runs mean"], [R, "128"], [N, "not stated"], [N, "not stated"], [R, "4,096"], [N, "not stated"]]],
+  ["Llama 3.1 405B", [[N, "shares only (Table 7)"], [N, "not printed"], [R, "1e-5 over 8.5K-9K steps"], [N, "not printed"], [N, "not stated"], [R, "prompt tokens masked"], [N, "not printed"], [R, "average of runs"]]],
+  ["SmolLM3-3B", [[R, "1.8B tokens"], [R, "4 (~8B tokens)"], [N, "not reported"], [N, "not reported"], [R, "BFD packing"], [R, "user turns and tool results masked"], [N, "not reported"], [N, "not reported (released model: APO soup merged 0.9/0.1 with a mid-training checkpoint)"]]],
+  ["DeepSeek-V3", [[R, "1.5M instances"], [R, "2"], [R, "cosine 5e-6 → 1e-6"], [N, "not printed"], [R, "packing with sample masking"], [N, "not printed"], [N, "not printed"], [N, "not reported"]]],
+  ["Phi-4", [[R, "around 8B tokens"], [N, "not reported"], [R, "1e-6"], [N, "not reported"], [N, "not reported"], [N, "not reported"], [N, "not reported"], [N, "not reported"]]],
+  ["Phi-4-reasoning", [[R, "over 1.4M pairs; 8.3B unique; 16B trained"], [R, "2+ passes; epoch weights per cluster"], [R, "1e-5, 450 warmup steps, weight decay 1e-4"], [R, "global batch 32 (unit not stated)"], [N, "not stated"], [N, "not stated"], [R, "32K"], [N, "not reported (RL-plus: best AIME 2024)"]]],
+  ["phi-3 family", [[N, "not reported"], [N, "not reported"], [N, "not reported"], [N, "not reported"], [N, "not reported"], [N, "not reported"], [N, "not reported"], [N, "not reported"]]]
+];
+const grid = $("grid");
+let html = "<thead><tr><th>Model</th>" + COLS.map(c => `<th>${c}</th>`).join("") + "</tr></thead><tbody>";
+LEDGER.forEach(([m, cells]) => {
+  html += `<tr><th>${m}</th>` + cells.map(([st, txt]) => `<td class="${st}">${txt}</td>`).join("") + "</tr>";
+});
+grid.innerHTML = html + "</tbody>";
 </script>
-
 </body>
 </html>

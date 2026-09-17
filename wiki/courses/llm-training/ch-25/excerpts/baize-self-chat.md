@@ -7,6 +7,8 @@ source_url: https://arxiv.org/abs/2304.01196
 created_at: "2026-04-23"
 ---
 
+> Superseded by the 2026-09 revision of read.md; kept for history.
+
 # Excerpt: Baize — The Self-Chat Prompt Template and Its Consequences
 
 **Source:** `wiki/raw-data/llm-training/papers/baize.md`, `wiki/raw-data/llm-training/papers/baize-construction.md`

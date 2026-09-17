@@ -5,107 +5,41 @@ phase: read
 excerpt_of: wiki/raw-data/llm-training/papers/step-dpo.md
 source_url: https://arxiv.org/abs/2406.18629
 created_at: "2026-04-23"
+revised_at: "2026-09-15"
 ---
 
-# Excerpt: Step-DPO — DPO applied at the step granularity
+# Excerpt: Step-DPO — preference pairs at the first wrong step, with self-generated chosen steps
 
-**Source library:** `wiki/raw-data/llm-training/papers/step-dpo.md`
-**Paper:** Lai et al. 2024, "Step-DPO: Step-wise Preference Optimization for Long-chain Reasoning of LLMs"
+**Checked on 2026-09-15 against arXiv:2406.18629v1.** The library card `papers/step-dpo.md` had no verification section at that date and contains the errors listed at the end; this excerpt is the checked extract used by ch-24 §6, the negative-samples section, and the Recipe.
 
----
+## Loss (§3.1, Eq. 2)
 
-## Why this source anchors ch-24 §6
+`L(θ) = −E[log σ(β log(π_θ(s_win | x; s_{1∼k−1}) / π_ref(s_win | x; s_{1∼k−1})) − β log(π_θ(s_lose | x; s_{1∼k−1}) / π_ref(s_lose | x; s_{1∼k−1})))]`
 
-Step-DPO is the cleanest demonstration that **moving the preference-optimization granularity from trajectory to step** produces a large signal-to-noise win on reasoning tasks. It is also the paper that justifies ch-24's insistence that DPO-style preference data for reasoning must be *curated at the step level*, not sampled as full-response pairs.
+Stated motivation: in long-chain math answers "the first error often appears midway", and "rejecting an entire undesirable answer in DPO may also discard preceding correct reasoning steps, introducing significant noise" (§3.1).
 
----
+## Data pipeline (§3.2)
 
-## The data-construction pipeline
+1. Error collection: prompt the reference model with "Let's think step by step. Step 1:"; keep answers whose final answer differs from ground truth.
+2. Step localization: verify steps in order until the first error, "manually or using GPT-4"; that step is `s_lose`.
+3. Rectification: sample continuations from `π_ref` given the correct prefix; keep those whose final answer matches; the first step of a kept continuation is `s_win`. Samples whose `s_win` is still wrong may be filtered manually or by GPT-4.
+- Humans or GPT-4 "only locate errors and rank answers"; they do not write corrections (§3.2).
+- Out-of-distribution chosen steps (GPT-4 corrections) have low reference log probability; the authors cite gradient decay (§3.2).
 
-From the source (§Synthesis pipeline):
+## Settings (§4.1)
 
-1. **Collect incorrect trajectories**: sample K CoTs from the policy; keep ones whose final answer is wrong.
-2. **Locate first erroneous step**: prompt a stronger model (GPT-4 or Qwen2-72B) with (problem, wrong-trajectory-segmented-into-steps); ask for the index of the first incorrect step.
-3. **Generate corrected step**: prompt the stronger model to produce a correct next step given (problem, prefix-up-to-error). Verify by continuing the trajectory and checking final answer; accept only if correct.
-4. **Form triplet**: `(prefix_i, step_correct, step_incorrect)` — both steps share the same prefix.
+- SFT data: 374K DeepSeekMath responses to MetaMath and MMIQC problems with correct answers; 299K used for SFT; SFT 3 epochs (7B) or 2 (>30B), batch 256, LR 5e-6, linear decay, warmup ratio 0.03.
+- Step-DPO: about 10K pairs (remaining SFT data plus an AQuA subset); 8 epochs (7B) or 4 (>30B); batch 128; LR 5e-7; β 0.4 (0.5 for 72B); cosine schedule, warmup 0.1.
 
-Filters from the same section:
-- Reject pairs where the stronger model's continuation itself fails.
-- Reject pairs where the "incorrect" step actually still leads to gold (false-positive error localization).
+## Results
 
-Output: **~10K triplets**, step lengths 30-120 tokens each. GPT-4 API cost ~$5-10K.
+- Table 3 (5K pairs, MATH): Qwen2-7B-SFT 54.8 → DPO 55.0 → Step-DPO 55.8; Qwen2-72B-SFT 61.7 → 62.5 → 64.1.
+- Table 4 (MATH): Qwen2-7B-SFT 54.8; Step-DPO with GPT-4-corrected steps 55.1; with self-generated steps 55.8.
+- Table 1 (10K pairs, MATH / GSM8K): Qwen2-7B-SFT 54.8 → 55.8 / 88.2 → 88.5; Llama-3-70B-SFT 56.9 → 59.5; Qwen2-72B-SFT 61.7 → 64.7; Qwen2-72B-Instruct 69.4 → 70.8 / 92.4 → 94.0 (reproduced with the authors' prompt); DeepSeekMath-RL 51.7 → 53.2.
+- Fig. 2: DPO's validation reward margin is limited and plateaus; Step-DPO's is larger.
 
----
+## Errors in the earlier excerpt and library card
 
-## The Step-DPO loss — identical form, different granularity
-
-From the source (§Step-DPO loss):
-
-Given step-preference triplet (x, y_w, y_l) where y_w and y_l share prefix x:
-
-```
-L_StepDPO = -log σ( β · log[π_θ(y_w|x) / π_ref(y_w|x)]
-                   - β · log[π_θ(y_l|x) / π_ref(y_l|x)] )
-```
-
-Same functional form as vanilla DPO. The distinction is entirely in **x and y_w/y_l**:
-
-- **Vanilla DPO**: x = problem, y_w/y_l = full answers (hundreds of tokens each).
-- **Step-DPO**: x = problem + first k-1 steps (200-1000 tokens), y_w/y_l = single reasoning steps (30-120 tokens).
-
-Ch-24 §6 carries the loss verbatim.
-
----
-
-## The gradient-dilution argument — why granularity matters
-
-From the source (§Modality-specific):
-
-> Under KL-constrained optimization, gradient is dominated by tokens with largest log-prob gap; when most of a long trajectory is identical between chosen and rejected, the effective signal is diluted. Step-DPO concentrates signal on the actual disagreement.
-
-Worked case: suppose a 1000-token wrong trajectory and a 1000-token correct trajectory share the first 800 tokens. Vanilla DPO computes the log-prob ratio over all 1000 tokens per side; 800 of those are identical (or near-identical) between the two completions, so the token-level log-prob gap averages near zero over 80% of the sequence. The gradient signal from the 200 tokens that *do* differ is diluted by a factor of ~5.
-
-Step-DPO extracts only the disagreeing step. **x is the 800-token shared prefix**, **y_w / y_l are the ~80-token divergent steps**. The loss gradient concentrates on the actual disagreement; the shared prefix contributes to x (conditioning) but not to the log-prob ratio.
-
-The empirical consequence, from the source (§Quality evaluation):
-
-- Qwen2-7B-Instruct: MATH **53.0 → 58.6**, GSM8K **85.5 → 87.9** with Step-DPO-10K.
-- Full-trajectory DPO on 100K pairs: MATH 54.3 — **worse than Step-DPO with 10× less data**.
-- Qwen2-72B: MATH **70.8 → 79.5**.
-
-Scale-invariance of the gradient-dilution argument: the 72B numbers shift linearly, so the step-level advantage does not diminish with model size.
-
----
-
-## Where Step-DPO sits relative to PRM-based methods
-
-From the source (§Risks + gotchas):
-
-> Not a process reward model: Step-DPO is pairwise preference, not a scalar step-value — complementary to math-shepherd, omegaprm.
-
-Step-DPO and OmegaPRM solve the same problem (step-level supervision for reasoning) via different machinery:
-
-- **OmegaPRM** fits a scalar function r_φ(step, prefix) → [0,1] via MC rollout regression. Used at inference time for weighted best-of-N.
-- **Step-DPO** fits a pairwise ranker implicitly by modifying the policy's log-prob surface. Used to directly improve the policy; no separate reward head.
-
-Ch-24 §6 treats them as complementary: OmegaPRM-labeled step-values can be converted into step-preference pairs (take Q-gap > δ siblings) and consumed by Step-DPO. rStar-Math's PPM is effectively the formalized version of this combination.
-
----
-
-## Caveats
-
-From the source (§Risks + gotchas):
-
-- **Stronger-teacher dependency**: step-localization + correction requires GPT-4-class teacher. Step-DPO data quality is teacher-capped.
-- **Step-segmentation ambiguity**: "first wrong step" is ill-defined when multiple steps jointly err; authors rely on teacher judgment.
-- No process-reward-model head — Step-DPO trains only the policy, so downstream best-of-N or RL with a separate reward must still provide its own signal.
-
-The teacher dependency is the sharpest practical constraint. Without a strong teacher that can reliably identify step-level errors and emit corrections, Step-DPO reduces to vanilla trajectory DPO.
-
----
-
-## Connections
-
-- [[excerpts/omegaprm]] — scalar PRM route; step-level Monte-Carlo labels.
-- [[excerpts/rstar-math]] — MCTS-native step-preference pairs; the PPM is pairwise like Step-DPO but trained as a separate head.
-- [[ch-24]] §6 (step-level supervision), Track 4 (RL with step-preference inputs).
+- "Teacher (GPT-4 / Qwen2-72B) generates the corrected step" (the reference model generates it).
+- "Qwen2-7B-Instruct 53.0 → 58.6 with 10K pairs; full-trajectory DPO on 100K pairs 54.3" (not in the paper).
+- "KL-constrained gradient dilution" explanation; "steps of 30–120 tokens"; "$5K–$10K GPT-4 cost".

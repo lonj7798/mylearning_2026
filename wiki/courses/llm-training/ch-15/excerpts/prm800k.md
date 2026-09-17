@@ -7,6 +7,8 @@ source_url: https://arxiv.org/abs/2305.20050
 created_at: "2026-04-23"
 ---
 
+> Superseded by the 2026-09 revision of read.md; kept for history.
+
 # Excerpt: PRM800K — step-level annotation, active learning, and the 10× cost rule
 
 **Source library:** `wiki/raw-data/llm-training/papers/prm800k.md`

@@ -2,348 +2,142 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8" />
-<title>Ch-28 — Context Extension: RoPE, Needle, Effective Context</title>
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>RULER Effective Length Reader</title>
 <style>
   :root {
-    --bg: #0f1115; --panel: #171a21; --text: #e6e8eb;
-    --muted: #8a95a4; --accent: #5ec8ff; --warn: #ffb86b;
-    --good: #7dd87d; --bad: #ff6b6b; --grid: #2a2f3a;
+    color-scheme: light;
+    --surface: #fcfcfb; --panel: #f3f2ee; --text: #0b0b0b; --text2: #52514e; --muted: #7a7974;
+    --grid: #e2e1dc; --axis: #b9b8b1; --focus: #2a78d6; --context: #b9b8b1; --threshold: #52514e;
   }
-  * { box-sizing: border-box; }
-  body {
-    margin: 0; padding: 20px; background: var(--bg); color: var(--text);
-    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-    font-size: 13px;
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      color-scheme: dark;
+      --surface: #1a1a19; --panel: #242423; --text: #ffffff; --text2: #c3c2b7; --muted: #9a998f;
+      --grid: #33332f; --axis: #5c5b55; --focus: #3987e5; --context: #5c5b55; --threshold: #c3c2b7;
+    }
   }
-  h1 { font-size: 16px; margin: 0 0 4px 0; }
-  h2 { font-size: 13px; color: var(--accent); margin: 0 0 8px 0; font-weight: 600; }
-  p.sub { color: var(--muted); margin: 0 0 16px 0; font-size: 12px; }
-  .controls {
-    background: var(--panel); padding: 12px 16px; border-radius: 6px;
-    margin-bottom: 16px; display: flex; flex-wrap: wrap; gap: 18px; align-items: center;
+  :root[data-theme="dark"] {
+    color-scheme: dark;
+    --surface: #1a1a19; --panel: #242423; --text: #ffffff; --text2: #c3c2b7; --muted: #9a998f;
+    --grid: #33332f; --axis: #5c5b55; --focus: #3987e5; --context: #5c5b55; --threshold: #c3c2b7;
   }
-  .control { display: flex; flex-direction: column; gap: 4px; min-width: 180px; }
-  .control label { font-size: 11px; color: var(--muted); }
-  .control .val { font-variant-numeric: tabular-nums; color: var(--accent); font-weight: 600; }
-  input[type=range] { width: 180px; }
-  .toggle { display: flex; gap: 4px; }
-  .toggle button {
-    background: #232833; border: 1px solid #2a2f3a; color: var(--text);
-    padding: 4px 10px; border-radius: 4px; cursor: pointer; font-size: 11px;
-  }
-  .toggle button.active { background: var(--accent); color: #0f1115; border-color: var(--accent); }
-  .grid {
-    display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 14px;
-  }
-  .panel {
-    background: var(--panel); padding: 14px; border-radius: 6px;
-    min-height: 360px; display: flex; flex-direction: column;
-  }
-  canvas { width: 100%; height: 260px; background: #0b0d11; border-radius: 4px; }
-  .legend { display: flex; gap: 12px; font-size: 11px; color: var(--muted); margin-top: 8px; }
-  .legend span.sw { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 4px; vertical-align: middle; }
-  .stat-row { display: flex; justify-content: space-between; font-size: 11px; color: var(--muted); margin-top: 4px; }
-  .stat-row .v { color: var(--text); font-variant-numeric: tabular-nums; }
-  .haystack {
-    background: #0b0d11; border-radius: 4px; padding: 6px; height: 260px;
-    overflow: hidden; position: relative;
-  }
-  .hay-line { height: 3px; margin: 1px 0; background: #1f2530; border-radius: 1px; }
-  .hay-line.needle { background: var(--warn); height: 4px; box-shadow: 0 0 6px var(--warn); }
-  .caption { font-size: 11px; color: var(--muted); margin-top: 10px; line-height: 1.5; }
+  body { margin: 0; background: var(--surface); color: var(--text);
+    font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+  .wrap { max-width: 900px; margin: 0 auto; padding-inline: 16px; padding-block: 20px; }
+  h1 { font-size: 18px; margin: 0 0 4px; }
+  p { margin: 0 0 12px; color: var(--text2); }
+  .note { background: var(--panel); border-radius: 6px; padding: 10px 12px; font-size: 13px; }
+  .controls { display: flex; flex-wrap: wrap; gap: 6px; margin: 12px 0; }
+  .controls button { font: inherit; font-size: 13px; padding: 4px 10px; border-radius: 4px;
+    border: 1px solid var(--axis); background: var(--surface); color: var(--text); cursor: pointer; }
+  .controls button[aria-pressed="true"] { border-color: var(--focus); outline: 2px solid var(--focus); }
+  .chart { position: relative; }
+  svg { width: 100%; height: auto; display: block; }
+  .tip { position: absolute; pointer-events: none; background: var(--panel); color: var(--text);
+    border: 1px solid var(--axis); border-radius: 4px; padding: 6px 8px; font-size: 12px; white-space: nowrap; }
+  .readout { font-size: 14px; margin: 8px 0 14px; }
+  .readout b { font-variant-numeric: tabular-nums; }
+  .tablewrap { overflow-x: auto; }
+  table { border-collapse: collapse; font-size: 12px; font-variant-numeric: tabular-nums; min-width: 640px; }
+  th, td { padding: 4px 8px; border-bottom: 1px solid var(--grid); text-align: right; }
+  th:first-child, td:first-child { text-align: left; }
+  td.pass { font-weight: 600; }
+  caption { caption-side: bottom; text-align: left; color: var(--muted); padding-top: 8px; }
 </style>
 </head>
 <body>
+<div class="wrap">
+  <h1>RULER effective length, read from the reported scores</h1>
+  <p>Select a model. The line shows its 13-task RULER average at each tested length; the dashed line is the Llama2-7B score at 4K (85.6). The effective length is the longest tested length whose score is above the dashed line.</p>
+  <p class="note">Revised 2026-09. The earlier version of this page drew simulated curves and a RoPE frequency panel. Every number here is from RULER (arXiv 2404.06654 v3) Table 3. RoPE extension methods are covered in ch-32b.</p>
 
-<h1>Chapter 28 — Context Extension Explorer</h1>
-<p class="sub">Drag the context slider. The RoPE frequency bands stretch, the NIAH haystack grows, and the claimed-vs-effective curves diverge. All three panels share the same max-context state.</p>
+  <div class="controls" id="controls" role="group" aria-label="Model"></div>
+  <div class="readout" id="readout"></div>
+  <div class="chart" id="chart">
+    <svg id="svg" viewBox="0 0 760 360" role="img" aria-label="RULER average score by input length"></svg>
+    <div class="tip" id="tip" hidden></div>
+  </div>
 
-<div class="controls">
-  <div class="control">
-    <label>Max context (tokens) <span id="ctxLabel" class="val">8192</span></label>
-    <input id="ctx" type="range" min="8" max="1024" value="8" step="8"
-           title="scale: 8 → 8K, 1024 → 1M tokens (linear on log-bucket index)" />
-  </div>
-  <div class="control">
-    <label>Needle depth <span id="depthLabel" class="val">50%</span></label>
-    <input id="depth" type="range" min="0" max="100" value="50" step="5" />
-  </div>
-  <div class="control">
-    <label>RoPE mode</label>
-    <div class="toggle" id="mode">
-      <button data-mode="uniform" class="active">Uniform NTK</button>
-      <button data-mode="longrope">LongRoPE per-dim</button>
-    </div>
-  </div>
-  <div class="control">
-    <label>Training cap (reference, tokens) <span id="trainLabel" class="val">256K</span></label>
-    <input id="train" type="range" min="8" max="1024" value="256" step="8" />
+  <div class="tablewrap">
+    <table id="table">
+      <caption>Source: Hsieh et al., RULER, arXiv 2404.06654 v3, Table 3 (average of 13 tasks, %). Bold cells exceed 85.6. Effective length as printed by the paper.</caption>
+    </table>
   </div>
 </div>
-
-<div class="grid">
-
-  <!-- Panel 1: RoPE frequency bands -->
-  <div class="panel">
-    <h2>RoPE frequency bands</h2>
-    <canvas id="rope" width="440" height="260"></canvas>
-    <div class="legend">
-      <span><span class="sw" style="background:#5ec8ff"></span>θᵢ per dimension</span>
-      <span><span class="sw" style="background:#ffb86b"></span>usable-range band</span>
-    </div>
-    <div class="stat-row"><span>θ (base)</span><span class="v" id="thetaBase">500,000</span></div>
-    <div class="stat-row"><span>Effective λ (avg)</span><span class="v" id="lambdaAvg">1.00×</span></div>
-    <p class="caption">Uniform NTK scales every band by the same λ. LongRoPE searches per-dim λᵢ — high-freq bands (small i) mostly untouched, low-freq bands compressed harder so aliasing is pushed past the target context.</p>
-  </div>
-
-  <!-- Panel 2: NIAH haystack -->
-  <div class="panel">
-    <h2>NIAH haystack (needle at depth)</h2>
-    <div class="haystack" id="hay"></div>
-    <div class="stat-row"><span>Haystack lines</span><span class="v" id="hayLines">128</span></div>
-    <div class="stat-row"><span>Needle position</span><span class="v" id="needlePos">line 64</span></div>
-    <p class="caption">Each line is ~64 tokens. As context grows, the haystack grows linearly but the retrieval load grows super-linearly when distractors, multi-hop, or aggregation are added (RULER / BABILong).</p>
-  </div>
-
-  <!-- Panel 3: Claimed vs Effective -->
-  <div class="panel">
-    <h2>Claimed vs effective context</h2>
-    <canvas id="curve" width="440" height="260"></canvas>
-    <div class="legend">
-      <span><span class="sw" style="background:#7dd87d"></span>NIAH</span>
-      <span><span class="sw" style="background:#5ec8ff"></span>RULER (13-task)</span>
-      <span><span class="sw" style="background:#ff6b6b"></span>BABILong reasoning</span>
-    </div>
-    <div class="stat-row"><span>NIAH @ ctx</span><span class="v" id="niahCur">100%</span></div>
-    <div class="stat-row"><span>RULER @ ctx</span><span class="v" id="rulerCur">95%</span></div>
-    <div class="stat-row"><span>BABILong @ ctx</span><span class="v" id="babiCur">85%</span></div>
-    <p class="caption">NIAH stays near 100% well past the training cap (single-needle is easy). RULER tracks the training cap more closely. BABILong reasoning-in-a-haystack collapses first — the "effective context" gap that Llama-3.1-70B exhibits at 128K.</p>
-  </div>
-
-</div>
-
 <script>
-(function(){
-  const ctxSlider = document.getElementById('ctx');
-  const depthSlider = document.getElementById('depth');
-  const trainSlider = document.getElementById('train');
-  const ctxLabel = document.getElementById('ctxLabel');
-  const depthLabel = document.getElementById('depthLabel');
-  const trainLabel = document.getElementById('trainLabel');
-  const thetaBase = document.getElementById('thetaBase');
-  const lambdaAvg = document.getElementById('lambdaAvg');
-  const hayDiv = document.getElementById('hay');
-  const hayLinesEl = document.getElementById('hayLines');
-  const needlePos = document.getElementById('needlePos');
-  const niahCur = document.getElementById('niahCur');
-  const rulerCur = document.getElementById('rulerCur');
-  const babiCur = document.getElementById('babiCur');
-  const ropeC = document.getElementById('rope').getContext('2d');
-  const curveC = document.getElementById('curve').getContext('2d');
-  let mode = 'uniform';
+(function () {
+  const lengths = ['4K', '8K', '16K', '32K', '64K', '128K'];
+  const TH = 85.6;
+  const models = [
+    { name: 'Gemini-1.5-Pro', claimed: '1M', eff: '>128K', s: [96.7, 95.8, 96.0, 95.9, 95.9, 94.4] },
+    { name: 'GPT-4', claimed: '128K', eff: '64K', s: [96.6, 96.3, 95.2, 93.2, 87.0, 81.2] },
+    { name: 'Llama3.1 (70B)', claimed: '128K', eff: '64K', s: [96.5, 95.8, 95.4, 94.8, 88.4, 66.6] },
+    { name: 'Qwen2 (72B)', claimed: '128K', eff: '32K', s: [96.9, 96.1, 94.9, 94.1, 79.8, 53.7] },
+    { name: 'Llama3.1 (8B)', claimed: '128K', eff: '32K', s: [95.5, 93.8, 91.6, 87.4, 84.7, 77.0] },
+    { name: 'GradientAI/Llama3 (70B)', claimed: '1M', eff: '16K', s: [95.1, 94.4, 90.8, 85.4, 80.9, 72.1] },
+    { name: 'LongChat (7B)', claimed: '32K', eff: '<4K', s: [84.7, 79.9, 70.8, 59.3, 0.0, 0.0] },
+    { name: 'LongAlpaca (13B)', claimed: '32K', eff: '<4K', s: [60.6, 57.0, 56.6, 43.6, 0.0, 0.0] }
+  ];
+  let sel = 2;
+  const svg = document.getElementById('svg');
+  const tip = document.getElementById('tip');
+  const W = 760, H = 360, L = 48, R = 20, T = 16, B = 40;
+  const x = i => L + i * (W - L - R) / (lengths.length - 1);
+  const y = v => T + (100 - v) * (H - T - B) / 100;
+  const NS = 'http://www.w3.org/2000/svg';
+  const el = (tag, attrs, parent) => { const e = document.createElementNS(NS, tag);
+    for (const k in attrs) e.setAttribute(k, attrs[k]); (parent || svg).appendChild(e); return e; };
 
-  // Toggle buttons
-  document.querySelectorAll('#mode button').forEach(btn => {
-    btn.addEventListener('click', () => {
-      document.querySelectorAll('#mode button').forEach(b => b.classList.remove('active'));
-      btn.classList.add('active');
-      mode = btn.dataset.mode;
-      render();
+  function draw() {
+    svg.innerHTML = '';
+    [0, 20, 40, 60, 80, 100].forEach(v => {
+      el('line', { x1: L, x2: W - R, y1: y(v), y2: y(v), stroke: 'var(--grid)', 'stroke-width': 1 });
+      const t = el('text', { x: L - 8, y: y(v) + 4, 'text-anchor': 'end', 'font-size': 11, fill: 'var(--muted)' }); t.textContent = v;
     });
-  });
-
-  function fmtK(n) {
-    if (n >= 1024) return (n/1024).toFixed(1).replace(/\.0$/, '') + 'M';
-    return n + 'K';
-  }
-
-  function render() {
-    const ctxK = parseInt(ctxSlider.value);          // in units of 1K tokens, 8..1024
-    const depthPct = parseInt(depthSlider.value);
-    const trainK = parseInt(trainSlider.value);
-    ctxLabel.textContent = fmtK(ctxK);
-    depthLabel.textContent = depthPct + '%';
-    trainLabel.textContent = fmtK(trainK);
-
-    // RoPE frequency plot
-    drawRope(ctxK);
-
-    // Haystack
-    drawHay(ctxK, depthPct);
-
-    // Curves
-    drawCurve(ctxK, trainK);
-  }
-
-  function drawRope(ctxK) {
-    const d = 128; // head dim
-    const w = 440, h = 260;
-    ropeC.clearRect(0, 0, w, h);
-    // background grid
-    ropeC.strokeStyle = '#2a2f3a';
-    ropeC.lineWidth = 1;
-    for (let i = 0; i < 5; i++) {
-      const y = 20 + i * ((h-40)/4);
-      ropeC.beginPath(); ropeC.moveTo(30, y); ropeC.lineTo(w-10, y); ropeC.stroke();
-    }
-    // Theta base grows with target context
-    const baseTheta = 10000 * Math.pow(ctxK / 8, 1.6);
-    thetaBase.textContent = Math.round(baseTheta).toLocaleString();
-
-    // Per-dim frequencies θ_i = base^(-2i/d)
-    const freqs = [];
-    for (let i = 0; i < d/2; i++) {
-      const theta_i = Math.pow(baseTheta, -2*i/d);
-      let lam = 1.0;
-      if (mode === 'uniform') {
-        lam = Math.max(1, ctxK/8);  // uniform rescale grows with context
-      } else {
-        // LongRoPE: high-freq (small i) left alone; low-freq (large i) rescaled hard
-        const frac = i / (d/2);
-        lam = 1 + Math.pow(frac, 0.6) * (ctxK/8 - 1);
-      }
-      freqs.push({ theta: theta_i / lam, lam });
-    }
-    const lamMean = freqs.reduce((a,b)=>a+b.lam,0) / freqs.length;
-    lambdaAvg.textContent = lamMean.toFixed(2) + '×';
-
-    // plot log(theta_i) across dims
-    const maxLog = Math.log(freqs[0].theta);
-    const minLog = Math.log(freqs[freqs.length-1].theta);
-    ropeC.strokeStyle = '#5ec8ff';
-    ropeC.lineWidth = 2;
-    ropeC.beginPath();
-    freqs.forEach((f, i) => {
-      const x = 30 + (i / (d/2-1)) * (w-40);
-      const norm = (Math.log(f.theta) - minLog) / (maxLog - minLog + 1e-9);
-      const y = h - 20 - norm * (h-40);
-      if (i === 0) ropeC.moveTo(x, y); else ropeC.lineTo(x, y);
+    lengths.forEach((lb, i) => { const t = el('text', { x: x(i), y: H - 16, 'text-anchor': 'middle', 'font-size': 11, fill: 'var(--muted)' }); t.textContent = lb; });
+    const xl = el('text', { x: (L + W - R) / 2, y: H - 2, 'text-anchor': 'middle', 'font-size': 11, fill: 'var(--text2)' }); xl.textContent = 'input length';
+    el('line', { x1: L, x2: W - R, y1: y(TH), y2: y(TH), stroke: 'var(--threshold)', 'stroke-width': 1.5, 'stroke-dasharray': '5 4' });
+    const tl = el('text', { x: W - R, y: y(TH) - 6, 'text-anchor': 'end', 'font-size': 11, fill: 'var(--text2)' }); tl.textContent = 'threshold 85.6';
+    models.forEach((m, k) => { if (k === sel) return;
+      el('polyline', { points: m.s.map((v, i) => x(i) + ',' + y(v)).join(' '), fill: 'none', stroke: 'var(--context)', 'stroke-width': 1 });
     });
-    ropeC.stroke();
-
-    // usable-range shading: show which dim indices still resolve at the target context
-    // heuristic: dim i resolves if 2*pi/theta_i >= ctxK*1024 * 0.3 (half wavelength must cover context)
-    ropeC.fillStyle = 'rgba(255,184,107,0.18)';
-    let usableEnd = 0;
-    for (let i = 0; i < freqs.length; i++) {
-      const wavelength = 2 * Math.PI / Math.max(freqs[i].theta, 1e-12);
-      if (wavelength >= ctxK * 1024 * 0.3) usableEnd = i;
-    }
-    ropeC.fillRect(30, 20, (usableEnd / (d/2-1)) * (w-40), h-40);
-
-    // axis labels
-    ropeC.fillStyle = '#8a95a4';
-    ropeC.font = '10px sans-serif';
-    ropeC.fillText('dim 0 (high freq)', 32, h-6);
-    ropeC.fillText('dim ' + (d/2-1) + ' (low freq)', w-110, h-6);
-    ropeC.fillText('log θᵢ', 4, 30);
+    const m = models[sel];
+    el('polyline', { points: m.s.map((v, i) => x(i) + ',' + y(v)).join(' '), fill: 'none', stroke: 'var(--focus)', 'stroke-width': 2 });
+    m.s.forEach((v, i) => {
+      el('circle', { cx: x(i), cy: y(v), r: 5, fill: v > TH ? 'var(--focus)' : 'var(--surface)', stroke: 'var(--focus)', 'stroke-width': 2 });
+      const hit = el('rect', { x: x(i) - 30, y: T, width: 60, height: H - T - B, fill: 'transparent' });
+      hit.addEventListener('mousemove', ev => showTip(ev, i));
+      hit.addEventListener('mouseleave', () => { tip.hidden = true; });
+    });
+    const lb = el('text', { x: x(5) - 6, y: y(m.s[5]) - 10, 'text-anchor': 'end', 'font-size': 12, fill: 'var(--text)' }); lb.textContent = m.name;
+    const last = m.s.reduce((acc, v, i) => v > TH ? i : acc, -1);
+    const diffAt = last >= 0 && last < 5 ? (m.s[last + 1] - TH).toFixed(1) : null;
+    document.getElementById('readout').innerHTML = '<b>' + m.name + '</b>: claimed ' + m.claimed +
+      ', effective <b>' + m.eff + '</b>' + (diffAt !== null ? '. At the next length (' + lengths[last + 1] + ') the score is ' +
+      m.s[last + 1].toFixed(1) + ', ' + Math.abs(+diffAt).toFixed(1) + ' points below the threshold.' : '.');
+    document.querySelectorAll('#controls button').forEach((b, k) => b.setAttribute('aria-pressed', k === sel));
   }
-
-  function drawHay(ctxK, depthPct) {
-    hayDiv.innerHTML = '';
-    // Map context to number of lines, with visual ceiling at 80
-    const approxLines = Math.min(80, Math.max(8, Math.round(ctxK / 12)));
-    hayLinesEl.textContent = approxLines + ' visible (ctx=' + fmtK(ctxK) + ')';
-    const needleIdx = Math.round((depthPct / 100) * (approxLines - 1));
-    needlePos.textContent = 'line ' + needleIdx + ' of ' + approxLines;
-    for (let i = 0; i < approxLines; i++) {
-      const d = document.createElement('div');
-      d.className = 'hay-line' + (i === needleIdx ? ' needle' : '');
-      // randomized-ish width to evoke filler text
-      const wpct = 40 + ((i * 83) % 55);
-      d.style.width = wpct + '%';
-      hayDiv.appendChild(d);
-    }
+  function showTip(ev, i) {
+    const m = models[sel], v = m.s[i];
+    tip.textContent = m.name + ' at ' + lengths[i] + ': ' + v.toFixed(1) + (v > TH ? ' (above 85.6)' : ' (not above 85.6)');
+    const r = document.getElementById('chart').getBoundingClientRect();
+    tip.hidden = false;
+    tip.style.left = Math.min(ev.clientX - r.left + 12, r.width - tip.offsetWidth - 4) + 'px';
+    tip.style.top = (ev.clientY - r.top - 34) + 'px';
   }
-
-  function drawCurve(ctxK, trainK) {
-    const w = 440, h = 260;
-    curveC.clearRect(0, 0, w, h);
-    // grid
-    curveC.strokeStyle = '#2a2f3a';
-    curveC.lineWidth = 1;
-    for (let i = 0; i < 5; i++) {
-      const y = 20 + i * ((h-40)/4);
-      curveC.beginPath(); curveC.moveTo(30, y); curveC.lineTo(w-10, y); curveC.stroke();
-    }
-    // threshold line at 85.6 (Llama2-7B baseline from RULER)
-    curveC.strokeStyle = '#444';
-    curveC.setLineDash([3,3]);
-    const yThr = 20 + (1 - 0.856) * (h-40);
-    curveC.beginPath(); curveC.moveTo(30, yThr); curveC.lineTo(w-10, yThr); curveC.stroke();
-    curveC.setLineDash([]);
-    curveC.fillStyle = '#555'; curveC.font='10px sans-serif';
-    curveC.fillText('85.6 baseline', w-90, yThr-3);
-
-    // log-x axis: 8K .. 1M  (i.e. ctxK from 8 to 1024)
-    const xs = [];
-    for (let i = 0; i <= 40; i++) {
-      const frac = i/40;
-      const logMin = Math.log(8), logMax = Math.log(1024);
-      const c = Math.exp(logMin + frac*(logMax-logMin));
-      xs.push(c);
-    }
-
-    function niah(c, tr) {
-      // easy; stays near 1 until 2x training cap, then gentle decline
-      const r = c / tr;
-      if (r <= 1) return 0.98;
-      return Math.max(0.55, 0.98 - 0.08 * Math.log2(r));
-    }
-    function ruler(c, tr) {
-      // tracks training cap more closely
-      const r = c / tr;
-      if (r <= 0.5) return 0.95;
-      if (r <= 1) return 0.90 - 0.05 * ((r-0.5)/0.5);
-      return Math.max(0.35, 0.85 - 0.22 * Math.log2(r));
-    }
-    function babi(c, tr) {
-      // reasoning-in-a-haystack collapses first
-      const r = c / tr;
-      if (r <= 0.5) return 0.82;
-      if (r <= 1) return 0.78 - 0.12 * ((r-0.5)/0.5);
-      return Math.max(0.15, 0.66 - 0.32 * Math.log2(r));
-    }
-
-    function plot(color, fn) {
-      curveC.strokeStyle = color;
-      curveC.lineWidth = 2;
-      curveC.beginPath();
-      xs.forEach((c, i) => {
-        const xFrac = i/(xs.length-1);
-        const x = 30 + xFrac * (w-40);
-        const y = 20 + (1 - fn(c, trainK)) * (h-40);
-        if (i === 0) curveC.moveTo(x, y); else curveC.lineTo(x, y);
-      });
-      curveC.stroke();
-    }
-    plot('#7dd87d', niah);
-    plot('#5ec8ff', ruler);
-    plot('#ff6b6b', babi);
-
-    // mark current context with a vertical
-    const frac = (Math.log(ctxK)-Math.log(8)) / (Math.log(1024)-Math.log(8));
-    const cx = 30 + frac*(w-40);
-    curveC.strokeStyle = '#e6e8eb';
-    curveC.setLineDash([4,4]);
-    curveC.beginPath(); curveC.moveTo(cx, 20); curveC.lineTo(cx, h-20); curveC.stroke();
-    curveC.setLineDash([]);
-
-    niahCur.textContent  = (niah(ctxK, trainK)*100).toFixed(1) + '%';
-    rulerCur.textContent = (ruler(ctxK, trainK)*100).toFixed(1) + '%';
-    babiCur.textContent  = (babi(ctxK, trainK)*100).toFixed(1) + '%';
-
-    // axis labels
-    curveC.fillStyle = '#8a95a4';
-    curveC.font = '10px sans-serif';
-    curveC.fillText('8K', 30, h-6);
-    curveC.fillText('128K', 30+(Math.log(128)-Math.log(8))/(Math.log(1024)-Math.log(8))*(w-40), h-6);
-    curveC.fillText('1M', w-20, h-6);
-    curveC.fillText('score', 4, 30);
-  }
-
-  [ctxSlider, depthSlider, trainSlider].forEach(s => s.addEventListener('input', render));
-  render();
+  const c = document.getElementById('controls');
+  models.forEach((m, k) => { const b = document.createElement('button'); b.textContent = m.name;
+    b.addEventListener('click', () => { sel = k; draw(); }); c.appendChild(b); });
+  const tb = document.getElementById('table');
+  const head = document.createElement('tr');
+  ['Model', 'Claimed', 'Effective'].concat(lengths).forEach(h => { const th = document.createElement('th'); th.textContent = h; head.appendChild(th); });
+  tb.appendChild(head);
+  models.forEach(m => { const tr = document.createElement('tr');
+    [m.name, m.claimed, m.eff].forEach(v => { const td = document.createElement('td'); td.textContent = v; tr.appendChild(td); });
+    m.s.forEach(v => { const td = document.createElement('td'); td.textContent = v.toFixed(1); if (v > TH) td.className = 'pass'; tr.appendChild(td); });
+    tb.appendChild(tr); });
+  draw();
 })();
 </script>
 </body>

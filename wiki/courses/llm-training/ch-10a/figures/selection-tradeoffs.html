@@ -1,0 +1,411 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Selection Trade-offs (ch-10a)</title>
+<style>
+:root {
+  color-scheme: light;
+  --bg: #f7f6f3;
+  --surface: #fcfcfb;
+  --text: #0b0b0b;
+  --text2: #52514e;
+  --muted: #7a7973;
+  --grid: #e3e2de;
+  --axis: #b9b8b2;
+  --border: #dcdbd6;
+  --s1: #2a78d6;
+  --s2: #eb6834;
+  --s3: #1baf7a;
+  --accent-bg: #eef3fb;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --bg: #121211;
+    --surface: #1a1a19;
+    --text: #ffffff;
+    --text2: #c3c2b7;
+    --muted: #9a998f;
+    --grid: #2c2c2a;
+    --axis: #55544f;
+    --border: #33332f;
+    --s1: #3987e5;
+    --s2: #d95926;
+    --s3: #199e70;
+    --accent-bg: #1d2735;
+  }
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --bg: #121211;
+  --surface: #1a1a19;
+  --text: #ffffff;
+  --text2: #c3c2b7;
+  --muted: #9a998f;
+  --grid: #2c2c2a;
+  --axis: #55544f;
+  --border: #33332f;
+  --s1: #3987e5;
+  --s2: #d95926;
+  --s3: #199e70;
+  --accent-bg: #1d2735;
+}
+* { box-sizing: border-box; }
+[hidden] { display: none !important; }
+body {
+  margin: 0; background: var(--bg); color: var(--text);
+  font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+}
+.wrap { max-width: 980px; margin: 0 auto; padding-inline: 16px; padding-block: 20px 40px; }
+h1 { font-size: 1.35rem; margin: 0 0 4px; }
+h2 { font-size: 1.1rem; margin: 0 0 6px; }
+p.lead { color: var(--text2); margin: 0 0 18px; }
+.panel { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 16px; margin-bottom: 20px; }
+.row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 8px 0; }
+button.tab {
+  font: inherit; color: var(--text); background: transparent; border: 1px solid var(--border);
+  border-radius: 999px; padding: 4px 12px; cursor: pointer;
+}
+button.tab[aria-pressed="true"] { background: var(--accent-bg); border-color: var(--s1); }
+.legend { display: flex; flex-wrap: wrap; gap: 14px; color: var(--text2); font-size: 13px; margin: 6px 0 4px; }
+.legend span.sw { display: inline-block; width: 12px; height: 12px; border-radius: 3px; margin-right: 6px; vertical-align: -1px; }
+.chart-box { overflow-x: auto; position: relative; }
+svg text { fill: var(--text2); font-size: 12px; }
+svg .axis { stroke: var(--axis); }
+svg .gridl { stroke: var(--grid); }
+.caption { color: var(--text2); font-size: 13px; margin-top: 8px; }
+.tablebox { overflow-x: auto; margin-top: 10px; }
+table { border-collapse: collapse; font-size: 12.5px; min-width: 520px; }
+th, td { border-bottom: 1px solid var(--grid); padding: 3px 8px; text-align: right; white-space: nowrap; }
+th:first-child, td:first-child { text-align: left; }
+th { color: var(--text2); font-weight: 600; }
+td.neg { font-weight: 600; }
+.tip {
+  position: absolute; pointer-events: none; background: var(--surface); color: var(--text);
+  border: 1px solid var(--border); border-radius: 6px; padding: 4px 8px; font-size: 12px;
+  box-shadow: 0 2px 8px rgba(0,0,0,.15); white-space: nowrap;
+}
+label.ctl { display: flex; flex-direction: column; gap: 2px; min-width: 200px; flex: 1 1 200px; color: var(--text2); font-size: 13px; }
+label.ctl output { color: var(--text); font-weight: 600; }
+input[type=range] { width: 100%; }
+.stats { display: flex; flex-wrap: wrap; gap: 12px; margin: 10px 0; }
+.stat { border: 1px solid var(--border); border-radius: 8px; padding: 8px 12px; min-width: 150px; flex: 1 1 150px; }
+.stat .k { color: var(--text2); font-size: 12px; }
+.stat .v { font-size: 1.25rem; font-weight: 650; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Selection trade-offs: which tasks a data selection method lowers</h1>
+  <p class="lead">Panel 1 plots reported per-task changes from three studies cited in ch-10a, each relative to that study's own random or uniform baseline on the same pool and budget. Panel 2 is an illustrative two-domain pool that shows how temperature sampling changes domain coverage compared with top-k selection.</p>
+
+  <section class="panel" aria-labelledby="p1h">
+    <h2 id="p1h">1. Reported per-task changes</h2>
+    <div class="row" role="group" aria-label="Study">
+      <button class="tab" data-view="wo" aria-pressed="true">Filters on one pool (WebOrganizer, 1B)</button>
+      <button class="tab" data-view="qr" aria-pressed="false">Top-k vs τ = 2 (QuRating, 1.3B)</button>
+      <button class="tab" data-view="ds" aria-pressed="false">Targeted selection (DsDm, 1.3B)</button>
+    </div>
+    <div class="row" id="subrow" role="group" aria-label="QuRating criterion" hidden>
+      <button class="tab sub" data-crit="edu" aria-pressed="true">Educational value</button>
+      <button class="tab sub" data-crit="exp" aria-pressed="false">Required expertise</button>
+    </div>
+    <div class="legend" id="legend"></div>
+    <div class="chart-box" id="chartbox"><svg id="chart" role="img" aria-label="Per-task change chart"></svg><div class="tip" id="tip" hidden></div></div>
+    <div class="caption" id="caption"></div>
+    <div class="tablebox"><table id="table"></table></div>
+  </section>
+
+  <section class="panel" aria-labelledby="p2h">
+    <h2 id="p2h">2. Top-k versus temperature sampling on an illustrative pool</h2>
+    <p class="caption" style="margin-top:0">Illustrative pool, not source data: two equal domains of 2,000 documents each. Ratings in domain A are normal with mean +m, in domain B with mean −m, both with standard deviation 0.71 (at m = 0.71 the pool's rating variance is about 1, as in QuRating's normalization). Selection keeps a share f of documents. Top-k keeps the highest ratings. Sampling uses p(d) ∝ exp(s/τ) without replacement; the figure computes the large-pool limit of Gumbel top-k sampling, where a document with rating s is kept with probability 1 − exp(−exp(s/τ − c)) and c is set so the expected kept share equals f. Defaults reproduce the ch-10a §5.1 numbers: domain B share 5.6% (top-k), 25.1% (τ = 1), 35.9% (τ = 2), 50% (uniform).</p>
+    <div class="row">
+      <label class="ctl">Temperature τ <output id="tauOut"></output>
+        <input type="range" id="tau" min="0" max="10" step="1" value="5" aria-label="Temperature">
+      </label>
+      <label class="ctl">Domain mean gap m (means +m and −m) <output id="gapOut"></output>
+        <input type="range" id="gap" min="0.2" max="1.2" step="0.01" value="0.71" aria-label="Domain mean gap">
+      </label>
+      <label class="ctl">Selected share f <output id="fOut"></output>
+        <input type="range" id="frac" min="0.05" max="0.6" step="0.05" value="0.3" aria-label="Selected share">
+      </label>
+    </div>
+    <div class="stats">
+      <div class="stat"><div class="k">Domain B share of selection</div><div class="v" id="bShare"></div></div>
+      <div class="stat"><div class="k">Mean rating of selection</div><div class="v" id="meanQ"></div></div>
+      <div class="stat"><div class="k">Domain B share in pool</div><div class="v">50.0%</div></div>
+    </div>
+    <div class="legend">
+      <span><span class="sw" style="background:var(--s1)"></span>Domain A (higher-rated)</span>
+      <span><span class="sw" style="background:var(--s2)"></span>Domain B (lower-rated)</span>
+    </div>
+    <div class="chart-box"><svg id="stack" role="img" aria-label="Domain composition of the selection"></svg></div>
+    <div class="chart-box"><svg id="curve" role="img" aria-label="Domain B share as a function of temperature"></svg></div>
+    <div class="caption">Lower chart: domain B share of the selection as τ varies (log scale), at the current m and f. The left end is top-k, the dashed line at 50% is uniform sampling, and the dot marks the current τ.</div>
+  </section>
+</div>
+
+<script>
+(function () {
+  "use strict";
+  // ---------- Panel 1 data (as printed in the sources) ----------
+  var WO_TASKS = ["MMLU", "HellaSwag", "PIQA", "WinoGrande", "CSQA", "SIQA", "ARC-Easy", "ARC-Challenge", "OpenBookQA", "9-task avg"];
+  var WO_BASE = [30.3, 57.5, 71.3, 56.1, 59.0, 49.9, 62.2, 34.0, 44.0, 51.6];
+  var WO = {
+    tasks: WO_TASKS, base: WO_BASE, baseName: "Random selection (baseline corpus)",
+    series: [
+      { name: "FineWeb-Edu filter", vals: [34.3, 56.0, 69.9, 57.7, 60.0, 47.9, 71.9, 42.3, 48.2, 54.2] },
+      { name: "DCLM fastText filter", vals: [33.4, 59.0, 70.5, 58.8, 63.2, 50.7, 71.4, 39.8, 48.8, 55.1] },
+      { name: "FineWeb-Edu + topic × format quotas", vals: [34.2, 62.5, 73.3, 57.1, 63.0, 49.4, 72.2, 43.3, 50.8, 56.2] }
+    ],
+    caption: "Source: WebOrganizer (Wettig et al., 2025) Table 1 (arXiv:2502.10341v3). 1B models in the DCLM 1b-1x setting, about 29B tokens selected from a 200B-token deduplicated Common Crawl pool; OLMES 5-shot. Bars are differences from the baseline corpus (derived). The quotas row uses the Topic × Format mixture that RegMix tuned toward MMLU and HellaSwag (§4.2-4.3). Held-out perplexity on the baseline corpus (Table 10): baseline 12.1, FineWeb-Edu 14.7, DCLM fastText 14.0, FineWeb-Edu + quotas 13.8."
+  };
+  var QR_TASKS = ["Reading comprehension (5)", "Commonsense (3)", "World knowledge (2)", "Average (10)"];
+  var QR_BASE = [50.9, 55.0, 14.9, 44.9];
+  var QR = {
+    edu: { series: [
+      { name: "Educational value, top-k", vals: [54.7, 54.9, 14.4, 46.7] },
+      { name: "Educational value, τ = 2", vals: [53.3, 56.3, 15.7, 46.7] },
+      { name: "Uniform, +50% data", vals: [52.9, 57.0, 15.9, 46.8] } ],
+      ppl: "perplexity: uniform 8.96, top-k 10.59, τ = 2 8.91, uniform +50% 8.46" },
+    exp: { series: [
+      { name: "Required expertise, top-k", vals: [52.8, 48.7, 14.3, 43.9] },
+      { name: "Required expertise, τ = 2", vals: [52.7, 55.5, 15.0, 46.0] },
+      { name: "Uniform, +50% data", vals: [52.9, 57.0, 15.9, 46.8] } ],
+      ppl: "perplexity: uniform 8.96, top-k 11.54, τ = 2 8.93, uniform +50% 8.46" }
+  };
+  var DS_TASKS = ["copa", "openbook_qa", "piqa", "cbt", "hellaswag", "winogrande", "boolq", "coqa", "news_qa", "bb_copy_logic", "bb_dyck_lang", "bb_operators", "arc_easy", "bb_qa_wikidata", "trivia_qa"];
+  var DS_BASE = [62.0, 33.4, 68.9, 86.4, 44.9, 52.2, 54.9, 18.8, 7.5, 3.1, 13.5, 10.5, 44.8, 40.6, 3.7];
+  var DS = {
+    tasks: DS_TASKS, base: DS_BASE, baseName: "Random selection, 1.3B",
+    series: [
+      { name: "DsDm (targets: LAMBADA, SQuAD, Jeopardy)", vals: [63.0, 31.2, 69.0, 88.2, 42.3, 51.1, 58.0, 25.5, 15.6, 3.1, 11.9, 13.3, 47.6, 48.1, 7.1] },
+      { name: "Classifier (Wikipedia, books, OpenWebText)", vals: [66.0, 32.0, 69.4, 85.1, 42.7, 50.5, 60.9, 16.7, 5.1, 0.0, 3.4, 6.7, 44.7, 48.3, 2.5] },
+      { name: "DSIR (Wikipedia, books, OpenWebText)", vals: [67.0, 32.0, 65.7, 92.4, 40.4, 55.3, 61.0, 16.5, 5.5, 0.0, 1.0, 10.5, 39.6, 37.7, 3.5] }
+    ],
+    caption: "Source: DsDm (Engstrom et al., 2024) Table 1 (arXiv:2401.12926v1). GPT-2-style 1.3B models, Chinchilla-optimal tokens from English C4; none of the 15 benchmarks is a selection target. Bars are differences from the random-selection 1.3B model (derived from the printed accuracies). Targeted methods selected data for four epochs and random selection used one (App. D.1)."
+  };
+
+  var state = { view: "wo", crit: "edu" };
+  var COLORS = ["var(--s1)", "var(--s2)", "var(--s3)"];
+  var NS = "http://www.w3.org/2000/svg";
+
+  function el(tag, attrs, parent) {
+    var e = document.createElementNS(NS, tag);
+    for (var k in attrs) e.setAttribute(k, attrs[k]);
+    if (parent) parent.appendChild(e);
+    return e;
+  }
+  function fmt(x) { return (x > 0 ? "+" : x < 0 ? "−" : "") + Math.abs(x).toFixed(1); }
+
+  function currentData() {
+    if (state.view === "wo") return WO;
+    if (state.view === "ds") return DS;
+    var q = QR[state.crit];
+    return { tasks: QR_TASKS, base: QR_BASE, baseName: "Uniform selection (30B tokens)", series: q.series,
+      caption: "Source: QuRating (Wettig et al., 2024) Table 1 (arXiv:2402.09739v3). 1.3B models trained on 30B tokens selected from the 260B-token QuRatedPajama; 10 in-context learning tasks. Bars are differences from uniform selection (as printed). Validation " + q.ppl + "." };
+  }
+
+  function renderChart() {
+    var d = currentData();
+    var svg = document.getElementById("chart");
+    while (svg.firstChild) svg.removeChild(svg.firstChild);
+    var nS = d.series.length, nT = d.tasks.length;
+    var deltas = d.series.map(function (s) { return s.vals.map(function (v, i) { return Math.round((v - d.base[i]) * 10) / 10; }); });
+    var maxAbs = 1;
+    deltas.forEach(function (r) { r.forEach(function (v) { maxAbs = Math.max(maxAbs, Math.abs(v)); }); });
+    var W = Math.max(340, Math.min(940, document.getElementById("chartbox").clientWidth || 900));
+    var narrow = W < 600;
+    var labelW = narrow ? 12 : 170, labelTop = narrow ? 16 : 0;
+    var plotW = W - labelW - 24, barH = 9, gap = 2, rowPad = 10;
+    var step = maxAbs > 8 ? 4 : 2;
+    var lim = Math.ceil(maxAbs / step) * step;
+    if (plotW / (2 * lim / step) < 48) step *= 2;
+    lim = Math.ceil(maxAbs / step) * step;
+    var rowH = nS * (barH + gap) - gap + rowPad * 2 + labelTop;
+    var H = 24 + nT * rowH + 24;
+    svg.setAttribute("width", W); svg.setAttribute("height", H); svg.setAttribute("viewBox", "0 0 " + W + " " + H);
+    var x = function (v) { return labelW + (v + lim) / (2 * lim) * plotW; };
+    for (var t = -lim; t <= lim + 1e-9; t += step) {
+      el("line", { x1: x(t), x2: x(t), y1: 18, y2: H - 20, "class": t === 0 ? "axis" : "gridl" }, svg);
+      var tx = el("text", { x: x(t), y: 12, "text-anchor": "middle" }, svg); tx.textContent = t === 0 ? "0" : fmt(t);
+      var tx2 = el("text", { x: x(t), y: H - 6, "text-anchor": "middle" }, svg); tx2.textContent = t === 0 ? "0" : fmt(t);
+    }
+    var tip = document.getElementById("tip");
+    d.tasks.forEach(function (task, i) {
+      var y0 = 24 + i * rowH;
+      if (i % 2 === 1) el("rect", { x: 0, y: y0, width: W, height: rowH, fill: "var(--grid)", opacity: 0.25 }, svg);
+      var lab = narrow ? el("text", { x: 4, y: y0 + 13, "text-anchor": "start" }, svg)
+                       : el("text", { x: labelW - 8, y: y0 + rowH / 2 + 4, "text-anchor": "end" }, svg);
+      lab.textContent = task;
+      d.series.forEach(function (s, j) {
+        var v = deltas[j][i];
+        var yb = y0 + labelTop + rowPad + j * (barH + gap);
+        var x0 = x(Math.min(0, v)), w = Math.max(1.5, Math.abs(x(v) - x(0)));
+        var r = el("rect", { x: x0, y: yb, width: w, height: barH, rx: 3, fill: COLORS[j] }, svg);
+        var hit = el("rect", { x: labelW, y: yb - 1, width: plotW, height: barH + 2, fill: "transparent" }, svg);
+        var msg = task + " — " + s.name + ": " + fmt(v) + " (" + d.base[i].toFixed(1) + " → " + s.vals[i].toFixed(1) + ")";
+        el("title", {}, r).textContent = msg;
+        hit.addEventListener("mousemove", function (ev) {
+          var box = document.getElementById("chartbox").getBoundingClientRect();
+          tip.textContent = msg; tip.hidden = false;
+          tip.style.left = Math.min(ev.clientX - box.left + 12, box.width - 260) + "px";
+          tip.style.top = (ev.clientY - box.top + 12) + "px";
+          r.setAttribute("stroke", "var(--text)"); r.setAttribute("stroke-width", "1");
+        });
+        hit.addEventListener("mouseleave", function () { tip.hidden = true; r.removeAttribute("stroke"); });
+      });
+    });
+    // legend
+    var lg = document.getElementById("legend"); lg.innerHTML = "";
+    d.series.forEach(function (s, j) {
+      var sp = document.createElement("span");
+      sp.innerHTML = '<span class="sw" style="background:' + COLORS[j] + '"></span>';
+      sp.appendChild(document.createTextNode(s.name));
+      lg.appendChild(sp);
+    });
+    document.getElementById("caption").textContent = d.caption;
+    // table
+    var tb = document.getElementById("table");
+    var html = "<thead><tr><th>Task</th><th>" + d.baseName + "</th>";
+    d.series.forEach(function (s) { html += "<th>" + s.name + "</th><th>Δ</th>"; });
+    html += "</tr></thead><tbody>";
+    d.tasks.forEach(function (task, i) {
+      html += "<tr><td>" + task + "</td><td>" + d.base[i].toFixed(1) + "</td>";
+      d.series.forEach(function (s, j) {
+        var v = deltas[j][i];
+        html += "<td>" + s.vals[i].toFixed(1) + "</td><td" + (v < 0 ? ' class="neg"' : "") + ">" + fmt(v) + "</td>";
+      });
+      html += "</tr>";
+    });
+    tb.innerHTML = html + "</tbody>";
+  }
+
+  function setPressed(sel, attr, val) {
+    document.querySelectorAll(sel).forEach(function (b) { b.setAttribute("aria-pressed", b.getAttribute(attr) === val ? "true" : "false"); });
+  }
+  document.querySelectorAll("button.tab[data-view]").forEach(function (b) {
+    b.addEventListener("click", function () {
+      state.view = b.getAttribute("data-view");
+      setPressed("button.tab[data-view]", "data-view", state.view);
+      document.getElementById("subrow").hidden = state.view !== "qr";
+      renderChart();
+    });
+  });
+  document.querySelectorAll("button.sub").forEach(function (b) {
+    b.addEventListener("click", function () {
+      state.crit = b.getAttribute("data-crit");
+      setPressed("button.sub", "data-crit", state.crit);
+      renderChart();
+    });
+  });
+
+  // ---------- Panel 2: illustrative pool ----------
+  function invNorm(p) { // Wichura AS241, as in Python's statistics.NormalDist.inv_cdf
+    var q = p - 0.5, r, x;
+    if (Math.abs(q) <= 0.425) {
+      r = 0.180625 - q * q;
+      return q * (((((((2509.0809287301226727 * r + 33430.575583588128105) * r + 67265.770927008700853) * r + 45921.953931549871457) * r + 13731.693765509461125) * r + 1971.5909503065514427) * r + 133.14166789178437745) * r + 3.387132872796366608) /
+        (((((((5226.495278852545925 * r + 28729.085735721942674) * r + 39307.89580009271061) * r + 21213.794301586595867) * r + 5394.1960214247511077) * r + 687.1870074920579083) * r + 42.313330701600911252) * r + 1.0);
+    }
+    r = q < 0 ? p : 1 - p;
+    r = Math.sqrt(-Math.log(r));
+    if (r <= 5) {
+      r -= 1.6;
+      x = (((((((7.7454501427834140764e-4 * r + 0.0227238449892691845833) * r + 0.24178072517745061177) * r + 1.27045825245236838258) * r + 3.64784832476320460504) * r + 5.7694972214606914055) * r + 4.6303378461565452959) * r + 1.42343711074968357734) /
+        (((((((1.05075007164441684324e-9 * r + 5.475938084995344946e-4) * r + 0.0151986665636164571966) * r + 0.14810397642748007459) * r + 0.68976733498510000455) * r + 1.6763848301838038494) * r + 2.05319162663775882187) * r + 1.0);
+    } else {
+      r -= 5;
+      x = (((((((2.01033439929228813265e-7 * r + 2.71155556874348757815e-5) * r + 0.0012426609473880784386) * r + 0.026532189526576123093) * r + 0.29656057182850489123) * r + 1.7848265399172913358) * r + 5.4637849111641143699) * r + 6.6579046435011037772) /
+        (((((((2.04426310338993978564e-15 * r + 1.4215117583164458887e-7) * r + 1.8463183175100546818e-5) * r + 7.868691311456732598e-4) * r + 0.0148753612908506148525) * r + 0.13692988092273580531) * r + 0.59983220655588793769) * r + 1.0);
+    }
+    return q < 0 ? -x : x;
+  }
+  var SD = 0.71;
+  function pool(mu, n) { var a = new Array(n); for (var i = 0; i < n; i++) a[i] = mu + SD * invNorm((i + 0.5) / n); return a; }
+  function select(m, f, tau, n) {
+    var A = pool(m, n), B = pool(-m, n), all = A.concat(B), pa = 0, pb = 0, mq = 0, i;
+    if (tau === 0) {
+      var s = all.slice().sort(function (u, v) { return v - u; });
+      var k = Math.round(f * all.length), t = s[k - 1];
+      for (i = 0; i < n; i++) { if (A[i] >= t) pa++; if (B[i] >= t) pb++; }
+      for (i = 0; i < k; i++) mq += s[i];
+      return { b: pb / (pa + pb), q: mq / k };
+    }
+    if (tau === Infinity) return { b: 0.5, q: 0 };
+    var incl = function (x, c) { var z = x / tau - c; return z > 50 ? 1 : 1 - Math.exp(-Math.exp(z)); };
+    var lo = -100, hi = 100;
+    for (var it = 0; it < 80; it++) {
+      var c = (lo + hi) / 2, sum = 0;
+      for (i = 0; i < all.length; i++) sum += incl(all[i], c);
+      if (sum / all.length > f) lo = c; else hi = c;
+    }
+    var cc = (lo + hi) / 2;
+    for (i = 0; i < n; i++) { var ia = incl(A[i], cc), ib = incl(B[i], cc); pa += ia; pb += ib; mq += ia * A[i] + ib * B[i]; }
+    return { b: pb / (pa + pb), q: mq / (pa + pb) };
+  }
+  var TAUS = [0, 0.25, 0.5, 0.75, 1, 2, 3, 4, 6, 8, Infinity];
+  function tauLabel(t) { return t === 0 ? "0 (top-k)" : t === Infinity ? "∞ (uniform)" : String(t); }
+
+  function renderPool() {
+    var tau = TAUS[+document.getElementById("tau").value];
+    var m = +document.getElementById("gap").value;
+    var f = +document.getElementById("frac").value;
+    document.getElementById("tauOut").textContent = tauLabel(tau);
+    document.getElementById("gapOut").textContent = m.toFixed(2);
+    document.getElementById("fOut").textContent = Math.round(f * 100) + "%";
+    var res = select(m, f, tau, 2000);
+    document.getElementById("bShare").textContent = (res.b * 100).toFixed(1) + "%";
+    document.getElementById("meanQ").textContent = res.q.toFixed(2);
+
+    // stacked composition bar
+    var sv = document.getElementById("stack"); while (sv.firstChild) sv.removeChild(sv.firstChild);
+    var W = Math.max(360, Math.min(940, sv.parentNode.clientWidth || 900)), H = 70, L = 90, PW = W - L - 16;
+    sv.setAttribute("width", W); sv.setAttribute("height", H); sv.setAttribute("viewBox", "0 0 " + W + " " + H);
+    [["Pool", 0.5, 8], ["Selection", res.b, 38]].forEach(function (row) {
+      var lab = el("text", { x: L - 8, y: row[2] + 15, "text-anchor": "end" }, sv); lab.textContent = row[0];
+      var wa = (1 - row[1]) * PW, wb = row[1] * PW;
+      el("rect", { x: L, y: row[2], width: Math.max(0, wa - 1), height: 22, rx: 4, fill: "var(--s1)" }, sv);
+      el("rect", { x: L + wa + 1, y: row[2], width: Math.max(0, wb - 1), height: 22, rx: 4, fill: "var(--s2)" }, sv);
+      el("title", {}, sv.lastChild).textContent = row[0] + ": domain B " + (row[1] * 100).toFixed(1) + "%";
+    });
+
+    // curve of B share vs tau (log scale), coarser grid for speed
+    var cv = document.getElementById("curve"); while (cv.firstChild) cv.removeChild(cv.firstChild);
+    var CW = Math.max(360, Math.min(940, cv.parentNode.clientWidth || 900)), CH = 230, cl = 56, cr = 90, ct = 14, cb = 34;
+    cv.setAttribute("width", CW); cv.setAttribute("height", CH); cv.setAttribute("viewBox", "0 0 " + CW + " " + CH);
+    var lmin = Math.log10(0.1), lmax = Math.log10(10);
+    var X = function (t) { return cl + (Math.log10(t) - lmin) / (lmax - lmin) * (CW - cl - cr); };
+    var Y = function (p) { return ct + (1 - p / 0.5) * (CH - ct - cb); };
+    [0, 0.1, 0.2, 0.3, 0.4, 0.5].forEach(function (p) {
+      el("line", { x1: cl, x2: CW - cr, y1: Y(p), y2: Y(p), "class": p === 0 ? "axis" : "gridl", "stroke-dasharray": p === 0.5 ? "4 3" : "" }, cv);
+      var tt = el("text", { x: cl - 6, y: Y(p) + 4, "text-anchor": "end" }, cv); tt.textContent = Math.round(p * 100) + "%";
+    });
+    var ul = el("text", { x: CW - cr + 6, y: Y(0.5) + 4 }, cv); ul.textContent = "uniform";
+    [0.1, 0.25, 0.5, 1, 2, 4, 10].forEach(function (t) {
+      var tt = el("text", { x: X(t), y: CH - 16, "text-anchor": "middle" }, cv); tt.textContent = String(t);
+    });
+    var xl = el("text", { x: (cl + CW - cr) / 2, y: CH - 2, "text-anchor": "middle" }, cv); xl.textContent = "temperature τ (log scale)";
+    var pts = [], g;
+    for (g = 0; g <= 30; g++) { var tv = Math.pow(10, lmin + g / 30 * (lmax - lmin)); pts.push([X(tv), Y(select(m, f, tv, 400).b)]); }
+    el("path", { d: "M" + pts.map(function (p) { return p[0].toFixed(1) + " " + p[1].toFixed(1); }).join(" L"), fill: "none", stroke: "var(--s2)", "stroke-width": 2 }, cv);
+    var topk = select(m, f, 0, 2000).b;
+    el("circle", { cx: cl, cy: Y(topk), r: 4, fill: "var(--surface)", stroke: "var(--s2)", "stroke-width": 2 }, cv);
+    var tl = el("text", { x: cl + 8, y: Y(topk) - 8 }, cv); tl.textContent = "top-k " + (topk * 100).toFixed(1) + "%";
+    if (tau !== 0 && tau !== Infinity && tau >= 0.1 && tau <= 10) {
+      el("circle", { cx: X(tau), cy: Y(res.b), r: 6, fill: "var(--s2)", stroke: "var(--surface)", "stroke-width": 2 }, cv);
+      var ml = el("text", { x: X(tau) + 9, y: Y(res.b) + 16 }, cv); ml.textContent = "τ = " + tau + ": " + (res.b * 100).toFixed(1) + "%";
+    }
+  }
+  ["tau", "gap", "frac"].forEach(function (id) { document.getElementById(id).addEventListener("input", renderPool); });
+  window.addEventListener("resize", function () { renderChart(); renderPool(); });
+  // expose for testing in a JS runtime
+  window.__ch10a = { select: select };
+  renderChart();
+  renderPool();
+})();
+</script>
+</body>
+</html>

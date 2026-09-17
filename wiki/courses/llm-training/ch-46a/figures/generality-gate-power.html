@@ -1,0 +1,210 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ch-46a — Sizing the generality gate</title>
+<style>
+  :root{
+    --bg:#ffffff; --fg:#16181d; --muted:#5b6270; --line:#d8dce4; --panel:#f5f6f8;
+    --ok:#1f6f4a; --bad:#9a3324; --accent:#24486e; --grid:#e4e7ec;
+  }
+  @media (prefers-color-scheme: dark){
+    :root{ --bg:#14161a; --fg:#e8eaee; --muted:#9aa2b1; --line:#2c313a; --panel:#1b1e24;
+           --ok:#6fcf97; --bad:#e08272; --accent:#8fb6e0; --grid:#262b33; }
+  }
+  *{box-sizing:border-box}
+  body{margin:0;padding:24px 18px 40px;background:var(--bg);color:var(--fg);
+       font:15px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif}
+  .wrap{max-width:880px;margin:0 auto}
+  h1{font-size:19px;margin:0 0 4px;font-weight:650}
+  h2{font-size:15px;margin:22px 0 8px;font-weight:650}
+  p.sub{margin:0 0 20px;color:var(--muted);font-size:13.5px}
+  .panel{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:16px 18px;margin-bottom:18px}
+  .grid{display:flex;flex-wrap:wrap;gap:16px}
+  .field{min-width:160px;flex:1 1 160px}
+  .field label{display:block;font-size:12.5px;color:var(--muted);margin-bottom:4px}
+  .val{font-variant-numeric:tabular-nums;font-weight:650;color:var(--fg)}
+  input[type=range]{width:100%}
+  select{width:100%;padding:4px 6px;background:var(--bg);color:var(--fg);border:1px solid var(--line);border-radius:4px}
+  .out{display:flex;flex-wrap:wrap;gap:24px;margin-top:4px}
+  .stat{min-width:190px}
+  .stat .k{font-size:12.5px;color:var(--muted)}
+  .stat .v{font-size:26px;font-weight:650;font-variant-numeric:tabular-nums;line-height:1.2}
+  .formula{background:var(--panel);border:1px solid var(--line);border-radius:6px;padding:10px 12px;
+           font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:13px;margin:12px 0;overflow-x:auto}
+  .tablewrap{overflow-x:auto}
+  table{border-collapse:collapse;width:100%;min-width:480px;font-size:14px}
+  th,td{border:1px solid var(--line);padding:7px 9px;text-align:left}
+  th{background:var(--panel);font-weight:600;font-size:13px}
+  td.num{font-variant-numeric:tabular-nums;text-align:right;white-space:nowrap}
+  .note{font-size:12.5px;color:var(--muted);margin-top:14px}
+  code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12.5px;
+       background:var(--panel);border:1px solid var(--line);border-radius:3px;padding:1px 4px}
+  svg{display:block;width:100%;height:auto;max-width:100%}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<h1>Sizing the generality gate</h1>
+<p class="sub">Companion to ch-46a §7.4. Set the suite size, the trials per task, and the two variance terms, and read
+the minimum detectable effect and the task count a target effect would require.</p>
+
+<div class="panel">
+  <div class="grid">
+    <div class="field">
+      <label for="n">Tasks or items in the suite, n <span class="val" id="nv">114</span></label>
+      <input id="n" type="range" min="20" max="1200" step="1" value="114">
+    </div>
+    <div class="field">
+      <label for="k">Trials per task, K (both checkpoints) <span class="val" id="kv">4</span></label>
+      <input id="k" type="range" min="1" max="16" step="1" value="4">
+    </div>
+    <div class="field">
+      <label for="rho">Per-item correlation between checkpoints <span class="val" id="rv">0.70</span></label>
+      <input id="rho" type="range" min="0" max="0.95" step="0.01" value="0.70">
+    </div>
+    <div class="field">
+      <label for="vx">Per-item difficulty variance, Var(x) <span class="val" id="vxv">0.0833</span></label>
+      <input id="vx" type="range" min="0.01" max="0.25" step="0.0001" value="0.0833">
+    </div>
+    <div class="field">
+      <label for="s2">Conditional variance per trial, &sigma;&sup2; <span class="val" id="s2v">0.1667</span></label>
+      <input id="s2" type="range" min="0" max="0.25" step="0.0001" value="0.1667">
+    </div>
+    <div class="field">
+      <label for="target">Target effect &delta; for the task-count row <span class="val" id="tgv">5.0</span> points</label>
+      <input id="target" type="range" min="1" max="25" step="0.5" value="5">
+    </div>
+  </div>
+</div>
+
+<div class="formula">
+&omega;&sup2; = Var(x<sub>A</sub>) + Var(x<sub>B</sub>) &minus; 2&thinsp;Cov(x<sub>A</sub>, x<sub>B</sub>) = 2&thinsp;Var(x)&thinsp;(1 &minus; &rho;)<br>
+&delta; = (z<sub>&alpha;/2</sub> + z<sub>&beta;</sub>) &middot; &radic;( (&omega;&sup2; + &sigma;&sup2;<sub>A</sub>/K<sub>A</sub> + &sigma;&sup2;<sub>B</sub>/K<sub>B</sub>) / n ) &nbsp;&nbsp;(Eq. 10)<br>
+n = (z<sub>&alpha;/2</sub> + z<sub>&beta;</sub>)&sup2; (&omega;&sup2; + &sigma;&sup2;<sub>A</sub>/K<sub>A</sub> + &sigma;&sup2;<sub>B</sub>/K<sub>B</sub>) / &delta;&sup2; &nbsp;&nbsp;(Eq. 9)
+</div>
+<p class="sub" style="margin-top:-6px">&alpha; = 0.05, power 1 &minus; &beta; = 0.80, so z<sub>0.025</sub> + z<sub>0.20</sub> = 1.960 + 0.8416 = 2.8016.</p>
+
+<div class="panel">
+  <div class="out">
+    <div class="stat"><div class="k">&omega;&sup2; (paired difficulty variance)</div><div class="v" id="omega"></div></div>
+    <div class="stat"><div class="k">Minimum detectable effect &delta;</div><div class="v" id="mde"></div></div>
+    <div class="stat"><div class="k">Tasks needed for the target &delta;</div><div class="v" id="need"></div></div>
+  </div>
+</div>
+
+<h2>Minimum detectable effect against suite size</h2>
+<svg id="chart" viewBox="0 0 860 300" role="img" aria-label="Minimum detectable effect falling as suite size grows"></svg>
+
+<h2>Effect of trials per task at the current suite size</h2>
+<div class="tablewrap">
+<table>
+  <thead><tr><th>K</th><th class="num">&sigma;&sup2;/K per checkpoint</th><th class="num">&delta; (points)</th><th class="num">Tasks needed for the target &delta;</th></tr></thead>
+  <tbody id="ktab"></tbody>
+</table>
+</div>
+
+<p class="note">
+Formulas and the constants are from <code>adding-error-bars-evals</code> §5, Eqs. 9 and 10. The default values
+reproduce worked example 2 of ch-46a §7.4: with the paper's illustrative binary-score values Var(x) = 1/12 and
+&sigma;&sup2; = 1/6, a correlation of 0.70 chosen for that example rather than taken from the paper, and n = 114 tasks, &delta; is 16.2 points at K = 1 and 9.6 points at
+K = 4, and reaching 5 points at K = 4 requires 419 tasks. Raising K shrinks only the &sigma;&sup2;/K term, so &delta;
+approaches a floor set by &omega;&sup2;; raising n shrinks the whole expression. The same source advises against
+lowering the sampling temperature to reduce variance (§3.3).
+</p>
+
+</div>
+<script>
+(function(){
+  var Z = 1.959964 + 0.8416212;
+  var ids = ['n','k','rho','vx','s2','target'];
+  var el = {}; ids.forEach(function(i){ el[i]=document.getElementById(i); });
+
+  function read(){
+    return {
+      n:+el.n.value, K:+el.k.value, rho:+el.rho.value,
+      vx:+el.vx.value, s2:+el.s2.value, tg:+el.target.value/100
+    };
+  }
+  function omega2(p){ return 2*p.vx*(1-p.rho); }
+  function variance(p,K){ return omega2(p) + 2*p.s2/K; }
+  function mde(p,n,K){ return Z*Math.sqrt(variance(p,K)/n); }
+  function need(p,K,delta){ return Math.ceil(Z*Z*variance(p,K)/(delta*delta)); }
+
+  function chart(p){
+    var W=860,H=300,L=58,R=16,T=14,B=38;
+    var xs=[], nmin=20, nmax=1200;
+    for(var i=0;i<=120;i++){ xs.push(nmin + (nmax-nmin)*i/120); }
+    var series=[{K:1,c:'var(--bad)'},{K:p.K,c:'var(--accent)'},{K:16,c:'var(--ok)'}];
+    var ymax=0;
+    series.forEach(function(s){ ymax=Math.max(ymax, mde(p,nmin,s.K)*100); });
+    ymax=Math.ceil(ymax/5)*5;
+    function X(n){ return L + (n-nmin)/(nmax-nmin)*(W-L-R); }
+    function Y(v){ return T + (1 - v/ymax)*(H-T-B); }
+    var out='';
+    for(var g=0; g<=5; g++){
+      var v=ymax*g/5, y=Y(v);
+      out += '<line x1="'+L+'" y1="'+y+'" x2="'+(W-R)+'" y2="'+y+'" stroke="var(--grid)" stroke-width="1"/>';
+      out += '<text x="'+(L-8)+'" y="'+(y+4)+'" text-anchor="end" font-size="11" fill="var(--muted)">'+v.toFixed(0)+'</text>';
+    }
+    [20,200,400,600,800,1000,1200].forEach(function(n){
+      out += '<text x="'+X(n)+'" y="'+(H-14)+'" text-anchor="middle" font-size="11" fill="var(--muted)">'+n+'</text>';
+    });
+    out += '<text x="'+L+'" y="'+(T-1)+'" font-size="11" fill="var(--muted)">points</text>';
+    out += '<text x="'+((L+W-R)/2)+'" y="'+(H-1)+'" text-anchor="middle" font-size="11" fill="var(--muted)">tasks or items in the suite (n)</text>';
+    var labels=[];
+    series.forEach(function(s){
+      var d='';
+      xs.forEach(function(n,i){ d += (i?'L':'M')+X(n).toFixed(1)+' '+Y(mde(p,n,s.K)*100).toFixed(1); });
+      out += '<path d="'+d+'" fill="none" stroke="'+s.c+'" stroke-width="2"/>';
+      labels.push({y:Y(mde(p,nmax,s.K)*100)-6, c:s.c, K:s.K});
+    });
+    labels.sort(function(a,b){ return a.y-b.y; });
+    for(var q=1;q<labels.length;q++){
+      if(labels[q].y - labels[q-1].y < 14) labels[q].y = labels[q-1].y + 14;
+    }
+    labels.forEach(function(lb){
+      out += '<text x="'+(W-R-4)+'" y="'+lb.y.toFixed(1)+'" text-anchor="end" font-size="11.5" fill="'+lb.c+'">K = '+lb.K+'</text>';
+    });
+    // target line and current point
+    var ty=Y(p.tg*100);
+    if(p.tg*100<=ymax){
+      out += '<line x1="'+L+'" y1="'+ty+'" x2="'+(W-R)+'" y2="'+ty+'" stroke="var(--muted)" stroke-width="1" stroke-dasharray="4 4"/>';
+      out += '<text x="'+(L+6)+'" y="'+(ty+14)+'" font-size="11" fill="var(--muted)">target &#948; = '+(p.tg*100).toFixed(1)+' points</text>';
+    }
+    var cy=mde(p,p.n,p.K)*100;
+    if(cy<=ymax){
+      out += '<circle cx="'+X(p.n)+'" cy="'+Y(cy)+'" r="4.5" fill="var(--accent)"/>';
+    }
+    document.getElementById('chart').innerHTML=out;
+  }
+
+  function update(){
+    var p=read();
+    document.getElementById('nv').textContent=p.n;
+    document.getElementById('kv').textContent=p.K;
+    document.getElementById('rv').textContent=p.rho.toFixed(2);
+    document.getElementById('vxv').textContent=p.vx.toFixed(4);
+    document.getElementById('s2v').textContent=p.s2.toFixed(4);
+    document.getElementById('tgv').textContent=(p.tg*100).toFixed(1);
+
+    document.getElementById('omega').textContent=omega2(p).toFixed(4);
+    document.getElementById('mde').textContent=(mde(p,p.n,p.K)*100).toFixed(1)+' pts';
+    document.getElementById('need').textContent=need(p,p.K,p.tg).toLocaleString();
+
+    var rows='';
+    [1,2,4,8,16].forEach(function(K){
+      rows += '<tr><td>'+K+'</td><td class="num">'+(p.s2/K).toFixed(4)+'</td><td class="num">'+
+              (mde(p,p.n,K)*100).toFixed(1)+'</td><td class="num">'+need(p,K,p.tg).toLocaleString()+'</td></tr>';
+    });
+    document.getElementById('ktab').innerHTML=rows;
+    chart(p);
+  }
+  ids.forEach(function(i){ el[i].addEventListener('input', update); });
+  update();
+})();
+</script>
+</body>
+</html>

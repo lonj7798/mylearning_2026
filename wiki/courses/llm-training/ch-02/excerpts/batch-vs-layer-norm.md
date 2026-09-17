@@ -7,6 +7,8 @@ source_url: https://arxiv.org/abs/1607.06450
 created_at: "2026-04-23"
 ---
 
+> Superseded by the 2026-09 revision of read.md; kept for history.
+
 # Excerpt: Normalization — why reductions stay in fp32
 
 **Papers:**

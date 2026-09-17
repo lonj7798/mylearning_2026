@@ -2,322 +2,261 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>Group-Baseline Advantages — RLOO vs GRPO vs Dr.GRPO</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ch-40 — Group baselines: advantages, dead groups, and loss normalizers</title>
 <style>
-  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-         max-width: 1240px; margin: 1.4em auto; padding: 0 1em; color: #1f1f1f;
-         background: #fafafa; }
-  h1 { font-size: 1.3em; margin-bottom: 0.25em; }
-  .subtitle { color: #5a5a5a; margin-top: 0; font-size: 0.92em; line-height: 1.5; }
-  .panel { border: 1px solid #dcdcdc; border-radius: 6px; background: #fff;
-           padding: 0.9em 1em; margin-top: 1em; }
-  h2 { font-size: 1.0em; margin: 0 0 0.6em 0; color: #2b2b2b;
-       border-bottom: 1px solid #ececec; padding-bottom: 0.3em; }
-  .controls { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
-              gap: 0.7em 1.0em; margin-bottom: 0.8em; }
-  .ctrl label { display: block; font-size: 0.82em; color: #444; margin-bottom: 0.18em; }
-  .ctrl input[type=range] { width: 100%; }
-  .ctrl .val { font-family: 'SF Mono', Menlo, monospace; font-size: 0.82em;
-               color: #2e5aa8; }
-  select, button { font-family: inherit; font-size: 0.85em; padding: 0.25em 0.5em; }
-  svg { width: 100%; display: block; background: #fff; }
-  .axis line, .axis path { stroke: #888; fill: none; shape-rendering: crispEdges; }
-  .axis text { font-family: 'SF Mono', Menlo, monospace; font-size: 10px; fill: #333; }
-  .gridline { stroke: #eee; stroke-width: 1; }
-  .bar-rloo  { fill: #2e5aa8; fill-opacity: 0.65; }
-  .bar-grpo  { fill: #c05621; fill-opacity: 0.65; }
-  .bar-drgrpo{ fill: #2f8f4a; fill-opacity: 0.65; }
-  .legend { font-size: 0.82em; color: #333; margin-top: 0.4em; line-height: 1.6; }
-  .legend .chip { display: inline-block; width: 14px; height: 14px; border-radius: 3px;
-                  margin-right: 4px; vertical-align: middle; border: 1px solid #555; }
-  .chip.rloo   { background: #2e5aa8; }
-  .chip.grpo   { background: #c05621; }
-  .chip.drgrpo { background: #2f8f4a; }
-  .stats { font-family: 'SF Mono', Menlo, monospace; font-size: 0.8em;
-           color: #333; background: #f5f7fb; padding: 0.4em 0.6em;
-           border-radius: 4px; margin-top: 0.4em; }
-  .warn { color: #b04040; font-weight: 600; }
-  .note { font-size: 0.82em; color: #555; margin-top: 0.4em; line-height: 1.5; }
-  .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 0.8em; }
-  @media (max-width: 860px) { .grid2 { grid-template-columns: 1fr; } }
-  code { background: #eef; padding: 1px 4px; border-radius: 3px;
-         font-family: 'SF Mono', Menlo, monospace; font-size: 0.85em; }
+  :root {
+    --bg: #fafaf8; --panel: #ffffff; --ink: #1f2328; --muted: #5b6470; --rule: #d9dde3;
+    --pos: #1f7a4d; --neg: #b3261e; --alt: #1d5fa8; --alt2: #8a4fbf; --grid: #eceef1;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #16181c; --panel: #1e2126; --ink: #e6e8eb; --muted: #a0a8b3; --rule: #353a42;
+      --pos: #4cc38a; --neg: #f2836b; --alt: #6aa6e8; --alt2: #b98ae6; --grid: #2a2e35;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #16181c; --panel: #1e2126; --ink: #e6e8eb; --muted: #a0a8b3; --rule: #353a42;
+    --pos: #4cc38a; --neg: #f2836b; --alt: #6aa6e8; --alt2: #b98ae6; --grid: #2a2e35;
+  }
+  body { margin: 0; background: var(--bg); color: var(--ink);
+         font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+  main { max-width: 1000px; margin: 0 auto; padding-block: 20px 40px; padding-inline: 16px; }
+  h1 { font-size: 19px; margin: 0 0 4px; }
+  h2 { font-size: 15px; margin: 0 0 8px; }
+  p.sub { color: var(--muted); margin: 0 0 16px; }
+  .panel { background: var(--panel); border: 1px solid var(--rule); border-radius: 8px;
+           padding: 16px; margin-bottom: 18px; }
+  .controls { display: flex; flex-wrap: wrap; gap: 14px 22px; margin: 6px 0 12px; }
+  .ctl { display: flex; flex-direction: column; min-width: 150px; flex: 1 1 150px; }
+  .ctl label { font-size: 12px; color: var(--muted); }
+  .ctl output, .ctl select { font-family: ui-monospace, "SF Mono", Menlo, monospace; }
+  input[type=range] { width: 100%; }
+  select { font: inherit; color: var(--ink); background: var(--panel);
+           border: 1px solid var(--rule); border-radius: 6px; padding: 3px 8px; }
+  table { border-collapse: collapse; width: 100%; font-size: 13px; }
+  th, td { border-bottom: 1px solid var(--rule); padding: 5px 8px; text-align: right; }
+  th:first-child, td:first-child { text-align: left; }
+  th { color: var(--muted); font-weight: 600; }
+  td.num { font-family: ui-monospace, "SF Mono", Menlo, monospace; }
+  .pos { color: var(--pos); } .neg { color: var(--neg); }
+  .readout { font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 12.5px;
+             background: var(--bg); border: 1px solid var(--rule); border-radius: 6px;
+             padding: 8px 10px; margin-top: 10px; white-space: pre-wrap; overflow-x: auto; }
+  .cap { font-size: 12.5px; color: var(--muted); margin-top: 10px; }
+  svg { width: 100%; height: auto; display: block; }
+  .axis text { fill: var(--muted); font-size: 11px; }
+  .axis line { stroke: var(--rule); }
+  .gridline { stroke: var(--grid); }
+  code { font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 12.5px; }
+  .wrap { overflow-x: auto; }
 </style>
 </head>
 <body>
-
-<h1>Group-Baseline Advantages: RLOO vs GRPO vs Dr.GRPO</h1>
-<p class="subtitle">
-  Two interactive panels for ch-40. <b>Panel 1</b>: pick a group size K and a reward
-  distribution; compare the per-sample advantages each variant assigns. <b>Panel 2</b>:
-  set rollout lengths and correctness; see per-token gradient magnitude under GRPO
-  (<code>1/|o_i|</code>) vs Dr.GRPO (<code>1/L_max</code>) to visualize the length bias.
-</p>
+<main>
+<h1>Group baselines: advantages, dead groups, and loss normalizers</h1>
+<p class="sub">Companion to ch-40. Panel 1 recomputes the advantage every rollout in a group receives under
+RLOO, GRPO (two standard-deviation conventions) and Dr. GRPO. Panel 2 shows how often a group carries no
+signal. Panel 3 compares loss normalizers on responses of different lengths.</p>
 
 <div class="panel">
-  <h2>Panel 1 — Advantage distribution under RLOO, GRPO, Dr.GRPO</h2>
+  <h2>Panel 1 — Advantages inside one group</h2>
   <div class="controls">
-    <div class="ctrl">
-      <label>Group size K
-        <span class="val" id="kVal">8</span></label>
-      <input type="range" id="kSlider" min="2" max="32" step="1" value="8">
-    </div>
-    <div class="ctrl">
-      <label>Reward distribution</label>
-      <select id="distSel">
-        <option value="binary">binary 0/1 (verifier)</option>
-        <option value="split">split: half-right (std medium)</option>
-        <option value="easy">easy prompt (most r=1, std small)</option>
-        <option value="hard">hard prompt (most r=0, std small)</option>
-        <option value="gaussian">continuous Gaussian (RM score)</option>
-        <option value="uniform">uniform [0,1]</option>
-      </select>
-    </div>
-    <div class="ctrl">
-      <label>Pass rate p (binary / split)
-        <span class="val" id="pVal">0.50</span></label>
-      <input type="range" id="pSlider" min="0" max="1" step="0.05" value="0.5">
-    </div>
-    <div class="ctrl">
-      <label>Random seed
-        <span class="val" id="seedVal">42</span></label>
-      <input type="range" id="seedSlider" min="0" max="100" step="1" value="42">
-    </div>
+    <div class="ctl"><label for="mode">Reward type</label>
+      <select id="mode">
+        <option value="binary">binary verifier (0 / 1)</option>
+        <option value="pm1">binary verifier (−1 / +1)</option>
+        <option value="rm">reward-model scores near a tie</option>
+      </select></div>
+    <div class="ctl"><label for="G">Group size G = <output id="Gv">8</output></label>
+      <input type="range" id="G" min="2" max="16" step="1" value="8"></div>
+    <div class="ctl" id="kbox"><label for="k">Correct responses = <output id="kv">7</output></label>
+      <input type="range" id="k" min="0" max="16" step="1" value="7"></div>
+    <div class="ctl" id="noisebox"><label for="noise">Score spread (± around 0.50) = <output id="noisev">0.02</output></label>
+      <input type="range" id="noise" min="0" max="20" step="1" value="2"></div>
   </div>
-  <svg id="advChart" viewBox="0 0 1100 360" preserveAspectRatio="xMidYMid meet"></svg>
-  <div class="legend">
-    <span class="chip rloo"></span> RLOO: <code>A_i = r_i − (1/(K−1)) Σ_{j≠i} r_j</code>
-    &nbsp;&nbsp;
-    <span class="chip grpo"></span> GRPO: <code>A_i = (r_i − mean) / std</code>
-    &nbsp;&nbsp;
-    <span class="chip drgrpo"></span> Dr.GRPO: <code>A_i = r_i − mean</code>
-  </div>
-  <div class="stats" id="statsPanel1">stats render on load</div>
-  <div class="note">
-    Watch the "easy" and "hard" distributions: std → 0, so GRPO's advantage blows up
-    (clipped here by ε=1e-6 in the denominator). Dr.GRPO stays well-scaled.
-    Watch K small (K=2): RLOO pairs equal &pm;(r_1 − r_2), so the two bars are mirror
-    images. Large K: RLOO &rarr; Dr.GRPO exactly.
-  </div>
+  <div class="wrap"><table id="tbl"></table></div>
+  <div class="readout" id="stats1"></div>
+  <p class="cap">Formulas: RLOO <code>r_i − mean of the other G−1</code> (Ahmadian et al. 2024, arXiv:2402.14740 §2.3); GRPO
+  <code>(r_i − mean)/std</code> (DeepSeekMath, arXiv:2402.03300 §4.1.2), with the population std and with <code>torch.std</code>
+  (divisor G−1), which is what verl and TRL compute; Dr. GRPO <code>r_i − mean</code> (Dr. GRPO, arXiv:2503.20783 §3.2).
+  The RLOO column is always <code>G/(G−1)</code> times the Dr. GRPO column (Dr. GRPO, arXiv:2503.20783 App. A).</p>
 </div>
 
 <div class="panel">
-  <h2>Panel 2 — Length bias: per-token gradient magnitude vs response length</h2>
+  <h2>Panel 2 — How often a group carries no signal</h2>
   <div class="controls">
-    <div class="ctrl">
-      <label>Length |o_wrong| (tokens)
-        <span class="val" id="lWrongVal">500</span></label>
-      <input type="range" id="lWrongSlider" min="50" max="4096" step="50" value="500">
-    </div>
-    <div class="ctrl">
-      <label>Length |o_correct| (tokens)
-        <span class="val" id="lRightVal">50</span></label>
-      <input type="range" id="lRightSlider" min="50" max="4096" step="50" value="50">
-    </div>
-    <div class="ctrl">
-      <label>L_max (Dr.GRPO budget)
-        <span class="val" id="lMaxVal">4096</span></label>
-      <input type="range" id="lMaxSlider" min="512" max="8192" step="128" value="4096">
-    </div>
-    <div class="ctrl">
-      <label>Raw advantage magnitude |A|
-        <span class="val" id="aMagVal">1.00</span></label>
-      <input type="range" id="aMagSlider" min="0.1" max="3" step="0.05" value="1.0">
-    </div>
+    <div class="ctl"><label for="G2">Group size G = <output id="G2v">8</output></label>
+      <input type="range" id="G2" min="2" max="32" step="1" value="8"></div>
   </div>
-  <svg id="lenChart" viewBox="0 0 1100 340" preserveAspectRatio="xMidYMid meet"></svg>
-  <div class="stats" id="statsPanel2">stats render on load</div>
-  <div class="note">
-    GRPO aggregates each response with <code>(1/|o_i|)</code>. A 500-token wrong
-    response gets a per-token loss magnitude of <code>|A|/500</code>; a 50-token
-    correct response gets <code>|A|/50</code> — 10&times; larger. The optimizer
-    therefore moves each token in the long wrong response 10&times; less than each
-    token in the short correct one. Adding padding/repetition to a wrong rollout
-    dilutes the penalty instead of amplifying it. Dr.GRPO uses a fixed
-    <code>1/L_max</code>, so per-token penalty magnitude is equal regardless of
-    realized length.
-  </div>
+  <svg id="dead" viewBox="0 0 640 260" role="img" aria-label="Probability that a group is all-correct or all-wrong, against per-sample pass rate"></svg>
+  <div class="readout" id="stats2"></div>
+  <p class="cap">With independent samples, the chance that a prompt's group is all-correct or all-wrong is
+  <code>p^G + (1−p)^G</code>; such a group has advantage exactly 0 and contributes no policy gradient
+  (verl core_algos.py@753aed3 L319-329). DAPO resamples until the batch contains only groups with a non-zero advantage
+  (DAPO, arXiv:2503.14476 §3.2).</p>
 </div>
+
+<div class="panel">
+  <h2>Panel 3 — Loss normalizers and response length</h2>
+  <div class="controls">
+    <div class="ctl"><label for="lenA">Response A length = <output id="lenAv">100</output> tokens</label>
+      <input type="range" id="lenA" min="50" max="3000" step="50" value="100"></div>
+    <div class="ctl"><label for="lenB">Response B length = <output id="lenBv">1000</output> tokens</label>
+      <input type="range" id="lenB" min="50" max="3000" step="50" value="1000"></div>
+    <div class="ctl"><label for="adv">Advantage on both = <output id="advv">-0.50</output></label>
+      <input type="range" id="adv" min="-100" max="100" step="5" value="-50"></div>
+    <div class="ctl"><label for="L">Constant normalizer L = <output id="Lv">3000</output></label>
+      <input type="range" id="L" min="500" max="8000" step="250" value="3000"></div>
+  </div>
+  <div class="wrap"><table id="tbl3"></table></div>
+  <p class="cap">GRPO divides each response's token losses by its own length <code>|o_i|</code>, so the total
+  contribution of a response does not depend on its length; Dr. GRPO divides by a constant equal to the
+  generation budget, and DAPO divides by the total token count of the group, so a longer response of the same
+  advantage contributes proportionally more (Dr. GRPO, arXiv:2503.20783 §3.1; DAPO, arXiv:2503.14476 §3.3). Group size is fixed at 8 here.</p>
+</div>
+</main>
 
 <script>
-// ---- RNG (mulberry32, seedable) ----
-function mulberry32(seed) {
-  return function() {
-    seed |= 0; seed = (seed + 0x6D2B79F5) | 0;
-    let t = Math.imul(seed ^ (seed >>> 15), 1 | seed);
-    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
-    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-  };
-}
-function gauss(rng) {
-  const u = 1 - rng(), v = rng();
-  return Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * v);
-}
+(function () {
+  var $ = function (id) { return document.getElementById(id); };
+  function fmt(x, d) { return (x >= 0 ? "+" : "") + x.toFixed(d === undefined ? 3 : d); }
 
-// ---- sample rewards ----
-function sampleRewards(K, dist, p, seed) {
-  const rng = mulberry32(seed);
-  const r = [];
-  for (let i = 0; i < K; i++) {
-    if (dist === "binary")       r.push(rng() < p ? 1.0 : 0.0);
-    else if (dist === "split")   r.push(i < Math.round(p * K) ? 1.0 : 0.0);
-    else if (dist === "easy")    r.push(rng() < 0.875 ? 1.0 : 0.0);
-    else if (dist === "hard")    r.push(rng() < 0.125 ? 1.0 : 0.0);
-    else if (dist === "gaussian") r.push(Math.max(0, Math.min(1, 0.5 + 0.25 * gauss(rng))));
-    else if (dist === "uniform") r.push(rng());
-  }
-  return r;
-}
-
-// ---- advantage computation ----
-function computeAdvantages(r) {
-  const K = r.length;
-  const mean = r.reduce((a, b) => a + b, 0) / K;
-  const variance = r.reduce((a, b) => a + (b - mean) ** 2, 0) / K;
-  const std = Math.sqrt(variance);
-  const eps = 1e-6;
-  const A_rloo = r.map((ri, i) => {
-    if (K === 1) return 0;
-    const others = r.reduce((a, b, j) => a + (j === i ? 0 : b), 0);
-    return ri - others / (K - 1);
-  });
-  const A_grpo = r.map(ri => (ri - mean) / (std + eps));
-  const A_dr   = r.map(ri => ri - mean);
-  return { mean, std, A_rloo, A_grpo, A_dr };
-}
-
-// ---- Panel 1 chart ----
-const svg1 = document.getElementById("advChart");
-function renderPanel1() {
-  const K = +document.getElementById("kSlider").value;
-  const dist = document.getElementById("distSel").value;
-  const p = +document.getElementById("pSlider").value;
-  const seed = +document.getElementById("seedSlider").value;
-  document.getElementById("kVal").textContent = K;
-  document.getElementById("pVal").textContent = p.toFixed(2);
-  document.getElementById("seedVal").textContent = seed;
-
-  const r = sampleRewards(K, dist, p, seed);
-  const { mean, std, A_rloo, A_grpo, A_dr } = computeAdvantages(r);
-
-  const W = 1100, H = 360, M = { l: 50, r: 20, t: 18, b: 60 };
-  const innerW = W - M.l - M.r, innerH = H - M.t - M.b;
-  const xStep = innerW / K;
-  const groupW = xStep * 0.9;
-  const barW = groupW / 3;
-
-  const allA = [...A_rloo, ...A_grpo, ...A_dr];
-  let maxAbs = Math.max(1, ...allA.map(Math.abs));
-  maxAbs = Math.min(maxAbs, 50);  // cap display when std blows up
-  const yMid = M.t + innerH / 2;
-  const yScale = v => yMid - (v / maxAbs) * (innerH / 2 - 6);
-
-  let html = "";
-  // y-axis and gridlines
-  const ticks = [-maxAbs, -maxAbs / 2, 0, maxAbs / 2, maxAbs];
-  for (const t of ticks) {
-    const y = yScale(t);
-    html += `<line class="gridline" x1="${M.l}" x2="${W - M.r}" y1="${y}" y2="${y}"/>`;
-    html += `<text class="axis" x="${M.l - 6}" y="${y + 3}" text-anchor="end">${t.toFixed(2)}</text>`;
-  }
-  // bars
-  for (let i = 0; i < K; i++) {
-    const gx = M.l + i * xStep + (xStep - groupW) / 2;
-    const vals = [
-      { cls: "bar-rloo", v: A_rloo[i], off: 0 },
-      { cls: "bar-grpo", v: Math.max(-maxAbs, Math.min(maxAbs, A_grpo[i])), off: barW },
-      { cls: "bar-drgrpo", v: A_dr[i], off: 2 * barW },
-    ];
-    for (const { cls, v, off } of vals) {
-      const y = v >= 0 ? yScale(v) : yMid;
-      const h = Math.abs(yScale(v) - yMid);
-      html += `<rect class="${cls}" x="${gx + off}" y="${y}" width="${barW - 1}" height="${h}"/>`;
+  /* ---------- Panel 1 ---------- */
+  function rewards() {
+    var mode = $("mode").value, G = +$("G").value, k = Math.min(+$("k").value, G), out = [];
+    if (mode === "rm") {
+      var spread = +$("noise").value / 100;
+      for (var i = 0; i < G; i++) {
+        var t = (G === 1) ? 0 : (2 * i / (G - 1) - 1);       /* −1 .. +1 */
+        out.push(0.5 + spread * t);
+      }
+    } else {
+      var lo = (mode === "pm1") ? -1 : 0;
+      for (var j = 0; j < G; j++) out.push(j < k ? 1 : lo);
     }
-    html += `<text class="axis" x="${gx + groupW / 2}" y="${H - M.b + 12}" text-anchor="middle">r=${r[i].toFixed(2)}</text>`;
-    html += `<text class="axis" x="${gx + groupW / 2}" y="${H - M.b + 26}" text-anchor="middle" fill="#666">i=${i + 1}</text>`;
+    return out;
   }
-  // zero line
-  html += `<line x1="${M.l}" x2="${W - M.r}" y1="${yMid}" y2="${yMid}" stroke="#222" stroke-width="1"/>`;
-  html += `<text class="axis" x="${W / 2}" y="${H - 8}" text-anchor="middle" fill="#333">sample index (group size K=${K})</text>`;
-  html += `<text class="axis" x="${14}" y="${yMid - 4}" transform="rotate(-90 14 ${yMid})" text-anchor="middle">advantage A_i</text>`;
-  svg1.innerHTML = html;
 
-  let warn = "";
-  if (std < 0.05) warn = ` <span class="warn">std=${std.toFixed(3)} — GRPO advantage unstable (degenerate group)</span>`;
-  document.getElementById("statsPanel1").innerHTML =
-    `mean(r)=${mean.toFixed(3)} &nbsp; std(r)=${std.toFixed(3)}${warn} &nbsp; ` +
-    `max|A_RLOO|=${Math.max(...A_rloo.map(Math.abs)).toFixed(3)} &nbsp; ` +
-    `max|A_GRPO|=${Math.max(...A_grpo.map(Math.abs)).toFixed(3)} &nbsp; ` +
-    `max|A_Dr.GRPO|=${Math.max(...A_dr.map(Math.abs)).toFixed(3)}`;
-}
+  function drawPanel1() {
+    var G = +$("G").value, mode = $("mode").value;
+    $("Gv").value = G;
+    $("k").max = G;
+    if (+$("k").value > G) $("k").value = G;
+    $("kv").value = $("k").value;
+    $("noisev").value = (+$("noise").value / 100).toFixed(2);
+    $("kbox").hidden = (mode === "rm");
+    $("noisebox").hidden = (mode !== "rm");
 
-// ---- Panel 2 chart ----
-const svg2 = document.getElementById("lenChart");
-function renderPanel2() {
-  const lW = +document.getElementById("lWrongSlider").value;
-  const lR = +document.getElementById("lRightSlider").value;
-  const lMax = +document.getElementById("lMaxSlider").value;
-  const aMag = +document.getElementById("aMagSlider").value;
-  document.getElementById("lWrongVal").textContent = lW;
-  document.getElementById("lRightVal").textContent = lR;
-  document.getElementById("lMaxVal").textContent = lMax;
-  document.getElementById("aMagVal").textContent = aMag.toFixed(2);
+    var r = rewards(), n = r.length;
+    var mean = r.reduce(function (a, b) { return a + b; }, 0) / n;
+    var ss = r.reduce(function (a, b) { return a + (b - mean) * (b - mean); }, 0);
+    var popStd = Math.sqrt(ss / n);
+    var sampStd = n > 1 ? Math.sqrt(ss / (n - 1)) : 0;
+    var eps = 1e-6;
 
-  // per-token gradient magnitude (proportional to |A|/denominator)
-  // GRPO: |A|/|o_i|   Dr.GRPO: |A|/L_max
-  const gGrpoW = aMag / lW;
-  const gGrpoR = aMag / lR;
-  const gDrW   = aMag / lMax;
-  const gDrR   = aMag / lMax;
+    var rows = ["<tr><th>Rollout</th><th>reward r<sub>i</sub></th><th>RLOO</th>" +
+                "<th>GRPO (population std)</th><th>GRPO (torch.std)</th><th>Dr. GRPO</th></tr>"];
+    var sumAbsGrpo = 0, sumAbsDr = 0;
+    for (var i = 0; i < n; i++) {
+      var dr = r[i] - mean;
+      var rloo = n > 1 ? (n / (n - 1)) * dr : r[i];
+      var gp = dr / (popStd + eps), gs = dr / (sampStd + eps);
+      sumAbsGrpo += Math.abs(gp); sumAbsDr += Math.abs(dr);
+      var cls = function (v) { return v > 1e-9 ? "num pos" : (v < -1e-9 ? "num neg" : "num"); };
+      rows.push("<tr><td>" + (i + 1) + "</td><td class='num'>" + r[i].toFixed(2) + "</td>" +
+        "<td class='" + cls(rloo) + "'>" + fmt(rloo) + "</td>" +
+        "<td class='" + cls(gp) + "'>" + fmt(gp) + "</td>" +
+        "<td class='" + cls(gs) + "'>" + fmt(gs) + "</td>" +
+        "<td class='" + cls(dr) + "'>" + fmt(dr) + "</td></tr>");
+    }
+    $("tbl").innerHTML = rows.join("");
 
-  const W = 1100, H = 340, M = { l: 80, r: 40, t: 20, b: 60 };
-  const innerW = W - M.l - M.r, innerH = H - M.t - M.b;
-  const maxG = Math.max(gGrpoW, gGrpoR, gDrW, gDrR, 1e-6);
-  const yScale = v => M.t + innerH - (v / maxG) * (innerH - 10);
-  const bars = [
-    { label: "GRPO · wrong (long)",  v: gGrpoW, cls: "bar-grpo",   x: 0 },
-    { label: "GRPO · correct (short)", v: gGrpoR, cls: "bar-grpo", x: 1 },
-    { label: "Dr.GRPO · wrong",       v: gDrW,   cls: "bar-drgrpo", x: 2 },
-    { label: "Dr.GRPO · correct",     v: gDrR,   cls: "bar-drgrpo", x: 3 },
-  ];
-  const bw = innerW / bars.length * 0.55;
-  let html = "";
-  // gridlines
-  for (let t = 0; t <= 4; t++) {
-    const v = (t / 4) * maxG;
-    const y = yScale(v);
-    html += `<line class="gridline" x1="${M.l}" x2="${W - M.r}" y1="${y}" y2="${y}"/>`;
-    html += `<text class="axis" x="${M.l - 6}" y="${y + 3}" text-anchor="end">${v.toExponential(2)}</text>`;
+    var lines = [];
+    lines.push("mean = " + mean.toFixed(4) + "   population std = " + popStd.toFixed(4) +
+               "   torch.std = " + sampStd.toFixed(4));
+    lines.push("bound on |GRPO advantage| with population std: sqrt(G-1) = " + Math.sqrt(n - 1).toFixed(3));
+    lines.push("sum of |advantage| over the group: GRPO " + sumAbsGrpo.toFixed(3) +
+               "   Dr. GRPO " + sumAbsDr.toFixed(3));
+    if (popStd < 1e-12) {
+      lines.push("All rewards are equal: every numerator r_i - mean is exactly 0, so every advantage is " +
+                 "0/(0 + 1e-6) = 0. The group contributes no policy gradient.");
+    } else if ($("mode").value === "rm") {
+      lines.push("Reward range in this group: " + (Math.max.apply(null, r) - Math.min.apply(null, r)).toFixed(3) +
+                 ". Dividing by the group std maps that range onto advantages of order 1.");
+    }
+    $("stats1").textContent = lines.join("\n");
   }
-  html += `<text class="axis" x="${14}" y="${M.t + innerH / 2}" transform="rotate(-90 14 ${M.t + innerH / 2})" text-anchor="middle">per-token gradient magnitude</text>`;
-  for (const b of bars) {
-    const cx = M.l + (b.x + 0.5) * (innerW / bars.length);
-    const y = yScale(b.v);
-    const h = yScale(0) - y;
-    html += `<rect class="${b.cls}" x="${cx - bw / 2}" y="${y}" width="${bw}" height="${h}"/>`;
-    html += `<text class="axis" x="${cx}" y="${y - 6}" text-anchor="middle" fill="#222">${b.v.toExponential(2)}</text>`;
-    html += `<text class="axis" x="${cx}" y="${H - M.b + 16}" text-anchor="middle">${b.label}</text>`;
+
+  /* ---------- Panel 2 ---------- */
+  function drawPanel2() {
+    var G = +$("G2").value; $("G2v").value = G;
+    var W = 640, H = 260, mL = 46, mR = 14, mT = 12, mB = 34;
+    var x = function (p) { return mL + p * (W - mL - mR); };
+    var y = function (q) { return mT + (1 - q) * (H - mT - mB); };
+    var parts = ['<g class="axis">'];
+    for (var t = 0; t <= 1.0001; t += 0.25) {
+      parts.push('<line class="gridline" x1="' + x(0) + '" y1="' + y(t) + '" x2="' + x(1) + '" y2="' + y(t) + '"/>');
+      parts.push('<text x="' + (mL - 8) + '" y="' + (y(t) + 4) + '" text-anchor="end">' + t.toFixed(2) + '</text>');
+    }
+    for (var u = 0; u <= 1.0001; u += 0.2) {
+      parts.push('<text x="' + x(u) + '" y="' + (H - 12) + '" text-anchor="middle">' + u.toFixed(1) + '</text>');
+    }
+    parts.push('<line x1="' + x(0) + '" y1="' + y(0) + '" x2="' + x(1) + '" y2="' + y(0) + '"/>');
+    parts.push('<line x1="' + x(0) + '" y1="' + y(0) + '" x2="' + x(0) + '" y2="' + y(1) + '"/>');
+    parts.push('<text x="' + x(0.5) + '" y="' + (H - 0) + '" text-anchor="middle">per-sample pass rate p</text>');
+    parts.push('</g>');
+    var d = "", d8 = "";
+    for (var i = 0; i <= 200; i++) {
+      var p = i / 200;
+      var q = Math.pow(p, G) + Math.pow(1 - p, G);
+      var q8 = Math.pow(p, 8) + Math.pow(1 - p, 8);
+      d += (i ? "L" : "M") + x(p).toFixed(1) + "," + y(q).toFixed(1);
+      d8 += (i ? "L" : "M") + x(p).toFixed(1) + "," + y(q8).toFixed(1);
+    }
+    if (G !== 8) parts.push('<path d="' + d8 + '" fill="none" stroke="var(--muted)" stroke-dasharray="4 3" stroke-width="1.5"/>');
+    parts.push('<path d="' + d + '" fill="none" stroke="var(--alt)" stroke-width="2"/>');
+    parts.push('<text class="axis" x="' + x(0.52) + '" y="' + y(0.92) + '" fill="var(--alt)">G = ' + G + '</text>');
+    if (G !== 8) parts.push('<text class="axis" x="' + x(0.52) + '" y="' + y(0.82) + '">dashed: G = 8</text>');
+    $("dead").innerHTML = parts.join("");
+
+    var rowsOut = [];
+    [0.1, 0.2, 0.5, 0.8, 0.9].forEach(function (p) {
+      rowsOut.push("p = " + p.toFixed(1) + "  ->  dead-group share " +
+        (Math.pow(p, G) + Math.pow(1 - p, G)).toFixed(3));
+    });
+    rowsOut.push("A batch of 512 prompts at p = 0.9 with G = " + G + " yields about " +
+      Math.round(512 * (Math.pow(0.9, G) + Math.pow(0.1, G))) + " prompts with no gradient.");
+    $("stats2").textContent = rowsOut.join("\n");
   }
-  svg2.innerHTML = html;
 
-  const ratio = gGrpoR / (gGrpoW || 1e-12);
-  const drRatio = gDrR / (gDrW || 1e-12);
-  document.getElementById("statsPanel2").innerHTML =
-    `GRPO per-token ratio (correct_short / wrong_long) = <b>${ratio.toFixed(2)}&times;</b> ` +
-    `&nbsp;&nbsp; Dr.GRPO ratio = <b>${drRatio.toFixed(2)}&times;</b> ` +
-    `&nbsp;&nbsp; <span class="note">(Dr.GRPO ratio should stay at 1.00 regardless of lengths — that is the bias fix.)</span>`;
-}
+  /* ---------- Panel 3 ---------- */
+  function drawPanel3() {
+    var la = +$("lenA").value, lb = +$("lenB").value, A = +$("adv").value / 100, L = +$("L").value, G = 8;
+    $("lenAv").value = la; $("lenBv").value = lb; $("advv").value = A.toFixed(2); $("Lv").value = L;
+    var sumLen = la + lb;
+    function row(name, wa, wb) {
+      return "<tr><td>" + name + "</td><td class='num'>" + wa.toExponential(2) + "</td><td class='num'>" +
+             wb.toExponential(2) + "</td><td class='num'>" + (wa * la).toExponential(2) + "</td><td class='num'>" +
+             (wb * lb).toExponential(2) + "</td><td class='num'>" +
+             (wa * la === 0 ? "-" : ((wb * lb) / (wa * la)).toFixed(2)) + "</td></tr>";
+    }
+    var head = "<tr><th>Normalizer</th><th>weight/token A</th><th>weight/token B</th>" +
+               "<th>total A</th><th>total B</th><th>total B : total A</th></tr>";
+    var body = row("GRPO  (1/G)(1/|o_i|)", A / (G * la), A / (G * lb)) +
+               row("Dr. GRPO  (1/G)(1/L)", A / (G * L), A / (G * L)) +
+               row("DAPO  1/&Sigma;|o_i| (2 responses)", A / sumLen, A / sumLen);
+    $("tbl3").innerHTML = head + body;
+  }
 
-// ---- wire up ----
-for (const id of ["kSlider", "distSel", "pSlider", "seedSlider"]) {
-  document.getElementById(id).addEventListener("input", renderPanel1);
-}
-for (const id of ["lWrongSlider", "lRightSlider", "lMaxSlider", "aMagSlider"]) {
-  document.getElementById(id).addEventListener("input", renderPanel2);
-}
-renderPanel1();
-renderPanel2();
+  ["mode", "G", "k", "noise"].forEach(function (id) {
+    $(id).addEventListener("input", drawPanel1);
+    $(id).addEventListener("change", drawPanel1);
+  });
+  $("G2").addEventListener("input", drawPanel2);
+  ["lenA", "lenB", "adv", "L"].forEach(function (id) { $(id).addEventListener("input", drawPanel3); });
+  drawPanel1(); drawPanel2(); drawPanel3();
+})();
 </script>
-
 </body>
 </html>

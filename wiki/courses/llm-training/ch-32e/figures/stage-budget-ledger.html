@@ -1,0 +1,248 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Stage Budget Ledger</title>
+<style>
+  :root {
+    color-scheme: light;
+    --surface-0: #f6f5f2;
+    --surface-1: #fcfcfb;
+    --surface-2: #efede8;
+    --border: #d9d6cf;
+    --grid: #e4e2dd;
+    --text-primary: #111110;
+    --text-secondary: #4f4e4a;
+    --text-muted: #6f6d67;
+    --k-decay: #c05a1c;
+    --k-mid: #2a6fc9;
+    --k-lc: #2d8a4e;
+    --focus: #2a6fc9;
+    --warn: #9a6a00;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      color-scheme: dark;
+      --surface-0: #131312;
+      --surface-1: #1b1b1a;
+      --surface-2: #242422;
+      --border: #3a3a37;
+      --grid: #2e2e2c;
+      --text-primary: #f4f3ef;
+      --text-secondary: #c4c3ba;
+      --text-muted: #9a998f;
+      --k-decay: #e08043;
+      --k-mid: #5b9bec;
+      --k-lc: #5cbf7d;
+      --focus: #5b9bec;
+      --warn: #d9a93a;
+    }
+  }
+  :root[data-theme="dark"] {
+    color-scheme: dark;
+    --surface-0: #131312;
+    --surface-1: #1b1b1a;
+    --surface-2: #242422;
+    --border: #3a3a37;
+    --grid: #2e2e2c;
+    --text-primary: #f4f3ef;
+    --text-secondary: #c4c3ba;
+    --text-muted: #9a998f;
+    --k-decay: #e08043;
+    --k-mid: #5b9bec;
+    --k-lc: #5cbf7d;
+    --focus: #5b9bec;
+    --warn: #d9a93a;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--surface-0); color: var(--text-primary);
+         font: 14px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; }
+  main { max-width: 980px; margin: 0 auto; padding-block: 20px 40px; padding-inline: 16px; }
+  h1 { font-size: 1.35rem; margin: 0 0 4px; }
+  h2 { font-size: 1.05rem; margin: 28px 0 6px; }
+  p { margin: 6px 0; color: var(--text-secondary); }
+  .card { background: var(--surface-1); border: 1px solid var(--border); border-radius: 8px; padding: 14px; margin-top: 10px; }
+  .tabs { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0 12px; }
+  .tabs button, .presets button { font: inherit; padding: 5px 10px; border-radius: 6px; border: 1px solid var(--border);
+         background: var(--surface-2); color: var(--text-primary); cursor: pointer; }
+  .tabs button[aria-pressed="true"] { border-color: var(--focus); outline: 2px solid var(--focus); outline-offset: -1px; }
+  button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
+  .row { display: grid; grid-template-columns: minmax(150px, 230px) 1fr minmax(84px, auto); gap: 8px; align-items: center;
+         padding: 5px 0; border-top: 1px solid var(--grid); cursor: pointer; }
+  .row:first-child { border-top: 0; }
+  .row .name { font-size: 0.9rem; }
+  .track { position: relative; height: 14px; background: var(--surface-2); border-radius: 3px; }
+  .bar { position: absolute; left: 0; top: 0; bottom: 0; border-radius: 3px; }
+  .val { font-variant-numeric: tabular-nums; text-align: right; font-size: 0.9rem; }
+  .axis { display: grid; grid-template-columns: minmax(150px, 230px) 1fr minmax(84px, auto); gap: 8px; font-size: 0.75rem; color: var(--text-muted); }
+  .ticks { position: relative; height: 16px; }
+  .ticks span { position: absolute; transform: translateX(-50%); white-space: nowrap; }
+  .detail { margin-top: 10px; padding: 10px; border-left: 3px solid var(--focus); background: var(--surface-2); border-radius: 4px; font-size: 0.9rem; }
+  .detail code { font-size: 0.85rem; }
+  .grid2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 10px; }
+  label { display: block; font-size: 0.85rem; color: var(--text-secondary); }
+  input, select { font: inherit; width: 100%; padding: 4px 6px; border: 1px solid var(--border); border-radius: 5px;
+         background: var(--surface-1); color: var(--text-primary); }
+  .phase { border: 1px solid var(--grid); border-radius: 6px; padding: 8px; }
+  .presets { display: flex; flex-wrap: wrap; gap: 6px; margin: 6px 0 10px; }
+  .out { font-variant-numeric: tabular-nums; font-size: 1rem; margin-top: 10px; }
+  .note { font-size: 0.8rem; color: var(--text-muted); }
+  .warn { color: var(--warn); }
+  @media (max-width: 560px) {
+    .row, .axis { grid-template-columns: 1fr minmax(70px, auto); }
+    .row .track, .axis .ticks { grid-column: 1 / -1; grid-row: 2; }
+    .axis > div:first-child, .axis > div:last-child { display: none; }
+  }
+</style>
+</head>
+<body>
+<main>
+  <h1>Stage budgets relative to pretraining</h1>
+  <p>Each bar is a stage's training tokens divided by the report's pretraining-stage tokens. All ratios are derived by the course from values printed in the sources; the scale is logarithmic because the ratios span from 0.0003% to 29%. Select a row to see the inputs and loci.</p>
+
+  <div class="card">
+    <div class="tabs" role="group" aria-label="Stage type">
+      <button type="button" data-kind="decay" aria-pressed="true">Decay / anneal</button>
+      <button type="button" data-kind="mid" aria-pressed="false">Mid-training (data change)</button>
+      <button type="button" data-kind="lc" aria-pressed="false">Context extension</button>
+    </div>
+    <div id="rows"></div>
+    <div class="axis" aria-hidden="true"><div></div><div class="ticks" id="ticks"></div><div></div></div>
+    <div class="detail" id="detail">Select a row.</div>
+  </div>
+
+  <h2>Token calculator: steps × batch × sequence length</h2>
+  <p>Reports print stage budgets in different units. This calculator converts steps, batch size in sequences, and sequence length into tokens, with "K" read as 1,000 or 1,024, and divides by a pretraining budget.</p>
+  <div class="card">
+    <div class="presets" role="group" aria-label="Presets">
+      <button type="button" data-preset="dsv3">DeepSeek-V3 (§4.3)</button>
+      <button type="button" data-preset="smol">SmolLM3 configs</button>
+      <button type="button" data-preset="olmo3">Olmo 3 7B (Table 35)</button>
+      <button type="button" data-preset="nano2">Nemotron Nano 2 (§2.6)</button>
+    </div>
+    <div class="grid2">
+      <div class="phase">
+        <strong>Phase 1</strong>
+        <label>Steps <input id="s1" type="number" min="0" step="1"></label>
+        <label>Batch (sequences) <input id="b1" type="number" min="0" step="1"></label>
+        <label>Sequence length (K) <input id="l1" type="number" min="0" step="1"></label>
+      </div>
+      <div class="phase">
+        <strong>Phase 2</strong>
+        <label>Steps <input id="s2" type="number" min="0" step="1"></label>
+        <label>Batch (sequences) <input id="b2" type="number" min="0" step="1"></label>
+        <label>Sequence length (K) <input id="l2" type="number" min="0" step="1"></label>
+      </div>
+      <div class="phase">
+        <strong>Units and denominator</strong>
+        <label>K means <select id="kunit"><option value="1024">1,024 (binary)</option><option value="1000">1,000 (decimal)</option></select></label>
+        <label>Pretraining tokens (T) <input id="pt" type="number" min="0" step="0.01"></label>
+      </div>
+    </div>
+    <div class="out" id="calcOut"></div>
+    <p class="note" id="presetNote"></p>
+  </div>
+
+  <p class="note">Sources: DeepSeek-V3 arXiv:2412.19437v2 §4.2–4.3; Llama 3 arXiv:2407.21783v3 §3.4; OLMo 2 arXiv:2501.00656v3 §2.3, Table 3; Olmo 3 arXiv:2512.13961v2 Tables 5, 11, 35; SmolLM3 blog (2025-07) and huggingface/smollm configs; GLM-4.5 arXiv:2508.06471v1 Fig. 3; GLM-5 arXiv:2602.15763v2 §2, §2.3; Nemotron Nano 2 arXiv:2508.14444v4 §2.5–2.6. Values match ch-32e read.md §1–§4 and the Recipe table.</p>
+</main>
+<script>
+(function () {
+  var data = {
+    decay: [
+      { n: "DeepSeek-V3: cosine decay", v: 4.3 / 14.8, t: "4.3T / 14.8T", d: "Cosine decay 2.2e-4 → 2.2e-5 over 4.3T tokens, after a constant LR to 10T (arXiv:2412.19437v2 §4.2)." },
+      { n: "Nemotron Nano 2 12B: WSD decay", v: 3.6 / 20, t: "3.6T / 20T", d: "WSD, stable LR 4.5e-4, decayed to 4.5e-6 over the final 3.6T of a 20T horizon (arXiv:2508.14444v4 §2.5)." },
+      { n: "SmolLM3 3B: decay (config)", v: 1.2316 / 11.136, t: "1.23T / 11.14T", d: "stage1_8T.yaml: lr_decay_steps 522000 of train_steps 4720000 at 2,359,296 tokens/step. The blog states 10T → 11.1T (1.1T / 11.1T = 9.9%)." },
+      { n: "MiniCPM 0.036B: stated sufficient decay", v: 0.10, t: "10% of tokens", d: "Figure 5: a decay of 10% of total tokens is sufficient; 2.5% falls short (arXiv:2404.06395v3 §4.2). Stated share, not a derived ratio." },
+      { n: "DeepSeek-V3: final low-LR tokens", v: 0.5 / 14.8, t: "500B / 14.8T", d: "333B at 2.2e-5 then 167B at 7.3e-6 (§4.2)." },
+      { n: "OLMo 2 7B: one mid-training run", v: 0.05 / 3.9, t: "50B / 3.90T", d: "Linear decay to 0 over each 50B Dolmino run; three runs averaged (arXiv:2501.00656v3 §2.3). All three runs: 150B / 3.90T = 3.8%." },
+      { n: "Llama 3 405B: final anneal", v: 0.00004 / 15.6, t: "40M / 15.6T", d: "LR linearly to 0 over the final 40M tokens at 128K context; checkpoint averaging (arXiv:2407.21783v3 §3.4.3)." }
+    ],
+    mid: [
+      { n: "OLMo 2 13B: 3×100B + 300B", v: 0.6 / 5.0, t: "600B / 5T", d: "All four souping ingredients counted; one 100B run is 2.0% (§2.3). The report's 5.6T total counts all ingredients." },
+      { n: "OLMo 2 32B: 3×100B + 300B", v: 0.6 / 6.06, t: "600B / 6.06T", d: "§2.3 gives 6.06T pretraining; the Table 9 caption gives 7T for the 32B pretrain checkpoint." },
+      { n: "GLM-5: three mid-training stages", v: 1.55 / 27, t: "1.55T / 27T", d: "32K 1T + 128K 500B + 200K 50B (arXiv:2602.15763v2 §2.3); 27T pre-training corpus (§1)." },
+      { n: "GLM-4.5: three mid-training stages", v: 1.1 / 22, t: "1.1T / 22T", d: "Repo code 500B at 32K + synthetic reasoning 500B at 32K + long-context and agent 100B at 128K; pre-training 15T + 7T (arXiv:2508.06471v1 Fig. 3)." },
+      { n: "OLMo 2 7B: 3 × 50B", v: 0.15 / 3.9, t: "150B / 3.90T", d: "Three 50B runs averaged; a single run is 1.3% (§2.3)." },
+      { n: "Olmo 3 32B: 2 × 100B", v: 0.2 / 5.5, t: "200B / 5.5T", d: "Two 100B midtraining runs merged; one run is 1.8% (Table 35)." },
+      { n: "Olmo 3 7B: 100B", v: 0.1 / 5.93, t: "100B / 5.93T", d: "Linear decay from 2.074e-4 to 0, 2,097,152 tokens per batch (Table 35)." },
+      { n: "SmolLM3 3B: reasoning mid-training", v: 0.14 / 11.1, t: "140B seen / 11.1T", d: "35B tokens × 4 epochs (blog). Unique tokens: 35B / 11.1T = 0.32%." }
+    ],
+    lc: [
+      { n: "Llama 3 405B: six stages 8K→128K", v: 0.8 / 15.6, t: "800B / 15.6T", d: "Approximately 800B tokens, inside the 15.6T pre-training total; per-stage lengths not printed (§3.4.2)." },
+      { n: "GLM-5: 128K + 200K stages", v: 0.55 / 27, t: "550B / 27T", d: "The 32K stage (1T) is excluded here (§2.3)." },
+      { n: "Olmo 3 32B: 8K→65K", v: 0.1 / 5.5, t: "100B / 5.5T", d: "34% long / 66% short; YaRN factor 8 on full-attention layers; last three checkpoints averaged (§3.6; Table 35)." },
+      { n: "SmolLM3 3B: 4K→32K→64K", v: 0.1 / 11.1, t: "100B / 11.1T", d: "Blog: 2 × 50B. Configs: 47.2B + 51.9B." },
+      { n: "DeepSeek-V3: 4K→32K→128K", v: 0.1258 / 14.8, t: "125.8B / 14.8T", d: "Derived: 1000 × 1920 × 32,768 + 1000 × 480 × 131,072 = 125.8B if batch counts sequences; with K = 1,000 it is 122.9B (§4.3 prints no token count)." },
+      { n: "Olmo 3 7B: 8K→65K", v: 0.05 / 5.93, t: "50B / 5.93T", d: "Table 35; Table 11 long rows 16.95B of 50B." },
+      { n: "GLM-4.5: 32K→128K stage", v: 0.1 / 22, t: "100B / 22T", d: "Figure 3 label; RoPE base 10K → 1M was set at the 32K extension (§2.4)." },
+      { n: "Nemotron Nano 2 12B: Phase LC", v: 18.9 / 20000, t: "18.9B / 20T", d: "524,288-token sequences, constant LR 4.5e-6, 80% Phase 3 blend + 20% long-document QA (§2.6)." }
+    ]
+  };
+  var colors = { decay: "var(--k-decay)", mid: "var(--k-mid)", lc: "var(--k-lc)" };
+  var MIN = 1e-6, MAX = 1;
+  function pos(v) { var x = Math.max(v, MIN); return (Math.log10(x) - Math.log10(MIN)) / (Math.log10(MAX) - Math.log10(MIN)) * 100; }
+  function pct(v) { var p = v * 100; return p >= 1 ? p.toFixed(1) + "%" : p >= 0.01 ? p.toFixed(2) + "%" : p.toPrecision(2) + "%"; }
+  var rowsEl = document.getElementById("rows"), detail = document.getElementById("detail");
+  function render(kind) {
+    rowsEl.innerHTML = "";
+    data[kind].slice().sort(function (a, b) { return b.v - a.v; }).forEach(function (r) {
+      var row = document.createElement("div");
+      row.className = "row"; row.tabIndex = 0; row.setAttribute("role", "button");
+      row.innerHTML = '<div class="name"></div><div class="track"><div class="bar"></div></div><div class="val"></div>';
+      row.querySelector(".name").textContent = r.n;
+      var bar = row.querySelector(".bar"); bar.style.width = pos(r.v) + "%"; bar.style.background = colors[kind];
+      row.querySelector(".val").textContent = pct(r.v);
+      function show() { detail.textContent = r.n + ": " + r.t + " = " + pct(r.v) + ". " + r.d; }
+      row.addEventListener("click", show);
+      row.addEventListener("keydown", function (e) { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); show(); } });
+      rowsEl.appendChild(row);
+    });
+    detail.textContent = "Select a row.";
+  }
+  var ticks = document.getElementById("ticks");
+  [[1e-6, "0.0001%"], [1e-4, "0.01%"], [1e-2, "1%"], [1, "100%"]].forEach(function (t) {
+    var s = document.createElement("span"); s.style.left = pos(t[0]) + "%";
+    s.textContent = t[1]; ticks.appendChild(s);
+  });
+  document.querySelectorAll(".tabs button").forEach(function (b) {
+    b.addEventListener("click", function () {
+      document.querySelectorAll(".tabs button").forEach(function (x) { x.setAttribute("aria-pressed", x === b ? "true" : "false"); });
+      render(b.dataset.kind);
+    });
+  });
+  render("decay");
+
+  var presets = {
+    dsv3: { v: [1000, 1920, 32, 1000, 480, 128, "1024", 14.8], note: "DeepSeek-V3 prints 1000 steps per phase, batch 1920 at 32K and 480 at 128K, and no unit for batch. Switch K to 1,000 to reproduce the 123B that the Olmo 3 report quotes for DeepSeek V3 (§3.6). The DeepSeek-V3.1 model card calls its 630B 32K phase 10-fold the V3 phase (about 63B)." },
+    smol: { v: [20000, 72, 32, 22000, 36, 64, "1024", 11.1], note: "Batch = micro 1 × accumulation 6 × dp 12 = 72 sequences at 32,768; accumulation 3 → 36 sequences at 65,536 (long_context_4k_to_32k.yaml, long_context_32k_to_64.yaml). The blog states 50B per stage." },
+    olmo3: { v: [11921, 64, 64, 0, 0, 0, "1024", 5.93], note: "Olmo 3 7B: 64 instances × 65,536 = 4,194,304 tokens per batch (Table 35). 50B / 4,194,304 is about 11,921 steps, the same step number as the last averaged 32B checkpoint (32B uses 8,388,608 tokens per batch and 100B)." },
+    nano2: { v: [3004, 12, 512, 0, 0, 0, "1024", 20], note: "Nemotron Nano 2 prints 18.9B tokens and batch 12 at 524,288 tokens; the step count (about 3,004) is derived, not printed (§2.6)." }
+  };
+  var ids = ["s1", "b1", "l1", "s2", "b2", "l2", "kunit", "pt"];
+  function num(id) { var x = parseFloat(document.getElementById(id).value); return isFinite(x) ? x : 0; }
+  function calc() {
+    var k = num("kunit");
+    var t1 = num("s1") * num("b1") * num("l1") * k, t2 = num("s2") * num("b2") * num("l2") * k, tot = t1 + t2;
+    var pt = num("pt") * 1e12;
+    var out = "Phase 1: " + (t1 / 1e9).toFixed(1) + "B tokens; phase 2: " + (t2 / 1e9).toFixed(1) + "B; total " + (tot / 1e9).toFixed(1) + "B";
+    if (pt > 0) out += " = " + pct(tot / pt) + " of " + num("pt") + "T";
+    document.getElementById("calcOut").textContent = out + ".";
+  }
+  document.querySelectorAll(".presets button").forEach(function (b) {
+    b.addEventListener("click", function () {
+      var p = presets[b.dataset.preset];
+      ids.forEach(function (id, i) { document.getElementById(id).value = p.v[i]; });
+      document.getElementById("presetNote").textContent = p.note;
+      calc();
+    });
+  });
+  ids.forEach(function (id) { document.getElementById(id).addEventListener("input", calc); });
+  var first = presets.dsv3;
+  ids.forEach(function (id, i) { document.getElementById(id).value = first.v[i]; });
+  document.getElementById("presetNote").textContent = first.note;
+  calc();
+})();
+</script>
+</body>
+</html>

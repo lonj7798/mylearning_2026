@@ -7,6 +7,8 @@ source_url: https://aclanthology.org/2024.findings-emnlp.74/
 created_at: "2026-04-23"
 ---
 
+> Superseded by the 2026-09 revision of read.md; kept for history.
+
 # Excerpt: LongAlign - post-extension alignment as a distinct stage
 
 **Source library:** `wiki/raw-data/llm-training/papers/longalign.md`

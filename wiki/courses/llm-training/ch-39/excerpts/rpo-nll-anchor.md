@@ -7,6 +7,8 @@ source_url: https://arxiv.org/abs/2404.19733
 created_at: "2026-04-23"
 ---
 
+> Superseded by the 2026-09 revision of read.md; kept for history.
+
 # Excerpt: RPO — iterative DPO + NLL anchor for reasoning
 
 **Source library:** `wiki/raw-data/llm-training/papers/rpo.md`

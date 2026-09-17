@@ -1,282 +1,262 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
 <head>
-<meta charset="UTF-8">
-<title>DoReMi — Group-DRO reweighting across domains</title>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Mixture Weight Workbench (ch-13)</title>
 <style>
-  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; max-width: 1100px; margin: 1.4em auto; padding: 0 1em; color: #222; background: #fafafa; }
-  h1 { font-size: 1.3em; margin-bottom: 0.15em; }
-  .subtitle { color: #666; margin-top: 0; font-size: 0.92em; }
-  .controls { display: flex; flex-wrap: wrap; gap: 1.2em; align-items: center; margin: 0.9em 0; padding: 0.7em 1em; background: #fff; border: 1px solid #dcdcdc; border-radius: 6px; }
-  .control { display: flex; flex-direction: column; font-size: 0.85em; }
-  .control label { color: #444; margin-bottom: 0.2em; }
-  .control input[type="range"] { width: 180px; }
-  .control .val { font-family: 'SF Mono', Menlo, monospace; color: #226; font-weight: 600; }
-  button { font-size: 0.85em; padding: 6px 14px; border: 1px solid #bbb; background: #f4f4f4; border-radius: 4px; cursor: pointer; }
-  button:hover { background: #e8e8e8; }
-  button.primary { background: #2b5fb3; color: #fff; border-color: #1b3f7a; }
-  button.primary:hover { background: #1f4a94; }
-  .layout { display: grid; grid-template-columns: 1.2fr 1fr; gap: 1em; }
-  .panel { border: 1px solid #dcdcdc; border-radius: 6px; background: #fff; padding: 0.6em 0.9em; }
-  h2 { font-size: 1em; margin: 0.1em 0 0.5em 0; color: #333; border-bottom: 1px solid #eee; padding-bottom: 0.3em; }
-  canvas { width: 100%; height: auto; display: block; }
-  .legend { font-size: 0.75em; color: #555; margin-top: 0.4em; display: flex; flex-wrap: wrap; gap: 0.9em; }
-  .legend span { display: inline-flex; align-items: center; gap: 0.3em; }
-  .swatch { width: 10px; height: 10px; display: inline-block; border-radius: 2px; }
-  .metric { font-family: 'SF Mono', Menlo, monospace; font-size: 0.82em; color: #333; }
-  .note { font-size: 0.8em; color: #666; margin-top: 0.6em; line-height: 1.45; }
-  table { width: 100%; border-collapse: collapse; font-size: 0.82em; }
-  th, td { padding: 3px 6px; border-bottom: 1px dashed #eee; text-align: right; }
-  th:first-child, td:first-child { text-align: left; }
-  th { color: #555; font-weight: 600; }
-  .bar-cell { position: relative; height: 14px; background: #f0f0f0; border-radius: 2px; overflow: hidden; }
-  .bar-fill { position: absolute; left: 0; top: 0; bottom: 0; background: #4a7fd1; transition: width 80ms linear; }
+:root{
+  --bg:#fbfaf7; --panel:#ffffff; --ink:#1d1d1f; --muted:#5d5d63; --line:#d9d6cf;
+  --a:#2f6fb3; --b:#c7661b; --c:#3f8f4a; --warn:#b8433a; --ok:#3f8f4a; --grid:#ecebe6;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#17171a; --panel:#202024; --ink:#ececf0; --muted:#a4a4ad; --line:#3a3a41;
+    --a:#6fa8e6; --b:#f0a060; --c:#7cc387; --warn:#e07a70; --ok:#7cc387; --grid:#2c2c31;
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#17171a; --panel:#202024; --ink:#ececf0; --muted:#a4a4ad; --line:#3a3a41;
+  --a:#6fa8e6; --b:#f0a060; --c:#7cc387; --warn:#e07a70; --ok:#7cc387; --grid:#2c2c31;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;padding-inline:16px;padding-block:20px}
+main{max-width:980px;margin:0 auto}
+h1{font-size:1.35rem;margin:0 0 4px}
+h2{font-size:1.08rem;margin:0 0 6px}
+p{margin:6px 0}
+.sub{color:var(--muted);font-size:.9rem}
+section{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:14px 16px;margin:14px 0}
+.row{display:flex;flex-wrap:wrap;gap:14px;align-items:flex-end;margin:8px 0}
+label{font-size:.85rem;color:var(--muted);display:flex;flex-direction:column;gap:2px}
+input[type=number]{width:84px;font:inherit;padding:2px 4px;border:1px solid var(--line);border-radius:5px;background:var(--panel);color:var(--ink)}
+input[type=range]{width:160px;max-width:100%}
+select,button{font:inherit;border:1px solid var(--line);background:transparent;color:var(--ink);border-radius:6px;padding:3px 9px;cursor:pointer}
+.tablewrap,.chartwrap{overflow-x:auto}
+table{border-collapse:collapse;font-size:.86rem;margin-top:6px;font-variant-numeric:tabular-nums}
+td,th{border:1px solid var(--line);padding:4px 7px;text-align:right;white-space:nowrap}
+th:first-child,td:first-child{text-align:left}
+th{font-weight:600}
+.warn{color:var(--warn);font-weight:600}
+.ok{color:var(--ok)}
+.note{font-size:.86rem;color:var(--muted);border-left:3px solid var(--line);padding-left:10px;margin-top:8px}
+svg{display:block;width:100%;height:auto}
+.chartwrap svg{min-width:560px}
+svg text{fill:var(--ink);font-size:11px}
+svg .ax{stroke:var(--line)}
+svg .gl{stroke:var(--grid)}
+.legend{display:flex;flex-wrap:wrap;gap:12px;font-size:.84rem;color:var(--muted);margin-top:4px}
+.legend span{display:inline-flex;align-items:center;gap:5px}
+.sw{width:12px;height:12px;border-radius:2px;display:inline-block}
+code{font-size:.85em}
 </style>
 </head>
 <body>
+<main>
+<h1>Mixture Weight Workbench</h1>
+<p class="sub">Companion to ch-13 read.md. Panel A performs the domain-weight update of DoReMi Algorithm 1 on numbers you enter. Panel B converts a mixture into epochs per domain and checks a repetition cap. Panel C plots the published Pile domain weights from two DoReMi proxy sizes. Panels A and B use toy inputs; Panel C copies a source table.</p>
 
-<h1>DoReMi — exponentiated-gradient reweighting across domains</h1>
-<p class="subtitle">A proxy LM's per-domain excess loss drives an adversary that reweights the mix. Adjust η (EG step) and watch α converge. Domain "difficulty" is simulated so you can see the equilibrium without a real LM.</p>
-
-<div class="controls">
-  <div class="control">
-    <label>η (EG step) <span class="val" id="eta-val">0.30</span></label>
-    <input type="range" id="eta" min="0.02" max="2.0" step="0.02" value="0.30">
-  </div>
-  <div class="control">
-    <label>Learner rate (θ tracking) <span class="val" id="lr-val">0.06</span></label>
-    <input type="range" id="lr" min="0.01" max="0.4" step="0.01" value="0.06">
-  </div>
-  <div class="control">
-    <label>Steps / click <span class="val" id="steps-val">50</span></label>
-    <input type="range" id="steps" min="1" max="200" step="1" value="50">
-  </div>
-  <button id="step-btn" class="primary">Step</button>
-  <button id="run-btn">Run 500</button>
-  <button id="reset-btn">Reset</button>
+<section id="panelA">
+<h2>A. One DoReMi weight update (Algorithm 1, step 2)</h2>
+<p class="sub">Enter per-token excess losses ℓ<sub>θ</sub> − ℓ<sub>ref</sub> for two tokens of each domain in the minibatch. The defaults are the worked example in read.md §2. Paper settings: η = 1 and c = 1e-3 in all experiments (DoReMi, arXiv:2305.10429v4 §2).</p>
+<div class="row">
+  <label>η (step size) <span id="etaVal">1.00</span><input type="range" id="eta" min="0" max="3" step="0.05" value="1"></label>
+  <label>c (smoothing)<select id="smooth"><option value="0">0</option><option value="0.001" selected>0.001</option><option value="0.01">0.01</option><option value="0.1">0.1</option></select></label>
+  <label><span><input type="checkbox" id="clip" checked> clip token excess at 0</span></label>
+  <label>repeat steps with the same λ <span id="nVal">10</span><input type="range" id="nsteps" min="1" max="60" step="1" value="10"></label>
 </div>
+<div class="tablewrap"><table id="tabA">
+<thead><tr><th>Domain</th><th>token 1</th><th>token 2</th><th>α<sub>t−1</sub></th><th>λ<sub>t</sub></th><th>α′<sub>t</sub> = α<sub>t−1</sub>·e<sup>ηλ</sup></th><th>normalized</th><th>α<sub>t</sub> after smoothing</th></tr></thead>
+<tbody></tbody>
+</table></div>
+<div class="chartwrap"><svg id="svgA" viewBox="0 0 640 230" role="img" aria-label="Domain weights over repeated steps"></svg></div>
+<div class="legend" id="legA"></div>
+<p class="note">Solid lines: α<sub>t</sub> when the same λ is applied at every step. Dashed lines: the running average ᾱ, which is what DoReMi returns. Holding λ fixed shows only the update rule. In a real run λ changes every step, because a larger weight scales up the proxy's updates on that domain and lowers its excess loss. Minibatches are sampled with uniform domain weights; α rescales the loss.</p>
+</section>
 
-<div class="layout">
-  <div class="panel">
-    <h2>Domain weights α over time</h2>
-    <canvas id="alpha-canvas" width="680" height="330"></canvas>
-    <div class="legend" id="alpha-legend"></div>
-    <div class="note">Starts uniform; EG update concentrates mass on domains with high excess loss. Time-averaged ᾱ is the transferable weight vector.</div>
-  </div>
-
-  <div class="panel">
-    <h2>Per-domain excess loss ℓ_k</h2>
-    <canvas id="loss-canvas" width="480" height="330"></canvas>
-    <div class="note">Proxy loss minus reference loss on each domain. The adversary reads this vector and reweights. Pareto result: all ℓ_k fall, even for downweighted domains.</div>
-  </div>
+<section id="panelB">
+<h2>B. Mixture weights → epochs under a repetition cap</h2>
+<p class="sub">e<sub>i</sub> = p<sub>i</sub>·R / N<sub>i</sub> and the cap p<sub>i</sub> ≤ k·N<sub>i</sub> / R, as used in Olmix (arXiv:2602.12237v1) §3.3.4. Defaults are the toy example in read.md §1.</p>
+<div class="row">
+  <label>R, requested tokens (B)<input type="number" id="R" value="1000" min="1" step="10"></label>
+  <label>k, max passes<input type="number" id="k" value="4" min="0.5" step="0.5"></label>
+  <button id="exToy" type="button">read.md §1 example</button>
+  <button id="exOlmix" type="button">Olmix §3.3.4 example</button>
 </div>
+<div class="tablewrap"><table id="tabB">
+<thead><tr><th>Domain</th><th>N<sub>i</sub> available (B)</th><th>p<sub>i</sub></th><th>tokens p<sub>i</sub>R (B)</th><th>epochs e<sub>i</sub></th><th>cap kN<sub>i</sub>/R</th><th>status</th></tr></thead>
+<tbody></tbody>
+</table></div>
+<p id="sumB" class="note"></p>
+</section>
 
-<div class="panel" style="margin-top: 1em;">
-  <h2>Current state (step <span class="metric" id="step-num">0</span>, time-avg ᾱ shown)</h2>
-  <table id="state-table">
-    <thead>
-      <tr><th>Domain</th><th>baseline</th><th>α now</th><th>ᾱ avg</th><th>ℓ_k</th><th>α bar</th></tr>
-    </thead>
-    <tbody></tbody>
-  </table>
-  <div class="note">
-    Intuition: when ℓ_k is large, α_k grows (softmax of η · cumulative ℓ). When ℓ_k is small, α_k shrinks but never reaches zero (EG keeps all coordinates strictly positive). Increase η to make the adversary more aggressive; observe oscillations at high η.
-  </div>
+<section id="panelC">
+<h2>C. Published Pile weights: baseline, DoReMi 280M proxy, DoReMi 1B proxy</h2>
+<div class="row">
+  <label>sort by (the printed value is the sorted column)<select id="sortC"><option value="0">baseline</option><option value="1" selected>DoReMi 280M</option><option value="2">DoReMi 1B</option></select></label>
 </div>
+<div class="chartwrap"><svg id="svgC" viewBox="0 0 640 640" role="img" aria-label="Domain weights on The Pile"></svg></div>
+<div class="legend"><span><i class="sw" style="background:var(--muted)"></i>baseline (default Pile weights)</span><span><i class="sw" style="background:var(--a)"></i>DoReMi 280M</span><span><i class="sw" style="background:var(--b)"></i>DoReMi 1B</span></div>
+<p class="note">Values copied from DoReMi Table 8 (arXiv:2305.10429v4; the 280M column equals Table 1). The 280M proxy puts 0.6057 on Pile-CC; the 1B proxy puts 0.3289 on OpenWebText2 and 0.1199 on Pile-CC. With the 280M weights, the 8B model improved on all 22 domains and raised average one-shot exact match from 20.03 to 26.56; with the 1B proxy's weights, the 8B average was 22.35 (Table 5).</p>
+</section>
+</main>
 
 <script>
-// Simulated domains — rough Pile-like. "difficulty" is the irreducible loss
-// floor; "learnability" controls how fast θ closes the excess-loss gap.
-const DOMAINS = [
-  { name: "CommonCrawl",   color: "#4a7fd1", baseline: 0.15, difficulty: 3.2, learnability: 0.012 },
-  { name: "Books",         color: "#d17f4a", baseline: 0.12, difficulty: 2.8, learnability: 0.010 },
-  { name: "Wikipedia",     color: "#4ad17f", baseline: 0.10, difficulty: 2.3, learnability: 0.014 },
-  { name: "GitHub (code)", color: "#a94ad1", baseline: 0.12, difficulty: 3.6, learnability: 0.008 },
-  { name: "arXiv (math)",  color: "#d14a9f", baseline: 0.05, difficulty: 4.1, learnability: 0.006 },
-  { name: "StackExchange", color: "#7fc04a", baseline: 0.08, difficulty: 3.0, learnability: 0.011 },
-  { name: "PubMed",        color: "#d1a74a", baseline: 0.04, difficulty: 3.4, learnability: 0.009 },
-  { name: "OpenWebText",   color: "#4ad1c0", baseline: 0.20, difficulty: 3.1, learnability: 0.013 },
-  { name: "PhilPapers",    color: "#8b5a2b", baseline: 0.03, difficulty: 3.5, learnability: 0.007 },
-  { name: "USPTO",         color: "#5a5a5a", baseline: 0.11, difficulty: 3.3, learnability: 0.010 },
-];
+(function(){
+  const cssVar = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+  const NS = "http://www.w3.org/2000/svg";
+  function el(tag, attrs, text){ const e=document.createElementNS(NS,tag); for(const k in attrs) e.setAttribute(k, attrs[k]); if(text!==undefined) e.textContent=text; return e; }
 
-const K = DOMAINS.length;
-let alpha, theta, step, alphaHistory, alphaRunningSum;
+  /* ---------- Panel A ---------- */
+  const domA = [
+    {name:"A", t:[0.5,0.1], prior:1/3, color:"--a"},
+    {name:"B", t:[-0.4,0.2], prior:1/3, color:"--b"},
+    {name:"C", t:[-0.3,-0.1], prior:1/3, color:"--c"}
+  ];
+  const tbodyA = document.querySelector("#tabA tbody");
+  domA.forEach((d,i)=>{
+    const tr=document.createElement("tr");
+    tr.innerHTML = `<td>${d.name}</td>`+
+      `<td><input type="number" step="0.05" value="${d.t[0]}" data-i="${i}" data-j="0" aria-label="domain ${d.name} token 1"></td>`+
+      `<td><input type="number" step="0.05" value="${d.t[1]}" data-i="${i}" data-j="1" aria-label="domain ${d.name} token 2"></td>`+
+      `<td><input type="number" step="0.01" min="0" value="${d.prior.toFixed(4)}" data-i="${i}" data-p="1" aria-label="domain ${d.name} prior weight"></td>`+
+      `<td class="lam"></td><td class="ap"></td><td class="nm"></td><td class="at"></td>`;
+    tbodyA.appendChild(tr);
+  });
+  tbodyA.addEventListener("input", e=>{
+    const t=e.target; const i=+t.dataset.i; const v=parseFloat(t.value);
+    if(isNaN(v)) return;
+    if(t.dataset.p) domA[i].prior=Math.max(0,v); else domA[i].t[+t.dataset.j]=v;
+    renderA();
+  });
+  ["eta","smooth","clip","nsteps"].forEach(id=>document.getElementById(id).addEventListener("input", renderA));
 
-function reset() {
-  alpha = DOMAINS.map(() => 1 / K);
-  // theta tracks a "how close is proxy loss to the reference loss" state per domain.
-  // theta_k ∈ [0, 1]: 0 = at reference loss (no excess), 1 = at initialization.
-  theta = DOMAINS.map(() => 1.0);
-  step = 0;
-  alphaHistory = [alpha.slice()];
-  alphaRunningSum = alpha.slice();
-  drawAll();
-  updateTable();
-  document.getElementById("step-num").textContent = step;
-}
-
-function lossVector() {
-  // excess loss ℓ_k = difficulty * theta_k  — positive while proxy is worse
-  // than reference on domain k; shrinks to ~0 as theta tracks to reference.
-  return DOMAINS.map((d, k) => d.difficulty * theta[k]);
-}
-
-function doStep(eta, lr) {
-  const ell = lossVector();
-
-  // 1) adversary EG update:  α_k ∝ α_k * exp(η * ℓ_k)
-  const log_unnorm = alpha.map((a, k) => Math.log(a + 1e-12) + eta * ell[k]);
-  const maxLog = Math.max(...log_unnorm);
-  const exp_shifted = log_unnorm.map(l => Math.exp(l - maxLog));
-  const Z = exp_shifted.reduce((s, x) => s + x, 0);
-  alpha = exp_shifted.map(x => x / Z);
-
-  // 2) learner update: θ_k shrinks at rate proportional to α_k * learnability.
-  // This is the simulation-level analogue of "more gradient signal on domain k
-  // when α_k is high, so the proxy closes the gap faster there."
-  for (let k = 0; k < K; k++) {
-    const gradEffect = alpha[k] * DOMAINS[k].learnability / DOMAINS[k].baseline;
-    theta[k] = Math.max(0.02, theta[k] - lr * gradEffect * 10);
+  function stepAlpha(alpha, lam, eta, c){
+    const k=alpha.length;
+    const ap=alpha.map((a,i)=>a*Math.exp(eta*lam[i]));
+    const s=ap.reduce((x,y)=>x+y,0);
+    const nm=ap.map(x=>x/s);
+    const at=nm.map(x=>(1-c)*x + c/k);
+    return {ap, nm, at};
+  }
+  function renderA(){
+    const eta=parseFloat(document.getElementById("eta").value);
+    const c=parseFloat(document.getElementById("smooth").value);
+    const clip=document.getElementById("clip").checked;
+    const n=parseInt(document.getElementById("nsteps").value,10);
+    document.getElementById("etaVal").textContent=eta.toFixed(2);
+    document.getElementById("nVal").textContent=n;
+    const ps=domA.reduce((x,d)=>x+d.prior,0) || 1;
+    const alpha=domA.map(d=>d.prior/ps);
+    const lam=domA.map(d=>{ const v=d.t.map(x=> clip? Math.max(0,x) : x); return (v[0]+v[1])/2; });
+    const r=stepAlpha(alpha, lam, eta, c);
+    [...tbodyA.rows].forEach((tr,i)=>{
+      tr.querySelector(".lam").textContent=lam[i].toFixed(3);
+      tr.querySelector(".ap").textContent=r.ap[i].toFixed(5);
+      tr.querySelector(".nm").textContent=r.nm[i].toFixed(5);
+      tr.querySelector(".at").textContent=r.at[i].toFixed(5);
+    });
+    // trajectory
+    const traj=[alpha.slice()]; const avg=[]; let cur=alpha.slice(); const sum=[0,0,0];
+    for(let t=1;t<=n;t++){ cur=stepAlpha(cur, lam, eta, c).at; traj.push(cur.slice()); cur.forEach((v,i)=>sum[i]+=v); avg.push(sum.map(s=>s/t)); }
+    drawA(traj, avg, n);
+  }
+  function drawA(traj, avg, n){
+    const svg=document.getElementById("svgA"); svg.innerHTML="";
+    const W=640,H=230,L=44,R=14,T=12,B=30;
+    const x=t=>L+(W-L-R)*t/Math.max(1,n); const y=v=>T+(H-T-B)*(1-v);
+    for(let v=0; v<=1.0001; v+=0.25){ svg.appendChild(el("line",{x1:L,x2:W-R,y1:y(v),y2:y(v),class:"gl"})); svg.appendChild(el("text",{x:L-6,y:y(v)+4,"text-anchor":"end"},v.toFixed(2))); }
+    svg.appendChild(el("line",{x1:L,x2:L,y1:T,y2:H-B,class:"ax"}));
+    svg.appendChild(el("line",{x1:L,x2:W-R,y1:H-B,y2:H-B,class:"ax"}));
+    svg.appendChild(el("text",{x:L,y:H-10},"step 0"));
+    svg.appendChild(el("text",{x:W-R,y:H-10,"text-anchor":"end"},"step "+n));
+    svg.appendChild(el("text",{x:(L+W-R)/2,y:H-10,"text-anchor":"middle"},"step (y-axis: weight α)"));
+    domA.forEach((d,i)=>{
+      const col=cssVar(d.color);
+      let p=""; traj.forEach((a,t)=>{ p+=(t?"L":"M")+x(t).toFixed(1)+","+y(a[i]).toFixed(1); });
+      svg.appendChild(el("path",{d:p,fill:"none",stroke:col,"stroke-width":2}));
+      let q=""; avg.forEach((a,t)=>{ q+=(t?"L":"M")+x(t+1).toFixed(1)+","+y(a[i]).toFixed(1); });
+      if(avg.length>1) svg.appendChild(el("path",{d:q,fill:"none",stroke:col,"stroke-width":1.5,"stroke-dasharray":"5 4"}));
+    });
+    const leg=document.getElementById("legA"); leg.innerHTML="";
+    domA.forEach(d=>{ const s=document.createElement("span"); s.innerHTML=`<i class="sw" style="background:var(${d.color})"></i>domain ${d.name}`; leg.appendChild(s); });
   }
 
-  step += 1;
-  alphaHistory.push(alpha.slice());
-  if (alphaHistory.length > 800) alphaHistory.shift();
-  for (let k = 0; k < K; k++) alphaRunningSum[k] += alpha[k];
-}
-
-function runSteps(n) {
-  const eta = parseFloat(document.getElementById("eta").value);
-  const lr = parseFloat(document.getElementById("lr").value);
-  for (let i = 0; i < n; i++) doStep(eta, lr);
-  drawAll();
-  updateTable();
-  document.getElementById("step-num").textContent = step;
-}
-
-function drawAlphaCanvas() {
-  const c = document.getElementById("alpha-canvas");
-  const ctx = c.getContext("2d");
-  const W = c.width, H = c.height;
-  ctx.clearRect(0, 0, W, H);
-  // axes
-  ctx.strokeStyle = "#ccc";
-  ctx.lineWidth = 1;
-  ctx.beginPath();
-  ctx.moveTo(40, 10); ctx.lineTo(40, H - 22); ctx.lineTo(W - 10, H - 22);
-  ctx.stroke();
-  // gridlines for α = 0.1, 0.2, ...
-  ctx.fillStyle = "#888";
-  ctx.font = "10px monospace";
-  for (let v = 0; v <= 0.6; v += 0.1) {
-    const y = H - 22 - v * (H - 40) / 0.6;
-    ctx.strokeStyle = "#eee"; ctx.beginPath();
-    ctx.moveTo(40, y); ctx.lineTo(W - 10, y); ctx.stroke();
-    ctx.fillText(v.toFixed(1), 6, y + 3);
+  /* ---------- Panel B ---------- */
+  let domB = [];
+  const toy = [{name:"web",N:2000,p:0.80},{name:"code",N:100,p:0.15},{name:"math",N:20,p:0.05}];
+  const olm = [{name:"all other domains",N:950,p:0.60},{name:"code",N:50,p:0.40}];
+  const tbodyB=document.querySelector("#tabB tbody");
+  function loadB(set, R, k){
+    domB=set.map(d=>({...d}));
+    document.getElementById("R").value=R; document.getElementById("k").value=k;
+    tbodyB.innerHTML="";
+    domB.forEach((d,i)=>{
+      const tr=document.createElement("tr");
+      tr.innerHTML=`<td>${d.name}</td><td><input type="number" min="0.001" step="1" value="${d.N}" data-i="${i}" data-f="N" aria-label="${d.name} available tokens"></td>`+
+        `<td><input type="number" min="0" max="1" step="0.01" value="${d.p}" data-i="${i}" data-f="p" aria-label="${d.name} weight"></td><td class="tok"></td><td class="ep"></td><td class="cap"></td><td class="st"></td>`;
+      tbodyB.appendChild(tr);
+    });
+    renderB();
   }
-  // time axis labels
-  const T = alphaHistory.length;
-  ctx.fillText("step 0", 42, H - 8);
-  ctx.fillText("step " + step, W - 60, H - 8);
-  // plot each domain
-  for (let k = 0; k < K; k++) {
-    ctx.strokeStyle = DOMAINS[k].color;
-    ctx.lineWidth = 1.6;
-    ctx.beginPath();
-    for (let t = 0; t < T; t++) {
-      const x = 40 + (t / Math.max(1, T - 1)) * (W - 50);
-      const v = Math.min(0.6, alphaHistory[t][k]);
-      const y = H - 22 - v * (H - 40) / 0.6;
-      if (t === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
-    }
-    ctx.stroke();
+  tbodyB.addEventListener("input", e=>{ const t=e.target; const v=parseFloat(t.value); if(isNaN(v)) return; domB[+t.dataset.i][t.dataset.f]=v; renderB(); });
+  ["R","k"].forEach(id=>document.getElementById(id).addEventListener("input", renderB));
+  document.getElementById("exToy").addEventListener("click", ()=>loadB(toy,1000,4));
+  document.getElementById("exOlmix").addEventListener("click", ()=>loadB(olm,1000,4));
+  function renderB(){
+    const R=parseFloat(document.getElementById("R").value)||0;
+    const k=parseFloat(document.getElementById("k").value)||0;
+    let sum=0, bad=0;
+    [...tbodyB.rows].forEach((tr,i)=>{
+      const d=domB[i]; sum+=d.p;
+      const tok=d.p*R, ep= d.N>0? tok/d.N : Infinity, cap= R>0? k*d.N/R : Infinity;
+      tr.querySelector(".tok").textContent=tok.toFixed(1);
+      tr.querySelector(".ep").textContent=isFinite(ep)? ep.toFixed(2) : "∞";
+      tr.querySelector(".cap").textContent=isFinite(cap)? cap.toFixed(3) : "∞";
+      const st=tr.querySelector(".st");
+      if(ep>k+1e-9){ st.textContent="exceeds k"; st.className="st warn"; bad++; } else { st.textContent="within k"; st.className="st ok"; }
+    });
+    const msg=document.getElementById("sumB");
+    const sumTxt = Math.abs(sum-1)<1e-6 ? "Weights sum to 1." : `Weights sum to ${sum.toFixed(3)}; a mixture must sum to 1.`;
+    msg.textContent = `${sumTxt} ${bad? bad+" domain(s) exceed the cap." : "No domain exceeds the cap."} The Olmix example reproduces the sentence in §3.3.4: 40% code when code is 5% of the available data gives 8 passes when R equals the total available tokens.`;
   }
-}
 
-function drawLossCanvas() {
-  const c = document.getElementById("loss-canvas");
-  const ctx = c.getContext("2d");
-  const W = c.width, H = c.height;
-  ctx.clearRect(0, 0, W, H);
-  const ell = lossVector();
-  const maxEll = Math.max(0.1, ...ell);
-  const bw = (W - 60) / K;
-  ctx.fillStyle = "#888"; ctx.font = "10px monospace";
-  ctx.fillText("ℓ_k", 6, 14);
-  // horizontal ticks
-  for (let v = 0; v <= maxEll + 0.5; v += Math.max(0.5, Math.round(maxEll / 4))) {
-    const y = H - 30 - (v / (maxEll + 0.2)) * (H - 50);
-    ctx.strokeStyle = "#eee"; ctx.beginPath();
-    ctx.moveTo(40, y); ctx.lineTo(W - 10, y); ctx.stroke();
-    ctx.fillText(v.toFixed(1), 6, y + 3);
+  /* ---------- Panel C ---------- */
+  const pile = [
+    ["Pile-CC",0.1121,0.6057,0.1199],["PubMed Central",0.1071,0.0046,0.0149],["Books3",0.0676,0.0224,0.0739],
+    ["OpenWebText2",0.1247,0.1019,0.3289],["ArXiv",0.1052,0.0036,0.0384],["Github",0.0427,0.0179,0.0129],
+    ["FreeLaw",0.0386,0.0043,0.0148],["StackExchange",0.0929,0.0153,0.0452],["USPTO Backgrounds",0.0420,0.0036,0.0260],
+    ["PubMed Abstracts",0.0845,0.0113,0.1461],["Gutenberg (PG-19)",0.0199,0.0072,0.0250],["OpenSubtitles",0.0124,0.0047,0.0017],
+    ["Wikipedia (en)",0.0919,0.0699,0.0962],["DM Mathematics",0.0198,0.0018,0.0004],["Ubuntu IRC",0.0074,0.0093,0.0044],
+    ["BookCorpus2",0.0044,0.0061,0.0029],["EuroParl",0.0043,0.0062,0.0078],["HackerNews",0.0075,0.0134,0.0058],
+    ["YoutubeSubtitles",0.0042,0.0502,0.0159],["PhilPapers",0.0027,0.0274,0.0063],["NIH ExPorter",0.0052,0.0063,0.0094],
+    ["Enron Emails",0.0030,0.0070,0.0033]
+  ];
+  document.getElementById("sortC").addEventListener("input", renderC);
+  function renderC(){
+    const key=parseInt(document.getElementById("sortC").value,10)+1;
+    const rows=pile.slice().sort((a,b)=>b[key]-a[key]);
+    const svg=document.getElementById("svgC"); svg.innerHTML="";
+    const W=640, L=130, R=56, T=18, rowH=27, H=T+rowH*rows.length+26;
+    svg.setAttribute("viewBox",`0 0 ${W} ${H}`);
+    const xmax=0.65; const x=v=>L+(W-L-R)*v/xmax;
+    for(let v=0; v<=0.6001; v+=0.1){ svg.appendChild(el("line",{x1:x(v),x2:x(v),y1:T-6,y2:H-22,class:"gl"})); svg.appendChild(el("text",{x:x(v),y:H-8,"text-anchor":"middle"},v.toFixed(1))); }
+    const cols=["--muted","--a","--b"];
+    rows.forEach((r,i)=>{
+      const y0=T+i*rowH;
+      svg.appendChild(el("text",{x:L-6,y:y0+15,"text-anchor":"end"},r[0]));
+      for(let j=0;j<3;j++){
+        const v=r[j+1]; const yy=y0+2+j*7.5;
+        svg.appendChild(el("rect",{x:L,y:yy,width:Math.max(0.5,x(v)-L),height:6.5,fill:cssVar(cols[j])}));
+      }
+      svg.appendChild(el("text",{x:Math.min(W-2, x(Math.max(r[1],r[2],r[3]))+4),y:y0+15,"font-size":"10",style:"fill:"+cssVar(cols[key-1])},r[key].toFixed(4)));
+    });
+    svg.appendChild(el("line",{x1:L,x2:L,y1:T-6,y2:H-22,class:"ax"}));
   }
-  for (let k = 0; k < K; k++) {
-    const x = 44 + k * bw;
-    const h = (ell[k] / (maxEll + 0.2)) * (H - 50);
-    ctx.fillStyle = DOMAINS[k].color;
-    ctx.fillRect(x, H - 30 - h, bw - 4, h);
-  }
-  // x-axis labels (rotated short names)
-  ctx.fillStyle = "#555";
-  ctx.font = "9px -apple-system, sans-serif";
-  for (let k = 0; k < K; k++) {
-    const x = 44 + k * bw + (bw - 4) / 2;
-    ctx.save(); ctx.translate(x, H - 22); ctx.rotate(-Math.PI / 5);
-    ctx.textAlign = "right";
-    ctx.fillText(DOMAINS[k].name, 0, 0);
-    ctx.restore();
-  }
-}
 
-function drawLegend() {
-  const el = document.getElementById("alpha-legend");
-  el.innerHTML = DOMAINS.map(d =>
-    '<span><span class="swatch" style="background:' + d.color + '"></span>' + d.name + '</span>'
-  ).join("");
-}
-
-function updateTable() {
-  const ell = lossVector();
-  const ta = DOMAINS.map((_, k) => alphaRunningSum[k] / Math.max(1, alphaHistory.length));
-  const maxAlpha = Math.max(...alpha, ...ta);
-  const tbody = document.querySelector("#state-table tbody");
-  tbody.innerHTML = "";
-  for (let k = 0; k < K; k++) {
-    const tr = document.createElement("tr");
-    tr.innerHTML =
-      "<td><span class='swatch' style='background:" + DOMAINS[k].color + "'></span> " + DOMAINS[k].name + "</td>" +
-      "<td>" + DOMAINS[k].baseline.toFixed(3) + "</td>" +
-      "<td>" + alpha[k].toFixed(3) + "</td>" +
-      "<td>" + ta[k].toFixed(3) + "</td>" +
-      "<td>" + ell[k].toFixed(2) + "</td>" +
-      "<td><div class='bar-cell'><div class='bar-fill' style='width:" +
-        (alpha[k] / maxAlpha * 100).toFixed(1) + "%;background:" + DOMAINS[k].color + "'></div></div></td>";
-    tbody.appendChild(tr);
-  }
-}
-
-function drawAll() { drawAlphaCanvas(); drawLossCanvas(); }
-
-// wire up
-document.getElementById("eta").addEventListener("input", e => {
-  document.getElementById("eta-val").textContent = parseFloat(e.target.value).toFixed(2);
-});
-document.getElementById("lr").addEventListener("input", e => {
-  document.getElementById("lr-val").textContent = parseFloat(e.target.value).toFixed(2);
-});
-document.getElementById("steps").addEventListener("input", e => {
-  document.getElementById("steps-val").textContent = e.target.value;
-});
-document.getElementById("step-btn").addEventListener("click", () => {
-  runSteps(parseInt(document.getElementById("steps").value, 10));
-});
-document.getElementById("run-btn").addEventListener("click", () => runSteps(500));
-document.getElementById("reset-btn").addEventListener("click", reset);
-
-drawLegend();
-reset();
+  renderA(); loadB(toy,1000,4); renderC();
+  if(window.matchMedia){ const mq=window.matchMedia("(prefers-color-scheme: dark)"); const re=()=>{renderA();renderC();}; if(mq.addEventListener) mq.addEventListener("change",re); }
+})();
 </script>
-
 </body>
 </html>

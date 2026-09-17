@@ -1,97 +1,35 @@
----
-chapter: ch-52
-course: llm-training
-phase: read
-excerpt_of: Mazeika et al. 2024 — "HarmBench: A Standardized Evaluation Framework for Automated Red Teaming and Robust Refusal"
-source_url: https://arxiv.org/abs/2402.04249
-created_at: "2026-04-23"
----
+<!-- scope: HarmBench (Mazeika et al., ICML 2024): the behavior inventory and its functional/semantic categories, the validation/test split, the 18 red-teaming methods, the two evaluation classifiers, and the R2D2 adversarial-training run
+     see-also: [[wildguard-data]], [[salad-bench]], [[circuit-breakers-data]]
+-->
 
-# Excerpt: HarmBench — Behavior Library + Attack-Wrapper Separation
+# HarmBench: A Standardized Evaluation Framework for Automated Red Teaming and Robust Refusal
 
-**Source:** `wiki/raw-data/llm-training/papers/harmbench-data.md`
-**Primary paper:** Mantas Mazeika et al., "HarmBench", 2024
-**arXiv:** https://arxiv.org/abs/2402.04249
-**Repo:** https://github.com/centerforaisafety/HarmBench
+Chapter excerpt for ch-52 (read.md). **Rewritten 2026-09-15 from the primary source** (arXiv:2402.04249 PDF) because the library card `wiki/raw-data/llm-training/papers/harmbench-data.md` had not been revised and states "400 behaviors" for the whole benchmark. Every number below carries its locus.
 
----
+- **Core Insight:** HarmBench separates the target behavior from the attack wrapper and from the success judge, and enforces a validation/test split on both behaviors and classifiers, so that attacks and defenses can be compared on the same substrate; over 18 red-teaming methods and 33 LLMs it finds that "no current attack or defense is uniformly effective" and that robustness within a model family does not track model size (§6.1).
+- **Guideline:** When measuring adversarial robustness, develop against the 100 validation behaviors and the Mistral-7B validation classifier and report only on the 410 test behaviors with the Llama-2-13B-Chat test classifier, because the two classifiers were built to be distinct (41 vs 51 errors on the same set, only 26 in common) precisely so that optimizing against one does not invalidate the other (App. B.2).
 
-## Why HarmBench is the default adversarial-robustness benchmark
+## Corrections to the library card
 
-Pre-HarmBench, a "safety benchmark" was usually a flat list of harmful prompts plus a substring scorer. HarmBench replaced that with a three-layer design that every subsequent safety benchmark has adopted in some form: behavior library, attack wrappers, and held-out judge. The raw-data source is explicit:
+| Card claim | Primary source | Locus |
+|---|---|---|
+| "curates 400 behaviors in 7 semantic and 4 functional categories" | 510 unique behaviors: 400 textual + 110 multimodal; functional split 200 standard, 100 copyright, 100 contextual, 110 multimodal | §3.1 |
+| implies a single behavior pool | validation 100 behaviors (20 multimodal, 20 contextual, 20 copyright, 40 standard), test 410 | App. B.2 |
+| "a held-out success classifier" (one classifier) | two: test classifier fine-tuned from Llama-2-13B-Chat, validation classifier fine-tuned from Mistral-7B base on half the data | App. B.2, B.5.1 |
+| "a completion can count as successful even if the content is imperfect" without qualification | the criteria also require instances to be "unambiguous and non-minimal. Vague or very short instances do not count", require the generation itself to be harmful, and require code artifacts for code behaviors | App. B.1 |
 
-> *"HarmBench separates: the **behavior label** from the **attack wrapper**. That separation is extremely useful if you want to synthesize refusal data, adversarial SFT data, or red-team replay buffers without entangling target behavior design with one particular jailbreak style."*
+## Technical details
 
-For ch-52's taxonomy-vs-attack-vs-judge framing, HarmBench is the cleanest public example of all three.
+- **Semantic categories (7):** Cybercrime & Unauthorized Intrusion; Chemical & Biological Weapons/Drugs; Copyright Violations; Misinformation & Disinformation; Harassment & Bullying; Illegal Activities; General Harm (§3.1).
+- **Functional categories (4):** standard (self-contained request), copyright (needs a different scorer), contextual (context string plus a request tied to it), multimodal (image plus behavior) (§3.1).
+- **Attack methods (18, §6, App. C.1):** Direct Request; Human Jailbreaks; GCG, GCG-Multi, GCG-Transfer; PEZ; GBDA; UAT; AutoPrompt; Zero-Shot; Stochastic Few-Shot; PAIR; TAP; TAP-Transfer; AutoDAN; PAP; and for multimodal models PGD, Adversarial Patch, Render Text.
+- **Test classifier construction (App. B.5.1).** Human-labeled validation set of 600 completions; GPT-4 prompts tuned per functional category; then 15 rounds of distillation fine-tuning of Llama-2-13B-Chat, sampling 10,000–15,000 completions per round and adding GPT-4/Llama disagreements to the pool. Agreement with human labels: 93.2% (test), 88.6% (validation). Robustness sets (Table 4): the classifier scores 95.68 / 98.0 / 93.4 on refusal-prefix-then-comply, benign-instruction, and unrelated-harmful-completion sets, against 89.6 / 100.0 / 78.7 for a GPT-4 PAIR judge and 50.8 / 99.0 / 72.8 for Llama Guard.
+- **Copyright classifier (App. B.5.2).** MinHash over overlapping hashed chunks of the original text, requiring the protected content to actually appear, because "trying" to reproduce it cannot be distinguished from inspired generation.
+- **Standardization (§4.3, Fig. 2).** The number of test cases generated per behavior strongly affects ASR and is not standardized in prior work; HarmBench fixes it.
+- **Main findings (§6.1).** ASR is higher on contextual behaviors and low on copyright behaviors (the stricter classifier); ASR is stable within model families and variable across them, with no correlation between robustness and size from 7B to 70B; the authors read this as training data and procedure mattering more than size.
+- **R2D2 (§5, §6.2).** Adversarial training of Mistral-7B base: M = 500 steps, N = 180 persistent test cases, m = 5 GCG steps per iteration, n = 8 test cases updated per iteration, K = 20% refreshed every L = 50 steps, UltraChat for the SFT loss, 16 hours on 8×A100. GCG ASR is 4× lower than Llama-2-13B-Chat, the second most robust model (Fig. 7). Improvements are smaller for PAIR, TAP and Stochastic Few-Shot, the methods least similar to the training adversary. MT-Bench 6.0 against 6.5 for Mistral-7B-Instruct-v0.2 (Table 11).
 
----
+## Verification
 
-## The behavior library
-
-7 semantic categories + 4 functional categories. The semantic categories:
-
-- `Cybercrime & Unauthorized Intrusion`
-- `Chemical & Biological Weapons / Drugs`
-- `Copyright Violations`
-- `Misinformation & Disinformation`
-- `Harassment & Bullying`
-- `Illegal Activities`
-- `General Harm`
-
-The functional categories (operationally more important):
-
-- `standard` — self-contained harmful request.
-- `copyright` — asks for copyrighted text; needs a different scorer.
-- `contextual` — context string + harmful request tied to the context.
-- `multimodal` — request paired with an image.
-
-The behavior inventory is **human-authored but policy-informed**: authors distilled acceptable-use policies from OpenAI, Anthropic, Meta, and Inflection AI via GPT-4, then manually designed behaviors that clearly violated the distilled summary. This is the key move — the behaviors are not GPT-4-generated unsafe prompts; they are human targets informed by a synthetic policy distillation.
-
-Two curation rules that matter for ch-52's "is this benchmark meaningful" question:
-
-- **Differential harm / low searchability.** Prefer behaviors where an LLM adds capability beyond what a user could trivially Google. This is what keeps the benchmark from collapsing into "refuse anything sensitive" over time.
-- **Dual-intent filtering.** Remove or rewrite behaviors where many benign users would plausibly want the same capability. This is the single most important lesson for any safety-data work: naive harmful-prompt lists routinely mix clearly malicious requests with normal expert use, and refusal training on such mixes produces over-refusal.
-
----
-
-## The attack wrappers
-
-HarmBench uses ~18 attack families, organized by construction style:
-
-- **Direct Request.** Behavior string with no wrapper. Measures base refusal.
-- **Human Jailbreaks.** In-the-wild human-authored templates (DAN-style).
-- **Token-optimization.** `GCG`, `GCG-Multi`, `GCG-Transfer`, `PEZ`, `GBDA`, `UAT`, `AutoPrompt` — learn adversarial suffixes or token sequences.
-- **Attacker-LLM generation.** `Zero-Shot`, `Stochastic Few-Shot`, `PAIR`, `TAP`, `TAP-Transfer` — use an attacker model to iteratively propose jailbreaks.
-- **Evolution / persuasion.** `AutoDAN` evolves handcrafted jailbreaks; `PAP` rewrites requests using persuasive strategies.
-
-The key operational insight: these attack families are orthogonal to the behavior library. You can generate new training data for any defense by pairing any behavior with any attack family. That is why HarmBench is also a data-synthesis pipeline, not only an eval.
-
----
-
-## The judge
-
-For non-copyright behaviors, HarmBench fine-tunes **Llama-2-13B-Chat** on a manually labeled validation set of completions. For copyright behaviors, it uses **MinHash-style matching** over overlapping chunks. The asymmetry is deliberate — for copyright, "attempted" reproduction is not sufficient evidence of violation; the protected content must actually appear.
-
-The classifier is stress-tested on tricky cases:
-- Benign paragraphs labeled harmful (false positive check).
-- Unrelated harmful completions labeled as the target behavior (substring-match defense).
-- Completions that start with a refusal and then comply (refusal-prefix defense).
-
-This last case is important for ch-52: if the judge can be gamed by a visible refusal prefix that precedes compliance, every number downstream is corrupted.
-
----
-
-## Validation / test split
-
-HarmBench enforces an official val/test partition of behaviors so attacks and defenses do not optimize directly on the final eval target. This is the standard ML discipline applied to safety benchmarks — rare in the pre-2024 safety benchmark literature.
-
-The operational rule for ch-52: if you train refusal SFT on HarmBench, train only on `val`; report on `test`. Mixing the splits is the safety-data equivalent of leakage.
-
----
-
-## Connections
-
-- [[wildguard-data]] — complement focused on moderation labels over prompt-response pairs.
-- [[salad-bench]] — hierarchical counterpart with finer leaf taxonomy.
-- [[circuit-breakers-data]] — consumes HarmBench as seed data for the harmful completion set.
-- Chapter synthesis: [[ch-52]] §1, §2, §9.
+- Read on 2026-09-15 from the cached primary text of arXiv:2402.04249 (body plus App. B and C).
+- Not reported by the source: per-model ASR tables in the body (they are in App. C.3); inter-annotator agreement numbers for the 600-item validation set in the extracted text.

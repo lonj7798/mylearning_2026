@@ -1,246 +1,454 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
 <head>
-<meta charset="UTF-8">
-<title>Open curation pipelines compared — CCNet, C4, Dolma, FineWeb</title>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Heuristic Pipeline Stages</title>
 <style>
-  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-         max-width: 1200px; margin: 1.4em auto; padding: 0 1em; color: #222;
-         background: #fafafa; }
-  h1 { font-size: 1.3em; margin-bottom: 0.2em; }
-  .subtitle { color: #666; margin-top: 0.1em; font-size: 0.92em; }
-  .lanes { display: grid; grid-template-columns: repeat(4, 1fr); gap: 0.8em;
-           margin-top: 1.2em; }
-  .lane { background: #fff; border: 1px solid #dcdcdc; border-radius: 6px;
-          padding: 0.7em 0.8em; }
-  .lane h2 { margin: 0 0 0.3em 0; font-size: 1em; color: #333; }
-  .lane .year { font-size: 0.78em; color: #888; margin-bottom: 0.6em; }
-  .stage { display: block; width: 100%; text-align: left;
-           padding: 0.55em 0.65em; margin: 0.25em 0;
-           border: 1px solid #c8d2e0; background: #f3f6fb;
-           border-radius: 4px; cursor: pointer; font-size: 0.87em;
-           font-family: inherit; color: #222; line-height: 1.35; }
-  .stage:hover { background: #e8eef7; }
-  .stage.active { background: #1e3a5f; color: #fff; border-color: #1e3a5f; }
-  .stage .num { display: inline-block; width: 18px; color: #556;
-                font-weight: 600; font-size: 0.8em; }
-  .stage.active .num { color: #cfd8e5; }
-  .stage .pill { display: inline-block; font-size: 0.7em; padding: 1px 6px;
-                 border-radius: 10px; margin-left: 4px; vertical-align: middle;
-                 background: #e4ebf5; color: #334; }
-  .stage.active .pill { background: #3c5a82; color: #e8eef7; }
-  .arrow { text-align: center; color: #aab; font-size: 0.8em; margin: -2px 0; }
-  .detail { background: #fff; border: 1px solid #dcdcdc; border-radius: 6px;
-            padding: 0.9em 1.1em; margin-top: 1em; min-height: 140px; }
-  .detail h3 { margin: 0 0 0.4em 0; font-size: 1em; color: #1e3a5f; }
-  .detail .meta { font-size: 0.82em; color: #666; margin-bottom: 0.5em; }
-  .detail p { margin: 0.25em 0; font-size: 0.92em; line-height: 1.55; }
-  .detail code { background: #eef; padding: 1px 5px; border-radius: 3px;
-                 font-family: 'SF Mono', Menlo, monospace; font-size: 0.85em; }
-  .detail .ablation { margin-top: 0.5em; font-size: 0.85em; color: #444;
-                      border-left: 3px solid #1e3a5f; padding-left: 0.6em; }
-  .empty { color: #888; font-style: italic; font-size: 0.9em; }
-  .legend { margin-top: 0.8em; font-size: 0.8em; color: #555; }
-  .legend .pill { background: #e4ebf5; color: #334; padding: 1px 6px;
-                  border-radius: 10px; margin-right: 0.3em; }
-  .legend .pill.q { background: #fff4e0; color: #7a4a00; }
-  .legend .pill.c { background: #e6f4ea; color: #1b5e20; }
-  .legend .pill.d { background: #fde7e7; color: #802020; }
+  :root {
+    color-scheme: light;
+    --surface-0: #f6f5f2;
+    --surface-1: #fcfcfb;
+    --surface-2: #efede8;
+    --border: #d9d6cf;
+    --grid: #e4e2dd;
+    --axis: #9c9a93;
+    --text-primary: #111110;
+    --text-secondary: #4f4e4a;
+    --text-muted: #6f6d67;
+    --k-lang: #2a6fc9;
+    --k-rule: #c05a1c;
+    --k-content: #8a44b8;
+    --k-dedup: #2d8a4e;
+    --k-ref: #0f7f86;
+    --series-1: #2a6fc9;
+    --series-2: #c05a1c;
+    --focus: #2a6fc9;
+    --keep: #2d8a4e;
+    --drop: #b83a3a;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      color-scheme: dark;
+      --surface-0: #131312;
+      --surface-1: #1b1b1a;
+      --surface-2: #242422;
+      --border: #3a3a37;
+      --grid: #2e2e2c;
+      --axis: #6d6c66;
+      --text-primary: #f4f3ef;
+      --text-secondary: #c4c3ba;
+      --text-muted: #9a998f;
+      --k-lang: #5b9bec;
+      --k-rule: #e08043;
+      --k-content: #b67ce0;
+      --k-dedup: #5cbf7d;
+      --k-ref: #3fb3ba;
+      --series-1: #5b9bec;
+      --series-2: #e08043;
+      --focus: #5b9bec;
+      --keep: #5cbf7d;
+      --drop: #e06a6a;
+    }
+  }
+  :root[data-theme="dark"] {
+    color-scheme: dark;
+    --surface-0: #131312;
+    --surface-1: #1b1b1a;
+    --surface-2: #242422;
+    --border: #3a3a37;
+    --grid: #2e2e2c;
+    --axis: #6d6c66;
+    --text-primary: #f4f3ef;
+    --text-secondary: #c4c3ba;
+    --text-muted: #9a998f;
+    --k-lang: #5b9bec;
+    --k-rule: #e08043;
+    --k-content: #b67ce0;
+    --k-dedup: #5cbf7d;
+    --k-ref: #3fb3ba;
+    --series-1: #5b9bec;
+    --series-2: #e08043;
+    --focus: #5b9bec;
+    --keep: #5cbf7d;
+    --drop: #e06a6a;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--surface-0);
+    color: var(--text-primary);
+    font: 14px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  }
+  main { max-width: 1120px; margin: 0 auto; padding-inline: 16px; padding-block: 24px 40px; }
+  h1 { font-size: 1.35rem; margin: 0 0 4px; }
+  h2 { font-size: 1.05rem; margin: 0 0 6px; }
+  p { margin: 0 0 8px; }
+  .sub { color: var(--text-secondary); max-width: 70ch; }
+  section.panel {
+    background: var(--surface-1);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 16px;
+    margin-top: 18px;
+  }
+  .caption { color: var(--text-muted); font-size: 0.85rem; margin-top: 10px; max-width: 90ch; }
+  .legend { display: flex; flex-wrap: wrap; gap: 6px 14px; margin: 8px 0 12px; color: var(--text-secondary); font-size: 0.85rem; }
+  .legend span::before {
+    content: ""; display: inline-block; width: 10px; height: 10px; border-radius: 2px;
+    margin-right: 6px; vertical-align: -1px; background: var(--c);
+  }
+  .lanes { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; }
+  @media (max-width: 900px) { .lanes { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+  @media (max-width: 520px) { .lanes { grid-template-columns: minmax(0, 1fr); } }
+  .lane { background: var(--surface-2); border-radius: 8px; padding: 10px; }
+  .lane h3 { font-size: 0.95rem; margin: 0; }
+  .lane .meta { color: var(--text-muted); font-size: 0.8rem; margin-bottom: 8px; }
+  .stage {
+    display: block; width: 100%; text-align: left;
+    background: var(--surface-1); color: var(--text-primary);
+    border: 1px solid var(--border); border-left: 5px solid var(--c);
+    border-radius: 6px; padding: 6px 8px; margin-bottom: 6px;
+    font: inherit; font-size: 0.86rem; cursor: pointer;
+  }
+  .stage small { display: block; color: var(--text-muted); font-size: 0.75rem; }
+  .stage[aria-pressed="true"] { outline: 2px solid var(--focus); outline-offset: 1px; }
+  .stage:focus-visible, button:focus-visible, input:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+  .lane .note { color: var(--text-muted); font-size: 0.78rem; margin-top: 4px; }
+  .detail { margin-top: 14px; border-top: 1px solid var(--border); padding-top: 12px; }
+  .detail dl { display: grid; grid-template-columns: 9.5rem minmax(0, 1fr); gap: 4px 12px; margin: 0; }
+  @media (max-width: 520px) { .detail dl { grid-template-columns: minmax(0, 1fr); } .detail dt { margin-top: 6px; } }
+  .detail dt { color: var(--text-muted); font-size: 0.85rem; }
+  .detail dd { margin: 0; }
+  .two { display: grid; grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr); gap: 18px; align-items: start; }
+  @media (max-width: 760px) { .two { grid-template-columns: minmax(0, 1fr); } }
+  .ctrl { margin-bottom: 10px; }
+  .ctrl label { display: flex; justify-content: space-between; color: var(--text-secondary); font-size: 0.88rem; }
+  .ctrl input[type="range"] { width: 100%; accent-color: var(--series-1); }
+  .btns { display: flex; flex-wrap: wrap; gap: 6px; margin: 4px 0 10px; }
+  .btns button {
+    font: inherit; font-size: 0.82rem; padding: 4px 10px; border-radius: 6px;
+    border: 1px solid var(--border); background: var(--surface-2); color: var(--text-primary); cursor: pointer;
+  }
+  .readout { font-variant-numeric: tabular-nums; }
+  .big { font-size: 1.25rem; font-weight: 600; }
+  svg text { fill: var(--text-muted); font-size: 11px; }
+  table { border-collapse: collapse; font-variant-numeric: tabular-nums; font-size: 0.86rem; }
+  th, td { padding: 3px 10px 3px 0; text-align: left; }
+  th { color: var(--text-muted); font-weight: 500; }
+  .doc { display: grid; gap: 3px; margin: 6px 0 10px; }
+  .line { height: 9px; border-radius: 3px; }
+  .line.p { background: var(--series-1); }
+  .line.n { background: var(--grid); border: 1px solid var(--axis); }
+  .outcomes { display: grid; gap: 8px; }
+  .out { border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; background: var(--surface-2); }
+  .out b { display: block; font-size: 0.88rem; }
+  .verdict { font-weight: 600; }
+  .verdict.keep { color: var(--keep); }
+  .verdict.drop { color: var(--drop); }
+  .wrap-x { overflow-x: auto; }
 </style>
 </head>
 <body>
+<main>
+  <h1>Heuristic pipeline stages: order, thresholds, removal rates</h1>
+  <p class="sub">Companion to ch-10. Panel 1 lists the stages of CCNet, C4, Dolma v1.6 (web), and FineWeb in the order each source reports, with the locus of every number. Panel 2 computes MinHash match probabilities. Panel 3 applies three punctuation rules of different granularity to one document.</p>
 
-<h1>Open curation pipelines compared — CCNet, C4, Dolma, FineWeb</h1>
-<p class="subtitle">
-  Four lanes, one per pipeline. Click any stage to see the exact filter — what
-  signal it uses, what threshold it applies, and (where reported) how ablating
-  it moved downstream evals. Stages that look similar across lanes often differ
-  by one or two numbers; the detail panel is where the differences live.
-</p>
+  <section class="panel" aria-labelledby="p1">
+    <h2 id="p1">1. Stages of four pipelines</h2>
+    <p class="sub">Select a stage to see its rule, granularity, threshold, reported removal, and the evidence for it.</p>
+    <div class="legend" aria-hidden="true">
+      <span style="--c: var(--k-lang)">extraction or language ID</span>
+      <span style="--c: var(--k-rule)">rule-based quality</span>
+      <span style="--c: var(--k-content)">content, blocklist, PII</span>
+      <span style="--c: var(--k-dedup)">deduplication</span>
+      <span style="--c: var(--k-ref)">reference score</span>
+    </div>
+    <div class="lanes" id="lanes"></div>
+    <div class="detail" id="detail" aria-live="polite"></div>
+    <p class="caption">Sources: CCNet arXiv:1911.00359v2; C4 in T5 arXiv:1910.10683v4 and Dodge et al. arXiv:2104.08758v2; Dolma arXiv:2402.00159v2; FineWeb arXiv:2406.17557v2 and datatrove commit acd431b. Removal rates use the unit the source reports and are not comparable across units. Loci are given in each detail view.</p>
+  </section>
 
-<div class="lanes" id="lanes"></div>
-<div class="detail" id="detail">
-  <span class="empty">Click a stage in any lane to inspect its exact filter.</span>
-</div>
+  <section class="panel" aria-labelledby="p2">
+    <h2 id="p2">2. MinHash match probability</h2>
+    <div class="two">
+      <div>
+        <div class="btns" role="group" aria-label="Presets">
+          <button type="button" data-b="14" data-r="8">FineWeb: 14 buckets × 8</button>
+          <button type="button" data-b="450" data-r="20">RefinedWeb: 450 × 20</button>
+          <button type="button" data-b="8" data-r="14">8 × 14 (same 112 hashes)</button>
+        </div>
+        <div class="ctrl">
+          <label for="b">Buckets b <span class="readout" id="bv"></span></label>
+          <input type="range" id="b" min="1" max="500" step="1" value="14">
+        </div>
+        <div class="ctrl">
+          <label for="r">Hashes per bucket r <span class="readout" id="rv"></span></label>
+          <input type="range" id="r" min="1" max="30" step="1" value="8">
+        </div>
+        <div class="ctrl">
+          <label for="s">Jaccard similarity s of two documents <span class="readout" id="sv"></span></label>
+          <input type="range" id="s" min="0" max="1" step="0.01" value="0.8">
+        </div>
+        <p class="readout">P(match) = 1 − (1 − s<sup>r</sup>)<sup>b</sup> = <span class="big" id="pv"></span></p>
+        <p class="readout" id="hv"></p>
+        <div class="wrap-x">
+          <table aria-label="Match probability at selected similarities">
+            <thead><tr><th>s</th><th>current setting</th><th>FineWeb 14 × 8</th></tr></thead>
+            <tbody id="ptab"></tbody>
+          </table>
+        </div>
+      </div>
+      <div>
+        <svg id="curve" viewBox="0 0 360 260" width="100%" role="img" aria-label="Match probability as a function of similarity"></svg>
+      </div>
+    </div>
+    <p class="caption">Formula and FineWeb values (56%, 77%, 92%, 98.8% at s = 0.7, 0.75, 0.8, 0.85) from FineWeb App. E.1; RefinedWeb setting from FineWeb App. E.1, Figure 13. s is the Jaccard similarity of the two documents' word 5-gram sets (Broder 1997, Theorem 1). Solid line: current setting. Dashed line: FineWeb.</p>
+  </section>
 
-<div class="legend">
-  Pill legend:
-  <span class="pill">structural</span> (langID, extraction, URL)
-  <span class="pill q">quality</span> (heuristics, classifier, perplexity)
-  <span class="pill c">content</span> (PII, toxicity, blocklist)
-  <span class="pill d">dedup</span> (exact / near / paragraph)
-  &nbsp;·&nbsp; Sources: CCNet (Wenzek 2019), C4 (Raffel 2019),
-  Dolma (Soldaini 2024), FineWeb (Penedo 2024).
-</div>
+  <section class="panel" aria-labelledby="p3">
+    <h2 id="p3">3. Same document, three punctuation rules</h2>
+    <div class="two">
+      <div>
+        <div class="ctrl">
+          <label for="n">Lines in the document <span class="readout" id="nv"></span></label>
+          <input type="range" id="n" min="4" max="20" step="1" value="10">
+        </div>
+        <div class="ctrl">
+          <label for="k">Lines ending in . ! ? or " <span class="readout" id="kv"></span></label>
+          <input type="range" id="k" min="0" max="10" step="1" value="3">
+        </div>
+        <div class="doc" id="doc" aria-hidden="true"></div>
+        <p class="caption">Filled bars: lines ending in terminal punctuation. Other rules (minimum words per line, blocklists, repetition) are ignored, and each kept line is counted as one sentence.</p>
+      </div>
+      <div class="outcomes" id="outcomes" aria-live="polite"></div>
+    </div>
+    <p class="caption">C4: T5 §2.2 (line rule; pages with fewer than 3 sentences discarded). Dolma: App. N.4 datasheet wording of "C4 NoPunc" (§5.2 describes it as paragraph removal). FineWeb: §3.6 rule, remove when the fraction of lines ending in punctuation is ≤ 0.12. FineWeb §3.5 reports that the C4 terminal-punctuation rule removed about 30% of tokens on the 2019-18 crawl, and the §3.6 rule 10.14%.</p>
+  </section>
+</main>
 
 <script>
-// ------------------------------------------------------------
-// Pipeline data — each stage carries the exact filter + threshold
-// and, where the paper reports one, a one-line ablation note.
-// ------------------------------------------------------------
-const PIPELINES = [
-  {
-    id: "ccnet",
-    title: "CCNet",
-    year: "2019 · Wenzek et al. (FAIR)",
-    stages: [
-      { kind: "structural", label: "WET text extract from Common Crawl",
-        detail: "Read WET files (pre-extracted plaintext from WARC). Chunk into ~5 GB shards for parallel processing. Multilingual by design — no English restriction at this step.",
-        ablation: "CCNet is multilingual; later English-only stacks (C4, FineWeb) drop all non-English here instead of at langID." },
-      { kind: "dedup", label: "Paragraph-level exact dedup (per shard)",
-        detail: "Hash each paragraph (normalized: lowercased, digits removed, punctuation stripped). Within a shard of ~1 M documents, drop duplicate paragraphs. Done before langID because dedup is cheap and removes common boilerplate that would bias the classifier.",
-        ablation: "Roughly 70% of paragraphs from Common Crawl are duplicates across the crawl. Paragraph dedup reduces corpus size by ~3× before any semantic filtering runs." },
-      { kind: "structural", label: "fastText language ID",
-        detail: "Run fastText lid.176 classifier on each document. Keep documents whose top-predicted language has score ≥ 0.5. Assign document to its top language for downstream per-language processing.",
-        ablation: "Threshold 0.5 is a recall-precision trade; CCNet uses it per-language, so low-resource languages do not lose their tail to a global threshold." },
-      { kind: "quality", label: "KenLM perplexity filter vs Wikipedia",
-        detail: "Train a 5-gram KenLM on Wikipedia of the target language. Score each document's perplexity. Partition into head / middle / tail by perplexity percentile. Lower perplexity = more 'Wikipedia-like'.",
-        ablation: "The three-partition output is the downstream user's choice — CCNet does not discard the tail, it labels it. Later recipes (e.g. RedPajama) ship only the head partition as the 'high quality' English slice." },
-    ],
-  },
-  {
-    id: "c4",
-    title: "C4",
-    year: "2019 · Raffel et al. (T5)",
-    stages: [
-      { kind: "structural", label: "Common Crawl April 2019 WET",
-        detail: "Start from one CC snapshot (April 2019 WET) — ~1.4T raw tokens. C4 is single-snapshot; reproducibility = pin the snapshot id.",
-        ablation: "Single-snapshot is the reason C4 reproduces deterministically; later pipelines combine 90+ snapshots and so do not." },
-      { kind: "quality", label: "Terminal-punctuation heuristic (per line)",
-        detail: "Keep only lines ending in a terminal punctuation mark (. ! ? \"). Drops menu items, captions, table rows, boilerplate.",
-        ablation: "This single rule removes ~50% of raw lines — the most aggressive filter in C4. Also the most blunt: it deletes code lines, bullet points, and titles wholesale." },
-      { kind: "quality", label: "Line length ≥ 5 words",
-        detail: "Drop lines with fewer than 5 words. Targets navigation fragments, error messages, one-word captions.",
-        ablation: "Low-magnitude filter on its own; compounds with the terminal-punctuation rule to aggressively prune non-prose." },
-      { kind: "content", label: "Bad-word blocklist",
-        detail: "Remove any document containing any word from the 'List of Dirty, Naughty, Obscene and Otherwise Bad Words' (~400 entries). Document-level drop, not line-level.",
-        ablation: "Later audits (Dodge et al. 2021) showed this disproportionately removes documents about LGBTQ identities, medical content, and some dialects of English. Blunt-instrument cost of heuristic content filtering." },
-      { kind: "quality", label: "JavaScript-line strip",
-        detail: "Remove any line containing the word 'javascript' (case-insensitive). Targets 'Please enable JavaScript to view this page' boilerplate.",
-        ablation: "Also deletes legitimate prose discussing the JavaScript language — a lexical collision the heuristic does not resolve." },
-      { kind: "quality", label: "{ Curly-brace } placeholder strip",
-        detail: "Drop pages containing a pair of { } — typically template placeholders that leaked into rendered HTML.",
-        ablation: "Near-zero false-positive rate in practice; one of the few C4 rules that is strictly additive." },
-      { kind: "quality", label: "'Lorem ipsum' strip",
-        detail: "Drop pages containing the literal string 'lorem ipsum'. Filler text for design mockups.",
-        ablation: "Tiny recall loss; catches template noise." },
-      { kind: "structural", label: "langdetect → English",
-        detail: "Run langdetect. Keep documents with P(English) ≥ 0.99. This is stricter than CCNet's 0.5 because C4 is explicitly an English-only corpus.",
-        ablation: "The 0.99 threshold is what causes C4 to underrepresent African-American English and code-switched text (Dodge 2021)." },
-      { kind: "dedup", label: "Three-sentence line dedup",
-        detail: "Emit all contiguous 3-sentence spans; within the corpus, keep only one copy of each unique span. Line-rather-than-document granularity.",
-        ablation: "Catches the long tail of templated boilerplate (legal disclaimers, site footers) that document-level dedup misses." },
-    ],
-  },
-  {
-    id: "dolma",
-    title: "Dolma (web lane)",
-    year: "2024 · Soldaini et al. (AI2)",
-    stages: [
-      { kind: "structural", label: "URL + Bloom dedup across CC snapshots",
-        detail: "Hash URLs across all included Common Crawl snapshots into a Bloom filter with FP ≤ 1e-6. Drop duplicate URLs. Done first because re-crawls dominate CC volume.",
-        ablation: "Removing this stage doubles downstream token count with near-duplicate re-crawls; OLMo downstream eval drops by the doc-dedup row of the Dolma ablation table." },
-      { kind: "dedup", label: "Document-level near dedup",
-        detail: "Bloom-filter hash of normalized document text. Collision → drop. Complements URL dedup: same content served from different URLs.",
-        ablation: "Dolma ablation (Table 5): removing doc-dedup reduces downstream task accuracy at 1B-model × 150B-token eval." },
-      { kind: "structural", label: "fastText language ID → English",
-        detail: "fastText lid.176 classifier. Keep documents with P(English) ≥ threshold (Dolma uses a loose English threshold similar to CCNet).",
-        ablation: "Not ablated independently; Dolma treats langID as non-optional infrastructure." },
-      { kind: "quality", label: "Gopher + C4 quality heuristics",
-        detail: "Stacked heuristics adapted from Gopher and C4: symbol-to-word ratio < 0.1, mean line length > 5, fraction of lines ending in punctuation > 0.6, stopword ratio > 0.06, duplicate-line fraction < 0.3, etc.",
-        ablation: "Dolma ablation shows the quality filter contributes ~half of the total downstream-eval gain from the full pipeline." },
-      { kind: "content", label: "fastText toxicity/NSFW classifier",
-        detail: "fastText classifier trained on Jigsaw Toxic Comments. Score each document for 'hate' and 'NSFW'; drop above threshold. Binary-thresholded, not score-weighted.",
-        ablation: "Content filter contribution is small on general-knowledge evals but matters for RLHF-era safety benchmarks." },
-      { kind: "content", label: "High-precision PII regex",
-        detail: "Three categories only: email addresses, IP addresses, phone numbers. Regex-based, no ML classifier. Documents above a PII-density threshold are dropped rather than redacted in place.",
-        ablation: "Scoped deliberately narrow — higher-precision than recall. Dolma argues comprehensive PII removal is a policy problem the pipeline cannot solve." },
-      { kind: "dedup", label: "Paragraph-level dedup (last)",
-        detail: "Bloom-filter exact match on paragraphs. Alternative 'dolma-ngram' variant: split paragraph into n-grams, mark duplicate if fraction of duplicated n-grams exceeds threshold T (default T = 1.0 = exact).",
-        ablation: "Paragraph dedup last because earlier filters change the surviving distribution. The ablation row shows this stage's contribution is smaller than doc-dedup but non-zero." },
-    ],
-  },
-  {
-    id: "fineweb",
-    title: "FineWeb / FineWeb-Edu",
-    year: "2024 · Penedo et al. (HF)",
-    stages: [
-      { kind: "structural", label: "URL blocklist filter",
-        detail: "Remove WARCs whose source URL matches a curated adult/spam blocklist before HTML extraction. Cheap, eliminates load downstream.",
-        ablation: "Ablated: removing URL filter alone costs < 1 pp on MMLU; keeps the pipeline from wasting dedup effort on spam." },
-      { kind: "structural", label: "Trafilatura HTML→text extraction",
-        detail: "Use Trafilatura (not CCNet's extractor, not WET). Trafilatura preserves paragraph structure and strips chrome more aggressively than WET's boilerpipe-style extractor.",
-        ablation: "Ablation in FineWeb paper: swapping WET for Trafilatura gives a several-token-per-doc quality bump before any semantic filter runs." },
-      { kind: "structural", label: "fastText language ID → English",
-        detail: "fastText lid.176. Keep P(English) ≥ 0.65. Looser than C4's 0.99 — FineWeb is permissive at langID and tightens later via quality filtering.",
-        ablation: "The 0.65 threshold is empirical: higher thresholds removed enough valid English dialect to hurt downstream evals." },
-      { kind: "quality", label: "Gopher + C4 heuristic cascade",
-        detail: "Same stack as Dolma: terminal-punctuation fraction, symbol ratio, stopword ratio, line-length, duplicate-line fraction. FineWeb confirms Gopher rules generalize to 2024 CC.",
-        ablation: "Ablation shows stacking more heuristics beyond this cascade plateaus on MMLU — the empirical motivation for the classifier." },
-      { kind: "dedup", label: "MinHash dedup — per snapshot (not global)",
-        detail: "MinHash-LSH on 5-grams, Jaccard threshold 0.8, applied within each of 96 CC snapshots. Global dedup across snapshots was tested and found to hurt downstream evals.",
-        ablation: "Per-dump vs global is the surprise finding: global removes too many high-quality documents that re-appear across snapshots; per-dump keeps 'evergreen' pages that contribute to training signal." },
-      { kind: "content", label: "PII redaction (email, phone)",
-        detail: "Regex-based redaction — replace matches with placeholder tokens rather than drop documents. Preserves surrounding text.",
-        ablation: "Narrower scope than Dolma's PII stage; FineWeb argues redaction preserves more training signal than document-drop." },
-      { kind: "quality", label: "FineWeb-Edu classifier (score ≥ 3)",
-        detail: "Train a small classifier head on top of a frozen embedding model, using 450 K web pages annotated by Llama-3-70B-Instruct with integer scores 0–5 on educational value. Keep documents with score ≥ 3. Classifier F1 ≈ 82 % on a 46,867-sample hold-out.",
-        ablation: "Threshold sweep (0–5) shows: threshold 3 best trade-off — MMLU +2–3 pp vs FineWeb base; threshold 4 gains MMLU but loses HellaSwag. Score≥3 discards ≈ 92 % of FineWeb, leaving 1.3 T tokens from 15 T." },
-    ],
-  },
-];
+(function () {
+  var K = {
+    lang: "var(--k-lang)", rule: "var(--k-rule)", content: "var(--k-content)",
+    dedup: "var(--k-dedup)", ref: "var(--k-ref)"
+  };
+  var KN = {
+    lang: "extraction or language ID", rule: "rule-based quality", content: "content, blocklist, PII",
+    dedup: "deduplication", ref: "reference score"
+  };
+  var lanes = [
+    { name: "CCNet", meta: "Feb 2019 snapshot, multilingual", note: "Order ablated for dedup vs LID (§4.1, Fig. 3).", stages: [
+      { t: "WET text input", k: "lang", g: "document", rule: "Common Crawl WET text, 24 TB for Feb 2019, grouped into 1,600 shards of 5 GB.", thr: "none", rem: "not applicable", ev: "not applicable", loc: "CCNet §3.1" },
+      { t: "Paragraph dedup", k: "dedup", g: "paragraph", rule: "Normalize (lower-case, digits to 0, remove Unicode punctuation and accents); hash with the first 64 bits of SHA-1; remove paragraphs whose hash appears in the comparison set. Exact matching only.", thr: "comparison set of 50 shards (about 3% of the corpus)", rem: "42% of a shard's characters remain when compared with 1 shard, 28% with 100 shards", ev: "Figures 4-5 (characters remaining vs RAM). Dedup before LID recovers low-resource-language documents (Figure 3, 1% of Feb 2019).", loc: "CCNet §3.2, §4.1-§4.2" },
+      { t: "Language ID", k: "lang", g: "document", rule: "fastText classifier, 176 languages; the page is assigned its top language.", thr: "top-language score > 0.5, otherwise discarded", rem: "not reported", ev: "no threshold ablation reported", loc: "CCNet §3.3" },
+      { t: "Perplexity buckets", k: "ref", g: "document (paragraph perplexities)", rule: "Per language: SentencePiece tokenizer and 5-gram Kneser-Ney model trained on Wikipedia (48 languages); per-language terciles head, middle, tail. No text is removed by this score.", thr: "per-language terciles", rem: "none (labels only)", ev: "Table 1: English analogy accuracy head 77.9, middle 74.2, tail 62.0. Table 2: BERT-BASE XNLI average 75.9 (CC head) vs 72.6 (Wikipedia). No comparison with unfiltered CC.", loc: "CCNet §3.4, §5.2-§5.3" }
+    ]},
+    { name: "C4", meta: "Apr 2019 snapshot, English", note: "§2.2 lists rules without a stage order; the TFDS code checks them per line in a fixed order.", stages: [
+      { t: "WET text input", k: "lang", g: "document", rule: "Common Crawl web extracted text, one monthly snapshot.", thr: "none", rem: "not applicable", ev: "not applicable", loc: "T5 §2.2" },
+      { t: "Line rules", k: "rule", g: "line", rule: "Keep lines ending in a period, exclamation mark, question mark, or end quotation mark; keep lines with at least 5 words; remove lines containing 'Javascript' or policy strings; remove citation markers.", thr: "5 words per line", rem: "per rule not reported in T5. FineWeb §3.5 re-ablation (2019-18 crawl): terminal punctuation removed about 30% of tokens", ev: "T5 Table 8 compares all rules vs none only", loc: "T5 §2.2; FineWeb §3.5" },
+      { t: "Page rules", k: "rule", g: "page", rule: "Discard pages with fewer than 3 sentences, pages containing 'lorem ipsum', and pages containing '{' (stated purpose: remove code).", thr: "3 sentences per page", rem: "FineWeb §3.5 re-ablation: curly-bracket rule 2.8% of tokens; lorem ipsum under 0.5%", ev: "no per-rule ablation in T5", loc: "T5 §2.2; FineWeb §3.5" },
+      { t: "Word blocklist", k: "content", g: "page", rule: "Remove any page containing a word from the List of Dirty, Naughty, Obscene or Otherwise Bad Words.", thr: "any one listed word", rem: "Dodge et al. Table 1: 395M to 365M documents (7.6%) and 198B to 156B SpaCy tokens (21.2%, derived)", ev: "Dodge et al. §5.3: removal rate 42% for AAE and 32% for Hispanic-aligned English vs 6.2% White-aligned and 7.2% other English", loc: "T5 §2.2; Dodge et al. §5, Table 1" },
+      { t: "Span dedup", k: "dedup", g: "three-sentence span", rule: "Discard all but one of any three-sentence span occurring more than once. The TFDS release code deduplicates hashed lines instead.", thr: "exact repeat", rem: "not reported", ev: "no ablation reported", loc: "T5 §2.2; TFDS c4_utils.py L345-370" },
+      { t: "langdetect English", k: "lang", g: "page", rule: "Keep pages classified as English by langdetect.", thr: "probability at least 0.99", rem: "not reported separately. C4 745 GB vs unfiltered C4 6.1 TB (langdetect only)", ev: "Table 8, 220M model, 2^35 tokens: SuperGLUE 71.36 (C4) vs 68.04 (unfiltered). Effect of the 0.99 threshold on dialects not measured.", loc: "T5 §2.2, §3.4.1" }
+    ]},
+    { name: "Dolma v1.6 web", meta: "25 snapshots 2020-05 to 2023-06, English", note: "Order justified by efficiency; not ablated (§5.4).", stages: [
+      { t: "CCNet stage", k: "lang", g: "document; paragraph", rule: "CCNet language ID and within-snapshot paragraph dedup.", thr: "fastText English score ≥ 0.5", rem: "61.7% of data by bytes (LID); about 70% of paragraphs (dedup); 84.2% overall, 175.1 TB to 27.7 TB", ev: "no ablation reported", loc: "Dolma §5.1" },
+      { t: "URL dedup", k: "dedup", g: "document", rule: "Exact URL match, Bloom filter.", thr: "exact", rem: "53.2% of documents", ev: "run first for efficiency", loc: "Dolma §5.4" },
+      { t: "Document dedup", k: "dedup", g: "document", rule: "Exact text match, Bloom filter; empty documents count as duplicates.", thr: "exact", rem: "14.9% of URL-deduplicated documents", ev: "run early for efficiency", loc: "Dolma §5.4" },
+      { t: "Quality rules", k: "rule", g: "document (Gopher); C4 NoPunc: paragraph in §5.2, document in App. N.4", rule: "All Gopher rules plus the single C4 punctuation rule (C4 NoPunc). Gopher includes: 50 to 100K words; median word length 3 to 10; symbol-to-word ratio ≤ 0.10; ≤ 0.90 of lines start with a bullet; ≤ 0.30 of lines end with an ellipsis; ≤ 0.30 duplicated lines.", thr: "Gopher original thresholds; App. N.4: more than half of lines without end punctuation", rem: "Gopher All 15.23% and C4 NoPunc 22.73% of UTF-8 characters tagged", ev: "Figure 1 (1.2B, up to 150B tokens): C4 NoPunc alone beats C4 All and Gopher All; Gopher All + C4 NoPunc best", loc: "Dolma §5.2, App. N.4" },
+      { t: "Toxicity", k: "content", g: "sentence", rule: "fastText 'hate' and 'NSFW' classifiers trained on Jigsaw Toxic Comments; sentences above the threshold removed.", thr: "τ = 0.4", rem: "5.5-7.3%", ev: "Figure 2: τ = 0.0004 (29.1-34.9% removed) generally better downstream; 0.4 adopted to meet the token count", loc: "Dolma §5.3" },
+      { t: "PII", k: "content", g: "span or document", rule: "Regular expressions for email addresses, IP addresses, phone numbers. Spans replaced by a special token when a document has 5 or fewer; document removed when it has 6 or more.", thr: "≤ 5 spans masked; ≥ 6 removed", rem: "0.02% of documents masked, 0.001% removed (§5.3); datasheet: 0.05% and 0.11% tagged (App. N.4)", ev: "removal vs replacement: no measured effect", loc: "Dolma §5.3, App. N.4" },
+      { t: "Paragraph dedup", k: "dedup", g: "paragraph", rule: "Exact paragraph match, Bloom filter; last because paragraph removal risks disrupting content analysis.", thr: "exact", rem: "18.7% of paragraphs (§5.4); 19.1% of UTF-8 characters (App. N.4)", ev: "Figure 3: compounding gain when stacked with quality and content filters (HellaSwag)", loc: "Dolma §5.4-§5.5" }
+    ]},
+    { name: "FineWeb", meta: "96 snapshots, English, 15T GPT-2 tokens", note: "Order from §3.7. The App. A datasheet places MinHash after the custom rules; the released script (datatrove acd431b) runs all filters before MinHash.", stages: [
+      { t: "WARC + trafilatura", k: "lang", g: "document", rule: "Extract text from WARC HTML with trafilatura instead of using WET text.", thr: "none", rem: "not reported", ev: "Figure 1: better than WET at 28B tokens (1.71B model)", loc: "FineWeb §3.2" },
+      { t: "URL blocklist", k: "content", g: "document", rule: "Blocklist of adult-content URLs.", thr: "listed URL", rem: "not reported separately", ev: "Figure 2 (base filtering combined)", loc: "FineWeb §3.3" },
+      { t: "Language ID", k: "lang", g: "document", rule: "fastText language classifier; keep English.", thr: "English score ≥ 0.65", rem: "not reported separately", ev: "no threshold ablation reported", loc: "FineWeb §3.3" },
+      { t: "Gopher quality + repetition", k: "rule", g: "document", rule: "MassiveText (Gopher) quality and repetition filters.", thr: "original thresholds", rem: "base filtering output about 36T tokens from 96 snapshots", ev: "Figure 2: base filtering vs unfiltered WARC at 28B tokens", loc: "FineWeb §3.3" },
+      { t: "Per-snapshot MinHash", k: "dedup", g: "duplicate cluster", rule: "Word 5-grams; 112 hashes in 14 buckets of 8; transitive clusters; one random document kept per cluster; each snapshot deduplicated independently.", thr: "all 8 minhashes equal in any bucket", rem: "36T to 20T tokens", ev: "Global dedup left 4T tokens with little gain at 350B tokens; in 2013-48 the kept ~31B tokens trained worse than 171B rebuilt from removed data (Figures 3-5); lighter global methods worse (App. E.3)", loc: "FineWeb §3.4, App. E" },
+      { t: "C4 rules without terminal punctuation", k: "rule", g: "line and page", rule: "All C4 rules except the terminal-punctuation line rule.", thr: "datatrove C4QualityFilter defaults at acd431b: 5 sentences, 3 words per line", rem: "about 7% of tokens (2019-18 crawl)", ev: "Figure 6: beats terminal punctuation alone (about 30% removed)", loc: "FineWeb §3.5; datatrove c4_filters.py L66-67" },
+      { t: "Custom rules", k: "rule", g: "document", rule: "Remove if fraction of lines ending in punctuation ≤ 0.12 (10.14% of tokens); fraction of characters in duplicated lines ≥ 0.1 in §3.6 text, 0.01 in App. E.4 Table 2 and code (12.47%); fraction of lines under 30 characters ≥ 0.67 (3.73%).", thr: "0.12; 0.1 or 0.01 (conflict); 0.67", rem: "about 22% of tokens together", ev: "Figure 7: aggregate about +1% at 28B tokens; thresholds set from histograms of per-snapshot vs global dedup of 2013-48", loc: "FineWeb §3.6, App. E.4; fineweb_quality_filter.py L14-18" },
+      { t: "PII", k: "content", g: "span", rule: "Anonymize email addresses and public IP addresses.", thr: "pattern match", rem: "not reported", ev: "no ablation reported", loc: "FineWeb §3.7" }
+    ]}
+  ];
 
-// ------------------------------------------------------------
-// Render lanes
-// ------------------------------------------------------------
-const lanesDiv  = document.getElementById("lanes");
-const detailDiv = document.getElementById("detail");
+  var lanesEl = document.getElementById("lanes");
+  var detailEl = document.getElementById("detail");
+  var buttons = [];
 
-const KIND_PILL = {
-  structural: "",
-  quality:    "q",
-  content:    "c",
-  dedup:      "d",
-};
+  function el(tag, cls, text) {
+    var e = document.createElement(tag);
+    if (cls) e.className = cls;
+    if (text !== undefined) e.textContent = text;
+    return e;
+  }
 
-PIPELINES.forEach(p => {
-  const lane = document.createElement("div");
-  lane.className = "lane";
-  lane.innerHTML = `<h2>${p.title}</h2><div class="year">${p.year}</div>`;
-  p.stages.forEach((s, i) => {
-    if (i > 0) {
-      const a = document.createElement("div");
-      a.className = "arrow";
-      a.textContent = "↓";
-      lane.appendChild(a);
-    }
-    const btn = document.createElement("button");
-    btn.className = "stage";
-    btn.dataset.pipeline = p.id;
-    btn.dataset.index    = i;
-    const pillCls = KIND_PILL[s.kind] || "";
-    btn.innerHTML = `<span class="num">${i + 1}.</span> ${s.label}
-                     <span class="pill ${pillCls}">${s.kind}</span>`;
-    btn.addEventListener("click", () => showStage(p, s, btn));
-    lane.appendChild(btn);
+  function showDetail(li, si) {
+    var lane = lanes[li], st = lane.stages[si];
+    buttons.forEach(function (b) { b.setAttribute("aria-pressed", String(b._li === li && b._si === si)); });
+    detailEl.textContent = "";
+    var h = el("h3", null, lane.name + " — " + st.t);
+    h.style.margin = "0 0 8px";
+    detailEl.appendChild(h);
+    var dl = el("dl");
+    [["Kind", KN[st.k]], ["Rule", st.rule], ["Granularity", st.g], ["Threshold", st.thr],
+     ["Reported removal", st.rem], ["Evidence", st.ev], ["Locus", st.loc]].forEach(function (row) {
+      dl.appendChild(el("dt", null, row[0]));
+      dl.appendChild(el("dd", null, row[1]));
+    });
+    detailEl.appendChild(dl);
+  }
+
+  lanes.forEach(function (lane, li) {
+    var box = el("div", "lane");
+    box.appendChild(el("h3", null, lane.name));
+    box.appendChild(el("div", "meta", lane.meta));
+    lane.stages.forEach(function (st, si) {
+      var b = el("button", "stage");
+      b.type = "button";
+      b.style.setProperty("--c", K[st.k]);
+      b.appendChild(document.createTextNode((si + 1) + ". " + st.t));
+      b.appendChild(el("small", null, KN[st.k]));
+      b._li = li; b._si = si;
+      b.setAttribute("aria-pressed", "false");
+      b.addEventListener("click", function () { showDetail(li, si); });
+      buttons.push(b);
+      box.appendChild(b);
+    });
+    box.appendChild(el("div", "note", lane.note));
+    lanesEl.appendChild(box);
   });
-  lanesDiv.appendChild(lane);
-});
+  showDetail(0, 1);
 
-function showStage(pipeline, stage, btn) {
-  document.querySelectorAll(".stage.active").forEach(b => b.classList.remove("active"));
-  btn.classList.add("active");
-  const ablation = stage.ablation
-    ? `<div class="ablation"><strong>Ablation / note:</strong> ${stage.ablation}</div>`
-    : "";
-  detailDiv.innerHTML = `
-    <h3>${pipeline.title} · stage ${Number(btn.dataset.index) + 1} — ${stage.label}</h3>
-    <div class="meta">kind: ${stage.kind} · pipeline: ${pipeline.year}</div>
-    <p>${stage.detail}</p>
-    ${ablation}
-  `;
-}
+  // Panel 2: MinHash
+  var bIn = document.getElementById("b"), rIn = document.getElementById("r"), sIn = document.getElementById("s");
+  var svg = document.getElementById("curve");
+  var NS = "http://www.w3.org/2000/svg";
+  var W = 360, H = 260, L = 42, R = 12, T = 12, B = 34;
+  function P(s, b, r) { return 1 - Math.pow(1 - Math.pow(s, r), b); }
+  function x(s) { return L + s * (W - L - R); }
+  function y(p) { return T + (1 - p) * (H - T - B); }
+  function pct(p) {
+    var v = p * 100;
+    if (v >= 99.9995) return "> 99.999%";
+    if (v >= 99.95) return v.toFixed(3) + "%";
+    if (v < 0.1) return v.toFixed(3) + "%";
+    return v.toFixed(1) + "%";
+  }
+  function svgEl(tag, attrs) {
+    var e = document.createElementNS(NS, tag);
+    for (var a in attrs) e.setAttribute(a, attrs[a]);
+    return e;
+  }
+  function path(b, r) {
+    var d = "";
+    for (var i = 0; i <= 200; i++) {
+      var s = i / 200;
+      d += (i ? "L" : "M") + x(s).toFixed(1) + " " + y(P(s, b, r)).toFixed(1);
+    }
+    return d;
+  }
+  function drawCurve() {
+    var b = +bIn.value, r = +rIn.value, s = +sIn.value;
+    while (svg.firstChild) svg.removeChild(svg.firstChild);
+    [0, 0.25, 0.5, 0.75, 1].forEach(function (t) {
+      svg.appendChild(svgEl("line", { x1: x(0), x2: x(1), y1: y(t), y2: y(t), stroke: "var(--grid)", "stroke-width": 1 }));
+      var ty = svgEl("text", { x: L - 6, y: y(t) + 4, "text-anchor": "end" }); ty.textContent = Math.round(t * 100) + "%"; svg.appendChild(ty);
+      var tx = svgEl("text", { x: x(t), y: H - B + 16, "text-anchor": "middle" }); tx.textContent = t.toFixed(2); svg.appendChild(tx);
+    });
+    svg.appendChild(svgEl("line", { x1: x(0), x2: x(1), y1: y(0), y2: y(0), stroke: "var(--axis)", "stroke-width": 1 }));
+    svg.appendChild(svgEl("line", { x1: x(0), x2: x(0), y1: y(0), y2: y(1), stroke: "var(--axis)", "stroke-width": 1 }));
+    var xl = svgEl("text", { x: (x(0) + x(1)) / 2, y: H - 4, "text-anchor": "middle" }); xl.textContent = "Jaccard similarity s"; svg.appendChild(xl);
+    if (!(b === 14 && r === 8)) {
+      svg.appendChild(svgEl("path", { d: path(14, 8), fill: "none", stroke: "var(--series-2)", "stroke-width": 2, "stroke-dasharray": "5 4" }));
+    }
+    svg.appendChild(svgEl("path", { d: path(b, r), fill: "none", stroke: "var(--series-1)", "stroke-width": 2.5 }));
+    svg.appendChild(svgEl("line", { x1: x(s), x2: x(s), y1: y(0), y2: y(1), stroke: "var(--axis)", "stroke-width": 1, "stroke-dasharray": "2 3" }));
+    svg.appendChild(svgEl("circle", { cx: x(s), cy: y(P(s, b, r)), r: 4.5, fill: "var(--series-1)", stroke: "var(--surface-1)", "stroke-width": 2 }));
+  }
+  function updateMinhash() {
+    var b = +bIn.value, r = +rIn.value, s = +sIn.value;
+    document.getElementById("bv").textContent = b;
+    document.getElementById("rv").textContent = r;
+    document.getElementById("sv").textContent = s.toFixed(2);
+    document.getElementById("pv").textContent = pct(P(s, b, r));
+    document.getElementById("hv").textContent = "Total hash functions b × r = " + (b * r) + ". One bucket matches with probability s^r = " + pct(Math.pow(s, r)) + ".";
+    var tb = document.getElementById("ptab");
+    tb.textContent = "";
+    [0.5, 0.6, 0.7, 0.75, 0.8, 0.85, 0.9].forEach(function (sv) {
+      var tr = el("tr");
+      tr.appendChild(el("td", null, sv.toFixed(2)));
+      tr.appendChild(el("td", null, pct(P(sv, b, r))));
+      tr.appendChild(el("td", null, pct(P(sv, 14, 8))));
+      tb.appendChild(tr);
+    });
+    drawCurve();
+  }
+  [bIn, rIn, sIn].forEach(function (i) { i.addEventListener("input", updateMinhash); });
+  Array.prototype.forEach.call(document.querySelectorAll("[data-b]"), function (btn) {
+    btn.addEventListener("click", function () {
+      bIn.value = btn.getAttribute("data-b");
+      rIn.value = btn.getAttribute("data-r");
+      updateMinhash();
+    });
+  });
+  updateMinhash();
+
+  // Panel 3: granularity
+  var nIn = document.getElementById("n"), kIn = document.getElementById("k");
+  function outcome(title, verdictText, keep, detail) {
+    var d = el("div", "out");
+    d.appendChild(el("b", null, title));
+    d.appendChild(el("span", "verdict " + (keep ? "keep" : "drop"), verdictText));
+    d.appendChild(el("div", "caption", detail));
+    return d;
+  }
+  function updateDoc() {
+    var n = +nIn.value;
+    kIn.max = String(n);
+    if (+kIn.value > n) kIn.value = String(n);
+    var k = +kIn.value;
+    document.getElementById("nv").textContent = n;
+    document.getElementById("kv").textContent = k;
+    var doc = document.getElementById("doc");
+    doc.textContent = "";
+    for (var i = 0; i < n; i++) {
+      var ln = el("div", "line " + (i < k ? "p" : "n"));
+      ln.style.width = (58 + ((i * 37) % 40)) + "%";
+      doc.appendChild(ln);
+    }
+    var ratio = k / n;
+    var out = document.getElementById("outcomes");
+    out.textContent = "";
+    var c4keep = k >= 3;
+    out.appendChild(outcome(
+      "C4 line rule (T5 §2.2)",
+      c4keep ? ("Page kept with " + k + " of " + n + " lines") : "Page removed",
+      c4keep,
+      c4keep ? ((n - k) + " unpunctuated lines deleted (" + Math.round(100 * (n - k) / n) + "% of lines); page has at least 3 sentences." )
+             : ("After deleting " + (n - k) + " lines, " + k + " sentence(s) remain, fewer than 3.")
+    ));
+    var unp = (n - k) / n;
+    var dolmaKeep = !(unp > 0.5);
+    out.appendChild(outcome(
+      "Dolma C4 NoPunc, datasheet wording (App. N.4)",
+      dolmaKeep ? "Whole document kept" : "Whole document removed",
+      dolmaKeep,
+      "Unpunctuated share " + (n - k) + "/" + n + " = " + unp.toFixed(2) + (dolmaKeep ? " ≤ 0.5." : " > 0.5.")
+    ));
+    var fwKeep = ratio > 0.12;
+    out.appendChild(outcome(
+      "FineWeb line-punctuation rule (§3.6)",
+      fwKeep ? "Whole document kept" : "Whole document removed",
+      fwKeep,
+      "Punctuated share " + k + "/" + n + " = " + ratio.toFixed(2) + (fwKeep ? " > 0.12." : " ≤ 0.12.")
+    ));
+  }
+  nIn.addEventListener("input", updateDoc);
+  kIn.addEventListener("input", updateDoc);
+  updateDoc();
+})();
 </script>
-
 </body>
 </html>

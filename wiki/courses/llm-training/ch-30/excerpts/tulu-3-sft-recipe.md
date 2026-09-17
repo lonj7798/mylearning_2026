@@ -2,137 +2,60 @@
 chapter: ch-30
 course: llm-training
 phase: read
-excerpt_of: wiki/raw-data/llm-training/blogs/allenai-tulu-sft-recipe.md
-source_url: https://allenai.org/blog/tulu-3
+excerpt_of: arXiv:2411.15124v5 (Tülu 3 report)
+source_url: https://arxiv.org/abs/2411.15124
 created_at: "2026-04-23"
+revised: "2026-09-15 (generality revision; rewritten from the paper)"
 ---
 
-# Excerpt: Tülu-3 as the attested production SFT recipe
+# Excerpt: Tülu 3 SFT settings and analyses as printed in the report
 
-**Source library:** `wiki/raw-data/llm-training/blogs/allenai-tulu-sft-recipe.md`
-**Companion source:** `wiki/raw-data/llm-training/papers/tulu-3-sft-mix.md`
-**Paper:** Lambert et al. 2024 — "Tülu 3: Pushing Frontiers in Open Language Model Post-Training" (arXiv:2411.15124)
+Used by [[read]] §3, §6, §9, and the Recipe table. The earlier version quoted the card [[allenai-tulu-sft-recipe]], whose NEFTune, packing, optimizer, FSDP, mixture-share, and ablation-delta rows do not appear in the report; none of them is repeated here. Card for the report: [[tulu-3]].
 
----
+## Table 11 and §4.3 (SFT training settings)
 
-## Why this source anchors ch-30
+| Hyperparameter | 8B | 70B |
+|---|---|---|
+| Learning Rate | 5 × 10⁻⁶ | 2 × 10⁻⁶ |
+| Learning Rate Schedule | Linear | Linear |
+| Batch Size (effective) | 128 | 128 |
+| Max Token Length | 4,096 | 4,096 |
+| Warm up ratio | 0.03 | 0.03 |
+| Number of Epochs | 2 | 2 |
 
-Ch-30 presents a five-axis design space. Tülu-3 is one of the two worked examples in ch-30 §6 (the other is Zephyr's smaller recipe). Tülu-3 is the 2024 reference for "what do the five axes look like when you push to the largest fully-open SFT run." Every number here is attested from the Ai2 blog post or the paper; the interest is in how each axis is set and what the ablations say about counterfactual choices.
+§4.3 (verbatim): "we used between 4 and 16 8xH100 nodes … The final 8B model is trained on 32 GPUs for 6 hours and the 70B model was trained on 64 GPUs for 50 hours. … We trained for two epochs using a learning rate of 5e-6 for our 8B models, and 2e-6 for our 70B models, which we found after a hyperparameter search." The SFT mix contains 939,344 prompts (Table 7).
 
----
+## §4.3.2 Batch aggregation
 
-## The mix scale — and why it changes an axis
+"Averaging the loss across padding tokens without taking into account gradient accumulation or distributed training setups." For two samples with n₁, n₂ non-padding tokens, one forward pass gives L = (l_{n1} + l_{n2})/(n₁ + n₂) (Eq. 1); gradient accumulation gives L = (l_{n1}/n₁ + l_{n2}/n₂)/2 (Eq. 2). "That is, in the second case we weight each example equally, while in the first we weight each token equally." "To fix this issue, we opted generally to use a sum loss instead of averaging ('mean loss') when training. This removes the issue by simply removing the denominator from the above equations and requires an adjustment to learning rates." Fine-tuning Llama 3.0 on the Tülu 2 SFT mixture: "using a sum loss with a learning rate of 5.00E-06 worked best. Surprisingly, we additionally found that training for longer did not yield further improvements, and so used 2 epochs for training" (Figs. 5-6). The figures print curves without numeric labels.
 
-From `allenai-tulu-sft-recipe.md`, §Overview:
+## §4.3.1 Seeds and soups (Table 14)
 
-> Tülu 3's SFT mix of 939K prompts with careful contamination filtering matches or beats closed-source instruct models at 8B / 70B.
+| Model | Seed | Average |
+|---|---|---|
+| Tülu 3 8B SFT | 42 (default) / 123 / 456 / 789 / 1011 | 59.9 / 60.1 / 59.8 / 59.8 / 59.8 |
+| Best 8B soup | 42 & 123 | 60.2 |
+| Tülu 3 70B SFT | 42 (default) / 123 / 456 | 71.8 / 70.0 / 72.6 |
+| Best 70B soup | 123 & 456 | 72.5 |
 
-939K is an order of magnitude larger than the Zephyr / Alpaca reference runs that defined the NEFTune default. From §SFT Hyperparameters:
+"We see that SFT performance noticeably varies based on the seed, highlighting the importance of multiple training runs, and that the best model soup does not always outperform the best single training run. Because of this, we use the best single SFT training run for each model size as our final SFT models."
 
-> | NEFTune | off (found neutral on 939K) | off |
+## §2.2, Table 3 and §7.4.1 (development and unseen suites)
 
-This is the single most important lesson in the recipe for ch-30: the NEFTune axis flips its default based on data scale. The source's ablation finding — "NEFTune gain saturates — no improvement at 939K; small gain ≤ 100K" — is the empirical basis for ch-30's dataset-size rule.
+"Crucially, we did not examine scores on our unseen set when developing our models, allowing us to observe how much we may have overfit to particular evaluations in our decisions around data mixtures, algorithms, and hyperparameters." Development and unseen pairs include MMLU / MMLU-Pro, BigBenchHard / AGIEval English, MATH / Deepmind Mathematics, HumanEval / BigcodeBench, IFEval / IFEval-OOD. No unseen safety evaluation exists.
 
-## Notice: the data axis is where scaling happens, not the loss axis
+Table 32 (8B SFT, selected columns: Dev avg, Unseen avg, MATH, DMM, IFEval, IFEval-OOD):
 
-From `allenai-tulu-sft-recipe.md`, §Core Insight:
+| Model | Dev. Avg | Uns. Avg | MATH | DMM | IFE | IFEO |
+|---|---|---|---|---|---|---|
+| Tülu 3 8B SFT | 64.1 | 29.9 | 31.5 | 32.3 | 72.8 | 17.6 |
+| w/o WildChat | 62.8 | 28.8 | 31.8 | 31.2 | 70.1 | 20.8 |
+| w/o Safety | 63.7 | 29.7 | 32.6 | 32.6 | 71.0 | 17.6 |
+| w/o Persona Data | 59.8 | 29.4 | 30.1 | 31.8 | 53.6 | 18.0 |
+| w/o Math Data | 62.2 | 27.4 | 23.5 | 23.3 | 70.6 | 18.3 |
 
-> Scaling SFT quality is overwhelmingly about *data composition* (math vs code vs chat vs safety mix) and *dedup against eval sets*, not about loss-function tricks.
+§7.4.1 (verbatim): "the data choices generalize on average … In individual skills, we see that our choices overfit to the development evaluations in Precise Instruction Following, and to some extent in Knowledge Recall and Reasoning."
 
-Ch-30 places this observation between the lines. The five design axes are loss-function / template / packing axes. They are necessary and they have correct defaults. They are *not* the main variable that moves capability at scale. The data mix is. Ch-30 spends its real estate on the axes because they are the cheapest to get wrong, not because they have the highest leverage.
+## What the report does not state
 
----
-
-## The mix composition — attested ratios
-
-From `allenai-tulu-sft-recipe.md`, §Data Mix (939K prompts):
-
-> | Bucket | Share | Notable sources |
-> |--------|-------|-----------------|
-> | Chat / general | 27% | OpenAssistant-2, WildChat-1M curated |
-> | Math | 21% | Tülu-3 Persona-Math (synthetic), OpenMathInstruct-2 |
-> | Code | 14% | OpenCodeInterpreter, Evol-CodeAlpaca |
-> | Precise IF | 11% | IFEval-persona + No-Robots |
-> | Safety | 10% | WildJailbreak, Tülu-3 Safety |
-> | Multilingual | 7% | Aya, Tülu-3 Persona-Multiling |
-> | Reasoning / knowledge | 10% | FLAN-v2 subset, SciRIFF |
-
-These ratios are not derived from a theoretical argument; they are the result of Ai2's skill-specific sub-mix construction, then merging, then downsampling. From the companion paper ([[tulu-3-sft-mix]]):
-
-> Ai2 starts with public datasets that have clear provenance and licenses, then manually reviews each candidate source for diversity, hard-skill coverage, and decontamination. The team builds skill-specific data mixtures and models first, keeps the mixes that perform best on individual skills, and then combines them into a preview mix.
-
----
-
-## The removal ablations — what each bucket costs
-
-From `allenai-tulu-sft-recipe.md`, §Ablation findings:
-
-> - Removing Persona-Math drops GSM8K by 15 pts; removing code drops HumanEval by 12.
-> - Removing safety data barely moves capability evals but tanks WildJailbreak from 98% → 52%.
-> - 2 epochs > 1 epoch > 3 epochs at this mix size; later epochs hurt IFEval.
-> - NEFTune gain saturates — no improvement at 939K; small gain ≤ 100K.
-> - Packing: 2.5× throughput, no quality delta.
-
-Three patterns worth extracting:
-
-1. **Capability buckets are mostly additive** — removing math hits math, removing code hits code. There is no substantial cross-bucket spillover in this mix. This is a useful priors-check for ch-31..ch-35: if you add a new capability via SFT, you can expect localized gains, not across-the-board gains.
-2. **Safety is orthogonal to capability** — removing safety data does not change MMLU / GSM8K / HumanEval but collapses jailbreak resistance. Safety is a behaviour the model learns via its specific data, not an emergent property of capability training.
-3. **Epoch count is non-monotone** — 2 > 1 > 3. More SFT is not universally better; 3 epochs specifically hurts IFEval (instruction following), plausibly because the model overfits to the specific phrasing of the training instructions. The sweet spot is dataset-dependent.
-
----
-
-## The packing attestation
-
-> Packing: 2.5× throughput, no quality delta.
-
-This is the ablation that backs [[packed-vs-unpacked-ablation]]'s claim. Tülu-3's 8B run used packing; they also ran an unpacked control; the quality was statistically indistinguishable. The 2.5× throughput is the realised speedup (vs the ~6.8× raw speedup the formula predicts for `L_max = 4096, avg(L_i) = 600`); the gap is FlashAttention overhead and memory-bandwidth ceiling, as discussed in ch-30 §4.
-
----
-
-## The 70B-vs-8B learning-rate scaling
-
-From `allenai-tulu-sft-recipe.md`, §SFT Hyperparameters:
-
-> | Learning rate | 5e-6 | 2e-6 |
-> | Distributed | FSDP FULL_SHARD | FSDP + HYBRID_SHARD |
-
-The learning rate halves (roughly) at 70B. This follows a rough `1/√N_params` scaling that is folklore for SFT and well-attested across Llama / Qwen / DeepSeek reports. The distributed strategy also shifts — FULL_SHARD at 8B, HYBRID_SHARD at 70B — because HYBRID keeps one replica per node and all-gathers within a node, reducing inter-node bandwidth pressure that becomes dominant at larger model sizes.
-
----
-
-## Decontamination as a data-recipe step, not an afterthought
-
-From `allenai-tulu-sft-recipe.md`, §Decontamination:
-
-> - 8-gram overlap ≥ 50% against every eval set → drop.
-> - Embedding similarity > 0.9 to eval-set items → drop.
-> - Documented "surviving overlap" rates per eval.
-
-And from [[tulu-3-sft-mix]]:
-
-> Decontamination is part of the data recipe, not an afterthought; Ai2 explicitly removes overlap with more than 2% of the eval suite.
-
-This is a point ch-30 mentions but does not belabour: decontamination is not itself one of the five SFT *design* axes, but it is a non-negotiable preprocessing step. The "5-axis design space" assumes the input data has been decontaminated; if it has not, every axis's ablation becomes uninterpretable because the baseline is inflated.
-
----
-
-## What ch-30 lifts from this recipe
-
-| Recipe element | Ch-30 use |
-|----------------|-----------|
-| 939K mix scale | Justifies NEFTune-off default for `|D| ≥ 500K` |
-| 2.5× packing speedup | Cited in §4 as the realised number |
-| LR 5e-6 / 2e-6 for 8B / 70B | Quoted in §6's production-recipe table |
-| 2 epochs sweet spot | Quoted in §6 |
-| Response-only loss | Confirmed as default |
-| FSDP FULL_SHARD / HYBRID_SHARD | Referenced for infra track ch-54..ch-59 |
-
----
-
-## Connections
-
-- [[excerpts/neftune-regularizer]] — Tülu-3 is the saturation datapoint; this excerpt is the recipe that flipped the default.
-- [[excerpts/sequence-packing-contract]] — Tülu-3's 2.5× is the attested realised speedup.
-- [[excerpts/sft-pre-determines-rl]] — the Tülu-3 stack is SFT → DPO → RLVR; what SFT shaped bounds what later stages do.
-- [[ch-30]] — §6 recipe table and §5 NEFTune rule both depend on this source.
-- [[ch-36]] (SFT lab) — Tülu-3 is the full-budget reference; the lab's resource-constrained path is a scaled-down version of this recipe.
+NEFTune, packing, optimizer betas, weight decay, and the distributed-training strategy for SFT were not found in §4.3, Table 11, or App. B. The open-instruct reproduction commands and their loss-reduction drift are in [[open-instruct-allenai-recipes]].

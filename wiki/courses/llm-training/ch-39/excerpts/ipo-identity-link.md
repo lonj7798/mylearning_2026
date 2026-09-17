@@ -7,6 +7,8 @@ source_url: https://arxiv.org/abs/2310.12036
 created_at: "2026-04-23"
 ---
 
+> Superseded by the 2026-09 revision of read.md; kept for history.
+
 # Excerpt: IPO — bounded target via identity link
 
 **Source library:** `wiki/raw-data/llm-training/papers/ipo.md`

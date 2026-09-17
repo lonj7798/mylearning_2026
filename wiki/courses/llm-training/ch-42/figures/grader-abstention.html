@@ -1,0 +1,132 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Grader thresholds, guessing, and abstention — ch-42</title>
+<style>
+  :root {
+    --bg: #f7f8fa; --panel: #ffffff; --ink: #14181d; --muted: #5b6672; --line: #d7dde4;
+    --answer: #1f6f4a; --abstain: #7a5b12; --error: #9b2c2c; --accent: #1f4e79;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #0f1317; --panel: #161b21; --ink: #e6eaee; --muted: #93a0ac; --line: #2a323b;
+            --answer: #6ee7b7; --abstain: #f0b34a; --error: #f08a8a; --accent: #8ec5ff; }
+  }
+  html, body { margin: 0; padding: 0; background: var(--bg); color: var(--ink);
+    font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; font-size: 15px; line-height: 1.5; }
+  .wrap { max-width: 900px; margin: 0 auto; padding: 24px 16px 48px; }
+  h1 { font-size: 20px; margin: 0 0 4px; }
+  .sub { color: var(--muted); font-size: 13px; margin-bottom: 20px; }
+  .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 16px; margin-bottom: 16px; }
+  h2 { font-size: 14px; margin: 0 0 12px; letter-spacing: 0.03em; text-transform: uppercase; color: var(--accent); }
+  label { display: block; font-size: 13px; margin-bottom: 4px; color: var(--muted); }
+  input[type=range] { width: 100%; }
+  .controls { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }
+  @media (max-width: 620px) { .controls { grid-template-columns: 1fr; } }
+  table { border-collapse: collapse; width: 100%; font-size: 13px; }
+  th, td { border-bottom: 1px solid var(--line); padding: 6px 8px; text-align: right; }
+  th:first-child, td:first-child { text-align: left; }
+  th { color: var(--muted); font-weight: 600; }
+  .ans { color: var(--answer); font-weight: 600; }
+  .abs { color: var(--abstain); font-weight: 600; }
+  .stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-top: 12px; }
+  @media (max-width: 620px) { .stats { grid-template-columns: repeat(2, 1fr); } }
+  .stat { border: 1px solid var(--line); border-radius: 6px; padding: 10px; }
+  .stat .k { font-size: 12px; color: var(--muted); }
+  .stat .v { font-size: 19px; font-variant-numeric: tabular-nums; }
+  .bar { height: 10px; background: var(--line); border-radius: 5px; overflow: hidden; margin-top: 6px; }
+  .bar span { display: block; height: 100%; background: var(--accent); }
+  code { font-size: 12.5px; background: rgba(127,127,127,0.14); padding: 1px 5px; border-radius: 3px; }
+  .note { font-size: 12.5px; color: var(--muted); }
+  .note b { color: var(--ink); }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Grader thresholds, guessing, and abstention</h1>
+  <p class="sub">Companion to ch-42 §3. Set the confidence target <code>t</code> and see which questions a score-maximizing
+  policy answers, what the score is, and how accuracy-on-answered trades against coverage. The rule and the penalty come from
+  Kalai, Nachum, Vempala, and Zhang, <i>Why Language Models Hallucinate</i> (arXiv:2509.04664v1 §4.1-§4.2). The eight
+  correctness probabilities below are an illustrative population chosen for this figure, not a measurement from that paper.</p>
+
+  <div class="panel">
+    <h2>Grader settings</h2>
+    <div class="controls">
+      <div>
+        <label for="t">Confidence target <code>t</code> — error penalty <code>t/(1 − t)</code>: <b id="tval"></b></label>
+        <input type="range" id="t" min="0" max="0.95" step="0.05" value="0">
+        <p class="note"><code>t = 0</code> is binary grading: 1 point for a correct answer, 0 for an error and 0 for
+        "I don't know". Kalai et al. Observation 1: under any binary grader, abstaining is never an optimal response.</p>
+      </div>
+      <div>
+        <label for="b">Confidence bias of the policy (stated − true probability): <b id="bval"></b></label>
+        <input type="range" id="b" min="-0.3" max="0.3" step="0.05" value="0">
+        <p class="note">The policy decides with its own estimate; the score is computed with the true probability. A negative
+        bias (underconfidence) makes a high threshold suppress answers the policy would have got right.</p>
+      </div>
+    </div>
+  </div>
+
+  <div class="panel">
+    <h2>Per-question decision</h2>
+    <table>
+      <thead><tr><th>Question</th><th>True p(correct)</th><th>Policy estimate</th><th>Expected score if answered</th><th>Decision</th></tr></thead>
+      <tbody id="rows"></tbody>
+    </table>
+    <div class="stats">
+      <div class="stat"><div class="k">Answered</div><div class="v" id="nans"></div><div class="bar"><span id="barans"></span></div></div>
+      <div class="stat"><div class="k">Expected score</div><div class="v" id="score"></div></div>
+      <div class="stat"><div class="k">Accuracy on answered</div><div class="v" id="acc"></div></div>
+      <div class="stat"><div class="k">Expected errors</div><div class="v" id="err"></div></div>
+    </div>
+  </div>
+
+  <div class="panel">
+    <h2>What to read from it</h2>
+    <p class="note">
+      <b>Answering beats abstaining exactly when p &gt; t.</b> Expected score of an answer is
+      <code>p − (1 − p)·t/(1 − t)</code>, and abstaining scores 0.
+      At <code>t = 0</code> every question is answered, including the ones the policy is likely to get wrong; this is the
+      shape of the grader in 9 of the 10 benchmarks surveyed in §4.1 Table 2 of the paper.
+      As <code>t</code> rises, accuracy-on-answered rises and coverage falls: the same penalty that removes confident
+      guessing also removes correct answers, which is the over-suppression failure of ch-42 §3.
+      With a negative confidence bias the two effects compound — the policy abstains on questions whose true probability is
+      above the threshold. The paper's proposal for auditing this is <b>behavioral calibration</b>: compare accuracy and
+      error rates across several thresholds rather than reading one number (§4.2).
+      The paper prints an error penalty of 2 for <code>t = 0.75</code>; the stated formula gives 3, and this figure uses the formula.
+    </p>
+  </div>
+</div>
+<script>
+  var P = [0.97, 0.9, 0.82, 0.71, 0.6, 0.48, 0.33, 0.15];
+  var tEl = document.getElementById('t'), bEl = document.getElementById('b');
+  function fmt(x, d) { return x.toFixed(d === undefined ? 2 : d); }
+  function render() {
+    var t = parseFloat(tEl.value), b = parseFloat(bEl.value);
+    var pen = t >= 1 ? Infinity : t / (1 - t);
+    document.getElementById('tval').textContent = fmt(t) + '  →  penalty ' + fmt(pen);
+    document.getElementById('bval').textContent = (b >= 0 ? '+' : '') + fmt(b);
+    var rows = '', n = 0, score = 0, corr = 0, errs = 0;
+    for (var i = 0; i < P.length; i++) {
+      var p = P[i];
+      var est = Math.min(1, Math.max(0, p + b));
+      var answer = est > t;
+      var val = p - (1 - p) * pen;
+      if (answer) { n++; score += val; corr += p; errs += (1 - p); }
+      rows += '<tr><td>Q' + (i + 1) + '</td><td>' + fmt(p) + '</td><td>' + fmt(est) + '</td><td>' + fmt(val) +
+              '</td><td class="' + (answer ? 'ans' : 'abs') + '">' + (answer ? 'answer' : 'abstain') + '</td></tr>';
+    }
+    document.getElementById('rows').innerHTML = rows;
+    document.getElementById('nans').textContent = n + ' / ' + P.length;
+    document.getElementById('barans').style.width = (100 * n / P.length) + '%';
+    document.getElementById('score').textContent = fmt(score);
+    document.getElementById('acc').textContent = n ? fmt(100 * corr / n, 1) + '%' : '—';
+    document.getElementById('err').textContent = fmt(errs);
+  }
+  tEl.addEventListener('input', render);
+  bEl.addEventListener('input', render);
+  render();
+</script>
+</body>
+</html>

@@ -5,108 +5,66 @@ phase: read
 excerpt_of: Bai, Lv, Zhang et al. — "LongAlign: A Recipe for Long Context Alignment of Large Language Models"
 source_url: https://aclanthology.org/2024.findings-emnlp.74/
 created_at: "2026-04-23"
+revised: "2026-09-15 (rewritten against the EMNLP 2024 Findings PDF and arXiv 2401.18058 v1)"
 ---
 
-# Excerpt: LongAlign — the 5-question pick-one trick and packed-loss correction
+# Excerpt: LongAlign — data construction, mixing with short data, and packed-loss weighting
 
-**Source:** `wiki/raw-data/llm-training/papers/longalign.md`
-**Paper:** Yushi Bai et al. (Tsinghua + Zhipu AI), 2024 — EMNLP Findings
-**arXiv/ACL:** https://aclanthology.org/2024.findings-emnlp.74/
+**Paper:** Yushi Bai, Xin Lv, Jiajie Zhang, Yuze He, Ji Qi, Lei Hou, Jie Tang, Yuxiao Dong, Juanzi Li. Findings of EMNLP 2024 (arXiv v1 2024-01).
+**Library card:** [[longalign]]. Where the card and the paper differ, this excerpt follows the EMNLP PDF.
 
----
+## Context extension before SFT (§4.1)
 
-## Bibliographic header
+> "This involves expanding the base frequency b of the RoPE position encoding by 200 times (from 10,000 to 2,000,000) and continual training on pretraining data with lengths under 64k, for a total of 10 billion tokens." (§4.1)
 
-> *"Long-context ability is not solved by context-window extension alone; you need dedicated long instruction data, length-aware SFT, and evaluation on realistic 10k-100k-token prompts."*
+Base models: ChatGLM3-6B, Llama-2-7B, Llama-2-13B, all extended to 64K before SFT.
 
-LongAlign is the first paper to fully frame long-context alignment as a distinct training stage — not a pre-training modification, not a position-encoding hack, but a *post-extension SFT problem* with its own data, batching, and loss-weighting requirements.
+## Data construction (§3.2; App. A)
 
----
+- Documents from 9 sources: Arxiv, Books3, C4, CLUECorpus2020, CommonCrawl, Github, Stack Exchange, Wikipedia, WuDaoCorpora. "We sample articles with lengths under 64k ... Note that we upsample longer articles to ensure our dataset covers more long texts." (App. A)
+- Generator: Claude 2.1. 10k instances, 10% Chinese, 8k-64k tokens measured with the ChatGLM tokenizer (§3.2).
+- Four prompt types (general, summary, reasoning, information extraction). Example of the reasoning prompt: "Given the above text, please propose 5 English questions that require multi-hop reasoning, make sure they are diverse and cover all parts of the text" (App. A).
+- Selection: "For each long article, we randomly select one of the four task prompts and have Claude generate five questions ... We then randomly choose one of these questions and request Claude for its answer" (App. A).
+- Verification: "We recruit 4 Ph.D. students to manually check 100 randomly sampled data ... 94 have correct answers. Among the remaining data, 2 answers are incorrect, 3 answers are incomplete, and 1 answer is irrelevant" (App. A, EMNLP version).
+- Shape of the data: ShareGPT short data has a target/sequence token ratio of 19.3 (percent) and 330 target tokens on average; LongAlign-10k has 0.015 and 200 target tokens (App. A).
 
-## The two-stage generation — cross-span coverage by construction
+## Mixing with short data (§4.1-§4.2, Table 3)
 
-From the raw-data notes:
+Short data: "the entire 76k ShareGPT data" (§4.1). Long data suites are added to it. ChatGLM3-6B-64k results:
 
-> *"Self-Instruct-style two-stage synthesis: (1) feed a long document + task-type prompt to Claude, ask for 5 candidate questions covering the whole text; (2) randomly choose one question and ask Claude for the answer."*
+| Long data added | LongBench-Chat | S-Doc QA | M-Doc QA | Summ | MT-Bench | ARC | HellaSwag | TruthfulQA | MMLU |
+|---|---|---|---|---|---|---|---|---|---|
+| LongAlign-0k | 3.73 | 58.7 | 41.1 | 38.4 | 5.34 | 50.3 | 74.7 | 51.6 | 45.5 |
+| LongAlign-5k | 5.99 | 61.8 | 42.1 | 42.0 | 5.50 | 50.3 | 75.1 | 52.5 | 46.6 |
+| LongAlign-10k | 6.28 | 64.0 | 44.4 | 44.2 | 5.51 | 50.5 | 74.9 | 52.5 | 45.5 |
+| LongAlpaca-12k | 4.58 | 65.8 | 45.6 | 44.1 | 4.93 | 51.5 | 75.4 | 53.2 | 47.1 |
 
-The trick is the **random choice**. If you let the teacher pick which question to answer, it picks the locally-answerable one — the question with the lowest synthesis cost for the teacher, which is the retrieval question, not the integration question. Randomly sampling from 5 candidates forces the teacher to occasionally commit to a question that requires reading far across the document. Cross-span coverage is **baked into the sampling, not the prompt**.
+Authors' findings (§4.2): "as the amount of long instruction data increases, there is a consistent improvement in the model's performance across all long tasks. Meanwhile ... its performance on short tasks remains comparable". LongAlign-10k is better than LongAlpaca-12k on LongBench-Chat and MT-Bench; LongAlpaca-12k is slightly better on LongBench, which the authors attribute to 2WikiMQA and NarrativeQA being closer to LongAlpaca's sources (§4.2). The paper does not state that gains saturate at 10k.
 
-**Notice:** This is why LongAlign-10k beats the *larger* LongAlpaca-12k on multi-segment integration. It isn't the token count; it's the sampling gate.
+## Packing and loss weighting (§3.3; App. B)
 
-The four task-prompt families used:
-
-1. general questions
-2. summarization / multi-part integration
-3. multi-hop reasoning
-4. information extraction
-
-Nine document sources are sampled upstream (ArXiv, Books3, C4, CLUECorpus2020, CommonCrawl, GitHub, StackExchange, Wikipedia, WuDaoCorpora), with length-tail upsampling so the final dataset is not dominated by the short end of 8k–64k.
-
----
-
-## Base-model extension *before* SFT
-
-> *"Before SFT, the authors first extend all of them to 64k context: expand the RoPE base frequency by 200x, from 10,000 to 2,000,000; continually train on pretraining data up to 64k for 10B tokens."*
-
-LongAlign is *post-extension* — it is not a substitute for long-context pretraining, it is the alignment layer that sits on top. The 200× RoPE base rescale (`10K → 2M`) is Llama-2-scale; for Llama-3 the equivalent is `500K → 128M` ([[excerpts/prolong-coherence]]). Both are the same NTK-aware trick, tuned to different base models.
-
----
-
-## Packed loss is biased — the correction
-
-> *"If each pack contributes equally to the batch loss, then packs with fewer sequences, usually the longest ones, get overweighted. Sequences with more target tokens also get overweighted."*
-
-Walk the biases separately:
-
-- **Pack-level bias.** A pack with 2 long sequences contributes the same to the batch-average loss as a pack with 12 short sequences — so the long-tail sequences get 6× their fair share of gradient.
-- **Sequence-level bias.** Inside a pack, a sequence with 500 target tokens dominates the sequence with 50 target tokens in the token-average — so verbose targets are over-weighted.
-
-The desired objective is **equal average contribution per sequence**, not per pack, not per target-token. LongAlign's fix is a weighted 1-D mask constructed at preprocessing:
+Equal weight per sequence (Eq. 2), with M sequences in the batch and L_i, N_i the summed loss and target-token count of sequence i:
 
 ```
-for each token t:
-    if t is a target token in sequence s with N target tokens total:
-        weight[t] = 1 / N
-    else:
-        weight[t] = 0
+L  = (1/M) Σ_{i=1..M} L_i / N_i
 ```
 
-During training, with `K` packs in the batch and `M` total sequences, token losses are scaled by `K / (M · N)`. Algebraically that recovers the per-sequence objective.
+Packing averages per pack instead (Eq. 3), which favors sequences with more target tokens and sequences in packs with fewer sequences. The fix scales the loss of sequence i by K/(N_i M), where K is the number of packs, and sums over packs (Eq. 4). Implementation: "a weighted 1D mask for each pack ... the weight is set to 1/N ... the loss is calculated as the summation of the cross entropy loss at each token scaled by K/M N" (App. B). Packing uses `flash_attn_varlen_func` with `cu_seqlens_q` / `cu_seqlens_k` so each sequence attends only within itself (App. B).
 
-**Reported effect:**
-- ChatGLM3-6B-64k on LongBench-Chat: **5.76 → 6.21**
-- Llama-2-7B-64k on LongBench-Chat: **5.89 → 6.10**
+Training: 8×A800 80G, 2 epochs, about 1500-2000 steps; a pack holds 12 sequences on average; batch size 8 packs gives global batch 96 (§4.1).
 
-The LongBench-overall gain is smaller because LongBench is mostly retrieval-like, but the chat-style gain is material.
+| Model | Naive batching | Sorted batching | Packing | Packing + loss weighting |
+|---|---|---|---|---|
+| ChatGLM3-6B-64k, LongBench-Chat | 5.87 | 5.40 | 5.76 | 6.21 |
+| Llama-2-7B-64k, LongBench-Chat | 5.95 | 6.38 | 5.89 | 6.10 |
 
----
+(Table 4.) Training time on 8×A800: ChatGLM3-6B-64k naive 45.4 h, packing 20.5 h, sorted batching 19.1 h (Fig. 5).
 
-## Packing vs sorted batching — the throughput ablation
+## LongBench-Chat (§3.4; App. C.1)
 
-Wall-clock on 8×A800 80G:
-
-| Model | Naive | Packing | Sorted batching |
-|---|---|---|---|
-| ChatGLM3-6B-64k | 45.4 h | 20.5 h | 19.1 h |
-| Llama-2-7B-64k | 67.2 h | 23.4 h | 23.3 h |
-| Llama-2-13B-64k | 117.2 h | 41.2 h | 44.5 h |
-
-Sorted batching often matches packing on throughput *without* the loss-weighting correction — because batches become length-homogeneous and the within-batch pad-rate is already low. Tradeoff: sorted-batching batches are *distributionally biased* across steps (all-long batch then all-short batch), which packing avoids at the cost of the loss-weight fix.
-
----
-
-## LongBench-Chat — the eval companion
-
-50 examples at 10k–100k tokens, four task categories (information extraction, multi-segment integration, multi-segment reasoning, full-text comprehension). 30 authored mimicking real user queries (20 EN, 10 ZH), 20 adapted from LooGLE. GPT-4 + few-shot grading, calibrated against humans.
-
-This is the realistic-query complement to synthetic RULER — and the `5.76 → 6.21` numbers above are measured on this benchmark.
-
----
+50 queries of 10k-100k tokens (40 English, 10 Chinese); 30 written by the authors to mimic user queries and 20 taken from LooGLE long-dependency QA; GPT-4 scores 1-10 with few-shot examples and a reference answer.
 
 ## Connections
 
-- Chapter synthesis: [[ch-28]]
-- Coherence-filter successor: [[excerpts/prolong-coherence]]
-- Multi-turn extension: [[excerpts/longmit-multiturn]]
-- Position-encoding lane: [[excerpts/longrope-per-dim-search]]
-- Evaluation lineage: [[excerpts/ruler-task-family]]
+- [[ch-28]] §2; packing and masking in ch-04; SFT mixture shares in ch-30b.
+- [[prolong]] — reports that synthetic long SFT data did not help after 40B tokens of long continued training.

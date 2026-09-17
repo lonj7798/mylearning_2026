@@ -1,239 +1,317 @@
 <!-- chapter: ch-35
      track: sft
      kind: content
-     title: Case Studies C — Nemotron, Distillation SFT
-     deps: [ch-34]
-     sources: [[nemotron-4-synthetic]], [[nemotron]], [[nemotron-ultra]], [[deepseek-r1]], [[deepseek-r1-followup]], [[deepseek-r1-distill-synth]], [[bespoke-stratos]], [[sky-t1]], [[openr1]], [[s1]], [[limo]], [[open-thoughts]]
-     figures: figures/distill-sft-compare.html
+     title: Distillation in Practice A: Where Labs Insert Teacher Data
+     deps: [ch-34, ch-20]
+     sources: [[deepseek-r1]], [[deepseek-r1-recipe]], [[deepseek-v3]], [[deepseek-v3-recipe]], [[deepseek-v3.1]], [[deepseek-v3.1-recipe]], [[deepseek-v4-recipe]], [[glm-4-5]], [[glm-4-5-recipe]], [[glm-5]], [[qwen-3]], [[qwen-3-post-training]], [[kimi-k1-5]], [[kimi-k1-5-recipe]], [[kimi-k2]], [[kimi-k2-recipe]], [[llama-nemotron]], [[nemotron-nano-2]], [[phi-4]], [[phi-4-reasoning]], [[magistral]], [[magistral-recipe]], [[gemma-2]], [[gemma-3]], [[llama-4]], [[minitron-approach]], [[mimo-v2-flash]], [[thinkingmachines-on-policy-distillation]], [[smollm-3]], [[smollm-3-midtraining]]
+     figures: figures/teacher-data-stage-map.html
+     revised: 2026-09 (generality revision)
 -->
 
-# Chapter 35 — Case Studies C: Nemotron, Distillation SFT
+# Chapter 35 — Distillation in Practice A: Where Labs Insert Teacher Data
 
-> **Core insight.** The cases in this chapter sit at two opposite ends of one continuum. Nemotron-4 340B builds the world's heaviest *synthetic-SFT apparatus* — a custom multi-attribute reward model (HelpSteer2) drives a pipeline that produces >98% of the alignment data, with only ~20K human examples anchoring the whole stack. At the other end, Bespoke-Stratos / Sky-T1 / s1 / LIMO build the world's *lightest* post-training — copy a frontier reasoning model's trace distribution, filter, SFT, ship. The lesson worth extracting is that both extremes work, but only for the thing they were built for. Nemotron's machinery is the only viable path if you want to be the trace generator for everyone else; the lean distillation recipes are the only viable path if you want a reasoner for <$1K and your teacher happens to be publicly redistributable.
+> **Core insight.** In the 2024–2026 reports covered here, teacher data enters training at nine positions, from pre-training logit targets to a distillation stage after RL, and the reports differ mainly in which positions they use and how much they disclose. Distilling a stronger teacher beat RL from the same starting point at 32B in DeepSeek-R1 (R1-Distill-Qwen-32B 72.6 vs RL-only 47.0 on AIME 2024, [[deepseek-r1]] Table 16) and at 8B in Qwen3 (on-policy distillation 74.4 at 1,800 GPU hours vs RL 67.6 at 17,920, [[qwen-3-post-training]] Table 21), but not at 24B in Magistral Small, where RL alone matched SFT on AIME'24 pass@1 (65.8 vs 65.4) and exceeded it on GPQA (68.8 vs 63.4) ([[magistral]] Table 3). Supervised distillation alone stayed below the teacher in Llama-Nemotron, and RL after it moved past (LN-Ultra GPQA-Diamond 66.4 after SFT, 71.5 for the teacher DeepSeek-R1, 76.0 after RL; [[llama-nemotron]] Table 5). Reports that tracked non-target skills across stages found losses at some stage (instruction following in [[llama-nemotron]] Table 4, competition math in [[qwen-3-post-training]] Table 22, long context in [[smollm-3-midtraining]]), and three recent pipelines end with a distillation stage whose stated purpose is to recover or combine capabilities from earlier or separate RL training ([[glm-5]] §3.5, [[nemotron-nano-2]] §4.3, [[mimo-v2-flash]] §4.1).
 >
-> **Guideline.** Pick the recipe from the decision tree in §6 — not from the benchmark you want to win. If you have your own base model, a compute budget in the tens of millions, and intend to produce open data for others, build a HelpSteer2-style multi-attribute RM and the synthetic pipeline around it. If you have a strong open base, a weekend, and a permissive teacher (R1 or QwQ, not GPT-4), run the 17K-trace distillation recipe. If your base is already reasoning-rich and you have exceptional curators, s1/LIMO-style 1K hand-selection beats both. The boundary between "SFT is enough" and "still need RL" is attested by OpenR1's +3-5 AIME gap between `OpenR1-Qwen-7B-SFT` and its GRPO follow-up — on saturated distilled traces, SFT has a ceiling and RL pushes past it.
+> **Guideline.** When a stronger teacher exists and the student is a smaller model, start with SFT on filtered teacher samples that mix reasoning and non-reasoning responses under a mode instruction, because in the reports that trained students this way the distilled model exceeded an RL-only baseline from the same base (R1-Distill-Qwen-32B, [[deepseek-r1]] Table 16), the four-stage pipeline run on the small model itself ([[qwen-3-post-training]] §4), a same-size instruct model on the reasoning and BFCL rows but not on IFEval (LN-Nano-SFT vs Llama-3.1-8B-Instruct, IFEval 69.9 vs 81.8, [[llama-nemotron]] Table 3), or its starting model (Phi-4-reasoning vs Phi-4, [[phi-4-reasoning]] §1); Magistral Small is the exception, where RL alone matched SFT on AIME'24 ([[magistral]] Table 3). When the student must exceed the teacher or recover a lost skill, add on-policy distillation or RL after SFT, because SFT alone approached but did not exceed the teacher in [[llama-nemotron]] §5 and on-policy distillation raised pass@64 where RL did not ([[qwen-3-post-training]] Table 21). When a pipeline trains separate domain experts or sequential RL stages, evaluate every earlier domain after the merge or final stage, because distilled students scored below their specialists in [[deepseek-v3.1]] §3 and by up to 6.3 points on BrowseComp in [[mimo-v2-flash]] Table 7. When no stronger teacher exists, use RL from the model's own samples, because Magistral Medium, trained with no reasoning traces from another model before RL, raised AIME'24 pass@1 from 26.8 (Mistral Medium 3) to 73.6 with RL alone ([[magistral]] Table 2). Otherwise, the Magistral Small result suggests testing RL-only and SFT-then-RL from the same base before committing to one ([[magistral]] Table 3).
 
----
+## Why this chapter matters for a general-purpose model
 
-## Why this chapter exists
+Teacher data is any training target produced by a model other than the one being trained, or by an earlier checkpoint of it. It takes three forms: sequences sampled from the teacher and used as SFT targets, the teacher's next-token distribution used as a soft target, and teacher log-probabilities computed on sequences the student sampled. ch-20 treated distillation as a data source and followed the R1-Distill lineage; this chapter asks where in the pipeline (pre-training → mid-training → SFT → preference optimization → RL → evaluation) labs insert teacher data and what each lab reported about it.
 
-Ch-33 and ch-34 walked through the mainstream heavy recipes: Tülu 3's 939K-sample mix, Llama 3's 6-round RSFT, Qwen 2.5's 1M-SFT + 150K-DPO, Qwen 3 hybrid-thinking, Phi-4-reasoning. Ch-20 established the **distillation-as-data** primitive and catalogued three open R1-distill reproductions. This chapter does two things ch-20 did not:
+The placement question has measurable consequences for generality. Teacher traces carry the teacher's length habits into the student: in DeepSeek-V3's ablation, R1-derived data raised average MATH-500 response length from 769 to 1510 tokens ([[deepseek-v3]] Table 9). Reasoning-focused SFT lowered IFEval in Llama-Nemotron ([[llama-nemotron]] Table 4), and general-purpose stages lowered AIME'24 in Qwen3 ([[qwen-3-post-training]] Table 22). Sequential stages cause forgetting that the GLM-5 authors describe as "cumulative degradation of previously acquired capabilities" ([[glm-5]] §3.5). The next chapter, ch-35a, covers how prompts are selected, how teachers are sampled, and how outputs are filtered. This chapter covers stage placement, objectives, and the disclosure record.
 
-1. Foregrounds **Nemotron-4 340B** as the *producer* of frontier synthetic data — the model whose whole alignment story is "if you build a better RM, 98% of your SFT and preference data can be synthetic." Ch-20 mentioned taxonomy-driven synthesis in passing; here Nemotron gets its own treatment because its HelpSteer2 5-attribute RM is the cleanest public disclosure of a production reward-model recipe and is the reference point ch-41 (reward modeling) will come back to.
-2. Asks the **sufficiency question**: at what point does distillation-SFT hit a ceiling that only RL crosses? The s1/LIMO/Bespoke-Stratos/Sky-T1/Open-R1 comparison makes this an empirical, not philosophical, question — and the 5-way table in §5 is the chapter's unit of analysis.
+## §1 Three forms of teacher signal and their objectives
 
----
+### 1.1 Definitions and formulas
 
-## 1. Nemotron-4 340B — the synthetic-alignment apparatus
+**Sequence-level (off-policy) distillation** is SFT on responses sampled from the teacher. The loss is
 
-[[nemotron-4-synthetic]] and [[nemotron]] together describe a 340B dense model whose distinctive contribution is not the base but the **apparatus** wrapped around it: a reward model, a generator, and a critic that together synthesize over 98% of all alignment data. The stated human budget is ~20K annotations total, split between SFT seeds and HelpSteer2 preference labels. Everything else is machine-made.
+L_seq(θ) = − E_{x∼D} E_{y∼π_T(·|x)} [ Σ_{t=1}^{|y|} log π_θ(y_t | x, y_<t) ]
 
-### 1.1 The HelpSteer2 5-dimensional rubric (verbatim)
+where D is the prompt distribution, π_T the teacher policy, π_θ the student with parameters θ, y a response, and y_t its t-th token. Gradient flows only through tokens the teacher produced. [[thinkingmachines-on-policy-distillation]] notes that sampling sequences gives an unbiased estimate of the teacher's distribution and "arrives at the same objective" as full-distribution matching (Interpretation, practitioner evidence).
 
-This is the chapter's load-bearing artifact. [[nemotron]] trains a regression reward model that outputs a **5-vector**, one score per attribute, instead of a single preference logit. The five attributes, from the HelpSteer2 rubric:
+**Logit (token-distribution) distillation** trains the student toward the teacher's full next-token distribution at each position. With forward KL:
 
-| # | Attribute | What it measures |
+L_fwd(θ) = E_{c} [ Σ_{v∈V} p_T(v|c) · log( p_T(v|c) / p_θ(v|c) ) ]
+
+where c is a context taken from training text, V the vocabulary, p_T and p_θ the teacher and student next-token probabilities. Gemma 2 minimizes the cross-entropy Σ_v −p_T(v|c) log p_θ(v|c), which equals L_fwd plus the teacher entropy, a constant in θ ([[gemma-2]] §3.2). Gemma 3 samples 256 logits per token by teacher probability, sets the others to zero, and renormalizes: p̃_T(v|c) = p_T(v|c)·1[v∈S_c] / Σ_{u∈S_c} p_T(u|c), with S_c the sampled set ([[gemma-3]] §2.2). Minitron and Nemotron Nano 2 use forward KL on logits only, without the language-model loss ([[minitron-approach]] Distillation; [[nemotron-nano-2]] §4.3).
+
+**On-policy distillation** samples y from the student and uses the teacher's log-probability ratio as a per-token advantage:
+
+Â_t = sg[ log π_T(y_t | x, y_<t) − log π_θ(y_t | x, y_<t) ],  y ∼ π_θ(·|x)
+
+L_on(θ) = − E_{x∼D, y∼π_θ} [ Σ_t Â_t · log π_θ(y_t | x, y_<t) ]
+
+where sg is stop-gradient. The expectation of Â_t over the student's own token choice is −KL(π_θ ‖ π_T) at that prefix, so L_on is a sampled per-token reverse KL ([[mimo-v2-flash]] Eq. 5–6). GLM-5 writes the same advantage into its GRPO loss (Eq. 2); MiMo-V2-Flash adds importance weights and an outcome-reward term α·Â_ORM (Eq. 7–9); Thinking Machines sets `advantages = -reverse_kl` with discount zero ([[thinkingmachines-on-policy-distillation]], Pseudocode). Qwen3 aligns student logits with teacher logits "to minimize the KL divergence" without stating the direction ([[qwen-3-post-training]] §4.5). DeepSeek-V4 uses a full-vocabulary D_KL(π_θ ‖ π_E) against more than ten teachers ([[deepseek-v4-recipe]], V4 report §5.1.2 Eq. 29).
+
+### 1.2 Worked example: what each objective penalizes
+
+Take one prefix and a four-token vocabulary. Teacher p_T = (0.60, 0.30, 0.09, 0.01); student p_θ = (0.40, 0.40, 0.10, 0.10).
+
+1. Forward KL = 0.6·ln(0.6/0.4) + 0.3·ln(0.3/0.4) + 0.09·ln(0.09/0.1) + 0.01·ln(0.01/0.1) = 0.2433 − 0.0863 − 0.0095 − 0.0230 = 0.1245 nats. Token 4 contributes −0.0230 because it is weighted by the teacher's 0.01.
+2. Reverse KL = 0.4·ln(0.4/0.6) + 0.4·ln(0.4/0.3) + 0.1·ln(0.1/0.09) + 0.1·ln(0.1/0.01) = −0.1622 + 0.1151 + 0.0105 + 0.2303 = 0.1937 nats. Token 4 contributes +0.2303, the largest term, because it is weighted by the student's 0.10.
+3. On-policy advantages: Â = ln(p_T/p_θ) = (+0.4055, −0.2877, −0.1054, −2.3026). The student-weighted mean is 0.4·0.4055 + 0.4·(−0.2877) + 0.1·(−0.1054) + 0.1·(−2.3026) = −0.1937 = −(reverse KL).
+4. Gemma 3-style sampling with S_c = {token 1, token 2} gives the target (0.667, 0.333, 0, 0); tokens outside S_c receive no teacher mass at that position.
+
+Sequence-level SFT on teacher samples visits token 4 at this prefix with probability 0.01, so the student's 0.10 on it is rarely corrected. On-policy sampling visits it with probability 0.10 and assigns the largest negative advantage. Exposure bias is the mismatch between training on prefixes written by the teacher and generating, at inference, from prefixes the student wrote itself. The visiting-probability difference above is the mechanism behind the claim that on-policy distillation reduces exposure bias ([[thinkingmachines-on-policy-distillation]]; [[mimo-v2-flash]] §4.1; Interpretation).
+
+### 1.3 Conditions
+
+On-policy distillation needs the teacher to assign probability to tokens the student already produces. [[thinkingmachines-on-policy-distillation]] runs SFT first because "SFT, using forwards KL, adds support for new tokens. Reverse-KL methods can then perform mode seeking within the initialization's support." Every on-policy report in this chapter that describes its full pipeline starts from an SFT or off-policy-distilled checkpoint ([[qwen-3-post-training]] §4.5; [[glm-5]] §3; [[mimo-v2-flash]] Figure 3; [[thinkingmachines-on-policy-distillation]]). Logit distillation needs a shared tokenizer or a mapping between vocabularies. Where the teacher is named, the logit-distillation reports here use a teacher from the student's own family ([[minitron-approach]], [[nemotron-nano-2]], [[llama-4]]); [[gemma-3]] does not name its teacher.
+
+## §2 The nine insertion positions
+
+| # | Position | What enters | Objective | Reports (locus) |
+|---|---|---|---|---|
+| S1 | Pre-training logit distillation | teacher next-token distribution on pre-training text | forward KL / cross-entropy to p_T | Gemma 2 2B and 9B ([[gemma-2]] §3.2); Gemma 3 all sizes ([[gemma-3]] §2.2); Llama 4 Maverick codistillation ([[llama-4]]) |
+| S2 | Pruning with distillation | original model's logits after pruning | forward KL on logits | [[minitron-approach]]; LN-Super, LN-Ultra ([[llama-nemotron]] §2.2); Nemotron-Nano-9B-v2 ([[nemotron-nano-2]] §4.3) |
+| S3 | Mid-training on distilled traces | reasoning traces or agent trajectories in continued pre-training | next-token loss | GLM-4.5 synthetic reasoning stage, 500B tokens label ([[glm-4-5]] §2.3, Figure 3); SmolLM3 35B tokens × 4 epochs ([[smollm-3-midtraining]]) |
+| S4 | Cold start | small long-CoT SFT set before RL | SFT | R1 ([[deepseek-r1]] B.3.2); Qwen3 ([[qwen-3-post-training]] §4.1); Kimi k1.5 ([[kimi-k1-5]] §2.2); GLM-4.5 experts ([[glm-4-5]] §3.1); Magistral Small ([[magistral]] §5.3) |
+| S5 | Experts to one model | outputs of domain experts or specialists | SFT | DeepSeek-V3 ([[deepseek-v3]] §5.1); V3.2 ([[deepseek-v3.1]] §3); GLM-4.5 ([[glm-4-5]] §3.1); GLM-5 coding and agent SFT data from expert RL and rejection sampling ([[glm-5]] §3.1); Kimi K2 ([[kimi-k2]] §3.1); MiMo-V2-Flash ([[mimo-v2-flash]] §4.2) |
+| S6 | Post-RL rejection-sampling SFT | correct samples from an RL checkpoint | SFT | R1 800K set ([[deepseek-r1]] B.3.3); Qwen3 Stage 3 ([[qwen-3-post-training]] §4.3); GLM-4.5 agent iterative distillation ([[glm-4-5]] §3.3.2) |
+| S7 | Small-model distillation | a larger model's outputs or logits | SFT, then on-policy KL | R1-Distill ([[deepseek-r1-recipe]]); Qwen3 strong-to-weak ([[qwen-3-post-training]] §4.5); Llama-Nemotron ([[llama-nemotron]] §3–4); Phi-4-reasoning ([[phi-4-reasoning]] §3); Nemotron Nano 2 ([[nemotron-nano-2]] §3.1); Gemma 3 post-training ([[gemma-3]] §3); Thinking Machines reasoning run ([[thinkingmachines-on-policy-distillation]]) |
+| S8 | Length reduction | shortest correct samples, truncated traces, merges | SFT, DPO, RL with length penalty | Kimi k1.5 long2short ([[kimi-k1-5]] §2.4); Nemotron Nano 2 truncated traces ([[nemotron-nano-2]] §3.2); DeepSeek-V3 stated aim ([[deepseek-v3]] §5.1) |
+| S9 | Distillation after RL | earlier-stage or domain teachers on student samples; or logits after RL | on-policy reverse KL; forward-KL logits | GLM-5 ([[glm-5]] §3.5); MiMo-V2-Flash ([[mimo-v2-flash]] §4.4); DeepSeek-V4 ([[deepseek-v4-recipe]]); Nano 2 post-GRPO KD ([[nemotron-nano-2]] §4.3); Thinking Machines recovery after mid-training rather than RL ([[thinkingmachines-on-policy-distillation]]) |
+
+The interactive map [figures/teacher-data-stage-map.html](figures/teacher-data-stage-map.html) lets the reader select any report and position to read the verified detail and its locus, and highlight rows by objective type. A grey cell there means the report was checked and does not describe teacher data at that position, which is a disclosure gap and not evidence of absence.
+
+## §3 DeepSeek from R1 to V4
+
+**3.1 R1 cold start (S4).** R1's cold start uses "thousands" of long-CoT examples ([[deepseek-r1]] §3, B.3.2). The teacher is an earlier model of the same project: for "thousands of high-quality, diverse reasoning prompts", DeepSeek-R1-Zero generates multiple trajectories at temperature 1.0, generations with correct final answers and readable format are kept (sympy for math; repetition detection and language-mixing filters), and DeepSeek-V3 is prompted to refine the reasoning and summaries (B.3.2). The human step is stated in the same section: "we first engage human annotators to convert the reasoning trace into a more natural, human conversational style. The modified data pairs are then used as examples to prompt an LLM to rewrite additional data in a similar style. All LLM-generated outputs subsequently undergo a second round of human verification." The stated motivation is "primarily product-driven": first-person reasoning and language consistency, not reasoning accuracy. SFT on DeepSeek-V3-Base ran 2–3 epochs, cosine LR 5×10⁻⁵ → 5×10⁻⁶, 32,768 tokens, batch 128 (B.4.2). The cold-start checkpoint (Dev1, trained from V3-Base, not from R1-Zero) scored 71.7 on IF-Eval against 46.6 for R1-Zero and 59.0 on AIME 2024 against 77.9; the authors attribute the AIME gap to "the limited size of the cold-start dataset" (§4, Table 3).
+
+**3.2 RL prompt mix.** The reasoning RL prompts are Math 26K, Code 17K (text: 17k algorithm plus 8k bug-fixing problems), STEM 22K, Logic 15K; the final mixed RL stage adds 66k helpfulness and 12,000 harmlessness questions ([[deepseek-r1-recipe]], B.3.1 Table 4).
+
+**3.3 The 800K rejection-sampling SFT set (S6).** Reasoning data comes from "rejection sampling from the checkpoint of the first-stage RL training"; "for each prompt, we sample multiple responses and retain only the correct ones", and chains of thought "with mixed languages, long paragraphs, and code blocks" are filtered out (B.3.3). Part of the added reasoning data is graded by DeepSeek-V3 against a reference with a two-level classification prompt (Listing 4: "**correct**: The answer fully aligns with the reference answer in both reasoning process and final conclusion"). Non-reasoning data reuses parts of the DeepSeek-V3 SFT set plus software-engineering data, with V3-generated CoT for some tasks and none for simple queries such as "hello". SFT restarts from DeepSeek-V3-Base, not from the RL checkpoint (Fig. 2).
+
+Worked example from Table 5 (samples, average tokens): Math 395,285 (6,094.2), Code 211,129 (7,435.7), STEM 10,124 (4,928.8), Logic 10,395 (2,739.0), General 177,812 (1,419.8), total 804,745 (5,355.3). General data is 177,812 / 804,745 = 22.1% of samples but 177,812 × 1,419.8 = 252.5M of 4,309.7M tokens = 5.9% of tokens (derived). Math is 49.1% of samples and 55.9% of tokens (derived). If the loss is averaged over all tokens in a batch, general data contributes about 5.9% of the loss terms; if it is averaged per sample first, about 22.1% (Interpretation; the report states neither its loss normalization nor whether "Avg Tokens" includes prompt tokens). Between Dev2 and Dev3, AlpacaEval 2.0 moved from 55.8 to 62.1 and Aider-Polyglot from 25.6 to 44.8 (Table 3). The authors attribute this to "the inclusion of large-scale non-reasoning corpora and code engineering datasets" (§4); Dev3 is retrained from V3-Base rather than built on Dev2, so the comparison is not a controlled ablation.
+
+**3.4 R1-Distill (S7).** Six students are fine-tuned on the same set for 2–3 epochs, cosine decay to one-tenth of the initial LR, 32,768 tokens, batch 64: Qwen2.5-Math-1.5B (LR 1×10⁻⁴), Qwen2.5-Math-7B (8×10⁻⁵), Qwen2.5-14B (7×10⁻⁵), Qwen2.5-32B (6×10⁻⁵), Llama-3.1-8B (5×10⁻⁵), Llama-3.3-70B-Instruct (2×10⁻⁵) ([[deepseek-r1-recipe]], B.4.3 Table 6). At 32B, RL from Qwen2.5-32B-Base for over 10K steps reached AIME 2024 47.0, MATH-500 91.6, GPQA 55.0, LiveCodeBench 40.2; Distill-Qwen-32B reached 72.6, 94.3, 62.1, 57.2 (Table 16). Result (single study). The authors add that "advancing beyond the boundaries of human intelligence may still require more powerful base models and larger-scale reinforcement learning" (F.1, Interpretation).
+
+**3.5 DeepSeek-V3 expert models (S5, S8).** V3's final model was not trained directly on R1 outputs. It trained per-domain expert models with SFT on two sample types, "<problem, original response>" and "<system prompt, problem, R1 response>", the system prompt asking for reflection and verification, followed by RL with high-temperature sampling; "after hundreds of RL steps", rejection sampling from the experts produced the reasoning part of a 1.5M-instance SFT set ([[deepseek-v3]] §5.1). The stated aim was to keep R1's accuracy while avoiding "overthinking, poor formatting, and excessive length". The ablation on DeepSeek-V2.5 (§5.4.1: a baseline trained on short-CoT data against one trained on data from the expert checkpoints) still shows a length cost: MATH-500 74.6 → 83.2 with average length 769 → 1510 tokens, LiveCodeBench-CoT 31.1 → 37.4 with 718 → 783 (Table 9). V3's final SFT: 2 epochs, cosine 5×10⁻⁶ → 1×10⁻⁶, packing with sample masking (§5.1).
+
+**3.6 V3.2 specialists and V4 on-policy distillation (S5, S9).** V3.2 fine-tunes specialists from the same base for mathematics, programming, general logical reasoning, general agentic tasks, agentic coding, and agentic search, plus writing and general QA, each in thinking and non-thinking modes and each trained with RL ([[deepseek-v3.1]] §3). Models trained on their distilled data score "only marginally below" the specialists, and the following single mixed RL stage removes the gap; no numbers or data sizes are printed ([[deepseek-v3.1-recipe]]). DeepSeek-V4 replaces that mixed RL stage with multi-teacher on-policy distillation over more than ten teachers with full-vocabulary logits; teacher weights, steps, and learning rates are not reported ([[deepseek-v4-recipe]]).
+
+## §4 GLM-4.5 and GLM-5
+
+**4.1 GLM-4.5 mid-training (S3).** One mid-training stage at 32K adds "synthetic reasoning content for math, science, and coding competitions", with questions from webpages and books and "reasoning processes with a reasoning model"; Figure 3 labels it 500B tokens ([[glm-4-5]] §2.3). The 128K stage (100B tokens) adds large-scale synthetic agent trajectories. The report does not name the reasoning model or isolate this stage's effect.
+
+**4.2 Experts to one model (S4, S5, S6).** Stage 1 trains Reasoning, Agent, and General-chat experts, each from a small cold-start SFT set followed by RL. Stage 2 "employ[s] self-distillation techniques to integrate multiple experts": SFT on "millions of samples" from the experts at 128K, with data containing full reasoning balanced against data "lacking explicit thought processes" so that one model has both modes ([[glm-4-5]] §3, §3.1). Rejection sampling removes (1) repetitive, short, truncated, or badly formatted samples, (2) wrong objective answers, (3) subjective responses filtered by reward models, (4) tool trajectories that break protocol or miss the terminal state. Two data-selection results are reported without benchmark names: dropping the bottom 50% of prompts by response length gave +2%–4% on math and science "despite training with only half the data", and four responses per hard prompt gave another +1%–2% ([[glm-4-5-recipe]]). For agents, RL alternates with self-distillation: when RL plateaus, cold-start data is replaced by the RL model's responses, SFT is repeated, and RL continues on harder tasks (§3.3.2).
+
+**4.3 GLM-5 on-policy cross-stage distillation (S9).** GLM-5 (744B total, 40B active) runs SFT, then Reasoning RL, Agentic RL, and General RL in sequence ([[glm-5]] §2.1, §3). SFT math and science problems are kept only if "challenging for the GLM-4.7 model", and agent SFT data keeps erroneous trajectory segments "masked out in the loss function" (§3.1). The final stage uses "the final checkpoints from the preceding training stages" as teachers on prompts from their RL sets "mixed in appropriate proportions", with the Eq. 2 advantage from §1.1, GRPO group size 1, and batch 1,024, "because it is no longer necessary to maintain a large group of samples per prompt to estimate advantages" (§3.5). Two limits apply. §1 describes the distillation as used "throughout this process" while §3.5 places it "as the final stage", and no number isolates its effect. Result (single study), no ablation.
+
+## §5 Qwen3 and Kimi
+
+**5.1 Qwen3 cold start (S4).** Query filtering uses Qwen2.5-72B-Instruct to remove queries "not easily verifiable" (multiple sub-questions, general text generation) and queries it "can answer correctly without using CoT reasoning", and to annotate domains for balance ([[qwen-3-post-training]] §4.1). QwQ-32B generates N candidates per query (N not printed). Responses are removed for wrong final answers, substantial repetition, guesswork, thinking–summary inconsistency, language mixing or style shifts, and suspected similarity to validation items. The authors prefer "to minimize both the number of training samples and the training steps" so that later RL is not limited. Reasoning RL then uses 3,995 query–verifier pairs, and Qwen3-235B-A22B moves from 70.1 to 85.1 on AIME'24 over 170 steps (§4.2).
+
+**5.2 Thinking mode fusion (S6).** Stage 3 is continual SFT on the RL model. "The 'thinking' data is generated via rejection sampling on Stage 1 queries using the Stage 2 model itself", so that the reasoning ability is not degraded by the extra SFT, and non-thinking data covers coding, math, instruction following, multilingual tasks, creative writing, QA, and role-play (§4.3). Table 22 (Qwen3-32B, thinking mode) shows what Stages 3 and 4 add and remove: IFEval strict prompt 73.0 → 78.4 → 85.0, ToolUse (in-house) 63.3 → 70.4 → 85.5, AIME'24 83.8 → 81.9 → 81.4, LiveCodeBench v5 68.4 → 67.2 → 65.7. The authors "choose to accept this performance trade-off to enhance the model's overall versatility" (§4.7).
+
+**5.3 Strong-to-weak distillation (S7).** Qwen3-0.6B to 14B and Qwen3-30B-A3B are trained in two phases: off-policy distillation on teacher outputs "generated with both /think and /no_think modes", then on-policy distillation in which "the student model produces responses in either /think or /no_think mode" and is "fine-tuned by aligning its logits with those of a teacher model (Qwen3-32B or Qwen3-235B-A22B) to minimize the KL divergence" (§4.5). §4.5 describes no reward model in this phase. The student's teachers have been through RL, but the student itself receives no RL before or during this phase.
+
+Worked example from Table 21 (Qwen3-8B, math and code queries, same off-policy checkpoint at AIME'24 55.0). pass@k is the probability that at least one of k sampled responses is correct; the table prints pass@1 with pass@64 in parentheses.
+
+| Method | AIME'24 (pass@64) | GPQA-Diamond | GPU hours | AIME'24 gain per 1,000 GPU hours |
+|---|---|---|---|---|
+| + RL | 67.6 (90.0) | 61.3 | 17,920 | 12.6 / 17.92 = 0.70 (derived) |
+| + on-policy distillation | 74.4 (93.3) | 63.3 | 1,800 | 19.4 / 1.80 = 10.8 (derived) |
+
+The GPU-hour ratio is 17,920 / 1,800 = 9.96. RL left pass@64 at 90.0 while on-policy distillation raised it to 93.3, which the authors read as distillation expanding "exploration space" (Interpretation). Conditions: one student size, math and code queries only, no repeated runs reported, and teacher inference cost is not broken out.
+
+**5.4 Kimi k1.5 warm-up and long2short (S4, S8).** The long-CoT warm-up is "a small yet high-quality" dataset of verified long-CoT paths built by prompt engineering; its size is not printed ([[kimi-k1-5-recipe]], §2.2). RL prompts are curated by the pass rate of an SFT model over 10 samples, by excluding multiple-choice, true/false, and proof questions, and by removing prompts a model without CoT answers correctly within N = 8 attempts (§2.1). For short-CoT models, four long2short methods are compared: weight-average merging, the shortest correct response among n = 8 samples used for SFT, DPO with the shortest correct response as chosen and longer responses as rejected (longer wrong responses, and correct responses 1.5× longer than the chosen one), and long2short RL with a length penalty and a reduced maximum rollout length (§2.4). long2short RL reaches 60.8 on AIME 2024 at 3,272 tokens per response and had the highest token efficiency in Figure 7 (§3.4).
+
+**5.5 Kimi K2 (S5).** SFT candidate responses come from "K1.5 and other in-house domain-specialized expert models" and are filtered by LLM or human judges; dataset size, epochs, and learning rate are not printed ([[kimi-k2]] §3.1; [[kimi-k2-recipe]]).
+
+## §6 NVIDIA, Microsoft, Mistral, Google, Meta, Xiaomi, and one practitioner study
+
+**6.1 Llama-Nemotron (S2, S7).** After architecture search, LN-Super is distilled for 40B tokens and LN-Ultra for 65B tokens followed by 88B tokens of continued pre-training ([[llama-nemotron]] §2.2). SFT data is assigned per domain and per mode: for math, DeepSeek-R1 writes reasoning solutions (16 per problem) and Qwen2.5-Math-7B-Instruct non-reasoning solutions (64 per problem), and Qwen2.5-32B-Instruct judges answer equivalence; for code, R1 samples at temperature 0.6 and top-p 0.95 yield about 488K Python samples, and scaling code data from 25k to 736k "showed continuous improvement"; general responses from R1 are rejection-sampled with a 70B reward model (§3.1). Non-reasoning pairs come from Llama-3.1-Nemotron-70B-Instruct or Llama-3.3-70B-Instruct under "detailed thinking off" (§3.2). The mix totals 33,011,757 samples, 66.8% math (Table 2).
+
+SFT versus RL, from Table 5 (GPQA-Diamond, reasoning on): LN-Ultra-SFT 66.4, DeepSeek-R1 71.5, LN-Ultra after GRPO 76.0. The authors write that "distillation inherently sets an upper bound on the student's performance" and that RL "yields suboptimal results for smaller models compared to distillation", so RL is applied only to LN-Ultra (§5). They also "initialized RL from an earlier checkpoint" rather than the SFT checkpoint with the highest scores (§7.4). Result (single study).
+
+**6.2 Nemotron Nano 2 (S2, S7, S8, S9).** Alignment SFT uses about 80B tokens, with math, science, and code responses from DeepSeek-R1-0528 and tool-calling and conversational responses from Qwen3-235B-A22B ([[nemotron-nano-2]] §3.1). Stage 1 adds about 10% of prompts with reasoning traces stripped, Stage 2 retrains tool calling without 128k packing because Stage 1 had degraded it, and Stage 3 adds traces "abruptly truncated to 1–2k tokens while preserving the final answer"; §1 puts truncated traces at about 5% of the data. Without truncated examples the model lengthened answers under short thinking budgets and produced fewer well-formed responses (Figure 5, plot only). Compression to 9B uses forward-KL logit distillation in stages (~60B, ~50B, ~25B, ~1B tokens), and a further ~0.4B tokens of distillation after GRPO "to recover post-RL drops", including MMLU-Pro (§4.3, Figure 6, plot only). In an ablation after about 6B tokens of KD, a mix of 70% reasoning-SFT data and 30% pre-training data gave the highest math average (58.5 vs 57.5 at 50/50 and 57.2 at 90/10, Table 11).
+
+**6.3 Phi-4-reasoning (S7).** The SFT set has over 1.4M prompt–response pairs and 8.3B unique tokens with o3-mini responses on "teachable" prompts "situated at the edge of Phi-4's current abilities"; where no verifiable answer exists, difficulty is the agreement rate of weaker models (Phi-4 or GPT-4o) with a strong reference model's plurality answer ([[phi-4-reasoning]] §2.1, §3). On teacher choice, "o3-mini with medium 'reasoning effort' [had] similar effect to DeepSeek-R1 when used as teachers, but o3-mini medium was more token efficient", while high effort was stronger and produced longer responses (§3.2). Phi-4-reasoning is SFT-only; Phi-4-reasoning-plus adds GRPO for 90 steps over about 6k problems (64 per step, 8 samples each), gains more than 10% on AIME, and uses about 1.5× more tokens (§1, §4.2). The card [[phi-4]] mixes Phi-4 and Phi-4-reasoning and is not used for numbers.
+
+**6.4 Magistral (S4).** Magistral Medium uses no reasoning SFT. Magistral Small (24B) is SFT-trained for 4 epochs on correct traces from Magistral Medium's RL run plus Medium responses to OpenThoughts and OpenR1-code prompts, with 10% general instruction data, and then trained with RL ([[magistral-recipe]], §5.3). Table 3 (24B; SFT / RL only / SFT + RL): AIME'24 pass@1 65.4 / 65.8 / 70.7; AIME'25 55.6 / 51.9 / 62.8; GPQA 63.4 / 68.8 / 68.2; LiveCodeBench v5 52.2 / 46.4 / 55.8; AIME'24 maj@64 90.0 / 86.7 / 83.3 ([[magistral]]). maj@64 is the accuracy of the majority answer over 64 samples. The RL-only column matches or exceeds SFT on AIME'24 pass@1 and GPQA and trails it on AIME'25 and LiveCodeBench; the authors state that this contradicts DeepSeek-R1's observation that small models relying on RL fall short of distilled ones (§6.2). Result (single study). Separately, Mistral Medium 3 was fine-tuned on about 1.3M open-source R1-generated traces, and RL on top of that checkpoint gained over 10 points on AIME'25 and 5 on LiveCodeBench over the SFT checkpoint, while GPQA-Diamond fell from 72.9% after SFT to 71.0% after RL (§8, Figure 13).
+
+**6.5 Gemma (S1).** Gemma 2 measured the effect of pre-training distillation: a 2B model on 500B tokens averages 60.3 on three benchmarks from scratch and 67.7 when distilled from a 7B teacher ([[gemma-2]] Table 6). Gemma 3 samples 256 logits per token and trains on 14T, 12T, 4T, and 2T tokens for the 27B, 12B, 4B, and 1B models ([[gemma-3]] §2.2). In its teacher-size study, "for short training horizons, the smaller teacher is better, but the trend is reversed for longer training" (§5.4, Figure 8; values shown only in the plot). Gemma 3 post-training also uses "an improved version of knowledge distillation" from a large instruction-tuned teacher, with no settings printed (§3).
+
+**6.6 Llama 4 (S1).** Llama 4 Maverick was codistilled from Behemoth during pre-training with a loss that "dynamically weights the soft and hard targets through training"; teacher forward passes were reused for most student data and run again only for new data ([[llama-4]], "Pushing Llama to new sizes"). No weighting schedule or ablation numbers are given.
+
+**6.7 Minitron (S2).** The teacher is first fine-tuned on the distillation dataset for about 100B tokens ("teacher correction"), because an uncorrected teacher gave "sub-optimal guidance"; this gave "over a 6% reduction in LM validation loss" ([[minitron-approach]] Insights). MN-Minitron-8B was then trained with logit-only forward KL for 380B tokens, "up to 40×" fewer than training from scratch.
+
+**6.8 MiMo-V2-Flash (S5, S9).** SFT responses come from "in-house domain-specialized model checkpoints" in thinking and non-thinking modes ([[mimo-v2-flash]] §4.2). Domain teachers are then trained by RL (Table 7 also lists an SFT model and the student itself as the best teacher on some rows), and multi-teacher on-policy distillation (MOPD) trains the student on its own samples with the per-token advantage of §1.1 plus α times an outcome-reward advantage (§4.4; α not printed). Table 7 compares the student before MOPD, the best teacher, and the student after MOPD: AIME 2025 89.3 / 93.9 / 94.1; SWE-Bench Verified 67.8 / 74.2 / 73.4; Arena-Hard creative writing 90.1 / 90.1 / 86.2; BrowseComp 42.5 / 51.7 / 45.4. The student reached or exceeded the best teacher on 8 of 12 rows and fell below it by 0.6 (GPQA-Diamond), 0.8 (SWE-Bench Verified), 3.9 (creative writing), and 6.3 (BrowseComp) points (derived from Table 7).
+
+**6.9 Thinking Machines (S7, S9; practitioner evidence).** Qwen3-8B-Base after SFT on 400k OpenThoughts-3 prompts scores 60% on AIME'24; on-policy distillation reaches 70% in about 150 steps (about 77K prompts, 4 samples per prompt), which the post estimates as 9–30× less compute than extending SFT to about 2M prompts ([[thinkingmachines-on-policy-distillation]]). In a personalization test, Qwen3-8B mid-trained on 70% internal documents and 30% chat moved from 85% to 79% on IF-eval; on-policy distillation from the original Qwen3-8B on Tulu 3 prompts restored 83% while internal-QA accuracy rose from 36% to 41%.
+
+## §7 Disclosure matrix and errata
+
+N = values given in numbers; D = described without numbers; — = not reported (checked at the loci in §3–§6).
+
+| Report | Stage placement | Prompt source and selection | Teacher and sampling | Output filters | Objective settings | Effect measured |
+|---|---|---|---|---|---|---|
+| DeepSeek-R1 | N | N (RL, Table 4); D (SFT) | N (cold start: R1-Zero at temperature 1.0); D (800K set) | D | N | N (Tables 3, 16) |
+| DeepSeek-V3 | N | — | D | D | N | N (Table 9, on V2.5) |
+| DeepSeek-V3.2 | D | — | D | — | — | D |
+| GLM-4.5 | N | N (length cut) | D | D | — (SFT LR, epochs) | N (benchmarks unnamed) |
+| GLM-5 | D (§1 vs §3.5) | D | D | D | N | — |
+| Qwen3 | N | D | D (N not printed) | D | D | N (Tables 21, 22) |
+| Kimi k1.5 | N | N (N = 8, 10 samples) | D | D | N (long2short) | N (60.8 at 3,272) |
+| Kimi K2 | D | — | D | D | — | — |
+| Llama-Nemotron | N | N | N | N | N | N (Tables 3–5) |
+| Nemotron Nano 2 | N | D | D | D | N (KD) | N (Table 11); plots |
+| Phi-4-reasoning | N | D (thresholds unprinted); N (decontamination list) | D | D | N | N |
+| Magistral Small | N | D | D | D | N (4 epochs) | N (Table 3) |
+| Gemma 3 | N | — | — (teacher unnamed) | — | N (256 logits) | D (plot only) |
+| Llama 4 | D | — | D | — | — | — |
+| MiMo-V2-Flash | N | — | D | D | D (α, ε unprinted) | N (Table 7) |
+
+> **Errata for earlier chapters (line numbers refer to the version at git commit 4a72e54).**
+> 1. ch-20 L107 "the 6 distilled students (Qwen2.5-Math 1.5B/7B/14B/32B, Llama-3.1-8B, Llama-3.3-70B)" → the 14B and 32B students use Qwen2.5-14B and Qwen2.5-32B, and the 70B student uses Llama-3.3-70B-Instruct; the same line's "SFT-on-R1-traces for one epoch" → 2–3 epochs ([[deepseek-r1-recipe]], arXiv:2501.12948v2 B.4.3 Table 6).
+> 2. ch-20 L98–105 slice table (Math ~200–300K, Code ~200–300K, Logic/science ~50–100K) → Table 5 gives Math 395,285, Code 211,129, STEM 10,124, Logic 10,395, General 177,812 ([[deepseek-r1]] B.3.3).
+> 3. ch-20 L95 "a V3 judge filters them for readability + correctness" → rule filters remove mixed-language, long-paragraph, and code-block CoT; DeepSeek-V3 judges correctness only for part of the added data ([[deepseek-r1]] B.3.3, Listing 4).
+> 4. ch-20 L10 "Distillation in 2023–2025 is not logit-matching" → Gemma 2 and Gemma 3 use pre-training logit distillation, Minitron and Nemotron Nano 2 use forward-KL logit distillation, and Qwen3 aligns student logits to teacher logits ([[gemma-2]] §3.2; [[gemma-3]] §2.2; [[minitron-approach]]; [[qwen-3-post-training]] §4.5).
+> 5. ch-32 L69, L78, and L199 "~800K cold-start examples … The attested point is DeepSeek's 800K … R1 used 800K cold-start traces before RL" → R1's cold start is "thousands" of examples; the 804,745-sample set is the later rejection-sampling SFT stage ([[deepseek-r1]] §3, B.3.2, B.3.3).
+> 6. ch-34 L130 "on-policy (student rollouts scored by teacher-derived RM)" → the student's logits are aligned with Qwen3-32B or Qwen3-235B-A22B logits by minimizing KL; the description names no reward model ([[qwen-3-post-training]] §4.5).
+> 7. ch-34 L174 "Then GRPO for 90 training steps with … +1 correct / −0.5 incorrect" → Phi-4-reasoning is SFT-only; the 90-step GRPO stage produced Phi-4-reasoning-plus, and its accuracy reward lies in [0.5, 1.0] for correct and [−1.0, −0.5] for incorrect answers, scaled by length ([[phi-4-reasoning]] §1, §4.1).
+>
+> ch-34 has since been revised (2026-09) and its current text no longer contains claims 6 and 7; they are listed for readers of the earlier version.
+
+The on-policy objectives in §1.1 are derived step by step in the separate `on-policy-distillation` course (branch `course/on-policy-distillation`), ch-04 (per-token reverse-KL mechanism) and ch-05 (cost and failure modes).
+
+## Negative samples and negative feedback
+
+**Where negatives come from.** In off-policy distillation, negatives are teacher samples that fail a check: wrong answers against a reference or a DeepSeek-V3 judgment ([[deepseek-r1]] B.3.3), Qwen2.5-32B-Instruct equivalence judgments ([[llama-nemotron]] §3.1.1), the six Qwen3 response criteria ([[qwen-3-post-training]] §4.1), and the four GLM-4.5 filters ([[glm-4-5]] §3.1). None of these reports gives a rejection rate or a false-negative rate for its judge. In on-policy distillation, every sampled token with π_T < π_θ receives a negative advantage. In preference stages that use teacher data, the rejected response comes from a weaker or longer source: longer wrong responses and correct responses 1.5× longer than the chosen one in Kimi k1.5 long2short DPO ([[kimi-k1-5]] §2.4), Qwen3-0.6B responses against Qwen3-32B responses in SmolLM3 ([[smollm-3-midtraining]]), failed WorkBench tool calls in Nano 2's on-policy DPO ([[nemotron-nano-2]] §3.2).
+
+**What current practice does with them.** Rejection-sampling distillation discards them, which is meaning (1), negative marginal value. GLM-5 keeps erroneous agent segments in the context but masks them from the loss, so the model trains on the corrections that follow; this is meaning (2), negative as content, with no gradient on the error tokens ([[glm-5]] §3.1). DPO pairs, negative on-policy distillation advantages, and Phi-4-reasoning-plus's negative rewards are meaning (4), negative as gradient. No report in this chapter uses meaning (3), failure conditioning. Full derivations are in ch-31a and ch-43a.
+
+**Mechanism.** For a softmax over logits z, ∂ log p_y / ∂ z_j = 1[j = y] − p_j. With advantage Â on sampled token y, a gradient-ascent step changes z_j by η·Â·(1[j = y] − p_j). Using the §1.2 student p_θ = (0.4, 0.4, 0.1, 0.1), sampled token 4 with Â = −2.303, and η = 0.1: Δz = 0.1 × (−2.303) × (−0.4, −0.4, −0.1, 0.9) = (+0.092, +0.092, +0.023, −0.207). The new probabilities are (0.4135, 0.4135, 0.0965, 0.0766). Token 4 lost 0.0234, tokens 1 and 2 gained 0.0135 each, and token 3 lost 0.0035 despite its logit increase. The removed mass goes to the tokens that were already most likely, here equally to tokens 1 and 2, although the teacher rates token 2 (0.30) below the student's current 0.40. The dense per-token signal corrects this when token 2 is sampled (Â = −0.2877). A push-down applied alone to an already-unlikely token concentrates mass on the most likely alternatives, whether or not the teacher prefers them.
+
+**Evidence with numbers.** On-policy distillation, which includes negative advantages, reached AIME'24 74.4 against 67.6 for RL from the same checkpoint ([[qwen-3-post-training]] Table 21). MiMo-V2-Flash compares RL with an outcome reward, MOPD without it, and MOPD with it only as curves (Figure 6). Kimi k1.5 attributes its advantage over ReST, which trains only on the best response, to negative gradients, without separating their share (§3.5, Figure 10). No source in this chapter measures the share of improvement due to negatives in a distillation setting; ch-43a covers the RL settings where that share has been measured, and a share measured in RL does not transfer to distillation without a new measurement.
+
+**Controls.** Localize: GLM-5 masks erroneous segments instead of penalizing whole trajectories. Bound: MiMo-V2-Flash zeros the importance weight of tokens whose train–inference ratio lies outside [ε_low, ε_high] (Eq. 8). Keep on-policy: Nano 2 regenerates DPO pairs from each candidate checkpoint; "this process ensures that iterative DPO remains on-policy" (§3.2). Anchor: combine teacher advantages with an outcome reward (MiMo Eq. 9) or train SFT on positives before any negative update (every on-policy report in §1.3 that describes its pipeline starts from an SFT checkpoint). Localization by the teacher: in a SimpleBench example, [[thinkingmachines-on-policy-distillation]] observes that the teacher's largest penalties fell on tokens "that start phrases which lead the student astray", while "the final answer, though wrong, isn't penalized — it is entirely predictable conditional on the whole preceding sequence." This is one illustrated example, not a measured rate (anecdotal within a practitioner post).
+
+**Diagnostics.** Log mean per-token reverse KL separately for tokens with Â > 0 and Â < 0; student entropy; pass@1 and pass@k at k = 64 ([[qwen-3-post-training]] Table 21); maj@64 ([[magistral]] Table 3); response length and truncation rate ([[deepseek-v3]] Table 9); and, for preference pairs built from a weaker model, the chosen and rejected log-probabilities separately.
+
+**Effect on generality.** Discarding failures narrows coverage to prompts the teacher solves (Interpretation). Qwen3 sends queries on which QwQ-32B consistently fails to human annotators, and Llama-Nemotron uses majority voting where no ground-truth answer exists ([[qwen-3-post-training]] §4.1; [[llama-nemotron]] §3.1.3). On-policy distillation raised pass@64 on AIME'24 from 90.0 to 93.3 while RL left it unchanged ([[qwen-3-post-training]] Table 21). SFT + RL had the highest AIME'24 pass@1 but the lowest maj@64 in Magistral Table 3 (83.3 vs 90.0 for SFT). Kimi k1.5's DPO rejects correct responses that are 1.5× longer (§2.4); for those pairs the preference signal is length, not correctness (Interpretation).
+
+## Recipe
+
+| Model (exact release) | Size | Stage | Setting | Value | Source location | Status | Evidence for this value |
+|---|---|---|---|---|---|---|---|
+| DeepSeek-R1 (Dev1) | 671B MoE | SFT (cold start) | examples; epochs; LR; context; batch | "thousands"; 2–3; cosine 5×10⁻⁵ → 5×10⁻⁶; 32,768; 128 | arXiv:2501.12948v2 B.3.2, B.4.2; [[deepseek-r1-recipe]] | verified 2026-09-15 | Table 3: Dev1 vs R1-Zero |
+| DeepSeek-R1 (Dev3) | 671B MoE | distill-SFT (post-RL) | samples by domain | Math 395,285; Code 211,129; STEM 10,124; Logic 10,395; General 177,812; total 804,745 | v2 B.3.3 Table 5 | verified 2026-09-15 | Table 3: Dev2 → Dev3 AlpacaEval 2.0 55.8 → 62.1 |
+| DeepSeek-R1-Distill (all six) | 1.5B–70B | distill-SFT | epochs; schedule; context; batch | 2–3; cosine to 1/10 initial LR; 32,768; 64 | v2 B.4.3 | verified 2026-09-15 | no ablation reported |
+| DeepSeek-R1-Distill-Qwen-7B | 7B | distill-SFT | base; initial LR | Qwen2.5-Math-7B; 8×10⁻⁵ | v2 Table 6 | verified 2026-09-15 | no ablation reported |
+| DeepSeek-R1-Distill-Qwen-32B | 32B | distill-SFT | base; initial LR | Qwen2.5-32B; 6×10⁻⁵ | v2 Table 6 | verified 2026-09-15 | Table 16: AIME 2024 72.6 vs 47.0 for RL from base |
+| DeepSeek-V3 | 671B / 37B act. | distill-SFT | instances; epochs; LR; packing | 1.5M; 2; cosine 5×10⁻⁶ → 1×10⁻⁶; packing with sample masking | arXiv:2412.19437v2 §5.1; [[deepseek-v3-recipe]] | verified 2026-09-15 | Table 9 (on V2.5): MATH-500 74.6 → 83.2 |
+| DeepSeek-V3.2 | not printed | distill-SFT | size, epochs, LR | not printed | arXiv:2512.02556v1 §3 | not reported (body checked) | §3: distilled model "only marginally below" specialists (no numbers) |
+| DeepSeek-V4-Flash / -Pro | both | distill (on-policy) | teachers; loss | more than ten; Σᵢ wᵢ·D_KL(π_θ ‖ π_Eᵢ), full vocabulary; wᵢ, steps, LR not printed | V4 report §5.1.2 Eq. 29; [[deepseek-v4-recipe]] | verified 2026-09-14 (card) | no table |
+| GLM-4.5 | 355B / 32B act. | mid-train | synthetic reasoning stage | 500B tokens (Figure 3 label) at 32K | arXiv:2508.06471v1 §2.3, Fig. 3 | verified 2026-09-15 | no ablation reported |
+| GLM-4.5 | 355B / 32B act. | distill-SFT | data; context; prompt cut; responses per hard prompt | "millions" from 3 experts; 128K; bottom 50% by length dropped; 4 | v1 §3.1; [[glm-4-5-recipe]] | verified 2026-09-15 (LR, epochs not printed) | §3.1: +2%–4% and +1%–2% (benchmarks not named) |
+| GLM-5 | 744B / 40B act. | distill (on-policy) | teachers; group size; batch | final checkpoints of earlier stages; 1; 1,024 | arXiv:2602.15763v2 §3.5; [[glm-5]] | verified 2026-09-15 (proportions, steps, LR not printed) | no ablation reported |
+| Qwen3-235B-A22B | 235B / 22B act. | RL (after cold start) | query–verifier pairs; steps | 3,995; 170 | arXiv:2505.09388v1 §4.2; [[qwen-3-post-training]] | verified 2026-09-15 | AIME'24 70.1 → 85.1 |
+| Qwen3 cold start | flagship | SFT (cold start) | teacher; N; set size | QwQ-32B; N not printed; size not printed | v1 §4.1 | not reported (N, size) | no ablation reported |
+| Qwen3-8B | 8B | distill (on-policy) | teacher; GPU hours; query domains | Qwen3-32B or Qwen3-235B-A22B (not specified for 8B); 1,800; math and code | v1 §4.5, §4.7 Table 21 | verified 2026-09-15 | Table 21: 74.4 vs RL 67.6 at 17,920 GPU hours |
+| Kimi k1.5 | not reported | distill-SFT (warm-up) | size, settings | "small yet high-quality"; not printed | arXiv:2501.12599v4 §2.2; [[kimi-k1-5-recipe]] | not reported | n/a |
+| Kimi k1.5 short-CoT | not reported | distill-SFT / preference | shortest rejection sampling; DPO rejected | n = 8; longer wrong responses, and correct responses 1.5× longer than chosen | v4 §2.4 | verified 2026-09-14 (card) | Figure 7; long2short RL 60.8 at 3,272 tokens (§3.4) |
+| Kimi-K2-Instruct | 1.04T / 32B act. | distill-SFT | sources; size | K1.5 and domain experts, judge-filtered; size not printed | arXiv:2507.20534v2 §3.1; [[kimi-k2-recipe]] | verified 2026-09-14 (card) | no ablation reported |
+| LN-Ultra | 253B | pruning KD; CPT | tokens | 65B KD; 88B CPT | arXiv:2505.00949v5 §2.2; [[llama-nemotron]] | verified 2026-09-15 | Table 1: MMLU 88.1 vs 88.6 for Llama-3.1-405B-Instruct |
+| Llama-Nemotron SFT mix | 8B–253B | distill-SFT | total samples; math generations per problem; judge | 33,011,757; R1 16, Qwen2.5-Math-7B-Instruct 64; Qwen2.5-32B-Instruct | v5 Table 2, §3.1.1 | verified 2026-09-15 | §3.1.2: code data 25k → 736k "showed continuous improvement" |
+| LN-Nano | 8B | distill-SFT | batch; packing; stage-1 LR, epochs | 256; 32k; 1e-4, 4 epochs (reasoning only) | v5 §4.2 | verified 2026-09-15 | §4.2: stage 1 "prevents failure modes such as repetitive completions" (no numbers) |
+| LN-Super | 49B | distill-SFT | epochs; LR; length; batch | 1; 5e-6 fixed; 16k; 256 | v5 §4.2 | verified 2026-09-15 | §4.2: smaller runs improved up to 3–4 epochs at 5e-5 (not run at full scale) |
+| LN-Ultra | 253B | distill-SFT | packing; batch; LR | 24k; 256; warmup to 1e-5, cosine to 1e-6, warmup ratio 10% | v5 §4.2 | verified 2026-09-15 | §4.2: higher LR 5e-5 better but unstable |
+| Nemotron-Nano-12B-v2 | 12B | distill-SFT | tokens; truncated traces; stripped traces | ~80B; ~5% of data truncated to 1–2k tokens; ~10% of prompts without traces (Stage 1) | arXiv:2508.14444 §1, §3.1–3.2; [[nemotron-nano-2]] | verified 2026-09-15 (LR, epochs not printed) | Figure 5 (plot only) |
+| Nemotron-Nano-9B-v2 | 9B | pruning KD | loss; tokens; data mix | forward KL; ~60B + ~50B + ~25B + ~1B; ~0.4B after GRPO; 70% reasoning-SFT / 30% pre-training (ablation after ~6B KD tokens) | §4.3, Table 11 | verified 2026-09-15 | Table 11: math average 58.5 vs 57.5 (50/50) and 57.2 (90/10) |
+| MN-Minitron-8B | 8B | pruning KD | teacher correction; LR; batch; tokens | ~100B; 1e-4 → 4.5e-7, 60 warm-up; 768; 380B | arXiv:2408.11796v4 Table 4; [[minitron-approach]] | verified 2026-09-15 | Insights: teacher correction >6% lower LM validation loss |
+| Phi-4-reasoning | 14B | distill-SFT | pairs; tokens; steps; batch; context; LR | >1.4M; 8.3B unique (16B trained); ~16K; 32; 32K; 1e-5, 450 warm-up, wd 1e-4 | arXiv:2504.21318v1 §3, §3.2; [[phi-4-reasoning]] | verified 2026-09-15 | §3.1: LR grid [1e-6, 2e-5], 1e-5 best |
+| Phi-4-reasoning-plus | 14B | RL | steps; problems; G; LR; β | 90; ~6k; 8; 5e-8; 0.001 | v1 §4.2 | verified 2026-09-15 | Fig. 7a: >10% AIME; later steps no gain |
+| Magistral Small | 24B | distill-SFT | epochs; general data; checkpoint rule | 4; 10%; best AIME'24 | arXiv:2506.10910v1 §5.3; [[magistral-recipe]] | verified 2026-09-14 (card; size not reported) | Table 3: SFT + RL 70.7 vs SFT 65.4 |
+| Gemma 3 | 1B / 4B / 12B / 27B | pretrain-stable (KD) | logits per token; tokens | 256 sampled, renormalized; 2T / 4T / 12T / 14T | arXiv:2503.19786v1 §2.2; [[gemma-3]] | verified 2026-09-15 (teacher not reported) | §5.4 Fig. 8 (plot only) |
+| Gemma 2 2B (ablation) | 2B | pretrain-stable (KD) | teacher; tokens | 7B; 500B | [[gemma-2]] Table 6 | verified 2026-09-14 (card) | 67.7 vs 60.3 from scratch |
+| MiMo-V2-Flash | 309B / 15B act. | distill-SFT | LR; batch; AdamW ε; expert-bias rate | cosine 5.0e-5 → 5.0e-6; 128; 1.0e-8; 1.0e-4 | arXiv:2601.02780v2 §4.2; [[mimo-v2-flash]] | verified 2026-09-15 | §4.2: num-zeros stability (no table) |
+| Qwen3-8B-Base (Thinking Machines) | 8B | distill (on-policy) | teacher; steps; prompts; samples per prompt | Qwen3-8B; about 150; about 77K; 4 | blog 2025-10-27, "Distillation for reasoning"; [[thinkingmachines-on-policy-distillation]] | verified 2026-09-15 (LR not reported) | AIME'24 60% → 70%; practitioner evidence |
+| SmolLM3-3B | 3B | mid-train | tokens; epochs; sources | 35B; 4 (~140B seen); OpenThoughts3-1.2M + Llama-Nemotron subset | HF blog 2025-07-08, "Reasoning Mid-training"; [[smollm-3-midtraining]] | verified 2026-09-15 | "Model Merging": RULER loss traced to this stage |
+
+**Starting point for a small general-purpose run.** For an 8B–14B student with a stronger teacher, the verified rows above support the following, under the conditions stated. First, SFT on filtered teacher samples, with reasoning-on and reasoning-off responses under a mode instruction when one model must serve both modes (as in Llama-Nemotron and Qwen3): R1-Distill used 2–3 epochs, cosine decay to one-tenth of an 8×10⁻⁵ initial LR for the Qwen2.5-Math-7B base, 32,768 tokens, and batch 64 on 804,745 samples from a 671B teacher; Phi-4-reasoning used LR 1e-5 with 450 warm-up steps, batch 32, and 32K context for 14B on over 1.4M pairs; LN-Nano used LR 1e-4 for 4 epochs on reasoning data only in the first of its three SFT stages, batch 256, and 32k packing for 8B, drawing on a 33M-sample mix. These three settings differ by an order of magnitude in learning rate, and no source compares them on the same data. Second, on-policy distillation from the SFT checkpoint: the only verified small-model settings are Qwen3-8B's 1,800 GPU hours on math and code queries and the Thinking Machines run of about 150 steps with 4 samples per prompt (8B, practitioner evidence); learning rates for both are not reported. Third, evaluate the checkpoint after every stage on IFEval, a tool-use benchmark, Arena-Hard, a long-context test, and pass@64 on a date-filtered math set, because each of these moved in at least one report above.
+
+## Generalization lens
+
+**(a) What increases breadth.**
+- Adding non-reasoning teacher data to reasoning distillation: from R1 Dev2 to Dev3, AlpacaEval 2.0 moved 55.8 → 62.1 and Aider-Polyglot 25.6 → 44.8, which the authors attribute to the added non-reasoning and code-engineering data; Dev3 is retrained from V3-Base, so this is not a controlled ablation ([[deepseek-r1]] §4, Table 3).
+- A fusion stage with non-thinking data and then general RL: Qwen3-32B IFEval 73.0 → 85.0 and ToolUse 63.3 → 85.5 ([[qwen-3-post-training]] Table 22).
+- On-policy distillation over off-policy SFT: pass@64 on AIME'24 90.0 → 93.3, where RL stayed at 90.0 ([[qwen-3-post-training]] Table 21).
+- Teachable-prompt distillation: Phi-4-reasoning and -plus gained 30–60 points over Phi-4 on TSP, 3SAT, and BA-Calendar, which were not targeted, and "we do not see any catastrophic forgetting compared to the base Phi-4 model on more general capabilities" ([[phi-4-reasoning]] §1, §3). Result (single study).
+- Distillation after a stage that lowered a skill: Nano 2 recovered MMLU-Pro after GRPO (plot only, [[nemotron-nano-2]] Fig. 6), and Thinking Machines recovered IF-eval from 79% to 83% after mid-training ([[thinkingmachines-on-policy-distillation]]). Two sources agree in direction, with different degrading stages (RL, mid-training); magnitudes are not comparable.
+
+**(b) What causes narrowing or forgetting.**
+- Reasoning-focused SFT lowered IFEval: LN-Super-SFT 81.9 (on) against 92.1 for Llama-3.3-70B-Instruct, recovered to 89.2 with IFEval RL ([[llama-nemotron]] Table 4). The same tables list IFEval 85.1 for R1-Distill-Llama-70B against 92.1 for its base Llama-3.3-70B-Instruct, and 73.4 for R1-Distill-Llama-8B against 81.8 for Llama-3.1-8B-Instruct (Tables 3–4); the report does not state whether it ran these baseline evaluations or copied them. Result (single study): one report shows the direction for two distillation pipelines (R1-Distill and LN-SFT).
+- General stages cost specialized reasoning: Qwen3-32B AIME'24 83.8 → 81.4 and LiveCodeBench 68.4 → 65.7 across Stages 3–4 ([[qwen-3-post-training]] Table 22).
+- Reasoning mid-training cost long context: SmolLM3's RULER degradation was traced to that stage and repaired by merging ([[smollm-3-midtraining]]).
+- Merging experts by on-policy distillation lost some domains: BrowseComp 51.7 → 45.4 and creative writing 90.1 → 86.2 relative to the best teacher ([[mimo-v2-flash]] Table 7).
+- Losses after SFT + RL on teacher traces: AIME'24 maj@64 90.0 (SFT) vs 83.3 (SFT + RL) for Magistral Small ([[magistral]] Table 3); GPQA-Diamond fell from 72.9 after SFT of Mistral Medium 3 on about 1.3M open R1-generated traces to 71.0 after RL on that checkpoint (§8, Figure 13).
+- Longer outputs: MATH-500 response length 769 → 1510 with R1-derived data ([[deepseek-v3]] Table 9); Phi-4-reasoning-plus uses about 1.5× more tokens ([[phi-4-reasoning]] §1).
+
+**(c) How to measure it for this stage.** Evaluate each checkpoint (teacher, SFT student, post-RL, post-distillation) on a fixed non-target panel: IFEval, Arena-Hard, a tool-use benchmark (BFCL or Tau2), a long-context test (RULER), and a knowledge test (MMLU-Pro). Llama-Nemotron (Tables 3–5), Qwen3 (Table 22), and MiMo-V2-Flash (Table 7) each report a subset of this panel per stage or per model; none of those tables includes a long-context test. Report pass@k at k = 64 and maj@64 in addition to pass@1. Use contests released after data finalization, as Phi-4-reasoning did with AIME 2025 (§2.2). Report variance: two runs of average-of-5 AIME evaluation differed by up to 5–10 points ([[phi-4-reasoning]] §1). When a report lists scores for another lab's distilled model, record whether the report ran that evaluation under its own settings or copied the number, because Llama-Nemotron Tables 3–5 do not say.
+
+## Common mistakes and how to detect them
+
+| Mistake | Observable symptom | Check |
 |---|---|---|
-| 1 | **Helpfulness** | Does the response address what the user asked for? |
-| 2 | **Correctness** | Are the factual, logical, or code claims correct? |
-| 3 | **Coherence** | Is the response internally consistent and well-structured? |
-| 4 | **Complexity** | Does the response match the intellectual depth the prompt demands? |
-| 5 | **Verbosity** | Is the response length calibrated to the task? |
-
-The RM architecture is a shared trunk (the 340B base) plus **five linear heads** trained with per-attribute L2 regression on HelpSteer2's 10,000 human-labeled examples. For preference use at RL time, the five scores are combined by a **weighted sum** (weights documented in the NeMo-Aligner config). Nemotron-4-340B-Reward ranked #1 on RewardBench at release.
-
-Why 5 scores instead of 1 matters operationally:
-
-- **Compositional preference at RL time.** You can reweight verbosity down without retraining the RM — the policy gets a different objective for free. A scalar-only RM forces a new annotation round.
-- **Single-attribute Goodhart is visible.** If the policy starts over-optimizing verbosity, the other four attributes still give a signal; a scalar RM collapses all four into the hacked one.
-- **Synthetic filtering at scale.** Per-attribute scores let the pipeline keep, say, high-correctness-low-verbosity traces for math and high-complexity traces for science without retraining.
-
-This is the response to the question ch-41 will pose: *"why does Nemotron get more out of 10K human preferences than Llama 3 gets out of much more?"* Answer: richer label schema amortizes the human cost across five training signals.
-
-### 1.2 The >98%-synthetic alignment pipeline
-
-[[nemotron-4-synthetic]] itemizes the pipeline; [[nemotron]] names the approximate slice sizes. In words, the six-stage loop:
-
-```
-seed (task-family prompts)
-   -> prompt generation (Nemotron-4-Instruct_{t-1} synthesizes task prompts per family)
-   -> response generation (Instruct_{t-1} emits 1-N candidate responses / dialogues)
-   -> RM filtering (340B-Reward scores each response on 5 attributes)
-   -> selection (keep high-score; for DPO pair the high vs low)
-   -> stage-specific training (SFT -> DPO -> RPO, iteratively)
-```
-
-The task families covered: coding, general QA, topic-following, document-based reasoning, function-calling, and *incapable tasks* (prompts that should be refused — few-shot seeded with human-written rejections). For topic-following, the pipeline *intentionally injects distractor turns* so the student learns to steer back. Approximate output volumes:
-
-- **~800K code SFT** (generated via Genetic Instruct: Self-Instruct + WizardCoder-style mutations + LLM fitness function growing a small seed into a 1000x-scale population).
-- **~200K general SFT** (category-seeded; RM-filtered).
-- **~160K DPO preference pairs.**
-- **~300K RPO preference pairs** (reward-preference optimization — DPO with an added SFT loss term to prevent the policy from "flying off" from the reference).
-
-SFT is staged: **code SFT first**, then **general SFT**. The paper's justification is that code SFT sharpens format discipline before general-domain SFT introduces looser objectives. Preference optimization runs **DPO followed by RPO**; Nemotron argues DPO alone overfits to the reward gap between chosen and rejected, and RPO's auxiliary SFT term on the chosen response counteracts that drift.
-
-### 1.3 Why a small human anchor suffices
-
-The counter-intuitive claim is that ~10K HelpSteer2 labels plus ~10K SFT seeds are enough to sustain an alignment loop generating tens of millions of downstream tokens. The mechanism:
-
-1. The 10K human labels train the RM, not the policy directly.
-2. The RM then scores an arbitrary-size synthetic pool — the RM's *coverage*, not the human set's, bounds what can be filtered.
-3. The filtered synthetic pool trains the policy. Each RM query is a machine operation; the human cost amortizes.
-
-The risk Nemotron flags: **reward-model errors compound when the same scorer is reused across iterations.** If the RM systematically underscores a correct-but-unusual reasoning step, iteration 2's policy stops emitting those steps, iteration 3's RM is now tuned on a narrower distribution, and the collapse compounds. The mitigation is partial: Nemotron periodically adds fresh human preferences to the HelpSteer2 pool and re-trains the RM, but the paper does not claim this fully eliminates the compounding risk. Ch-23 (model collapse) is the direct continuation of this failure mode.
-
----
-
-## 2. Nemotron-Ultra / Nemotron 3 — multi-environment RL succession
-
-[[nemotron-ultra]] describes the 2025 successor. Nemotron 3 ships as Nano (3.2B active / 31.6B total MoE), with Super and Ultra tech reports to follow. The two deltas from Nemotron-4 that matter for this chapter:
-
-- **Multi-environment RL** replaces sequential stages. Nemotron-4 ran reasoning-RL then tool-use-RL then alignment-RL; Nemotron 3 collapses these into a single RL run spanning reasoning, multi-step tool use, and agentic environments with the reward model (now a **GenRM** — generative reward model) scoring across all of them. The claim is better generalization to agentic tasks than the staged recipe.
-- **GenRM is publicly released** alongside the policy. Nemotron-4's 340B-Reward was open-weight but the recipe for training it was not fully reproducible from the paper; Nemotron 3's GenRM release lets downstream users resume RLHF without retraining the RM.
-
-What [[nemotron-ultra]] *does not* disclose is as telling as what it does: RL algorithm (PPO vs GRPO vs DPO unspecified), KL β, LR, batch size, clip ε, group size G, rollouts per prompt, step counts, GenRM loss form, preference-data sizes, multi-environment reward-mixing weights. The white paper is thin on hyperparameters — a reminder that "open release" is a spectrum and Nemotron 3 sits closer to "reproducible artifact bundle" than to "reproducible recipe."
-
-The Nemotron-4 -> Nemotron 3 shift that matters for ch-35: the synthetic-data pipeline is *carried forward* but no longer the headline. The headline is the RL environment coverage. Synthetic SFT is now the *substrate*, not the finish line.
-
----
-
-## 3. R1-distill as SFT-consumption — what changed from ch-20
-
-Ch-20 covered the teacher-side R1 pipeline in detail. This chapter revisits R1-distill from the **student-side** angle: once DeepSeek emits the 800K trace pool, what does SFT-consuming it look like, and why does it work without RL?
-
-From [[deepseek-r1]] / [[deepseek-r1-distill-synth]] / [[deepseek-r1-followup]]:
-
-- The distill corpus is produced by the **rejection-sampling SFT stage** in the teacher's own pipeline — stage-1 RL model samples N traces per prompt, V3-judge filters for readability + correctness, kept set is ~600K reasoning + 200K non-reasoning.
-- Six distilled students are released: Qwen-2.5-Math 1.5B, Qwen-2.5 7B/14B/32B, Llama-3.1-8B, Llama-3.3-70B. **All are pure SFT on the 800K** — no RL, no RM, no DPO.
-- The explicit claim from the report: *dense students benefit more from copied reasoning structure than from rediscovering that structure via their own RL.* A dense 32B student running GRPO from scratch needs more compute than one-epoch SFT on R1 traces and gets a weaker model.
-
-The R1-0528 refresh ([[deepseek-r1-followup]]) is *R1-with-more-compute* — same V3 base, same recipe, more RL steps. R1-Distill family is unchanged. V3.1 (Aug 2025) then *absorbs* R1's reasoning into the V3 line, ending R1 as a standalone family. The practical implication for ch-35: R1-distill is likely the **terminal** version of "straight SFT transfer of reasoning"; future recipes will be hybrid-thinking-mode (ch-34 Qwen 3) rather than separate distilled reasoners.
-
----
-
-## 4. Bespoke-Stratos, Sky-T1 — "cheap frontier reasoning" as an operational claim
-
-Ch-20 catalogued these. Here we extract the specific cost claims and what exactly each team filtered, because the cost numbers are the chapter's concrete evidence that distillation SFT can be extremely cheap.
-
-### 4.1 Bespoke-Stratos — contamination checks and the $4.8K run
-
-[[bespoke-stratos]]: 17,000 `(prompt, R1-trace)` pairs covering math (~7K problems from NuminaMath-CoT, MATH, AIME/AMC archive), code (~5K from APPS, CodeContests, TACO, LeetCode), science (~5K from STILL-2 curated prompts + CoTLogic).
-
-**Trace generation.** Query DeepSeek-R1 (official API) at temperature 0.6, request `<think>...</think><answer>...</answer>` format, retry up to 3× on failure.
-
-**Three-layer verifier (rejection-sampling filter):**
-
-1. **Math.** Extract boxed answer; compare to gold via SymPy canonicalization; reject on mismatch.
-2. **Code.** Extract candidate solution; run public unit tests; reject on any failure.
-3. **Science.** GPT-4o as LLM-judge; require "correct" verdict against reference.
-
-Reject rate ~30-50% of raw R1 outputs; majority of rejections are code test failures and math extraction errors. MinHash dedup cross-prompt; per-source cap enforces domain balance. **Contamination check** — because AIME and MATH are public and R1 may have memorized solutions, Bespoke explicitly holds out AIME25 as a clean eval; the Stratos-32B paper reports AIME24 ~63% but flags that AIME25 numbers are weaker and represent the "post-contamination-gap" reality.
-
-**Cost.** ~$800 DeepSeek-R1 API credits (teacher) + ~$4,000 student training (8×H100, few hours on Qwen2.5-32B-Instruct). Ablation: removing code-verification halves LiveCodeBench gain; removing math symbolic equivalence halves MATH gain. **Every verifier layer is load-bearing.**
-
-### 4.2 Sky-T1 — $450 QwQ recipe and the reformatting trick
-
-[[sky-t1]]: 17K traces, mostly distilled from **QwQ-32B-preview** (Alibaba's open-weights reasoner, no API lock-in). Qwen2.5-32B-Instruct base, 3 epochs × 19 hours on 8×H100 ≈ $450 on rental hardware at listed rates.
-
-**Pulled from QwQ.** Local vLLM inference (teacher cost ≈ 0), temperature 0.7, max 8K tokens per trace, ~10K math seeds (NuminaMath-CoT + AIME/AMC) + ~5K code (APPS + TACO) + ~2K science (STILL-2).
-
-**Filtered out.**
-
-- **Math mismatch.** SymPy on `\boxed{}`; reject non-matching.
-- **Code failure.** Unit-test execution; reject any-test-fail.
-- **Science incorrect.** GPT-4o-mini LLM-judge; reject "incorrect" verdicts.
-- **Format noise.** QwQ emits "Alright, let me think", "Hmm, okay so", and other filler preambles; Sky-T1 runs a GPT-4o rewriter pass that converts QwQ's native format to `<|im_start|>…<|im_end|>` chat template *and* strips fillers. The paper reports this cleanup *alone* lifted AIME by +4 points — the rewriter is not cosmetic.
-
-**Training config attested.** LR 1e-5, 3 epochs, sequence length 32K (to fit long traces), BF16, FSDP across 8 GPUs, Llama-Factory framework.
-
-**Results.** MATH500 82.4% (matches o1-preview), AIME24 43.3% (within 2 pts of o1-preview), LiveCodeBench-Easy 86.3% (beats o1-preview), GPQA-Diamond 56.8%. **AIME25 drops significantly** — QwQ as a teacher has a lower ceiling than R1, and Sky-T1 inherits it. This is the clearest public evidence that *teacher quality is the ultimate ceiling of SFT-only distillation*.
-
----
-
-## 5. Comparison table — 5 distillation recipes
-
-This is the chapter's headline table. The interactive version is [figures/distill-sft-compare.html](figures/distill-sft-compare.html) — click any recipe for the full filter breakdown and attested hyperparameters.
-
-| Recipe | # traces | Teacher | Filter stack | Cost (full) | AIME24 | MATH500 | GPQA-Dia |
-|---|---:|---|---|---:|---:|---:|---:|
-| **R1-Distill-Qwen-32B** (official) | 800,000 | DeepSeek-R1 (671B MoE) | V3-judge readability + correctness | not disclosed | ~72% | ~94% | ~62% |
-| **Bespoke-Stratos-32B** | 17,000 | DeepSeek-R1 | SymPy + unit tests + GPT-4o-judge + MinHash | ~$4.8K ($800 API + $4K compute) | ~63% | ~93% | ~59% |
-| **Sky-T1-32B-Preview** | 17,000 | QwQ-32B-preview (open) | SymPy + unit tests + GPT-4o-mini judge + GPT-4o rewriter | ~$450 (local QwQ + 8×H100) | ~43% | ~82% | ~57% |
-| **OpenR1-Qwen-7B** | ~440,000 (220K×2) | DeepSeek-R1 | Math-Verify SymPy only (math-only corpus) | ~$10K + multi-day H100 | ~40% | ~80% | n/a |
-| **s1-32B** | 1,000 | Gemini (CoT traces) + hand-curation | difficulty + diversity + quality (hand-filter from 59K pool) | ~26 min × 16 H100 ≈ $50 | 56.7% | 93.0% | 59.6% |
-| **LIMO** (817 traces) | 817 | mix + hand-edited | manual correctness + reflective-structure filter | hand-curation labor | 63.3% | 95.6% | (strong OOD) |
-
-Three non-obvious readings of this table:
-
-**5.1 The trace count and the benchmark are not monotone.** s1's 1,000 and LIMO's 817 beat Sky-T1's 17,000 on AIME24 despite Sky-T1 having ~17× more data. The mechanism per [[s1]] and [[limo]]: hand curation removes low-signal traces that *corrupt* rather than augment the student; mass distillation inevitably smuggles them in even after SymPy/unit-test filtering. s1 goes further with **budget forcing** at inference (suppress early stopping by appending `"Wait"`) — which lifts AIME24 from 50% to 57% on the same checkpoint, no additional training. Budget forcing is not a training trick; it reallocates latent compute.
-
-**5.2 17K is a regime, not a target.** Bespoke-Stratos, Sky-T1, and (coincidentally) several OpenThoughts intermediate checkpoints all landed around 17K. The pattern is not mystical: the smallest pool that survives a three-layer verifier over math + code + science from a public seed set, with ~30-50% reject rate, is approximately 17K. If you filter harder you drop below 10K and lose domain coverage; if you filter softer you keep bad traces. The 17K-number is an equilibrium, not a hyperparameter.
-
-**5.3 OpenR1's GRPO delta is the "still need RL?" evidence.** OpenR1-Qwen-7B gets MATH ~80% / AIME24 ~40% with pure SFT on 440K traces. Adding a GRPO stage on a 40K-subset (binary Math-Verify reward) adds +3-5 AIME points. This is the single cleanest public ablation isolating "SFT ceiling vs RL residual." The gap is not huge (5 points on AIME), but it is real and persists after the SFT budget is already generous.
-
----
-
-## 6. When distillation SFT is enough vs when you still need RL
-
-The decision tree the chapter is built around. Three axes: base-model reasoning capacity, teacher-trace license, target evaluation.
-
-```
-Is your base model already reasoning-rich (Qwen2.5-32B / Llama-3.1-70B)?
-|-- YES: distillation SFT is likely enough
-|     |
-|     Can you hand-curate?
-|     |-- YES + strong curators  -> s1 / LIMO regime (1K traces, $50, hand review)
-|     \-- NO  -> Bespoke-Stratos / Sky-T1 regime (17K traces, ~$500-$5K)
-|
-\-- NO (base is weaker / smaller / general-purpose):
-      |
-      Is your target eval well-verifiable (math, code)?
-      |-- YES -> SFT + GRPO/RLVR
-      |         (OpenR1 pattern: 440K SFT + 40K-prompt GRPO; s1 budget forcing
-      |          stops being cheap recovery and RL is needed to break the ceiling)
-      \-- NO (agentic, tool-use, open-ended)
-                -> full Nemotron-style synthetic-pipeline + multi-attribute RM + RL
-                   (reasoning-only SFT ceiling is lower on open-ended tasks)
-```
-
-The asymmetry this tree encodes is the chapter's take-home: **SFT saturates faster on the verifiable domains it was supposed to be good at**. Math and code are where outcome rewards and unit tests work, and where the verifier is strong enough to catch the "wrong-question-correctly" failure ch-20 §5.5 flagged. On open-ended tasks the verifier is an LLM-judge which is itself distribution-shift-brittle; SFT's ceiling there is lower but RL's ceiling is also lower. Nemotron-style multi-attribute RM is the only lever that reliably works across all regimes — which is why Nemotron-Ultra multi-environment RL is the 2025 direction, not distillation.
-
-See [figures/distill-sft-compare.html](figures/distill-sft-compare.html) for the full recipe switch — click a scenario and the tree highlights the recipe row.
-
----
-
-## 7. What this chapter leaves open
-
-- **Per-attribute RM weights.** [[nemotron]] says "weighted sum of 5 attributes (weights in NeMo-Aligner config)" — the weights themselves are not in the paper. Practitioners must read the NeMo-Aligner source.
-- **R1-Distill's per-domain slice ratios.** DeepSeek gives 600K + 200K split but not the per-domain breakdown of the 600K reasoning set.
-- **Budget-forcing transferability.** [[s1]] shows `"Wait"`-appending boosts AIME but not on every prompt class; the paper does not characterize which prompt distributions respond.
-- **OpenR1 GRPO on non-math.** The GRPO stage is math-only (Math-Verify as reward); the generalization to code / science is an open question ch-44 (verifiable rewards) partially addresses.
-
----
-
-## Connections and what's next
-
-- **ch-20** — Distillation-as-data origin chapter; Orca lineage + R1-distill mechanics. This chapter assumes ch-20 and uses its vocabulary.
-- **ch-33 / ch-34** — Tülu 3, Llama 3, Qwen 2.5/3, OLMo 2/3, Phi 3/4 — the mainstream SFT case studies. Nemotron is the **synthetic-only** peer; the 5-dim RM is what distinguishes it.
-- **ch-36 (lab)** — Packed SFT run with masking tests; the practical checkpoint after this case-study block.
-- **ch-23 (model collapse)** — Nemotron's self-bootstrapping RM loop is the archetypal test case; the compounding-error risk §1.3 flagged is made precise there.
-- **ch-41 (reward modeling)** — HelpSteer2 5-attribute regression is the reference recipe; scalar-only baselines are the comparison.
-- **ch-40 (GRPO)** — R1's GRPO hyperparameters and DeepSeek's loose-clip (ε=10) philosophy are the case study.
-- **ch-44 (verifiable rewards)** — OpenR1's Math-Verify is the smallest working verifier; Bespoke-Stratos's three-layer stack is the canonical extended version.
-
-## Further reading
-
-- [[nemotron-4-synthetic]] — NVIDIA 2024; >98%-synthetic alignment; staged SFT + DPO + RPO; Genetic Instruct for code.
-- [[nemotron]] — Nemotron-4 340B model report; HelpSteer2 5-attribute RM; 10K human preferences.
-- [[nemotron-ultra]] — Nemotron 3 Nano white paper; multi-environment RL; GenRM release; reasoning budget control.
-- [[deepseek-r1]] / [[deepseek-r1-followup]] / [[deepseek-r1-distill-synth]] — R1 pipeline, R1-0528 refresh, 800K distill corpus.
-- [[bespoke-stratos]] — 17K curated, $800 API + $4K compute, three-layer verifier, AIME24 ~63%.
-- [[sky-t1]] — $450 QwQ recipe, GPT-4o rewriter +4 AIME, teacher-ceiling lesson.
-- [[openr1]] — 220K×2 math corpus, Math-Verify, GRPO-adds-+3-5-AIME evidence.
-- [[s1]] — 1K curated + budget-forcing at inference; 26-minute SFT.
-- [[limo]] — 817 traces; Less-is-More Reasoning Hypothesis; latent-capability activation.
-- [[open-thoughts]] — 1000+ ablations; QwQ > R1 as teacher; no-answer-side-filter finding.
-
-## Companion visualization
-
-**[figures/distill-sft-compare.html](figures/distill-sft-compare.html)** — self-contained interactive comparator. Five recipe cards (R1-Distill-Qwen-32B / Bespoke-Stratos / Sky-T1 / OpenR1 / s1) arranged side by side. Click any card to expand the filter stack (which verifier layers, reject rate, dedup policy, rewriter step) and see the attested evaluation numbers. The decision-tree panel on the right lights up the row matching the current selection so you can see which recipe your answer-profile points to. Use it before a distillation run to pick your recipe, and after a run to check your numbers against the reference grid.
+| Treating R1's 804,745-sample set as its cold start | A "cold start" run consumes most of the SFT budget before any RL | Compare the stage size with the locus: cold start is "thousands" (B.3.2), the 800K set is post-RL (B.3.3) |
+| Evaluating a distilled student only on the teacher's target benchmarks | Math rises while IFEval or tool use falls unnoticed | Run the non-target panel before and after each stage; compare with the base instruct model (LN Tables 3–4) |
+| Starting RL from the SFT checkpoint with the highest benchmark scores | Smaller RL gains than an earlier checkpoint | Run short RL from two SFT checkpoints and compare; LN-Ultra started RL from an earlier SFT checkpoint for this reason but prints no comparison (§7.4) |
+| Sequential RL stages without a regression check | An earlier domain drops after a later stage | Evaluate every earlier domain after each stage; add distillation after RL or merging (GLM-5 §3.5; Nano 2 §4.3) |
+| Distilling long traces without tracking length | Mean response length rises with the accuracy gain (769 → 1510 tokens in V3 Table 9) | Log mean length and truncation rate per benchmark (V3 Table 9) |
+| Reporting only pass@1 after SFT + RL | pass@1 rises while maj@64 or pass@64 falls | Report pass@64 and maj@64 (Magistral Table 3; Qwen3 Table 21) |
+| Packing mixed-mode SFT to very long sequences | Tool-calling accuracy degrades | Evaluate BFCL after changing packing; retrain tool data unpacked (Nano 2 §3.2) |
+| Logit distillation from a teacher never trained on the distillation data | Higher student validation loss than expected | Fine-tune the teacher on the distillation data first (Minitron teacher correction, >6% lower LM loss) |
+| Computing on-policy distillation log-probabilities in an inference engine without checking them against the trainer | The ratio π_θ/μ_θ of the trainer's token probability π_θ to the sampler's token probability μ_θ departs from 1 on some tokens | Compare engine and trainer log-probs on the same tokens; zero the weight of tokens outside a ratio band, as MiMo-V2-Flash does for its student sampler (Eq. 8); GLM-5 fetches teacher logits from its inference engine and plans to move them to the training engine (§3.5) |
+| Reading "not reported" as "not used" | Wrong conclusions about which stages a lab used | Record the loci checked, as in the §7 matrix and the figure |
+
+## Check your understanding
+
+1. In the §1.2 example, forward KL and reverse KL rank the student's errors differently. Explain which token each objective penalizes most and why that difference matters when the student over-weights a token the teacher rarely produces.
+2. DeepSeek-R1's 800K set is 22.1% general samples but 5.9% general tokens. Explain how per-token loss averaging and per-sample averaging would change the effective weight of general data, and what that implies for instruction-following retention.
+3. LN-Ultra-SFT reached 66.4 on GPQA-Diamond and the teacher 71.5. Explain why supervised distillation is bounded by the teacher, and why RL from an earlier SFT checkpoint could end higher than RL from the best SFT checkpoint.
+4. In Qwen3 Table 21, RL improved pass@1 without changing pass@64, while on-policy distillation improved both. Give a mechanism for each result and state what additional experiment would separate them.
+5. GLM-5, MiMo-V2-Flash, and DeepSeek-V4 all place distillation after RL. Explain why a distillation stage can recover a capability lost in a later RL stage, and what the MiMo BrowseComp row shows about the limit of this recovery.
+6. GLM-5 masks erroneous agent segments instead of discarding the trajectory or penalizing it. Using the four meanings of "negative", explain what the model learns from the kept segments and what it does not learn.
+7. Kimi k1.5's long2short DPO rejects correct responses that are 1.5× longer than the chosen one. Explain what this pair construction trains and what risk it creates for problems that need long reasoning.
+8. A lab report leaves the teacher's sampling temperature, the rejection rate, and the SFT learning rate unreported. Explain which conclusions about its distillation stage remain valid and which cannot be drawn.
+
+## Connections
+
+- **Previous (dependency):** ch-34 — Case Studies B: Generality versus Specialization in Qwen, OLMo, and Phi Reports. Qwen3 and Phi-4-reasoning stage placement is summarized there; errata 6–7 correct two claims.
+- **Dependency:** ch-20 — Distillation as Data: Explanation Traces and the R1-Distill Lineage. The data view of R1-Distill; errata 1–4 correct four claims.
+- **Next:** ch-35a — Distillation in Practice B: Prompt Selection, Teacher Sampling, and Quality Filters. How the prompts, teacher samples, and filters summarized in §3–§6 are built and ablated.
+- ch-31 — Rejection Sampling, Self-Generated Data, Cold Start, and SFT–RL Alternation. Cold start and self-distillation from the model's own RL checkpoints.
+- ch-31a — Negative Samples in Supervised Training: Corrections, Failure Conditioning, Critiques, and Unlikelihood; ch-43a — Negative Samples and Negative Gradients: Likelihood Displacement, Squeezing, and Negative Advantages. Derivations behind the negative-feedback section.
+- ch-30a — Forgetting and Alignment Tax in Fine-Tuning: Measurement and Control; ch-30c — Weight Averaging and Model Merging for Generalist Models. Measurement and merging methods used for the regressions in the Generalization lens.
+- ch-32 — Mid-Training: Annealing Data, Stage Gates, and Effects on Later SFT and RL; ch-32d — Agentic Mid-Training: Repository, Execution-Trace, and Trajectory Data Before Post-Training. Position S3 in more depth; erratum 5 corrects ch-32.
+- ch-38a — SFT versus RL Generalization: On-Policy Data, KL to the Base Model, and Output Diversity. The on-policy argument of §1.2 in the RL setting.
+- ch-44a — Length in RL: Overlong Responses, Length Control, and Long-Context RL. Position S8 during RL.
+- ch-45d — Open Agentic Recipes Side by Side: Stage Placement, Data Mixture, and Agentic RL; ch-58a — Open General-Model Recipes End to End: Pretraining to Merge. Full pipelines that include the positions mapped here.
+- ch-36 — Lab: SFT Run with Masking Tests, a Forgetting Report, and a Held-Out Evaluation Split; ch-57 — TRL Internals: SFT, DPO, GRPO, and Distillation Trainers. Implementing and measuring a distillation SFT run.
+
+## Sources
+
+- [[deepseek-r1]] — cold-start construction, RL prompt mix, 800K set with filters and the V3 judge prompt, stage-by-stage Table 3, distillation versus RL at 32B.
+- [[deepseek-r1-recipe]] — verified SFT, distillation, and student-base rows (Table 6 learning rates, epochs, batch).
+- [[deepseek-v3]] and [[deepseek-v3-recipe]] — R1-derived expert models, 1.5M SFT set, Table 9 accuracy and length ablation.
+- [[deepseek-v3.1]] and [[deepseek-v3.1-recipe]] — card for the DeepSeek-V3.2 report: specialists, distillation gap closed by mixed RL, unreported sizes.
+- [[deepseek-v4-recipe]] — multi-teacher on-policy distillation with full-vocabulary reverse KL.
+- [[glm-4-5]] and [[glm-4-5-recipe]] — synthetic reasoning mid-training, experts to unified SFT, rejection-sampling filters, prompt-length cut and response scaling, agent self-distillation.
+- [[glm-5]] — SFT difficulty filter and masked erroneous segments, on-policy cross-stage distillation objective and settings (chapter excerpt verified against arXiv:2602.15763v2).
+- [[qwen-3]] — library card for the Qwen3 report; it lacks these numbers and has no verification section, so every Qwen3 citation in the body points to [[qwen-3-post-training]], the chapter extract verified against arXiv:2505.09388v1 (cold-start filters, thinking fusion, strong-to-weak distillation, Tables 21–22).
+- [[kimi-k1-5]] and [[kimi-k1-5-recipe]] — long-CoT warm-up, RL prompt curation, long2short methods and result.
+- [[kimi-k2]] and [[kimi-k2-recipe]] — SFT responses from K1.5 and domain experts; unreported sizes.
+- [[llama-nemotron]] — post-NAS distillation, per-domain teachers and generation counts, 33M-sample mix, SFT settings, SFT versus RL, IFEval effects (chapter excerpt verified against arXiv:2505.00949v5).
+- [[nemotron-nano-2]] — R1-0528 and Qwen3-235B-A22B SFT data, truncated and stripped traces, forward-KL compression and post-GRPO distillation (chapter excerpt verified against arXiv:2508.14444).
+- [[phi-4]] — library card not used for numbers (it mixes Phi-4 and Phi-4-reasoning and has no verification); [[phi-4-reasoning]] — teachable prompts, o3-mini teacher comparison, SFT and RL settings, transfer and length (chapter excerpt verified against arXiv:2504.21318v1).
+- [[magistral]] and [[magistral-recipe]] — Magistral Small cold start from Medium traces, Table 3 SFT versus RL versus SFT + RL, open-trace experiment.
+- [[gemma-2]] — pre-training distillation objective and 2B ablation.
+- [[gemma-3]] — 256 sampled logits, token budgets, small versus large teacher (chapter excerpt verified against arXiv:2503.19786v1).
+- [[llama-4]] — codistillation of Maverick from Behemoth during pre-training.
+- [[minitron-approach]] — teacher correction, forward-KL logit-only distillation, token savings (chapter excerpt verified against arXiv:2408.11796v4).
+- [[mimo-v2-flash]] — domain-teacher SFT data, MOPD objective, Table 7 student versus teacher (chapter excerpt verified against arXiv:2601.02780v2).
+- [[thinkingmachines-on-policy-distillation]] — per-token reverse-KL implementation, compute comparison, forgetting recovery; practitioner evidence (chapter excerpt verified against the blog page).
+- [[smollm-3]] — the SmolLM3 card has no verification section; [[smollm-3-midtraining]] holds the verified extract (35B tokens × 4 epochs of distilled traces, RULER regression, merge repair, Qwen3-32B/0.6B preference pairs).

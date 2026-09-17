@@ -1,0 +1,247 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Paired Forgetting Delta</title>
+<style>
+  :root {
+    --bg: #fbfaf7;
+    --panel: #ffffff;
+    --ink: #1f2328;
+    --muted: #5b636d;
+    --line: #d9dde2;
+    --paired: #1f6feb;
+    --unpaired: #b35c00;
+    --zero: #8a2b2b;
+    --good: #1a7f37;
+    --warn: #9a6700;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #14171b;
+      --panel: #1c2026;
+      --ink: #e6e8eb;
+      --muted: #9aa3ad;
+      --line: #343a42;
+      --paired: #6ea8fe;
+      --unpaired: #f0a35e;
+      --zero: #e07a7a;
+      --good: #56d364;
+      --warn: #e3b341;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #14171b;
+    --panel: #1c2026;
+    --ink: #e6e8eb;
+    --muted: #9aa3ad;
+    --line: #343a42;
+    --paired: #6ea8fe;
+    --unpaired: #f0a35e;
+    --zero: #e07a7a;
+    --good: #56d364;
+    --warn: #e3b341;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--ink);
+    font: 15px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  }
+  main { max-width: 860px; margin: 0 auto; padding: 24px 16px 40px; }
+  h1 { font-size: 1.35rem; margin: 0 0 4px; }
+  p.lead { color: var(--muted); margin: 0 0 18px; }
+  .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 16px; margin-bottom: 16px; }
+  .controls { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; }
+  label { display: block; font-size: 0.85rem; color: var(--muted); margin-bottom: 4px; }
+  input[type="number"] {
+    width: 100%; padding: 6px 8px; font: inherit; color: var(--ink);
+    background: var(--bg); border: 1px solid var(--line); border-radius: 6px;
+  }
+  input[type="range"] { width: 100%; }
+  .presets { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+  button {
+    font: inherit; font-size: 0.85rem; padding: 6px 10px; cursor: pointer;
+    color: var(--ink); background: var(--bg); border: 1px solid var(--line); border-radius: 6px;
+  }
+  button:hover { border-color: var(--paired); }
+  .grid2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 16px; }
+  table { border-collapse: collapse; width: 100%; font-variant-numeric: tabular-nums; }
+  th, td { border: 1px solid var(--line); padding: 6px 8px; text-align: right; }
+  th { color: var(--muted); font-weight: 600; }
+  td.l, th.l { text-align: left; }
+  .stats td:first-child { text-align: left; color: var(--muted); }
+  .verdict { margin-top: 10px; font-weight: 600; }
+  .verdict.detect { color: var(--good); }
+  .verdict.nodetect { color: var(--warn); }
+  .err { color: var(--zero); font-size: 0.9rem; min-height: 1.2em; margin-top: 8px; }
+  svg { width: 100%; height: auto; display: block; }
+  .caption { font-size: 0.85rem; color: var(--muted); }
+  code { font-size: 0.85em; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Paired versus unpaired interval for a forgetting delta</h1>
+  <p class="lead">Set the number of held-out items, the reference checkpoint's correct count, and how many items the fine-tuned checkpoint lost and gained. The page computes the accuracy difference and its 95% interval with and without pairing by item.</p>
+
+  <section class="panel" aria-label="Inputs">
+    <div class="controls">
+      <div>
+        <label for="n">Items n</label>
+        <input id="n" type="number" min="10" max="20000" step="1" value="500">
+      </div>
+      <div>
+        <label for="ref">Reference correct</label>
+        <input id="ref" type="number" min="0" step="1" value="300">
+      </div>
+      <div>
+        <label for="loss">Losses (reference correct, fine-tuned wrong): <span id="lossv">45</span></label>
+        <input id="loss" type="range" min="0" max="300" step="1" value="45">
+      </div>
+      <div>
+        <label for="gain">Gains (reference wrong, fine-tuned correct): <span id="gainv">20</span></label>
+        <input id="gain" type="range" min="0" max="200" step="1" value="20">
+      </div>
+    </div>
+    <div class="presets">
+      <button type="button" data-p="500,300,45,20">ch-30a §1 example: 45 losses, 20 gains</button>
+      <button type="button" data-p="500,300,95,70">Same net change, 95 losses, 70 gains</button>
+      <button type="button" data-p="2000,1200,180,80">Same rates, n = 2000</button>
+    </div>
+    <div class="err" id="err" role="status"></div>
+  </section>
+
+  <section class="grid2">
+    <div class="panel">
+      <table aria-label="Item outcome table">
+        <thead><tr><th class="l"></th><th>fine-tuned correct</th><th>fine-tuned wrong</th></tr></thead>
+        <tbody>
+          <tr><th class="l">reference correct</th><td id="cc"></td><td id="cw"></td></tr>
+          <tr><th class="l">reference wrong</th><td id="wc"></td><td id="ww"></td></tr>
+        </tbody>
+      </table>
+      <table class="stats" style="margin-top:12px" aria-label="Statistics">
+        <tbody>
+          <tr><td>Reference accuracy</td><td id="pref"></td></tr>
+          <tr><td>Fine-tuned accuracy</td><td id="pft"></td></tr>
+          <tr><td>Delta (fine-tuned − reference)</td><td id="delta"></td></tr>
+          <tr><td>Outcome agreement with reference</td><td id="agree"></td></tr>
+          <tr><td>SE paired (Eq. 7)</td><td id="sep"></td></tr>
+          <tr><td>SE unpaired (Eq. 2, §4.1)</td><td id="seu"></td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="panel">
+      <svg id="plot" viewBox="0 0 400 190" role="img" aria-label="Two 95% confidence intervals for the delta relative to zero"></svg>
+      <div class="verdict" id="vp"></div>
+      <div class="verdict" id="vu"></div>
+    </div>
+  </section>
+
+  <p class="caption">Formulas: SE<sub>paired</sub> = sqrt( Σ(d<sub>i</sub> − d̄)² / (n − 1) / n ) with d<sub>i</sub> ∈ {−1, 0, +1}; SE<sub>unpaired</sub> = sqrt( p<sub>ref</sub>(1 − p<sub>ref</sub>)/n + p<sub>ft</sub>(1 − p<sub>ft</sub>)/n ); interval = delta ± 1.96 × SE. Equation numbers refer to Miller, "Adding Error Bars to Evals", arXiv:2411.00640v1 (§2.1, §4.1, §4.2). Agreement here is the share of items with the same correct/wrong outcome for both checkpoints. Kalajdzievski (arXiv:2401.05605v1 §3.1) reports a related quantity on ARC-Challenge, the share of items where the fine-tuned model gives the reference model's answer; on multiple-choice items that answer agreement is at most the outcome agreement shown here, because two different wrong answers count as the same outcome. The preset counts are constructed examples from ch-30a §1, not data from a source. The normal approximation is less accurate when few items change.</p>
+</main>
+<script>
+(function () {
+  var $ = function (id) { return document.getElementById(id); };
+  var nEl = $("n"), refEl = $("ref"), lossEl = $("loss"), gainEl = $("gain");
+
+  function fmt(x, d) { return (x >= 0 ? "+" : "") + x.toFixed(d); }
+  function pct(x) { return (100 * x).toFixed(1) + "%"; }
+
+  function clampInputs() {
+    var n = Math.max(10, Math.min(20000, Math.round(+nEl.value || 0)));
+    var ref = Math.max(0, Math.min(n, Math.round(+refEl.value || 0)));
+    nEl.value = n; refEl.value = ref;
+    lossEl.max = ref; gainEl.max = n - ref;
+    if (+lossEl.value > ref) lossEl.value = ref;
+    if (+gainEl.value > n - ref) gainEl.value = n - ref;
+    return { n: n, ref: ref, b: Math.round(+lossEl.value), c: Math.round(+gainEl.value) };
+  }
+
+  function draw(d, ciP, ciU) {
+    var svg = $("plot");
+    var css = getComputedStyle(document.documentElement);
+    var colP = css.getPropertyValue("--paired").trim();
+    var colU = css.getPropertyValue("--unpaired").trim();
+    var colZ = css.getPropertyValue("--zero").trim();
+    var colL = css.getPropertyValue("--line").trim();
+    var colM = css.getPropertyValue("--muted").trim();
+    var colI = css.getPropertyValue("--ink").trim();
+    var m = Math.max(Math.abs(ciP[0]), Math.abs(ciP[1]), Math.abs(ciU[0]), Math.abs(ciU[1]), 0.01) * 1.15;
+    var x0 = 40, x1 = 380;
+    var sx = function (v) { return x0 + (v + m) / (2 * m) * (x1 - x0); };
+    var ticks = [-m, -m / 2, 0, m / 2, m];
+    var s = "";
+    s += '<line x1="' + x0 + '" y1="150" x2="' + x1 + '" y2="150" stroke="' + colL + '"/>';
+    ticks.forEach(function (t) {
+      s += '<line x1="' + sx(t) + '" y1="146" x2="' + sx(t) + '" y2="154" stroke="' + colL + '"/>';
+      s += '<text x="' + sx(t) + '" y="170" font-size="11" text-anchor="middle" fill="' + colM + '">' + fmt(t, 3) + '</text>';
+    });
+    s += '<line x1="' + sx(0) + '" y1="20" x2="' + sx(0) + '" y2="150" stroke="' + colZ + '" stroke-dasharray="4 3"/>';
+    s += '<text x="' + (sx(0) + 4) + '" y="30" font-size="11" fill="' + colZ + '">zero</text>';
+    function interval(ci, y, col, name) {
+      var out = '<line x1="' + sx(ci[0]) + '" y1="' + y + '" x2="' + sx(ci[1]) + '" y2="' + y + '" stroke="' + col + '" stroke-width="4" stroke-linecap="round"/>';
+      out += '<circle cx="' + sx(d) + '" cy="' + y + '" r="5" fill="' + col + '"/>';
+      out += '<text x="' + x0 + '" y="' + (y - 12) + '" font-size="12" fill="' + colI + '">' + name + ' [' + fmt(ci[0], 3) + ', ' + fmt(ci[1], 3) + ']</text>';
+      return out;
+    }
+    s += interval(ciP, 70, colP, "Paired 95%");
+    s += interval(ciU, 120, colU, "Unpaired 95%");
+    s += '<text x="' + ((x0 + x1) / 2) + '" y="186" font-size="11" text-anchor="middle" fill="' + colM + '">accuracy difference (fine-tuned − reference)</text>';
+    svg.innerHTML = s;
+  }
+
+  function update() {
+    var v = clampInputs();
+    var n = v.n, ref = v.ref, b = v.b, c = v.c;
+    $("lossv").textContent = b; $("gainv").textContent = c;
+    $("err").textContent = "";
+    var ft = ref - b + c;
+    $("cc").textContent = ref - b; $("cw").textContent = b;
+    $("wc").textContent = c; $("ww").textContent = n - ref - c;
+    var pr = ref / n, pf = ft / n, d = (c - b) / n;
+    var ssd = (b + c) - n * d * d;
+    var varP = ssd / (n - 1);
+    var seP = Math.sqrt(Math.max(varP, 0) / n);
+    var seU = Math.sqrt(pr * (1 - pr) / n + pf * (1 - pf) / n);
+    var ciP = [d - 1.96 * seP, d + 1.96 * seP];
+    var ciU = [d - 1.96 * seU, d + 1.96 * seU];
+    $("pref").textContent = pct(pr);
+    $("pft").textContent = pct(pf);
+    $("delta").textContent = fmt(d, 4);
+    $("agree").textContent = pct(1 - (b + c) / n);
+    $("sep").textContent = seP.toFixed(5);
+    $("seu").textContent = seU.toFixed(5);
+    function verdict(el, ci, name) {
+      var excl = ci[0] > 0 || ci[1] < 0;
+      el.className = "verdict " + (excl ? "detect" : "nodetect");
+      el.textContent = name + (excl ? " interval excludes zero: the change is detected at the 5% level." : " interval includes zero: the change is not distinguished from noise at this n.");
+    }
+    verdict($("vp"), ciP, "Paired");
+    verdict($("vu"), ciU, "Unpaired");
+    draw(d, ciP, ciU);
+  }
+
+  [nEl, refEl].forEach(function (el) { el.addEventListener("input", update); el.addEventListener("change", update); });
+  [lossEl, gainEl].forEach(function (el) { el.addEventListener("input", update); });
+  Array.prototype.forEach.call(document.querySelectorAll("button[data-p]"), function (btn) {
+    btn.addEventListener("click", function () {
+      var p = btn.getAttribute("data-p").split(",").map(Number);
+      nEl.value = p[0]; refEl.value = p[1];
+      clampInputs();
+      lossEl.value = p[2]; gainEl.value = p[3];
+      update();
+    });
+  });
+  if (window.matchMedia) {
+    var mq = window.matchMedia("(prefers-color-scheme: dark)");
+    if (mq.addEventListener) mq.addEventListener("change", update);
+  }
+  update();
+})();
+</script>
+</body>
+</html>

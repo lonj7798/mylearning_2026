@@ -7,6 +7,8 @@ source_url: https://arxiv.org/abs/2203.14465
 created_at: "2026-04-23"
 ---
 
+> Superseded by the 2026-09 revision of read.md; kept for history.
+
 # Excerpt: STaR — the original self-improvement SFT bridge ch-31 is descended from
 
 **Source library:** `wiki/raw-data/llm-training/papers/star.md`

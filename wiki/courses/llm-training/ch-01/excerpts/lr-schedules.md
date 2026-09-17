@@ -7,6 +7,8 @@ source_url: https://arxiv.org/abs/1706.03762
 created_at: "2026-04-23"
 ---
 
+> Superseded by the 2026-09 revision of read.md; kept for history.
+
 # Excerpt: LR schedules — warmup, cosine, inverse-sqrt, WSD
 
 **Authors (composite):** Ashish Vaswani et al. (inverse-sqrt + warmup, 2017); Ilya Loshchilov, Frank Hutter (SGDR/cosine, 2017); Shengding Hu et al. (MiniCPM/WSD, 2024); Alexander Hägele et al. (2024)

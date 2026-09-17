@@ -1,0 +1,275 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Negative Gradient Lab</title>
+<style>
+:root{
+  color-scheme: light;
+  --bg:#fcfcfb; --panel:#ffffff; --ink:#0b0b0b; --muted:#52514e; --line:#dcdad3;
+  --before:#9b9a93; --after:#2a78d6; --gain:#1baf7a; --loss:#e34948;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    color-scheme: dark;
+    --bg:#1a1a19; --panel:#232322; --ink:#ffffff; --muted:#c3c2b7; --line:#3c3c3a;
+    --before:#7b7a74; --after:#3987e5; --gain:#199e70; --loss:#e66767;
+  }
+}
+:root[data-theme="dark"]{
+  color-scheme: dark;
+  --bg:#1a1a19; --panel:#232322; --ink:#ffffff; --muted:#c3c2b7; --line:#3c3c3a;
+  --before:#7b7a74; --after:#3987e5; --gain:#199e70; --loss:#e66767;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font:14px/1.55 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+.wrap{max-width:1000px;margin:0 auto;padding-inline:16px;padding-block:20px 40px}
+h1{font-size:20px;margin:0 0 4px}
+h2{font-size:14px;margin:0 0 8px}
+p.lead{margin:0 0 16px;color:var(--muted)}
+.grid{display:grid;grid-template-columns:minmax(0,290px) minmax(0,1fr);gap:16px}
+@media (max-width:780px){.grid{grid-template-columns:minmax(0,1fr)}}
+.panel{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:12px 14px;margin-bottom:16px}
+label{display:block;font-size:13px;margin:10px 0 2px}
+input[type=range]{width:100%}
+select,button{font:inherit;color:var(--ink);background:var(--panel);border:1px solid var(--line);border-radius:6px;padding:4px 8px}
+button{cursor:pointer;margin-right:6px}
+.val{font-variant-numeric:tabular-nums;color:var(--muted);font-size:12px}
+table{border-collapse:collapse;width:100%;font-variant-numeric:tabular-nums;font-size:13px}
+th,td{text-align:right;padding:4px 6px;border-bottom:1px solid var(--line)}
+th:first-child,td:first-child{text-align:left}
+th{color:var(--muted);font-weight:600}
+.pos{color:var(--gain)} .neg{color:var(--loss)}
+.legend{display:flex;gap:14px;align-items:center;font-size:12.5px;color:var(--muted);margin-bottom:6px;flex-wrap:wrap}
+.key{display:inline-block;width:10px;height:10px;border-radius:2px;margin-right:5px;vertical-align:middle}
+.formula{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12.5px;background:var(--bg);border:1px solid var(--line);border-radius:6px;padding:6px 8px;margin:8px 0;white-space:pre-wrap;overflow-x:auto}
+.scroll{overflow-x:auto}
+.readout{font-size:13px;margin-top:8px}
+.caption{margin-top:6px;font-size:12.5px;color:var(--muted)}
+svg{display:block;max-width:100%}
+svg text{fill:var(--ink)}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Negative gradient lab: where the removed probability goes</h1>
+  <p class="lead">Five tokens at one position. Choose an update rule and an advantage sign, apply steps to the logits, and compare the distribution before and after. Defaults reproduce the worked example in §2 of read.md: logits 2, 1, 0, −1, −2 and step size 0.5.</p>
+
+  <div class="grid">
+    <div>
+      <div class="panel">
+        <h2>Controls</h2>
+        <div id="logitControls"></div>
+        <label for="rule">Update rule</label>
+        <select id="rule">
+          <option value="pg">Policy gradient on log π (advantage A)</option>
+          <option value="nsr">NSR form: loss written on π, not log π</option>
+          <option value="ul">Unlikelihood: −log(1 − p) on the sampled token</option>
+          <option value="npo">NPO weight: 2π^β/(π^β + π_ref^β)</option>
+        </select>
+        <label for="sampled">Sampled token</label>
+        <select id="sampled"></select>
+        <label for="sign">Advantage sign</label>
+        <select id="sign">
+          <option value="-1">negative (A = −1)</option>
+          <option value="1">positive (A = +1)</option>
+        </select>
+        <label for="beta">NPO β <span class="val" id="betaV">1.0</span></label>
+        <input id="beta" type="range" min="0.1" max="2" step="0.1" value="1">
+        <label for="eta">Step size η <span class="val" id="etaV">0.50</span></label>
+        <input id="eta" type="range" min="0.1" max="2" step="0.1" value="0.5">
+        <div style="margin-top:12px">
+          <button id="step1">Apply 1 step</button>
+          <button id="step10">Apply 10 steps</button>
+          <button id="reset">Reset</button>
+        </div>
+      </div>
+
+      <div class="panel">
+        <h2>Entropy by sampled token and sign</h2>
+        <p class="caption" style="margin-top:0">One step from the current distribution, for each token as the sampled one. The sign flip down each column is the four-quadrant reading of the covariance law of Cui et al. 2025 (§3 of the entropy-mechanism source card), reproduced in §2 of read.md.</p>
+        <div class="scroll">
+          <table id="quadTable">
+            <thead><tr><th>Sampled token</th><th>p</th><th>ΔH at A = −1</th><th>ΔH at A = +1</th></tr></thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <div>
+      <div class="panel">
+        <h2>Distribution before and after</h2>
+        <div class="legend">
+          <span><span class="key" style="background:var(--before)"></span>probability before the update</span>
+          <span><span class="key" style="background:var(--after)"></span>probability after the update</span>
+          <span id="stepCount">steps applied: 0</span>
+        </div>
+        <div class="scroll"><svg id="chart" width="620" height="230" role="img" aria-label="Probability of each token before and after the update"></svg></div>
+        <div class="readout" id="readout"></div>
+        <div class="formula" id="ruleFormula"></div>
+      </div>
+
+      <div class="panel">
+        <h2>Per-token change</h2>
+        <div class="scroll">
+          <table id="mainTable">
+            <thead><tr><th>Token</th><th>logit before</th><th>p before</th><th>logit after</th><th>p after</th><th>Δp</th></tr></thead>
+            <tbody></tbody>
+          </table>
+        </div>
+        <p class="caption">Numbers are computed in the page from the logits on the left; they match read.md §2 at the default settings (step size 0.5, one step).</p>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+const NAMES = ["t1", "t2", "t3", "t4", "t5"];
+const START = [2, 1, 0, -1, -2];
+let base = START.slice();     // logits before the applied steps
+let cur = START.slice();      // logits after the applied steps
+let refP = softmax(START);    // reference distribution for the NPO weight
+let steps = 0;
+
+function softmax(z){
+  const m = Math.max(...z), e = z.map(x => Math.exp(x - m)), s = e.reduce((a, b) => a + b, 0);
+  return e.map(x => x / s);
+}
+function entropy(p){ return -p.reduce((a, x) => a + (x > 0 ? x * Math.log(x) : 0), 0); }
+
+function weight(rule, p, y, sign, beta){
+  // returns the scalar multiplying (1[j=y] - p_j); positive means push up
+  if (rule === "pg") return sign;
+  if (rule === "nsr") return sign * p[y];
+  if (rule === "ul") return -p[y] / (1 - p[y]);          // negative only, by construction
+  if (rule === "npo"){
+    const r = Math.pow(p[y] / refP[y], beta);
+    return -2 * r / (r + 1);                              // negative only, weight decays as p falls
+  }
+  return sign;
+}
+function applyStep(z, rule, y, sign, eta, beta){
+  const p = softmax(z), w = weight(rule, p, y, sign, beta);
+  return z.map((v, j) => v + eta * w * ((j === y ? 1 : 0) - p[j]));
+}
+
+const el = id => document.getElementById(id);
+const logitBox = el("logitControls");
+NAMES.forEach((n, i) => {
+  const lab = document.createElement("label");
+  lab.innerHTML = `logit of ${n} <span class="val" id="lv${i}"></span>`;
+  const inp = document.createElement("input");
+  inp.type = "range"; inp.min = "-4"; inp.max = "4"; inp.step = "0.1"; inp.value = String(START[i]); inp.id = "lg" + i;
+  inp.addEventListener("input", () => {
+    base[i] = parseFloat(inp.value); cur = base.slice(); refP = softmax(base); steps = 0; render();
+  });
+  logitBox.appendChild(lab); logitBox.appendChild(inp);
+});
+const sampledSel = el("sampled");
+NAMES.forEach((n, i) => { const o = document.createElement("option"); o.value = String(i); o.textContent = n; sampledSel.appendChild(o); });
+sampledSel.value = "3";
+
+["rule", "sampled", "sign", "beta", "eta"].forEach(id => el(id).addEventListener("input", () => { cur = base.slice(); steps = 0; render(); }));
+el("step1").addEventListener("click", () => { doSteps(1); });
+el("step10").addEventListener("click", () => { doSteps(10); });
+el("reset").addEventListener("click", () => { cur = base.slice(); steps = 0; render(); });
+
+function readControls(){
+  return {
+    rule: el("rule").value,
+    y: parseInt(el("sampled").value, 10),
+    sign: parseFloat(el("sign").value),
+    eta: parseFloat(el("eta").value),
+    beta: parseFloat(el("beta").value)
+  };
+}
+function doSteps(n){
+  const c = readControls();
+  for (let k = 0; k < n; k++) cur = applyStep(cur, c.rule, c.y, c.sign, c.eta, c.beta);
+  steps += n; render();
+}
+
+const FORMULAS = {
+  pg: "Delta z_j = eta * A * (1[j = y] - p_j)          A = advantage of the response containing token y",
+  nsr: "Delta z_j = eta * A * p_y * (1[j = y] - p_j)    loss on the probability, not its logarithm",
+  ul:  "Delta z_j = -eta * (p_y / (1 - p_y)) * (1[j = y] - p_j)    always a push-down",
+  npo: "Delta z_j = -eta * W * (1[j = y] - p_j),  W = 2 (p_y/p_ref)^beta / ((p_y/p_ref)^beta + 1)"
+};
+
+function render(){
+  const c = readControls();
+  NAMES.forEach((n, i) => { el("lv" + i).textContent = base[i].toFixed(1); el("lg" + i).value = String(base[i]); });
+  el("etaV").textContent = c.eta.toFixed(2);
+  el("betaV").textContent = c.beta.toFixed(1);
+  el("stepCount").textContent = "steps applied: " + steps;
+  el("ruleFormula").textContent = FORMULAS[c.rule];
+
+  const pBefore = softmax(base), pAfter = softmax(cur);
+  drawChart(pBefore, pAfter);
+
+  const tb = document.querySelector("#mainTable tbody");
+  tb.innerHTML = "";
+  NAMES.forEach((n, i) => {
+    const d = pAfter[i] - pBefore[i];
+    const tr = document.createElement("tr");
+    tr.innerHTML = `<td>${n}${i === c.y ? " (sampled)" : ""}</td><td>${base[i].toFixed(3)}</td><td>${pBefore[i].toFixed(4)}</td>` +
+      `<td>${cur[i].toFixed(3)}</td><td>${pAfter[i].toFixed(4)}</td>` +
+      `<td class="${d >= 0 ? "pos" : "neg"}">${d >= 0 ? "+" : ""}${d.toFixed(4)}</td>`;
+    tb.appendChild(tr);
+  });
+
+  const hB = entropy(pBefore), hA = entropy(pAfter);
+  const topIdx = pBefore.indexOf(Math.max(...pBefore));
+  const gainTop = pAfter[topIdx] - pBefore[topIdx];
+  const dY = pAfter[c.y] - pBefore[c.y];
+  const moveTxt = steps === 0 ? "No steps applied yet." :
+    `Sampled token ${NAMES[c.y]}: ${dY >= 0 ? "+" : ""}${dY.toFixed(4)}. Most probable token before the update, ${NAMES[topIdx]} at ` +
+    `${pBefore[topIdx].toFixed(4)}: ${gainTop >= 0 ? "+" : ""}${gainTop.toFixed(4)}.`;
+  el("readout").innerHTML =
+    `Entropy ${hB.toFixed(4)} → ${hA.toFixed(4)} nats (<span class="${hA - hB >= 0 ? "pos" : "neg"}">${hA - hB >= 0 ? "+" : ""}${(hA - hB).toFixed(4)}</span>). ` + moveTxt;
+
+  const qt = document.querySelector("#quadTable tbody");
+  qt.innerHTML = "";
+  const p0 = softmax(cur), h0 = entropy(p0);
+  NAMES.forEach((n, i) => {
+    const dneg = entropy(softmax(applyStep(cur, c.rule, i, -1, c.eta, c.beta))) - h0;
+    const dpos = entropy(softmax(applyStep(cur, c.rule, i, 1, c.eta, c.beta))) - h0;
+    const tr = document.createElement("tr");
+    tr.innerHTML = `<td>${n}</td><td>${p0[i].toFixed(4)}</td>` +
+      `<td class="${dneg >= 0 ? "pos" : "neg"}">${dneg >= 0 ? "+" : ""}${dneg.toFixed(4)}</td>` +
+      `<td class="${dpos >= 0 ? "pos" : "neg"}">${dpos >= 0 ? "+" : ""}${dpos.toFixed(4)}</td>`;
+    qt.appendChild(tr);
+  });
+}
+
+function drawChart(pB, pA){
+  const svg = el("chart");
+  const W = 620, H = 230, padL = 44, padR = 10, padT = 12, padB = 34;
+  const iw = W - padL - padR, ih = H - padT - padB;
+  const maxP = Math.max(0.2, ...pB, ...pA);
+  const n = NAMES.length, group = iw / n, barW = Math.min(26, group / 2 - 6);
+  let s = "";
+  for (let g = 0; g <= 4; g++){
+    const v = maxP * g / 4, y = padT + ih - (v / maxP) * ih;
+    s += `<line x1="${padL}" y1="${y.toFixed(1)}" x2="${W - padR}" y2="${y.toFixed(1)}" stroke="var(--line)" stroke-width="1"/>`;
+    s += `<text x="${padL - 6}" y="${(y + 4).toFixed(1)}" text-anchor="end" font-size="11" fill="var(--muted)">${v.toFixed(2)}</text>`;
+  }
+  NAMES.forEach((name, i) => {
+    const cx = padL + group * i + group / 2;
+    const hB = (pB[i] / maxP) * ih, hA = (pA[i] / maxP) * ih;
+    const x1 = cx - barW - 2, x2 = cx + 2;
+    s += `<rect x="${x1.toFixed(1)}" y="${(padT + ih - hB).toFixed(1)}" width="${barW}" height="${hB.toFixed(1)}" rx="3" fill="var(--before)"/>`;
+    s += `<rect x="${x2.toFixed(1)}" y="${(padT + ih - hA).toFixed(1)}" width="${barW}" height="${hA.toFixed(1)}" rx="3" fill="var(--after)"/>`;
+    s += `<text x="${cx}" y="${H - 14}" text-anchor="middle" font-size="12">${name}</text>`;
+    s += `<text x="${cx}" y="${(padT + ih - Math.max(hA, hB) - 5).toFixed(1)}" text-anchor="middle" font-size="11" fill="var(--muted)">${pA[i].toFixed(3)}</text>`;
+  });
+  s += `<line x1="${padL}" y1="${padT + ih}" x2="${W - padR}" y2="${padT + ih}" stroke="var(--line)" stroke-width="1"/>`;
+  svg.innerHTML = s;
+}
+
+render();
+</script>
+</body>
+</html>

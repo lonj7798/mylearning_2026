@@ -151,3 +151,15 @@ Generator가 perfect해도 발생. Finite sampling이 low-probability를 *under-
 
 
 
+
+---
+
+## Q-정정 (2026-09 revision)
+
+2026-09 revision에서 read.md를 primary source 기준으로 다시 작성했다. 아래 Q의 kernel에 이제 정정된 사실이 들어 있다. 이전 entry의 line reference(예: "read.md L156")는 git commit 4a72e54 시점의 read.md를 가리킨다.
+
+- **Q1.** Shumailov et al.의 LLM 실험은 pretraining이 아니라 OPT-125m을 wikitext2로 fine-tuning한 실험이다. "real anchor 제거 + recursion + verification gate 없음"이 모두 있어야 collapse라는 정리는 정확하지 않다: verifier 없이 real data와 synthetic data를 accumulate만 해도 test error가 bounded로 유지된다. 이 결과는 9M–126M language model(TinyStories)과 linear regression에서 측정되었고, Gemma 2 SFT에서 재현되었다(read.md §2, [[model-collapse-accumulation]] Table 2, [[collapse-or-thrive]] Fig. 3). "1% synthetic만으로 scaling law break"는 label-shift linear regression theory의 결론이고, GPT-2 실험에서는 scaling이 늦어지는 것만 보였고 plateau는 보이지 않았다(§3). phi-1 data는 filtered code-language 약 6B tokens + synthetic textbook 1B tokens 미만이며, 1.3B는 parameter 수이다([[phi-textbooks]] §2 기준).
+- **Q2.** "α = 0.3~0.5"는 source가 없다. Synthetic data가 섞여도 `σ²d/n` term은 n에 따라 계속 줄어들고, n과 무관한 floor `p₂²c²`가 더해진다(Corollary 1, Eq. 12). Power-law term이 사라지는 것이 아니다.
+- **Q3.** `c(p) = p/(1−p)`, `σ_synth²`, "p → 1에서 발산"은 논문의 식이 아니다. 논문의 floor는 `p₂²c²`이고, `p₂`는 synthetic fraction, `c²`는 synthetic label function과 real label function의 mismatch(quality)이다.
+- **Q4.** 논문은 rare-token perplexity를 측정하지 않았다. Real test set의 mean perplexity는 generation마다 올라가고, generation-0 model로 채점한 generated sequence 분포가 high-probability 쪽으로 이동하면서 긴 tail이 생긴다(Fig. 1). "GPT-4/Claude의 저자원어 tail이 이미 collapsed"라는 주장은 확인된 source가 없다(Open question).
+- **Q5.** "No gate면 무조건 collapse"는 틀렸다: accumulate는 verifier 없이 collapse를 막는다. Verifier는 `σ_synth²`를 0으로 만드는 장치가 아니라, 정답 keep rate ϕ와 오답 keep rate ψ의 비율로 breakdown point `p* = 1/(1 + ψ/ϕ)`를 올리는 장치이고, 여러 round 반복하면 model은 verifier의 knowledge center로 수렴한다(§4). Gate 강도 목록(faithful-synth-eval 포함)은 source가 없고, exact-match verifier도 false positive(정답이지만 틀린 reasoning)와 false negative(parser가 정답을 버림, [[bespoke-stratos]])를 가진다.

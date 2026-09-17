@@ -1,0 +1,302 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>On-policy updates, KL to the base model, and pass@k</title>
+<style>
+  :root {
+    --bg: #fbfaf7;
+    --panel: #ffffff;
+    --ink: #1f2328;
+    --muted: #5b636d;
+    --line: #d9dde2;
+    --base: #5b636d;
+    --rl: #1f6feb;
+    --sft: #b35c00;
+    --accent: #1a7f37;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #14171b; --panel: #1c2026; --ink: #e6e8eb; --muted: #9aa3ad; --line: #343a42;
+      --base: #9aa3ad; --rl: #6ea8fe; --sft: #f0a35e; --accent: #56d364;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #14171b; --panel: #1c2026; --ink: #e6e8eb; --muted: #9aa3ad; --line: #343a42;
+    --base: #9aa3ad; --rl: #6ea8fe; --sft: #f0a35e; --accent: #56d364;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink);
+    font: 15px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }
+  main { max-width: 900px; margin: 0 auto; padding: 24px 16px 48px; }
+  h1 { font-size: 1.3rem; margin: 0 0 4px; }
+  h2 { font-size: 1.05rem; margin: 0 0 8px; }
+  p.lead, p.note { color: var(--muted); margin: 0 0 16px; }
+  p.note { font-size: 0.85rem; }
+  .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 16px; margin-bottom: 18px; }
+  table { border-collapse: collapse; width: 100%; font-size: 0.9rem; }
+  th, td { border-bottom: 1px solid var(--line); padding: 6px 8px; text-align: right; }
+  th:first-child, td:first-child { text-align: left; }
+  input[type="number"] { width: 5.5rem; padding: 4px 6px; font: inherit; color: var(--ink);
+    background: var(--bg); border: 1px solid var(--line); border-radius: 4px; }
+  .row { display: flex; flex-wrap: wrap; gap: 14px; align-items: flex-end; margin-bottom: 12px; }
+  .field label { display: block; font-size: 0.8rem; color: var(--muted); margin-bottom: 3px; }
+  .out { font-variant-numeric: tabular-nums; }
+  .kv { display: grid; grid-template-columns: 1fr auto; gap: 4px 12px; font-size: 0.92rem; max-width: 460px; }
+  .kv div:nth-child(even) { text-align: right; font-variant-numeric: tabular-nums; }
+  .bar { height: 12px; border-radius: 2px; }
+  svg { max-width: 100%; height: auto; display: block; }
+  .legend { display: flex; gap: 16px; font-size: 0.85rem; color: var(--muted); margin-top: 6px; flex-wrap: wrap; }
+  .swatch { display: inline-block; width: 12px; height: 12px; border-radius: 2px; margin-right: 5px; vertical-align: -1px; }
+  code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 0.88em; }
+</style>
+</head>
+<body>
+<main>
+  <h1>On-policy updates, KL to the base model, and pass@k</h1>
+  <p class="lead">Three panels for ch-38a. Panel 1 computes the KL cost of two ways to reach the same task accuracy.
+  Panel 2 computes pass@k from sample counts and shows when an RL model that is ahead at k = 1 falls behind at larger k.
+  Panel 3 shows measured diversity across three post-training stages of OLMo 2.</p>
+
+  <section class="panel">
+    <h2>1. Two distributions that both solve the task</h2>
+    <p class="note">Base distribution π₀ over five candidate answers for one prompt. Mark the answers a verifier accepts.
+    The rejection-sampling projection q_RS is π₀ restricted to the accepted set and renormalized; this is the distribution
+    policy gradient converges to with a binary reward (Lemma 5.1 and Theorem 5.2 of arXiv:2509.04259v1 §5.2).
+    The SFT target q_SFT places all mass on one accepted answer chosen by an external annotator.
+    Both reach 100% accuracy. The reported quantity is the reverse KL D(q ‖ π₀) in nats,
+    which equals −ln π₀(accepted set) for q_RS and −ln π₀(target) for q_SFT.</p>
+    <table id="dist-table">
+      <thead><tr><th>Answer</th><th>π₀ (unnormalized)</th><th>Accepted</th><th>SFT target</th><th>π₀</th><th>q_RS</th><th>q_SFT</th></tr></thead>
+      <tbody></tbody>
+    </table>
+    <div class="kv" style="margin-top:12px">
+      <div>π₀(accepted set)</div><div id="p-correct" class="out"></div>
+      <div>D(q_RS ‖ π₀) = −ln π₀(accepted set)</div><div id="kl-rs" class="out"></div>
+      <div>D(q_SFT ‖ π₀) = −ln π₀(target)</div><div id="kl-sft" class="out"></div>
+      <div>ratio D(q_SFT ‖ π₀) / D(q_RS ‖ π₀)</div><div id="kl-ratio" class="out"></div>
+    </div>
+    <p class="note" style="margin-top:10px">The forgetting law of arXiv:2509.04259v1 uses the other direction,
+    E<sub>x∼τ</sub>[D(π₀ ‖ π)], estimated on samples; with a point-mass q that quantity is unbounded, which is why the
+    panel reports the direction the projection result is stated in.</p>
+  </section>
+
+  <section class="panel">
+    <h2>2. pass@k from sample counts</h2>
+    <p class="note">Unbiased estimator of arXiv:2504.13837v5 App. A.2:
+    <code>pass@k = mean over problems of 1 − C(n − c, k) / C(n, k)</code>, with n samples per problem and c correct.
+    The default numbers are constructed for this course, not taken from a source; they reproduce the shape reported in §3.2,
+    where the RL model leads at k = 1 and the base model leads at larger k.</p>
+    <div class="row">
+      <div class="field"><label for="n-samples">n samples per problem</label><input id="n-samples" type="number" min="1" max="64" step="1" value="8"></div>
+      <div class="field"><label for="base-c1">base: correct on problem 1</label><input id="base-c1" type="number" min="0" step="1" value="3"></div>
+      <div class="field"><label for="base-c2">base: correct on problem 2</label><input id="base-c2" type="number" min="0" step="1" value="1"></div>
+      <div class="field"><label for="rl-c1">RL: correct on problem 1</label><input id="rl-c1" type="number" min="0" step="1" value="6"></div>
+      <div class="field"><label for="rl-c2">RL: correct on problem 2</label><input id="rl-c2" type="number" min="0" step="1" value="0"></div>
+    </div>
+    <svg id="passk" viewBox="0 0 640 300" role="img" aria-label="pass@k curves for a base model and an RL model"></svg>
+    <div class="legend">
+      <span><span class="swatch" style="background:var(--base)"></span>base model</span>
+      <span><span class="swatch" style="background:var(--rl)"></span>RL model</span>
+    </div>
+    <div class="kv" id="passk-readout" style="margin-top:10px"></div>
+  </section>
+
+  <section class="panel">
+    <h2>3. Distinct generations per stage, OLMo 2</h2>
+    <p class="note">distinct<sub>10</sub> on NoveltyBench (10 generations at temperature 1, functional-equivalence classes),
+    measured after SFT, after DPO, and after RLVR. Values from arXiv:2504.05228v4 §4.4 Figure 6.
+    Cumulative utility<sub>10</sub> over the same stages is 2.40 → 3.03 → 3.21 (1B), 4.02 → 4.35 → 4.32 (7B),
+    4.29 → 4.62 → 4.46 (13B), 4.22 → 4.63 → 4.62 (32B): diversity falls at every size while utility does not.</p>
+    <svg id="olmo" viewBox="0 0 640 280" role="img" aria-label="distinct generations by OLMo 2 size and post-training stage"></svg>
+    <div class="legend">
+      <span><span class="swatch" style="background:var(--accent)"></span>SFT</span>
+      <span><span class="swatch" style="background:var(--rl)"></span>DPO</span>
+      <span><span class="swatch" style="background:var(--sft)"></span>RLVR</span>
+    </div>
+  </section>
+</main>
+
+<script>
+(function () {
+  "use strict";
+
+  /* ---------- Panel 1 ---------- */
+  var answers = [
+    { name: "a1", w: 0.35, ok: false },
+    { name: "a2", w: 0.25, ok: true },
+    { name: "a3", w: 0.20, ok: false },
+    { name: "a4", w: 0.12, ok: true },
+    { name: "a5", w: 0.08, ok: false }
+  ];
+  var target = 3; // index of the SFT target answer (a4)
+  var tbody = document.querySelector("#dist-table tbody");
+
+  function buildRows() {
+    answers.forEach(function (a, i) {
+      var tr = document.createElement("tr");
+      tr.innerHTML =
+        "<td>" + a.name + "</td>" +
+        '<td><input type="number" min="0" step="0.01" value="' + a.w + '" data-w="' + i + '"></td>' +
+        '<td><input type="checkbox" data-ok="' + i + '"' + (a.ok ? " checked" : "") + "></td>" +
+        '<td><input type="radio" name="target" data-t="' + i + '"' + (i === target ? " checked" : "") + "></td>" +
+        '<td class="out" data-p0="' + i + '"></td>' +
+        '<td class="out" data-qrs="' + i + '"></td>' +
+        '<td class="out" data-qsft="' + i + '"></td>';
+      tbody.appendChild(tr);
+    });
+    tbody.addEventListener("input", function (e) {
+      var el = e.target;
+      if (el.dataset.w !== undefined) { answers[+el.dataset.w].w = Math.max(0, parseFloat(el.value) || 0); }
+      if (el.dataset.ok !== undefined) { answers[+el.dataset.ok].ok = el.checked; }
+      if (el.dataset.t !== undefined) { target = +el.dataset.t; }
+      render1();
+    });
+  }
+
+  function fmt(x, d) { return (x === null || !isFinite(x)) ? "—" : x.toFixed(d === undefined ? 3 : d); }
+
+  function render1() {
+    var total = answers.reduce(function (s, a) { return s + a.w; }, 0);
+    var p0 = answers.map(function (a) { return total > 0 ? a.w / total : 0; });
+    var pc = answers.reduce(function (s, a, i) { return s + (a.ok ? p0[i] : 0); }, 0);
+    var qrs = answers.map(function (a, i) { return a.ok && pc > 0 ? p0[i] / pc : 0; });
+    var qsft = answers.map(function (a, i) { return i === target ? 1 : 0; });
+
+    answers.forEach(function (a, i) {
+      tbody.querySelector('[data-p0="' + i + '"]').textContent = fmt(p0[i]);
+      tbody.querySelector('[data-qrs="' + i + '"]').textContent = fmt(qrs[i]);
+      tbody.querySelector('[data-qsft="' + i + '"]').textContent = fmt(qsft[i]);
+    });
+
+    var klRS = pc > 0 ? -Math.log(pc) : null;
+    var pt = p0[target];
+    var targetAccepted = answers[target].ok;
+    var klSFT = pt > 0 ? -Math.log(pt) : null;
+
+    document.getElementById("p-correct").textContent = fmt(pc);
+    document.getElementById("kl-rs").textContent = klRS === null ? "—" : fmt(klRS) + " nats";
+    document.getElementById("kl-sft").textContent =
+      (klSFT === null ? "—" : fmt(klSFT) + " nats") + (targetAccepted ? "" : " (target not accepted: accuracy < 100%)");
+    document.getElementById("kl-ratio").textContent =
+      (klRS && klSFT) ? fmt(klSFT / klRS, 2) + "×" : "—";
+  }
+
+  /* ---------- Panel 2 ---------- */
+  function logChoose(n, k) {
+    if (k < 0 || k > n) { return -Infinity; }
+    var s = 0;
+    for (var i = 0; i < k; i++) { s += Math.log(n - i) - Math.log(i + 1); }
+    return s;
+  }
+  function passAtK(n, c, k) {
+    if (k > n) { return null; }
+    if (n - c < k) { return 1; }
+    return 1 - Math.exp(logChoose(n - c, k) - logChoose(n, k));
+  }
+
+  function readInt(id, lo, hi) {
+    var v = parseInt(document.getElementById(id).value, 10);
+    if (isNaN(v)) { v = lo; }
+    return Math.min(hi, Math.max(lo, v));
+  }
+
+  function render2() {
+    var n = readInt("n-samples", 1, 64);
+    var bc = [readInt("base-c1", 0, n), readInt("base-c2", 0, n)];
+    var rc = [readInt("rl-c1", 0, n), readInt("rl-c2", 0, n)];
+    var ks = [], base = [], rl = [];
+    for (var k = 1; k <= n; k++) {
+      ks.push(k);
+      base.push((passAtK(n, bc[0], k) + passAtK(n, bc[1], k)) / 2);
+      rl.push((passAtK(n, rc[0], k) + passAtK(n, rc[1], k)) / 2);
+    }
+
+    var W = 640, H = 300, L = 52, R = 16, T = 16, B = 42;
+    var iw = W - L - R, ih = H - T - B;
+    var x = function (i) { return L + (ks.length === 1 ? iw / 2 : iw * i / (ks.length - 1)); };
+    var y = function (v) { return T + ih * (1 - v); };
+    var parts = [];
+    parts.push('<rect x="' + L + '" y="' + T + '" width="' + iw + '" height="' + ih + '" fill="none" stroke="var(--line)"/>');
+    [0, 0.25, 0.5, 0.75, 1].forEach(function (v) {
+      parts.push('<line x1="' + L + '" y1="' + y(v) + '" x2="' + (L + iw) + '" y2="' + y(v) + '" stroke="var(--line)" stroke-dasharray="3 3"/>');
+      parts.push('<text x="' + (L - 8) + '" y="' + (y(v) + 4) + '" fill="var(--muted)" font-size="11" text-anchor="end">' + v.toFixed(2) + "</text>");
+    });
+    ks.forEach(function (k, i) {
+      if (ks.length <= 16 || k % 4 === 0 || k === 1) {
+        parts.push('<text x="' + x(i) + '" y="' + (T + ih + 16) + '" fill="var(--muted)" font-size="11" text-anchor="middle">' + k + "</text>");
+      }
+    });
+    parts.push('<text x="' + (L + iw / 2) + '" y="' + (H - 8) + '" fill="var(--muted)" font-size="12" text-anchor="middle">k (samples allowed per problem)</text>');
+    parts.push('<text transform="translate(14,' + (T + ih / 2) + ') rotate(-90)" fill="var(--muted)" font-size="12" text-anchor="middle">pass@k</text>');
+
+    function path(series, color) {
+      var d = series.map(function (v, i) { return (i ? "L" : "M") + x(i).toFixed(1) + " " + y(v).toFixed(1); }).join(" ");
+      parts.push('<path d="' + d + '" fill="none" stroke="' + color + '" stroke-width="2.2"/>');
+      series.forEach(function (v, i) {
+        parts.push('<circle cx="' + x(i).toFixed(1) + '" cy="' + y(v).toFixed(1) + '" r="3" fill="' + color + '"/>');
+      });
+    }
+    path(base, "var(--base)");
+    path(rl, "var(--rl)");
+    document.getElementById("passk").innerHTML = parts.join("");
+
+    var cross = null;
+    for (var j = 0; j < ks.length; j++) {
+      if (rl[j] <= base[j]) { cross = ks[j]; break; }
+    }
+    var ro = document.getElementById("passk-readout");
+    ro.innerHTML =
+      "<div>pass@1 (base / RL)</div><div>" + fmt(base[0]) + " / " + fmt(rl[0]) + "</div>" +
+      "<div>pass@" + n + " (base / RL)</div><div>" + fmt(base[n - 1]) + " / " + fmt(rl[n - 1]) + "</div>" +
+      "<div>smallest k where base ≥ RL</div><div>" + (cross === null ? "none in range" : cross) + "</div>";
+  }
+
+  /* ---------- Panel 3 ---------- */
+  function render3() {
+    var data = [
+      { size: "1B", v: [8.83, 8.08, 7.85] },
+      { size: "7B", v: [7.46, 5.96, 5.72] },
+      { size: "13B", v: [7.47, 5.61, 5.16] },
+      { size: "32B", v: [7.25, 5.22, 5.08] }
+    ];
+    var colors = ["var(--accent)", "var(--rl)", "var(--sft)"];
+    var W = 640, H = 280, L = 46, R = 12, T = 14, B = 44;
+    var iw = W - L - R, ih = H - T - B, maxV = 10;
+    var parts = [];
+    parts.push('<rect x="' + L + '" y="' + T + '" width="' + iw + '" height="' + ih + '" fill="none" stroke="var(--line)"/>');
+    [0, 2, 4, 6, 8, 10].forEach(function (v) {
+      var yy = T + ih * (1 - v / maxV);
+      parts.push('<line x1="' + L + '" y1="' + yy + '" x2="' + (L + iw) + '" y2="' + yy + '" stroke="var(--line)" stroke-dasharray="3 3"/>');
+      parts.push('<text x="' + (L - 8) + '" y="' + (yy + 4) + '" fill="var(--muted)" font-size="11" text-anchor="end">' + v + "</text>");
+    });
+    var gw = iw / data.length;
+    data.forEach(function (g, gi) {
+      var bw = gw / 5;
+      g.v.forEach(function (v, si) {
+        var bx = L + gi * gw + gw / 2 - 1.5 * bw + si * bw;
+        var bh = ih * v / maxV;
+        parts.push('<rect x="' + bx.toFixed(1) + '" y="' + (T + ih - bh).toFixed(1) + '" width="' + (bw - 3).toFixed(1) +
+          '" height="' + bh.toFixed(1) + '" fill="' + colors[si] + '"/>');
+        parts.push('<text x="' + (bx + (bw - 3) / 2).toFixed(1) + '" y="' + (T + ih - bh - 4).toFixed(1) +
+          '" fill="var(--muted)" font-size="10" text-anchor="middle">' + v.toFixed(2) + "</text>");
+      });
+      parts.push('<text x="' + (L + gi * gw + gw / 2) + '" y="' + (T + ih + 17) + '" fill="var(--muted)" font-size="12" text-anchor="middle">' + g.size + "</text>");
+    });
+    parts.push('<text x="' + (L + iw / 2) + '" y="' + (H - 8) + '" fill="var(--muted)" font-size="12" text-anchor="middle">OLMo 2 parameters</text>');
+    parts.push('<text transform="translate(13,' + (T + ih / 2) + ') rotate(-90)" fill="var(--muted)" font-size="12" text-anchor="middle">distinct generations (of 10)</text>');
+    document.getElementById("olmo").innerHTML = parts.join("");
+  }
+
+  buildRows();
+  render1();
+  render2();
+  render3();
+  ["n-samples", "base-c1", "base-c2", "rl-c1", "rl-c2"].forEach(function (id) {
+    document.getElementById(id).addEventListener("input", render2);
+  });
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,281 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Agentic Data Stage Map</title>
+<style>
+  :root {
+    color-scheme: light;
+    --surface-0: #f6f5f2; --surface-1: #fcfcfb; --border: #e2e0da; --grid: #ecebe6;
+    --text-primary: #0b0b0b; --text-secondary: #52514e; --text-muted: #77756f; --accent: #2a78d6;
+    --c-traj: #eb6834; --c-human: #e87ba4; --c-repo: #2a78d6; --c-trace: #4a3aa7; --c-tool: #1baf7a; --c-rl: #eda100; --c-none: #b9b7b0;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      color-scheme: dark;
+      --surface-0: #121211; --surface-1: #1a1a19; --border: #34332f; --grid: #2a2a27;
+      --text-primary: #ffffff; --text-secondary: #c3c2b7; --text-muted: #9a998f; --accent: #3987e5;
+      --c-traj: #d95926; --c-human: #d55181; --c-repo: #3987e5; --c-trace: #9085e9; --c-tool: #199e70; --c-rl: #c98500; --c-none: #5b5a55;
+    }
+  }
+  :root[data-theme="dark"] {
+    color-scheme: dark;
+    --surface-0: #121211; --surface-1: #1a1a19; --border: #34332f; --grid: #2a2a27;
+    --text-primary: #ffffff; --text-secondary: #c3c2b7; --text-muted: #9a998f; --accent: #3987e5;
+    --c-traj: #d95926; --c-human: #d55181; --c-repo: #3987e5; --c-trace: #9085e9; --c-tool: #199e70; --c-rl: #c98500; --c-none: #5b5a55;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--surface-0); color: var(--text-primary);
+    font: 14px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; padding-inline: 16px; padding-block: 20px; }
+  main { max-width: 1100px; margin: 0 auto; }
+  h1 { font-size: 1.25rem; margin: 0 0 4px; }
+  h2 { font-size: 1.05rem; margin: 0 0 6px; }
+  p { margin: 6px 0; color: var(--text-secondary); }
+  .card { background: var(--surface-1); border: 1px solid var(--border); border-radius: 10px; padding: 16px; margin-top: 14px; }
+  .legend { display: flex; flex-wrap: wrap; gap: 6px 16px; margin-top: 8px; }
+  .legend span { display: inline-flex; align-items: center; gap: 6px; color: var(--text-secondary); }
+  .sw { width: 12px; height: 12px; border-radius: 3px; flex: none; display: inline-block; }
+  .controls { display: flex; flex-wrap: wrap; gap: 8px 18px; align-items: center; margin-top: 8px; }
+  label { color: var(--text-secondary); }
+  select, input[type="number"] { font: inherit; color: var(--text-primary); background: var(--surface-0);
+    border: 1px solid var(--border); border-radius: 6px; padding: 4px 6px; }
+  input[type="number"] { width: 7em; }
+  .scroll { overflow-x: auto; }
+  table { border-collapse: collapse; width: 100%; min-width: 900px; }
+  th, td { text-align: left; vertical-align: top; padding: 6px 8px; border-bottom: 1px solid var(--grid); }
+  th { color: var(--text-secondary); font-weight: 600; white-space: nowrap; }
+  tr.row { cursor: pointer; }
+  tr.row:hover td, tr.row.sel td { background: var(--surface-0); }
+  tr.row:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+  .model { font-weight: 600; white-space: nowrap; }
+  .chip { display: block; border-left: 4px solid var(--c-none); padding: 1px 0 1px 6px; margin: 2px 0; color: var(--text-primary); font-size: 12.5px; }
+  .meas { font-size: 12.5px; color: var(--text-secondary); }
+  .detail h3 { margin: 0 0 4px; font-size: 1rem; }
+  .detail ul { margin: 4px 0 0 18px; padding: 0; color: var(--text-secondary); }
+  .grid2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 14px; }
+  .out { font-variant-numeric: tabular-nums; }
+  .out div { display: flex; justify-content: space-between; gap: 12px; border-bottom: 1px solid var(--grid); padding: 3px 0; }
+  .bar { height: 14px; display: flex; border-radius: 3px; overflow: hidden; border: 1px solid var(--border); margin: 6px 0; }
+  .muted { color: var(--text-muted); font-size: 12.5px; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Agentic data stage map</h1>
+  <p>Each row is one report. Each cell lists the data that the report places in that stage. Color marks the data type. Select a row to see loci and what the report measured about general (non-agentic) ability. All numbers are taken from the chapter's sources; "NR" means not reported.</p>
+  <div class="legend" id="legend"></div>
+  <div class="controls">
+    <label><input type="checkbox" id="onlyTraj"> Show only reports with agent trajectories before post-training</label>
+  </div>
+
+  <div class="card scroll">
+    <table>
+      <thead><tr><th>Report</th><th>Pre-training (main phase)</th><th>Mid-training / continued pre-training</th><th>SFT</th><th>RL</th><th>General ability measured after agentic mid-training</th></tr></thead>
+      <tbody id="tbody"></tbody>
+    </table>
+  </div>
+
+  <div class="card detail" id="detail" aria-live="polite"></div>
+
+  <div class="card">
+    <h2>Units check: unique tokens, upsampling, and seen-token share</h2>
+    <p>A mixture share changes when a source is upsampled. Enter unique tokens and an upsampling factor for up to three sources. The preset is Kimi-Dev's mid-training recipe (50B diff patches, 20B commit packs, 20B synthetic data upsampled 4×). The seen-token total is derived by multiplication; the paper states "∼150B tokens".</p>
+    <div class="grid2">
+      <div id="srcInputs"></div>
+      <div>
+        <div class="bar" id="barUnique" aria-label="unique token shares"></div>
+        <div class="muted">Unique-token shares</div>
+        <div class="bar" id="barSeen" aria-label="seen token shares"></div>
+        <div class="muted">Seen-token shares (the shares the optimizer sees)</div>
+        <div class="out" id="unitOut"></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>Long trajectories and the context window</h2>
+    <p>A trajectory longer than the training window is truncated or split. Enter a trajectory length, a window, and a stage token budget. The preset is AgentFounder Stage 2 (100B tokens at 128K). The sequence count assumes every sequence is filled to the window, so it is an upper bound on full-length sequences, not a reported number.</p>
+    <div class="controls">
+      <label>Trajectory length (tokens) <input type="number" id="trajL" value="200000" min="1"></label>
+      <label>Window (tokens) <input type="number" id="win" value="128000" min="1"></label>
+      <label>Stage budget (B tokens) <input type="number" id="budget" value="100" min="0" step="any"></label>
+    </div>
+    <div class="out" id="ctxOut" style="margin-top:8px"></div>
+  </div>
+</main>
+<script>
+(function () {
+  var TYPES = {
+    traj:  ["var(--c-traj)",  "Agent trajectories, model-generated"],
+    human: ["var(--c-human)", "Agent trajectories, origin includes human demonstrations"],
+    repo:  ["var(--c-repo)",  "Repository code, issues, PRs, commits"],
+    trace: ["var(--c-trace)", "Execution traces"],
+    tool:  ["var(--c-tool)",  "Tool documents, skills, schemas"],
+    rl:    ["var(--c-rl)",    "RL on agent environments"],
+    none:  ["var(--c-none)",  "Other data (no agent-specific data listed)"]
+  };
+  function c(type, text) { return { t: type, x: text }; }
+  var ROWS = [
+    { id: "k2", name: "Kimi K2", size: "1.04T total / 32B act.", trajBefore: false,
+      pre: [c("none", "15.5T at 4K: web, code, math, knowledge (rephrasing)")],
+      mid: [c("none", "Anneal 400B at 4K, then 60B at 32K; YaRN to 128K")],
+      sft: [c("traj", "Synthetic tool-use trajectories: 3000+ MCP tools, 20,000+ synthetic tools, LLM judge")],
+      rl: [c("rl", "Verifiable-reward gym incl. SWE sandbox; rubric reward")],
+      meas: "No per-stage measurement of agent data. Post-trained scores only.",
+      loci: ["kimi-k2 §2.2, §2.5 (pre-training data and annealing)", "§3.1, §3.1.1 (agentic synthesis is part of SFT)", "Card Verification: no injection of agentic trajectories into pre-training reported"] },
+    { id: "k25", name: "Kimi K2.5", size: "1.04T total / 32B act.", trajBefore: true,
+      pre: [c("repo", "15T joint vision-text at 4K; code upweighted incl. repository code, issues, code reviews, commit histories"), c("human", "GUI screenshots and action trajectories, incl. human-annotated demonstrations (share NR)")],
+      mid: [c("none", "32K→262K, 500B→200B: high-quality text and multimodal, long text, long video, reasoning, long-CoT")],
+      sft: [c("none", "Text-only (zero-vision) SFT")],
+      rl: [c("rl", "Joint text-vision RL, agent swarm")],
+      meas: "No ablation of agent or repository data in pre-training.",
+      loci: ["kimi-k2-5 Table 3, §4.3", "App. B.2 (code), App. B.3 (GUI action trajectories)"] },
+    { id: "glm45", name: "GLM-4.5", size: "355B total / 32B act.", trajBefore: true,
+      pre: [c("none", "15T general (mainly web) + 7T code/math/science up-sampled, at 4K")],
+      mid: [c("repo", "500B at 32K: repo-level code; issues, PRs, commits in diff-like format"), c("none", "500B at 32K: synthetic reasoning"), c("traj", "100B at 128K: long documents + large-scale synthetic agent trajectories")],
+      sft: [c("traj", "Expert distillation; agent trajectories filtered by judge agents")],
+      rl: [c("rl", "Web-search and SWE agentic RL; general RL")],
+      meas: "Base-model table (MMLU 86.1, GSM8K 79.4, ...) with no before/after-mid-training comparison.",
+      loci: ["glm-4-5 §2.3, Figure 3", "glm-4-5-recipe mid-train rows", "§4.1 Table 2 (base model)"] },
+    { id: "glm5", name: "GLM-5", size: "744B total / 40B act.", trajBefore: true,
+      pre: [c("none", "27T corpus; code and reasoning prioritized")],
+      mid: [c("repo", "32K stage, 1T tokens; issue–PR data ≈160B unique tokens (stage placement NR)"), c("traj", "128K (500B) and 200K (50B): long documents and synthetic agent trajectories up-sampled")],
+      sft: [c("traj", "Trajectories from execution environments; erroneous segments loss-masked")],
+      rl: [c("rl", "Reasoning RL → agentic RL → general RL; cross-stage distillation")],
+      meas: "GLM-5-Base vs GLM-4.5-Base table: not a controlled comparison (size, data, attention, and tokens all differ).",
+      loci: ["glm-5 §1, §2.3", "App. A (LR 4e-5 → 1e-5 in mid-training)", "App. B.1 Table 11"] },
+    { id: "cwm", name: "CWM", size: "32B dense", trajBefore: true,
+      pre: [c("none", "8T at 8K; code ≈30% of mix")],
+      mid: [c("trace", "5T at 131K; CWM-specific data 30%: 120M+ traced functions, repo and CodeContests traces"), c("traj", "3M ForagerAgent Docker trajectories (not filtered by success)"), c("repo", "GitHub PR data; general code 40%; rehearsal 30%")],
+      sft: [c("traj", "100B at 32K; ≈30% rehearsal; agentic SWE RL trajectories")],
+      rl: [c("rl", "172B at 131K: agentic SWE, coding, math")],
+      meas: "Table 13 reports CWM-Mid on MMLU, GPQA, GSM8k, but no pre-mid-training row. Rehearsal share called essential; no ablation printed.",
+      loci: ["cwm-code-world-model Figure 1, §2.2-§2.3, §4.2", "§7.1 Table 4 (8B ablation)", "§7.7 Table 13"] },
+    { id: "af", name: "AgentFounder-30B", size: "Qwen3-30B-A3B-Base start", trajBefore: true,
+      pre: [c("none", "Qwen3 pre-training (not part of the paper)")],
+      mid: [c("traj", "CPT Stage 1: ≈200B at 32K, FAS + short HAS + knowledge reasoning"), c("traj", "CPT Stage 2: 100B at 128K, high-quality HAS agent data")],
+      sft: [c("traj", "SFT-A / SFT-B / SFT-C: general chat + ReAct trajectories")],
+      rl: [c("none", "NR in this paper")],
+      meas: "ACEBench (tool use) only: 67.2 → 70.0 against released Qwen3-30B-A3B. No knowledge, math, or chat benchmark.",
+      loci: ["agentfounder §2.1, §2.2-§2.3", "Tables 3-6; §3.5.2 scaling"] },
+    { id: "kd", name: "Kimi-Dev", size: "Qwen2.5-72B-Base start", trajBefore: true,
+      pre: [c("none", "Qwen2.5 pre-training (not part of the paper)")],
+      mid: [c("repo", "≈150B seen at 32K: ≈50B Agentless diff patches, ≈20B PR commit packs"), c("traj", "≈20B synthetic (≈10B localization rollouts + ≈10B simulated agent interactions), upsampled 4×")],
+      sft: [c("traj", "Cold start: R1 reasoning trajectories")],
+      rl: [c("rl", "Code-edit RL with test-execution reward")],
+      meas: "SWE benchmarks only (Verified, Live, Multilingual).",
+      loci: ["kimi-dev §3.2, App. A", "§4.2 Figures 5-7"] },
+    { id: "mt", name: "MidTool", size: "Qwen3-4B/8B-Base start", trajBefore: true,
+      pre: [c("none", "Qwen3 pre-training (not part of the paper)")],
+      mid: [c("tool", "20.3B at 8,192: web 42%, PDF 23%, code 26% incl. context-grounded augmentation"), c("traj", "Native agentic trajectories 9% (GPT-5 family, AWM rollouts, Nemotron Agentic)")],
+      sft: [c("traj", "100K TOUCAN tool-use samples")],
+      rl: [c("rl", "GRPO, 64 steps, 526 AWM environments")],
+      meas: "Tool-use benchmarks only (BFCL, τ²-Bench, MCP-Universe).",
+      loci: ["midtool Table 2, Tables 3-6, App. B"] },
+    { id: "spt", name: "SPT", size: "1.6B / 3B / 7B backbones", trajBefore: false,
+      pre: [c("none", "One general pre-training stage, no annealing")],
+      mid: [c("tool", "347.8M tokens at 4,096: public skill packages (no trajectories); AgentBank trajectory corpus as a control")],
+      sft: [c("none", "Tulu 3 or xLAM-FC")],
+      rl: [c("none", "GRPO test at 360M on math/IF data")],
+      meas: "Controlled: six-benchmark general average at equal tokens, 5 seeds. Change vs direct SFT −0.85 to +0.51. AgentBank trajectories at 3B + xLAM-FC: MMLU 50.10 vs 54.22 for the Dolmino general-data control.",
+      loci: ["skill-pretraining Table 1, Tables 12-13"] },
+    { id: "s2s", name: "State2State", size: "Qwen3-4B / 8B", trajBefore: false,
+      pre: [c("none", "Qwen3 training (not part of the paper)")],
+      mid: [c("rl", "State-reaching RL from random exploration, 80 steps (best validation checkpoint kept)")],
+      sft: [c("none", "Optional distillation SFT (200 trajectories)")],
+      rl: [c("rl", "Task RL on ALFWorld / ScienceWorld")],
+      meas: "Agent environments only.",
+      loci: ["state2state §3, Tables 1-5"] }
+  ];
+
+  var legend = document.getElementById("legend");
+  Object.keys(TYPES).forEach(function (k) {
+    var s = document.createElement("span");
+    s.innerHTML = '<i class="sw" style="background:' + TYPES[k][0] + '"></i>' + TYPES[k][1];
+    legend.appendChild(s);
+  });
+
+  var tbody = document.getElementById("tbody");
+  var detail = document.getElementById("detail");
+  var onlyTraj = document.getElementById("onlyTraj");
+  var selected = "cwm";
+
+  function chips(list) {
+    return list.map(function (ch) {
+      return '<span class="chip" style="border-left-color:' + TYPES[ch.t][0] + '">' + ch.x + "</span>";
+    }).join("");
+  }
+  function render() {
+    tbody.innerHTML = "";
+    ROWS.forEach(function (r) {
+      if (onlyTraj.checked && !r.trajBefore) return;
+      var tr = document.createElement("tr");
+      tr.className = "row" + (r.id === selected ? " sel" : "");
+      tr.tabIndex = 0;
+      tr.innerHTML = '<td><div class="model">' + r.name + '</div><div class="muted">' + r.size + "</div></td>" +
+        "<td>" + chips(r.pre) + "</td><td>" + chips(r.mid) + "</td><td>" + chips(r.sft) + "</td><td>" + chips(r.rl) + "</td>" +
+        '<td class="meas">' + r.meas + "</td>";
+      function pick() { selected = r.id; render(); }
+      tr.addEventListener("click", pick);
+      tr.addEventListener("keydown", function (e) { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); pick(); } });
+      tbody.appendChild(tr);
+    });
+    var r = ROWS.filter(function (x) { return x.id === selected; })[0];
+    detail.innerHTML = "<h3>" + r.name + " (" + r.size + ")</h3><p><b>General-ability measurement:</b> " + r.meas +
+      "</p><p><b>Where to check:</b></p><ul>" + r.loci.map(function (l) { return "<li>" + l + "</li>"; }).join("") + "</ul>";
+  }
+  onlyTraj.addEventListener("change", render);
+  render();
+
+  // Units calculator
+  var SRC = [["Diff patches", 50, 1], ["PR commit packs", 20, 1], ["Synthetic", 20, 4]];
+  var COLORS = ["var(--c-repo)", "var(--c-tool)", "var(--c-traj)"];
+  var srcBox = document.getElementById("srcInputs");
+  SRC.forEach(function (s, i) {
+    var d = document.createElement("div");
+    d.className = "controls";
+    d.innerHTML = '<span><i class="sw" style="background:' + COLORS[i] + '"></i> ' + s[0] + "</span>" +
+      '<label>unique B <input type="number" min="0" step="any" id="u' + i + '" value="' + s[1] + '"></label>' +
+      '<label>× <input type="number" min="0" step="any" id="f' + i + '" value="' + s[2] + '"></label>';
+    srcBox.appendChild(d);
+  });
+  function num(id) { var v = parseFloat(document.getElementById(id).value); return isFinite(v) && v >= 0 ? v : 0; }
+  function fmt(v) { return (Math.round(v * 10) / 10).toString(); }
+  function pct(v) { return (Math.round(v * 1000) / 10).toFixed(1) + "%"; }
+  function units() {
+    var u = [0, 1, 2].map(function (i) { return num("u" + i); });
+    var s = [0, 1, 2].map(function (i) { return num("u" + i) * num("f" + i); });
+    var U = u[0] + u[1] + u[2], S = s[0] + s[1] + s[2];
+    function bar(el, arr, tot) {
+      el.innerHTML = arr.map(function (v, i) {
+        return '<span style="width:' + (tot ? 100 * v / tot : 0) + '%;background:' + COLORS[i] + '"></span>';
+      }).join("");
+    }
+    bar(document.getElementById("barUnique"), u, U);
+    bar(document.getElementById("barSeen"), s, S);
+    var out = "<div><span>Unique tokens</span><span>" + fmt(U) + "B</span></div><div><span>Seen tokens = Σ unique × factor</span><span>" + fmt(S) + "B</span></div>";
+    [0, 1, 2].forEach(function (i) {
+      out += "<div><span>" + SRC[i][0] + ": unique share → seen share</span><span>" + (U ? pct(u[i] / U) : "–") + " → " + (S ? pct(s[i] / S) : "–") + "</span></div>";
+    });
+    document.getElementById("unitOut").innerHTML = out;
+  }
+  srcBox.addEventListener("input", units);
+  units();
+
+  // Context calculator
+  function ctx() {
+    var L = num("trajL"), W = num("win"), B = num("budget");
+    var kept = Math.min(L, W), lost = Math.max(0, L - W);
+    var seqs = W ? Math.floor(B * 1e9 / W) : 0;
+    document.getElementById("ctxOut").innerHTML =
+      "<div><span>Tokens inside one window</span><span>" + kept.toLocaleString() + "</span></div>" +
+      "<div><span>Tokens beyond the window (truncated, or moved to another sequence)</span><span>" + lost.toLocaleString() + (L ? " (" + pct(lost / L) + ")" : "") + "</span></div>" +
+      "<div><span>Full-length sequences that fit in the stage budget (upper bound)</span><span>" + seqs.toLocaleString() + "</span></div>";
+  }
+  ["trajL", "win", "budget"].forEach(function (id) { document.getElementById(id).addEventListener("input", ctx); });
+  ctx();
+})();
+</script>
+</body>
+</html>

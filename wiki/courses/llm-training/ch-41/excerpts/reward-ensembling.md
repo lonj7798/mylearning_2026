@@ -2,88 +2,40 @@
 chapter: ch-41
 course: llm-training
 phase: read
-excerpt_of: wiki/raw-data/llm-training/papers/reward-ensembling.md
+excerpt_of: arXiv:2310.02743v2 (Reward Model Ensembles Help Mitigate Overoptimization); library card [[reward-ensembling]]
 source_url: https://arxiv.org/abs/2310.02743
 created_at: "2026-04-23"
+revised: "2026-09-15 (generality revision; rewritten to match the verified card and primary source)"
 ---
 
-# Excerpt: Coste 2023 — ensembling §3 of ch-41 uses as Goodhart insurance
+# Excerpt: conservative reward-model ensembles (Coste, Anwar, Kirk, Krueger)
 
-**Source library:** `wiki/raw-data/llm-training/papers/reward-ensembling.md`
-**Artifact:** mean / LCB / min / UWO aggregators over K BT RMs
+Used by [[read]] Guideline, §3.1, the negatives section, the Recipe, and the Generalization lens. ICLR 2024. Checked against arXiv v2 (2024-03-10) on 2026-09-15.
 
----
+The library card for this slug has no Verification section, and several of its statements are not in the paper. The earlier version of this excerpt repeated them. Corrections:
+- "Mean gives the highest peak; LCB and min are safer but cap lower" → worst-case (WCO) and uncertainty-weighted (UWO) optimization avoid over-optimization in best-of-n and reduce it in PPO, while mean optimization over-optimizes with noisy labels (§5, Fig. 3, Fig. 5). The paper studies mean, WCO, and UWO; it does not define an "LCB" aggregator.
+- "Peak moves from d ≈ 3 to d ≈ 5–8" → no such values are reported.
+- "Shared blind spots demonstrated on adversarial prompts" and "data-shard diversity matters more than seeds" → not in this paper. Ensemble members use the same data and differ only in random seed (§4.3). The shared-error finding is from [[helping-or-herding]], which found pretraining-seed diversity more useful than fine-tuning-seed diversity.
+- "3–5 RMs is usually enough" → performance is similar for 4 and 5 members, with a gap from 3 to 4 (§5.4, Fig. 11).
+- UWO uses the intra-ensemble variance, not the standard deviation (Eq. 5).
 
-## Why this source anchors ch-41
+## Objectives (§3)
+- `R_μ(q,a) = (1/k) Σ_i R_i(q,a)` (Eq. 3); not conservative: one overestimating member can be exploited.
+- `R_WCO(q,a) = min_i R_i(q,a)` (Eq. 4); no hyperparameters.
+- `R_UWO(q,a) = (1/k) Σ_i R_i − λ · (1/k) Σ_i (R_i − (1/k) Σ_i R_i)²` (Eq. 5).
 
-§3 is the cheap, direct answer to §2's inverted-U. Coste 2023 asks: if the proxy has bounded generalization, average K proxies. The result — peak shifts from `d ≈ 3` to `d ≈ 5–8` — is the single most cost-effective intervention on the overoptimization curve, which is why §6's decision framework has "ensemble it" as a *modifier* applicable on top of every RM choice.
+## Setup (§4)
+- Pythia 1.4B policy; proxy RMs of 7M, 44M, 1.3B (Pythia 14M, 70M, 1.4B with unembedding removed); AlpacaFarm 7B human-preference RM as gold.
+- SFT on 10k AlpacaFarm demonstrations; two responses per instruction labelled by the gold RM; optional 25% label noise; RM training set fixed at 46k samples (§5.3); 5 epochs; RMs reach 60–75% validation accuracy.
+- Ensembles of five RMs trained on identical data with different random seeds (head initialization and data order).
+- BoN up to n = 12,500 (≈ 8.4 nats); PPO for 3000 steps.
+- Hyperparameters (App. D.1): SFT LR 8e-6, 3 epochs, batch 4; RM LR 1e-5, 5 epochs, batch 32; PPO LR 1e-6, 4 PPO epochs, batch 32, 256 rollouts, clip 0.2, GAE λ 0.95.
 
----
+## Results (§5)
+- BoN: up to ~30% (no noise) and ~75% (25% noise) improvement over the average single-RM result; no over-optimization with WCO and UWO; mean optimization over-optimizes with noise (Fig. 3). UWO shown with λ = 0.5.
+- PPO without KL penalty: WCO and UWO reduce but do not eliminate over-optimization (Fig. 5). With KL penalty 0.01 they prevent it without notable performance loss; a single RM needs 0.2 and loses performance (Figs. 4, 6).
+- Gains are orthogonal to RM size and data size (Figs. 8, 9).
+- Intra-ensemble variance under PPO: rises almost 3× (no noise) and ~2.5× (25% noise) with mean optimization; ~20% with UWO (λ = 0.1) under noise (§5.5, Fig. 10).
 
-## The four aggregators §3 enumerates
-
-From the source (lines 18–22):
-
-> *Mean:* `r(x,y) = (1/K) Σ_k r_k(x,y)`.
-> *LCB:* `r(x,y) = mean_k r_k − λ · std_k r_k` (pessimistic under disagreement).
-> *Min:* `r(x,y) = min_k r_k(x,y)`.
-> *UWO (uncertainty-weighted objective):* reward minus a penalty on std.
-
-Ch-41 §3 reports all four with a single trade-off rule: mean gives the highest peak, LCB and min are safer but cap lower. Pick LCB for safety-critical deployments; pick mean when you can afford to ride closer to the edge of the KL budget.
-
----
-
-## Variance reduction intuition §3 formalizes
-
-The source does not write this out; ch-41 §3 derives it explicitly: for K iid RMs each with error variance `σ²`, the mean has variance `σ² / K`. The proxy-vs-gold gap at fixed `d` scales with RM error, so halving variance (K = 4) pushes the peak right by a constant on the `d` axis. This matches the empirical peak-shift from `d ≈ 3` to `d ≈ 5–8` for K = 3–5.
-
-The interactive figure [figures/rm-overopt.html](../figures/rm-overopt.html) models this as `β_eff = β₀ / sqrt(K)`. Slide K from 1 to 10 and watch the peak drift right.
-
----
-
-## The empirical peak shift §3 quotes
-
-From the source (line 23):
-
-> peak moves from `d ≈ 3` (Gao baseline) to `d ≈ 5–8` depending on K.
-
-This is the exact number ch-41 §3 embeds in the chapter body. Diminishing returns past K = 5 — don't bother with K = 10 unless RM-forward compute is free.
-
----
-
-## The counterexample §3 refuses to skip
-
-From the source (line 25):
-
-> if all RMs are systematically miscalibrated in the same direction (shared label noise, shared blind spot), ensembling does not help — demonstrated on adversarial prompts.
-
-Ch-41 §3 promotes this to an operational rule: *ensemble diversity must come from data shards, not just random seeds*. Seed-only diversity leaves all K RMs exposed to the same dataset biases; only data-shard diversity hedges against shared blind spots. This is why Nemotron-4's HelpSteer2 pipeline ([[nemotron-4-synthetic]]) trains per-attribute heads on different subsets rather than just reshuffling seeds.
-
----
-
-## Disagreement as OOD signal §3 surfaces
-
-From the source (line 37):
-
-> **Disagreement as signal:** `std_k r_k` correlates with OOD-ness of the response; can be used as an anomaly flag.
-
-Ch-41 §3 lifts this into a diagnostic: surface `std_k r_k` during RL even when you are not using LCB as the reward. High std means the policy has drifted into novel territory — the same territory where §2's proxy-gold gap blows up. This is the quickest in-loop signal that you are approaching the peak.
-
----
-
-## The overhead tax
-
-From the source (line 38):
-
-> K RMs roughly multiply the reward-forward-pass cost by K during RL; often affordable since the RM is smaller than the policy.
-
-Ch-41 §3 notes this is only true while RMs are small. For 70B-scale RMs (increasingly common with GenRMs — [[generative-reward-models]]), K × forward cost stops being free. This is why §4's GenRM line and §3's ensemble line are not a strict upgrade — they trade off against each other on a compute budget.
-
----
-
-## Connections to the rest of ch-41
-
-- **§2** — the direct defense against [[reward-model-overoptimization]]'s law.
-- **§4** — complementary to GenRM ensembles; `std_k r_k` becomes calibrated uncertainty with generative heads.
-- **§5** — HelpSteer2's 5-dim RM is implicitly an ensemble over *attributes*, not over seeds.
-- **§6** — "ensemble it" is a modifier on every decision-framework row, not a row itself.
+## Limits (§6)
+One environment and model family; offline RLHF with no RM refresh during policy optimization.

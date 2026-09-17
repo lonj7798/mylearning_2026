@@ -7,6 +7,8 @@ source_url: https://arxiv.org/abs/2305.20050
 created_at: "2026-04-23"
 ---
 
+> Superseded by the 2026-09 revision of read.md; kept for history.
+
 # Excerpt: Let's-Verify — process vs outcome head-to-head
 
 **Source library:** `wiki/raw-data/llm-training/papers/lets-verify.md`, `wiki/raw-data/llm-training/papers/let-verify.md`

@@ -7,6 +7,8 @@ source_url: https://arxiv.org/abs/2305.18290
 created_at: "2026-04-23"
 ---
 
+> Superseded by the 2026-09 revision of read.md; kept for history.
+
 # Excerpt: DPO — Option A of the ch-46 lab
 
 **Source library:** `wiki/raw-data/llm-training/papers/dpo.md`

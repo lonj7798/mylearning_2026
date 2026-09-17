@@ -7,6 +7,8 @@ source_url: https://arxiv.org/abs/2505.20161
 created_at: "2026-04-23"
 ---
 
+> Superseded by the 2026-09 revision of read.md; kept for history.
+
 # Excerpt: Prismatic Synthesis — G-Vendi as the upstream coverage audit, and why a 7B beats a 671B teacher
 
 **Source library:** `wiki/raw-data/llm-training/papers/prismatic-synthesis.md`

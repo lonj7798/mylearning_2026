@@ -7,6 +7,8 @@ source_url: https://proceedings.iclr.cc/paper_files/paper/2025/hash/be06e3802e94
 created_at: "2026-04-23"
 ---
 
+> Superseded by the 2026-09 revision of read.md; kept for history.
+
 # Excerpt: Magpie — prefix-only extraction from aligned models
 
 **Source library:** `wiki/raw-data/llm-training/papers/magpie.md`

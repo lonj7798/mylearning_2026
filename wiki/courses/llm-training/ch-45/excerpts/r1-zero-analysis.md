@@ -7,6 +7,8 @@ source_url: https://arxiv.org/abs/2503.20783
 created_at: "2026-04-23"
 ---
 
+> Superseded by the 2026-09 revision of read.md; kept for history.
+
 # Excerpt: R1-Zero analyses — what the 2025 reproductions settled
 
 **Source library:** `wiki/raw-data/llm-training/papers/r1-zero-analysis.md`

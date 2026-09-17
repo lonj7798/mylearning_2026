@@ -3,138 +3,64 @@ chapter: ch-21
 course: llm-training
 phase: read
 excerpt_of: wiki/raw-data/llm-training/papers/nemotron-4-synthetic.md
-source_url: https://d1qx31qr3h6wln.cloudfront.net/publications/Nemotron_4_340B_8T_0.pdf
+source_url: https://arxiv.org/abs/2406.11704
 created_at: "2026-04-23"
+revised_at: "2026-09-15"
 ---
 
-# Excerpt: Nemotron-4 340B — generator / critic at alignment scale
+# Excerpt: Nemotron-4 340B Technical Report — synthetic alignment data
 
-**Source library:** `wiki/raw-data/llm-training/papers/nemotron-4-synthetic.md`
-**Author/Org:** NVIDIA — 2024.
+This excerpt was rewritten on 2026-09-15 to match the verified library cards `nemotron-4-synthetic` and
+`nemotron-4-synthetic-recipe` (checked 2026-09-14 against arXiv:2406.11704v2). The April 2026 version contained a
+reconstructed loop (best/worst of K samples per prompt), a six-family task list, a "frozen anchor" explanation, and
+staging rationales that the report does not state; they are removed.
 
----
+## Human versus synthetic data (§3.2)
+"we relied on only approximately 20K human-annotated data (10K for supervised fine-tuning, 10K Helpsteer2 data for
+reward model training and preference fine-tuning), while our data generation pipeline synthesized over 98% of the
+data used for supervised fine-tuning and preference fine-tuning."
 
-## Why this source anchors ch-21 §3
+## Prompt synthesis (§3.2.1)
+- Generator: Mixtral-8x7B-Instruct-v0.1, chosen for its permissive license.
+- Tasks with separate pipelines: open Q&A, writing, closed Q&A (from C4 documents), math and coding.
+- Topics: the generator lists macro-topics, then subtopics per macro-topic; with manually collected topics, 3K topics
+  in total. Math and coding prompts are seeded with 12K Python-related and 17K math-related keywords.
+- Instruction-following prompts append verifiable format constraints; two-turn prompts take the first user turn
+  from ShareGPT. LMSYS-Chat-1M prompts are also used; Mixtral responses to synthetic prompts have mean reward-model
+  helpfulness 3.24 vs 3.04 for LMSYS prompts, which the report reads as LMSYS prompts being harder (Figure 3).
 
-GLAN gives you the cleanest *tree*. Nemotron-4 gives you the cleanest *loop*. The two are complementary specializations of the ch-18 design pattern: GLAN adds structure to the "generate" step, Nemotron adds structure to the "filter + judge" step. Ch-21 §3 is built on the Nemotron source; this excerpt reconstructs the loop and the data-flow math.
+## Judges and filters
+- **Reward model (§3.1):** Nemotron-4-340B-Reward is Nemotron-4-340B-Base with the final softmax replaced by a linear
+  projection to five HelpSteer attributes, trained on 10K HelpSteer2 examples; RewardBench overall 92.0 (Table 4).
+- **Preference ranking (§3.2.3):** ground truth or a Python verifier where available; otherwise LLM-as-judge in early
+  iterations and Reward-Model-as-judge later (Chat-Hard accuracy 0.87 vs 0.54).
+- **Dialogues (§3.2.2):** three turns, greedy decoding; dialogues below a reward-model score threshold are dropped.
+- **Weak-to-strong (§3.2.4):** Mixtral-8x7B-Instruct-v0.1 data trains 340B-Interm-1; that model generates the next round.
 
-From the source's core insight:
+## Staged SFT (§3.3.1)
+"learning multiple behaviors concurrently can sometimes lead to conflicts between them ... We observe this phenomenon
+particularly strongly in coding tasks, where adjusting the sampling weights for the data blend fails to align the
+model to all coding tasks." The two-stage strategy "yields superior results across all downstream tasks" (no
+single-stage numbers are given).
+- Code SFT: Genetic Instruct (self-instruction and WizardCoder mutations from a limited number of seeds, with an LLM
+  fitness check); about 800K samples after de-duplication and filtering; 1 epoch; constant LR 3e-7; global batch 128.
+- General SFT: 200K-sample blend including 2% of Code SFT samples "to mitigate the risk of forgetting"; 3 epochs;
+  batch 128; LR searched in [1e-7, 5e-7]; loss on assistant turns only.
 
-> NVIDIA compresses alignment into a strong reward model plus a synthetic prompt/response/pair pipeline; over 98% of post-training data is synthetic, and the same pipeline feeds SFT, DPO, and RPO.
+## Stage effects (Table 6)
+| After stage | MT-Bench (GPT-4-Turbo) | MMLU 0-shot | GSM8K 0-shot | HumanEval 0-shot | IFEval prompt-strict |
+|---|---|---|---|---|---|
+| Code SFT | 6.79 | 72.2 | 77.6 | 70.7 | 46.4 |
+| + General SFT | 7.99 | 78.3 | 87.9 | 66.5 | 61.4 |
+| + DPO | 7.90 | 78.4 | 88.5 | 67.1 | 61.7 |
+| + RPO (iteration 1, 2, 3) | 8.21, 8.31, 8.22 | 78.5, 78.6, 78.7 | 91.1, 91.8, 92.3 | 70.7, 68.3, 73.2 | 78.2, 79.9, 79.9 |
 
-The "over 98%" number is load-bearing. Ch-21 §3's anchor-set-size table is derived directly from this.
+The base model's HumanEval is 57.3 (text introducing Table 6).
 
----
+## Negative signals (§3.3.2, §3.2.5)
+- Under DPO the report observed both chosen and rejected likelihoods falling, added an SFT loss on chosen responses,
+  and moved to RPO, whose target is the reward-model score gap.
+- Refusal responses for tasks the model cannot do are ordinary SFT targets.
 
-## The human / synthetic split — reconstructed
-
-From the source (Key Contributions + Synthesis Pipeline):
-
-- 20K human-annotated examples, split between SFT and HelpSteer2 RM training.
-- 800K synthetic code SFT samples.
-- 200K synthetic general SFT samples.
-- 160K DPO preference pairs (synthetic, RM-judged).
-- 300K RPO preference pairs (synthetic, RM-judged).
-
-Totals:
-
-| Role | Human | Synthetic |
-|---|---|---|
-| SFT | ~10K | 1,000K |
-| Preference | 0 | 460K |
-| RM training (HelpSteer2) | ~10K | 0 |
-| **Sum** | **~20K** | **~1,460K** |
-| **Fraction** | ~1.3% | ~98.7% |
-
-The 20K human anchor set is overwhelmingly concentrated in *training the critic*, not in training the generator directly. This is the asymmetry that makes the pipeline work: you do not need to curate human-written *responses*, you only need to curate human-written *preferences* over synthetic candidates. Preferences are cheaper per token than completions, and they scale the RM, which then scales the pipeline.
-
----
-
-## The generator / critic loop — what runs
-
-The source's pipeline description compressed into one loop:
-
-```
-for iteration in alignment_stages:  # code SFT, then general SFT, then DPO, then RPO
-    for family in task_families:    # coding, general QA, topic-following, doc reasoning, function call, refusal
-        prompts = synthesize_prompts(policy_ckpt, family)
-        for p in prompts:
-            candidates = [policy_ckpt.sample(p) for _ in range(K)]
-            scores    = [rm.score(p, c) for c in candidates]
-            # SFT corpus: take top-scoring candidate
-            sft_data.append((p, candidates[argmax(scores)]))
-            # Preference corpus: take (top, bottom) or (top, mid) pair
-            preference_data.append((p, best(candidates, scores), worst(candidates, scores)))
-    retrain_policy_on(sft_data, preference_data)
-    rm = retrain_rm_optionally(rm, new_helpsteer2_labels)
-```
-
-From the source:
-
-> The pipeline is meant to preserve behavior diversity across task families while still using synthetic data at very high scale.
-
-The loop is *not* a fully closed self-improvement loop (ch-23 territory). The RM anchor set is frozen — HelpSteer2 — and the generator is allowed to iterate but the critic's training data stays stable. This is how Nemotron keeps recursive-distillation collapse bounded: the judge is a stationary target.
-
----
-
-## RM-as-filter and RM-as-judge — two distinct uses
-
-From the source:
-
-> a reward model scores responses for quality; when ground truth is missing, Nemotron-4-340B-Reward selects high-quality chosen responses. The preference pipeline prefers RM-based ranking over raw model self-selection.
-
-Two operational modes worth keeping separate in your head:
-
-1. **RM-as-filter.** Given one (p, response) pair, decide whether it passes a quality threshold for SFT inclusion. Binary.
-2. **RM-as-judge.** Given (p, response_A, response_B), decide which is chosen and which is rejected for a preference pair. Comparative.
-
-The same underlying RM serves both roles, but the thresholds and failure modes differ. Filter mode is vulnerable to miscalibrated absolute scores (the RM might think everything is 7/10). Judge mode is more robust to miscalibration because only the relative ordering is consumed. Nemotron uses both.
-
----
-
-## Genetic Instruct — the code-family specialization
-
-From the source:
-
-> the code alignment stage uses Genetic Instruct, which combines self-instruction and WizardCoder-style mutations plus an LLM-based fitness function to grow a population from a limited number of seeds.
-
-Genetic Instruct is inside the `synthesize_prompts(policy_ckpt, "coding")` call in the loop above. The family-internal fan-out is genetic-algorithm-shaped: mutate existing prompts, score offspring with an LLM fitness function, keep the winners, mutate again. This is a bottom-up (seed + mutate) step embedded inside a top-down (task-family) pipeline.
-
-Ch-21 §3 notes this because it illustrates the "mix top-down and bottom-up" rule: Nemotron's task-family tree is shallow (6 families, flat), and the imagination inside each family is supplied by the Genetic Instruct bottom-up mechanism. Without the bottom-up piece, 6 families at the top-level would produce a corpus with very little within-family diversity.
-
----
-
-## Staged SFT — a curriculum decision
-
-From the source:
-
-> Implements staged SFT: first a code-focused SFT stage, then a broader general SFT stage.
-
-Why this order:
-- Code data has cleaner correctness signal (unit tests, compiler errors). Training on it first installs "follow a structured format, fail loudly when wrong" behavior.
-- General SFT on top leverages the structured-following behavior without damaging code ability because the general-SFT LR is smaller and the code capability is already consolidated.
-
-The same pattern shows up in Phi-4 and Tülu 3. The curriculum is: easy-to-verify first, then open-ended.
-
----
-
-## The DPO → RPO transition
-
-From the source:
-
-> Implements preference fine-tuning with DPO followed by RPO, with the reward model used to select higher-quality chosen responses.
-
-DPO alone tends to *under-correct* for reward quality — it happily makes both chosen and rejected responses less likely if the training pair is noisy. RPO (Reward-aware Preference Optimization) adds an explicit scalar reward term to the loss, weighting pairs by RM confidence. This is a different failure mode from reward hacking (ch-42); it is more like "the generator needs calibrated signal from the critic, not just a direction."
-
-Ch-21 does not expand on RPO mechanics — those are in ch-39 — but the point for §3 is that Nemotron uses two preference algorithms in sequence on the same synthetic pipeline, and the RM mediates both.
-
----
-
-## Connections
-
-- [[excerpts/glan]] — sibling top-down paradigm; different structure (tree vs task families) and different critic (rule-based vs RM).
-- [[excerpts/phi-4]] — pivotal-token DPO is a related critic-in-the-loop technique for preference-pair construction.
-- [[ch-18]] — the ch-18 filter + verify steps are specialized here to "RM score gating."
-- [[ch-23]] — what stops the generator/critic loop from collapsing is the frozen HelpSteer2 anchor; ch-23 formalizes the recursive-training risk.
-- [[ch-42]] — RM failure modes and reward hacking are the downstream risk once the pipeline is running at 98% synthetic.
-- [[ch-21]] §3.
+## Verification
+- Values match the verified cards; the §3.2 and §3.3.1 quotations were re-read in the cached arXiv text on 2026-09-15.

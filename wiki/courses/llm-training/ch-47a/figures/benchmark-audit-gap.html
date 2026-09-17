@@ -1,0 +1,202 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>ch-47a — Benchmark-audit gap and detection power</title>
+<style>
+  :root { --bg:#fbfbf9; --fg:#1b1b1b; --muted:#5d5d5d; --line:#c9c9c4; --hi:#b5341f; --lo:#2a5e8c; --neu:#8a8a85; }
+  body { margin:0; padding:24px; background:var(--bg); color:var(--fg);
+         font:14px/1.55 "Iowan Old Style", Georgia, "Times New Roman", serif; }
+  .wrap { max-width:940px; margin:0 auto; }
+  h1 { font-size:19px; margin:0 0 4px; }
+  h2 { font-size:15px; margin:28px 0 6px; border-bottom:1px solid var(--line); padding-bottom:4px; }
+  p.note { color:var(--muted); font-size:12.5px; margin:4px 0 14px; }
+  .panel { background:#fff; border:1px solid var(--line); padding:14px; }
+  svg { display:block; max-width:100%; height:auto; }
+  .axis line, .axis path { stroke:var(--line); }
+  text { font:11px/1.2 ui-sans-serif, system-ui, sans-serif; fill:var(--fg); }
+  text.ax { fill:var(--muted); }
+  circle.pt { cursor:pointer; stroke:#fff; stroke-width:.8; }
+  .legend span { display:inline-block; margin-right:16px; font:12px ui-sans-serif, system-ui, sans-serif; }
+  .sw { display:inline-block; width:10px; height:10px; border-radius:50%; margin-right:5px; vertical-align:-1px; }
+  #tip { position:fixed; pointer-events:none; background:#1b1b1b; color:#fff; padding:5px 8px;
+         font:12px ui-sans-serif, system-ui, sans-serif; border-radius:3px; opacity:0; transition:opacity .08s; }
+  table { border-collapse:collapse; font:12.5px ui-sans-serif, system-ui, sans-serif; margin-top:10px; }
+  td, th { border:1px solid var(--line); padding:4px 9px; text-align:right; }
+  th { background:#f1f1ec; font-weight:600; }
+  td.l, th.l { text-align:left; }
+  label { display:block; font:12.5px ui-sans-serif, system-ui, sans-serif; margin:10px 0 2px; color:var(--muted); }
+  input[type=range] { width:260px; vertical-align:-4px; }
+  output { font-variant-numeric:tabular-nums; font-weight:600; }
+  .grid2 { display:flex; flex-wrap:wrap; gap:26px; }
+  .res { font:13px ui-sans-serif, system-ui, sans-serif; }
+  .res b { font-variant-numeric:tabular-nums; }
+  code { font:12.5px ui-monospace, SFMono-Regular, Menlo, monospace; background:#f1f1ec; padding:1px 4px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<h1>Benchmark-audit gap and detection power</h1>
+<p class="note">Two panels for Chapter 47a. Panel 1 plots every model in the GSM1k results table against the line of
+equal accuracy. Panel 2 computes the paired standard error, the confidence interval, and the minimum detectable
+effect for an audit of a chosen size.</p>
+
+<h2>1. GSM8K against GSM1k, 63 models</h2>
+<div class="panel">
+  <div class="legend">
+    <span><i class="sw" style="background:var(--hi)"></i>drop, p &lt; 0.05</span>
+    <span><i class="sw" style="background:var(--neu)"></i>drop, p ≥ 0.05</span>
+    <span><i class="sw" style="background:var(--lo)"></i>higher on GSM1k</span>
+  </div>
+  <svg id="scatter" viewBox="0 0 860 460" role="img" aria-label="Scatter plot of GSM8K accuracy against GSM1k accuracy for 63 models"></svg>
+  <p class="note" id="cap">Source: GSM1k, App. F, standard-prompt table (5-shot from the GSM8K train split, LM Evaluation
+  Harness fork, max 1000 generated tokens, temperature 0 for open models). Z-scores and p-values are the paper's own
+  two-tailed two-proportion tests. Points below the diagonal scored lower on the fresh set.</p>
+</div>
+
+<h2>2. Paired audit: interval and minimum detectable effect</h2>
+<div class="panel">
+  <p class="note">Model A is the headline benchmark, model B the audit counterpart, scored on the same items (binary
+  scores). Enter how many items the two disagree on and what the mean difference is.</p>
+  <div class="grid2">
+    <div>
+      <label>Audit items <code>n</code>: <output id="oN">300</output></label>
+      <input id="n" type="range" min="50" max="2000" step="10" value="300">
+      <label>Disagreement rate <code>a + b</code> (share of items where exactly one is correct): <output id="oD">0.12</output></label>
+      <input id="d" type="range" min="0.02" max="0.60" step="0.01" value="0.12">
+      <label>Observed mean difference <code>s̄</code> (headline − audit): <output id="oG">0.040</output></label>
+      <input id="g" type="range" min="-0.10" max="0.30" step="0.005" value="0.04">
+      <label>Headline accuracy <code>p_A</code>: <output id="oP">0.80</output></label>
+      <input id="pa" type="range" min="0.10" max="0.98" step="0.01" value="0.80">
+    </div>
+    <div class="res" id="out"></div>
+  </div>
+  <p class="note">Formulas from Adding Error Bars to Evals §4.2 and §5:
+  <code>SE = sqrt(Var(s_A−B)/n)</code>, <code>CI = s̄ ± 1.96·SE</code>,
+  <code>δ = (z_.025 + z_β)·sqrt(ω²/n)</code> with <code>z_.025 = 1.96</code>,
+  <code>z_.20 = 0.8416</code>, one sample per item, so that <code>ω² = Var(s_A−B)</code>. With binary paired scores and disagreement rate <code>a+b</code>,
+  <code>Var(s_A−B) = (a+b) − s̄²</code>. The unpaired standard error uses the two marginal rates and ignores the pairing.</p>
+</div>
+
+</div>
+<div id="tip"></div>
+
+<script>
+// ---- Panel 1 data: GSM1k App. F, standard prompt ---------------------------
+var D = [
+["Yi-6B-Chat",.437,.357,4.135,.000],["math-shepherd-mistral-7b-rl",.826,.754,4.488,.000],
+["command",.447,.383,3.336,.000],["Xwin-Math-13B-V1.0",.660,.596,3.334,.000],
+["phi-2",.566,.504,3.167,.001],["Meta-Llama-3-8B-Instruct",.752,.690,3.532,.000],
+["Xwin-Math-7B-V1.0",.552,.492,3.040,.001],["Meta-Llama-3-8B",.502,.448,2.734,.003],
+["phi-1.5",.324,.274,2.814,.002],["Phind-CodeLlama-34B-v2",.419,.370,2.531,.006],
+["CodeLlama-34b-Instruct-hf",.426,.381,2.338,.010],["Phi-3-medium-128k-instruct",.869,.825,3.103,.001],
+["CodeLlama-13b-Python-hf",.223,.179,2.759,.003],["gemma-7b",.519,.476,2.198,.014],
+["Phi-3-mini-4k-instruct",.788,.748,2.385,.009],["Yi-34B-Chat",.685,.650,1.883,.030],
+["mistral-medium-latest",.790,.755,2.104,.018],["Mixtral-8x7B-v0.1",.591,.557,1.771,.038],
+["Xwin-Math-70B-V1.0",.806,.772,2.107,.018],["Mixtral-8x7B-Instruct-v0.1",.660,.630,1.588,.056],
+["Mistral-7B-v0.1",.391,.364,1.421,.078],["Mixtral-8x22B-Instruct-v0.1",.872,.846,1.913,.028],
+["CodeLlama-70b-Instruct-hf",.513,.486,1.323,.093],["Llama-2-7b-hf",.141,.116,1.892,.029],
+["Mistral-7B-Instruct-v0.1",.353,.329,1.309,.095],["CodeLlama-70b-hf",.478,.454,1.221,.111],
+["gemma-7b-it",.325,.302,1.247,.106],["mistral-small-latest",.790,.768,1.343,.090],
+["CodeLlama-13b-hf",.236,.215,1.247,.106],["Phi-3-medium-4k-instruct",.874,.854,1.519,.064],
+["Mixtral-8x22B-v0.1",.767,.748,1.138,.127],["CodeLlama-34b-hf",.354,.337,0.919,.179],
+["gemma-2b",.185,.170,0.966,.167],["Meta-Llama-3-70B-Instruct",.914,.900,1.251,.105],
+["CodeLlama-7b-Python-hf",.131,.118,1.040,.149],["dbrx-base",.731,.719,0.707,.240],
+["pythia-12b",.036,.025,1.701,.044],["Phi-3-mini-128k-instruct",.757,.746,0.645,.260],
+["Meta-Llama-3-70B",.817,.806,0.707,.240],["CodeLlama-34b-Python-hf",.312,.301,0.549,.291],
+["gpt-3.5-turbo",.760,.750,0.546,.293],["Mistral-7B-Instruct-v0.2",.428,.419,0.469,.319],
+["claude-3-haiku-20240307",.785,.776,0.532,.298],["Llama-2-70b-hf",.552,.544,0.445,.328],
+["CodeLlama-7b-Instruct-hf",.177,.169,0.472,.319],["gemini-1.5-pro-preview-0514",.895,.890,0.472,.318],
+["gemini-1.5-pro-preview-0409",.897,.892,0.403,.343],["CodeLlama-13b-Instruct-hf",.267,.262,0.257,.399],
+["dbrx-instruct",.730,.726,0.211,.417],["gpt-4-turbo",.898,.895,0.270,.394],
+["gpt2-xl",.009,.007,0.778,.218],["gpt-4o",.931,.929,0.219,.413],
+["gemini-pro",.792,.793,-0.081,.532],["mistral-large-latest",.853,.854,-0.049,.519],
+["gemma-2b-it",.111,.112,-0.106,.542],["claude-2.1",.887,.891,-0.336,.632],
+["CodeLlama-7b-hf",.126,.133,-0.525,.700],["Llama-2-13b-hf",.236,.246,-0.629,.735],
+["gpt-4",.911,.923,-1.161,.877],["claude-3-sonnet-20240229",.719,.735,-0.894,.814],
+["claude-3-opus-20240229",.802,.824,-1.421,.922],["deepseek-math-7b-rl",.187,.217,-1.963,.975],
+["gemini-1.5-flash-preview-0514",.797,.835,-2.507,.994]
+];
+
+var W=860,H=460,M={t:18,r:18,b:46,l:56};
+var pw=W-M.l-M.r, ph=H-M.t-M.b;
+function X(v){ return M.l + v*pw; }
+function Y(v){ return M.t + (1-v)*ph; }
+function el(n,a){ var e=document.createElementNS("http://www.w3.org/2000/svg",n);
+  for(var k in a) e.setAttribute(k,a[k]); return e; }
+
+var svg=document.getElementById("scatter");
+// grid + axes
+for(var t=0;t<=10;t++){
+  var v=t/10;
+  svg.appendChild(el("line",{x1:X(v),y1:M.t,x2:X(v),y2:M.t+ph,stroke:"#ececE6","stroke-width":1}));
+  svg.appendChild(el("line",{x1:M.l,y1:Y(v),x2:M.l+pw,y2:Y(v),stroke:"#ececE6","stroke-width":1}));
+  var tx=el("text",{x:X(v),y:M.t+ph+16,"text-anchor":"middle"}); tx.setAttribute("class","ax");
+  tx.textContent=(v*100).toFixed(0); svg.appendChild(tx);
+  var ty=el("text",{x:M.l-8,y:Y(v)+4,"text-anchor":"end"}); ty.setAttribute("class","ax");
+  ty.textContent=(v*100).toFixed(0); svg.appendChild(ty);
+}
+svg.appendChild(el("line",{x1:M.l,y1:M.t+ph,x2:M.l+pw,y2:M.t+ph,stroke:"#9a9a94"}));
+svg.appendChild(el("line",{x1:M.l,y1:M.t,x2:M.l,y2:M.t+ph,stroke:"#9a9a94"}));
+svg.appendChild(el("line",{x1:X(0),y1:Y(0),x2:X(1),y2:Y(1),stroke:"#7a7a74","stroke-dasharray":"5 4"}));
+var lab=el("text",{x:X(.62),y:Y(.66),fill:"#7a7a74"}); lab.textContent="equal accuracy"; svg.appendChild(lab);
+var xl=el("text",{x:M.l+pw/2,y:H-10,"text-anchor":"middle"}); xl.textContent="GSM8K accuracy (%)"; svg.appendChild(xl);
+var yl=el("text",{x:-(M.t+ph/2),y:16,"text-anchor":"middle",transform:"rotate(-90)"});
+yl.textContent="GSM1k accuracy (%)"; svg.appendChild(yl);
+
+var tip=document.getElementById("tip");
+D.forEach(function(r){
+  var name=r[0], a=r[1], b=r[2], z=r[3], p=r[4];
+  var col = (b>a) ? "var(--lo)" : (p<0.05 ? "var(--hi)" : "var(--neu)");
+  var c=el("circle",{cx:X(a),cy:Y(b),r:5,fill:col}); c.setAttribute("class","pt");
+  c.addEventListener("mousemove",function(e){
+    tip.style.opacity=1; tip.style.left=(e.clientX+12)+"px"; tip.style.top=(e.clientY+12)+"px";
+    tip.textContent=name+" — GSM8K "+(a*100).toFixed(1)+", GSM1k "+(b*100).toFixed(1)
+      +", diff "+((a-b)*100).toFixed(1)+" pt, z "+z.toFixed(2)+", p "+p.toFixed(3);
+  });
+  c.addEventListener("mouseleave",function(){ tip.style.opacity=0; });
+  svg.appendChild(c);
+});
+
+// ---- Panel 2: paired audit statistics --------------------------------------
+var ids=["n","d","g","pa"], out=document.getElementById("out");
+function num(id){ return parseFloat(document.getElementById(id).value); }
+function recompute(){
+  var n=num("n"), dis=num("d"), gap=num("g"), pA=num("pa");
+  document.getElementById("oN").textContent=n;
+  document.getElementById("oD").textContent=dis.toFixed(2);
+  document.getElementById("oG").textContent=gap.toFixed(3);
+  document.getElementById("oP").textContent=pA.toFixed(2);
+  var pB=pA-gap;
+  if (Math.abs(gap) > dis) { out.innerHTML =
+    "<p><b>Inconsistent inputs.</b> The mean difference cannot exceed the disagreement rate: "
+    +"a difference of "+gap.toFixed(3)+" requires at least that share of items to disagree.</p>"; return; }
+  if (pB<0 || pB>1) { out.innerHTML =
+    "<p><b>Inconsistent inputs.</b> The audit accuracy implied by these settings is "+pB.toFixed(2)+".</p>"; return; }
+  var varD = dis - gap*gap;              // Var(s_A-B) for binary paired scores
+  var se   = Math.sqrt(varD/n);
+  var lo   = gap - 1.96*se, hi = gap + 1.96*se;
+  var zsc  = se>0 ? gap/se : 0;
+  var seU  = Math.sqrt(pA*(1-pA)/n + pB*(1-pB)/n);
+  var mde  = (1.96+0.8416)*Math.sqrt(varD/n);
+  var nReq = Math.pow(1.96+0.8416,2)*varD/Math.pow(0.03,2);
+  out.innerHTML =
+    "<table><tr><th class='l'>Quantity</th><th>Value</th></tr>"
+   +"<tr><td class='l'>audit accuracy p<sub>B</sub> = p<sub>A</sub> − s&#772;</td><td>"+pB.toFixed(3)+"</td></tr>"
+   +"<tr><td class='l'>Var(s<sub>A−B</sub>) = (a+b) − s&#772;²</td><td>"+varD.toFixed(4)+"</td></tr>"
+   +"<tr><td class='l'>paired SE</td><td>"+se.toFixed(4)+"</td></tr>"
+   +"<tr><td class='l'>95% CI of the gap</td><td>("+(lo*100).toFixed(1)+", "+(hi*100).toFixed(1)+") pt</td></tr>"
+   +"<tr><td class='l'>z</td><td>"+zsc.toFixed(2)+"</td></tr>"
+   +"<tr><td class='l'>unpaired SE at the same marginals</td><td>"+seU.toFixed(4)+"</td></tr>"
+   +"<tr><td class='l'>minimum detectable effect at 80% power</td><td>"+(mde*100).toFixed(1)+" pt</td></tr>"
+   +"<tr><td class='l'>items needed for a 3-point effect</td><td>"+Math.ceil(nReq)+"</td></tr>"
+   +"</table><p>"+(lo>0 ? "The interval excludes zero: the headline set scores higher than the audit set at this sample size."
+        : (hi<0 ? "The interval lies below zero: the audit set scores higher."
+        : "The interval contains zero: this audit cannot separate the two scores."))+"</p>";
+}
+ids.forEach(function(i){ document.getElementById(i).addEventListener("input",recompute); });
+recompute();
+</script>
+</body>
+</html>

@@ -760,17 +760,23 @@ For each Q:
 
 **Punchline**: Random 1K (24) → s1K (56.7) = **+32 point는 difficulty filter alone**. "1K can beat 14M, 단 *the 1K must be carefully difficulty-filtered*". ch-22 axis 5 augmentation × selection의 극한 case: scale ≈ 0, selection 극도로 aggressive, *selection 단독 dominate*.
 
+---
 
+## Q-정정 (2026-09 revision)
 
+**배경**: read.md가 2026-09 generality revision으로 새로 작성되었다. 아래 Qn의 kernel에는 이제 정정된 사실이 들어 있다. 괄호의 번호는 새 read.md "Corrections to the version you studied"의 항목 번호이다. Q1–Q16에 있는 section·line reference(예: "§8", "chapter §2")는 git commit 4a72e54 시점의 read.md를 가리킨다.
 
-
-
-
-
-
-
-
-
-
-
-
+- **Q1**: "ch-21/22/23이 general case이고 ch-24가 유일한 modality drill-down"은 틀리다. General synthetic-data chapter는 ch-18–ch-23이고, ch-25–ch-28도 modality chapter이다. "Track 4 RL chapters"도 틀리며, RL chapter는 ch-40–ch-46a이다 (2–3).
+- **Q2**: OpenMathInstruct-1의 generator는 Mixtral-base(5-shot)이고, paper는 SymPy filter를 명시하지 않는다. OpenMathInstruct-2에는 TIR과 text-CoT 비교 실험이 없다. Format ablation은 두 text format, OpenMath CoT 44.5 vs Llama CoT 40.6의 비교이다 (5–6, 8).
+- **Q3**: Sampling 수는 GSM8K prompt당 128(총 256), MATH prompt당 224(총 896)이다. 84.6 / 50.7은 OpenMath-CodeLlama-70B의 점수이고, OpenMath-Llama2-70B는 84.7 / 46.3이다. "acceptance ~2%", "500K GPU-hours", "650K H100-hours", "5-10% wrong intermediate", "paraphrase +1 / novel +3", "MetaMath +9", "~5M 이후 flat"은 source에 없다(OpenMathInstruct-2는 14M에서 saturation이 없다고 쓴다). Teacher ablation은 Llama3.1-405B-Instruct vs Llama3.1-8B-Base(matched coverage) 37.9 vs 30.1이다. 고정 256K pairs에서 unique question 1K → 6.5K가 +10.5이므로 "teacher > solutions/problem > problem count" 순서는 source와 맞지 않는다 (5–10).
+- **Q4**: "Mixtral 산술 정확도 ~30%", "pure CoT acceptance ~1% vs TIR ~2%", "CoT-only MATH −8 / PoT-only GSM8K −5" ablation은 OpenMathInstruct-1에 없다 (6).
+- **Q5**: Acceptance rate 계산의 입력(K=64, 15K problems)이 틀리다. 실제 sampling 수는 Q3의 값이고, 생성은 code block 최대 3개이며 첫 execution error에서 멈춘다. SymPy filter와 GPU-hours는 보고되지 않았다 (5–6).
+- **Q6**: Code block 수는 0개 16.4%, 1개 81.7%, 2개 이상 2%이다(App. A.1). Step-DPO는 TIR boundary가 아니라 prompt의 "Step i:" prefix로 step을 나누고, OmegaPRM은 solution을 길이 기준 16 pieces로 나눈다.
+- **Q7, Q11**: "OpenMathInstruct-2가 TIR를 버렸다"는 전제가 source에 없으므로, 이를 근거로 한 "text-CoT swap의 operational reason"은 근거가 없다. "Sandbox를 끄면 GSM8K 80.2 → ~55-60"도 보고된 수치가 아니다. OpenMathInstruct-1 평가가 code execution을 포함한다는 점은 맞다 (8).
+- **Q8**: "Tool 없이 inference하면 GSM8K 80% → ~55-60%"는 source에 없는 수치이다.
+- **Q9**: "MATH-level-5 ~60-70%", "leak rate 5-10% → 1-3%", "405B 1M > Mixtral 10M", augmentation +1 / +3 / +9는 source에 없다. OpenMathInstruct-1의 512K model은 MATH validation Level 5에서 16.3%이다 (6, 10).
+- **Q10**: "5-10% noise"와 cost 계산은 source에 없고, OpenMathInstruct-1은 flawed-reasoning 정답을 anecdotal하게 "rare"라고 쓴다. MetaMath SV는 "정답 여부를 판정하고 수정하는 prompt"가 아니라, question과 answer를 서술문으로 바꾸고 숫자 하나를 x로 가린 backward question이다. Step-DPO는 OmegaPRM scorer를 쓰지 않으며, 첫 오류 step은 사람 또는 GPT-4가 찾고 chosen step은 reference model이 직접 sampling한다 (11, 27–28).
+- **Q12**: 새 question의 답은 32개 solution(temperature 0.7)의 majority vote이고 minimum vote threshold는 0이다. 즉 low consensus로 problem을 버리지 않는다(App. C.1, Table 9). "~3-5% systematically wrong", "MinHash decontam", "MetaMath +9 vs OMI-2 +4"는 source에 없다. Decontamination은 embedding top-5 검색 후 Llama3.1-405B-Instruct paraphrase check이다 (7).
+- **Q13**: Augmentation은 "paraphrase + novel question"이 아니라 few-shot "similar question" 생성이다. Compute 수치, "compensating-error 5-10% → 1-3%", TIR → text-CoT 비교는 source에 없다. OpenMathInstruct-1 70B와 OpenMathInstruct-2 8B는 base model(CodeLlama/Llama 2 vs Llama3.1)이 달라서 "teacher upgrade ≈ 9× model scaling"은 통제된 비교가 아니다 (7–10).
+- **Q14, Q15**: "seed 2.5% / paraphrase ~30% / novel ~67%" 구성은 틀리다. Table 5 기준 13.97M pairs 중 original question에 대한 solution augmentation이 2.92M(약 20.9%), 새 question에 대한 question-solution augmentation이 11.05M(약 79.1%)이다(derived). 별도 paraphrase category는 없다. s1의 trace teacher는 Gemini 2.0 Flash Thinking이고, LIMO v3의 teacher는 DeepSeek R1, R1-Distill-Qwen-32B, QwQ-32B이다 (7, 19).
+- **Q16**: s1 filter 순서는 quality(자동) → difficulty → diversity이고, difficulty filter는 51,581개를 24,496개로 줄인다(약 52.5% 제거, "80% drop"이 아니다). 정답 판정은 Claude 3.5 Sonnet이 한다. "base ~17", "Random 1K ~24", "+32 point"는 틀리다: budget forcing(약 30,000 token cap)에서 1K-random 36.7 vs s1K 50.0 AIME24(+13.3, Table 2)이고, Qwen2.5-32B-Instruct는 26.7이다(Table 1). Paper는 difficulty 단독을 dominant component로 보지 않는다. Difficulty 지표만 쓴 1K-longest는 33.3이고, 세 criteria의 조합이 필요하다고 쓴다. LIMO는 v3에서 "expert hand-curation"이 아니라 rule-based chain score로 고르고 800 samples로 63.3 / 95.6을 보고한다. 817 samples는 v1이며 57.1 / 94.8이다 (16–19).

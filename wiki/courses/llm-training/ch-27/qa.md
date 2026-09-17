@@ -894,3 +894,21 @@ Math sample (α=1) + writing sample (α=0)이 같은 batch. Gradient가 *합쳐�
 **Joint RL = `α * RLVR + (1-α) * critique`로 verifiable + open-ended를 single RL stage에서 동시 학습. α는 task type에 따라 dynamic. Sequential의 catastrophic forgetting 해결. K2가 first frontier instance. Hidden weakness는 task classifier + α tuning.**
 
 ---
+
+## Q-정정 (2026-09 revision)
+
+2026-09 revision에서 [[read]]를 primary source 기준으로 다시 작성했다. 아래 기존 entry의 kernel에 들어 있던 사실이 정정되었다. 기존 entry는 수정하지 않는다. 기존 entry의 line reference(예: "read.md L156")는 git commit 4a72e54 시점의 read.md를 가리킨다.
+
+- **Q1** — ch-27 trajectory 길이 "15K–100K+ tokens"는 source에 없는 값이다. SWE-Gym의 successful trajectory는 평균 약 19 turn, 약 19,000 token이다 ([[excerpts/swe-gym]] §4.2). Kimi K2의 SFT data는 real world가 아니라 state를 유지하는 LLM tool simulator에서 만들어진다 ([[kimi-k2]] §3.1.1).
+- **Q3** — AgentTuning의 mix는 "1:10"이 아니라 η = 0.2(agent 20%, ShareGPT 80%)이다. FireAct에서 CoT+ReAct+Reflexion 3-method mix(40.0)는 ReAct+CoT(41.0)보다 낮아서 최선이 아니다. Agent-FLAN의 hallucination type은 4개가 아니라 format과 action 2개이다. AgentInstruct는 약 22M flow pair와 3.8M Orca-2.5 pair를 합친 약 25.8M이다.
+- **Q4** — Lumos-O는 "Onetime"이 아니라 "OnePass"이다. Lumos annotation은 GPT-4가 기존 benchmark의 ground-truth reasoning step을 변환해서 만든다 ([[excerpts/lumos]] §3, §4.1).
+- **Q5, Q6** — AutoAct는 self-consistency 다수결을 쓰지 않는다. reward = 1인 trajectory만 남기고, iteration도 하지 않는다 ([[autoact]] §2.3). 따라서 "democracy" framework의 mechanism 대응은 AutoAct 논문에 근거하지 않는다. SWE-RL은 학습 중 unit test를 실행하지 않고 oracle patch와의 similarity를 reward로 쓴다. AgentTuning의 filtering은 "5K rollout → 1.8K"가 아니라 35,341 instruction → 1,866 trajectory이다 ([[agenttuning]] Table 1).
+- **Q7** — "general 90% / agent 10%, positive:negative 4:1" mix는 source에 없다. AgentTuning은 η = 0.2, Agent-FLAN은 ShareGPT : agent = 1:1이다. Mode 3(parameter)과 Mode 4(relevance)는 Agent-FLAN에 없다. Agent-FLAN negative는 "tool 없음 + tool을 요구하는 query"와 "tool 있음 + 일반 대화 query" 두 종류이다. SFT의 negative가 cross-entropy를 쓰는 content라는 설명(negative gradient 없음)은 그대로 맞다.
+- **Q8, Q9** — AgentInstruct는 4 stage가 아니라 3 flow(content transformation, seed instruction generation, refinement)이다. "43"은 generator agent 수가 아니라 reading comprehension question type 수이다 ([[agentinstruct]] §2.1).
+- **Q10** — SWE-Gym trajectory는 teacher Qwen-2.5-Coder-32B로 task당 K=10번 생성한 24,380개가 아니다. gpt-4o-2024-08-06과 claude-3-5-sonnet-20241022에서 얻은 successful trajectory 491개이다. OpenHands의 browser는 꺼져 있고 action은 bash terminal과 file editor이다. 예시 yield는 gpt-4o가 SWE-Gym Lite 230개 중 19개(8.26%)이다 ([[excerpts/swe-gym]] §4.2, App. B.4).
+- **Q11** — "7B 3% → 15.3%"는 32B의 SWE-bench Lite 수치이다. Verified는 7B 1.8 → 10.6, 32B 7.0 → 20.6이고, verifier를 쓰면 32B가 32.0%(Best@16)이다. SWE-RL은 "hidden test RL"이 아니고 human reference patch similarity에 묶여 있다. "RS-SFT 10K H100-h vs RL 1M H100-h" 비용 비교는 source에 없다. SWE-RL의 compute는 512 H100으로 약 32시간이다. execution reward만으로 RL을 한 사례는 DeepSWE이다 ([[deepswe]]). self < teacher < world verifier hierarchy라는 reasoning framework 자체는 유지할 수 있다.
+- **Q12** — "raw base에 바로 RL은 unstable, SFT init이 prerequisite"는 일반 규칙이 아니다. DeepSWE는 SFT 없이 Qwen3-32B에서 RL만으로 42.2% Pass@1에 도달했고, SFT warm start 위의 RL은 100 iteration 후에도 개선되지 않았다 ([[deepswe]] §4, §6). AutoAct는 iteration loop를 하지 않는다.
+- **Q13** — SWE-RL의 "1M H100-hours"는 논문에 없다. 논문은 1,600 step, 512 H100, 약 32시간을 보고한다. 표의 "SWE-RL이 checkpoint selection과 eval 기반 stopping을 사용"은 논문에 보고되지 않았다. "training reward plateau ~0.6"은 예시 값이다.
+- **Q14** — KL β = 0.02, G = 8은 논문에 없다(β, ε, learning rate는 보고되지 않음, group당 16 rollout). 잘못된 format의 reward는 0이 아니라 −1이다. "modification requirement" filter는 논문에 없다. "similarity 0.9 → test pass 70%" 같은 correlation 값은 source 없는 예시이다. continuous reward가 exact-match 0/1 reward보다 낫다는 결과는 맞다(repair 34.8 vs 29.0). MATH 변화는 +4가 아니라 strict 기준 63.2 → 73.7이다.
+- **Q15** — "≤10 files, ≤500 lines, Python only" filter는 SWE-RL 논문의 filter가 아니다. 논문은 bot PR, 빈 변경과 과도하게 큰 변경, CodeLlama hunk filter를 쓰고 SWE-bench repository를 제외한다 ([[excerpts/swe-rl]] App. A). "OOD transfer가 예상보다 약함"은 source에 없다.
+- **Q16** — `total = α · RLVR + (1 − α) · self_critique`와 task별 α 표는 Kimi K2 report에 없는 예시이다. K2 critic은 actor response를 core, prescriptive, human-annotated rubric에 대해 pairwise로 순위를 매기고, verifiable-reward rollout으로 critic을 갱신한다 ([[kimi-k2]] §3.2.2). K2 report에는 agentic pretraining corpus가 없고, agentic data synthesis는 post-training SFT 단계에 있다 ([[kimi-k2]] §2.2, §3.1.1).

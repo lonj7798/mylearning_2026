@@ -2,123 +2,45 @@
 chapter: ch-14
 course: llm-training
 phase: read
-excerpt_of: Subramanyam, Chen, Grossman 2025 — "Scaling Laws Revisited: Modeling the Role of Data Quality"
+excerpt_of: wiki/raw-data/llm-training/papers/scaling-laws-data-quality.md (card has no verification section and no numbers; quotations below are taken from the primary source)
 source_url: https://arxiv.org/abs/2510.03313
-created_at: "2026-04-23"
+primary_version: arXiv:2510.03313v2 (2026-02-23; v1 2025-10)
+created_at: "2026-09-15"
+revised: 2026-09 (generality revision; replaces the 2026-04 excerpt, which gave a formula with a quality-dependent irreducible loss E(q) that the paper does not use)
 ---
 
-# Excerpt: Quality as a Formal Scaling-Law Variable
+# Excerpt: Scaling Laws Revisited: Modeling the Role of Data Quality in Language Model Pretraining
 
-**Source:** `wiki/raw-data/llm-training/papers/scaling-laws-data-quality.md`
-**Primary paper:** Anirudh Subramanyam, Yuxin Chen, Robert L. Grossman, "Scaling Laws Revisited: Modeling the Role of Data Quality in Language Model Pretraining", 2025
-**arXiv:** https://arxiv.org/abs/2510.03313
+Verbatim quotations and table values used by ch-14 `read.md`, with loci. Authors: Anirudh Subramanyam, Yuxin Chen, Robert L. Grossman (University of Chicago). Checked against the v2 PDF on 2026-09-15. Source type: paper.
 
----
+## The law (§1, §6)
+> "The law predicts loss as L(N, D, Q) = A/N^α + B/(D^β Q^γ) + E, capturing the interplay between model size, data volume, and data quality."
+> "we introduce a single dimensionless parameter Q ∈ (0, 1] characterizing the usable information in a corpus. A value of Q = 1 represents fully clean and representative data, while smaller Q values reflect increasing corruption or redundancy."
+- In this form E does not depend on Q. §5.5: the plots "suggest that the additive terms in our proposed scaling law, A/N^α + E, indeed do not vary with data quality Q."
 
-## Bibliographic header
+## Corruption-rate estimator (§3.1)
+> "if we have a dataset consisting of D tokens and 10% are corrupted, then we would say that the CR = 10% and the data quality Q is 90%."
 
-Chinchilla's `L(N, D) = E + A/N^α + B/D^β` treats all tokens as equivalent. Every data-curation practitioner knows this is false — a FineWeb-Edu token is worth more than a raw CommonCrawl token — but the scaling-law literature did not formalise the difference until 2025. This paper does.
+## Relation between γ and effective data (§4.1, App. A.3)
+- Definition 3: "D_eff := D g(Q)".
+- App. A.3: "ρ(Q) ≈ c Q^γ0 as Q → 1, so ρ(Q)^−β ≈ c^−β Q^−βγ0. Absorbing c^−β into B and setting γ = βγ0, we obtain L_D ≈ B / (D^β Q^γ)."
 
-From the raw-data notes:
+## Experimental setting (§5.1-§5.3)
+- Causal language modeling: "a 8L Llama 3 ... model with a hidden size of 512 and a context length of 2048"; C4 (en) subsets of "100M, 1B and 10B tokens" trained "for a single epoch"; 63 runs.
+- Machine translation: "a 8L GPT Neo model with a hidden size of 1024 with approximately ∼ 133M params"; Paracrawl v8 English-German, 500K, 1M, and 2M sentence pairs; 63 runs.
+- Quality is set by synthetic noise: "if 25% of all samples are perturbed, then the quality of that dataset is considered to be 0.75." For CLM, "we randomly swap 50% of all non-special tokens with valid non-special tokens from the tokenizer vocabulary." Quality levels: "Q = {1.0, 0.9, 0.8, 0.75, 0.7, 0.6, 0.5}".
+- Model size is fixed within each task; App. E.3 fits "L ≈ B/(D^β Q^γ) + E (assuming N is fixed or large enough)".
 
-> *"Data quality can be treated as an explicit scaling variable, not just an anecdotal curation benefit. When comparing data pipelines, model effective sample size and noise/deficiency explicitly instead of treating all tokens as equal."*
+## Table 2 (estimated parameters)
+| Task | Method | B | β | γ | E |
+|---|---|---|---|---|---|
+| NMT | Least Squares | 166.568727 | 0.262933 | 0.185135 | 0.146998 |
+| NMT | Huber | 139.602744 | 0.250067 | 0.173161 | 0.066539 |
+| CLM | Least Squares | 1428.225931 | 0.395142 | 0.388678 | 3.439888 |
+| CLM | Huber | 1441.505289 | 0.395859 | 0.400657 | 3.439047 |
 
-The value of the paper is practical: it lets you compare two pretraining runs on different corpora with a shared scaling-law fit, rather than arguing by benchmark anecdote.
+## Authors' interpretation (§5.5)
+> "the estimated exponents for data quality, γ̂, are significantly less than one: γ̂ ≈ 0.173 for NMT and γ̂ ≈ 0.401 for CLM (with Huber estimation). This indicates that the effective dataset size decays sublinearly with quality, i.e., models are more robust to moderate corruption than predicted by simple effective sample-size theories"
+> "Table 3 shows us that using our pre-trained models to evaluate loss on unseen data also follows a scaling law similar to our fit on in distribution data"
 
----
-
-## The core extension
-
-Standard Chinchilla:
-
-```math
-L(N, D) = E + A / N^\alpha + B / D^\beta
-```
-
-Subramanyam's quality-aware extension:
-
-```math
-L(N, D, q) = E(q) + A / N^\alpha + B / (\psi(q) \cdot D)^\beta
-```
-
-Two quality-dependent terms:
-
-1. **`E(q)` — irreducible-loss term.** Depends on the inherent noise floor of the corpus. Junk-heavy corpora have higher `E(q)` — no amount of `N` or `D` drives the loss below this.
-2. **`ψ(q)` — effective-sample-size multiplier.** A cleaner corpus acts like more tokens at the same raw count. A filtered-to-2T FineWeb-Edu corpus might have `ψ(q_edu) ≈ 1.5`, meaning it trains like a 3T unfiltered corpus would.
-
----
-
-## The quality axis is not a multiplier — it is an asymptote
-
-From the raw-data notes:
-
-> *"Models quality through effective sample size / deficiency-style terms. Evaluates how corruption or redundancy changes the useful training signal."*
-
-The subtlety: if quality only entered via `ψ(q)`, it would be a multiplier on `D` — you could compensate by scraping more low-quality tokens. It does not work that way. The `E(q)` term is an **asymptote**. Two corpora with different quality floors sit on *different scaling curves* that never cross. You cannot scale your way out of a bad corpus with more data or more parameters.
-
-```
-   loss
-    |
-    |                   E(low-quality)  ←---  asymptote you can never beat
-    |‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾
-    |
-    |        E(high-quality)
-    |‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾
-    |
-    +----------------------------→ log(N or D)
-```
-
-This is the 2025 statement of why FineWeb-Edu beats FineWeb at every scale, not just at small scale: they live on different asymptotes.
-
----
-
-## Measuring ψ(q) in practice
-
-The paper proposes several proxies for the quality factor `ψ(q)`:
-
-1. **Held-out perplexity ratio.** Train small proxy models on candidate corpora; measure perplexity on a fixed held-out real-text test set. `ψ_proxy(q) = PPL_ref / PPL_candidate` normalised to a reference corpus. Cheap but fragile — susceptible to overlap artifacts.
-2. **Downstream task scaling-law fit.** Fit `L(N, D, q)` to a sweep of small models; read off `ψ(q)` from the fit. Expensive but load-bearing — this is what the paper uses for its main claims.
-3. **Classifier-score distribution.** For classifier-filtered corpora (FineWeb-Edu style), the classifier score distribution is itself a proxy for quality; corpora with higher mean/lower variance in educational-content scores have higher `ψ`.
-
-The paper's empirical measurements: filtered web corpora (FineWeb-Edu vs FineWeb) give `ψ(q_edu) / ψ(q_plain) ≈ 1.3–1.5`; heavily-deduplicated corpora over raw scrapes give `ψ ≈ 1.1–1.2`; de-contaminated corpora over contaminated corpora show a smaller `ψ` gain (~1.02–1.05) but a large `E(q)` improvement at benchmark-specific losses.
-
----
-
-## Composition with the data-constrained law
-
-Stacking with Muennighoff's `D' = U (1 − exp(−R/R_T))`:
-
-```math
-D_{\text{eff}} = \psi(q) \cdot U \cdot (1 - \exp(-R / R_T))
-```
-
-```math
-L(N, D_{\text{eff}}, q) = E(q) + A/N^\alpha + B/D_{\text{eff}}^\beta
-```
-
-**Key consequence:** high-quality repeats are worth more than low-quality novel tokens until the repetition-saturation dominates. Concretely: if `q_old/q_new = 2`, one repeat of `q_old` data beats one fresh `q_new` token up to about epoch `R_T · ln(2) ≈ 2.8`. Past that, the Muennighoff decay kicks in and fresh noisy tokens become preferable.
-
-This is the mathematical justification for the OLMo 2 / OLMo 3 cooldown design: a small high-quality corpus (Dolmino) at many epochs beats a large low-quality corpus at 1 epoch for the final-quality cooldown stage.
-
----
-
-## What the paper does not resolve
-
-From the raw-data notes:
-
-> *"Practical lesson: two corpora with the same token count can sit on different scaling curves if quality differs enough."*
-
-The paper gives a framework but leaves three open problems:
-
-1. **No universal `q` scalar.** `q` is really multi-dimensional (factual density, linguistic diversity, domain coverage, error rate). The paper lumps them into a scalar proxy. Task-specific applications may need per-dimension fits.
-2. **No recipe for what quality operations give the largest ψ lift.** The fit is descriptive, not prescriptive — it tells you two corpora differ but not which curation step was responsible.
-3. **Contamination is treated as a subcase of quality.** But as Dohmatob 2024 shows ([[strong-model-collapse]]), synthetic contamination *flatlines* scaling laws rather than shifting them. The two failure modes are not interchangeable.
-
----
-
-## Connections
-
-- The original data-constrained paper: [[excerpts/data-constrained-scaling]]
-- Empirical quality curation: [[fineweb]] (classifier approach), [[dolma]] (cascade approach)
-- The contamination side of the quality question: [[excerpts/model-collapse]]
-- Chapter synthesis: [[ch-14]]
+Note for readers (derived, not stated by the paper): with γ = βγ0, the clean-token equivalent of D tokens at quality Q is D · Q^(γ/β). With the CLM Huber row, γ/β = 0.400657 / 0.395859 = 1.012; with the NMT Huber row, 0.173161 / 0.250067 = 0.692.

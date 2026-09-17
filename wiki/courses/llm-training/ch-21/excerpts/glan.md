@@ -5,111 +5,73 @@ phase: read
 excerpt_of: wiki/raw-data/llm-training/papers/glan.md
 source_url: https://arxiv.org/abs/2402.13064
 created_at: "2026-04-23"
+revised_at: "2026-09-15"
 ---
 
-# Excerpt: GLAN — the taxonomy-as-seed paradigm
+# Excerpt: GLAN — "Synthetic Data (Almost) from Scratch: Generalized Instruction Tuning for Language Models"
 
-**Source library:** `wiki/raw-data/llm-training/papers/glan.md`
-**Authors:** Li, Dong, Tang, Wang, et al. (Microsoft Research) — 2024.
+This excerpt was rewritten on 2026-09-15 to match the verified library card `glan` (checked 2026-09-14 against
+arXiv:2402.13064v1). The April 2026 version contained claims that are not in the paper (a hand-curated
+"~36-field" root, a difficulty loop per concept, verification-friendly answer formats, same-base Alpaca and WizardLM
+baselines, and depth ablations); they are removed.
 
----
+- **Authors:** Haoran Li, Qingxiu Dong, Zhengyang Tang, Chaojun Wang, Xingxing Zhang, Haoyang Huang, et al.
+- **Date:** arXiv v1 2024-02-20 ("Work in progress").
 
-## Why this source anchors ch-21 §1–§2, §5
-
-GLAN is the cleanest statement of the top-down paradigm. It is also the only paper among the ch-21 primary sources that is explicitly about instruction tuning (not pretraining), which makes it the right reference point for comparing to Self-Instruct and bottom-up siblings from ch-19.
-
-The three claims ch-21 pulls directly from GLAN:
-
-1. **Taxonomy is a third paradigm.** "Prior instruction-tuning data synthesis (Self-Instruct, Evol-Instruct) is seeded by a small real instruction pool and inherits its biases. GLAN replaces the seed with a **taxonomy**." This is the seed / no-seed / taxonomy trichotomy ch-21 §1 opens with.
-2. **Tree depth is the coverage knob.** "Ablations on taxonomy depth confirm deeper trees give flatter capability distributions." The interactive companion makes this knob physical.
-3. **Teacher bias concentrates at the top.** "GPT-4's view of what constitutes a field/discipline shapes the entire downstream corpus." Ch-21 §5 quotes this directly for the curator-bias discussion.
-
----
-
-## The six-level tree — reconstructed
-
-The paper's named hierarchy (with the level-name vocabulary it actually uses):
+## Pipeline (§2, Algorithm 1)
 
 ```
-Level 0 — Field          hand-curated, ~36 entries
-Level 1 — Subfield       GPT-4 decomposition per field
-Level 2 — Discipline     GPT-4 decomposition per subfield
-Level 3 — Subject        GPT-4 enumeration per discipline
-Level 4 — Session        GPT-4 syllabus per subject (with learning objectives)
-Level 5 — Concept        GPT-4 concept-list per session
-Level 6 — Instruction    generation at the leaf (with varied difficulty)
+D ← build_taxonomy()                     # list of disciplines (§2.1)
+for each discipline d ∈ D:
+    S ← generate_subjects(d)             # §2.2
+    for each subject s ∈ S:
+        A ← generate_syllabus(s, d)      # §2.3
+        C, K ← extract_class_details(A)  # class sessions and key concepts
+        Q ← generate_instructions(A, C, K, d)   # sample sessions and key concepts (§2.4)
+        L ← L ∪ Q
+return L
 ```
 
-From the source:
+1. **Taxonomy (§2.1, §3.1).** GPT-4 is prompted with instructions such as "list all fields of human knowledge and
+   capabilities". Human annotators vote to keep or remove elements; removing a field or sub-field removes its
+   descendants. 126 disciplines were kept after majority voting. Example top-level fields: Natural Sciences,
+   Humanities, Services (vocational training). The number of fields and sub-fields is not reported.
+2. **Subjects (§2.2, §3.1).** GPT-4, prompted as an education expert, lists subjects; a second prompt converts the
+   list to jsonl (subject_name, level, subtopics). 10 queries per discipline, temperature 1.0, top-p 0.95; 100 to 200
+   subjects per discipline on average; subjects repeated across disciplines are kept.
+3. **Syllabus (§2.3, §3.1).** One GPT-4 query per subject; 10 to 30 class sessions; around five key concepts per session.
+4. **Questions (§2.4).** Sample one or two class sessions and one to five key concepts; GPT-4 writes a homework
+   question given the sampled items and the full syllabus.
+   - One session with m key concepts: Σ_{i=1..5} C(m, i) combinations.
+   - Two sessions with m1 and m2 key concepts: Σ_{i=2..5} C(m1+m2, i) − Σ_{i=2..5} C(m1, i) − Σ_{i=2..5} C(m2, i).
+5. **Answers (§3.1).** Generated in a separate call by GPT-3.5-turbo (temperature 0.7, top-p 0.95). No answer
+   verification step is described.
+6. **Decontamination (§3.1).** Pairs containing questions or input prompts from the test and training sets of every
+   evaluated benchmark are removed. Total: 10 million pairs.
 
-> Each discipline gets an auto-generated subject list; each subject gets an auto-generated syllabus of class sessions; each class session is enumerated as a concept list. Instructions are generated at the concept level, guaranteeing coverage across all branches.
+## Training (§3.2)
+Mistral 7B; loss on response tokens only; 3 epochs; LR 3e-6, cosine, 1,000 linear warm-up steps, final LR 0; batch 512 pairs.
 
-The one-line summary ch-21 uses: *"Field → Subfield → Discipline → Subject → Session → Concept → Instruction."*
+## Results
+| Model | HumanEval | MBPP | GSM8K | MATH | BBH | ARC-E | ARC-C | MMLU |
+|---|---|---|---|---|---|---|---|---|
+| Mistral 7B (base) | 28.0 | 50.2 | 43.4 | 10.0 | 56.1 | 79.5 | 53.9 | 62.3 |
+| WizardMath v1.1 7B | 51.2 | 54.1 | 83.2 | 33.0 | 58.2 | 79.8 | 53.2 | 60.3 |
+| Mistral CodeAlpaca 7B | 35.4 | 50.2 | 34.6 | 8.3 | 56.1 | 79.1 | 54.2 | 60.9 |
+| GLAN 7B | 48.8 | 57.6 | 80.8 | 32.7 | 60.7 | 90.7 | 81.1 | 62.9 |
 
----
+(Table 1; other rows in the card.)
 
-## Why levels 0–1 are the bias-injection point
+- MMLU by category (Table 2): Mistral 7B STEM 52.0 / Humanities 56.5 / Social Sciences 73.3 / Other 70.1;
+  GLAN 60.1 / 54.9 / 71.8 / 68.6.
+- IFEval strict prompt / instruction level: GLAN-7B 34.0 / 44.8; Mistral-7B-Instruct-v0.1 32.0 / 42.8 (Table 4).
+- GLAN-Test (§3.5): 6,300 held-out instructions from GLAN data, 50 per discipline, GPT-4 pairwise judging:
+  +1.61 vs Orca2-7B, +0.43 vs Mistral-7B-Instruct, +0.19 vs WizardLM-13B-V1.2, −0.55 vs GPT-4 (Table 6).
+  American history, Divinity, and Radiology have negative gaps vs Orca-2-7b and Mistral-7B-Instruct (Table 8).
+- Loss-gap check (§3.4, Table 3): Δ(%) = (L_test − L_train) / L_test. GLAN-7B: −0.74% ARC-C, −0.23% ARC-E,
+  0.92% GSM8K, −1.79% MATH; Orca2-7B 11.4% and WizardLM-13B-V1.2 4.39% on GSM8K.
+- Future work (§5): multi-turn conversations and long documents.
 
-From the source (Risks + gotchas):
-
-> **Teacher-bias concentrates at the top:** GPT-4's view of what constitutes a field/discipline shapes the entire downstream corpus.
-
-Concretely: the root list decides what kinds of knowledge exist. If the root list has "Mathematics" but not "Applied Engineering Ethics," no downstream node can generate ethics content. If the root list has "Computer Science" as one item, CS gets one root slice; if the root list had "Computer Science" and also "Computational Linguistics" and "Information Theory" as separate roots, those sub-areas get their own full subtree instead of being sub-branches of CS.
-
-The level-1 Subfield choice is almost as important. Whether "Machine Learning" is placed as a Subfield under Computer Science (inherits CS-style Discipline children: theory, systems, etc.) or under Mathematics (inherits math-style Discipline children: statistics, optimization) changes tens of thousands of leaves.
-
-Ch-21 §5's "hand-curated at the top" claim is this observation generalized across Phi-1.5, Phi-4, Nemotron, and Cosmopedia.
-
----
-
-## What "generate at the concept level" looks like
-
-The source's step 5:
-
-> **Concept → Instructions:** for each concept, prompt for instruction-response pairs at varied difficulty levels; include verification-friendly answer formats for math/code.
-
-Two details worth highlighting:
-
-- **Varied difficulty per concept.** GLAN asks for multiple instances per concept at different difficulty settings — one easy, one medium, one hard. This is the within-leaf diversity knob; it does not add branches but it does thicken the sampling of each branch.
-- **Verification-friendly formats.** For math and code concepts, GLAN asks the teacher to emit answers in a format the authors can later verify automatically (final numeric answer boxed, code that returns a value). This is the "verify" step of the ch-18 loop specialized to leaf generation.
-
----
-
-## The coverage audit result
-
-From the source:
-
-> Mistral-7B + GLAN outperforms same-base models fine-tuned on Alpaca / WizardLM / CodeAlpaca on MATH, GSM8K, HumanEval, MBPP, BBH, ARC, MMLU.
-> No task-specific data used — generalization attributed to coverage.
-
-This is the pay-off of the coverage guarantee. Every listed benchmark probes a named part of the tree. GLAN spans the union of those parts and Alpaca / WizardLM / CodeAlpaca do not. The null-hypothesis explanation — that Mistral-7B simply trained on more data — is ruled out by same-token-count ablations the paper runs.
-
-The finding ch-21 extracts: **coverage is worth more than volume at fixed compute**, provided the coverage is constructed and not just statistical.
-
----
-
-## The "add a capability = add a subtree" claim
-
-From the source:
-
-> Demonstrated fine-grained coverage control: adding a taxonomy node adds a capability.
-
-This is the clearest operational benefit of top-down synthesis. If you want your model to handle, say, organic chemistry retrosynthesis, you do not need to collect user logs or seed examples. You:
-
-1. Add "Organic Chemistry Retrosynthesis" as a Subject under Chemistry.
-2. Ask the teacher to write a syllabus of sessions for that subject.
-3. Ask for concept lists per session.
-4. Generate leaves.
-
-The cost scales linearly with the size of the added subtree, not with the curation of new examples. This property is why taxonomy-driven synthesis is attractive for labs that want to add capabilities incrementally without rebuilding a data pipeline each time — see Phi-4's "50 synthetic categories" as a flat-taxonomy variant of the same idea.
-
----
-
-## Connections
-
-- [[excerpts/phi-1-5]] — the 20K-topic list is a flat (level-1) precursor of GLAN's tree.
-- [[excerpts/nemotron-4-synthetic]] — different shape (task families × RM filter) but same top-down move.
-- [[excerpts/cosmopedia]] — the HF reproduction uses a mixed-source taxonomy (curated + web-cluster-derived) as an explicit audit against single-curator bias.
-- [[excerpts/mathscale]] — the seed-derived concept graph is the complement — taxonomy extracted from data rather than pre-curated.
-- [[ch-18]] — the ch-18 loop's "generate" step is specialized by GLAN to "traverse-tree-and-generate-at-leaf."
-- [[ch-21]] §2 and §5.
+## Verification
+- Every value above appears in the verified card `glan` with the locus given; the Algorithm 1 block and the two
+  combination formulas were re-read in the cached arXiv v1 text on 2026-09-15.

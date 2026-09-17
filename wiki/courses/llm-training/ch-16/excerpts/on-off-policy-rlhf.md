@@ -7,6 +7,8 @@ source_url: https://arxiv.org/abs/2404.14367
 created_at: "2026-04-23"
 ---
 
+> Superseded by the 2026-09 revision of read.md; kept for history.
+
 # Excerpt: On-vs-off-policy RLHF — distribution shift as the root pathology
 
 **Source library:** `wiki/raw-data/llm-training/papers/on-off-policy-rlhf.md`

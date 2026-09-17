@@ -1,0 +1,263 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Length Reward Explorer</title>
+<style>
+:root{
+  --bg:#fbfaf7; --fg:#1d1d1b; --muted:#5f5e58; --line:#d8d5cc; --panel:#ffffff;
+  --ok:#1f6fb2; --bad:#b4561b; --trunc:#9a3d8f; --zero:#6b6b6b; --grid:#e6e3da;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#171716; --fg:#ecebe6; --muted:#a8a69e; --line:#3a3935; --panel:#212120;
+    --ok:#6fb0ea; --bad:#eb9a5f; --trunc:#d98fd0; --zero:#b0b0b0; --grid:#2c2b28;
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#171716; --fg:#ecebe6; --muted:#a8a69e; --line:#3a3935; --panel:#212120;
+  --ok:#6fb0ea; --bad:#eb9a5f; --trunc:#d98fd0; --zero:#b0b0b0; --grid:#2c2b28;
+}
+body{margin:0;background:var(--bg);color:var(--fg);font:14px/1.5 system-ui,-apple-system,"Segoe UI",sans-serif}
+.wrap{max-width:1000px;margin:0 auto;padding-inline:16px;padding-block:20px}
+h1{font-size:1.3rem;margin:0 0 4px}
+h2{font-size:1rem;margin:18px 0 6px}
+p.lead{color:var(--muted);margin:0 0 14px}
+.controls{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px;background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:12px}
+label{display:flex;flex-direction:column;font-size:.85rem;color:var(--muted);gap:3px}
+input[type=number]{font:inherit;color:var(--fg);background:var(--bg);border:1px solid var(--line);border-radius:5px;padding:4px 6px;width:100%;box-sizing:border-box}
+.presets{display:flex;flex-wrap:wrap;gap:6px;margin:10px 0}
+button{font:inherit;color:var(--fg);background:var(--panel);border:1px solid var(--line);border-radius:5px;padding:4px 10px;cursor:pointer}
+button:hover{border-color:var(--muted)}
+.charts{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:10px}
+.chart{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:8px}
+.chart h3{font-size:.92rem;margin:2px 4px 6px}
+svg{display:block;width:100%;height:auto}
+svg text{fill:var(--muted);font-size:10px}
+.tablewrap{overflow-x:auto;background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:8px}
+table{border-collapse:collapse;width:100%;min-width:720px;font-variant-numeric:tabular-nums}
+th,td{border-bottom:1px solid var(--line);padding:5px 6px;text-align:right;font-size:.85rem}
+th:first-child,td:first-child{text-align:left}
+th{color:var(--muted);font-weight:600;text-align:right}
+td input[type=number]{width:88px}
+.masked{color:var(--muted)}
+.readout{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:8px;margin:12px 0}
+.readout div{background:var(--panel);border:1px solid var(--line);border-radius:6px;padding:8px}
+.readout b{display:block;font-size:1.05rem}
+.readout span{font-size:.8rem;color:var(--muted)}
+.legend{display:flex;flex-wrap:wrap;gap:14px;margin:4px 6px;font-size:.82rem;color:var(--muted)}
+.sw{display:inline-block;width:16px;height:0;border-top:3px solid;vertical-align:middle;margin-right:5px}
+.caption{color:var(--muted);font-size:.82rem;margin-top:10px}
+code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:.85em}
+</style>
+</head>
+<body>
+<div class="wrap">
+<h1>Length reward explorer</h1>
+<p class="lead">Set the response limit, the soft-punishment buffer and one group of eight rollouts, then read the reward and the
+group-normalized advantage each rollout receives under four treatments of length. Default values are the DAPO settings:
+maximum generation 20,480 tokens = 16,384 expected + 4,096 buffer (arXiv:2503.14476 §4.1).</p>
+
+<div class="controls">
+  <label>Maximum response length L_max (tokens)
+    <input id="lmax" type="number" value="20480" min="512" step="256"></label>
+  <label>Soft-punish buffer L_cache (tokens)
+    <input id="lcache" type="number" value="4096" min="0" step="256"></label>
+  <label>Cosine reward: r0 correct
+    <input id="r0c" type="number" value="2" step="0.5"></label>
+  <label>Cosine reward: rL correct
+    <input id="rLc" type="number" value="1" step="0.5"></label>
+  <label>Cosine reward: r0 wrong
+    <input id="r0w" type="number" value="-10" step="0.5"></label>
+  <label>Cosine reward: rL wrong
+    <input id="rLw" type="number" value="0" step="0.5"></label>
+</div>
+<div class="presets">
+  <button data-p="dapo">DAPO: 16,384 + 4,096 buffer</button>
+  <button data-p="olmo">Olmo 3 Instruct RL: 8,192, no buffer</button>
+  <button data-p="l1">L1 training limit: 4,096</button>
+  <button data-p="heavy">Heavy truncation: 5 of 8 at the limit</button>
+</div>
+
+<h2>Reward as a function of response length</h2>
+<div class="charts" id="charts"></div>
+<div class="legend">
+  <span><i class="sw" style="border-color:var(--ok)"></i>correct answer</span>
+  <span><i class="sw" style="border-color:var(--bad);border-top-style:dashed"></i>wrong answer</span>
+  <span><i class="sw" style="border-color:var(--trunc)"></i>L_max − L_cache (buffer starts)</span>
+</div>
+<p class="caption">Left: the correctness-only rule R(ŷ, y) = 1 if equivalent, −1 otherwise (arXiv:2503.14476 Eq. 7); a truncated
+response has no answer, so it takes the −1 branch. Middle: the same rule plus soft overlong punishment (Eq. 13), which is 0
+below L_max − L_cache and falls linearly to −1 at L_max. Right: the cosine reward
+CosFn(t, T, η_min, η_max) = η_min + 0.5(η_max − η_min)(1 + cos(tπ/T)) with the hyperparameters from
+arXiv:2502.03373 App. E.5.1 (r0ᶜ = +2, rLᶜ = +1, r0ʷ = −10, rLʷ = 0).</p>
+
+<h2>One group of eight rollouts</h2>
+<div class="tablewrap">
+<table id="grouptable">
+  <thead>
+    <tr>
+      <th>Rollout</th><th>Length</th><th>Answer correct</th>
+      <th>Punitive r</th><th>Punitive A</th>
+      <th>Filtered r</th><th>Filtered A</th>
+      <th>Soft r</th><th>Soft A</th>
+      <th>Kimi λ</th>
+    </tr>
+  </thead>
+  <tbody></tbody>
+</table>
+</div>
+<div class="readout" id="readout"></div>
+<p class="caption">Advantages are A_i = (r_i − mean(r)) / std(r) over the group, with the population standard deviation
+(arXiv:2402.03300 GRPO). <b>Punitive</b> keeps truncated rollouts in the group with the wrong-answer reward. <b>Filtered</b> is
+DAPO's Overlong Filtering: truncated rollouts are removed from the loss, so they have no advantage and the group statistics are
+computed from the remaining rollouts. <b>Soft</b> adds the Eq. 13 penalty to the correctness reward. <b>Kimi λ</b> is the
+group-relative length reward λ = 0.5 − (len(i) − min_len)/(max_len − min_len), given as λ for correct responses and min(0, λ)
+for wrong ones (arXiv:2501.12599 §2.3.3); it is a separate term, not one of the three treatments. A rollout whose length equals
+L_max is treated as truncated: the "Answer correct" box then marks reasoning that was on track but never produced an answer.</p>
+</div>
+
+<script>
+var DEFAULT_LEN = [1200, 1500, 2100, 3400, 5200, 9800, 16000, 20480];
+var DEFAULT_OK  = [true, true, false, false, false, false, true, true];
+var lens = DEFAULT_LEN.slice(), oks = DEFAULT_OK.slice();
+
+function num(id){ return parseFloat(document.getElementById(id).value); }
+function cfg(){
+  var lmax = Math.max(256, num('lmax')), lcache = Math.max(0, Math.min(num('lcache'), lmax));
+  return {lmax: lmax, lcache: lcache, r0c: num('r0c'), rLc: num('rLc'), r0w: num('r0w'), rLw: num('rLw')};
+}
+function softPenalty(len, c){
+  if (c.lcache <= 0) return 0;
+  var start = c.lmax - c.lcache;
+  if (len <= start) return 0;
+  return Math.max(-1, (start - Math.min(len, c.lmax)) / c.lcache);
+}
+function cosFn(t, T, etaMin, etaMax){
+  var x = Math.min(t, T);
+  return etaMin + 0.5 * (etaMax - etaMin) * (1 + Math.cos(x * Math.PI / T));
+}
+function stats(values){
+  if (!values.length) return {mean: 0, std: 0};
+  var m = values.reduce(function(a, b){ return a + b; }, 0) / values.length;
+  var v = values.reduce(function(a, b){ return a + (b - m) * (b - m); }, 0) / values.length;
+  return {mean: m, std: Math.sqrt(v)};
+}
+function adv(r, s){ return s.std > 1e-9 ? (r - s.mean) / s.std : 0; }
+function fmt(x, d){ return (x === null || x === undefined) ? "—" : x.toFixed(d === undefined ? 2 : d); }
+
+function chartSVG(title, series, c, yMin, yMax){
+  var W = 320, H = 190, L = 40, R = 10, T = 12, B = 26;
+  var x = function(v){ return L + (v / c.lmax) * (W - L - R); };
+  var y = function(v){ return T + (1 - (v - yMin) / (yMax - yMin)) * (H - T - B); };
+  var parts = ['<svg viewBox="0 0 ' + W + ' ' + H + '" role="img" aria-label="' + title + '">'];
+  var ticks = [yMin, (yMin + yMax) / 2, yMax];
+  ticks.forEach(function(t){
+    parts.push('<line x1="' + L + '" y1="' + y(t) + '" x2="' + (W - R) + '" y2="' + y(t) + '" stroke="var(--grid)" stroke-width="1"/>');
+    parts.push('<text x="' + (L - 5) + '" y="' + (y(t) + 3) + '" text-anchor="end">' + (Math.round(t * 10) / 10) + '</text>');
+  });
+  if (y(0) > T && y(0) < H - B) {
+    parts.push('<line x1="' + L + '" y1="' + y(0) + '" x2="' + (W - R) + '" y2="' + y(0) + '" stroke="var(--zero)" stroke-width="1" stroke-dasharray="2 3"/>');
+  }
+  if (c.lcache > 0) {
+    var bx = x(c.lmax - c.lcache);
+    parts.push('<line x1="' + bx + '" y1="' + T + '" x2="' + bx + '" y2="' + (H - B) + '" stroke="var(--trunc)" stroke-width="1"/>');
+  }
+  series.forEach(function(s){
+    var d = '';
+    for (var i = 0; i <= 120; i++) {
+      var t = c.lmax * i / 120, v = s.f(t);
+      d += (i ? 'L' : 'M') + x(t).toFixed(1) + ' ' + y(v).toFixed(1) + ' ';
+    }
+    parts.push('<path d="' + d + '" fill="none" stroke="' + s.color + '" stroke-width="2"' + (s.dash ? ' stroke-dasharray="5 4"' : '') + '/>');
+  });
+  parts.push('<line x1="' + L + '" y1="' + (H - B) + '" x2="' + (W - R) + '" y2="' + (H - B) + '" stroke="var(--line)" stroke-width="1"/>');
+  parts.push('<text x="' + L + '" y="' + (H - 8) + '">0</text>');
+  parts.push('<text x="' + (W - R) + '" y="' + (H - 8) + '" text-anchor="end">' + c.lmax.toLocaleString() + ' tokens</text>');
+  parts.push('</svg>');
+  return '<div class="chart"><h3>' + title + '</h3>' + parts.join('') + '</div>';
+}
+
+function drawCharts(){
+  var c = cfg();
+  var html = '';
+  html += chartSVG('Correctness only', [
+    {f: function(){ return 1; }, color: 'var(--ok)'},
+    {f: function(){ return -1; }, color: 'var(--bad)', dash: true}
+  ], c, -2.4, 2.4);
+  html += chartSVG('Correctness + soft overlong punishment', [
+    {f: function(t){ return 1 + softPenalty(t, c); }, color: 'var(--ok)'},
+    {f: function(t){ return -1 + softPenalty(t, c); }, color: 'var(--bad)', dash: true}
+  ], c, -2.4, 2.4);
+  var lo = Math.min(c.r0c, c.rLc, c.r0w, c.rLw), hi = Math.max(c.r0c, c.rLc, c.r0w, c.rLw);
+  var pad = 0.1 * (hi - lo || 1);
+  html += chartSVG('Cosine length-scaling reward', [
+    {f: function(t){ return cosFn(t, c.lmax, c.rLc, c.r0c); }, color: 'var(--ok)'},
+    {f: function(t){ return cosFn(t, c.lmax, c.rLw, c.r0w); }, color: 'var(--bad)', dash: true}
+  ], c, lo - pad, hi + pad);
+  document.getElementById('charts').innerHTML = html;
+}
+
+function drawGroup(){
+  var c = cfg();
+  var truncated = lens.map(function(L){ return L >= c.lmax; });
+  var rPun = lens.map(function(L, i){ return (oks[i] && !truncated[i]) ? 1 : -1; });
+  var rSoft = lens.map(function(L, i){ return rPun[i] + softPenalty(L, c); });
+  var keep = [];
+  lens.forEach(function(L, i){ if (!truncated[i]) keep.push(i); });
+  var rFil = keep.map(function(i){ return rPun[i]; });
+  var sPun = stats(rPun), sSoft = stats(rSoft), sFil = stats(rFil);
+  var minLen = Math.min.apply(null, lens), maxLen = Math.max.apply(null, lens);
+  var rows = '';
+  for (var i = 0; i < lens.length; i++) {
+    var lam = (maxLen === minLen) ? 0 : 0.5 - (lens[i] - minLen) / (maxLen - minLen);
+    var kimi = (oks[i] && !truncated[i]) ? lam : Math.min(0, lam);
+    var inFilter = !truncated[i];
+    rows += '<tr>' +
+      '<td>' + (i + 1) + (truncated[i] ? ' <span style="color:var(--trunc)">truncated</span>' : '') + '</td>' +
+      '<td><input type="number" min="1" step="100" data-i="' + i + '" class="len" value="' + lens[i] + '"></td>' +
+      '<td><input type="checkbox" data-i="' + i + '" class="ok"' + (oks[i] ? ' checked' : '') + '></td>' +
+      '<td>' + fmt(rPun[i]) + '</td><td>' + fmt(adv(rPun[i], sPun)) + '</td>' +
+      (inFilter
+        ? '<td>' + fmt(rPun[i]) + '</td><td>' + fmt(adv(rPun[i], sFil)) + '</td>'
+        : '<td class="masked">masked</td><td class="masked">no gradient</td>') +
+      '<td>' + fmt(rSoft[i]) + '</td><td>' + fmt(adv(rSoft[i], sSoft)) + '</td>' +
+      '<td>' + fmt(kimi) + '</td></tr>';
+  }
+  document.querySelector('#grouptable tbody').innerHTML = rows;
+  document.querySelectorAll('input.len').forEach(function(el){
+    el.addEventListener('change', function(){ lens[+el.dataset.i] = Math.max(1, parseInt(el.value, 10) || 1); render(); });
+  });
+  document.querySelectorAll('input.ok').forEach(function(el){
+    el.addEventListener('change', function(){ oks[+el.dataset.i] = el.checked; render(); });
+  });
+  var nTrunc = truncated.filter(Boolean).length;
+  var lost = 0;
+  for (var j = 0; j < lens.length; j++) { if (truncated[j] && oks[j]) lost++; }
+  var zeroVar = sPun.std < 1e-9;
+  document.getElementById('readout').innerHTML =
+    '<div><b>' + (100 * nTrunc / lens.length).toFixed(0) + '%</b><span>truncation rate in this group</span></div>' +
+    '<div><b>' + lost + ' of ' + lens.length + '</b><span>rollouts marked on-track but scored as wrong under the punitive treatment</span></div>' +
+    '<div><b>' + fmt(sPun.mean) + ' / ' + fmt(sPun.std) + '</b><span>punitive group mean / standard deviation</span></div>' +
+    '<div><b>' + (keep.length ? fmt(sFil.std) : '—') + '</b><span>standard deviation after filtering truncated rollouts</span></div>' +
+    '<div><b>' + (zeroVar ? 'yes' : 'no') + '</b><span>zero reward variance (dynamic sampling would drop this prompt)</span></div>';
+}
+
+function render(){ drawCharts(); drawGroup(); }
+
+document.querySelectorAll('.controls input').forEach(function(el){ el.addEventListener('input', render); });
+document.querySelectorAll('.presets button').forEach(function(b){
+  b.addEventListener('click', function(){
+    var p = b.dataset.p;
+    if (p === 'dapo') { document.getElementById('lmax').value = 20480; document.getElementById('lcache').value = 4096; lens = DEFAULT_LEN.slice(); oks = DEFAULT_OK.slice(); }
+    if (p === 'olmo') { document.getElementById('lmax').value = 8192; document.getElementById('lcache').value = 0; lens = [700, 900, 1300, 2100, 3300, 5200, 8192, 8192]; oks = [true, true, false, false, false, true, true, false]; }
+    if (p === 'l1')   { document.getElementById('lmax').value = 4096; document.getElementById('lcache').value = 0; lens = [400, 520, 780, 1100, 1800, 2600, 4096, 4096]; oks = [true, true, true, false, false, false, true, false]; }
+    if (p === 'heavy'){ document.getElementById('lmax').value = 20480; document.getElementById('lcache').value = 4096; lens = [3200, 7400, 19000, 20480, 20480, 20480, 20480, 20480]; oks = [true, false, false, true, true, true, false, false]; }
+    render();
+  });
+});
+render();
+</script>
+</body>
+</html>

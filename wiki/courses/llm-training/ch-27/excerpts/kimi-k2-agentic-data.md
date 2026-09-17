@@ -7,6 +7,8 @@ source_url: https://arxiv.org/abs/2507.20534
 created_at: "2026-04-23"
 ---
 
+> Superseded by the 2026-09 revision of read.md; kept for history.
+
 # Excerpt: Kimi K2 — agentic data at pretraining scale
 
 **Source library:** `wiki/raw-data/llm-training/papers/kimi-k2-agentic-data.md`

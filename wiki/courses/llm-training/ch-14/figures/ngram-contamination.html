@@ -1,0 +1,198 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>N-gram Contamination Scores</title>
+<style>
+  :root {
+    --bg: #fbfaf7; --panel: #ffffff; --ink: #1f2328; --muted: #5b636d; --line: #d9dde2; --grid: #eceef1;
+    --cov: #ffe9a8; --covink: #4d3800; --long: #1f6feb; --flag: #cf222e; --ok: #1a7f37;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #14171b; --panel: #1c2026; --ink: #e6e8eb; --muted: #9aa3ad; --line: #343a42; --grid: #262b32;
+      --cov: #5a4600; --covink: #fff2c7; --long: #6ea8fe; --flag: #ff7b72; --ok: #56d364;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #14171b; --panel: #1c2026; --ink: #e6e8eb; --muted: #9aa3ad; --line: #343a42; --grid: #262b32;
+    --cov: #5a4600; --covink: #fff2c7; --long: #6ea8fe; --flag: #ff7b72; --ok: #56d364;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink);
+    font: 15px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }
+  main { max-width: 920px; margin: 0 auto; padding: 24px 16px 40px; }
+  h1 { font-size: 1.35rem; margin: 0 0 4px; }
+  h2 { font-size: 1.02rem; margin: 0 0 8px; }
+  p.lead { color: var(--muted); margin: 0 0 16px; }
+  .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 16px; margin-bottom: 16px; }
+  .two { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 14px; }
+  .controls { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 14px; margin-top: 12px; }
+  label { display: block; font-size: 0.85rem; color: var(--muted); margin-bottom: 4px; }
+  textarea { width: 100%; min-height: 150px; font: 13px/1.45 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    color: var(--ink); background: var(--bg); border: 1px solid var(--line); border-radius: 6px; padding: 8px; resize: vertical; }
+  select, button { font: inherit; color: var(--ink); background: var(--bg); border: 1px solid var(--line); border-radius: 6px; padding: 5px 8px; }
+  select { width: 100%; }
+  button { cursor: pointer; margin: 6px 8px 0 0; }
+  input[type="range"] { width: 100%; }
+  .val { font-variant-numeric: tabular-nums; font-weight: 600; }
+  .tokens { line-height: 2; font: 13px/2 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; overflow-wrap: anywhere; }
+  .tok { padding: 1px 2px; border-radius: 3px; border-bottom: 2px solid transparent; }
+  .tok.cov { background: var(--cov); color: var(--covink); }
+  .tok.long { border-bottom-color: var(--long); }
+  .tablewrap { overflow-x: auto; }
+  table { border-collapse: collapse; width: 100%; font-variant-numeric: tabular-nums; font-size: 0.86rem; }
+  th, td { text-align: right; padding: 4px 8px; border-bottom: 1px solid var(--line); white-space: nowrap; }
+  th:first-child, td:first-child { text-align: left; }
+  th { color: var(--muted); font-weight: 600; }
+  .flag { color: var(--flag); font-weight: 600; }
+  .ok { color: var(--ok); font-weight: 600; }
+  .note { color: var(--muted); font-size: 0.88rem; margin: 8px 0 0; }
+  .legend { font-size: 0.82rem; color: var(--muted); margin-top: 6px; }
+  .legend .tok { margin-right: 4px; }
+</style>
+</head>
+<body>
+<main>
+  <h1>N-gram contamination scores</h1>
+  <p class="lead">Accompanies ch-14 §5.3-§5.5. Paste an evaluation item and a training document, choose the n-gram length, normalization, and threshold, and compare three score functions described by Singh et al. (arXiv:2411.03923 §3.1). The page shows which evaluation tokens a check covers and whether the item would be flagged.</p>
+
+  <section class="panel" aria-label="Inputs">
+    <div>
+      <button type="button" data-preset="verbatim">Verbatim copy inside a page</button>
+      <button type="button" data-preset="rephrase">Paraphrase (Yang et al. 2023, Example 1)</button>
+      <button type="button" data-preset="options">Shared option list (Yang et al. 2023, Example 2)</button>
+    </div>
+    <div class="two" style="margin-top:10px">
+      <div>
+        <label for="ev">Evaluation item e</label>
+        <textarea id="ev" spellcheck="false"></textarea>
+      </div>
+      <div>
+        <label for="tr">Training document t</label>
+        <textarea id="tr" spellcheck="false"></textarea>
+      </div>
+    </div>
+    <div class="controls">
+      <div>
+        <label for="n">n-gram length n (words)</label>
+        <select id="n"><option>4</option><option selected>8</option><option>10</option><option>13</option></select>
+      </div>
+      <div>
+        <label for="norm">Normalization</label>
+        <select id="norm"><option value="1" selected>lowercase, remove punctuation</option><option value="0">none (split on whitespace)</option></select>
+      </div>
+      <div>
+        <label for="score">Score used for the flag</label>
+        <select id="score"><option value="tok" selected>TOKEN-MATCH</option><option value="ng">NGRAM-MATCH</option><option value="long">LONGEST-MATCH</option></select>
+      </div>
+      <div>
+        <label for="tau">Threshold τ (flag if score &gt; τ)</label>
+        <input id="tau" type="range" min="0" max="0.95" step="0.05" value="0.5">
+        <div class="val" id="tauval"></div>
+      </div>
+    </div>
+  </section>
+
+  <section class="panel" aria-label="Result">
+    <h2>Evaluation tokens</h2>
+    <div class="tokens" id="toks"></div>
+    <div class="legend"><span class="tok cov">covered</span> token lies in an n-gram that also occurs in t &nbsp; <span class="tok long">underlined</span> longest shared span</div>
+    <div class="tablewrap" style="margin-top:12px"><table>
+      <thead><tr><th>Score function</th><th>Definition</th><th>Value</th><th>Flag at τ</th></tr></thead>
+      <tbody id="scores"></tbody>
+    </table></div>
+    <p class="note" id="summary"></p>
+  </section>
+
+  <section class="panel" aria-label="Notes">
+    <h2>What the numbers mean</h2>
+    <p class="note" style="margin-top:0">Tokens here are words after the selected normalization. Singh et al. count model tokens, so an "8-gram" in their paper is 8 tokens (§3.1) and values differ from this page. LONGEST-MATCH here uses a skip budget of 0 and counts a span only if it is at least n long, because the method extends matches from n-gram seeds.</p>
+    <p class="note">Values the chapter quotes (normalization on): the GSM8K item has 53 tokens; the verbatim preset gives TOKEN-MATCH 53/53 = 1.0 at n = 8 and n = 13; the paraphrase preset gives 0/53 at n = 8 and n = 13, a longest shared span of 4 tokens, and 12/53 = 0.226 at n = 4. Yang et al. report 10-gram F1 = 0 on rephrased MMLU and HumanEval pairs (Tables 5-6); their rephrased items were regenerated until an n-gram check no longer matched them (Algorithm 1), so this result partly follows from how the items were built. Singh et al. find that n larger than 8 and a minimum corpus count above 1 increase false negatives (§6.1, §6.3), and that thresholds should be chosen per model-benchmark pair (§4.2).</p>
+    <p class="note">The shared-option preset shows a false-positive pattern: two different questions share the option list "A. True, True B. False, False C. True, False D. False, True". At n = 8 the options cover 12 of 59 tokens (TOKEN-MATCH 0.203): the item is not flagged at τ = 0.5 but is flagged at τ = 0.20 or lower, and the per-benchmark thresholds Singh et al. selected range from 0.04 to 0.40 (Table 3). Olmo 3 matches full answer text instead of option labels to reduce such matches (arXiv:2512.13961v2 §3.5.3). The verbatim preset's surrounding page text is constructed for this figure; the evaluation item and both Yang et al. examples are quoted from arXiv:2311.04850v2 §3 and §5.1.1.</p>
+  </section>
+</main>
+<script>
+(function () {
+  var GSM = "Janet’s ducks lay 16 eggs per day. She eats three for breakfast every morning and bakes muffins for her friends every day with four. She sells the remainder at the farmers’ market daily for $2 per fresh duck egg. How much in dollars does she make every day at the farmers’ market?";
+  var PRESETS = {
+    verbatim: {
+      ev: GSM,
+      tr: "Grade school practice set, page 3.\nProblem 12. " + GSM + "\nShow your work in the box below. Problem 13 is on the next page."
+    },
+    rephrase: {
+      ev: GSM,
+      tr: "Janet’s ducks produce 16 eggs each day. She consumes three of them for her morning meal and uses four to bake muffins for her friends daily. The remaining eggs are sold at the daily farmers’ market for $2 per egg. What is the daily amount in dollars that she earns at the farmers’ market?"
+    },
+    options: {
+      ev: "Statement 1 — Every group of order p2 where p is prime is Abelian. Statement 2 — For a fixed prime p a Sylow p-subgroup of a group G is a normal subgroup of G if and only if it is the only Sylow p-subgroup of G.\nA. True, True\nB. False, False\nC. True, False\nD. False, True",
+      tr: "Statement 1 — Every group of order 42 has a normal subgroup of order 7. Statement 2 — Every group of order 42 has a normal subgroup of order 8.\nA. True, True\nB. False, False\nC. True, False\nD. False, True"
+    }
+  };
+  var evEl = document.getElementById("ev"), trEl = document.getElementById("tr");
+  var nEl = document.getElementById("n"), normEl = document.getElementById("norm"), scoreEl = document.getElementById("score"), tauEl = document.getElementById("tau");
+
+  function tokenize(text, norm) {
+    if (norm) text = text.toLowerCase().replace(/[^\p{L}\p{N}_\s$]/gu, " ");
+    return text.split(/\s+/).filter(function (x) { return x.length > 0; });
+  }
+  function escapeHtml(s) { return s.replace(/[&<>"]/g, function (c) { return { "&": "&amp;", "<": "&lt;", ">": "&gt;", "\"": "&quot;" }[c]; }); }
+
+  function analyze(E, T, n) {
+    var SEP = "", grams = new Set(), i, j;
+    for (i = 0; i + n <= T.length; i++) grams.add(T.slice(i, i + n).join(SEP));
+    var covered = new Array(E.length).fill(false), total = Math.max(E.length - n + 1, 0), hit = 0;
+    for (i = 0; i + n <= E.length; i++) {
+      if (grams.has(E.slice(i, i + n).join(SEP))) { hit++; for (j = i; j < i + n; j++) covered[j] = true; }
+    }
+    var cov = covered.filter(Boolean).length;
+    // longest common contiguous span (skip budget 0)
+    var best = 0, bestEnd = -1, prev = new Array(T.length + 1).fill(0), cur = new Array(T.length + 1).fill(0);
+    for (i = 1; i <= E.length; i++) {
+      for (j = 1; j <= T.length; j++) {
+        if (E[i - 1] === T[j - 1]) { cur[j] = prev[j - 1] + 1; if (cur[j] > best) { best = cur[j]; bestEnd = i - 1; } }
+        else cur[j] = 0;
+      }
+      var tmp = prev; prev = cur; cur = tmp; cur.fill(0);
+    }
+    return { covered: covered, cov: cov, hit: hit, total: total, best: best, bestEnd: bestEnd };
+  }
+
+  function render() {
+    var norm = normEl.value === "1", n = parseInt(nEl.value, 10), tau = parseFloat(tauEl.value);
+    document.getElementById("tauval").textContent = tau.toFixed(2);
+    var E = tokenize(evEl.value, norm).slice(0, 3000), T = tokenize(trEl.value, norm).slice(0, 30000);
+    if (E.length === 0) { document.getElementById("toks").textContent = ""; document.getElementById("scores").innerHTML = ""; document.getElementById("summary").textContent = "Enter an evaluation item."; return; }
+    var a = analyze(E, T, n);
+    var longOk = a.best >= n;
+    var longStart = a.bestEnd - a.best + 1;
+    document.getElementById("toks").innerHTML = E.map(function (w, i) {
+      var cls = "tok" + (a.covered[i] ? " cov" : "") + (longOk && i >= longStart && i <= a.bestEnd ? " long" : "");
+      return '<span class="' + cls + '">' + escapeHtml(w) + "</span>";
+    }).join(" ");
+    var sTok = a.cov / E.length, sNg = a.total ? a.hit / a.total : 0, sLong = longOk ? a.best / E.length : 0;
+    var rows = [
+      ["tok", "TOKEN-MATCH", "covered tokens / |e| = " + a.cov + " / " + E.length, sTok],
+      ["ng", "NGRAM-MATCH", "matched n-grams / (|e| − n + 1) = " + a.hit + " / " + a.total, sNg],
+      ["long", "LONGEST-MATCH", "ℓ / |e| if ℓ ≥ n, else 0; ℓ = " + a.best, sLong]
+    ];
+    document.getElementById("scores").innerHTML = rows.map(function (r) {
+      var flagged = r[3] > tau;
+      var mark = r[0] === scoreEl.value ? " (selected)" : "";
+      return "<tr><td>" + r[1] + mark + '</td><td style="text-align:left">' + r[2] + "</td><td>" + r[3].toFixed(3) + '</td><td class="' + (flagged ? "flag" : "ok") + '">' + (flagged ? "flagged" : "not flagged") + "</td></tr>";
+    }).join("");
+    var sel = { tok: sTok, ng: sNg, long: sLong }[scoreEl.value];
+    document.getElementById("summary").textContent = "|e| = " + E.length + " tokens, |t| = " + T.length + " tokens. With n = " + n + ", τ = " + tau.toFixed(2) + ", the selected score is " + sel.toFixed(3) + ", so the item is " + (sel > tau ? "flagged as contaminated." : "not flagged.") + " Longest shared span: " + a.best + " tokens.";
+  }
+  function load(name) { evEl.value = PRESETS[name].ev; trEl.value = PRESETS[name].tr; render(); }
+  Array.prototype.forEach.call(document.querySelectorAll("button[data-preset]"), function (b) {
+    b.addEventListener("click", function () { load(b.getAttribute("data-preset")); });
+  });
+  [evEl, trEl].forEach(function (x) { x.addEventListener("input", render); });
+  [nEl, normEl, scoreEl, tauEl].forEach(function (x) { x.addEventListener("input", render); x.addEventListener("change", render); });
+  load("rephrase");
+})();
+</script>
+</body>
+</html>

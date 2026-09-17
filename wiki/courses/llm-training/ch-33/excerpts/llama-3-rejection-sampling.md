@@ -7,6 +7,8 @@ source_url: https://ai.meta.com/blog/meta-llama-3/
 created_at: "2026-04-23"
 ---
 
+> Superseded by the 2026-09 revision of read.md; kept for history.
+
 # Excerpt: Llama 3's public synthetic pipeline — what Meta actually disclosed
 
 **Source library:** `wiki/raw-data/llm-training/blogs/llama-3-synthetic-pipeline.md`

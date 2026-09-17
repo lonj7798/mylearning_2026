@@ -2,204 +2,221 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>β₂ Memory — Second-Moment EMA Response to a Gradient Spike</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Adam β₂ and Update Size After a Gradient Change</title>
 <style>
-  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-         max-width: 900px; margin: 2em auto; padding: 0 1em; color: #222; }
-  h1 { font-size: 1.4em; margin-bottom: 0.2em; }
-  .subtitle { color: #666; margin-top: 0; }
-  .panel { border: 1px solid #ddd; border-radius: 6px; padding: 1em; margin: 1em 0;
-           background: #fafafa; }
-  .controls { display: flex; gap: 1em; flex-wrap: wrap; align-items: center; }
-  .control { display: flex; flex-direction: column; }
-  label { font-size: 0.85em; color: #555; margin-bottom: 0.2em; }
-  input[type="range"] { width: 180px; }
-  canvas { background: white; border: 1px solid #ccc; display: block; margin: 1em auto; }
-  .legend { display: flex; gap: 1.5em; justify-content: center; font-size: 0.9em; }
-  .swatch { display: inline-block; width: 12px; height: 12px; margin-right: 4px;
-            vertical-align: middle; border-radius: 2px; }
-  .value { font-variant-numeric: tabular-nums; color: #333; font-weight: 600; }
-  .note { font-size: 0.88em; color: #555; line-height: 1.5; }
-  code { background: #eef; padding: 1px 4px; border-radius: 3px; font-size: 0.9em; }
+  :root {
+    --bg: #fbfaf7; --panel: #ffffff; --ink: #1f2328; --muted: #5b6470; --rule: #d9dde3;
+    --grid: #eceff3; --c1: #1f6fb2; --c2: #b35c00; --c3: #6a3fb5; --grad: #8a929c; --ref: #2e7d32;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #16181c; --panel: #1e2127; --ink: #e6e8eb; --muted: #a3abb6; --rule: #353a43;
+      --grid: #2a2e35; --c1: #6cb2ef; --c2: #f0a24f; --c3: #b99af0; --grad: #7d8591; --ref: #7cc47f;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #16181c; --panel: #1e2127; --ink: #e6e8eb; --muted: #a3abb6; --rule: #353a43;
+    --grid: #2a2e35; --c1: #6cb2ef; --c2: #f0a24f; --c3: #b99af0; --grad: #7d8591; --ref: #7cc47f;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink);
+         font: 15px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+  main { max-width: 920px; margin: 0 auto; padding-block: 20px 40px; padding-inline: 16px; }
+  h1 { font-size: 1.3rem; margin: 0 0 4px; }
+  .sub { color: var(--muted); margin: 0 0 16px; }
+  .panel { background: var(--panel); border: 1px solid var(--rule); border-radius: 8px; padding: 12px 14px; margin: 12px 0; }
+  .controls { display: flex; flex-wrap: wrap; gap: 12px 24px; align-items: flex-end; }
+  .ctl { display: flex; flex-direction: column; min-width: 0; }
+  .ctl label, .ctl .lab { font-size: 0.82rem; color: var(--muted); margin-bottom: 3px; }
+  .ctl output { font-variant-numeric: tabular-nums; font-weight: 600; }
+  input[type=range] { width: 180px; max-width: 100%; }
+  .seg { display: inline-flex; border: 1px solid var(--rule); border-radius: 6px; overflow: hidden; }
+  .seg button { background: transparent; color: var(--ink); border: 0; padding: 5px 10px; font: inherit; cursor: pointer; }
+  .seg button[aria-pressed=true] { background: var(--ink); color: var(--bg); }
+  .checks label { margin-right: 12px; font-size: 0.9rem; white-space: nowrap; }
+  .plotwrap { width: 100%; }
+  svg { width: 100%; height: auto; display: block; }
+  svg text { fill: var(--muted); font-size: 11px; }
+  .plotwrap + .plotwrap { margin-top: 6px; }
+  .tablewrap { overflow-x: auto; }
+  table { border-collapse: collapse; font-variant-numeric: tabular-nums; font-size: 0.88rem; min-width: 520px; }
+  th, td { border-bottom: 1px solid var(--rule); padding: 4px 10px; text-align: right; }
+  th:first-child, td:first-child { text-align: left; }
+  .note { font-size: 0.9rem; color: var(--ink); }
+  .note p { margin: 6px 0; }
+  .sw { display: inline-block; width: 12px; height: 3px; vertical-align: middle; margin-right: 4px; }
+  code { font-size: 0.88em; }
 </style>
 </head>
 <body>
+<main>
+<h1>Adam β₂ and update size after a gradient change</h1>
+<p class="sub">Deterministic simulation of one coordinate of Adam. The gradient is 1 before the event, so the steady-state update is exactly α. Choose a one-step spike or a gradual rise and compare how the second-moment estimate and the update size respond for different β₂.</p>
 
-<h1>β₂ Memory — Second-Moment EMA Response to a Gradient Spike</h1>
-<p class="subtitle">
-  Inject a single gradient spike at step <span class="value" id="spikeStepLabel">50</span>
-  and watch how <code>v̂ = v_t / (1 − β₂ᵗ)</code> reacts under different β₂ values.
-  <strong>Low β₂ = short memory = faster reaction.</strong>
-</p>
-
-<div class="panel">
-  <div class="controls">
-    <div class="control">
-      <label>Spike magnitude (× baseline gradient)</label>
-      <input type="range" id="spikeMag" min="2" max="50" step="1" value="10">
-      <span class="value"><span id="spikeMagLabel">10</span>×</span>
+<div class="panel controls">
+  <div class="ctl">
+    <span class="lab">Gradient event</span>
+    <div class="seg" role="group" aria-label="Gradient event">
+      <button id="evSpike" aria-pressed="true">one-step spike</button>
+      <button id="evRamp" aria-pressed="false">rise over 20 steps, then stays</button>
     </div>
-    <div class="control">
-      <label>Spike at step</label>
-      <input type="range" id="spikeStep" min="10" max="100" step="1" value="50">
-      <span class="value" id="spikeStepValue">50</span>
+  </div>
+  <div class="ctl">
+    <label for="mag">New gradient magnitude (× the old value)</label>
+    <input id="mag" type="range" min="2" max="50" step="1" value="10">
+    <output id="magOut">10×</output>
+  </div>
+  <div class="ctl">
+    <span class="lab">Window after the event</span>
+    <div class="seg" role="group" aria-label="Window">
+      <button id="w120" aria-pressed="true">120 steps</button>
+      <button id="w1200" aria-pressed="false">1,200 steps</button>
     </div>
-    <div class="control">
-      <label>Baseline gradient (stable training)</label>
-      <input type="range" id="gradBase" min="0.1" max="2.0" step="0.1" value="1.0">
-      <span class="value"><span id="gradBaseLabel">1.0</span></span>
+  </div>
+  <div class="ctl checks">
+    <span class="lab">β₂ values (β₁ = 0.9)</span>
+    <div>
+      <label><input type="checkbox" id="b95" checked> 0.95</label>
+      <label><input type="checkbox" id="b98" checked> 0.98</label>
+      <label><input type="checkbox" id="b999" checked> 0.999</label>
     </div>
   </div>
 </div>
 
-<canvas id="plot" width="860" height="360"></canvas>
+<div class="panel">
+  <div class="note"><strong>Top:</strong> √v̂ (the denominator of the update) and the gradient magnitude |g| (grey). <strong>Bottom:</strong> update size |m̂ / (√v̂ + ε)| in units of α; the green line marks the steady-state value 1.</div>
+  <div class="plotwrap"><svg id="top" viewBox="0 0 880 230" role="img" aria-label="Square root of v-hat over steps"></svg></div>
+  <div class="plotwrap"><svg id="bot" viewBox="0 0 880 230" role="img" aria-label="Update size over steps"></svg></div>
+  <div id="legend" class="note"></div>
+</div>
 
-<div class="legend">
-  <span><span class="swatch" style="background:#d32f2f"></span>β₂ = 0.999 (ImageNet default)</span>
-  <span><span class="swatch" style="background:#1976d2"></span>β₂ = 0.95 (Llama / LLM default)</span>
-  <span><span class="swatch" style="background:#388e3c"></span>β₂ = 0.9</span>
-  <span><span class="swatch" style="background:#aaa"></span>gradient g_t</span>
+<div class="panel tablewrap">
+  <table id="tbl"><thead></thead><tbody></tbody></table>
 </div>
 
 <div class="panel note">
-  <strong>What you should notice.</strong>
-  At β₂ = 0.999, <code>v̂</code> lags the spike by hundreds of steps — the effective step size stays
-  too large long after the gradient has normalized, which is how a single outlier step causes a
-  downstream loss spike. At β₂ = 0.95 (the Llama default), <code>v̂</code> responds within ~20 steps
-  and the adaptive denominator <code>√v̂ + ε</code> tracks current variance. Lower still (β₂ = 0.9)
-  tracks faster but becomes jittery under normal noise, pushing the optimizer around. The Llama
-  choice of 0.95 is the empirical sweet spot for the non-stationary loss landscapes of large-scale
-  pretraining.
+  <p><strong>Reading the one-step spike (default 10×).</strong> With β₂ = 0.999 the denominator barely moves (√v̂ = 1.048 at the spike), while the momentum m̂ jumps to 1.9, so the spike step is 1.81α and the updates stay above α through step +28. After that, v̂ remains slightly elevated for hundreds of steps, so updates are slightly <em>smaller</em> than α (0.96α at +50 and +100). With β₂ = 0.95 the denominator rises to 2.44 at once, the spike step is 0.78α, updates stay below α, and they are back within 1% of α at step +108.</p>
+  <p><strong>Reading the gradual rise.</strong> When the gradient grows over several steps, a long second-moment memory lags behind the growth. With β₂ = 0.999 the peak update is 5.30α; with β₂ = 0.95 it is 1.15α. This is the case in which a long β₂ memory produces large steps.</p>
+  <p><strong>Formulas.</strong> m_t = β₁m_{t−1} + (1 − β₁)g_t; v_t = β₂v_{t−1} + (1 − β₂)g_t²; update = α·m̂_t/(√v̂_t + ε) (Kingma &amp; Ba, arXiv:1412.6980, Algorithm 1). The simulation starts from the steady state m = 1, v = 1, where bias correction is close to 1, and uses ε = 0 relative to a gradient of 1. Averaging timescale 1/(1 − β): 10 steps (β = 0.9), 20 (0.95), 50 (0.98), 1,000 (0.999); half-life ln 0.5 / ln β: 6.6, 13.5, 34.3, 692.8 steps.</p>
+  <p><strong>Scope.</strong> This is an arithmetic illustration, not a measurement. β₂ = 0.95 appears in GPT-3 (arXiv:2005.14165 App. B), InstructGPT (arXiv:2203.02155 App. C), Llama 2 (arXiv:2307.09288 §2.2), DeepSeek-V3 (arXiv:2412.19437 §4.2), and the OLMo 2 7B config; none of these reports gives an ablation of β₂. In a 130M-parameter sweep, β₂ = 0.98 gave C4 loss 3.529 and 0.95 gave 3.535 (arXiv:2509.02046 Table 36). See ch-01 §4.</p>
 </div>
+</main>
 
 <script>
-const cvs = document.getElementById('plot');
-const ctx = cvs.getContext('2d');
+(function () {
+  var state = { ev: 'spike', mag: 10, win: 120, betas: { '0.95': true, '0.98': true, '0.999': true } };
+  var colors = { '0.95': 'var(--c1)', '0.98': 'var(--c3)', '0.999': 'var(--c2)' };
+  var PRE = 10; // steps shown before the event
 
-const betas = [
-  { name: '0.999', val: 0.999, color: '#d32f2f' },
-  { name: '0.95',  val: 0.95,  color: '#1976d2' },
-  { name: '0.9',   val: 0.9,   color: '#388e3c' },
-];
-
-function computeTrajectory(beta2, gradSeq) {
-  let v = 0;
-  const vhat = [];
-  for (let t = 0; t < gradSeq.length; t++) {
-    const g = gradSeq[t];
-    v = beta2 * v + (1 - beta2) * g * g;
-    const bc = 1 - Math.pow(beta2, t + 1);
-    vhat.push(v / bc);
-  }
-  return vhat;
-}
-
-function render() {
-  const spikeMag = +document.getElementById('spikeMag').value;
-  const spikeStep = +document.getElementById('spikeStep').value;
-  const gradBase = +document.getElementById('gradBase').value;
-  document.getElementById('spikeMagLabel').textContent = spikeMag;
-  document.getElementById('spikeStepValue').textContent = spikeStep;
-  document.getElementById('spikeStepLabel').textContent = spikeStep;
-  document.getElementById('gradBaseLabel').textContent = gradBase.toFixed(1);
-
-  const N = 500;
-  const grads = [];
-  for (let t = 0; t < N; t++) {
-    // small per-step noise around the baseline
-    let g = gradBase + (Math.random() - 0.5) * 0.1 * gradBase;
-    if (t === spikeStep) g = gradBase * spikeMag;
-    grads.push(g);
+  function gradAt(k) { // k = steps since event (k<0 before)
+    if (k < 0) return 1;
+    if (state.ev === 'spike') return k === 0 ? state.mag : 1;
+    var frac = Math.min(k + 1, 20) / 20;
+    return 1 + (state.mag - 1) * frac;
   }
 
-  const trajectories = betas.map(b => computeTrajectory(b.val, grads));
-
-  // plot
-  ctx.clearRect(0, 0, cvs.width, cvs.height);
-  const pad = { l: 60, r: 20, t: 20, b: 40 };
-  const W = cvs.width - pad.l - pad.r;
-  const H = cvs.height - pad.t - pad.b;
-
-  // axes
-  const yMax = Math.max(
-    gradBase * gradBase * 1.2,
-    ...trajectories.flat()
-  );
-  const xFor = t => pad.l + (t / (N - 1)) * W;
-  const yFor = v => pad.t + H - (v / yMax) * H;
-
-  // grid
-  ctx.strokeStyle = '#eee';
-  ctx.lineWidth = 1;
-  for (let i = 0; i <= 5; i++) {
-    const y = pad.t + (H * i) / 5;
-    ctx.beginPath(); ctx.moveTo(pad.l, y); ctx.lineTo(pad.l + W, y); ctx.stroke();
-  }
-
-  // axis labels
-  ctx.fillStyle = '#555';
-  ctx.font = '11px sans-serif';
-  ctx.textAlign = 'right';
-  for (let i = 0; i <= 5; i++) {
-    const vAtTick = yMax * (1 - i / 5);
-    const y = pad.t + (H * i) / 5;
-    ctx.fillText(vAtTick.toFixed(2), pad.l - 6, y + 4);
-  }
-  ctx.textAlign = 'center';
-  for (let t = 0; t <= 5; t++) {
-    const step = Math.round((t / 5) * N);
-    ctx.fillText(step.toString(), xFor(step), pad.t + H + 18);
-  }
-  ctx.fillText('step t', pad.l + W / 2, pad.t + H + 34);
-
-  ctx.save();
-  ctx.translate(14, pad.t + H / 2);
-  ctx.rotate(-Math.PI / 2);
-  ctx.fillText('v̂  (second-moment estimate, bias-corrected)', 0, 0);
-  ctx.restore();
-
-  // gradient trace (g²)
-  ctx.strokeStyle = '#aaa';
-  ctx.lineWidth = 1;
-  ctx.beginPath();
-  for (let t = 0; t < N; t++) {
-    const g2 = grads[t] * grads[t];
-    const x = xFor(t), y = yFor(g2);
-    if (t === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
-  }
-  ctx.stroke();
-
-  // EMA trajectories
-  betas.forEach((b, i) => {
-    ctx.strokeStyle = b.color;
-    ctx.lineWidth = 2;
-    ctx.beginPath();
-    for (let t = 0; t < N; t++) {
-      const x = xFor(t), y = yFor(trajectories[i][t]);
-      if (t === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+  function simulate(b2) {
+    var b1 = 0.9, m = 1, v = 1, rows = [];
+    for (var k = -PRE; k <= state.win; k++) {
+      var g = gradAt(k);
+      if (k >= 0) { m = b1 * m + (1 - b1) * g; v = b2 * v + (1 - b2) * g * g; }
+      rows.push({ k: k, g: g, s: Math.sqrt(v), u: m / Math.sqrt(v) });
     }
-    ctx.stroke();
+    return rows;
+  }
+
+  function el(name, attrs, text) {
+    var e = document.createElementNS('http://www.w3.org/2000/svg', name);
+    for (var a in attrs) e.setAttribute(a, attrs[a]);
+    if (text !== undefined) e.textContent = text;
+    return e;
+  }
+
+  function niceMax(x) {
+    var p = Math.pow(10, Math.floor(Math.log10(x)));
+    var n = x / p;
+    var c = n <= 1 ? 1 : n <= 1.2 ? 1.2 : n <= 1.5 ? 1.5 : n <= 2 ? 2 : n <= 2.5 ? 2.5 : n <= 3 ? 3 : n <= 4 ? 4 : n <= 5 ? 5 : n <= 6 ? 6 : n <= 8 ? 8 : 10;
+    return c * p;
+  }
+
+  function plot(svg, series, key, yLabel, withGrad, refLine) {
+    while (svg.firstChild) svg.removeChild(svg.firstChild);
+    var W = Math.round(svg.parentNode.clientWidth) || 880, H = W < 600 ? 210 : 230, L = 46, R = 10, T = 12, B = 36;
+    svg.setAttribute('viewBox', '0 0 ' + W + ' ' + H);
+    var x0 = -PRE, x1 = state.win;
+    var ymax = refLine ? 1.2 : 1;
+    series.forEach(function (s) { s.rows.forEach(function (r) { ymax = Math.max(ymax, r[key]); if (withGrad) ymax = Math.max(ymax, r.g); }); });
+    ymax = niceMax(ymax * 1.05);
+    function X(k) { return L + (k - x0) / (x1 - x0) * (W - L - R); }
+    function Y(y) { return T + (1 - y / ymax) * (H - T - B); }
+    for (var i = 0; i <= 4; i++) {
+      var yv = ymax * i / 4;
+      svg.appendChild(el('line', { x1: L, x2: W - R, y1: Y(yv), y2: Y(yv), stroke: 'var(--grid)', 'stroke-width': 1 }));
+      svg.appendChild(el('text', { x: L - 6, y: Y(yv) + 4, 'text-anchor': 'end' }, (Math.round(yv * 100) / 100).toString()));
+    }
+    var narrow = W < 600;
+    var ticks = state.win === 120 ? (narrow ? [0, 40, 80, 120] : [0, 20, 40, 60, 80, 100, 120]) : (narrow ? [0, 400, 800, 1200] : [0, 200, 400, 600, 800, 1000, 1200]);
+    ticks.forEach(function (t) {
+      svg.appendChild(el('text', { x: X(t), y: H - B + 16, 'text-anchor': 'middle' }, String(t)));
+    });
+    svg.appendChild(el('text', { x: (L + W - R) / 2, y: H - 4, 'text-anchor': 'middle' }, 'steps after the event'));
+    svg.appendChild(el('text', { x: 12, y: T + (H - T - B) / 2, transform: 'rotate(-90 12 ' + (T + (H - T - B) / 2) + ')', 'text-anchor': 'middle' }, yLabel));
+    svg.appendChild(el('line', { x1: X(0), x2: X(0), y1: T, y2: H - B, stroke: 'var(--rule)', 'stroke-dasharray': '3 3' }));
+    if (refLine) svg.appendChild(el('line', { x1: L, x2: W - R, y1: Y(1), y2: Y(1), stroke: 'var(--ref)', 'stroke-width': 1.2 }));
+    if (withGrad && series.length) {
+      var d0 = series[0].rows.map(function (r, j) { return (j ? 'L' : 'M') + X(r.k).toFixed(1) + ' ' + Y(r.g).toFixed(1); }).join(' ');
+      svg.appendChild(el('path', { d: d0, fill: 'none', stroke: 'var(--grad)', 'stroke-width': 1.2 }));
+    }
+    series.forEach(function (s) {
+      var d = s.rows.map(function (r, j) { return (j ? 'L' : 'M') + X(r.k).toFixed(1) + ' ' + Y(r[key]).toFixed(1); }).join(' ');
+      svg.appendChild(el('path', { d: d, fill: 'none', stroke: colors[s.b], 'stroke-width': 2 }));
+    });
+  }
+
+  function render() {
+    document.getElementById('magOut').textContent = state.mag + '×';
+    var series = Object.keys(state.betas).filter(function (b) { return state.betas[b]; })
+      .map(function (b) { return { b: b, rows: simulate(parseFloat(b)) }; });
+    plot(document.getElementById('top'), series, 's', '√v̂', true, false);
+    plot(document.getElementById('bot'), series, 'u', 'update / α', false, true);
+    document.getElementById('legend').innerHTML = series.map(function (s) {
+      return '<span style="margin-right:14px"><span class="sw" style="background:' + colors[s.b] + '"></span>β₂ = ' + s.b + '</span>';
+    }).join('') + '<span><span class="sw" style="background:var(--grad)"></span>|g|</span>';
+    var marks = state.win === 120 ? [0, 1, 10, 20, 50, 100] : [0, 10, 50, 100, 500, 1000];
+    var thead = document.querySelector('#tbl thead'), tbody = document.querySelector('#tbl tbody');
+    thead.innerHTML = '<tr><th>β₂</th><th>largest / α</th><th>smallest / α</th>' + marks.map(function (m) { return '<th>+' + m + '</th>'; }).join('') + '</tr>';
+    tbody.innerHTML = series.map(function (s) {
+      var hi = -1, hiAt = 0, lo = 1e9, loAt = 0;
+      s.rows.forEach(function (r) {
+        if (r.k < 0) return;
+        if (r.u > hi) { hi = r.u; hiAt = r.k; }
+        if (r.u < lo) { lo = r.u; loAt = r.k; }
+      });
+      var cells = marks.map(function (m) { var r = s.rows[m + PRE]; return '<td>' + (r ? r.u.toFixed(3) : '') + '</td>'; }).join('');
+      return '<tr><td>' + s.b + '</td><td>' + hi.toFixed(2) + ' (+' + hiAt + ')</td><td>' + lo.toFixed(2) + ' (+' + loAt + ')</td>' + cells + '</tr>';
+    }).join('') + '<tr><td colspan="' + (marks.length + 3) + '" style="text-align:left;color:var(--muted)">Largest and smallest update after the event within the window (step in parentheses); other cells: update / α at the given number of steps after the event.</td></tr>';
+  }
+
+  function seg(onId, offId, fn) {
+    document.getElementById(onId).addEventListener('click', function () {
+      document.getElementById(onId).setAttribute('aria-pressed', 'true');
+      document.getElementById(offId).setAttribute('aria-pressed', 'false');
+      fn(); render();
+    });
+  }
+  seg('evSpike', 'evRamp', function () { state.ev = 'spike'; });
+  seg('evRamp', 'evSpike', function () { state.ev = 'ramp'; });
+  seg('w120', 'w1200', function () { state.win = 120; });
+  seg('w1200', 'w120', function () { state.win = 1200; });
+  document.getElementById('mag').addEventListener('input', function (e) { state.mag = +e.target.value; render(); });
+  [['b95', '0.95'], ['b98', '0.98'], ['b999', '0.999']].forEach(function (p) {
+    document.getElementById(p[0]).addEventListener('change', function (e) { state.betas[p[1]] = e.target.checked; render(); });
   });
-
-  // mark the spike
-  ctx.strokeStyle = '#ccc';
-  ctx.setLineDash([3, 3]);
-  ctx.beginPath();
-  ctx.moveTo(xFor(spikeStep), pad.t);
-  ctx.lineTo(xFor(spikeStep), pad.t + H);
-  ctx.stroke();
-  ctx.setLineDash([]);
-  ctx.fillStyle = '#666';
-  ctx.textAlign = 'left';
-  ctx.fillText('spike', xFor(spikeStep) + 4, pad.t + 12);
-}
-
-['spikeMag', 'spikeStep', 'gradBase'].forEach(id => {
-  document.getElementById(id).addEventListener('input', render);
-});
-
-render();
+  var rt;
+  window.addEventListener('resize', function () { clearTimeout(rt); rt = setTimeout(render, 100); });
+  render();
+})();
 </script>
-
 </body>
 </html>

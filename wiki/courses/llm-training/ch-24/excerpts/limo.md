@@ -5,111 +5,38 @@ phase: read
 excerpt_of: wiki/raw-data/llm-training/papers/limo.md
 source_url: https://arxiv.org/abs/2502.03387
 created_at: "2026-04-23"
+revised_at: "2026-09-15"
 ---
 
-# Excerpt: LIMO — the Less-Is-More Reasoning Hypothesis and hand-curation
+# Excerpt: LIMO — small-set long-CoT SFT, version differences, and base-model dependence
 
-**Source library:** `wiki/raw-data/llm-training/papers/limo.md`
-**Paper:** Ye et al. 2025, "LIMO: Less is More for Reasoning"
+**Checked on 2026-09-15 against arXiv:2502.03387v3 (COLM 2025) and v1 (2025-02-05).** The library card `papers/limo.md` had no verification section at that date; this excerpt is the checked extract used by ch-24 §4 and the Recipe.
 
----
+## Version differences
 
-## Why this source anchors ch-24 §4
+| Version | Examples | AIME24 | MATH500 | Chain selection |
+|---|---|---|---|---|
+| v1 (2025-02) | 817 | 57.1 | 94.8 | "hybrid approach combining rule-based filtering and LLM-assisted curation" (§3.3.2) |
+| v3 (2025-07, COLM 2025) | 800 | 63.3 | 95.6 | rule-based score (§3.1.2) |
 
-LIMO formalizes what s1 demonstrates: the "Less-Is-More Reasoning Hypothesis" — if the base model already contains domain knowledge from pretraining, a small number of high-quality post-training traces can *activate* strong reasoning. The paper's 817-sample set is hand-curated rather than semi-automatically filtered (s1), so LIMO is the paper to cite when the argument depends on careful human judgment over the traces.
+## v3 pipeline (§3.1)
 
----
+- Pool: NuminaMath-CoT, DeepScaleR (about 40,000 problems), AIME before 2024, MATH, and Chinese school and exam questions; tens of millions of problems.
+- Difficulty: drop problems Qwen2.5-Math-7B-Instruct solves within 4 attempts; keep problems DeepSeek-R1-Distill-Qwen-32B solves 1–3 times in 32 → 2,125 problems (LIMO-Pool); n-gram deduplication against evaluation sets.
+- Chains: sampled from DeepSeek R1, DeepSeek-R1-Distill-Qwen-32B, and QwQ-32B; scored by length (30%), verification words such as "check" (20%), tentative words such as "perhaps" (25%), connectives such as "therefore" (25%), normalized by length; best chain per problem; top 800 pairs.
 
-## The hypothesis, stated
+## Training (v3 §4)
 
-From the source (§Key Contributions):
+Qwen2.5-32B-Instruct; full fine-tuning with DeepSpeed ZeRO-3 and FlashAttention-2; all responses under 16,384 tokens (v1: "sequence length limit of 16,384 tokens"); LR 5.0e-6, cosine decay, no warmup; 15 epochs; batch 64.
 
-> Formalizes the **Less-Is-More Reasoning Hypothesis**: strong latent knowledge from pretraining plus high-quality demonstrations are the two prerequisites.
+## Results (v3)
 
-Two claims packed in:
+- Table 1 (pass@1; AIME24, AMC23, CHMath use 4 samples at temperature 0.6, others greedy; 32,768 max output tokens, §5): base 16.5 AIME24 / 79.4 MATH500 / 48.0 GPQA / 49.9 average; NuminaMath-100k SFT 6.5 / 59.2 / 25.8 / 32.3; OpenThoughts-114k SFT 50.2 / 80.6 / 42.9 / 58.3; LIMO 63.3 / 95.6 / 70.7 / 78.1.
+- Question difficulty (§6.3.2): Advanced-500 (AIME) data reaches 51.5 AIME24 and 91.2 MATH500.
+- Base model (§6.3.3): LIMO data on Qwen1.5-32B-Chat gives 9.2 AIME24 vs 63.3 on Qwen2.5-32B-Instruct.
+- Size (§6.3.4): AIME24 2.5 (3B) to 68.3 (72B); MATH500 95.6 (32B) vs 94.8 (72B).
+- Data size (§6.3.5): LIMO-400 57.5 / 94.8; 800 → 1.2k +0.9 AIME24, −0.2 MATH500; 2k gives 69.6 / 95.8.
 
-1. **Latent knowledge** — the base model must have absorbed the domain during pretraining. LIMO does not work on weak bases.
-2. **Demonstration quality** — the demonstrations must show the *right cognitive template*: reflective structure, branching, verification. Flat traces do not activate anything.
+## Removed from the earlier excerpt
 
-Ch-24 §4 treats this as the chapter's central tension: scale-is-all (OMI-2) vs activation-via-quality (LIMO). The resolution in ch-24 §8 is "both are right, for different verifier regimes."
-
----
-
-## The 817 — what got in, what got cut
-
-From the source (§Synthesis pipeline):
-
-- **Seed pool**: competition math, MATH, GSM8K-hard, physics olympiad.
-- **Question selection**: keep only problems that strong baselines still find hard — multi-step reasoning, not recall.
-- **Solution generation**: multiple candidate traces from strong reasoning models and human editing.
-- **Quality scoring**:
-  - correctness of final answer vs gold;
-  - presence of **self-verification / re-checking segments**;
-  - **branching / backtracking markers** (non-linear reasoning structure);
-  - **fine-grained step granularity** (not outline-only answers).
-- **Manual curation**: hand-filter to remove lucky-guess-correct traces and traces with subtly broken intermediate logic.
-
-The last bullet is the labor-expensive one. Authors explicitly *reject* traces where the final answer is correct but an intermediate step is subtly wrong — the same failure mode OpenMathInstruct-1 catalogued as its chief limitation (ch-24 §2). Hand review catches what symbolic equivalence misses.
-
-**817** is the resulting count. Some traces reach many thousands of tokens; the average is long-reflective.
-
----
-
-## The evaluation delta
-
-From the source (§Quality evaluation):
-
-> Reaches **63.3% AIME24 and 95.6% MATH500**.
-
-Context for ch-24's Panel-2 table:
-
-| Recipe | AIME24 | MATH500 | Samples |
-|---|---|---|---|
-| Qwen2.5-32B-Instruct base | ~17 | ~84 | 0 |
-| Random 1K (s1 ablation) | ~24 | ~86 | 1000 |
-| s1K curated | 56.7 | 93.0 | 1000 |
-| **LIMO hand-curated** | **63.3** | **95.6** | **817** |
-| OpenMathInstruct-2 on 8B | ~40 on AIME24 | 67.8 MATH (not MATH500) | 14M |
-
-The LIMO → s1 gap (63.3 vs 56.7 on AIME24) is attributed by the LIMO authors to **curator effort**: hand review removes noise that the s1 semi-automated pipeline retains. This is a real ablation; ch-24 §4 flags it as the main reason the "trace quality > count" claim is not a tautology.
-
----
-
-## The ablation that makes the hypothesis falsifiable
-
-From the source (§Quality evaluation):
-
-> Ablations show that random or low-quality samples do not reproduce the effect; the quality gap is not reducible to volume.
-
-If you could match LIMO's numbers by taking 817 random samples from the same seed pool, "Less-Is-More Reasoning" would be trivial (pretraining did all the work; SFT is noise). The ablation shows that random-817 scores far below curated-817 — so the curation bit is doing real work, even if pretraining does most of the work.
-
----
-
-## Caveats
-
-From the source (§Risks + gotchas):
-
-- **Curator subjectivity**: exact reproduction depends on matching the curation policy. The paper releases the 817 samples but the *policy* that selected them is not a pipeline.
-- **Base-model dependence**: weak bases do not activate from a tiny dataset. Deliberately trying LIMO on a 7B non-reasoning-tuned base mostly fails.
-- **Benchmark overlap**: competition-style sources make contamination auditing non-trivial. AIME24 traces may overlap with AIME-previous-years pretraining.
-
-The base-model dependence is the practical caveat for ch-24 §8's guidance: LIMO/s1-style curation is not a substitute for having a strong base; it is an *unlock* on top of one.
-
----
-
-## Why this sits above s1 on the benchmarks
-
-From the source (§Modality-specific technical details):
-
-> Long-CoT traces, with some examples reaching many thousands of tokens. Reflective long-CoT with verification and backtracking, structurally similar to o1 / R1 style traces.
-
-The style difference is the likely explanation. s1 uses Gemini-generated traces (strong but not explicitly o1-style-reflective). LIMO accepts only traces with explicit reflection and backtracking markers. For AIME24-hard problems, the reflective template is worth 6-7 absolute points at matched dataset size.
-
----
-
-## Connections
-
-- [[excerpts/s1]] — the twin paper; same hypothesis, semi-automated filter instead of hand curation.
-- [[excerpts/openmathinstruct-2]] — the volume-scaled contrast; OMI-2's short-CoT ceiling is why LIMO can win with 1% of the data.
-- [[excerpts/rstar-math]] — MCTS as an alternative route to reflective traces without hand curation.
-- [[ch-24]] §4 (long-CoT small-N), §8 (when to curate vs when to scale).
+- "817 samples with 63.3 / 95.6" (version mix); "hand-filter removes subtly broken traces"; pool "GSM8K-hard, physics olympiad".

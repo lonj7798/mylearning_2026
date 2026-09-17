@@ -1,0 +1,341 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Mixture Share Calculator</title>
+<style>
+  :root {
+    color-scheme: light;
+    --surface-0: #f6f5f2;
+    --surface-1: #fcfcfb;
+    --border: #e2e0da;
+    --grid: #ecebe6;
+    --text-primary: #0b0b0b;
+    --text-secondary: #52514e;
+    --text-muted: #77756f;
+    --accent: #2a78d6;
+    --s1: #2a78d6; --s2: #eb6834; --s3: #1baf7a; --s4: #eda100;
+    --s5: #e87ba4; --s6: #008300; --s7: #4a3aa7; --s8: #e34948;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      color-scheme: dark;
+      --surface-0: #121211; --surface-1: #1a1a19; --border: #34332f; --grid: #2a2a27;
+      --text-primary: #ffffff; --text-secondary: #c3c2b7; --text-muted: #9a998f; --accent: #3987e5;
+      --s1: #3987e5; --s2: #d95926; --s3: #199e70; --s4: #c98500;
+      --s5: #d55181; --s6: #008300; --s7: #9085e9; --s8: #e66767;
+    }
+  }
+  :root[data-theme="dark"] {
+    color-scheme: dark;
+    --surface-0: #121211; --surface-1: #1a1a19; --border: #34332f; --grid: #2a2a27;
+    --text-primary: #ffffff; --text-secondary: #c3c2b7; --text-muted: #9a998f; --accent: #3987e5;
+    --s1: #3987e5; --s2: #d95926; --s3: #199e70; --s4: #c98500;
+    --s5: #d55181; --s6: #008300; --s7: #9085e9; --s8: #e66767;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--surface-0); color: var(--text-primary);
+    font: 14px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    padding-inline: 16px; padding-block: 20px;
+  }
+  main { max-width: 980px; margin: 0 auto; }
+  h1 { font-size: 1.25rem; margin: 0 0 4px; }
+  p { margin: 6px 0; color: var(--text-secondary); }
+  .card { background: var(--surface-1); border: 1px solid var(--border); border-radius: 10px; padding: 16px; margin-top: 14px; }
+  .controls { display: flex; flex-wrap: wrap; gap: 12px 20px; align-items: center; }
+  label { color: var(--text-secondary); }
+  select, input[type="number"], input[type="text"] {
+    font: inherit; color: var(--text-primary); background: var(--surface-0);
+    border: 1px solid var(--border); border-radius: 6px; padding: 4px 6px;
+  }
+  input[type="number"] { width: 7.5em; }
+  input[type="text"] { width: 12em; }
+  .radio { display: flex; gap: 14px; flex-wrap: wrap; }
+  .scroll { overflow-x: auto; }
+  table { border-collapse: collapse; width: 100%; min-width: 640px; }
+  th, td { text-align: right; padding: 5px 8px; border-bottom: 1px solid var(--grid); white-space: nowrap; }
+  th { color: var(--text-secondary); font-weight: 600; }
+  th:first-child, td:first-child { text-align: left; }
+  td.key { display: flex; align-items: center; gap: 8px; }
+  .swatch { width: 12px; height: 12px; border-radius: 3px; flex: none; }
+  .bars { display: grid; gap: 12px; }
+  .barrow { display: grid; grid-template-columns: minmax(120px, 190px) 1fr; gap: 10px; align-items: center; }
+  .barlabel { color: var(--text-secondary); }
+  .barlabel strong { color: var(--text-primary); font-weight: 600; }
+  .track { display: flex; gap: 2px; min-height: 22px; align-items: stretch; }
+  .seg { height: 22px; min-width: 0; cursor: default; outline: none; }
+  .seg:first-child { border-radius: 4px 0 0 4px; }
+  .seg:last-child { border-radius: 0 4px 4px 0; }
+  .seg:only-child { border-radius: 4px; }
+  .seg:hover, .seg:focus { filter: brightness(1.12); box-shadow: 0 0 0 2px var(--text-primary) inset; }
+  .na { color: var(--text-muted); font-style: italic; line-height: 1.4; }
+  .eff .barlabel strong::after { content: "  (effective loss weight)"; color: var(--accent); font-weight: 600; }
+  .legend { display: flex; flex-wrap: wrap; gap: 6px 16px; margin-top: 10px; color: var(--text-secondary); }
+  .legend span { display: inline-flex; align-items: center; gap: 6px; }
+  #tip {
+    position: fixed; pointer-events: none; background: var(--surface-1); color: var(--text-primary);
+    border: 1px solid var(--border); border-radius: 6px; padding: 6px 9px; font-size: 13px;
+    box-shadow: 0 2px 8px rgba(0,0,0,.15); display: none; max-width: 260px; z-index: 5;
+  }
+  #tip .v { font-weight: 700; font-size: 15px; }
+  #tip .k { display: inline-block; width: 14px; height: 3px; border-radius: 2px; vertical-align: middle; margin-right: 6px; }
+  .formula { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 13px; color: var(--text-primary); background: var(--surface-0); border-radius: 6px; padding: 8px 10px; overflow-x: auto; white-space: pre; }
+  .caption { font-size: 13px; color: var(--text-muted); }
+  button { font: inherit; color: var(--text-primary); background: var(--surface-0); border: 1px solid var(--border); border-radius: 6px; padding: 3px 9px; cursor: pointer; }
+  @media (max-width: 520px) { .barrow { grid-template-columns: 1fr; gap: 4px; } }
+</style>
+</head>
+<body>
+<main>
+  <h1>Mixture share calculator: examples, size units, and loss weight</h1>
+  <p>A mixture share depends on its unit. This page converts one mixture into four shares: raw examples, sampled examples after per-dataset multipliers, total size (tokens or rounds), and loss tokens. The loss-aggregation setting marks which share equals each domain's weight in the SFT loss. Values in every cell can be edited.</p>
+
+  <div class="card">
+    <div class="controls">
+      <label>Preset
+        <select id="preset">
+          <option value="llama3">Llama 3.1 SFT mix (Table 7)</option>
+          <option value="r1">DeepSeek-R1 Dev3 SFT (Table 5)</option>
+          <option value="adp">ADP non-web mixture (Tables 1, 2, 9)</option>
+          <option value="custom">Custom (3 rows)</option>
+        </select>
+      </label>
+      <div class="radio" role="radiogroup" aria-label="Loss aggregation">
+        <label><input type="radio" name="agg" value="seq"> Per-sequence mean loss</label>
+        <label><input type="radio" name="agg" value="tok" checked> Token mean over the batch</label>
+      </div>
+      <button id="addrow" type="button">Add row</button>
+    </div>
+    <p id="note" class="caption"></p>
+  </div>
+
+  <div class="card">
+    <div class="bars" id="bars"></div>
+    <div class="legend" id="legend"></div>
+  </div>
+
+  <div class="card scroll">
+    <table id="tbl" aria-label="Mixture rows and computed shares">
+      <thead><tr>
+        <th>Domain / dataset</th><th>Count n</th><th>Multiplier w</th><th id="hsize">Avg tokens</th><th>Avg loss tokens</th>
+        <th>Raw ex. %</th><th>Sampled ex. %</th><th id="hsizeshare">Token %</th><th>Loss-token %</th><th></th>
+      </tr></thead>
+      <tbody></tbody>
+    </table>
+  </div>
+
+  <div class="card">
+    <div class="formula">m_d = n_d · w_d                       sampled examples of domain d
+example share_d  = m_d / Σ_j m_j
+size share_d     = m_d · L_d / Σ_j m_j · L_j   L_d = average tokens (or rounds) per example
+loss share_d     = m_d · ℓ_d / Σ_j m_j · ℓ_j   ℓ_d = average loss (response) tokens per example
+
+Per-sequence mean loss: each example contributes equally → weight_d = example share_d
+Token mean over batch:  each loss token contributes equally → weight_d = loss share_d
+                        (size share_d is used when ℓ_d is not reported)</div>
+    <p class="caption" id="caption"></p>
+  </div>
+</main>
+<div id="tip" role="status" aria-live="polite"></div>
+
+<script>
+(function () {
+  var PRESETS = {
+    llama3: {
+      unit: "tokens", countLabel: "% of examples",
+      note: "Llama 3.1 SFT data (arXiv:2407.21783 Table 7). Count is the printed % of examples; average tokens per example and average tokens in the final response are printed. The six printed percentages are rounded, so the rows sum to 847.1 tokens per example rather than the printed 846.1. Loss tokens here are final-response tokens; whether earlier assistant turns also receive loss is not stated in Table 7.",
+      rows: [
+        ["General English", 52.66, 1, 974.0, 317.1],
+        ["Code", 14.89, 1, 753.3, 374.5],
+        ["Multilingual", 3.01, 1, 520.5, 289.7],
+        ["Exam-like", 8.14, 1, 297.8, 173.4],
+        ["Reasoning and tools", 21.19, 1, 661.6, 301.9],
+        ["Long context", 0.11, 1, 38135.6, 740.5]
+      ]
+    },
+    r1: {
+      unit: "tokens", countLabel: "samples",
+      note: "DeepSeek-R1 Dev3 rejection-sampling SFT set (arXiv:2501.12948v2 Supp. B.3.3, Table 5). Average tokens per sample are printed; response-token counts are not, so the loss-token share is not computable and the token-mean weight falls back to the total-token share.",
+      rows: [
+        ["Math", 395285, 1, 6094.2, null],
+        ["Code", 211129, 1, 7435.7, null],
+        ["STEM", 10124, 1, 4928.8, null],
+        ["Logic", 10395, 1, 2739.0, null],
+        ["General", 177812, 1, 1419.8, null]
+      ]
+    },
+    adp: {
+      unit: "rounds", countLabel: "raw trajectories",
+      note: "Agent Data Protocol non-web training subset used with OpenHands and SWE-Agent (arXiv:2510.24702v2 App. C.1). Counts are Table 1 values printed in thousands with one decimal, so sampled counts are approximate; multipliers are Table 9 (the six agenttuning subsets, each ×2, are grouped as one row; App. C.1 lists the excluded web datasets as Mind2Web, Go-Browse, NNetNav, and Synatra and does not say whether the agenttuning mind2web and webshop subsets are kept, so they are included here). Size is average rounds per trajectory from Table 2, because token counts are not reported. The paper states the subset has around 30K samples.",
+      rows: [
+        ["AgentInstruct (agenttuning)", 1900, 2, 8.2, null],
+        ["Code-Feedback", 66400, 0.1, 4.0, null],
+        ["CodeActInstruct", 7100, 1, 4.0, null],
+        ["Nebius SWE-agent", 13400, 0.2, 16.2, null],
+        ["openhands-feedback", 200, 1, 18.3, null],
+        ["Orca AgentInstruct", 1046100, 0.001, 1.3, null],
+        ["SWE-Gym (OpenHands)", 500, 3, 19.7, null],
+        ["SWE-smith", 5000, 1, 26.8, null]
+      ]
+    },
+    custom: {
+      unit: "tokens", countLabel: "examples",
+      note: "Custom mixture. Enter counts, multipliers, and sizes to compare the four shares.",
+      rows: [
+        ["Short chat", 9000, 1, 800, 300],
+        ["Agent trajectories", 900, 1, 12000, 2500],
+        ["Long-context QA", 100, 1, 60000, 700]
+      ]
+    }
+  };
+  var CAPTION = "Sources: Llama 3.1 rows from arXiv:2407.21783 Table 7; DeepSeek-R1 rows from arXiv:2501.12948v2 Table 5; ADP rows from arXiv:2510.24702v2 Tables 1, 2, and 9 with App. C.1. All shares are derived by the formulas above; none is printed in the sources. Values quoted in ch-30b read.md §1 and §5: Llama 3.1 long context 0.11% of examples, 4.95% of tokens, 0.26% of final-response tokens; DeepSeek-R1 General 22.10% of samples and 5.86% of tokens; ADP Orca AgentInstruct 91.71% of raw non-web trajectories and 3.74% of sampled examples.";
+  var COLORS = ["--s1","--s2","--s3","--s4","--s5","--s6","--s7","--s8"];
+  var MAXROWS = 8;
+  var state = { unit: "tokens", rows: [] };
+  var tbody = document.querySelector("#tbl tbody");
+  var bars = document.getElementById("bars");
+  var legend = document.getElementById("legend");
+  var tip = document.getElementById("tip");
+
+  function load(key) {
+    var p = PRESETS[key];
+    state.unit = p.unit;
+    state.rows = p.rows.map(function (r) { return { name: r[0], n: r[1], w: r[2], L: r[3], l: r[4] }; });
+    document.getElementById("note").textContent = p.note;
+    document.getElementById("hsize").textContent = p.unit === "rounds" ? "Avg rounds" : "Avg tokens";
+    document.getElementById("hsizeshare").textContent = p.unit === "rounds" ? "Round %" : "Token %";
+    buildTable();
+    render();
+  }
+
+  function num(v) { var x = parseFloat(v); return isFinite(x) ? x : null; }
+  function fmt(x) { if (x === null) return "n/r"; return x.toFixed(2); }
+
+  function inputCell(row, key, type) {
+    var td = document.createElement("td");
+    var inp = document.createElement("input");
+    inp.type = type; if (type === "number") { inp.step = "any"; inp.min = "0"; }
+    inp.value = row[key] === null ? "" : row[key];
+    inp.setAttribute("aria-label", key);
+    inp.addEventListener("input", function () { row[key] = type === "number" ? num(inp.value) : inp.value; render(); });
+    td.appendChild(inp);
+    return td;
+  }
+
+  function buildTable() {
+    tbody.textContent = "";
+    state.rows.forEach(function (row, i) {
+      var tr = document.createElement("tr");
+      var tdName = document.createElement("td"); tdName.className = "key";
+      var sw = document.createElement("span"); sw.className = "swatch"; sw.style.background = "var(" + COLORS[i] + ")";
+      var inp = document.createElement("input"); inp.type = "text"; inp.value = row.name; inp.setAttribute("aria-label", "name");
+      inp.addEventListener("input", function () { row.name = inp.value; render(); });
+      tdName.appendChild(sw); tdName.appendChild(inp); tr.appendChild(tdName);
+      tr.appendChild(inputCell(row, "n", "number"));
+      tr.appendChild(inputCell(row, "w", "number"));
+      tr.appendChild(inputCell(row, "L", "number"));
+      tr.appendChild(inputCell(row, "l", "number"));
+      ["raw","ex","size","loss"].forEach(function (k) { var td = document.createElement("td"); td.dataset.k = k; tr.appendChild(td); });
+      var tdDel = document.createElement("td"); var b = document.createElement("button"); b.type = "button"; b.textContent = "Remove";
+      b.addEventListener("click", function () { state.rows.splice(i, 1); buildTable(); render(); });
+      tdDel.appendChild(b); tr.appendChild(tdDel);
+      tbody.appendChild(tr);
+    });
+    document.getElementById("addrow").disabled = state.rows.length >= MAXROWS;
+  }
+
+  function shares() {
+    var R = state.rows;
+    var raw = R.map(function (r) { return r.n || 0; });
+    var m = R.map(function (r) { return (r.n || 0) * (r.w === null ? 1 : r.w); });
+    var sizeOk = R.every(function (r) { return r.L !== null; });
+    var lossOk = R.every(function (r) { return r.l !== null; });
+    function norm(a) { var s = a.reduce(function (x, y) { return x + y; }, 0); return a.map(function (x) { return s > 0 ? 100 * x / s : 0; }); }
+    return {
+      raw: norm(raw), ex: norm(m),
+      size: sizeOk ? norm(m.map(function (x, i) { return x * R[i].L; })) : null,
+      loss: lossOk ? norm(m.map(function (x, i) { return x * R[i].l; })) : null
+    };
+  }
+
+  function render() {
+    var s = shares();
+    var agg = document.querySelector("input[name=agg]:checked").value;
+    var effKey = agg === "seq" ? "ex" : (s.loss ? "loss" : "size");
+    var unitWord = state.unit === "rounds" ? "rounds" : "tokens";
+    var defs = [
+      ["raw", "Raw examples", "before multipliers"],
+      ["ex", "Sampled examples", "after multipliers"],
+      ["size", "Total " + unitWord, "sampled × average size"],
+      ["loss", "Loss tokens", "sampled × average loss tokens"]
+    ];
+    bars.textContent = "";
+    defs.forEach(function (d) {
+      var row = document.createElement("div"); row.className = "barrow" + (d[0] === effKey ? " eff" : "");
+      var lab = document.createElement("div"); lab.className = "barlabel";
+      var st = document.createElement("strong"); st.textContent = d[1];
+      lab.appendChild(st); lab.appendChild(document.createElement("br"));
+      lab.appendChild(document.createTextNode(d[2]));
+      row.appendChild(lab);
+      var track = document.createElement("div"); track.className = "track";
+      var vals = s[d[0]];
+      if (!vals) {
+        var na = document.createElement("div"); na.className = "na"; na.textContent = "not computable: a size value is not reported for at least one row";
+        track.appendChild(na);
+      } else {
+        vals.forEach(function (v, i) {
+          if (v <= 0) return;
+          var seg = document.createElement("div"); seg.className = "seg"; seg.tabIndex = 0;
+          seg.style.flex = v + " 1 0"; seg.style.background = "var(" + COLORS[i] + ")";
+          var name = state.rows[i].name;
+          seg.setAttribute("aria-label", name + ": " + v.toFixed(2) + "% of " + d[1].toLowerCase());
+          function show(e) {
+            tip.textContent = "";
+            var vv = document.createElement("div"); vv.className = "v"; vv.textContent = v.toFixed(2) + "%";
+            var kk = document.createElement("div"); var key = document.createElement("span"); key.className = "k"; key.style.background = "var(" + COLORS[i] + ")";
+            kk.appendChild(key); kk.appendChild(document.createTextNode(name + " · " + d[1].toLowerCase()));
+            tip.appendChild(vv); tip.appendChild(kk); tip.style.display = "block";
+            var r = seg.getBoundingClientRect();
+            var x = e && e.clientX ? e.clientX : r.left + r.width / 2;
+            var y = e && e.clientY ? e.clientY : r.top;
+            tip.style.left = Math.min(x + 12, window.innerWidth - 270) + "px";
+            tip.style.top = Math.max(y - 56, 4) + "px";
+          }
+          seg.addEventListener("pointermove", show);
+          seg.addEventListener("focus", function () { show(null); });
+          seg.addEventListener("pointerleave", function () { tip.style.display = "none"; });
+          seg.addEventListener("blur", function () { tip.style.display = "none"; });
+          track.appendChild(seg);
+        });
+      }
+      row.appendChild(track);
+      bars.appendChild(row);
+    });
+    legend.textContent = "";
+    state.rows.forEach(function (r, i) {
+      var sp = document.createElement("span"); var sw = document.createElement("span"); sw.className = "swatch"; sw.style.background = "var(" + COLORS[i] + ")";
+      sp.appendChild(sw); sp.appendChild(document.createTextNode(r.name)); legend.appendChild(sp);
+    });
+    Array.prototype.forEach.call(tbody.rows, function (tr, i) {
+      ["raw","ex","size","loss"].forEach(function (k) {
+        var td = tr.querySelector('td[data-k="' + k + '"]');
+        td.textContent = s[k] ? fmt(s[k][i]) : "n/r";
+      });
+    });
+  }
+
+  document.getElementById("preset").addEventListener("change", function (e) { load(e.target.value); });
+  Array.prototype.forEach.call(document.querySelectorAll("input[name=agg]"), function (r) { r.addEventListener("change", render); });
+  document.getElementById("addrow").addEventListener("click", function () {
+    if (state.rows.length >= MAXROWS) return;
+    state.rows.push({ name: "New row", n: 1000, w: 1, L: 1000, l: 300 });
+    buildTable(); render();
+  });
+  document.getElementById("caption").textContent = CAPTION;
+  load("llama3");
+})();
+</script>
+</body>
+</html>

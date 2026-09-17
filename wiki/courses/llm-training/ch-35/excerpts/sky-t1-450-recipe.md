@@ -7,6 +7,8 @@ source_url: https://novasky-ai.github.io/posts/sky-t1/
 created_at: "2026-04-23"
 ---
 
+> Superseded by the 2026-09 revision of read.md; kept for history.
+
 # Excerpt: Sky-T1 — the $450 recipe and what it filtered
 
 **Source library:** `wiki/raw-data/llm-training/papers/sky-t1.md`

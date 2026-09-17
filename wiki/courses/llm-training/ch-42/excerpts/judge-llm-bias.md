@@ -2,82 +2,58 @@
 chapter: ch-42
 course: llm-training
 phase: read
-excerpt_of: wiki/raw-data/llm-training/papers/judge-llm-bias.md
+excerpt_of: arXiv:2306.05685 (Judging LLM-as-a-Judge with MT-Bench and Chatbot Arena), NeurIPS 2023 Datasets and Benchmarks; library card [[judge-llm-bias]]
 source_url: https://arxiv.org/abs/2306.05685
 created_at: "2026-04-23"
+revised: "2026-09-15 (generality revision; rewritten from the primary source because the library card has no Verification section and carries unverified flip rates)"
 ---
 
-# Excerpt: Zheng 2023 — Judging LLM-as-a-Judge with MT-Bench and Chatbot Arena
+# Excerpt: measured judge biases (Zheng et al.)
 
-**Source library:** `wiki/raw-data/llm-training/papers/judge-llm-bias.md`
-**Paper:** Zheng et al., *Judging LLM-as-a-Judge with MT-Bench and Chatbot Arena*, NeurIPS 2023 Datasets and Benchmarks.
+Used by [[read]] §4. Checked against the arXiv PDF on 2026-09-15 (tables and section numbers below are from that text).
 
----
+## Position bias (§3.3, Table 2)
+Two similar answers per first-turn MT-bench question (GPT-3.5 sampled twice at temperature 0.7); the judge is asked twice with the order swapped. "Consistency" is the share of pairs where the verdict does not change.
 
-## Why this source anchors ch-42
+| Judge | Prompt | Consistency | Biased toward first | Biased toward second | Error |
+|---|---|---|---|---|---|
+| Claude-v1 | default | 23.8% | 75.0% | 0.0% | 1.2% |
+| Claude-v1 | rename | 56.2% | 11.2% | 28.7% | 3.8% |
+| GPT-3.5 | default | 46.2% | 50.0% | 1.2% | 2.5% |
+| GPT-4 | default | 65.0% | 30.0% | 5.0% | 0.0% |
+| GPT-4 | rename | 66.2% | 28.7% | 5.0% | 0.0% |
 
-LLM-as-a-judge is load-bearing for every modern alignment stack — RLAIF labels, reward-model training data, benchmark Elos. This paper is the definitive measurement of what those judges get wrong. Ch-42 §3 is almost entirely a restatement and operationalization of this paper's bias catalogue.
+- "Only GPT-4 outputs consistent results in more than 60% of cases." The test is deliberately hard: the two answers are near-identical.
+- By category (Table 10): consistency 42.0% (writing), 36.0% (humanities), 44.0% (stem), 86.0% (math), 86.0% (coding).
+- By model pair (Table 11): 67.5% for GPT-3.5 vs Claude-v1, 98.8% for GPT-3.5 vs LLaMA-13B — position bias shrinks as the quality gap grows.
+- Few-shot judging raises GPT-4 consistency from 65.0% to 77.5% (Table 12) but "high consistency may not imply high accuracy", and prompts are 4× more expensive.
+- Mitigation used in the paper: call the judge in both orders and declare a win only if both agree, otherwise a tie (§3.4).
 
-Raw-data header:
+## Verbosity bias (§3.3, Table 3)
+"Repetitive list" attack: 23 MT-bench answers containing a numbered list are made longer by prepending a GPT-4 rephrasing of the same items, adding no information. Failure = the judge prefers the longer version.
 
-> **Core Insight:** Strong LLM judges (GPT-4) agree with humans ~80% of the time — matching inter-human agreement — but they come with specific, measurable biases: position (order), verbosity (length), self-enhancement (prefer their own outputs), and limited reasoning on math/coding pairs.
+| Judge | Claude-v1 | GPT-3.5 | GPT-4 |
+|---|---|---|---|
+| Failure rate | 91.3% | 91.3% | 8.7% |
 
-## The agreement result
+All three judges correctly return a tie for two identical answers, so the attack is not caught by an identity check.
 
-GPT-4 vs human-expert agreement is 85%+ on MT-Bench and ~80% on Chatbot Arena — the same rate two humans agree with each other. This is the "parity" headline. It is *necessary* for LLM judges to be useful but *not sufficient* for them to be safe: a judge that agrees with humans 80% of the time can still systematically bias the remaining 20% in a reward-hackable direction.
+## Self-enhancement bias (§3.3, Fig. 3b)
+Compared with human win rates on the same pairs, "GPT-4 favors itself with a 10% higher win rate; Claude-v1 favors itself with a 25% higher win rate. However, they also favor other models and GPT-3.5 does not favor itself. Due to limited data and small differences, our study cannot determine whether the models exhibit a self-enhancement bias."
 
-## The three named biases
+## Grading math and reasoning (§3.3, §3.4, Table 4)
+Judge failure rate on 10 math questions (LLaMA-13B vs Vicuna-13B, positions swapped; failure = the judge calls an incorrect answer correct):
 
-### Position bias
+| Default | CoT | Reference-guided |
+|---|---|---|
+| 14/20 | 6/20 | 3/20 |
 
-A vs B ordering changes the winner in 20–30% of cases. Specifically:
+The text describes this as "a significant improvement in failure rate (from 70% to 15%) over the default prompt". With the CoT prompt "in many cases LLM makes exactly the same mistake as the given answers in its problem-solving process".
 
-- GPT-4 flips ~22%.
-- GPT-3.5 flips ~40%.
+## Agreement with humans (§4.2, Table 5)
+On MT-bench, setup S2 (non-tie votes only): GPT-4 pairwise vs human 85% (first turn) and 85% (second turn); human vs human 81% (first turn), 82% (second turn); random agreement is 50%. Under S1, which counts inconsistent votes as ties, GPT-4 vs human is 66%. Agreement rises with the win-rate gap between the two models compared, "from 70% to nearly 100%" (Fig. 2).
 
-The mitigation is the "two-game" score: evaluate both orders, count a win only if the judge is consistent, otherwise tie. This halves throughput but is the only correction without a theoretical hole. Ch-42 §3's diagnostic table reports the same thresholds and lists position-swap consistency as a pre-deployment check (§7).
-
-### Verbosity bias
-
-Longer responses win more often than a length-controlled baseline. The paper constructs length-controlled pairs where responses differ only in length and shows the judge still prefers longer. The correction is length-residualized win rate.
-
-This is the structural reason length bias appears in ch-42 §2 as hack #1 — the verbosity bias in the judge propagates into the RM trained on judge labels, which propagates into the policy trained under that RM. Every layer inherits it.
-
-### Self-enhancement
-
-GPT-4 prefers GPT-4-authored responses at a rate above what humans prefer; Claude shows the same toward Claude. Measured via the judge-vs-human win-rate delta on the same pairs. The mitigation is explicit: never use the candidate model as its own judge, and for RM training data, pool multiple judges from distinct model families.
-
-Ch-42 §7's pre-deployment checklist formalizes this as "judge-rotation audit": rotate the judge across model families; a win-rate swing > 8 pp is the self-enhancement flag.
-
-## Limited reasoning on objective tasks
-
-On math and coding pairs, LLM judges can confirm a wrong answer if it is presented confidently. This links directly to U-sophistry — a rhetoric-over-truth failure mode. The paper's fix: reference-guided grading.
-
-## Reference-guided grading
-
-Attach a gold reference solution to the judge prompt. Raises agreement by ~10 pp on MT-Bench objective categories (math, coding). Less effect on writing tasks, where no single gold reference exists.
-
-This is the structural argument for RLVR on verifiable prompts: when a reference is available and checkable, the judge is just a thin wrapper around a verifier, and you might as well cut out the judge.
-
-## CoT judging
-
-Asking the judge to reason step-by-step before verdict improves agreement but does **not** eliminate the biases — it only makes them more legible. A CoT judge is still subject to position, verbosity, and self-enhancement; you can just read the rationale and see where it is going wrong.
-
-## Dataset release
-
-- 3K expert MT-Bench votes.
-- ~30K Chatbot Arena conversations.
-
-Widely reused by later preference-dataset work (UltraFeedback, Nectar, Skywork-Reward-Preference). Also a known leakage risk: benchmarks trained on this data measure "how much the model agrees with the MT-Bench rater distribution" rather than a ground-truth preference.
-
-## Tie handling
-
-When judges declare ties, the Elo update is a small-delta adjustment. This matters for RM calibration: a dataset with many ties (indistinguishable pairs) under-trains the BT model on the informative region. The paper recommends explicit tie handling rather than forced A/B choice.
-
-## Takeaways for the chapter
-
-1. LLM judges reach human-level agreement *on average* but carry specific systematic biases. Every bias propagates down the RLHF stack.
-2. Position bias has the cleanest fix (two-game scoring); verbosity and self-enhancement require structural changes (length-controlled eval, judge rotation).
-3. Reference-guided grading is the biggest single-intervention gain (+10 pp); this is why RLVR is preferred over LLM-judged RL when a verifier exists.
-4. CoT rationales are legible but do not remove biases. Do not mistake legibility for correctness.
-5. Every number in ch-42's judge-bias table (§3) and pre-deployment checklist (§7) comes from this paper's figures.
+## Corrections to the previous version of this excerpt
+- "GPT-4 flips ~22%; GPT-3.5 ~40%" → Table 2 reports consistency 65.0% (GPT-4) and 46.2% (GPT-3.5) under the default prompt, so verdicts change on about 35% and 54% of pairs.
+- "Reference-guided grading: +10 pp on MT-Bench objective categories" → Table 4 reports failure rates 14/20 → 3/20 on 10 math questions; no agreement gain in percentage points is printed.
+- "GPT-4 vs human agreement ~85% on MT-Bench and ~80% on Arena" → 85% is the S2 (non-tie) figure; the S1 figure is 66%.

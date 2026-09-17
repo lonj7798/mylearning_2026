@@ -2,97 +2,49 @@
 chapter: ch-40
 course: llm-training
 phase: read
-excerpt_of: wiki/raw-data/llm-training/frameworks/verl-grpo.md
-source_url: https://github.com/verl-project/verl/blob/main/verl/trainer/ppo/core_algos.py
+excerpt_of: github.com/verl-project/verl@753aed3 verl/trainer/ppo/core_algos.py and docs/algo/{grpo,dapo}.md; library card [[verl-grpo]] (verified 2026-09-14)
+source_url: https://github.com/verl-project/verl/blob/753aed3e1c286ba6825a74342b28669e72c083ea/verl/trainer/ppo/core_algos.py#L266-L530
 created_at: "2026-04-23"
+revised: "2026-09-15 (generality revision; aligned with the verified card, commit pinned)"
 ---
 
-# Excerpt: verl GRPO advantage — the registry-hook implementation
+# Excerpt: verl's group advantage — what happens to all-equal and size-1 groups
 
-**Source library:** `wiki/raw-data/llm-training/frameworks/verl-grpo.md`
-**Artifact:** `verl/trainer/ppo/core_algos.py` ~L290–335, the `compute_grpo_outcome_advantage` function registered as `@register_adv_est(AdvantageEstimator.GRPO)`.
+Used by [[read]] §5, §6, §7, and the Common-mistakes table.
 
----
-
-## Why this source anchors ch-40 §7
-
-verl is the Bytedance/volcengine RL framework that most R1 reproductions actually run on. Its split design — advantage estimator in one function, policy loss in another — makes the GRPO-vs-Dr.GRPO diff especially clean: it is one boolean flag on one function. Ch-40 §7 uses this to show the reader that all the theory from §4–§5 reduces to dict-based groupby logic.
-
----
-
-## The code ch-40 §7 quotes verbatim
-
-Source lines 22–52:
-
+## `compute_grpo_outcome_advantage` (core_algos.py L311–329, verbatim)
 ```python
-@register_adv_est(AdvantageEstimator.GRPO)
-def compute_grpo_outcome_advantage(
-    token_level_rewards: torch.Tensor,   # (B, T) — reward on last response token
-    response_mask: torch.Tensor,         # (B, T)
-    index: np.ndarray,                   # (B,)  — prompt id per rollout
-    epsilon: float = 1e-6,
-    norm_adv_by_std_in_grpo: bool = True,
-    config: Optional[AlgoConfig] = None,
-) -> tuple[torch.Tensor, torch.Tensor]:
-    scores = token_level_rewards.sum(dim=-1)  # (B,) outcome reward per rollout
-    id2score = defaultdict(list)
-    id2mean, id2std = {}, {}
-    with torch.no_grad():
-        bsz = scores.shape[0]
         for i in range(bsz):
             id2score[index[i]].append(scores[i])
         for idx in id2score:
             if len(id2score[idx]) == 1:
                 id2mean[idx] = torch.tensor(0.0)
                 id2std[idx] = torch.tensor(1.0)
-            else:
-                tens = torch.stack(id2score[idx])
-                id2mean[idx] = torch.mean(tens)
-                id2std[idx] = torch.std(tens)
+            elif len(id2score[idx]) > 1:
+                scores_tensor = torch.stack(id2score[idx])
+                id2mean[idx] = torch.mean(scores_tensor)
+                id2std[idx] = torch.std(scores_tensor)
         for i in range(bsz):
             if norm_adv_by_std_in_grpo:
                 scores[i] = (scores[i] - id2mean[index[i]]) / (id2std[index[i]] + epsilon)
             else:
-                scores[i] = scores[i] - id2mean[index[i]]   # Dr.GRPO mode
+                scores[i] = scores[i] - id2mean[index[i]]
         scores = scores.unsqueeze(-1) * response_mask
-    return scores, scores  # (advantages, returns) — same tensor; no critic
 ```
+`scores[i]` is the summed token reward of response `i` (L304); groups are formed by prompt `uid`; `torch.std` is the sample standard deviation (divisor `G−1`); `ε = 1e-6` (L272). The same scalar is broadcast to every token of the response.
 
----
+## Behaviour the chapter uses
+- **All-equal group:** `r_i − mean = 0` exactly, so the advantage is 0 with or without the std division; the tokens stay in `response_mask` and still count in the denominator under the default `token-mean` aggregation (L329; L1170–1175).
+- **Size-1 group:** mean 0 and std 1, so the advantage is the raw reward divided by `1 + 1e-6`. The default `actor_rollout_ref.rollout.n` is 1 (rollout.yaml L127), which is not a group baseline at all — the docs tell the user to raise it for GRPO.
+- **Worked example at G = 4 with a binary reward** (derived from L319–326): one correct of four gives `μ = 0.25`, `σ = 0.5`, so +1.5 for the correct response and −0.5 for each wrong one; three correct gives +0.5 and −1.5; zero or four correct gives 0 for every response. Without std scaling the same cases give +0.75 / −0.25 and +0.25 / −0.75.
+- **Pass@k estimator** (`grpo_passk`, L471–530, implementing arXiv:2503.19595): only the highest-reward response gets `r_max − r_second_max`; all advantages are ≥ 0, so no response receives a negative advantage.
 
-## What ch-40 §7 points out
+## Documented configurations
+- GRPO: `algorithm.adv_estimator=grpo`, `rollout.n > 1`, `actor.use_kl_loss=True` with `kl_loss_coef=0.001`, `kl_loss_type` one of `kl(k1) | abs | mse(k2) | low_var_kl(k3) | full`, `loss_agg_mode=token-mean` (docs/algo/grpo.md L29–47). The docs state that the original paper's sample-level aggregation (`seq-mean-token-mean`) "may be unstable in long-CoT scenarios".
+- Dr. GRPO: `loss_agg_mode=seq-mean-token-sum-norm`, optional `loss_scale_factor` set to a constant such as the max response length, `use_kl_loss=False`, `algorithm.norm_adv_by_std_in_grpo=False` (grpo.md L57–62).
+- DAPO: `clip_ratio_low: 0.2`, `clip_ratio_high: 0.28`; `algorithm.filter_groups` (default off) drops groups whose metric values are all equal and resamples; overlong buffer `max_response_length: 20480`, `overlong_buffer.len: 4096`, `penalty_factor: 1.0`, applied as `overlong_reward = min(-exceed_len / overlong_buffer_len * penalty_factor, 0)` (docs/algo/dapo.md).
+- DAPO reproduction on Qwen2.5-32B (dapo.md L36–38): 52% AIME 2024 with dynamic sampling, 50% without, 44% without token-level loss and dynamic sampling. One run per row; the 44% run used different hardware and a different image, and no other benchmark is reported, so the table does not measure breadth.
+- FAQ: "Most experiments in the paper, including the best-performant one, are run without Overlong Filtering because it's somehow overlapping with Overlong Reward Shaping" — a conflict with Table 1 of [[dapo]].
 
-1. **`(advantages, returns) = (scores, scores)`** — no critic. The PPO-family value loss term (`vf_coef * (V(s) − R)²`) is disabled entirely; `use_critic = false` in the top-level config. Ch-40 §1's "kill PPO's critic" story is implemented here as a two-element tuple where both elements are the same tensor.
-
-2. **The Dr.GRPO toggle is one line.** The `norm_adv_by_std_in_grpo=True` default is vanilla GRPO; flipping it to `False` is Dr.GRPO — the advantage becomes `r_i − mean(r)` with no std denominator. Ch-40 §5's "delete the divisor" is a single boolean flip in config.
-
-3. **Singleton groups degrade gracefully.** `if len(id2score[idx]) == 1: id2mean=0, id2std=1` → advantage = r_i (zero if r_i is zero). In practice verl requires n ≥ 4 rollouts per prompt; the singleton branch exists only for edge cases.
-
-4. **Per-token broadcast: `scores.unsqueeze(-1) * response_mask`.** The per-rollout scalar advantage becomes a (B, T) tensor where every response token in rollout i shares the same value. This is identical to TRL's `.unsqueeze(1)` broadcast — same mechanism, different syntax. This is where the length-bias interaction lives: combined with the policy-loss aggregator, per-token gradient scales as `|A|/|o_i|` for GRPO aggregation, `|A|/L_max` for Dr.GRPO aggregation.
-
-5. **Outcome-only assumption.** `token_level_rewards.sum(dim=-1)` assumes the reward is placed on a single token (the last one). Process rewards — per-step feedback from a PRM — require the separate `compute_grpo_passk_outcome_advantage` variant at L498–550.
-
----
-
-## The split vs fused design (ch-40 §7 contrast)
-
-- verl splits: `compute_grpo_outcome_advantage` produces `(advantages, returns)`; then `compute_policy_loss_vanilla` (shared with PPO) produces the clipped surrogate. Two separate registry hooks.
-- TRL fuses: `_compute_loss` does advantages broadcast + surrogate + KL + aggregation in one method. See [[trl-grpo]].
-
-Algebraic equivalence for `loss_type="grpo"` and `AdvantageEstimator.GRPO + use_critic=false`. Practical difference: adding a new advantage estimator in verl means registering a new function; in TRL it means adding a branch to `_compute_loss`.
-
----
-
-## Side variant: GRPO Pass@k (source lines 67)
-
-`compute_grpo_passk_outcome_advantage` at L498–550 credits only the *best* rollout per group with `(r_max − r_second_max)/σ`. Useful when the downstream metric is pass@k rather than pass@1 — matches the training objective to the deployment objective.
-
----
-
-## Connections to the rest of the track
-
-- [[grpo]] — the paper this code implements (Eq. 3 of Shao 2024).
-- [[dr-grpo]] — enabled by `norm_adv_by_std_in_grpo=False`.
-- [[trl-grpo]] — the TRL equivalent with the fused `_compute_loss`.
-- [[verl-ppo-loss]] — the shared policy loss used downstream of this advantage estimator.
-- [[deepseek-r1]] — R1 reproductions are the primary user of this code path.
+## Claims removed from the earlier version of this excerpt
+"Singleton groups get zero advantage", "per-token broadcast is the source of the length bias" (the length term is set by `loss_agg_mode`, not by this function), and "verl is what most R1 reproductions run".

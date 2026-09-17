@@ -2,83 +2,65 @@
 chapter: ch-29
 course: llm-training
 phase: read
-excerpt_of: wiki/raw-data/llm-training/papers/self-instruct.md
+excerpt_of: https://arxiv.org/abs/2212.10560 (primary text; the library card [[self-instruct]] had no Verification section on 2026-09-15)
 source_url: https://arxiv.org/abs/2212.10560
 created_at: "2026-04-23"
+revised_at: "2026-09-15 (generality revision; re-read against the arXiv PDF)"
 ---
 
-# Excerpt: Self-Instruct — the breadth-generator loop ch-29 inherits
+# Excerpt: Self-Instruct generation and filtering, as used in ch-29 §2
 
-**Source library:** `wiki/raw-data/llm-training/papers/self-instruct.md`
-**Artifact:** 4-step pipeline (seed, instruction gen, instance gen, filter)
+**Artifact:** Wang et al., "Self-Instruct: Aligning Language Models with Self-Generated Instructions" (arXiv v1 2022-12; ACL 2023). Loci are section and table numbers of the arXiv PDF.
 
----
+## Pipeline (§2.2)
 
-## Why this source anchors ch-29
+1. **Task pool.** The pool starts with 175 tasks, each with 1 instruction and 1 instance. The seed tasks were written by the authors and their labmates at UW (§2.2, footnote 3).
+2. **Instruction generation.** Each step samples 8 task instructions from the pool as in-context examples: 6 from the human-written tasks and 2 from model-generated tasks of previous steps (§2.2). The prompt is "Come up with a series of tasks:" followed by "Task 1: …" to "Task 8: …" and "Task 9:" (Table 5). Generation stops at the model's length limit or when it produces "Task 16" tokens (Table 5 caption).
+3. **Classification identification.** A few-shot prompt asks "Can the following task be regarded as a classification task with finite output labels?" (§2.2, Table 6). Classification tasks are those with a small, limited output label space (footnote 4).
+4. **Instance generation.** Non-classification tasks use the **input-first** approach: generate the input, then the output. Classification tasks use the **output-first** approach: generate the possible class labels first, then an input conditioned on each label, because input-first generation produced inputs biased toward one label, for example grammatical inputs for grammar-error detection (§2.2, Tables 7–8).
+5. **Filtering and postprocessing (§2.2).**
+   - A new instruction enters the pool only when its ROUGE-L similarity with every existing instruction is below 0.7.
+   - Instructions containing keywords such as "image", "picture", or "graph" are excluded.
+   - Instances that are exactly the same, or that have the same input and different outputs, are removed.
+   - Invalid generations are removed by heuristics, for example an instruction that is too long or too short, or an output that repeats the input. The paper text gives no numeric length thresholds.
 
-The synthetic track's capstone needs two generators that together cover both *breadth* (novel tasks) and *depth* (complexity). Self-Instruct is the breadth generator. Without the 175-seed / 8-ICL / ROUGE-L-0.7 recipe, Evol-Instruct's depth operators evolve the same small set of topics endlessly and the pool collapses. The lab's 70/30 Self-Instruct/Evol-Instruct mix is exactly the ratio that preserves the complexity tail [[evol-instruct]] documents without forfeiting breadth.
+## Statistics (§3.1, Table 1)
 
----
+| Statistic | Value |
+|---|---|
+| instructions | 52,445 (11,584 classification, 40,861 non-classification) |
+| instances | 82,439 (35,878 with empty input) |
+| mean instruction / non-empty input / output length (words) | 15.9 / 12.7 / 18.9 |
+| generator | GPT-3 "davinci" engine through the OpenAI API (§3) |
 
-## The attested 4-step pipeline — what ch-29 implements verbatim
+The number of raw generations before filtering and the survival rate of each filter are not reported in the paper text.
 
-From the source (lines 31–39):
+## Quality of the kept data (§3.3, Table 2)
 
-1. **Instruction generation** — prompt the LM with 8 in-context examples (6 from seed, 2 from prior accepted) and ask for a new task instruction.
-2. **Classification-vs-non-classification branching** — ask the LM whether the instruction is classification; this changes the instance-generation prompt template (input-first for classification to avoid label bias, output-first otherwise).
-3. **Instance generation** — for each accepted instruction, prompt the LM to produce `(input, output)`.
-4. **Filtering** — drop instructions with ROUGE-L > 0.7 to any existing instruction (diversity filter); drop instances where `input == output`; drop if instruction contains "image/graph/file"; drop ill-formatted generations.
+An author labeled 200 random instructions, 1 instance each:
 
-The prompt template (source lines 44–51) is quoted verbatim in ch-29's `build_instruction_prompt`:
+| Question | Yes |
+|---|---|
+| Does the instruction describe a valid task? | 92% |
+| Is the input appropriate for the instruction? | 79% |
+| Is the output a correct and acceptable response? | 58% |
+| All fields are valid | 54% |
 
-```
-Come up with a series of tasks:
-Task 1: <seed 1>
-Task 2: <seed 2>
-...
-Task 8: <seed 8>
-Task 9:
-```
+The authors note that most erroneous instances are still in the correct format or partially correct (§3.3). The filters above check format and similarity, not correctness.
 
-Ch-29's `stop=["\nTask"]` is the same stop sequence implied by this template.
+## Diversity measurement (§3.2)
 
----
+- Verb–noun structure: 26,559 of 52,445 instructions have a parseable root verb with a direct noun object; the top 20 verbs with their top 4 objects cover 14% of the set (Figure 3).
+- Novelty against seeds: for each generated instruction, the highest ROUGE-L against the 175 seeds is plotted (Figure 4).
 
-## What ch-29 keeps, changes, drops from Self-Instruct
+## Use in ch-29
 
-| Self-Instruct default | Ch-29 choice | Reason |
-|-----------------------|--------------|--------|
-| 175 seed tasks | 175 seeds (unchanged) | the count is attested; reducing the seed pool collapses breadth |
-| 6 from seed + 2 from recent | same | this ratio is the attested recipe; the 2 recent keep the generator coupled to the evolving pool |
-| ROUGE-L > 0.7 diversity filter | Replaced by MinHash-LSH at J=0.8 | MinHash is the standard for near-duplicate detection at > 10K scale; ROUGE-L is O(N²) |
-| `(input, output)` per instruction | same | the two-field output shape makes SFT loss masking trivial |
-| 52K/82K instructions/instances at the end | 5K/5K target | ch-29 is a lab, not a dataset-release paper |
-| No complexity axis | Mixed 70/30 with Evol-Instruct | Self-Instruct's flat complexity distribution is the weakness [[evol-instruct]] Figure 1 attacks |
+- The lab keeps the 6 + 2 in-context sampling, the ROUGE-L < 0.7 pool rule, and the output-first branch for classification.
+- The keyword and heuristic filters become the lab's format filter; the lab records the survival rate that the paper does not report.
+- Table 2 is the reason the lab adds a verifier for checkable subsets: format filters kept a set in which 58% of sampled outputs were correct.
 
----
+## Connections
 
-## The one explicit failure mode the source documents
-
-From the source (line 52):
-
-> Failure modes observed: hallucinated "impossible" tasks, output-bias in classification, repetition — addressed via the diversity filter.
-
-Ch-29 instantiates all three mitigations:
-- "Hallucinated impossible tasks" → the `image/graph/file` keyword filter in `format_valid`.
-- "Output-bias in classification" → the input-first template branch, preserved in `generate_instance`.
-- "Repetition" → MinHash dedup (replacing ROUGE-L at scale).
-
----
-
-## Why 175 seeds specifically
-
-The paper does not claim 175 is optimal; the authors chose it to cover classification, generation, extraction, and open-ended within a budget a team could hand-write in one sitting. Ch-29 reuses the public seed file rather than rewriting: the win-condition is not novel seeds, it is the cascade's behaviour.
-
----
-
-## Connections to the rest of the track
-
-- **ch-19** — the full-read chapter on [[self-instruct]]; read that before this lab.
-- **ch-20** — [[evol-instruct]] extends this pipeline along the complexity axis; ch-29 uses them together.
-- **ch-23** — [[cherry-llm]] / [[ifd]] is the filter that specifically addresses "hallucinated instruction-response mismatch" — the residual failure mode after Self-Instruct's own diversity filter.
-- **ch-25** — MinHash is the scalable replacement for ROUGE-L 0.7 at ch-29's pool sizes.
+- [[self-instruct]] — library card for the same paper (not verified at the time of this revision; its sentence "input-first for classification" is reversed relative to §2.2).
+- [[evol-instruct]] — WizardLM uses the 52K Alpaca data, produced with this method, as seed.
+- [[alpaca]] — re-run of this pipeline with a different generator.

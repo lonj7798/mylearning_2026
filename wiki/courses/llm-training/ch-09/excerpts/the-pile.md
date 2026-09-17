@@ -2,162 +2,101 @@
 chapter: ch-09
 course: llm-training
 phase: read
-excerpt_of: wiki/raw-data/llm-training/papers/the-pile.md
+excerpt_of: wiki/raw-data/llm-training/papers/the-pile.md (the library card has no numbers and no Verification section on 2026-09-15; values below are taken from the primary source)
 source_url: https://arxiv.org/abs/2101.00027
+primary_version: arXiv:2101.00027v1 (2020-12-31)
 created_at: "2026-04-23"
+revised_at: "2026-09-15"
 ---
 
-# Excerpt: The Pile — the 22-subset hand-curation and what each subset taught the field
+# Excerpt: The Pile: An 800GB Dataset of Diverse Text for Language Modeling
 
-**Source library:** `wiki/raw-data/llm-training/papers/the-pile.md`
-**Paper:** Gao et al. 2020, "The Pile: An 800GB Dataset of Diverse Text for Language Modeling" (EleutherAI).
+Values and quotations used by ch-09 `read.md`, checked against the v1 PDF on 2026-09-15. Authors: Leo Gao, Stella Biderman, Sid Black, Laurence Golding, Travis Hoppe, Charles Foster, et al. (EleutherAI).
 
----
+## Weights and epochs (§2)
+> "Following Brown et al. (2020), we increase the weights of higher quality components, with certain high-quality datasets such as Wikipedia being seen up to 3 times ("epochs") for each full epoch over the Pile."
 
-## Why this source anchors ch-09 §2 and §3
+## Table 1 (all 22 components)
+| Component | Raw Size | Weight | Epochs | Effective Size | Mean Document Size |
+|---|---|---|---|---|---|
+| Pile-CC | 227.12 GiB | 18.11% | 1.0 | 227.12 GiB | 4.33 KiB |
+| PubMed Central | 90.27 GiB | 14.40% | 2.0 | 180.55 GiB | 30.55 KiB |
+| Books3 | 100.96 GiB | 12.07% | 1.5 | 151.44 GiB | 538.36 KiB |
+| OpenWebText2 | 62.77 GiB | 10.01% | 2.0 | 125.54 GiB | 3.85 KiB |
+| ArXiv | 56.21 GiB | 8.96% | 2.0 | 112.42 GiB | 46.61 KiB |
+| Github | 95.16 GiB | 7.59% | 1.0 | 95.16 GiB | 5.25 KiB |
+| FreeLaw | 51.15 GiB | 6.12% | 1.5 | 76.73 GiB | 15.06 KiB |
+| Stack Exchange | 32.20 GiB | 5.13% | 2.0 | 64.39 GiB | 2.16 KiB |
+| USPTO Backgrounds | 22.90 GiB | 3.65% | 2.0 | 45.81 GiB | 4.08 KiB |
+| PubMed Abstracts | 19.26 GiB | 3.07% | 2.0 | 38.53 GiB | 1.30 KiB |
+| Gutenberg (PG-19) | 10.88 GiB | 2.17% | 2.5 | 27.19 GiB | 398.73 KiB |
+| OpenSubtitles | 12.98 GiB | 1.55% | 1.5 | 19.47 GiB | 30.48 KiB |
+| Wikipedia (en) | 6.38 GiB | 1.53% | 3.0 | 19.13 GiB | 1.11 KiB |
+| DM Mathematics | 7.75 GiB | 1.24% | 2.0 | 15.49 GiB | 8.00 KiB |
+| Ubuntu IRC | 5.52 GiB | 0.88% | 2.0 | 11.03 GiB | 545.48 KiB |
+| BookCorpus2 | 6.30 GiB | 0.75% | 1.5 | 9.45 GiB | 369.87 KiB |
+| EuroParl | 4.59 GiB | 0.73% | 2.0 | 9.17 GiB | 68.87 KiB |
+| HackerNews | 3.90 GiB | 0.62% | 2.0 | 7.80 GiB | 4.92 KiB |
+| YoutubeSubtitles | 3.73 GiB | 0.60% | 2.0 | 7.47 GiB | 22.55 KiB |
+| PhilPapers | 2.38 GiB | 0.38% | 2.0 | 4.76 GiB | 73.37 KiB |
+| NIH ExPorter | 1.89 GiB | 0.30% | 2.0 | 3.79 GiB | 2.11 KiB |
+| Enron Emails | 0.88 GiB | 0.14% | 2.0 | 1.76 GiB | 1.78 KiB |
+| The Pile | 825.18 GiB | | | 1254.20 GiB | 5.91 KiB |
 
-Ch-09's central argument — *"a corpus is a composition, not a pile of text"* — is the thesis of this paper named literally "The Pile." EleutherAI's 2020 release is the first public, explicit, hand-curated pretraining mixture; every later open corpus either imitates its explicit-mixture discipline ([[dolma]], RedPajama, SlimPajama) or deliberately departs from it to a single-classifier regime ([[fineweb]]).
+Caption: "Raw Size is the size before any up- or down-sampling. Weight is the percentage of bytes in the final dataset occupied by each dataset. Epochs is the number of passes over each constituent dataset during a full epoch over the Pile. Effective Size is the approximate number of bytes in the Pile occupied by each dataset."
 
-The 22-subset table is the literal figure on the chapter's §3 spine. This excerpt walks through *why each subset was chosen*, *what happened to it by 2026*, and what the Pile's one-shot-release format got right and wrong about maintainability.
+## Bits per byte (§3.1)
+> "Our preferred metric is bits per UTF-8 encoded byte (BPB). [...] BPB = (L_T/L_B) log2(e^ℓ) = (L_T/L_B) ℓ/ln(2), where L_T is the length of the dataset in tokens and L_B is the length of the dataset in UTF-8 encoded bytes. We find that L_T/L_B is 0.29335 GPT-2-tokens/byte across the Pile"
 
----
+## Evaluation setup (§4, §4.1)
+> "we train architecturally-identical 1.3 billion parameter models based on those in Brown et al. (2020) on different datasets"
 
-## The mixture-as-scaling-variable argument
+> "we decontaminate any instances of the evaluation sets using the same 13-gram overlap filtering as in Brown et al. (2020) and downsample to 40GB to control for dataset size. As we control for dataset size, we emphasize that our evaluation is generous to CC-100 (en), which is about 1/3 the size of the Pile in reality."
 
-From the source (lines 7-8):
+Token counts and training steps for these models are not stated in §4.
 
-> - **Core Insight:** Diversity of source domains is itself a scaling variable; broad, high-quality mixtures outperform monolithic web corpora on cross-domain generalization.
-> - **Guideline:** When building a pretraining mix, do not rely only on generic web text; add curated academic, code, forum, and book-like sources with explicit mixture control.
+## Table 3 (size-controlled results)
+| Trained on | Pile val (BPB) | Pile test (BPB) | WikiText (PPL) | LAMBADA (PPL) | LAMBADA (ACC) |
+|---|---|---|---|---|---|
+| The Pile | 0.9281 | 0.9433 | 5.59 | 12.78 | 50.1 |
+| CC-100 (en) | 1.3143 | 1.3293 | 8.27 | 11.78 | 49.7 |
+| Raw CC | 1.1180 | 1.1275 | 11.75 | 19.84 | 43.8 |
 
-This is the argument that justifies ch-09's four-axis framework. If token count were the only relevant scaling variable, you could just throw more CommonCrawl at the model and be done. [[the-pile]] is the experimental refutation: on cross-domain evals, their 22-subset mixture outperforms pure CC at matched token counts. Gao et al. formalize this as the "diversity bonus" and give explicit weights:
-
-- Upsampled slices (weight > 1): Wikipedia, Gutenberg, arXiv, PubMed Central, StackExchange, USPTO — the high-quality domain-specialist texts.
-- Native-weight slices: Pile-CC, OpenWebText2, GitHub — already abundant.
-- Downsampled slices (weight < 1): none explicitly; a few subsets have weights approaching 1.
-
-The Pile's upsampling weights are the 2020 expression of what [[scaling-laws-data-quality]] later formalized as effective-sample-size scaling: structured domain text is *worth more per token* than raw web, and the mixture weights encode that per-source multiplier empirically.
-
----
-
-## The 22 subsets — what each contributed
-
-From the source (lines 22-25):
-
-> ## Technical Details
-> - 22 component datasets with manually chosen mixture weights.
-> - Includes sources such as PubMed, arXiv, GitHub, books, StackExchange, and web text.
-> - Emphasizes domain coverage rather than only crawl cleanup.
-> - Also documents risks and problematic sources, which helped push later data documentation standards.
-
-Table of the 22, with the 2026 post-mortem for each:
-
-| # | Subset | ~% (token-weighted) | 2026 status |
+## Table 4 (BPB on each Pile test component; columns are training corpora)
+| Evaluated on | The Pile | CC-100 (en) | Raw CC (en) |
 |---|---|---|---|
-| 1 | Pile-CC | 18.1% | Superseded by FineWeb (15T) and DCLM (~3T); web filtering moved from heuristic to classifier. |
-| 2 | Books3 | 8.1% | **Removed from every derivative** after 2023 Rhode Island litigation. |
-| 3 | PubMed Central | 7.6% | Aged well; present in peS2o ([[dolma]]). |
-| 4 | GitHub | 7.6% | Superseded by The Stack (licence-filtered) and Starcoder. |
-| 5 | OpenWebText2 | 5.0% | Obsoleted by FineWeb's classifier-scored web. |
-| 6 | arXiv | 4.5% | Aged well; present in peS2o and Proof Pile II. |
-| 7 | FreeLaw | 4.1% | Aged well; legal-domain text still rare and valuable. |
-| 8 | StackExchange | 2.6% | Aged well; Q&A structure is a high-value format. |
-| 9 | USPTO | 1.7% | Aged well; patents are structured domain text. |
-| 10 | PubMed Abstracts | 1.5% | Aged well; absorbed into academic slices. |
-| 11 | OpenSubtitles | 1.0% | Dropped by most derivatives (quality issues). |
-| 12 | Gutenberg (PG-19) | 0.9% | Aged well; public-domain books are the licence-safe replacement for Books3. |
-| 13 | DM Mathematics | 0.7% | **Aged poorly** — synthetic problems without chain-of-thought; superseded by Qwen2.5-Math synthetic CoT. |
-| 14 | Wikipedia EN | 0.5% | Aged well; still the canonical anchor. |
-| 15 | BookCorpus2 | 0.5% | Mostly dropped; licence concerns and quality. |
-| 16 | Ubuntu IRC | 0.4% | Dropped; narrow-domain chat log. |
-| 17 | EuroParl | 0.3% | Dropped; machine-translation noise. |
-| 18 | YouTube Subtitles | 0.3% | Dropped; auto-caption errors. |
-| 19 | HackerNews | 0.3% | Kept by some, dropped by others. |
-| 20 | PhilPapers | 0.2% | Kept in peS2o and academic slices. |
-| 21 | NIH ExPorter | 0.1% | Kept; grant-abstract structure is useful. |
-| 22 | Enron Emails | 0.1% | Dropped; PII concerns. |
+| Pile-CC | 0.9989 | 1.0873 | 1.0287 |
+| PubMed Central | 0.6332 | 1.1311 | 0.9120 |
+| Books3 | 1.0734 | 1.2264 | 1.1366 |
+| OpenWebText2 | 0.9938 | 1.2222 | 1.0732 |
+| ArXiv | 0.7945 | 1.8159 | 1.2642 |
+| Github | 0.5597 | 1.6509 | 0.9301 |
+| FreeLaw | 0.6978 | 1.0221 | 0.9468 |
+| Stack Exchange | 0.8152 | 1.5414 | 1.1292 |
+| USPTO Backgrounds | 0.6731 | 0.8772 | 0.8455 |
+| PubMed Abstracts | 0.7313 | 1.0193 | 0.9718 |
+| Gutenberg (PG-19) | 1.1426 | 1.2780 | 1.2235 |
+| OpenSubtitles | 1.0909 | 1.1827 | 1.2139 |
+| Wikipedia (en) | 0.8961 | 1.1807 | 1.0252 |
+| DM Mathematics | 1.5206 | 3.1774 | 2.6229 |
+| Ubuntu IRC | 1.4085 | 2.1243 | 1.5691 |
+| BookCorpus2 | 1.0613 | 1.1346 | 1.0914 |
+| EuroParl | 1.1202 | 2.7141 | 1.4917 |
+| HackerNews | 1.0968 | 1.4352 | 1.2305 |
+| YoutubeSubtitles | 1.4269 | 2.3287 | 1.5607 |
+| PhilPapers | 1.1256 | 1.4269 | 1.2090 |
+| NIH ExPorter | 0.7347 | 0.9713 | 0.9225 |
+| Enron Emails | 0.8301 | 1.3300 | 1.0483 |
 
-Aggregated: ~40% of the Pile's tokens (by weight) have survived essentially intact into 2024-2026 open corpora. ~60% have been replaced or removed. The largest single change is Books3 (8.1%) — dropped outright — and the next-largest is Pile-CC (18.1%) — superseded by classifier-filtered CC.
+## Results text (§4.2)
+> "models trained on Pile improve significantly over both Raw CC and CC-100 on all components of the Pile, as shown in Table 4. This indicates that models trained on the Pile have greater cross-domain generalization capabilities without compromising performance on traditional benchmarks."
 
----
+> "Surprisingly, raw Common Crawl performs better on the Pile BPB than CC-100, despite losing by a significant margin on LAMBADA and WikiText. We hypothesize that this is due to the perplexity based filtering used in CC-100, where a language model is trained on Wikipedia and all data with a perplexity too high or too low is discarded."
 
-## Books3 — the canonical licence mistake
+## Tokens per byte and language (§5.1, §5.2)
+> "many of the sets with the lowest bytes per token are those which consist in large part of non-text content (Github, ArXiv, Stack Exchange, and DM Mathematics) or languages other than English (EuroParl)."
 
-Books3 was the Pile's 2.5% books slice, sourced from Bibliotik (a shadow library / BitTorrent tracker). In 2020 the legal risk was speculative; by 2023, it had crystallised as the central exhibit in multiple lawsuits. From the source (lines 25-26):
+> "Using fasttext (Suárez et al., 2019a), we determine that the Pile is 97.4% English."
 
-> Also documents risks and problematic sources, which helped push later data documentation standards.
-
-EleutherAI did document Books3's provenance — this is one of the reasons the paper is credited with pushing data-documentation norms. But *documenting* is not the same as *avoiding*. By 2024:
-
-- **RedPajama v1** dropped Books3, replacing with Project Gutenberg.
-- **SlimPajama** inherited RedPajama's swap.
-- **Dolma** explicitly cites the Books3 lesson and uses Gutenberg.
-- **OLMo-Mix-1124** and **Dolma 3 Mix** use Gutenberg + other permissively-licenced books.
-- **The Pile's own download page** at `the-eye.eu` was taken down; the Pile-without-Books3 is a separate distribution.
-
-For ch-09 §5's licence discussion, Books3 is the single most important case study. It is also the reason "every opt-out register" conversation takes place — post-Books3, the ambient expectation is that training-data use of copyrighted text is auditable.
-
----
-
-## Why Pile-CC underperforms FineWeb
-
-From the source (line 15):
-
-> The Pile is an 825 GiB English text corpus built from 22 diverse high-quality subsets spanning academic text, code, books, web text, and forums.
-
-"High-quality" is doing a lot of work in that sentence for Pile-CC. The Pile-CC recipe is roughly:
-
-1. Start from Common Crawl WARC files.
-2. jusText extraction.
-3. Language filter (English).
-4. Heuristic quality filters (similar to C4's).
-5. Deduplication.
-
-This is the 2020 state of the art. [[fineweb]] (2024) is the next-generation recipe:
-
-1. Start from 96 CC WARC snapshots.
-2. Trafilatura extraction (higher-quality than jusText).
-3. fastText language ID.
-4. Stronger heuristics (Gopher + C4 stack).
-5. Per-dump MinHash (not global — a counterintuitive finding).
-6. PII redaction.
-7. (For FineWeb-Edu) Llama-3-70B-annotated classifier filter at score ≥ 3.
-
-The headline result: FineWeb produces better per-token training signal than Pile-CC on MMLU, ARC, and reasoning benchmarks. For ch-09 §4's "the shift from raw-web maximalism to classifier-filtered web" narrative, Pile-CC vs FineWeb is *the* concrete comparison. Same substrate (Common Crawl), same language (English), 100× scale difference, fundamentally different filter philosophy.
-
----
-
-## Why the Pile was a one-shot release, not a pipeline
-
-From the source (lines 17-21):
-
-> ## Key Contributions
-> - Made explicit mixture design a first-class pretraining decision.
-> - Released a broad-source open corpus that became a baseline for open LMs.
-> - Showed benefits of curated-domain coverage beyond raw crawl scale.
-
-What EleutherAI delivered in 2020 was a *corpus*: 825 GiB on disk, static, released, done. The code for regenerating it was published but never updated. No Pile-v2 ever shipped.
-
-By contrast, [[dolma]] and [[fineweb]] were released with their *pipelines* as first-class artefacts — `dolma` CLI and `datatrove` codebase, both maintained. Re-running on a 2026 Common Crawl snapshot produces a current corpus. This is the single biggest structural improvement of open-data work between 2020 and 2024.
-
-For ch-09's reader: the Pile's static nature is why its subset-level lessons transferred into later pipelines rather than being rebuilt from scratch. The 22-subset *template* is what survived; the specific corpus file is a 2020 snapshot.
-
----
-
-## What to take from The Pile for ch-09
-
-1. **Mixture is a design decision, not an accident.** The Pile made this explicit first; every later corpus either inherits that discipline or is measured against it.
-2. **40% of hand-curated slices aged well; 60% did not.** Structured domain text (arXiv, PubMed, GitHub-via-The-Stack, StackExchange, FreeLaw, USPTO, Wikipedia, Gutenberg) survives. Shadow-library books, narrow chat logs, auto-captioned media, synthetic math-without-reasoning do not.
-3. **Documentation is not the same as licence safety.** The Books3 lesson: "we documented it" does not shield against the 2023+ litigation environment.
-4. **One-shot releases lose to pipelines.** Static corpus files are artefacts of their release year; maintainable pipelines remain current.
-5. **Pile-CC → FineWeb is the canonical web-filter recipe transition.** Heuristics → classifier, hand-tuned → LLM-annotated.
-
----
-
-## Connections
-
-- [[excerpts/dolma]] — the six-stage-cascade successor to the Pile's hand-curation philosophy.
-- [[excerpts/fineweb]] — the single-classifier successor that challenges the "mixture is necessary" claim for web text.
-- [[excerpts/llama-3]] — the closed-corpus counterpart that does not publish its mix at all.
-- [[excerpts/olmo-3]] — the maximum-transparency 2025 open-corpus release, Dolma 3 stages.
-- [[excerpts/qwen-3]] — the 36T multilingual corpus that includes synthetic data at large scale.
-- [[ch-09]] — §2 (comparison table row: The Pile), §3 (22-subset aging), §5 (Books3 as the licence case study).
+## Correction to earlier ch-09 material
+The April 2026 version of this excerpt and of ch-09 listed percentages computed by dividing raw sizes by the 1254.20 GiB effective size (for example PubMed Central 7.6%) and called them token-weighted. The printed weights are byte shares of the effective dataset (PubMed Central 14.40%, Books3 12.07%, ArXiv 8.96%).

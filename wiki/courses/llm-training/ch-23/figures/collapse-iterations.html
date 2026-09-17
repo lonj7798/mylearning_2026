@@ -2,398 +2,325 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>Model Collapse — Gaussian-mixture density across generations</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Collapse and Verification Explorer</title>
 <style>
-  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-         max-width: 1120px; margin: 2em auto; padding: 0 1em; color: #222;
-         background: #fafafa; }
-  h1 { font-size: 1.35em; margin-bottom: 0.2em; }
-  .subtitle { color: #666; margin-top: 0; font-size: 0.95em; }
-  .layout { display: grid; grid-template-columns: 1.3fr 1fr; gap: 1.2em;
-            margin-top: 1.2em; }
-  .panel { border: 1px solid #dcdcdc; border-radius: 6px; background: #fff;
-           padding: 0.9em 1.1em; }
-  h2 { font-size: 1.05em; margin: 0 0 0.6em 0; color: #333;
-       border-bottom: 1px solid #eee; padding-bottom: 0.3em; }
-  .slider-row { display: grid; grid-template-columns: 170px 1fr 58px; gap: 0.7em;
-                align-items: center; padding: 0.35em 0; }
-  .slider-label { font-size: 0.87em; font-weight: 600; color: #333; }
-  .slider-val { font-family: 'SF Mono', Menlo, monospace; font-size: 0.82em;
-                color: #345; text-align: right; }
-  input[type="range"] { width: 100%; }
-  canvas { display: block; width: 100%; height: 320px; background: #fff;
-           border: 1px solid #e0e0e0; border-radius: 4px; }
-  .metric-row { display: flex; justify-content: space-between;
-                padding: 0.35em 0.1em; border-bottom: 1px dashed #eee;
-                font-size: 0.88em; }
-  .metric-row:last-child { border-bottom: none; }
-  .metric-name { color: #333; }
-  .metric-val  { font-family: 'SF Mono', Menlo, monospace; color: #0a4; font-weight: 600; }
-  .metric-val.warn { color: #a60; }
-  .metric-val.bad  { color: #a20; }
-  .legend { font-size: 0.78em; color: #555; margin-top: 0.4em; }
-  .note { font-size: 0.82em; color: #666; margin-top: 1em; line-height: 1.5; }
-  code { background: #eef; padding: 1px 4px; border-radius: 3px;
-         font-family: 'SF Mono', Menlo, monospace; font-size: 0.85em; }
-  .preset { font-size: 0.82em; padding: 4px 10px; margin-right: 0.4em;
-            border: 1px solid #bbb; background: #f4f4f4; border-radius: 4px;
-            cursor: pointer; }
-  .preset:hover { background: #e8e8e8; }
+  :root {
+    --bg: #f7f7f5; --panel: #ffffff; --ink: #1d1f22; --muted: #5d636b; --line: #d9dbde;
+    --grid: #eceef0; --c1: #2f6db5; --c2: #c2572b; --c3: #3f8f5a; --c4: #7d5bb5; --warn: #a33a3a;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #16181b; --panel: #1f2226; --ink: #e6e7e9; --muted: #a2a8b0; --line: #3a3f45;
+      --grid: #2b2f34; --c1: #6ea4e6; --c2: #e38a62; --c3: #71c08b; --c4: #b397e6; --warn: #e07b7b;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #16181b; --panel: #1f2226; --ink: #e6e7e9; --muted: #a2a8b0; --line: #3a3f45;
+    --grid: #2b2f34; --c1: #6ea4e6; --c2: #e38a62; --c3: #71c08b; --c4: #b397e6; --warn: #e07b7b;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink);
+         font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+  .wrap { max-width: 1100px; margin: 0 auto; padding-inline: 16px; padding-block: 20px 40px; }
+  h1 { font-size: 1.3rem; margin: 0 0 4px; }
+  .sub { color: var(--muted); margin: 0 0 16px; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 480px), 1fr)); gap: 16px; }
+  .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 14px; min-width: 0; }
+  h2 { font-size: 1rem; margin: 0 0 6px; }
+  .src { color: var(--muted); font-size: 12px; margin: 0 0 10px; }
+  .row { display: grid; grid-template-columns: 150px 1fr 64px; gap: 8px; align-items: center; margin: 4px 0; }
+  .row label { font-size: 13px; }
+  .row output { font-family: ui-monospace, Menlo, monospace; font-size: 12px; text-align: right; }
+  input[type=range] { width: 100%; }
+  select, button { font: inherit; color: var(--ink); background: var(--panel); border: 1px solid var(--line); border-radius: 4px; padding: 2px 6px; }
+  svg { width: 100%; height: auto; display: block; }
+  .readout { font-family: ui-monospace, Menlo, monospace; font-size: 12px; margin-top: 8px; white-space: pre-wrap; }
+  .legend { display: flex; flex-wrap: wrap; gap: 10px; font-size: 12px; margin-top: 4px; }
+  .sw { display: inline-block; width: 12px; height: 3px; vertical-align: middle; margin-right: 4px; }
+  .cap { color: var(--muted); font-size: 12px; margin-top: 8px; }
+  @media (max-width: 480px) { .row { grid-template-columns: 110px 1fr 56px; } }
 </style>
 </head>
 <body>
+<div class="wrap">
+<h1>Collapse and verification explorer</h1>
+<p class="sub">Companion to ch-23 read.md. Panel A is a simulation of a model from the paper; panels B–D compute published formulas. None of the curves are experimental data.</p>
 
-<h1>Model Collapse — Gaussian-mixture density across generations</h1>
-<p class="subtitle">
-  Iterated sample-and-refit on a 5-component Gaussian mixture. Move the sliders
-  to change anchor persistence and verifier pass-rate; watch tails survive or die
-  across generations 0→10. Source: <code>[[model-collapse]]</code>,
-  <code>[[faithful-synth-eval]]</code>.
-</p>
+<div class="grid">
 
-<div class="layout">
-
-  <div class="panel">
-    <h2>Density p<sub>n</sub>(x) — generations 0 (dark) → 10 (light)</h2>
-    <canvas id="densityCanvas" width="720" height="320"></canvas>
-    <div class="legend">
-      True distribution: bold black. Each generation refits from `N` samples of the
-      previous generation's model. <strong>Pure recursion</strong> (anchor=0,
-      verifier=0) reproduces Shumailov's tail-collapse curve.
-    </div>
+<section class="panel" id="pA">
+  <h2>A. Discrete resampling: replace, accumulate, and 10% original data</h2>
+  <p class="src">Simulation of the discrete model with exact fit in Shumailov et al. (Nature 2024), "Discrete distributions with exact approximation": each generation fits empirical frequencies and samples M points. The 10% mode mimics the data mix of the paper's OPT-125m setting 2; the paper's LLM experiment is not reproduced here.</p>
+  <div class="row"><label for="aM">Samples per generation M</label><input id="aM" type="range" min="100" max="5000" step="100" value="500"><output id="aMo"></output></div>
+  <div class="row"><label for="aG">Generations</label><input id="aG" type="range" min="1" max="40" step="1" value="20"><output id="aGo"></output></div>
+  <div class="row"><label for="aS">Zipf exponent of 60 states</label><input id="aS" type="range" min="0.6" max="2" step="0.1" value="1.2"><output id="aSo"></output></div>
+  <div class="row"><label>Random seed</label><button id="aR" type="button">New seed</button><output id="aRo"></output></div>
+  <svg id="aSvg" viewBox="0 0 480 240" role="img" aria-label="Number of states with non-zero probability per generation"></svg>
+  <div class="legend">
+    <span><i class="sw" style="background:var(--c2)"></i>replace</span>
+    <span><i class="sw" style="background:var(--c1)"></i>accumulate</span>
+    <span><i class="sw" style="background:var(--c3)"></i>90% synthetic + 10% original, each generation</span>
   </div>
+  <div class="readout" id="aOut"></div>
+  <p class="cap">y-axis: states with non-zero fitted probability (60 = all). A state with probability q ≤ 1/M has fewer than one expected sample per generation; once it gets zero samples under replace, it cannot return.</p>
+</section>
 
-  <div>
-    <div class="panel">
-      <h2>Controls</h2>
-      <div class="slider-row">
-        <span class="slider-label">Fresh-human anchor</span>
-        <input type="range" id="anchor" min="0" max="100" step="1" value="0">
-        <span class="slider-val" id="anchorVal">0%</span>
-      </div>
-      <div class="slider-row">
-        <span class="slider-label">Verifier pass-rate</span>
-        <input type="range" id="verifier" min="0" max="100" step="1" value="0">
-        <span class="slider-val" id="verifierVal">0%</span>
-      </div>
-      <div class="slider-row">
-        <span class="slider-label">Samples per gen (N)</span>
-        <input type="range" id="nsample" min="50" max="2000" step="50" value="300">
-        <span class="slider-val" id="nsampleVal">300</span>
-      </div>
-      <div style="margin-top: 0.6em;">
-        <button class="preset" data-a="0"   data-v="0"   data-n="300">Shumailov pure</button>
-        <button class="preset" data-a="10"  data-v="0"   data-n="300">10% accumulate</button>
-        <button class="preset" data-a="0"   data-v="60"  data-n="300">Verifier-only</button>
-        <button class="preset" data-a="30"  data-v="60"  data-n="500">Production gate</button>
-      </div>
-    </div>
-
-    <div class="panel" style="margin-top: 1em;">
-      <h2>Tail metrics at gen 10</h2>
-      <div class="metric-row">
-        <span class="metric-name">Rare-mode recall</span>
-        <span class="metric-val" id="recallVal">—</span>
-      </div>
-      <div class="metric-row">
-        <span class="metric-name">KL(p<sub>10</sub> ‖ p<sub>0</sub>)</span>
-        <span class="metric-val" id="klVal">—</span>
-      </div>
-      <div class="metric-row">
-        <span class="metric-name">Surviving components</span>
-        <span class="metric-val" id="survVal">—</span>
-      </div>
-      <div class="metric-row">
-        <span class="metric-name">Effective variance σ<sub>n</sub>²</span>
-        <span class="metric-val" id="varVal">—</span>
-      </div>
-    </div>
+<section class="panel" id="pB">
+  <h2>B. Linear regression: replace vs accumulate test error</h2>
+  <p class="src">Gerstgrasser et al., arXiv:2404.01413v2, Theorem 2 (Eq. 3) and Eq. 4: E_replace = σ²d/(T−d−1)·n; E_accum = σ²d/(T−d−1)·Σ 1/i² ≤ σ²d/(T−d−1)·π²/6.</p>
+  <div class="row"><label for="bS">Noise variance σ²</label><input id="bS" type="range" min="0.1" max="5" step="0.1" value="1"><output id="bSo"></output></div>
+  <div class="row"><label for="bD">Dimension d</label><input id="bD" type="range" min="1" max="50" step="1" value="10"><output id="bDo"></output></div>
+  <div class="row"><label for="bT">Samples per round T</label><input id="bT" type="range" min="12" max="1000" step="1" value="111"><output id="bTo"></output></div>
+  <svg id="bSvg" viewBox="0 0 480 240" role="img" aria-label="Test error versus round for replace and accumulate"></svg>
+  <div class="legend">
+    <span><i class="sw" style="background:var(--c2)"></i>replace</span>
+    <span><i class="sw" style="background:var(--c1)"></i>accumulate</span>
+    <span><i class="sw" style="background:var(--muted)"></i>accumulate bound</span>
   </div>
+  <div class="readout" id="bOut"></div>
+</section>
+
+<section class="panel" id="pC">
+  <h2>C. Strong model collapse: error floor from a fixed synthetic share</h2>
+  <p class="src">Dohmatob et al., arXiv:2410.04840v2, Corollary 1, Eq. 12 (isotropic ridge regression, small d/n): E ≈ σ²d/n + p₂²c². Plotted for n ≥ 10d.</p>
+  <div class="row"><label for="cD">Dimension d (σ² = 1)</label><input id="cD" type="range" min="10" max="1000" step="10" value="100"><output id="cDo"></output></div>
+  <div class="row"><label for="cC">Label mismatch c² (log10)</label><input id="cC" type="range" min="-2" max="1" step="0.1" value="0"><output id="cCo"></output></div>
+  <svg id="cSvg" viewBox="0 0 480 240" role="img" aria-label="Test error versus training size on log axes for several synthetic fractions"></svg>
+  <div class="legend">
+    <span><i class="sw" style="background:var(--ink)"></i>p₂ = 0 (real only)</span>
+    <span><i class="sw" style="background:var(--c3)"></i>p₂ = 0.001</span>
+    <span><i class="sw" style="background:var(--c1)"></i>p₂ = 0.01</span>
+    <span><i class="sw" style="background:var(--c2)"></i>p₂ = 0.1</span>
+  </div>
+  <div class="readout" id="cOut"></div>
+  <p class="cap">In the paper's GPT-2 runs with quality-filtered synthetic stories, synthetic data delayed scaling; a plateau was expected by the authors but not shown (§4.2).</p>
+</section>
+
+<section class="panel" id="pD">
+  <h2>D. Verifier breakdown point and the two reject pools</h2>
+  <p class="src">Feng et al., arXiv:2406.07515v2, Theorem 4.2: p* = 1/(1 + ψ/ϕ), where ϕ = P(keep | correct), ψ = P(keep | wrong), p = generator error rate. Pool counts are arithmetic for N = 1,000 generated answers.</p>
+  <div class="row"><label for="dP">Generator correct share 1−p</label><input id="dP" type="range" min="0.05" max="0.95" step="0.01" value="0.40"><output id="dPo"></output></div>
+  <div class="row"><label for="dF">Keep rate if correct ϕ</label><input id="dF" type="range" min="0.05" max="1" step="0.01" value="0.70"><output id="dFo"></output></div>
+  <div class="row"><label for="dS">Keep rate if wrong ψ</label><input id="dS" type="range" min="0" max="1" step="0.01" value="0.05"><output id="dSo"></output></div>
+  <svg id="dSvg" viewBox="0 0 480 170" role="img" aria-label="Composition of kept and rejected pools"></svg>
+  <div class="legend">
+    <span><i class="sw" style="background:var(--c3);height:10px"></i>correct answers</span>
+    <span><i class="sw" style="background:var(--c2);height:10px"></i>wrong answers</span>
+  </div>
+  <div class="readout" id="dOut"></div>
+  <p class="cap">The theorem is an infinite-data limit for a linear classifier. Correct answers in the reject pool are verifier false negatives: discarding them loses data; using them as negative gradients lowers the likelihood of correct behavior.</p>
+</section>
 
 </div>
-
-<div class="note">
-  <strong>Mechanism.</strong> At each generation, draw <code>N</code> samples from
-  <code>p<sub>n</sub></code>; if verifier pass-rate <code>v</code> &gt; 0, reject a
-  sample with probability <code>v · d(x, true_support)</code> (samples far from true
-  support more likely rejected); mix surviving samples with an <code>a</code>-fraction
-  re-sampled from the true distribution; refit mixture weights and means on the mixed
-  batch. The recursion <code>Var[ŵ<sub>k</sub>] ≈ n·w<sub>k</sub>(1-w<sub>k</sub>)/N</code>
-  drives the low-weight components to zero first; once a component hits zero, it is
-  irretrievable.
 </div>
 
 <script>
-// --- True distribution: 5-component Gaussian mixture with heavy-tailed low-weight modes ---
-const TRUE_WEIGHTS = [0.45, 0.30, 0.15, 0.07, 0.03];
-const TRUE_MEANS   = [-3.0, -0.8,  1.4,  3.6,  5.8];
-const SIGMA        = 0.55;
-const N_COMPS      = TRUE_WEIGHTS.length;
-const N_GENS       = 11;            // generations 0..10
-const X_MIN        = -7, X_MAX = 8;
-const X_RES        = 360;           // density grid resolution
-
-function gaussianPdf(x, mu, sigma) {
-  const z = (x - mu) / sigma;
-  return Math.exp(-0.5 * z * z) / (sigma * Math.sqrt(2 * Math.PI));
-}
-
-function mixturePdf(x, weights, means, sigma) {
-  let s = 0;
-  for (let k = 0; k < weights.length; k++) {
-    s += weights[k] * gaussianPdf(x, means[k], sigma);
+(function () {
+  "use strict";
+  var NS = "http://www.w3.org/2000/svg";
+  function $(id) { return document.getElementById(id); }
+  function el(tag, attrs, parent, text) {
+    var e = document.createElementNS(NS, tag);
+    for (var k in attrs) e.setAttribute(k, attrs[k]);
+    if (text !== undefined) e.textContent = text;
+    if (parent) parent.appendChild(e);
+    return e;
   }
-  return s;
-}
-
-// --- Refit: given mixed samples, re-estimate component weights (means fixed for clarity) ---
-// Each sample is assigned (soft) to the nearest component; rare components lose mass fast.
-function refitWeights(samples, means, sigma) {
-  const w = new Array(means.length).fill(0);
-  for (const x of samples) {
-    // Soft assignment via responsibilities under current means, uniform prior.
-    const r = means.map(mu => gaussianPdf(x, mu, sigma));
-    const Z = r.reduce((a,b)=>a+b, 1e-12);
-    for (let k = 0; k < means.length; k++) w[k] += r[k] / Z;
+  function clear(svg) { while (svg.firstChild) svg.removeChild(svg.firstChild); }
+  function fmt(x) {
+    if (x === 0) return "0";
+    var a = Math.abs(x);
+    if (a >= 1000 || a < 0.001) return x.toExponential(2);
+    return x.toPrecision(3);
   }
-  const total = w.reduce((a,b)=>a+b, 1e-12);
-  for (let k = 0; k < w.length; k++) w[k] /= total;
-  // Strict kill: once a weight drops below 1/(4N), it's gone (tail-loss irrecoverability)
-  const threshold = 1 / (4 * Math.max(samples.length, 1));
-  for (let k = 0; k < w.length; k++) if (w[k] < threshold) w[k] = 0;
-  const total2 = w.reduce((a,b)=>a+b, 1e-12);
-  for (let k = 0; k < w.length; k++) w[k] /= total2;
-  return w;
-}
-
-// --- Sample from mixture ---
-function sampleMixture(weights, means, sigma, n, seedState) {
-  const samples = [];
-  const cum = [];
-  let s = 0;
-  for (const w of weights) { s += w; cum.push(s); }
-  for (let i = 0; i < n; i++) {
-    const u = seededRand(seedState);
-    let k = 0; while (k < cum.length && u > cum[k]) k++;
-    if (k >= means.length) k = means.length - 1;
-    const g = seededGauss(seedState);
-    samples.push(means[k] + sigma * g);
+  function axes(svg, W, H, m, xTicks, yTicks, xl, yl) {
+    xTicks.forEach(function (t) {
+      el("line", { x1: t.x, x2: t.x, y1: m.t, y2: H - m.b, stroke: "var(--grid)" }, svg);
+      el("text", { x: t.x, y: H - m.b + 14, "text-anchor": "middle", "font-size": 10, fill: "var(--muted)" }, svg, t.label);
+    });
+    yTicks.forEach(function (t) {
+      el("line", { x1: m.l, x2: W - m.r, y1: t.y, y2: t.y, stroke: "var(--grid)" }, svg);
+      el("text", { x: m.l - 4, y: t.y + 3, "text-anchor": "end", "font-size": 10, fill: "var(--muted)" }, svg, t.label);
+    });
+    el("line", { x1: m.l, x2: W - m.r, y1: H - m.b, y2: H - m.b, stroke: "var(--line)" }, svg);
+    el("line", { x1: m.l, x2: m.l, y1: m.t, y2: H - m.b, stroke: "var(--line)" }, svg);
+    el("text", { x: (m.l + W - m.r) / 2, y: H - 4, "text-anchor": "middle", "font-size": 11, fill: "var(--ink)" }, svg, xl);
+    el("text", { x: 12, y: (m.t + H - m.b) / 2, "text-anchor": "middle", "font-size": 11, fill: "var(--ink)",
+                 transform: "rotate(-90 12 " + ((m.t + H - m.b) / 2) + ")" }, svg, yl);
   }
-  return samples;
-}
-
-// --- Deterministic PRNG for reproducibility across slider moves ---
-function seededRand(state) {
-  state.s = (state.s * 1664525 + 1013904223) >>> 0;
-  return state.s / 4294967296;
-}
-function seededGauss(state) {
-  // Box–Muller
-  let u1 = seededRand(state); if (u1 < 1e-9) u1 = 1e-9;
-  const u2 = seededRand(state);
-  return Math.sqrt(-2 * Math.log(u1)) * Math.cos(2 * Math.PI * u2);
-}
-
-// --- Verifier: rejects samples far from true support ---
-function verifierFilter(samples, trueWeights, trueMeans, sigma, passRate, seedState) {
-  if (passRate <= 0) return samples;
-  const out = [];
-  for (const x of samples) {
-    const pTrue = mixturePdf(x, trueWeights, trueMeans, sigma);
-    // Reject with probability proportional to (1 - normalized pTrue) × passRate
-    const pMax = 0.72;  // approx max of true mixture
-    const novelty = Math.max(0, 1 - pTrue / pMax);  // 0 on-support, →1 off-support
-    const rejectProb = passRate * novelty;
-    if (seededRand(seedState) >= rejectProb) out.push(x);
+  function path(svg, pts, color, dash) {
+    var d = pts.map(function (p, i) { return (i ? "L" : "M") + p[0].toFixed(1) + " " + p[1].toFixed(1); }).join(" ");
+    var a = { d: d, fill: "none", stroke: color, "stroke-width": 2 };
+    if (dash) a["stroke-dasharray"] = dash;
+    el("path", a, svg);
   }
-  return out.length > 0 ? out : samples;    // never empty
-}
 
-// --- Run the full simulation ---
-function runSimulation(anchorPct, verifierPct, N) {
-  const anchor = anchorPct / 100;
-  const verifier = verifierPct / 100;
-  const seedState = { s: 20240502 };
-
-  const allWeights = [TRUE_WEIGHTS.slice()];
-  let curWeights = TRUE_WEIGHTS.slice();
-
-  for (let gen = 1; gen < N_GENS; gen++) {
-    // Step A: sample N from current model
-    let syn = sampleMixture(curWeights, TRUE_MEANS, SIGMA, N, seedState);
-    // Step B: verifier filter
-    syn = verifierFilter(syn, TRUE_WEIGHTS, TRUE_MEANS, SIGMA, verifier, seedState);
-    // Step C: mix with anchor from true distribution
-    const nAnchor = Math.round(N * anchor);
-    if (nAnchor > 0) {
-      const anchorSamples = sampleMixture(TRUE_WEIGHTS, TRUE_MEANS, SIGMA,
-                                          nAnchor, seedState);
-      syn = syn.concat(anchorSamples);
+  /* ---------- Panel A: discrete resampling simulation ---------- */
+  var seed = 12345;
+  function rng() { seed = (seed * 1664525 + 1013904223) >>> 0; return seed / 4294967296; }
+  var K = 60;
+  function zipf(s) {
+    var w = [], z = 0, k;
+    for (k = 1; k <= K; k++) { w.push(1 / Math.pow(k, s)); z += w[k - 1]; }
+    return w.map(function (x) { return x / z; });
+  }
+  function sampleCounts(prob, n) {
+    var cdf = [], c = 0, i, counts = new Array(K).fill(0);
+    for (i = 0; i < K; i++) { c += prob[i]; cdf.push(c); }
+    for (var j = 0; j < n; j++) {
+      var u = rng() * c, lo = 0, hi = K - 1;
+      while (lo < hi) { var mid = (lo + hi) >> 1; if (cdf[mid] < u) lo = mid + 1; else hi = mid; }
+      counts[lo]++;
     }
-    // Step D: refit weights
-    curWeights = refitWeights(syn, TRUE_MEANS, SIGMA);
-    allWeights.push(curWeights.slice());
+    return counts;
   }
-  return allWeights;
-}
+  function norm(counts) {
+    var s = counts.reduce(function (a, b) { return a + b; }, 0);
+    return counts.map(function (x) { return s ? x / s : 0; });
+  }
+  function alive(p) { return p.filter(function (x) { return x > 0; }).length; }
+  function tv(p, q) { var s = 0; for (var i = 0; i < K; i++) s += Math.abs(p[i] - q[i]); return s / 2; }
 
-// --- Metrics ---
-function rareModeRecall(weights) {
-  // Fraction of initially-low-weight components (w<0.10) with >0 weight at gen 10
-  let rareTotal = 0, rareAlive = 0;
-  for (let k = 0; k < TRUE_WEIGHTS.length; k++) {
-    if (TRUE_WEIGHTS[k] < 0.10) {
-      rareTotal++;
-      if (weights[k] > 1e-3) rareAlive++;
+  function runA() {
+    var M = +$("aM").value, G = +$("aG").value, s = +$("aS").value;
+    $("aMo").textContent = M; $("aGo").textContent = G; $("aSo").textContent = s.toFixed(1); $("aRo").textContent = seed0;
+    var truth = zipf(s);
+    seed = seed0;
+    var real = sampleCounts(truth, M);
+    var pRep = norm(real), poolAcc = real.slice(), pAcc = norm(real), pMix = norm(real);
+    var realList = [];
+    real.forEach(function (c, i) { for (var j = 0; j < c; j++) realList.push(i); });
+    var sRep = [alive(pRep)], sAcc = [alive(pAcc)], sMix = [alive(pMix)];
+    for (var g = 1; g <= G; g++) {
+      pRep = norm(sampleCounts(pRep, M));
+      var add = sampleCounts(pAcc, M);
+      for (var i = 0; i < K; i++) poolAcc[i] += add[i];
+      pAcc = norm(poolAcc);
+      var mix = sampleCounts(pMix, Math.round(0.9 * M));
+      var nReal = Math.round(0.1 * M);
+      for (var r = 0; r < nReal; r++) mix[realList[Math.floor(rng() * realList.length)]]++;
+      pMix = norm(mix);
+      sRep.push(alive(pRep)); sAcc.push(alive(pAcc)); sMix.push(alive(pMix));
     }
+    var svg = $("aSvg"); clear(svg);
+    var W = 480, H = 240, m = { l: 40, r: 10, t: 10, b: 32 };
+    var X = function (g) { return m.l + (W - m.l - m.r) * g / G; };
+    var Y = function (v) { return H - m.b - (H - m.t - m.b) * v / K; };
+    var xt = [], yt = [];
+    var step = Math.max(1, Math.round(G / 8));
+    for (var g2 = 0; g2 <= G; g2 += step) xt.push({ x: X(g2), label: String(g2) });
+    [0, 15, 30, 45, 60].forEach(function (v) { yt.push({ y: Y(v), label: String(v) }); });
+    axes(svg, W, H, m, xt, yt, "generation", "states alive");
+    path(svg, sRep.map(function (v, i) { return [X(i), Y(v)]; }), "var(--c2)");
+    path(svg, sAcc.map(function (v, i) { return [X(i), Y(v)]; }), "var(--c1)");
+    path(svg, sMix.map(function (v, i) { return [X(i), Y(v)]; }), "var(--c3)", "5 3");
+    var below = truth.filter(function (q) { return q <= 1 / M; }).length;
+    $("aOut").textContent =
+      "True states with q ≤ 1/M: " + below + " of " + K + "\n" +
+      "After " + G + " generations, states alive: replace " + sRep[G] + ", accumulate " + sAcc[G] + ", 10% original " + sMix[G] + "\n" +
+      "Total variation to truth: replace " + tv(pRep, truth).toFixed(3) + ", accumulate " + tv(pAcc, truth).toFixed(3) + ", 10% original " + tv(pMix, truth).toFixed(3);
   }
-  return rareTotal > 0 ? rareAlive / rareTotal : 1;
-}
+  var seed0 = 12345;
+  ["aM", "aG", "aS"].forEach(function (id) { $(id).addEventListener("input", runA); });
+  $("aR").addEventListener("click", function () { seed0 = Math.floor(Math.random() * 1e9); runA(); });
 
-function klDivergence(p, q) {
-  // KL via grid quadrature
-  let kl = 0;
-  const dx = (X_MAX - X_MIN) / 500;
-  for (let i = 0; i < 500; i++) {
-    const x = X_MIN + (i + 0.5) * dx;
-    const pv = mixturePdf(x, p, TRUE_MEANS, SIGMA);
-    const qv = mixturePdf(x, q, TRUE_MEANS, SIGMA);
-    if (pv > 1e-9 && qv > 1e-9) kl += pv * Math.log(pv / qv) * dx;
+  /* ---------- Panel B: Gerstgrasser Theorem 2 ---------- */
+  function runB() {
+    var s2 = +$("bS").value, d = +$("bD").value;
+    var tEl = $("bT"); tEl.min = d + 2; if (+tEl.value < d + 2) tEl.value = d + 2;
+    var T = +tEl.value;
+    $("bSo").textContent = s2.toFixed(1); $("bDo").textContent = d; $("bTo").textContent = T;
+    var base = s2 * d / (T - d - 1), N = 20, rep = [], acc = [], sum = 0;
+    for (var n = 1; n <= N; n++) { sum += 1 / (n * n); rep.push(base * n); acc.push(base * sum); }
+    var bound = base * Math.PI * Math.PI / 6;
+    var svg = $("bSvg"); clear(svg);
+    var W = 480, H = 240, m = { l: 52, r: 10, t: 10, b: 32 };
+    var ymax = rep[N - 1] * 1.05;
+    var X = function (n) { return m.l + (W - m.l - m.r) * (n - 1) / (N - 1); };
+    var Y = function (v) { return H - m.b - (H - m.t - m.b) * v / ymax; };
+    var xt = [1, 5, 10, 15, 20].map(function (n) { return { x: X(n), label: String(n) }; });
+    var yt = [0, 0.25, 0.5, 0.75, 1].map(function (f) { return { y: Y(f * ymax), label: fmt(f * ymax) }; });
+    axes(svg, W, H, m, xt, yt, "round n", "test error");
+    path(svg, rep.map(function (v, i) { return [X(i + 1), Y(v)]; }), "var(--c2)");
+    path(svg, acc.map(function (v, i) { return [X(i + 1), Y(v)]; }), "var(--c1)");
+    path(svg, [[X(1), Y(bound)], [X(N), Y(bound)]], "var(--muted)", "4 3");
+    var acc10 = 0; for (var i = 1; i <= 10; i++) acc10 += 1 / (i * i);
+    $("bOut").textContent =
+      "σ²d/(T−d−1) = " + fmt(base) + "\n" +
+      "n = 10: replace " + fmt(base * 10) + ", accumulate " + fmt(base * acc10) + ", bound " + fmt(bound);
   }
-  return Math.max(kl, 0);
-}
+  ["bS", "bD", "bT"].forEach(function (id) { $(id).addEventListener("input", runB); });
 
-function survivingComponents(weights) {
-  return weights.filter(w => w > 1e-3).length;
-}
-
-function effectiveVariance(weights) {
-  // Weighted variance of means (proxy for spread) + σ²
-  const mean = weights.reduce((s, w, k) => s + w * TRUE_MEANS[k], 0);
-  const varMeans = weights.reduce((s, w, k) => s + w * (TRUE_MEANS[k]-mean)**2, 0);
-  return varMeans + SIGMA * SIGMA;
-}
-
-// --- Rendering ---
-const canvas = document.getElementById("densityCanvas");
-const ctx = canvas.getContext("2d");
-
-function drawDensities(allWeights) {
-  const W = canvas.width, H = canvas.height;
-  ctx.clearRect(0, 0, W, H);
-
-  // Axes
-  ctx.strokeStyle = "#ccc"; ctx.lineWidth = 1;
-  ctx.beginPath(); ctx.moveTo(40, H-28); ctx.lineTo(W-10, H-28); ctx.stroke();
-  ctx.beginPath(); ctx.moveTo(40, 10);    ctx.lineTo(40, H-28);  ctx.stroke();
-  ctx.fillStyle = "#666"; ctx.font = "11px sans-serif";
-  for (let v = X_MIN; v <= X_MAX; v += 2) {
-    const px = 40 + (W-50) * (v-X_MIN)/(X_MAX-X_MIN);
-    ctx.fillText(v.toFixed(0), px-4, H-12);
+  /* ---------- Panel C: Dohmatob Corollary 1 ---------- */
+  function runC() {
+    var d = +$("cD").value, c2 = Math.pow(10, +$("cC").value);
+    $("cDo").textContent = d; $("cCo").textContent = fmt(c2);
+    var svg = $("cSvg"); clear(svg);
+    var W = 480, H = 240, m = { l: 52, r: 10, t: 10, b: 32 };
+    var lx0 = Math.log10(10 * d), lx1 = 10;
+    var ps = [[0, "var(--ink)"], [0.001, "var(--c3)"], [0.01, "var(--c1)"], [0.1, "var(--c2)"]];
+    var E = function (n, p) { return d / n + p * p * c2; };
+    var ly1 = Math.log10(E(10 * d, 0.1)), ly0 = Math.log10(E(1e10, 0));
+    ly1 = Math.ceil(ly1); ly0 = Math.floor(ly0);
+    var X = function (lx) { return m.l + (W - m.l - m.r) * (lx - lx0) / (lx1 - lx0); };
+    var Y = function (ly) { return H - m.b - (H - m.t - m.b) * (ly - ly0) / (ly1 - ly0); };
+    var xt = [], yt = [];
+    for (var a = Math.ceil(lx0); a <= lx1; a += 1) xt.push({ x: X(a), label: "1e" + a });
+    var ystep = Math.max(1, Math.ceil((ly1 - ly0) / 6));
+    for (var b = ly0; b <= ly1; b += ystep) yt.push({ y: Y(b), label: "1e" + b });
+    axes(svg, W, H, m, xt, yt, "total training samples n", "test error");
+    ps.forEach(function (pc) {
+      var pts = [];
+      for (var k = 0; k <= 60; k++) {
+        var lx = lx0 + (lx1 - lx0) * k / 60;
+        pts.push([X(lx), Y(Math.log10(E(Math.pow(10, lx), pc[0])))]);
+      }
+      path(svg, pts, pc[1]);
+    });
+    var n8 = 1e8;
+    $("cOut").textContent =
+      "n = 1e8: real only " + fmt(E(n8, 0)) + ", p₂=0.01 " + fmt(E(n8, 0.01)) + " (floor p₂²c² = " + fmt(1e-4 * c2) + ")\n" +
+      "ratio mixed/real at n = 1e8 with p₂=0.01: " + fmt(E(n8, 0.01) / E(n8, 0));
   }
-  ctx.fillText("x", W-18, H-12);
-  ctx.fillText("p(x)", 8, 16);
+  ["cD", "cC"].forEach(function (id) { $(id).addEventListener("input", runC); });
 
-  // y-range: max across all generations + true
-  let yMax = 0;
-  const gridX = [];
-  for (let i = 0; i < X_RES; i++) {
-    gridX.push(X_MIN + i * (X_MAX - X_MIN) / (X_RES - 1));
-  }
-  const trueVals = gridX.map(x => mixturePdf(x, TRUE_WEIGHTS, TRUE_MEANS, SIGMA));
-  yMax = Math.max(yMax, ...trueVals);
-  const genVals = allWeights.map(w => gridX.map(x => mixturePdf(x, w, TRUE_MEANS, SIGMA)));
-  for (const g of genVals) for (const v of g) if (v > yMax) yMax = v;
-
-  function screenX(x) { return 40 + (W-50) * (x - X_MIN) / (X_MAX - X_MIN); }
-  function screenY(y) { return (H-28) - (H-40) * y / (yMax * 1.05); }
-
-  // Generation curves — dark (gen 0) to light (gen 10)
-  for (let g = 0; g < allWeights.length; g++) {
-    const t = g / (allWeights.length - 1);
-    const r = Math.round(40 + 180 * t);
-    const gcol = Math.round(80 + 120 * t);
-    const b = Math.round(180 - 80 * t);
-    ctx.strokeStyle = `rgba(${r},${gcol},${b},0.75)`;
-    ctx.lineWidth = g === 0 ? 2.2 : 1.3;
-    ctx.beginPath();
-    for (let i = 0; i < X_RES; i++) {
-      const sx = screenX(gridX[i]);
-      const sy = screenY(genVals[g][i]);
-      if (i === 0) ctx.moveTo(sx, sy); else ctx.lineTo(sx, sy);
+  /* ---------- Panel D: breakdown point and pools ---------- */
+  function runD() {
+    var q = +$("dP").value, phi = +$("dF").value, psi = +$("dS").value, N = 1000;
+    $("dPo").textContent = q.toFixed(2); $("dFo").textContent = phi.toFixed(2); $("dSo").textContent = psi.toFixed(2);
+    var p = 1 - q, pstar = 1 / (1 + psi / phi);
+    var C = N * q, Wr = N * p;
+    var keptC = C * phi, keptW = Wr * psi, rejC = C - keptC, rejW = Wr - keptW;
+    var svg = $("dSvg"); clear(svg);
+    var W = 480, barX = 100, barW = 300;
+    function bar(y, label, c, w) {
+      var tot = c + w;
+      el("text", { x: 4, y: y + 17, "font-size": 12, fill: "var(--ink)" }, svg, label);
+      if (tot <= 0) { el("text", { x: barX, y: y + 17, "font-size": 12, fill: "var(--muted)" }, svg, "empty"); return; }
+      var wc = barW * c / N, ww = barW * w / N;
+      el("rect", { x: barX, y: y, width: wc, height: 26, fill: "var(--c3)" }, svg);
+      el("rect", { x: barX + wc, y: y, width: ww, height: 26, fill: "var(--c2)" }, svg);
+      el("text", { x: barX + wc + ww + 4, y: y + 17, "font-size": 11, fill: "var(--muted)" }, svg,
+         Math.round(c) + " / " + Math.round(w));
     }
-    ctx.stroke();
+    bar(10, "generated", C, Wr);
+    bar(62, "kept (SFT)", keptC, keptW);
+    bar(114, "rejected", rejC, rejW);
+    el("text", { x: barX, y: 162, "font-size": 10, fill: "var(--muted)" }, svg, "bar length: count out of 1,000; labels: correct / wrong");
+    var ok = p < pstar;
+    $("dOut").textContent =
+      "p = " + p.toFixed(2) + ", p* = " + (psi === 0 ? "1.000" : pstar.toFixed(3)) + " → " +
+      (ok ? "p < p*: infinite-data limit trains the correct rule" : "p > p*: infinite-data limit trains the wrong rule") + "\n" +
+      "Wrong share of kept pool: " + (keptC + keptW > 0 ? (100 * keptW / (keptC + keptW)).toFixed(1) + "%" : "n/a") + "\n" +
+      "Correct share of reject pool (false negatives): " + (rejC + rejW > 0 ? (100 * rejC / (rejC + rejW)).toFixed(1) + "%" : "n/a") +
+      " = " + Math.round(rejC) + " correct answers";
   }
+  ["dP", "dF", "dS"].forEach(function (id) { $(id).addEventListener("input", runD); });
 
-  // True distribution — bold black dashed
-  ctx.setLineDash([4, 3]);
-  ctx.strokeStyle = "#000"; ctx.lineWidth = 1.8;
-  ctx.beginPath();
-  for (let i = 0; i < X_RES; i++) {
-    const sx = screenX(gridX[i]);
-    const sy = screenY(trueVals[i]);
-    if (i === 0) ctx.moveTo(sx, sy); else ctx.lineTo(sx, sy);
-  }
-  ctx.stroke();
-  ctx.setLineDash([]);
-}
-
-// --- Wire up ---
-const anchorEl   = document.getElementById("anchor");
-const verifierEl = document.getElementById("verifier");
-const nsampleEl  = document.getElementById("nsample");
-const anchorVal   = document.getElementById("anchorVal");
-const verifierVal = document.getElementById("verifierVal");
-const nsampleVal  = document.getElementById("nsampleVal");
-const recallVal   = document.getElementById("recallVal");
-const klVal       = document.getElementById("klVal");
-const survVal     = document.getElementById("survVal");
-const varVal      = document.getElementById("varVal");
-
-function classify(el, val, okBelow, warnBelow) {
-  el.classList.remove("warn", "bad");
-  if (val > warnBelow) el.classList.add("bad");
-  else if (val > okBelow) el.classList.add("warn");
-}
-
-function recompute() {
-  const a = +anchorEl.value, v = +verifierEl.value, n = +nsampleEl.value;
-  anchorVal.textContent   = a + "%";
-  verifierVal.textContent = v + "%";
-  nsampleVal.textContent  = n;
-  const allW = runSimulation(a, v, n);
-  drawDensities(allW);
-
-  const last = allW[allW.length - 1];
-  const rr   = rareModeRecall(last);
-  const kl   = klDivergence(TRUE_WEIGHTS, last);
-  const sc   = survivingComponents(last);
-  const ev   = effectiveVariance(last);
-
-  recallVal.textContent = (rr * 100).toFixed(0) + "%";
-  classify(recallVal, 1 - rr, 0.25, 0.50);   // bad if >50% lost
-  klVal.textContent     = kl.toFixed(3);
-  classify(klVal, kl, 0.10, 0.30);
-  survVal.textContent   = `${sc} / ${N_COMPS}`;
-  classify(survVal, N_COMPS - sc, 0.5, 1.5);
-  varVal.textContent    = ev.toFixed(3);
-}
-
-anchorEl.addEventListener("input", recompute);
-verifierEl.addEventListener("input", recompute);
-nsampleEl.addEventListener("input", recompute);
-
-document.querySelectorAll(".preset").forEach(btn => {
-  btn.addEventListener("click", () => {
-    anchorEl.value   = btn.dataset.a;
-    verifierEl.value = btn.dataset.v;
-    nsampleEl.value  = btn.dataset.n;
-    recompute();
-  });
-});
-
-recompute();
+  function safe(f) { try { f(); } catch (e) { /* keep other panels rendering */ } }
+  safe(runA); safe(runB); safe(runC); safe(runD);
+})();
 </script>
-
 </body>
 </html>

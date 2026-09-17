@@ -2,128 +2,45 @@
 chapter: ch-40
 course: llm-training
 phase: read
-excerpt_of: wiki/raw-data/llm-training/frameworks/trl-grpo.md
-source_url: https://github.com/huggingface/trl/blob/main/trl/trainer/grpo_trainer.py
+excerpt_of: github.com/huggingface/trl@a08e713 trl/trainer/grpo_trainer.py and grpo_config.py; library card [[trl-grpo]] (verified 2026-09-14)
+source_url: https://github.com/huggingface/trl/blob/a08e7139f933b770177fc2abc0b43118e26b260b/trl/trainer/grpo_trainer.py
 created_at: "2026-04-23"
+revised: "2026-09-15 (generality revision; aligned with the verified card, commit pinned)"
 ---
 
-# Excerpt: TRL GRPOTrainer — where the GRPO zoo lives in one file
+# Excerpt: TRL's GRPO trainer — the loss normalizer is one line
 
-**Source library:** `wiki/raw-data/llm-training/frameworks/trl-grpo.md`
-**Artifact:** `trl/trainer/grpo_trainer.py` ≈ lines 2418–2610. The `_compute_loss` method is the unified entry point for GRPO, Dr.GRPO, DAPO, CISPO, BNPO, LUSPO, VESPO, SAPO — all selected by a `loss_type` string.
+Used by [[read]] §6, the negatives section, and the Common-mistakes table.
 
----
-
-## Why this source anchors ch-40 §7
-
-Ch-40 §7 needs to show the reader that the abstract equations in §4–§5 have concrete code realizations, and that the Dr.GRPO "fix" is a one-line change in the aggregator. TRL's trainer is the best vehicle because it keeps every variant in a single method — the diffs between GRPO and Dr.GRPO are inline.
-
----
-
-## The aggregation branch ch-40 §5 and §7 both quote
-
-Source lines 86–93:
-
+## Loss normalizers (`_compute_loss`, L2548–2562, verbatim; gradient-accumulation lines omitted)
 ```python
-# ---- aggregation (varies per loss_type) ----
-if self.loss_type == "grpo":
+if self.loss_type in ["grpo", "sapo"]:
     loss = ((per_token_loss * mask).sum(-1) / mask.sum(-1).clamp(min=1.0)).mean()
 elif self.loss_type == "bnpo":
     loss = (per_token_loss * mask).sum() / mask.sum().clamp(min=1.0)
 elif self.loss_type == "dr_grpo":
     loss = (per_token_loss * mask).sum() / (per_token_loss.size(0) * self.max_completion_length)
+elif self.loss_type in ["cispo", "dapo", "vespo"]:
+    normalizer = inputs["num_items_in_batch"] / self.accelerator.num_processes
+    loss = (per_token_loss * mask).sum() / normalizer
 ```
+`grpo` is the per-sequence mean of DeepSeekMath Eq. 3; `dr_grpo` divides by a constant equal to the completion budget; `dapo` divides by the number of completion tokens in the batch.
 
-Three lines. The **only** difference between `grpo` and `dr_grpo` is the denominator:
-- `grpo`: per-sequence token-mean, then sample mean. `(Σ_t loss_t / |o_i|).mean()` — each response contributes its per-token mean, averaged across responses. Biased: short correct wins, long wrong underpenalized (ch-40 §5).
-- `dr_grpo`: per-batch token-sum divided by `(B · L_max)`. Each token's loss contributes the same weight regardless of its host sequence's length. Unbiased.
+## Defaults that differ from the paper formulation
+- `loss_type` default is `"dapo"` (grpo_config.py L709), not `"grpo"`.
+- `beta` default is 0.0, so no reference model is created (L650–653); the docs cite Open-Reasoner-Zero, Dr. GRPO, and DAPO for this (docs L100).
+- `scale_rewards` default is `"group"`: `A = r − group mean`, divided by `group std + 1e-4`; `"batch"` and `"none"` are the alternatives (L2127–2149).
+- `epsilon` (lower clip) 0.2; `epsilon_high` optional, with the docstring noting DAPO's recommended 0.28 (grpo_config.py L171–177).
+Reproducing a published GRPO run therefore requires setting `loss_type`, `beta`, and `scale_rewards` explicitly.
 
-The `bnpo` variant is the batch-normalized form (token-sum / total-valid-tokens) — an intermediate.
+## Other mechanisms the chapter cites
+- KL term: per-token `exp(ref − logp) − (ref − logp) − 1`, the DeepSeekMath Eq. 4 estimator, added after all masks and importance weights (L2493–2497, L2544–2545).
+- Zero-variance groups: when every completion of a prompt gets the same reward, `A = 0` for that group and its policy term vanishes, but its tokens still count in `num_items_in_batch` (derived from L2147–2149, L1747–1754). `frac_reward_zero_std` logs the share of such samples (L2150, L2186).
+- Sign-specific metrics: the low-clip metric counts `r < 1 − ε_low` only where `A < 0`, the high-clip metric counts `r > 1 + ε_high` only where `A > 0` (L2589–2590).
+- `delta` (two-sided clipping, attributed to the INTELLECT-2 report) caps the ratio from above, which by construction affects only negative advantages (derived from L2508–2515).
+- `mask_truncated_completions` removes truncated completions from the loss, citing DAPO (config L259–262).
+- The entropy-quantile mask keeps tokens above the `(1 − ρ)` entropy quantile, attributed in the docstring to arXiv:2506.01939 "Beyond the 80/20 Rule" with paper value ρ = 0.2 (config L276–281) — this is not a DAPO technique.
+- Tool-calling rollouts: tool-result tokens are masked out of the loss, the importance ratio, and the token count (L1472, L2425, L1747–1754).
 
----
-
-## The k3 KL inline
-
-Source lines 58–63:
-
-```python
-if self.beta != 0.0:
-    ref_per_token_logps = inputs["ref_per_token_logps"]
-    per_token_kl = (
-        torch.exp(ref_per_token_logps - per_token_logps)
-        - (ref_per_token_logps - per_token_logps) - 1
-    )
-```
-
-This is the Schulman k3 estimator (ch-40 §4 derivation): `e^x − x − 1` where `x = log(π_ref/π_θ)`. Always ≥ 0, unbiased, one extra reference forward pass. Ch-40 §4 reads the math directly off this tensor operation.
-
----
-
-## The surrogate branch
-
-Source lines 67–77:
-
-```python
-if self.loss_type in ["grpo", "bnpo", "dr_grpo", "dapo", "luspo"]:
-    coef_2 = torch.clamp(coef_1, 1 - self.epsilon_low, 1 + self.epsilon_high)
-    if self.args.delta is not None:                           # DAPO upper-clip cap
-        coef_1 = torch.clamp(coef_1, max=self.args.delta)
-    per_token_loss1 = coef_1 * advantages
-    per_token_loss2 = coef_2 * advantages
-    per_token_loss = -torch.min(per_token_loss1, per_token_loss2)
-```
-
-Standard PPO-clip with asymmetric `epsilon_low` / `epsilon_high` (the DAPO generalization). The `-torch.min` is the PPO surrogate: always take the *less optimistic* of the clipped and unclipped objectives. Unchanged across GRPO/Dr.GRPO.
-
----
-
-## Advantage broadcast — where length bias enters (ch-40 §5 references this)
-
-Source lines 40–42:
-
-```python
-advantages = inputs["advantages"]               # (B,)  group-relative z-scores
-if advantages.dim() == 1:
-    advantages = advantages.unsqueeze(1)
-```
-
-The `(B,)` per-rollout scalar advantage becomes `(B, 1)` and broadcasts against the `(B, T)` per-token-loss tensor. Every token in a completion shares the same advantage. This is where the length bias enters: combined with the `(1/|o_i|)` per-sequence mean downstream, the aggregated per-sequence loss is independent of the sequence length, so per-token gradient magnitude is `|A|/|o_i|`.
-
----
-
-## Top-entropy masking (DAPO trick, not GRPO-core but coexists)
-
-Source lines 34–38 and 79–80:
-
-```python
-if self.top_entropy_quantile < 1.0:
-    entropy_mask = self.get_high_entropy_mask(entropies, mask, 1 - self.top_entropy_quantile)
-# ...
-if entropy_mask is not None:
-    per_token_loss = per_token_loss * entropy_mask
-```
-
-Keeps only the top-K% highest-entropy tokens for the gradient — the DAPO / Muon-paper observation that gradient signal on low-entropy tokens is mostly noise. Not in vanilla GRPO; ch-40 §7 notes it exists as an option.
-
----
-
-## Why TRL fuses and verl splits
-
-Ch-40 §7's claim: TRL bundles advantage normalization, KL term, clipped objective, aggregator all into `_compute_loss`; verl splits them into registry-pluggable `compute_advantage` and `compute_policy_loss` hooks (see [[verl-grpo]]). Algebraic equivalence for `loss_type="grpo"`; the split in verl makes it easier to add new advantage estimators.
-
----
-
-## Attested implementation notes
-
-- TRL always logs `masked_batch_mean(entropies)` to `_metrics[mode]["entropy"]` — ch-40 §5's "log `mean(|o_wrong|) − mean(|o_right|)` every epoch" guideline depends on this kind of instrumentation.
-- K3 KL is always computed when β ≠ 0. Setting β=0 disables KL entirely (pure reward-only RL) — used in some ablations.
-- `self.args.use_bias_correction_kl` multiplies `per_token_kl * coef_1` — a secondary correction some recipes enable; not part of vanilla GRPO.
-
----
-
-## Connections to the rest of the track
-
-- [[grpo]] — the paper whose Eq. 3 this file implements.
-- [[dr-grpo]] — the `loss_type="dr_grpo"` branch.
-- [[verl-grpo]] — the alternative registry-based implementation.
-- [[entropy-logging-patterns]] — how the entropy log lines are used in practice.
+## Claims removed from the earlier version of this excerpt
+"k3 … low-variance, only costs one extra ref forward pass" and "algebraically equivalent to verl for loss_type='grpo'" were not supported by the source; the per-line loci above are from commit a08e713 (2026-04-21), not from an unpinned `main`.

@@ -2,268 +2,276 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>Iterative RSFT - DPO - RSFT loop (illustrative)</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Self-Generated Data Rounds</title>
 <style>
-  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-         max-width: 1200px; margin: 1.4em auto; padding: 0 1em; color: #1f1f1f;
-         background: #fafafa; }
-  h1 { font-size: 1.3em; margin-bottom: 0.25em; }
-  .subtitle { color: #5a5a5a; margin-top: 0; font-size: 0.92em; line-height: 1.5; }
-  .layout { display: grid; grid-template-columns: 1fr 340px; gap: 1.2em; margin-top: 1em; }
-  .panel { border: 1px solid #dcdcdc; border-radius: 6px; background: #fff; padding: 0.9em 1em; }
-  h2 { font-size: 1.0em; margin: 0 0 0.6em 0; color: #2b2b2b;
-       border-bottom: 1px solid #ececec; padding-bottom: 0.3em; }
-  svg { width: 100%; height: 440px; display: block; }
-  .round-label { font-family: 'SF Mono', Menlo, monospace; font-size: 11px; fill: #1b1b1b;
-                 text-anchor: middle; cursor: pointer; }
-  .axis-label { font-family: 'SF Mono', Menlo, monospace; font-size: 10px; fill: #555; }
-  .curve { fill: none; stroke-width: 2.2; }
-  .curve-sft { stroke: #2e5aa8; } .curve-rl { stroke: #b05030; }
-  .curve-combined { stroke: #2a7a2a; stroke-width: 2.8; }
-  .saturate-mark { stroke: #888; stroke-dasharray: 3 3; stroke-width: 1; }
-  .slider-row { margin: 0.55em 0; font-size: 0.88em; }
-  .slider-row label { display: block; color: #333; margin-bottom: 0.2em; }
-  .slider-row .row { display: flex; align-items: center; gap: 0.5em; }
-  .slider-row input[type=range] { flex: 1; }
-  .slider-row .val { font-family: 'SF Mono', Menlo, monospace; font-size: 0.88em;
-                     color: #204080; min-width: 3.2em; text-align: right; }
-  .legend { font-size: 0.82em; color: #444; margin-top: 0.6em; line-height: 1.6; }
-  .legend .chip { display: inline-block; width: 12px; height: 4px; margin-right: 4px;
-                  vertical-align: middle; }
-  .notes { font-size: 0.85em; color: #444; line-height: 1.5; margin-top: 0.6em;
-           background: #f5f7fb; padding: 0.55em 0.75em; border-radius: 4px;
-           border-left: 3px solid #2e5aa8; }
-  .pinned { font-size: 0.85em; color: #333; margin-top: 0.8em; background: #fff8e8;
-            padding: 0.55em 0.75em; border-radius: 4px; border-left: 3px solid #c78a1a;
-            display: none; }
-  button { font-family: inherit; font-size: 0.88em; padding: 0.35em 0.8em;
-           border: 1px solid #8aa; background: #eef5ff; border-radius: 4px;
-           cursor: pointer; margin-right: 0.4em; }
-  button:hover { background: #dbe8ff; }
-  code { background: #eef; padding: 1px 4px; border-radius: 3px;
-         font-family: 'SF Mono', Menlo, monospace; font-size: 0.85em; }
+:root{
+  --bg:#f7f7f5; --panel:#ffffff; --ink:#1d1d1f; --muted:#5b5b60; --line:#d9d9de;
+  --pos:#1f6fb5; --pos-bg:#dcebf8; --neg:#b4472c; --neg-bg:#f7e0d9; --zero-bg:#efeff1;
+  --sft:#dcebf8; --rl:#e6f2df; --samp:#fbf0d4; --dist:#ece2f6; --pref:#f6dfe8; --chipline:#c9c9cf;
+  --accent:#1f6fb5;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#16171a; --panel:#1f2024; --ink:#ececef; --muted:#a3a3ab; --line:#34353b;
+    --pos:#7fb6e8; --pos-bg:#1d3346; --neg:#ec9a82; --neg-bg:#45271f; --zero-bg:#2a2b30;
+    --sft:#1d3346; --rl:#233a22; --samp:#3d3419; --dist:#352a44; --pref:#46232f; --chipline:#44454c;
+    --accent:#7fb6e8;
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#16171a; --panel:#1f2024; --ink:#ececef; --muted:#a3a3ab; --line:#34353b;
+  --pos:#7fb6e8; --pos-bg:#1d3346; --neg:#ec9a82; --neg-bg:#45271f; --zero-bg:#2a2b30;
+  --sft:#1d3346; --rl:#233a22; --samp:#3d3419; --dist:#352a44; --pref:#46232f; --chipline:#44454c;
+  --accent:#7fb6e8;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font:14px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;padding:16px}
+main{max-width:1060px;margin:0 auto}
+h1{font-size:1.35em;margin:0 0 4px}
+h2{font-size:1.08em;margin:0 0 8px}
+p{margin:6px 0}
+.sub{color:var(--muted)}
+section{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:14px 16px;margin:14px 0}
+.caption{color:var(--muted);font-size:.9em;margin-top:10px}
+.controls{display:flex;flex-wrap:wrap;gap:12px 22px;align-items:center;margin:8px 0}
+.controls label{display:flex;flex-direction:column;gap:2px;font-size:.92em}
+.controls input[type=range]{width:180px;max-width:100%}
+.out{font-variant-numeric:tabular-nums}
+.stats{display:flex;flex-wrap:wrap;gap:10px;margin:8px 0}
+.stat{border:1px solid var(--line);border-radius:6px;padding:6px 10px;min-width:140px}
+.stat b{display:block;font-size:1.15em}
+.tablewrap{overflow-x:auto}
+table{border-collapse:collapse;width:100%;font-variant-numeric:tabular-nums}
+th,td{border-bottom:1px solid var(--line);padding:5px 8px;text-align:left;font-size:.92em}
+th{color:var(--muted);font-weight:600}
+.grid{display:grid;gap:4px;margin:8px 0}
+.cell{border:1px solid var(--line);border-radius:5px;padding:5px 2px;text-align:center;cursor:pointer;user-select:none;font-size:.82em;min-width:52px}
+.cell .r{font-weight:700;font-size:1.05em}
+.cell.pos{background:var(--pos-bg);color:var(--ink)} .cell.neg{background:var(--neg-bg)} .cell.zero{background:var(--zero-bg);color:var(--muted)}
+.rowlab{align-self:center;font-weight:600;font-size:.9em}
+.radios{display:flex;flex-wrap:wrap;gap:6px 14px}
+.radios label{flex-direction:row;align-items:center;gap:5px}
+button{font:inherit;border:1px solid var(--line);background:var(--panel);color:var(--ink);border-radius:6px;padding:4px 10px;cursor:pointer}
+.pipe{margin:10px 0 14px}
+.pipe h3{font-size:.98em;margin:0 0 4px}
+.chips{display:flex;flex-wrap:wrap;align-items:center;gap:4px}
+.chip{border:1px solid var(--chipline);border-radius:14px;padding:3px 10px;font-size:.85em}
+.chip.sft{background:var(--sft)} .chip.rl{background:var(--rl)} .chip.samp{background:var(--samp)} .chip.dist{background:var(--dist)} .chip.pref{background:var(--pref)}
+.arrow{color:var(--muted)}
+.note{font-size:.84em;color:var(--muted);margin-top:2px}
+.legend{display:flex;flex-wrap:wrap;gap:8px;margin:4px 0 10px}
 </style>
 </head>
 <body>
+<main>
+<h1>Self-generated data: acceptance, gradient weights, and round structure</h1>
+<p class="sub">Companion to ch-31 (read.md §1.2, §2, §5, §6). Panels 1 and 2 compute exact values from formulas; they contain no fitted data. Panel 3 copies stage facts from the chapter text with their sources.</p>
 
-<h1>Iterative RSFT - DPO - RSFT loop (illustrative)</h1>
-<p class="subtitle">
-  Animate <code>N</code> rounds of <code>(sample K per prompt -> reward-score -> keep top
-  fraction -> SFT)</code> with an optional DPO finishing move per round. The quality curve
-  is a qualitative synthetic saturation model drawn from the 2-3 iter ceiling attested in
-  ReST-EM, Self-Rewarding LM, and Llama-2. Click a round label to pin its accepted vs
-  rejected histogram.
-</p>
-
-<div class="layout">
-  <div class="panel">
-    <h2>Policy quality vs round</h2>
-    <svg id="chart" viewBox="0 0 780 440"></svg>
-    <div style="margin-top: 0.5em;">
-      <button id="playBtn">Play</button>
-      <button id="resetBtn">Reset</button>
-    </div>
-    <div class="legend">
-      <span class="chip" style="background:#2e5aa8;"></span> RSFT-only iteration &nbsp;
-      <span class="chip" style="background:#b05030;"></span> DPO-only iteration &nbsp;
-      <span class="chip" style="background:#2a7a2a;"></span> Alternated RSFT -> DPO
-    </div>
-    <div class="pinned" id="pinned"></div>
-  </div>
-  <div class="panel">
-    <h2>Controls</h2>
-    <div class="slider-row"><label>N - rollouts per prompt</label>
-      <div class="row"><input id="kSlider" type="range" min="2" max="64" value="10" step="1">
-      <span class="val" id="kVal">10</span></div></div>
-    <div class="slider-row"><label>Reward threshold - top fraction to keep</label>
-      <div class="row"><input id="threshSlider" type="range" min="0.05" max="1.0" value="0.1"
-      step="0.05"><span class="val" id="threshVal">0.10</span></div></div>
-    <div class="slider-row"><label>Number of rounds</label>
-      <div class="row"><input id="roundsSlider" type="range" min="1" max="8" value="5" step="1">
-      <span class="val" id="roundsVal">5</span></div></div>
-    <div class="slider-row"><label>Verifier strength - noise on reward signal</label>
-      <div class="row"><input id="noiseSlider" type="range" min="0.0" max="0.5" value="0.1"
-      step="0.01"><span class="val" id="noiseVal">0.10</span></div></div>
-    <div class="notes">
-      Larger K buys more selection per round but invites reward-model overoptimization past
-      K=64 (see best-of-n.md). Smaller top-fraction keeps only the cleanest samples but wastes
-      generation budget. Llama-2 uses K=10 top-1; Llama-3 uses K=10-30 top-(K/4); ReST-EM uses
-      K=32 with a diversity cap.
-    </div>
-    <div class="notes">
-      RSFT-only saturates fastest (ReST-EM 2-iter ceiling). DPO-only lifts slower per round
-      but is less likely to plateau. Alternation (green) approximates the Llama-2 / Tulu-3
-      multi-stage gain - each RSFT round resets the reference for the next DPO.
-    </div>
-  </div>
+<section id="acceptance">
+<h2>1. Which problems produce accepted samples</h2>
+<p>A problem with per-sample success probability p, sampled K times, yields at least one accepted sample with probability pass@K = 1 − (1 − p)<sup>K</sup>. The number of accepted samples X follows Binomial(K, p); with a per-problem cap c, the kept count is min(X, c).</p>
+<div class="controls">
+  <label>per-sample success p: <span class="out" id="pOut"></span><input id="p" type="range" min="0" max="1" step="0.01" value="0.10"></label>
+  <label>samples per problem K: <span class="out" id="kOut"></span><input id="k" type="range" min="1" max="128" step="1" value="32"></label>
+  <label>cap per problem c (0 = no cap): <span class="out" id="cOut"></span><input id="c" type="range" min="0" max="64" step="1" value="10"></label>
 </div>
+<div class="stats">
+  <div class="stat">pass@K<b class="out" id="passk"></b></div>
+  <div class="stat">P(no accepted sample)<b class="out" id="p0"></b></div>
+  <div class="stat">E[accepted], no cap<b class="out" id="eacc"></b></div>
+  <div class="stat">E[kept], with cap<b class="out" id="ecap"></b></div>
+</div>
+<div class="tablewrap"><table>
+  <thead><tr><th>Example problem (p)</th><th>pass@K</th><th>E[accepted] no cap</th><th>share of accepted set</th><th>E[kept] with cap</th><th>share with cap</th></tr></thead>
+  <tbody id="mixBody"></tbody>
+</table></div>
+<p class="caption">The four p values are example inputs placed in ReST-EM's difficulty bins (easy 75–100%, medium 50–75%, hard 25–50%, very hard below 25% base success; [[rest-em]] §5.3). Defaults K = 32 and c = 10 are ReST-EM's MATH settings ([[rest-em]] §5). SWE-Gym used a cap of 2 per task ([[swe-gym]] §4.3, Table 6). Shares assume one problem of each kind.</p>
+</section>
+
+<section id="weights">
+<h2>2. Per-sample gradient weights under different update rules</h2>
+<p>Each cell is one sampled response. Click a cell to switch its reward between 1 (correct) and 0 (incorrect). The number under the reward is the coefficient w<sub>ij</sub> that multiplies ∇<sub>θ</sub> log π<sub>θ</sub>(y<sub>ij</sub> | x<sub>i</sub>) in one gradient step taken at the sampling policy.</p>
+<div class="controls">
+  <label>samples per prompt n: <span class="out" id="nOut"></span><input id="n" type="range" min="2" max="8" step="1" value="4"></label>
+  <label>cap per prompt for rules 1–2 (0 = none): <span class="out" id="capOut"></span><input id="cap" type="range" min="0" max="8" step="1" value="0"></label>
+  <button id="preset">Reset to §2 worked example</button>
+</div>
+<div class="radios" id="rules"></div>
+<div class="grid" id="wgrid"></div>
+<div class="stats" id="wstats"></div>
+<div class="tablewrap"><table>
+  <thead><tr><th>Prompt</th><th>rewards</th><th>sum of positive weight</th><th>sum of negative weight</th><th>share of all positive weight</th></tr></thead>
+  <tbody id="wBody"></tbody>
+</table></div>
+<p class="caption">Rules. (1) RSFT: w = r / |A|, A = accepted samples (after the cap). (2) REINFORCE with r ∈ {0,1}, baseline 0: w = r / (M·n); rule 1 equals rule 2 times 1/a, a = |A| / (M·n) ([[star]] Eq. 2; [[rest-em]] Algorithm 1). (3) REINFORCE with r ∈ {−1,+1}, baseline 0: w = (2r − 1) / (M·n). (4) Group-mean baseline: w = (r − mean<sub>i</sub>) / (M·n). (5) GRPO-style: w = (r − mean<sub>i</sub>) / std<sub>i</sub> / (M·n), population standard deviation, w = 0 when std<sub>i</sub> = 0. (6) Reinforce-Rej: rule 3 after removing prompts whose samples are all correct or all incorrect, normalized over the remaining prompts ([[raft-reinforce-rej-minimalist]] §5.1). Token-level averaging, importance ratios, and clipping are omitted. M = 3 prompts.</p>
+</section>
+
+<section id="rounds">
+<h2>3. Round and stage structure in the cited pipelines</h2>
+<div class="legend">
+  <span class="chip sft">supervised or continued training on selected data</span>
+  <span class="chip samp">sampling and filtering</span>
+  <span class="chip rl">RL</span>
+  <span class="chip dist">distillation from model checkpoints</span>
+  <span class="chip pref">verifier or preference training on correct and incorrect samples</span>
+</div>
+<div id="pipes"></div>
+<p class="caption">Stage facts are copied from ch-31 read.md; each row names its source and section. "From base" marks rounds that fine-tune the pretrained model again instead of the previous round's model.</p>
+</section>
+</main>
 
 <script>
-(function () {
-  const svg = document.getElementById('chart');
-  const SVG_NS = 'http://www.w3.org/2000/svg';
-  const W = 780, H = 440, MARGIN = { top: 30, right: 30, bottom: 60, left: 60 };
-  const plotW = W - MARGIN.left - MARGIN.right, plotH = H - MARGIN.top - MARGIN.bottom;
-  const $ = (id) => document.getElementById(id);
-  const kSlider = $('kSlider'), threshSlider = $('threshSlider');
-  const roundsSlider = $('roundsSlider'), noiseSlider = $('noiseSlider');
-  const kVal = $('kVal'), threshVal = $('threshVal');
-  const roundsVal = $('roundsVal'), noiseVal = $('noiseVal');
-  const pinned = $('pinned'), playBtn = $('playBtn'), resetBtn = $('resetBtn');
-  let animRound = 0, animTimer = null, pinnedRound = null;
+(function(){
+  function $(id){return document.getElementById(id);}
+  function fmt(x,d){ if(!isFinite(x)) return "–"; return x.toFixed(d===undefined?3:d); }
 
-  // Quality-curve models (illustrative; calibrated against 2-3 iter ceilings in the notes).
-  function q_rsft(r, K, thr, noise) {
-    const sel = Math.log2(1 + K * (1 - thr)) / 4.0;
-    const base = 0.55 + 0.22 * (1 - Math.exp(-0.9 * r * sel));
-    const pen = noise * 0.15 * Math.max(0, r - 2);
-    return Math.max(0.35, Math.min(0.92, base - pen));
-  }
-  function q_dpo(r, K, thr, noise) {
-    const base = 0.52 + 0.30 * (1 - Math.exp(-0.55 * r));
-    const pen = noise * 0.08 * Math.max(0, r - 3);
-    return Math.max(0.32, Math.min(0.92, base - pen));
-  }
-  function q_combined(r, K, thr, noise) {
-    const sel = Math.log2(1 + K * (1 - thr)) / 4.0;
-    const base = 0.55 + 0.32 * (1 - Math.exp(-0.75 * r * (0.6 + 0.4 * sel)));
-    const pen = noise * 0.06 * Math.max(0, r - 4);
-    return Math.max(0.38, Math.min(0.96, base - pen));
-  }
-
-  function makeEl(tag, attrs, parent) {
-    const el = document.createElementNS(SVG_NS, tag);
-    for (const k in attrs) el.setAttribute(k, attrs[k]);
-    if (parent) parent.appendChild(el);
-    return el;
-  }
-  function clearSvg() { while (svg.firstChild) svg.removeChild(svg.firstChild); }
-
-  function draw() {
-    clearSvg();
-    const K = parseInt(kSlider.value, 10);
-    const thr = parseFloat(threshSlider.value);
-    const rounds = parseInt(roundsSlider.value, 10);
-    const noise = parseFloat(noiseSlider.value);
-    const xScale = (r) => MARGIN.left + (r / rounds) * plotW;
-    const yScale = (q) => MARGIN.top + plotH - ((q - 0.3) / 0.7) * plotH;
-
-    // axes
-    makeEl('line', { x1: MARGIN.left, y1: MARGIN.top + plotH,
-      x2: MARGIN.left + plotW, y2: MARGIN.top + plotH, stroke: '#333' }, svg);
-    makeEl('line', { x1: MARGIN.left, y1: MARGIN.top, x2: MARGIN.left,
-      y2: MARGIN.top + plotH, stroke: '#333' }, svg);
-
-    for (let q = 0.4; q <= 1.0; q += 0.1) {
-      const y = yScale(q);
-      makeEl('line', { x1: MARGIN.left, y1: y, x2: MARGIN.left + plotW, y2: y,
-        stroke: '#eee' }, svg);
-      const lbl = makeEl('text', { x: MARGIN.left - 8, y: y + 3, 'class': 'axis-label',
-        'text-anchor': 'end' }, svg);
-      lbl.textContent = q.toFixed(1);
+  // ---------- Panel 1 ----------
+  function binomPmf(K,p){
+    // dynamic programming, stable for K <= 128
+    var dp=[1];
+    for(var t=0;t<K;t++){
+      var nx=new Array(dp.length+1).fill(0);
+      for(var j=0;j<dp.length;j++){ nx[j]+=dp[j]*(1-p); nx[j+1]+=dp[j]*p; }
+      dp=nx;
     }
-
-    for (let r = 0; r <= rounds; r++) {
-      const x = xScale(r);
-      makeEl('line', { x1: x, y1: MARGIN.top + plotH, x2: x, y2: MARGIN.top + plotH + 4,
-        stroke: '#333' }, svg);
-      const t = makeEl('text', { x: x, y: MARGIN.top + plotH + 18, 'class': 'round-label',
-        'data-round': r }, svg);
-      t.textContent = r === 0 ? 'SFT init' : ('round ' + r);
-      t.addEventListener('click', () => pinRound(r, K, thr, noise));
-    }
-
-    const xLab = makeEl('text', { x: MARGIN.left + plotW / 2, y: MARGIN.top + plotH + 45,
-      'class': 'axis-label', 'text-anchor': 'middle' }, svg);
-    xLab.textContent = 'round index';
-    const yLab = makeEl('text', { x: 14, y: MARGIN.top + plotH / 2, 'class': 'axis-label',
-      transform: 'rotate(-90, 14, ' + (MARGIN.top + plotH / 2) + ')',
-      'text-anchor': 'middle' }, svg);
-    yLab.textContent = 'policy quality (illustrative)';
-
-    // ReST-EM 2-iter saturation marker
-    const satX = xScale(2);
-    makeEl('line', { x1: satX, y1: MARGIN.top, x2: satX, y2: MARGIN.top + plotH,
-      'class': 'saturate-mark' }, svg);
-    const satLab = makeEl('text', { x: satX + 4, y: MARGIN.top + 12,
-      'class': 'axis-label', fill: '#888' }, svg);
-    satLab.textContent = 'ReST-EM 2-iter ceiling';
-
-    const maxR = animTimer ? Math.min(animRound, rounds) : rounds;
-    const paths = [
-      { klass: 'curve curve-sft', fn: q_rsft, col: '#2e5aa8' },
-      { klass: 'curve curve-rl', fn: q_dpo, col: '#b05030' },
-      { klass: 'curve curve-combined', fn: q_combined, col: '#2a7a2a' },
-    ];
-    for (const p of paths) {
-      const pts = [];
-      for (let r = 0; r <= maxR; r++) pts.push([xScale(r), yScale(p.fn(r, K, thr, noise))]);
-      if (pts.length < 2) continue;
-      const d = pts.map((pt, i) => (i === 0 ? 'M' : 'L') + pt[0].toFixed(1) + ','
-        + pt[1].toFixed(1)).join(' ');
-      makeEl('path', { d: d, 'class': p.klass }, svg);
-      const last = pts[pts.length - 1];
-      makeEl('circle', { cx: last[0], cy: last[1], r: 4, fill: p.col }, svg);
-    }
-
-    if (pinnedRound !== null && pinnedRound <= rounds) {
-      const x = xScale(pinnedRound);
-      makeEl('line', { x1: x, y1: MARGIN.top, x2: x, y2: MARGIN.top + plotH,
-        stroke: '#c78a1a', 'stroke-width': 1.5, 'stroke-dasharray': '4 2' }, svg);
-    }
+    return dp;
   }
+  function expKept(K,p,c){
+    if(c<=0) return K*p;
+    var pm=binomPmf(K,p), e=0;
+    for(var j=0;j<pm.length;j++) e+=pm[j]*Math.min(j,c);
+    return e;
+  }
+  function renderAcc(){
+    var p=+$("p").value, K=+$("k").value, c=+$("c").value;
+    $("pOut").textContent=fmt(p,2); $("kOut").textContent=K; $("cOut").textContent=c===0?"none":c;
+    var p0=Math.pow(1-p,K);
+    $("passk").textContent=fmt(1-p0); $("p0").textContent=fmt(p0);
+    $("eacc").textContent=fmt(K*p,2); $("ecap").textContent=fmt(expKept(K,p,c),2);
+    var ex=[{lab:"easy bin, p = 0.90",p:0.90},{lab:"medium bin, p = 0.60",p:0.60},{lab:"hard bin, p = 0.35",p:0.35},{lab:"very hard bin, p = 0.10",p:0.10}];
+    var tot=0, totc=0;
+    ex.forEach(function(e){ e.a=K*e.p; e.k=expKept(K,e.p,c); tot+=e.a; totc+=e.k; });
+    var body="";
+    ex.forEach(function(e){
+      body+="<tr><td>"+e.lab+"</td><td>"+fmt(1-Math.pow(1-e.p,K))+"</td><td>"+fmt(e.a,2)+"</td><td>"+fmt(100*e.a/tot,1)+"%</td><td>"+fmt(e.k,2)+"</td><td>"+fmt(100*e.k/totc,1)+"%</td></tr>";
+    });
+    $("mixBody").innerHTML=body;
+  }
+  ["p","k","c"].forEach(function(id){ $(id).addEventListener("input",renderAcc); });
+  renderAcc();
 
-  function pinRound(r, K, thr, noise) {
-    pinnedRound = r;
-    const qs = q_rsft(r, K, thr, noise), qd = q_dpo(r, K, thr, noise);
-    const qc = q_combined(r, K, thr, noise);
-    const keepN = Math.max(1, Math.round(K * thr));
-    const accPct = Math.round(100 * thr);
-    pinned.style.display = 'block';
-    pinned.innerHTML = '<strong>Round ' + r + '</strong> - K=' + K + ', keep-top=' + keepN
-      + ' (' + accPct + '%), noise=' + noise.toFixed(2) + '<br>'
-      + 'RSFT-only quality: ' + qs.toFixed(3) + ' | DPO-only quality: ' + qd.toFixed(3)
-      + ' | Alternated quality: ' + qc.toFixed(3) + '<br>'
-      + 'Accepted samples per prompt: ' + keepN + '; rejected per prompt: ' + (K - keepN)
-      + '. The accepted set becomes round ' + (r + 1) + '\'s SFT pool (or the chosen side '
-      + 'of round ' + (r + 1) + '\'s DPO pairs).';
-    draw();
-  }
-
-  function animate() {
-    if (animTimer) return;
-    animRound = 0;
-    const rounds = parseInt(roundsSlider.value, 10);
-    animTimer = setInterval(() => {
-      animRound += 1;
-      if (animRound > rounds) { clearInterval(animTimer); animTimer = null; }
-      draw();
-    }, 600);
-    draw();
-  }
-  function reset() {
-    if (animTimer) { clearInterval(animTimer); animTimer = null; }
-    animRound = 0; pinnedRound = null;
-    pinned.style.display = 'none';
-    draw();
-  }
-  function syncLabels() {
-    kVal.textContent = kSlider.value;
-    threshVal.textContent = parseFloat(threshSlider.value).toFixed(2);
-    roundsVal.textContent = roundsSlider.value;
-    noiseVal.textContent = parseFloat(noiseSlider.value).toFixed(2);
-  }
-
-  [kSlider, threshSlider, roundsSlider, noiseSlider].forEach(s => {
-    s.addEventListener('input', () => { syncLabels(); draw(); });
+  // ---------- Panel 2 ----------
+  var RULES=[
+    {id:"rsft",lab:"1 RSFT (mean over accepted)"},
+    {id:"r01",lab:"2 REINFORCE, r ∈ {0,1}, b = 0"},
+    {id:"rpm",lab:"3 REINFORCE, r ∈ {−1,+1}, b = 0"},
+    {id:"gmean",lab:"4 group-mean baseline"},
+    {id:"grpo",lab:"5 GRPO-style (mean and std)"},
+    {id:"rej",lab:"6 Reinforce-Rej"}
+  ];
+  var rule="rsft", M=3, R=[];
+  var rdiv=$("rules");
+  RULES.forEach(function(r,i){
+    var l=document.createElement("label");
+    l.innerHTML='<input type="radio" name="rule" value="'+r.id+'"'+(i===0?" checked":"")+"> "+r.lab;
+    rdiv.appendChild(l);
   });
-  playBtn.addEventListener('click', animate);
-  resetBtn.addEventListener('click', reset);
+  rdiv.addEventListener("change",function(e){ rule=e.target.value; renderW(); });
 
-  syncLabels();
-  draw();
+  function preset(){
+    var n=+$("n").value;
+    R=[[],[],[]];
+    for(var j=0;j<n;j++){ R[0].push(j%2===0?1:0); R[1].push(1); R[2].push(0); }
+  }
+  function resize(){
+    var n=+$("n").value;
+    for(var i=0;i<M;i++){ while(R[i].length<n) R[i].push(0); R[i]=R[i].slice(0,n); }
+  }
+  function weights(){
+    var n=+$("n").value, cap=+$("cap").value, W=[];
+    var capped=R.map(function(row){
+      var cnt=0; return row.map(function(r){ if(r===1 && (cap===0 || cnt<cap)){cnt++; return 1;} return 0; });
+    });
+    var A=0; capped.forEach(function(row){ row.forEach(function(r){A+=r;}); });
+    var mixed=R.filter(function(row){ var s=row.reduce(function(a,b){return a+b;},0); return s>0 && s<row.length; }).length;
+    for(var i=0;i<M;i++){
+      var row=R[i], mean=row.reduce(function(a,b){return a+b;},0)/n;
+      var sd=Math.sqrt(row.reduce(function(a,b){return a+(b-mean)*(b-mean);},0)/n);
+      W.push(row.map(function(r,j){
+        switch(rule){
+          case "rsft": return A>0 ? capped[i][j]/A : 0;
+          case "r01": return capped[i][j]/(M*n);
+          case "rpm": return (2*r-1)/(M*n);
+          case "gmean": return (r-mean)/(M*n);
+          case "grpo": return sd>0 ? (r-mean)/sd/(M*n) : 0;
+          case "rej": return (mean>0 && mean<1 && mixed>0) ? (2*r-1)/(mixed*n) : 0;
+        }
+      }));
+    }
+    return {W:W,A:A,mixed:mixed};
+  }
+  function frac(x){
+    // show small rationals when exact
+    if(Math.abs(x)<1e-12) return "0";
+    for(var d=1; d<=96; d++){ var nn=Math.round(x*d); if(Math.abs(nn/d-x)<1e-9 && Math.abs(nn)<=d*4) return (nn>0?"+":"")+nn+"/"+d; }
+    return (x>0?"+":"")+x.toFixed(4);
+  }
+  function renderW(){
+    var n=+$("n").value;
+    $("nOut").textContent=n; $("capOut").textContent=(+$("cap").value)===0?"none":$("cap").value;
+    resize();
+    var res=weights(), W=res.W;
+    var g=$("wgrid"); g.style.gridTemplateColumns="70px repeat("+n+", minmax(52px,1fr))";
+    var html="", names=["A","B","C"];
+    for(var i=0;i<M;i++){
+      html+='<div class="rowlab">prompt '+names[i]+"</div>";
+      for(var j=0;j<n;j++){
+        var w=W[i][j], cls=Math.abs(w)<1e-12?"zero":(w>0?"pos":"neg");
+        html+='<div class="cell '+cls+'" data-i="'+i+'" data-j="'+j+'" role="button" aria-label="prompt '+names[i]+' sample '+(j+1)+'"><div class="r">r='+R[i][j]+"</div><div>"+frac(w)+"</div></div>";
+      }
+    }
+    g.innerHTML=html;
+    var totPos=0; W.forEach(function(row){ row.forEach(function(w){ if(w>0) totPos+=w; }); });
+    var body="";
+    for(var i2=0;i2<M;i2++){
+      var sp=0, sn=0; W[i2].forEach(function(w){ if(w>0) sp+=w; else sn+=w; });
+      body+="<tr><td>"+names[i2]+"</td><td>["+R[i2].join(", ")+"]</td><td>"+fmt(sp,4)+"</td><td>"+fmt(sn,4)+"</td><td>"+(totPos>0?fmt(100*sp/totPos,1)+"%":"–")+"</td></tr>";
+    }
+    $("wBody").innerHTML=body;
+    var a=res.A/(M*n);
+    $("wstats").innerHTML='<div class="stat">accepted |A| (after cap)<b>'+res.A+" of "+(M*n)+'</b></div><div class="stat">acceptance rate a<b>'+fmt(a,3)+'</b></div><div class="stat">rule 1 ÷ rule 2 = 1/a<b>'+(a>0?fmt(1/a,3):"–")+'</b></div><div class="stat">prompts with mixed rewards<b>'+res.mixed+" of "+M+"</b></div>";
+  }
+  $("wgrid").addEventListener("click",function(e){
+    var c=e.target.closest(".cell"); if(!c) return;
+    var i=+c.getAttribute("data-i"), j=+c.getAttribute("data-j");
+    R[i][j]=1-R[i][j]; renderW();
+  });
+  $("n").addEventListener("input",function(){ renderW(); });
+  $("cap").addEventListener("input",renderW);
+  $("preset").addEventListener("click",function(){ $("n").value=4; $("cap").value=0; preset(); renderW(); });
+  preset(); renderW();
+
+  // ---------- Panel 3 ----------
+  var P=[
+    {t:"Llama 2-Chat — [[llama-2]] §3.2.3", s:[["sft","SFT (27,540 annotations)"],["samp","RLHF-V1…V3: sample K per prompt with latest 70B, keep best by RM"],["sft","fine-tune on kept samples"],["samp","after V3: pool top samples from all prior iterations"],["rl","after RLHF (V4): PPO on the rejection-sampling checkpoint"]], n:"RLHF-V3 trained only on V2 samples and regressed on poem rhyming (qualitative). The report does not state whether V4 itself used PPO."},
+    {t:"STaR — [[star]] §3.1, Alg. 1", s:[["samp","greedy rationale per problem; rationalize failures with gold-answer hint"],["samp","keep rationales with correct answers (hint removed)"],["sft","fine-tune original pretrained model (from base)"],["samp","repeat until plateau"]], n:"CQA dev accuracy, GPT-J 6B: 68.8 without, 72.5 with rationalization (Table 1)."},
+    {t:"ReST-EM — [[rest-em]] §3, §5", s:[["samp","Generate: 32 (MATH) / 64 (APPS) samples, top-K 40, T 0.7"],["samp","keep r = 1, at most 10 per problem"],["sft","Improve: fine-tune base model (from base)"],["samp","MATH 3 iterations; APPS 2"]], n:"APPS regressed at iteration 2 while training accuracy rose (Fig. 4)."},
+    {t:"V-STaR — [[v-star]] Alg. 1", s:[["sft","G_SFT on original data"],["sft","generator: fine-tune base on accumulated correct samples (from base)"],["samp","sample 16 per query; correct → D_GEN, all → D_VER"],["samp","3 iterations"],["pref","DPO verifier from G_SFT on correct/incorrect pairs"]], n:"The verifier ranks candidates at test time; placing it in the training loop gave no substantial gain on MBPP (§4.7)."},
+    {t:"DeepSeek-R1 — [[deepseek-r1]] §3, B.3", s:[["sft","Dev1: cold start, “thousands” of examples, from V3-Base"],["rl","Dev2: reasoning RL"],["samp","rejection sampling ~600k correct reasoning + ~200k non-reasoning"],["sft","Dev3: SFT from V3-Base (804,745 samples)"],["rl","R1: mixed RL, 1,700 steps"]], n:"AIME 2024 pass@1: R1-Zero (separate RL-only run from V3-Base) 77.9; Dev1 59.0, Dev2 74.0, Dev3 78.1, R1 79.8 (Table 3)."},
+    {t:"GLM-4.5 agent expert — [[glm-4-5]] §3.1, §3.3.2", s:[["sft","small cold-start SFT"],["rl","agent RL until step count or plateau"],["samp","replace cold-start data with RL-model responses"],["sft","SFT again"],["rl","RL on harder tasks (repeat)"],["dist","Stage 2: unified SFT on expert outputs"]], n:"No numbers or ablation are reported for the iterative loop."},
+    {t:"GLM-5 — [[glm-5]] §3, §3.5", s:[["sft","multi-task SFT (erroneous agent steps loss-masked)"],["rl","Reasoning RL"],["rl","Agentic RL"],["rl","General RL"],["dist","on-policy cross-stage distillation, teachers = earlier stage checkpoints, group size 1"]], n:"§1 says the distillation is used throughout; §3 calls it the final stage. No ablation reported."},
+    {t:"Kimi-Dev — [[kimi-dev]] §3–4", s:[["sft","mid-training ~150B tokens (Qwen2.5-72B-Base)"],["sft","cold start on DeepSeek-R1 traces"],["rl","single-turn code-edit RL, pass@16 = 0 prompts removed then re-added"],["sft","SWE-Agent SFT on 5,016 trajectories"]], n:"SWE-bench Verified: 60.4% Agentless (40 × 40 self-play); 48.6% pass@1 as SWE-Agent."},
+    {t:"SWE-Gym, OpenHands 32B — [[swe-gym]] §4.2", s:[["sft","SFT on 491 teacher trajectories"],["samp","sample 6 per task at t = 0.5 → 868 successes"],["sft","fine-tune base on 868 + 491 (from base)"]], n:"SWE-bench Lite resolution 15.3% → 8.7%."}
+  ];
+  var ph="";
+  P.forEach(function(r){
+    ph+='<div class="pipe"><h3>'+r.t+'</h3><div class="chips">';
+    r.s.forEach(function(s,i){ if(i>0) ph+='<span class="arrow">→</span>'; ph+='<span class="chip '+s[0]+'">'+s[1]+"</span>"; });
+    ph+='</div><div class="note">'+r.n+"</div></div>";
+  });
+  $("pipes").innerHTML=ph;
 })();
 </script>
-
 </body>
 </html>

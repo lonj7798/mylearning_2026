@@ -7,6 +7,8 @@ source_url: https://arxiv.org/abs/2407.03502
 created_at: "2026-04-23"
 ---
 
+> Superseded by the 2026-09 revision of read.md; kept for history.
+
 # Excerpt: AgentInstruct — 43 generators and the agentic-flow template
 
 **Source library:** `wiki/raw-data/llm-training/papers/agentinstruct.md`

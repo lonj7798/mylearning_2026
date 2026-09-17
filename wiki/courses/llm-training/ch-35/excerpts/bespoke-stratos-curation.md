@@ -7,6 +7,8 @@ source_url: https://www.bespokelabs.ai/blog/bespoke-stratos-the-unreasonable-eff
 created_at: "2026-04-23"
 ---
 
+> Superseded by the 2026-09 revision of read.md; kept for history.
+
 # Excerpt: Bespoke-Stratos — 17K curated traces + contamination discipline
 
 **Source library:** `wiki/raw-data/llm-training/papers/bespoke-stratos.md`

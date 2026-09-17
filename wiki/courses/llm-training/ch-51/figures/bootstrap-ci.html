@@ -2,247 +2,272 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>Bootstrap CI + Paired-Comparison Explorer</title>
+<title>ch-51 — Precision of one score, and of a difference</title>
 <style>
-  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; max-width: 1200px; margin: 1.4em auto; padding: 0 1em; color: #1f1f1f; background: #fafafa; }
-  h1 { font-size: 1.3em; margin-bottom: 0.25em; }
-  .subtitle { color: #5a5a5a; margin-top: 0; font-size: 0.9em; line-height: 1.5; }
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; max-width: 1180px; margin: 1.4em auto; padding: 0 1em; color: #1f1f1f; background: #fafafa; }
+  h1 { font-size: 1.25em; margin-bottom: 0.25em; }
+  .subtitle { color: #4a4a4a; margin-top: 0; font-size: 0.9em; line-height: 1.55; }
   .panel { border: 1px solid #dcdcdc; border-radius: 6px; background: #fff; padding: 0.9em 1em; margin-top: 1em; }
-  h2 { font-size: 1.02em; margin: 0 0 0.6em 0; color: #2b2b2b; border-bottom: 1px solid #ececec; padding-bottom: 0.3em; }
-  .layout { display: grid; grid-template-columns: 1fr 340px; gap: 1em; }
+  h2 { font-size: 1em; margin: 0 0 0.55em 0; color: #2b2b2b; border-bottom: 1px solid #ececec; padding-bottom: 0.3em; }
+  .layout { display: grid; grid-template-columns: 1fr 350px; gap: 1em; }
   svg.plot { width: 100%; height: 300px; display: block; background: #fcfcfc; border: 1px solid #ececec; border-radius: 4px; }
   .axis-line { stroke: #666; stroke-width: 1; fill: none; }
   .axis-text { font-family: 'SF Mono', Menlo, monospace; font-size: 10px; fill: #444; }
   .grid { stroke: #f0f0f0; stroke-width: 1; }
   .curve { fill: none; stroke-width: 2.2; }
-  .curve.item { stroke: #2e5aa8; } .curve.seed { stroke: #c4793d; } .curve.total { stroke: #2f8a4a; stroke-dasharray: 5 3; }
-  .controls label { display: block; font-family: 'SF Mono', Menlo, monospace; font-size: 0.85em; color: #333; margin: 0.5em 0 0.15em 0; }
+  .curve.item { stroke: #2e5aa8; } .curve.run { stroke: #c4793d; } .curve.total { stroke: #2f8a4a; stroke-dasharray: 5 3; }
+  .controls label { display: block; font-family: 'SF Mono', Menlo, monospace; font-size: 0.83em; color: #333; margin: 0.5em 0 0.15em 0; }
   .controls input[type=range] { width: 100%; }
-  .readout { font-family: 'SF Mono', Menlo, monospace; font-size: 0.86em; color: #333; background: #f5f7fb; padding: 0.5em 0.7em; border-radius: 4px; border-left: 3px solid #2e5aa8; margin-top: 0.4em; white-space: pre; }
-  .p-verdict { font-family: 'SF Mono', Menlo, monospace; font-size: 0.9em; padding: 0.45em 0.7em; border-radius: 4px; margin-top: 0.45em; }
-  .sig-yes { background: #e6f4ea; color: #1c6b37; border-left: 3px solid #1c6b37; }
-  .sig-no  { background: #fef0ec; color: #8a2a1a; border-left: 3px solid #8a2a1a; }
-  .legend { font-family: 'SF Mono', Menlo, monospace; font-size: 11px; fill: #222; }
-  code { background: #eef; padding: 1px 4px; border-radius: 3px; font-family: 'SF Mono', Menlo, monospace; font-size: 0.85em; }
-  .hist-bar { fill: #2e5aa8; opacity: 0.72; }
-  .ci-line { stroke: #2e5aa8; stroke-width: 2.5; }
+  .readout { font-family: 'SF Mono', Menlo, monospace; font-size: 0.83em; color: #333; background: #f5f7fb; padding: 0.5em 0.7em; border-radius: 4px; border-left: 3px solid #2e5aa8; margin-top: 0.4em; white-space: pre; }
+  .verdict { font-family: 'SF Mono', Menlo, monospace; font-size: 0.85em; padding: 0.45em 0.7em; border-radius: 4px; margin-top: 0.45em; line-height: 1.45; }
+  .yes { background: #e9f2ec; color: #1c5b34; border-left: 3px solid #1c5b34; }
+  .no  { background: #f4eeec; color: #7a3421; border-left: 3px solid #7a3421; }
+  .legend { font-family: 'SF Mono', Menlo, monospace; font-size: 11px; }
+  .mark { stroke: #999; stroke-dasharray: 2 3; stroke-width: 1; }
+  .hist-bar { fill: #2e5aa8; opacity: 0.7; }
+  .ci-paired { stroke: #2e5aa8; stroke-width: 3; }
+  .ci-unpaired { stroke: #c4793d; stroke-width: 3; }
   .zero-ref { stroke: #999; stroke-dasharray: 3 3; stroke-width: 1; }
+  .caption { font-size: 0.82em; color: #555; margin: 0.6em 0 0 0; line-height: 1.5; }
+  code { background: #eef1f7; padding: 1px 4px; border-radius: 3px; font-family: 'SF Mono', Menlo, monospace; font-size: 0.85em; }
 </style>
 </head>
 <body>
 
-<h1>Bootstrap CI + Paired-Comparison Explorer</h1>
+<h1>Precision of one score, and of a difference</h1>
 <p class="subtitle">
-  Two panels. <b>Panel 1:</b> dial N (items) and K (seeds); see the 95% CI halfwidth
-  curve and the split between item-count noise and per-run noise. <b>Panel 2:</b>
-  two-checkpoint comparison: dial the true delta and per-item noise, see the
-  paired-bootstrap p-value and sign-test p-value update. All computation is
-  exact monte-carlo in the browser. See <code>read.md §3, §4</code>.
+  Companion to ch-51. <b>Panel 1</b> shows how the 95% halfwidth of a single score splits between the
+  item-sampling term, which falls as 1/sqrt(n), and the run-to-run term, which does not. <b>Panel 2</b> generates
+  paired per-item scores at a chosen correlation and compares the paired interval (Eq. 7 of
+  <span class="legend">[[adding-error-bars-evals]]</span>) with the unpaired one (Eq. 5) and with the sign test.
+  All computation runs in the browser; no data is loaded from anywhere.
 </p>
 
 <div class="panel">
-  <h2>Panel 1 — CI halfwidth vs N (items) and K (seeds per prompt)</h2>
+  <h2>Panel 1 — where the halfwidth of one score comes from</h2>
   <div class="layout">
-    <svg id="p1plot" class="plot" viewBox="0 0 720 300" preserveAspectRatio="xMidYMid meet"></svg>
+    <svg id="p1plot" class="plot" viewBox="0 0 740 300" preserveAspectRatio="xMidYMid meet"></svg>
     <div class="controls">
-      <label>N (items): <span id="p1N_val">500</span></label>
-      <input type="range" id="p1N" min="50" max="3000" step="50" value="500">
-      <label>K (seeds per item): <span id="p1K_val">1</span></label>
+      <label>n (items): <span id="p1n_val">500</span></label>
+      <input type="range" id="p1n" min="50" max="3000" step="50" value="500">
+      <label>score p: <span id="p1p_val">0.50</span></label>
+      <input type="range" id="p1p" min="0.05" max="0.95" step="0.01" value="0.5">
+      <label>generations per question K: <span id="p1K_val">1</span></label>
       <input type="range" id="p1K" min="1" max="10" step="1" value="1">
-      <label>per-seed sigma (pp): <span id="p1sig_val">1.5</span></label>
-      <input type="range" id="p1sig" min="0" max="4" step="0.1" value="1.5">
-      <label>true accuracy p: <span id="p1p_val">0.50</span></label>
-      <input type="range" id="p1p" min="0.1" max="0.9" step="0.05" value="0.5">
+      <label>run-to-run sigma across seeds (pp): <span id="p1s_val">0.80</span></label>
+      <input type="range" id="p1s" min="0" max="2.2" step="0.01" value="0.80">
+      <label>independent training runs R: <span id="p1R_val">1</span></label>
+      <input type="range" id="p1R" min="1" max="5" step="1" value="1">
       <div class="readout" id="p1read"></div>
     </div>
   </div>
+  <p class="caption">
+    Item term: 1.96·sqrt(p(1−p)/n)·(1 + (2/K − 2/1)·0 + …) is not used here; the generation effect is applied as
+    Var(µ̂|K) = (Var(x) + E[σ²]/K)/n with Var(x) = p(1−p)/2 and E[σ²] = p(1−p)/2 as an illustrative split of the
+    binary variance (labelled illustrative because no source measures this split for a given benchmark). Run term:
+    1.96·σ_run/sqrt(R), with σ_run defaulting to 0.80 pp, the ARC-C seed standard deviation measured over 10
+    identically trained 7B models in Madaan et al. 2024, Table 1. Dashed markers: HumanEval n=164, MATH500 n=500,
+    GSM8K n=1319, MMLU n=14042.
+  </p>
 </div>
 
 <div class="panel">
-  <h2>Panel 2 — two-checkpoint comparison (paired bootstrap + sign test)</h2>
+  <h2>Panel 2 — paired vs unpaired comparison of two checkpoints</h2>
   <div class="layout">
-    <svg id="p2plot" class="plot" viewBox="0 0 720 300" preserveAspectRatio="xMidYMid meet"></svg>
+    <svg id="p2plot" class="plot" viewBox="0 0 740 300" preserveAspectRatio="xMidYMid meet"></svg>
     <div class="controls">
-      <label>N (paired items): <span id="p2N_val">300</span></label>
-      <input type="range" id="p2N" min="30" max="2000" step="10" value="300">
-      <label>true delta (pp): <span id="p2d_val">2.0</span></label>
+      <label>n (paired items): <span id="p2n_val">500</span></label>
+      <input type="range" id="p2n" min="30" max="2000" step="10" value="500">
+      <label>score of checkpoint B: <span id="p2p_val">0.60</span></label>
+      <input type="range" id="p2p" min="0.1" max="0.9" step="0.01" value="0.60">
+      <label>true difference A − B (pp): <span id="p2d_val">2.0</span></label>
       <input type="range" id="p2d" min="-5" max="10" step="0.1" value="2.0">
-      <label>per-item noise sigma (pp): <span id="p2sig_val">8</span></label>
-      <input type="range" id="p2sig" min="1" max="25" step="0.5" value="8">
-      <label>bootstrap B: <span id="p2B_val">2000</span></label>
+      <label>item-level correlation between A and B: <span id="p2c_val">0.60</span></label>
+      <input type="range" id="p2c" min="0" max="0.95" step="0.01" value="0.60">
+      <label>bootstrap replicates B: <span id="p2B_val">2000</span></label>
       <input type="range" id="p2B" min="500" max="5000" step="500" value="2000">
       <div class="readout" id="p2read"></div>
-      <div id="p2verdict" class="p-verdict sig-no">pending</div>
+      <div id="p2verdict" class="verdict no">pending</div>
     </div>
   </div>
+  <p class="caption">
+    Per-item scores are drawn as correlated Bernoulli pairs at the chosen correlation. The histogram is the paired
+    bootstrap distribution of the mean difference; the blue bar is its percentile interval, the orange bar the
+    unpaired interval from Eq. 5. Moving the correlation slider to 0 makes the two intervals coincide: the gain
+    from pairing is the correlation and nothing else.
+  </p>
 </div>
 
 <script>
 // ---------- utilities ----------
-function gaussian() {  // Box-Muller
-  let u = 0, v = 0;
-  while (u === 0) u = Math.random(); while (v === 0) v = Math.random();
-  return Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * v);
-}
-function quantile(sorted, q) { return sorted[Math.max(0, Math.min(sorted.length - 1, Math.floor(q * sorted.length)))]; }
-function normalCdf(z) {  // Abramowitz 26.2.17
+function normalCdf(z) {  // Abramowitz-Stegun 26.2.17
   const t = 1 / (1 + 0.2316419 * Math.abs(z));
   const d = 0.3989422804 * Math.exp(-z * z / 2);
   const p = d * t * (0.31938153 + t * (-0.356563782 + t * (1.781477937 + t * (-1.821255978 + t * 1.330274429))));
   return z > 0 ? 1 - p : p;
 }
-function signTestP(W, L) {  // two-sided sign test
+function quantile(sorted, q) { return sorted[Math.max(0, Math.min(sorted.length - 1, Math.floor(q * sorted.length)))]; }
+function signTestP(W, L) {
   const n = W + L; if (n === 0) return 1.0;
-  if (n < 25) {  // exact tail
+  if (n < 25) {
     const binCoef = (n, k) => { let r = 1; for (let i = 0; i < k; i++) r = r * (n - i) / (i + 1); return r; };
     let tail = 0; for (let k = 0; k <= Math.min(W, L); k++) tail += binCoef(n, k);
     return Math.min(1, 2 * tail / Math.pow(2, n));
   }
-  const z = (Math.abs(W - L) - 1) / Math.sqrt(n);  // normal approx w/ continuity correction
+  const z = (Math.abs(W - L) - 1) / Math.sqrt(n);          // continuity correction
   return Math.max(0, Math.min(1, 2 * (1 - normalCdf(z))));
 }
 
 // ---------- Panel 1 ----------
-function drawPanel1() {
-  const N = +document.getElementById("p1N").value;
-  const K = +document.getElementById("p1K").value;
-  const sig = +document.getElementById("p1sig").value;
-  const p  = +document.getElementById("p1p").value;
-  document.getElementById("p1N_val").textContent = N;
-  document.getElementById("p1K_val").textContent = K;
-  document.getElementById("p1sig_val").textContent = sig.toFixed(1);
-  document.getElementById("p1p_val").textContent = p.toFixed(2);
+const BENCHMARKS = [["HumanEval", 164], ["MATH500", 500], ["GSM8K", 1319], ["MMLU", 14042]];
 
-  // item-count halfwidth: 1.96 * sqrt(p(1-p)/N), in pp
-  // per-seed halfwidth: 1.96 * sig / sqrt(K)
-  // total: sqrt of sum of squares
-  const svg = document.getElementById("p1plot"); svg.innerHTML = "";
-  const Wp = 720, Hp = 300, ml = 48, mr = 14, mt = 16, mb = 32;
-  const pw = Wp - ml - mr, ph = Hp - mt - mb;
-  const xs = [], yItem = [], ySeed = [], yTotal = [];
-  for (let nn = 50; nn <= 3000; nn += 25) {
-    const hwItem = 1.96 * Math.sqrt(p * (1 - p) / nn) * 100;
-    const hwSeed = 1.96 * sig / Math.sqrt(K);
-    xs.push(nn); yItem.push(hwItem); ySeed.push(hwSeed);
-    yTotal.push(Math.sqrt(hwItem * hwItem + hwSeed * hwSeed));
+function hwItem(p, n, K) {
+  // Var(mu_hat | K) = (Var(x) + E[sigma^2]/K)/n ; illustrative split of p(1-p) into halves
+  const varX = p * (1 - p) / 2, eSig = p * (1 - p) / 2;
+  return 1.96 * Math.sqrt((varX + eSig / K) / n) * 100;
+}
+function drawPanel1() {
+  const n = +p1n.value, p = +p1p.value, K = +p1K.value, s = +p1s.value, R = +p1R.value;
+  p1n_val.textContent = n; p1p_val.textContent = p.toFixed(2); p1K_val.textContent = K;
+  p1s_val.textContent = s.toFixed(2); p1R_val.textContent = R;
+
+  const svg = document.getElementById("p1plot"); const W = 740, H = 300, ml = 52, mr = 16, mt = 16, mb = 34;
+  const pw = W - ml - mr, ph = H - mt - mb;
+  const xs = [], yI = [], yR = [], yT = [];
+  const hwRun = 1.96 * s / Math.sqrt(R);
+  for (let k = 50; k <= 3000; k += 25) {
+    const a = hwItem(p, k, K);
+    xs.push(k); yI.push(a); yR.push(hwRun); yT.push(Math.sqrt(a * a + hwRun * hwRun));
   }
-  const xmin = 50, xmax = 3000, ymax = Math.max(12, Math.max(...yTotal) * 1.1);
-  const X = n => ml + (n - xmin) / (xmax - xmin) * pw;
+  const xmin = 50, xmax = 3000, ymax = Math.max(10, Math.max.apply(null, yT) * 1.08);
+  const X = v => ml + (v - xmin) / (xmax - xmin) * pw;
   const Y = v => mt + ph - v / ymax * ph;
   let parts = "";
   for (let g = 0; g <= 5; g++) {
     const y = mt + ph * g / 5;
-    parts += `<line class="grid" x1="${ml}" x2="${ml+pw}" y1="${y}" y2="${y}"/><text class="axis-text" x="${ml-6}" y="${y+3}" text-anchor="end">${(ymax*(5-g)/5).toFixed(1)}</text>`;
+    parts += '<line class="grid" x1="' + ml + '" x2="' + (ml + pw) + '" y1="' + y + '" y2="' + y + '"/>' +
+             '<text class="axis-text" x="' + (ml - 6) + '" y="' + (y + 3) + '" text-anchor="end">' + (ymax * (5 - g) / 5).toFixed(1) + '</text>';
   }
-  for (let n = 500; n <= 3000; n += 500)
-    parts += `<text class="axis-text" x="${X(n)}" y="${mt+ph+14}" text-anchor="middle">${n}</text>`;
-  parts += `<text class="axis-text" x="${ml+pw/2}" y="${Hp-6}" text-anchor="middle">N (items)</text><text class="axis-text" x="${ml-34}" y="${mt+ph/2}" transform="rotate(-90 ${ml-34} ${mt+ph/2})" text-anchor="middle">halfwidth (pp)</text>`;
-  const mkPath = (ys, cls) => { let d = ""; for (let i = 0; i < xs.length; i++) d += (i === 0 ? "M" : "L") + X(xs[i]) + " " + Y(ys[i]); return `<path class="curve ${cls}" d="${d}"/>`; };
-  parts += mkPath(yItem, "item") + mkPath(ySeed, "seed") + mkPath(yTotal, "total");
-  parts += `<line class="zero-ref" x1="${X(N)}" x2="${X(N)}" y1="${mt}" y2="${mt+ph}"/>`;
-  parts += `<text class="legend" x="${ml+10}" y="${mt+14}" fill="#2e5aa8">item-count HW</text><text class="legend" x="${ml+10}" y="${mt+28}" fill="#c4793d">per-seed HW (K=${K})</text><text class="legend" x="${ml+10}" y="${mt+42}" fill="#2f8a4a">combined HW</text>`;
+  for (let k = 500; k <= 3000; k += 500)
+    parts += '<text class="axis-text" x="' + X(k) + '" y="' + (mt + ph + 14) + '" text-anchor="middle">' + k + '</text>';
+  BENCHMARKS.forEach(function (b) {
+    if (b[1] >= xmin && b[1] <= xmax)
+      parts += '<line class="mark" x1="' + X(b[1]) + '" x2="' + X(b[1]) + '" y1="' + mt + '" y2="' + (mt + ph) + '"/>' +
+               '<text class="axis-text" x="' + (X(b[1]) + 3) + '" y="' + (mt + ph - 4) + '">' + b[0] + '</text>';
+  });
+  parts += '<text class="axis-text" x="' + (ml + pw / 2) + '" y="' + (H - 6) + '" text-anchor="middle">n (items)</text>' +
+           '<text class="axis-text" x="' + (ml - 36) + '" y="' + (mt + ph / 2) + '" transform="rotate(-90 ' + (ml - 36) + ' ' + (mt + ph / 2) + ')" text-anchor="middle">95% halfwidth (pp)</text>';
+  const mkPath = function (ys, cls) { let d = ""; for (let i = 0; i < xs.length; i++) d += (i === 0 ? "M" : "L") + X(xs[i]) + " " + Y(ys[i]); return '<path class="curve ' + cls + '" d="' + d + '"/>'; };
+  parts += mkPath(yI, "item") + mkPath(yR, "run") + mkPath(yT, "total");
+  parts += '<line class="zero-ref" x1="' + X(n) + '" x2="' + X(n) + '" y1="' + mt + '" y2="' + (mt + ph) + '"/>';
+  parts += '<text class="legend" x="' + (ml + 10) + '" y="' + (mt + 14) + '" fill="#2e5aa8">item + generation term</text>' +
+           '<text class="legend" x="' + (ml + 10) + '" y="' + (mt + 28) + '" fill="#c4793d">run-to-run term (R=' + R + ')</text>' +
+           '<text class="legend" x="' + (ml + 10) + '" y="' + (mt + 42) + '" fill="#2f8a4a">combined</text>';
   svg.innerHTML = parts;
 
-  const hwItemN = 1.96 * Math.sqrt(p*(1-p)/N) * 100;
-  const hwSeedN = 1.96 * sig / Math.sqrt(K);
-  const hwTotN  = Math.sqrt(hwItemN * hwItemN + hwSeedN * hwSeedN);
-  const dominant = hwItemN > hwSeedN ? "item-count noise dominates" : "per-seed noise dominates";
-  document.getElementById("p1read").textContent =
-    `At N=${N}, K=${K}, p=${p.toFixed(2)}, sigma=${sig.toFixed(1)} pp:
-item HW = ${hwItemN.toFixed(2)} pp
-seed HW = ${hwSeedN.toFixed(2)} pp
-total HW = ${hwTotN.toFixed(2)} pp
---> ${dominant}`;
+  const a = hwItem(p, n, K), t = Math.sqrt(a * a + hwRun * hwRun);
+  const dominant = a > hwRun ? "items dominate: add items or generations" : "runs dominate: adding items does not help";
+  p1read.textContent =
+    "n=" + n + "  p=" + p.toFixed(2) + "  K=" + K + "  sigma_run=" + s.toFixed(2) + " pp  R=" + R + "\n" +
+    "item + generation HW = " + a.toFixed(2) + " pp\n" +
+    "run-to-run HW        = " + hwRun.toFixed(2) + " pp\n" +
+    "combined HW          = " + t.toFixed(2) + " pp\n" +
+    "-> " + dominant;
 }
 
 // ---------- Panel 2 ----------
 function drawPanel2() {
-  const N   = +document.getElementById("p2N").value;
-  const d   = +document.getElementById("p2d").value;    // pp, true paired delta
-  const sig = +document.getElementById("p2sig").value;  // pp, per-item noise
-  const B   = +document.getElementById("p2B").value;
-  document.getElementById("p2N_val").textContent = N;
-  document.getElementById("p2d_val").textContent = d.toFixed(1);
-  document.getElementById("p2sig_val").textContent = sig.toFixed(1);
-  document.getElementById("p2B_val").textContent = B;
+  const n = +p2n.value, pB = +p2p.value, d = +p2d.value / 100, rho = +p2c.value, B = +p2B.value;
+  p2n_val.textContent = n; p2p_val.textContent = pB.toFixed(2); p2d_val.textContent = (d * 100).toFixed(1);
+  p2c_val.textContent = rho.toFixed(2); p2B_val.textContent = B;
+  const pA = Math.max(0.01, Math.min(0.99, pB + d));
 
-  // Simulate N paired per-item deltas ~ Normal(d, sig)
-  const pairs = new Array(N);
-  for (let i = 0; i < N; i++) pairs[i] = d + sig * gaussian();
-
-  // Paired bootstrap on the mean delta
-  const boot = new Array(B);
-  for (let b = 0; b < B; b++) {
-    let s = 0;
-    for (let i = 0; i < N; i++) s += pairs[(Math.random() * N) | 0];
-    boot[b] = s / N;
+  // correlated Bernoulli pairs via a shared latent draw
+  const sA = new Float64Array(n), sB = new Float64Array(n), diff = new Float64Array(n);
+  for (let i = 0; i < n; i++) {
+    const u = Math.random(), va = Math.random(), vb = Math.random();
+    const ua = (Math.random() < rho) ? u : va;
+    const ub = (Math.random() < rho) ? u : vb;
+    sA[i] = ua < pA ? 1 : 0;
+    sB[i] = ub < pB ? 1 : 0;
+    diff[i] = sA[i] - sB[i];
   }
-  boot.sort((a, b) => a - b);
-  const loCI = quantile(boot, 0.025);
-  const hiCI = quantile(boot, 0.975);
-  const deltaHat = pairs.reduce((a, b) => a + b, 0) / N;
-  // achieved significance level for H0: delta = 0
+  let mA = 0, mB = 0, md = 0;
+  for (let i = 0; i < n; i++) { mA += sA[i]; mB += sB[i]; md += diff[i]; }
+  mA /= n; mB /= n; md /= n;
+  let vd = 0; for (let i = 0; i < n; i++) vd += (diff[i] - md) * (diff[i] - md); vd /= (n - 1);
+  const sePaired = Math.sqrt(vd / n) * 100;
+  const seA = Math.sqrt(mA * (1 - mA) / n) * 100, seB = Math.sqrt(mB * (1 - mB) / n) * 100;
+  const seUnpaired = Math.sqrt(seA * seA + seB * seB);
+  const corr = (seUnpaired * seUnpaired - sePaired * sePaired) / (2 * seA * seB);
+
+  const boot = new Float64Array(B);
+  for (let b = 0; b < B; b++) { let s = 0; for (let i = 0; i < n; i++) s += diff[(Math.random() * n) | 0]; boot[b] = s / n * 100; }
+  const bs = Array.prototype.slice.call(boot).sort(function (x, y) { return x - y; });
+  const loP = quantile(bs, 0.025), hiP = quantile(bs, 0.975);
   let pos = 0, neg = 0;
-  for (let i = 0; i < B; i++) { if (boot[i] >= 0) pos++; if (boot[i] <= 0) neg++; }
-  const pBoot = 2 * Math.min(pos / B, neg / B);
+  for (let b = 0; b < B; b++) { if (bs[b] >= 0) pos++; if (bs[b] <= 0) neg++; }
+  const pBootApprox = 2 * Math.min(pos / B, neg / B);
+  let Wc = 0, Lc = 0;
+  for (let i = 0; i < n; i++) { if (diff[i] > 0) Wc++; else if (diff[i] < 0) Lc++; }
+  const pSign = signTestP(Wc, Lc);
+  const dHat = md * 100;
+  const loU = dHat - 1.96 * seUnpaired, hiU = dHat + 1.96 * seUnpaired;
 
-  // Sign test
-  let W = 0, L = 0;
-  for (let i = 0; i < N; i++) { if (pairs[i] > 0) W++; else if (pairs[i] < 0) L++; }
-  const pSign = signTestP(W, L);
-
-  const svg = document.getElementById("p2plot"); svg.innerHTML = "";
-  const Wp = 720, Hp = 300, ml = 48, mr = 14, mt = 18, mb = 32;
-  const pw = Wp - ml - mr, ph = Hp - mt - mb;
-  const xmin = Math.min(-3, boot[0] - 0.5), xmax = Math.max(5, boot[boot.length - 1] + 0.5);
+  const svg = document.getElementById("p2plot"); const W = 740, H = 300, ml = 52, mr = 16, mt = 40, mb = 34;
+  const pw = W - ml - mr, ph = H - mt - mb;
+  const xmin = Math.min(loU, bs[0]) - 0.6, xmax = Math.max(hiU, bs[bs.length - 1]) + 0.6;
   const X = v => ml + (v - xmin) / (xmax - xmin) * pw;
-  const nbins = 40, bins = new Array(nbins).fill(0);
-  for (let i = 0; i < B; i++) {
-    let k = Math.floor((boot[i] - xmin) / (xmax - xmin) * nbins);
+  const nbins = 44, bins = new Array(nbins).fill(0);
+  for (let b = 0; b < B; b++) {
+    const k = Math.floor((bs[b] - xmin) / (xmax - xmin) * nbins);
     bins[Math.max(0, Math.min(nbins - 1, k))]++;
   }
-  const binMax = Math.max(...bins);
+  const binMax = Math.max.apply(null, bins);
   const Y = c => mt + ph - (c / binMax) * ph;
   let parts = "";
   for (let k = 0; k < nbins; k++) {
     const x0 = X(xmin + k * (xmax - xmin) / nbins), x1 = X(xmin + (k + 1) * (xmax - xmin) / nbins);
-    const y0 = Y(bins[k]);
-    parts += `<rect class="hist-bar" x="${x0}" y="${y0}" width="${x1-x0-1}" height="${mt+ph-y0}"/>`;
+    parts += '<rect class="hist-bar" x="' + x0 + '" y="' + Y(bins[k]) + '" width="' + Math.max(0.5, x1 - x0 - 1) + '" height="' + (mt + ph - Y(bins[k])) + '"/>';
   }
-  parts += `<line class="axis-line" x1="${ml}" x2="${ml+pw}" y1="${mt+ph}" y2="${mt+ph}"/>`;
+  parts += '<line class="axis-line" x1="' + ml + '" x2="' + (ml + pw) + '" y1="' + (mt + ph) + '" y2="' + (mt + ph) + '"/>';
   for (let t = Math.ceil(xmin); t <= Math.floor(xmax); t++)
-    parts += `<text class="axis-text" x="${X(t)}" y="${mt+ph+14}" text-anchor="middle">${t}</text>`;
-  parts += `<text class="axis-text" x="${ml+pw/2}" y="${Hp-6}" text-anchor="middle">bootstrapped delta (pp)</text>`;
-  parts += `<line class="zero-ref" x1="${X(0)}" x2="${X(0)}" y1="${mt}" y2="${mt+ph}"/><line class="ci-line" x1="${X(loCI)}" x2="${X(hiCI)}" y1="${mt+4}" y2="${mt+4}"/><circle cx="${X(deltaHat)}" cy="${mt+4}" r="4" fill="#2e5aa8"/>`;
-  parts += `<text class="legend" x="${X(loCI)}" y="${mt-2}" fill="#2e5aa8">${loCI.toFixed(2)}</text><text class="legend" x="${X(hiCI)-26}" y="${mt-2}" fill="#2e5aa8">${hiCI.toFixed(2)}</text><text class="legend" x="${X(deltaHat)-10}" y="${mt+16}" fill="#2e5aa8">delta_hat=${deltaHat.toFixed(2)}</text>`;
+    parts += '<text class="axis-text" x="' + X(t) + '" y="' + (mt + ph + 14) + '" text-anchor="middle">' + t + '</text>';
+  parts += '<text class="axis-text" x="' + (ml + pw / 2) + '" y="' + (H - 6) + '" text-anchor="middle">difference A − B (pp)</text>';
+  parts += '<line class="zero-ref" x1="' + X(0) + '" x2="' + X(0) + '" y1="' + (mt - 34) + '" y2="' + (mt + ph) + '"/>';
+  parts += '<line class="ci-paired" x1="' + X(loP) + '" x2="' + X(hiP) + '" y1="' + (mt - 10) + '" y2="' + (mt - 10) + '"/>' +
+           '<text class="legend" x="' + (ml) + '" y="' + (mt - 14) + '" fill="#2e5aa8">paired</text>';
+  parts += '<line class="ci-unpaired" x1="' + X(loU) + '" x2="' + X(hiU) + '" y1="' + (mt - 26) + '" y2="' + (mt - 26) + '"/>' +
+           '<text class="legend" x="' + (ml) + '" y="' + (mt - 30) + '" fill="#c4793d">unpaired</text>';
+  parts += '<circle cx="' + X(dHat) + '" cy="' + (mt - 10) + '" r="3.5" fill="#2e5aa8"/>';
   svg.innerHTML = parts;
 
-  document.getElementById("p2read").textContent =
-    `N=${N}, B=${B}, true delta=${d.toFixed(1)} pp, noise sigma=${sig.toFixed(1)} pp
-delta_hat     = ${deltaHat.toFixed(2)} pp
-95% paired CI = [${loCI.toFixed(2)}, ${hiCI.toFixed(2)}]
-paired-bootstrap p = ${pBoot.toFixed(4)}
-sign test W=${W} L=${L} p = ${pSign.toFixed(4)}`;
+  p2read.textContent =
+    "observed: A=" + (mA * 100).toFixed(1) + "  B=" + (mB * 100).toFixed(1) + "  delta_hat=" + dHat.toFixed(2) + " pp\n" +
+    "measured corr(s_A,s_B) = " + corr.toFixed(2) + "\n" +
+    "SE paired   = " + sePaired.toFixed(2) + " pp   CI [" + loP.toFixed(2) + ", " + hiP.toFixed(2) + "]\n" +
+    "SE unpaired = " + seUnpaired.toFixed(2) + " pp   CI [" + loU.toFixed(2) + ", " + hiU.toFixed(2) + "]\n" +
+    "ratio of halfwidths = " + (seUnpaired / sePaired).toFixed(2) + "x\n" +
+    "paired bootstrap p (interval inversion) = " + pBootApprox.toFixed(4) + "\n" +
+    "sign test W=" + Wc + " L=" + Lc + "  p = " + pSign.toFixed(4);
 
   const v = document.getElementById("p2verdict");
-  const sig05 = pBoot < 0.05 && pSign < 0.05 && (loCI > 0 || hiCI < 0);
-  if (sig05) {
-    v.className = "p-verdict sig-yes";
-    v.textContent = "REJECT H0 at alpha=0.05 (both tests agree; CI excludes 0) -- ship-if-two-run";
-  } else if (pBoot < 0.05 || pSign < 0.05) {
-    v.className = "p-verdict sig-no";
-    v.textContent = "MIXED -- one test rejects, the other does not; do NOT claim significance";
+  const pairedExcludes = loP > 0 || hiP < 0;
+  const unpairedExcludes = loU > 0 || hiU < 0;
+  if (pairedExcludes && unpairedExcludes) {
+    v.className = "verdict yes";
+    v.textContent = "Both intervals exclude 0. Report the paired interval and the correlation.";
+  } else if (pairedExcludes) {
+    v.className = "verdict yes";
+    v.textContent = "Paired interval excludes 0, unpaired does not. Discarding the pairing would have hidden this difference.";
   } else {
-    v.className = "p-verdict sig-no";
-    v.textContent = "FAIL TO REJECT H0 -- delta within noise; do not ship on this evidence";
+    v.className = "verdict no";
+    v.textContent = "Paired interval contains 0 at this n. Either the difference is smaller than this design resolves, or n is too small (see §4).";
   }
 }
 
-// wire up
-["p1N","p1K","p1sig","p1p"].forEach(id =>
-  document.getElementById(id).addEventListener("input", drawPanel1));
-["p2N","p2d","p2sig","p2B"].forEach(id =>
-  document.getElementById(id).addEventListener("input", drawPanel2));
+["p1n", "p1p", "p1K", "p1s", "p1R"].forEach(function (id) { document.getElementById(id).addEventListener("input", drawPanel1); });
+["p2n", "p2p", "p2d", "p2c", "p2B"].forEach(function (id) { document.getElementById(id).addEventListener("input", drawPanel2); });
 drawPanel1();
 drawPanel2();
 </script>

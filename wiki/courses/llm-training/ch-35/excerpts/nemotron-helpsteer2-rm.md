@@ -7,6 +7,8 @@ source_url: https://arxiv.org/abs/2406.11704
 created_at: "2026-04-23"
 ---
 
+> Superseded by the 2026-09 revision of read.md; kept for history.
+
 # Excerpt: HelpSteer2 5-attribute RM — the core of Nemotron-4
 
 **Source library:** `wiki/raw-data/llm-training/model-reports/nemotron.md`

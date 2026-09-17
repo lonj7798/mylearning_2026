@@ -2,113 +2,39 @@
 chapter: ch-40
 course: llm-training
 phase: read
-excerpt_of: wiki/raw-data/llm-training/papers/grpo.md
+excerpt_of: arXiv:2402.03300v3 (DeepSeekMath); library card [[grpo]] (verified 2026-09-14)
 source_url: https://arxiv.org/abs/2402.03300
 created_at: "2026-04-23"
+revised: "2026-09-15 (generality revision; aligned with the verified card and the v3 text)"
 ---
 
-# Excerpt: GRPO — the DeepSeekMath loss that R1 shipped with
+# Excerpt: GRPO as published — objective, KL estimator, results
 
-**Source library:** `wiki/raw-data/llm-training/papers/grpo.md` + `wiki/raw-data/llm-training/model-reports/deepseekmath.md`
-**Artifact:** Shao et al. 2024, "DeepSeekMath: Pushing the Limits of Mathematical Reasoning in Open Language Models." The paper's §4.1.2 / Equation 3 is the single most-cited formula in post-R1 RL.
+Used by [[read]] §4, §5, §9, and the Recipe. Shao et al. (DeepSeek-AI, Tsinghua, Peking University), arXiv v1 Feb 2024, v3 27 Apr 2024.
 
----
-
-## Why this source anchors ch-40 §4
-
-GRPO is the loss DeepSeek used for R1-Zero and R1. Every open-source R1 reproduction runs some variant of it. Ch-40 §4 is essentially a tutorial on Equation 3 plus the k3 KL estimator in Equation 4. Getting the advantage form and the KL location right is the difference between matching paper results and silently training on a different objective.
-
----
-
-## The rollout/advantage/objective sequence ch-40 §4 walks through
-
-Source lines 33–42:
-
-1. **Rollout.** For each question q, sample G outputs `{o_1, …, o_G}` from `π_θ_old`. RM scores them → `r_1, …, r_G`.
-2. **Advantage** (same for every token t in o_i):
-   ```
-   Â_{i,t} = (r_i − mean(r)) / std(r)
-   ```
-3. **Objective (Eq. 3):**
-   ```
-   J = E[(1/G) Σ_i (1/|o_i|) Σ_t { min[ρ Â, clip(ρ, 1±ε) Â] − β D_KL(π_θ || π_ref) }]
-   ```
-   where `ρ_{i,t} = π_θ(o_{i,t}|·) / π_θ_old(o_{i,t}|·)`.
-
-Ch-40 §4 reproduces this formula exactly. The two biased divisions ch-40 §5 targets are the `(1/|o_i|)` and the `/std(r)` — both visible here on first sight.
-
----
-
-## Why std-normalize at all (ch-40 §4 argument)
-
-Source lines 36: advantages are z-scored. Ch-40 §4 motivates this concretely: prompt A has rewards `{0.1, 0.11, 0.12}`, prompt B has `{0.0, 0.5, 1.0}`. Without std, B's gradient magnitude is ~10× A's even though B's *relative* signal is equally informative per prompt. Dividing by std equalizes per-prompt gradient magnitudes so the optimizer doesn't focus all updates on high-variance prompts. This is the motivation; §5 then shows it backfires for verifiable 0/1 rewards.
-
----
-
-## The k3 KL estimator derivation
-
-Source lines 44–47:
-
+## Advantage and objective (§4.1.1–§4.1.2, Eqs. 3–4)
 ```
-D_KL^k3 ≈ π_ref/π_θ − log(π_ref/π_θ) − 1
+Â_{i,t} = (r_i − mean(r_1 … r_G)) / std(r_1 … r_G)        (outcome supervision; same value for every token of o_i)
+
+J_GRPO(θ) = E[q, {o_i}] (1/G) Σ_i (1/|o_i|) Σ_t { min[ ρ_{i,t} Â_{i,t}, clip(ρ_{i,t}, 1−ε, 1+ε) Â_{i,t} ] − β D_KL[π_θ || π_ref] }
+ρ_{i,t}   = π_θ(o_{i,t} | q, o_{i,<t}) / π_θold(o_{i,t} | q, o_{i,<t})
+D_KL      = π_ref/π_θ − log(π_ref/π_θ) − 1                 (Eq. 4, cited to Schulman 2020, "guaranteed to be positive")
 ```
+The paper does not use the label "k3"; that name comes from [[john-schulman-kl-tricks]]. PPO adds its KL penalty to the reward (Eq. 2); GRPO adds it to the loss, "avoiding complicating the calculation of Â" (§4.1.1). Stated motivation for dropping the value model: it is "typically another model of comparable size as the policy model", and a reward at the last token only "may complicate the training of a value function that is accurate at each token".
 
-Let `x = log(π_ref/π_θ)`. Then `k3 = e^x − x − 1`. Taylor around x=0:
-`k3 = x²/2 + x³/6 + x⁴/24 + …`
+Process supervision (§4.1.3) normalizes step rewards by the mean and std of all step rewards in the group and takes the undiscounted sum of normalized rewards of steps ending at or after token `t`. Iterative RL (§4.1.4, Algorithm 1) retrains the reward model on policy samples with 10% replay and resets `π_ref` to the current policy.
 
-- For small KL (`|x| → 0`): `k3 ≈ x²/2` = k2 (Fisher-information regime).
-- For positive x (ratio > 1): `k3 → e^x` — grows faster than |x|.
-- For negative x (ratio < 1): `k3 → −x − 1 + o(1)` — grows linearly.
-- Always ≥ 0 (Bregman property of convex `f(t) = e^t`).
-- Unbiased: `E[k3] = KL(π_θ || π_ref)` exactly when `x` is the log-likelihood-ratio of a sample from `π_θ`.
+## Recipe (§4.2)
+Policy LR 1e-6, β = 0.04, G = 64 outputs per question, max length 1024, training batch size 1024 (unit not stated in the paper), one policy update per exploration stage, about 144K chain-of-thought questions related to GSM8K and MATH taken from the SFT set, reward model initialized from DeepSeekMath-Base 7B with LR 2e-5. Clip ε and rollout temperature are not reported.
 
-This is why ch-40 §4 calls k3 "unbiased AND always positive" — k1 is biased in sign, k2 loses sign, k3 is both properties at once. One extra reference forward per step, tensor shape identical to logprobs.
+## Results (Table 5)
+DeepSeekMath-Instruct 7B → DeepSeekMath-RL 7B, chain-of-thought: GSM8K 82.9 → 88.2; MATH 46.8 → 51.7; MGSM-zh 73.2 → 79.6; CMATH 84.6 → 88.8. Tool-integrated: GSM8K 83.7 → 86.7; MATH 57.4 → 58.8. Figure 5 (1.3B) compares RFT, Online RFT, GRPO+OS, GRPO+PS as curves with no numbers in the text. No direct PPO-versus-GRPO accuracy comparison is reported at 7B.
 
----
+## Generality and negatives (§5.2)
+- RL raises Maj@K but not Pass@K at temperature 0.7 for K ≤ 64; the authors attribute the gain to "boosting the correct response from TopK rather than the enhancement of fundamental capabilities" (Fig. 7).
+- RL used math chain-of-thought prompts only; the authors treat MGSM-zh and CMATH as out of domain, and both improved. Non-math benchmarks after RL are not reported.
+- Online RFT has gradient coefficient 1 for correct and 0 for incorrect outputs and "does not penalize incorrect responses"; GRPO's normalized advantage gives below-mean outputs a negative coefficient (§5.2.1, Eq. 10; App. A.1.6 Eq. 21).
+- Reward-label noise: PRM800K is cited as containing about 20% incorrect annotations (§5.2.3, footnote 7).
 
-## KL-in-loss vs KL-on-reward (ch-40 §4's subtle point)
-
-Source line 47: "Applied token-wise inside the loss, not as a per-token reward penalty."
-
-RLOO and REINFORCE++ put `−β · KL_t` into the per-token reward before computing advantages. GRPO leaves the reward untouched and adds `−β · KL` to the per-token loss. The numerical difference:
-
-- On-reward KL: `Â = normalize(reward + KL penalty)` — KL propagates through advantage normalization (gets divided by std).
-- In-loss KL: `Â = normalize(reward)`, loss adds `−β · KL_t` separately — KL does not interact with advantage normalization.
-
-For verifiable 0/1 tasks, in-loss KL is cleaner: advantage is a pure function of the outcome reward, KL regularization is a pure function of the policy distance. Less entanglement.
-
----
-
-## Attested GRPO hyperparameters (DeepSeekMath paper recipe)
-
-Source lines 54–63:
-
-| Knob | Value (attested) |
-|------|------------------|
-| Group size G | 64 (main runs) |
-| Clip ε | 0.2 |
-| KL coefficient β | 0.04 |
-| Learning rate | 1e-6 |
-| Batch size (prompts) | 1024 |
-| Max response length | 1024 tokens |
-| π_ref | SFT model, frozen |
-| Epochs per rollout μ | 1 (single-step) |
-| Sampling T | 1.0 |
-
-Ch-40 §4 reports these as canonical GRPO defaults. G=64 is much larger than RLOO's k=2–4 — more samples give a tighter per-prompt baseline but require more rollout compute.
-
----
-
-## Empirical progression (ch-40 §4 final paragraph)
-
-From deepseekmath.md line 25: on MATH, SFT 46.8 → RFT 49.0 → DPO 49.0 → PPO 51.0 → **GRPO 51.7**. Each step of the ladder is smaller than the gap between SFT and RFT, but GRPO is the final rung and the one that ships with R1.
-
----
-
-## Connections to the rest of the track
-
-- [[rloo]] — the leave-one-out ancestor.
-- [[dr-grpo]] — the bias-corrected successor (subtracts the two problematic divisions).
-- [[deepseek-r1]] — the direct downstream application.
-- [[verl-grpo]], [[trl-grpo]] — the open-source reference implementations.
-- [[john-schulman-kl-tricks]] — the k1/k2/k3 estimator families.
+## Claims removed from the earlier version of this excerpt
+"MATH 51.7 from PPO's 51.0, RFT's 49.0" (no such comparison exists in the paper), "batch 1024 prompts = 16 × 64", "clip ε = 0.2", "π_ref frozen SFT", "removing the critic halves memory", and "GRPO is the loss DeepSeek used for R1-Zero and R1" (a fact from [[deepseek-r1-recipe]], not from this paper).

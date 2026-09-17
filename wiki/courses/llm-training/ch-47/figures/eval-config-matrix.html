@@ -1,370 +1,312 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
 <head>
-<meta charset="UTF-8">
-<title>Eval Config Matrix - task_shape x harness x inference_config</title>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Harness Coordinates and the Development-Unseen Gap</title>
 <style>
-  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-         max-width: 1180px; margin: 1.6em auto; padding: 0 1em; color: #1f1f1f;
-         background: #fafafa; font-feature-settings: "tnum" 1; font-variant-numeric: tabular-nums; }
-  h1 { font-size: 1.3em; margin-bottom: 0.25em; }
-  .subtitle { color: #5a5a5a; margin-top: 0; font-size: 0.92em; line-height: 1.5; }
-  .layout { display: grid; grid-template-columns: 1fr 380px; gap: 1.2em; margin-top: 1em; }
-  .panel { border: 1px solid #dcdcdc; border-radius: 6px; background: #fff;
-           padding: 0.9em 1em; }
-  h2 { font-size: 1.0em; margin: 0 0 0.6em 0; color: #2b2b2b;
-       border-bottom: 1px solid #ececec; padding-bottom: 0.3em; }
-  .controls { display: flex; flex-direction: column; gap: 0.55em; margin-bottom: 0.6em; }
-  .controls label { font-family: 'SF Mono', Menlo, monospace; font-size: 0.85em;
-                    color: #333; display: flex; flex-direction: column; gap: 0.2em; }
-  .controls select, .controls input[type=range] {
-    width: 100%; font-family: 'SF Mono', Menlo, monospace; font-size: 0.88em; }
-  table.matrix { border-collapse: collapse; width: 100%; font-size: 0.86em;
-                 font-family: 'SF Mono', Menlo, monospace; }
-  table.matrix th, table.matrix td { border: 1px solid #e0e0e0; padding: 6px 8px;
-                                      text-align: left; vertical-align: top; }
-  table.matrix th { background: #f3f5f8; font-weight: 600; color: #203050; }
-  .cell-title { font-family: 'SF Mono', Menlo, monospace; font-size: 0.95em;
-                color: #204080; margin: 0 0 0.4em 0; }
-  .cell-body { font-size: 0.86em; color: #333; line-height: 1.5;
-               background: #f5f7fb; padding: 0.55em 0.75em; border-radius: 4px;
-               border-left: 3px solid #2e5aa8; }
-  .pitfall { font-size: 0.82em; color: #333; line-height: 1.5;
-             background: #fbf5ef; padding: 0.45em 0.65em; border-radius: 4px;
-             border-left: 3px solid #c4793d; margin-top: 0.35em; }
-  .src { font-size: 0.78em; color: #5a6a80; margin-top: 0.4em; }
-  code { background: #eef; padding: 1px 4px; border-radius: 3px;
-         font-family: 'SF Mono', Menlo, monospace; font-size: 0.85em; }
-  .score-bar { height: 14px; background: #eaeef4; border-radius: 3px; overflow: hidden;
-               border: 1px solid #dde2ea; }
-  .score-bar > div { height: 100%; background: linear-gradient(90deg, #2e5aa8 0%, #2f8a4a 100%); }
-  .score-row { display: grid; grid-template-columns: 170px 1fr 54px; gap: 0.5em;
-               align-items: center; font-size: 0.82em; margin: 0.25em 0; }
-  .score-row span.lbl { color: #444; }
-  .score-row span.val { color: #204080; font-weight: 600; text-align: right; }
-  .readout { font-family: 'SF Mono', Menlo, monospace; font-size: 0.82em;
-             color: #5a6a80; margin-top: 0.3em; }
+  :root {
+    color-scheme: light;
+    --surface-0: #f6f5f2;
+    --surface-1: #fcfcfb;
+    --grid: #e4e2dd;
+    --axis: #b9b7b0;
+    --text-primary: #0b0b0b;
+    --text-secondary: #52514e;
+    --text-muted: #75736d;
+    --series-1: #2a78d6;
+    --series-2: #eb6834;
+    --series-3: #7a7a74;
+    --focus: #2a78d6;
+    --chip-bg: #ecebe6;
+    --chip-on: #2a78d6;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      color-scheme: dark;
+      --surface-0: #121211;
+      --surface-1: #1a1a19;
+      --grid: #2e2e2c;
+      --axis: #55544f;
+      --text-primary: #ffffff;
+      --text-secondary: #c3c2b7;
+      --text-muted: #9a998f;
+      --series-1: #3987e5;
+      --series-2: #d95926;
+      --series-3: #86857d;
+      --focus: #3987e5;
+      --chip-bg: #262624;
+      --chip-on: #3987e5;
+    }
+  }
+  :root[data-theme="dark"] {
+    color-scheme: dark;
+    --surface-0: #121211;
+    --surface-1: #1a1a19;
+    --grid: #2e2e2c;
+    --axis: #55544f;
+    --text-primary: #ffffff;
+    --text-secondary: #c3c2b7;
+    --text-muted: #9a998f;
+    --series-1: #3987e5;
+    --series-2: #d95926;
+    --series-3: #86857d;
+    --focus: #3987e5;
+    --chip-bg: #262624;
+    --chip-on: #3987e5;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    padding-block: 24px;
+    padding-inline: 16px;
+    background: var(--surface-0);
+    color: var(--text-primary);
+    font: 15px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  }
+  main { max-width: 900px; margin: 0 auto; }
+  h1 { font-size: 20px; margin: 0 0 4px; }
+  h2 { font-size: 16px; margin: 28px 0 8px; }
+  p.lede { color: var(--text-secondary); margin: 0 0 18px; }
+  section { background: var(--surface-1); border: 1px solid var(--grid); border-radius: 8px; padding: 16px; margin-bottom: 18px; }
+  .chips { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 14px; }
+  button.chip {
+    font: inherit; font-size: 13px; cursor: pointer;
+    background: var(--chip-bg); color: var(--text-primary);
+    border: 1px solid var(--grid); border-radius: 999px; padding: 5px 12px;
+  }
+  button.chip[aria-pressed="true"] { background: var(--chip-on); color: #fff; border-color: var(--chip-on); }
+  button.chip:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+  .row { display: grid; grid-template-columns: minmax(150px, 220px) 1fr 74px; gap: 10px; align-items: center; margin: 7px 0; }
+  .row .label { font-size: 13px; color: var(--text-secondary); }
+  .track { background: var(--chip-bg); border-radius: 3px; height: 18px; position: relative; overflow: hidden; }
+  .bar { height: 100%; border-radius: 3px; }
+  .val { font-variant-numeric: tabular-nums; font-size: 13px; text-align: right; }
+  .meta { font-size: 13px; color: var(--text-secondary); margin: 10px 0 0; }
+  .locus { font-size: 12px; color: var(--text-muted); margin-top: 6px; }
+  .delta { font-size: 13px; color: var(--text-primary); margin-top: 10px; }
+  table { border-collapse: collapse; width: 100%; font-size: 13px; margin-top: 6px; }
+  th, td { border-bottom: 1px solid var(--grid); padding: 6px 8px; text-align: right; }
+  th:first-child, td:first-child { text-align: left; }
+  th { color: var(--text-secondary); font-weight: 600; }
+  .dev { color: var(--series-1); font-variant-numeric: tabular-nums; }
+  .uns { color: var(--series-2); font-variant-numeric: tabular-nums; }
+  .legend { font-size: 12px; color: var(--text-muted); margin-top: 8px; }
+  .swatch { display: inline-block; width: 10px; height: 10px; border-radius: 2px; vertical-align: middle; margin-right: 4px; }
+  caption { caption-side: bottom; text-align: left; font-size: 12px; color: var(--text-muted); padding-top: 8px; }
+  @media (max-width: 560px) { .row { grid-template-columns: 1fr; } .val { text-align: left; } }
 </style>
 </head>
 <body>
+<main>
+  <h1>Harness coordinates and the development-unseen gap</h1>
+  <p class="lede">Chapter 47, figure 1. Every number below was reported with the model weights held fixed; what changed is a coordinate of the evaluation. Select a coordinate to see the measured numbers and the source locus.</p>
 
-<h1>Eval Config Matrix</h1>
-<p class="subtitle">
-  Three axes: <code>task_shape</code> (MCQ / generation / open-ended / agentic),
-  <code>harness</code> (lm-eval / OLMES / AgentBench), and <code>inference_config</code>
-  (temperature + max_tokens + few-shot preset). Pick a cell; the panel shows the expected
-  metric surface, the matcher that fires, the slicing primitive, the versioning axis, and
-  the three most common pitfalls. Score surface below the matrix is an illustrative
-  seven-bar chart showing how the same 7B model moves across the config preset --
-  directions attested by <code>bfcl</code>, <code>judge-llm-bias</code>, <code>ruler</code>,
-  and <code>olmo-3</code>; absolute numbers are example-only.
-</p>
+  <section aria-labelledby="coord-h">
+    <h2 id="coord-h">One checkpoint, one task, several harness settings</h2>
+    <div class="chips" id="chips" role="group" aria-label="Harness coordinate"></div>
+    <div id="panel"></div>
+  </section>
 
-<div class="layout">
-
-<div class="panel">
-  <h2>Config surface</h2>
-  <table class="matrix">
-    <thead>
-      <tr><th style="width:18%">axis</th><th style="width:41%">what fires</th><th style="width:41%">where it lives</th></tr>
-    </thead>
-    <tbody id="matrix-body"></tbody>
-  </table>
-  <h2 style="margin-top:1em">Illustrative score surface (7B)</h2>
-  <div id="scores"></div>
-  <p class="readout" id="readout">-</p>
-</div>
-
-<div class="panel">
-  <h2>Pick a cell</h2>
-  <div class="controls">
-    <label>task_shape
-      <select id="shape">
-        <option value="mcq">MCQ - MMLU / ARC / HellaSwag</option>
-        <option value="gen">generation-verifiable - GSM8K / HumanEval / BFCL</option>
-        <option value="open">open-ended - MT-Bench / AlpacaEval</option>
-        <option value="agent">agentic - WebArena / BFCL-V3 / SWE-bench</option>
-      </select>
-    </label>
-    <label>harness
-      <select id="harness">
-        <option value="lmeval">lm-eval-harness (EleutherAI)</option>
-        <option value="olmes">OLMES (AllenAI, co-released with OLMo 3)</option>
-        <option value="agentbench">AgentBench / WebArena-style</option>
-      </select>
-    </label>
-    <label>inference preset
-      <select id="cfg">
-        <option value="greedy-short">greedy-short: T=0.0 top_p=1.0 max_tokens=16</option>
-        <option value="greedy-long">greedy-long: T=0.0 top_p=1.0 max_tokens=512</option>
-        <option value="passk">pass@k: T=0.8 top_p=0.95 n=10 max_tokens=512</option>
-        <option value="chatty">chatty: T=0.7 top_p=0.95 max_tokens=1024</option>
-      </select>
-    </label>
-  </div>
-  <h2>Cell summary</h2>
-  <p class="cell-title" id="c-title">-</p>
-  <div class="cell-body" id="c-body">-</div>
-  <h2 style="margin-top:0.8em">Common pitfalls</h2>
-  <div id="c-pitfalls"></div>
-  <p class="src" id="c-src">-</p>
-</div>
-
-</div>
+  <section aria-labelledby="gap-h">
+    <h2 id="gap-h">Development and unseen scores across the Tülu 3 8B pipeline</h2>
+    <table>
+      <caption>Tülu 3 report (arXiv:2411.15124v5) Table 31. Development benchmark first, unseen benchmark second, per core skill. Both suites cover the same skills; only the development suite was read while decisions were made.</caption>
+      <thead>
+        <tr><th>Skill (development → unseen)</th><th>SFT</th><th>DPO</th><th>Final</th></tr>
+      </thead>
+      <tbody id="gapbody"></tbody>
+    </table>
+    <p class="legend"><span class="swatch" style="background:var(--series-1)"></span>development benchmark &nbsp; <span class="swatch" style="background:var(--series-2)"></span>unseen benchmark</p>
+  </section>
+</main>
 
 <script>
-// Cells keyed by "shape-harness". The cfg knob modifies the score bars only,
-// plus one pitfall line, because inference_config is an orthogonal axis that
-// multiplies onto any (shape, harness) cell.
-const CELLS = {
-  "mcq-lmeval": {
-    title: "MCQ x lm-eval-harness",
-    body: "Letter-perplexity is the native path: score log P(A|prompt), log P(B|prompt), ... and argmax. 5-shot is the lm-eval default on MMLU. Matcher is argmax-log-prob; there is no generation and no parsing -- the harness is effectively running forward passes over four (or more) choice tokens.",
-    pitfalls: [
-      "Letter-perplexity and generate-and-match give different numbers on the same model; moving between them silently shifts MMLU by 2-5 points.",
-      "lm-eval's task definitions have been renamed across versions (mmlu -> mmlu_flan_n_shot in 2023); pin the commit SHA.",
-      "Tokenizer edge: a tokenizer that splits ' A' vs 'A' differently changes scores. Always compare under the same tokenizer family."
+var COORDS = [
+  {
+    id: "formulation-8b",
+    name: "Formulation (8B)",
+    question: "Llama3-8B on ARC-Challenge: cloze or multiple-choice formulation",
+    scale: 100,
+    bars: [
+      { label: "25-shot cloze (HF leaderboard)", value: 60.2, series: 1 },
+      { label: "25-shot multiple choice (Llama 3 card)", value: 78.6, series: 2 },
+      { label: "OLMES standard (5 curated shots)", value: 79.3, series: 3 }
     ],
-    src: "Attested: lm-eval-harness task YAML; olmo-3 on eval-as-artifact"
+    delta: "18.4 points between two published numbers for the same weights on the same task.",
+    locus: "OLMES, arXiv:2406.08446v2, Table 1 and §3.4."
   },
-  "mcq-olmes": {
-    title: "MCQ x OLMES",
-    body: "OLMES pins the prompt format in the task id itself -- olmes:mmlu:v1.1 is the contract. Default 5-shot; per-subset and per-difficulty slicing are first-class. The task id embeds the inference-config hash so a number cannot travel without its eval recipe.",
-    pitfalls: [
-      "Do not compare olmes:mmlu:v1.1 to olmes:mmlu:v1.2 without re-running; prompt-format bumps are accountable but not reversible.",
-      "Format-version drift is where release-time regressions hide; always report against the exact id.",
-      "OLMES default few-shot (5) differs from some lm-eval defaults (0 or 1); cross-harness comparison must normalize this."
+  {
+    id: "formulation-70b",
+    name: "Formulation (70B)",
+    question: "Llama3-70B on ARC-Challenge: the same choice at higher ability",
+    scale: 100,
+    bars: [
+      { label: "Multiple-choice formulation", value: 93.7, series: 2 },
+      { label: "Cloze formulation", value: 69.0, series: 1 }
     ],
-    src: "Attested: olmo-3 (fully-open eval release); OLMES task-id convention"
+    delta: "24.7 points. The paper states the error rates are 6.3% and 31%, close to a 5x difference.",
+    locus: "OLMES, arXiv:2406.08446v2, §3.4."
   },
-  "mcq-agentbench": {
-    title: "MCQ x AgentBench (mismatch)",
-    body: "Agentic harnesses are not built for MCQ. They can be coerced -- wrap the MCQ as a single-turn env with a 'submit_answer' tool -- but the protocol overhead (tool-call tokens, env round-trip) measures agent-plumbing more than knowledge. Prefer lm-eval or OLMES for MCQ.",
-    pitfalls: [
-      "Tool-call-format errors become MCQ errors; you are measuring the agent scaffold, not the base-model MCQ ability.",
-      "Inference budget (max-turns) implicitly caps the answer -- a one-shot MCQ should not need turns.",
-      "Results are not comparable to any standard MMLU table; treat as agent-plumbing sanity check, not as an MCQ score."
+  {
+    id: "adaptation",
+    name: "Adaptation method",
+    question: "OPT (175B) on HellaSwag: how the choices are presented",
+    scale: 100,
+    bars: [
+      { label: "Each choice in a separate 0-shot prompt", value: 79.1, series: 1 },
+      { label: "Separate, calibrated", value: 54.8, series: 3 },
+      { label: "Choices presented jointly, 5-shot", value: 30.2, series: 2 }
     ],
-    src: "Attested by inference: BFCL relevance-detection uses this pattern when MCQ-like abstention is the capability"
+    delta: "48.9 points between the highest and lowest adaptation method; the joint form is near chance for this model.",
+    locus: "HELM, arXiv:2211.09110v2, Finding 23 and §8.2, Fig. 33."
   },
-  "gen-lmeval": {
-    title: "generation-verifiable x lm-eval-harness",
-    body: "Generate at T=0 for pass@1 or at T=0.8 top_p=0.95 for pass@k; matcher is regex (GSM8K \\boxed{...}) or unit-test (HumanEval). lm-eval has HumanEval and GSM8K tasks but the executor sandbox is user-provided.",
-    pitfalls: [
-      "max_tokens too low (e.g. 256) truncates HumanEval solutions mid-function; pass@1 drops 3-6 points.",
-      "Regex matcher fails on 'The answer is **42**.' when the bold or period trails; score what the model could produce, not what the regex accepts.",
-      "pass@k at low T becomes pass@1 with waste; use T>=0.6 if k>1."
+  {
+    id: "matcher",
+    name: "Matcher variant",
+    question: "GPT-4 on IFEval: which of the four reported numbers",
+    scale: 100,
+    bars: [
+      { label: "Prompt-level, strict", value: 76.89, series: 1 },
+      { label: "Prompt-level, loose", value: 79.30, series: 1 },
+      { label: "Instruction-level, strict", value: 83.57, series: 2 },
+      { label: "Instruction-level, loose", value: 85.37, series: 2 }
     ],
-    src: "Attested: llama-3 eval suite reports generate@k, not MCQ; bfcl AST-matcher protocol"
+    delta: "8.48 points across the four definitions. The strict-to-loose step alone is 2.41 points, which is 13 of the 541 prompts.",
+    locus: "IFEval, arXiv:2311.07911v1, Table 3 and §2.2."
   },
-  "gen-olmes": {
-    title: "generation-verifiable x OLMES",
-    body: "OLMES treats generation tasks the same way: prompt-format version pinned, 0-shot or 5-shot per task-id, generation with deterministic decoding for pass@1. The number is strictly versioned; moving to a new task-id is a new benchmark.",
-    pitfalls: [
-      "Prompt-format version change is often invisible in diffs but worth 1-4 points on GSM8K.",
-      "Stop-string set is part of the task id; do not override at the harness level.",
-      "For code, OLMES does not ship a sandbox -- executors are still user-provided, so executor bugs look like model regressions."
+  {
+    id: "format",
+    name: "Prompt format",
+    question: "Accuracy spread over formats a practitioner would call equivalent",
+    scale: 80,
+    bars: [
+      { label: "Median spread, 10 sampled formats, 53 tasks", value: 7.5, series: 1 },
+      { label: "Median spread, GPT-3.5, 320 formats", value: 6.4, series: 1 },
+      { label: "Maximum spread, GPT-3.5", value: 56, series: 2 },
+      { label: "Maximum spread, LLaMA-2-13B", value: 76, series: 2 }
     ],
-    src: "Attested: olmo-3 as model-flow artifact incl. eval"
+    delta: "Rankings also invert: LLaMA-2-13B and -70B reverse by at least 0.02 accuracy with probability 0.141.",
+    locus: "FormatSpread, arXiv:2310.11324v2, §1 and §4.2, Fig. 4."
   },
-  "gen-agentbench": {
-    title: "generation-verifiable x AgentBench / BFCL-executable",
-    body: "When the verifier is an executor (HumanEval unit tests, BFCL live API calls, WebArena predicates), this is the natural home. Matcher runs the output. Slicing by task-category and pass^k (BFCL V3+: every of k rollouts must pass) are first-class. Docker digest is the version primitive.",
-    pitfalls: [
-      "Sandbox determinism: non-deterministic environment (clock, network) corrupts pass rate; pin everything.",
-      "pass@k vs pass^k conflation: pass@k averages, pass^k demands consistency. Reporting the wrong one is a known headline-inflation path.",
-      "V1 leaderboards saturate (BFCL V1 ~98% on frontier); always move to the latest version (V2-Live, V3-multi-turn, V4-agentic)."
+  {
+    id: "benchmark",
+    name: "Benchmark construction",
+    question: "Score range over 24 reasonable prompts: MMLU against MMLU-Pro",
+    scale: 12,
+    bars: [
+      { label: "MMLU, typical range", value: 4.5, series: 2 },
+      { label: "MMLU, peak range", value: 10.98, series: 2 },
+      { label: "MMLU-Pro, typical range", value: 2.0, series: 1 },
+      { label: "MMLU-Pro, maximum range", value: 3.74, series: 1 }
     ],
-    src: "Attested: bfcl V1->V4 version generations; webarena predicate-based success"
+    delta: "Ten options instead of four, plus expert review: the same prompt variation moves the score about half as far. The MMLU range is reported as 4-5%; 4.5 is plotted.",
+    locus: "MMLU-Pro, arXiv:2406.01574v6, §6.3, Fig. 5."
   },
-  "open-lmeval": {
-    title: "open-ended x lm-eval (LLM-judge, second-class)",
-    body: "lm-eval can call an LLM judge but it is not first-class. T=0.7 for the candidate, judge prompts and swap-and-average must be configured by the user. The numbers are valid only under the exact judge + rubric + ordering pinned in the task file.",
-    pitfalls: [
-      "Position bias: A-vs-B ordering flips winner in 22-40% of judge calls (judge-llm-bias Fig 2). Always swap-and-average.",
-      "Verbosity bias: longer responses win at a rate above length-controlled baseline. Residualize by length or cap max_tokens.",
-      "Self-enhancement: never let the candidate judge itself. Attested on GPT-4 and Claude."
+  {
+    id: "determinism",
+    name: "Numeric determinism",
+    question: "Qwen3-235B-A22B-Instruct-2507, one prompt, temperature 0, 1,000 completions",
+    scale: 100,
+    bars: [
+      { label: "Unique completions, default kernels", value: 80, series: 2 },
+      { label: "Unique completions, batch-invariant kernels", value: 1, series: 1 }
     ],
-    src: "Attested: judge-llm-bias (MT-Bench/Chatbot Arena bias quantification)"
+    delta: "All 1,000 completions agree for the first 102 tokens; at the first divergence 992 continue \"Queens, New York\" and 8 continue \"New York City\". Throughput for 1,000 short sequences on Qwen3-8B: 26 s default, 55 s deterministic, 42 s with an improved attention kernel.",
+    locus: "Thinking Machines Lab, \"Defeating Nondeterminism in LLM Inference\", Sep 2025."
   },
-  "open-olmes": {
-    title: "open-ended x OLMES",
-    body: "OLMES has open-ended tasks but the judge pipeline is not its focus; when used, the rubric and judge model are embedded in the task id. Reference-guided grading (provide the judge a gold solution) raises judge-human agreement ~10 pp per judge-llm-bias.",
-    pitfalls: [
-      "Judge-model identity is a harness-version coordinate: GPT-4-0613 vs GPT-4o give different win-rates.",
-      "Chain-of-thought judging helps agreement but does not eliminate biases; still swap-and-average.",
-      "Tie-handling is not neutral for Elo: many ties compress the leaderboard."
+  {
+    id: "perturbation",
+    name: "Robustness perturbation",
+    question: "TNLG v2 (530B) on NarrativeQA: standard input against perturbed input",
+    scale: 100,
+    bars: [
+      { label: "Standard accuracy", value: 72.6, series: 1 },
+      { label: "With robustness perturbations", value: 38.9, series: 2 }
     ],
-    src: "Attested: judge-llm-bias; olmo-3 eval-as-artifact"
+    delta: "33.7 points. Accuracy measured on clean inputs does not bound accuracy on perturbed ones; ch-47a treats perturbation audits.",
+    locus: "HELM, arXiv:2211.09110v2, Finding 4."
   },
-  "open-agentbench": {
-    title: "open-ended x AgentBench (mismatch)",
-    body: "Agent harnesses are not designed for free-form open-ended scoring. If the environment has a predicate (task-success), the shape is agentic, not open-ended. If you want Elo, use a pairwise judge harness.",
-    pitfalls: [
-      "Conflating 'agent did the task' with 'the writing was good' -- the predicate measures only the former.",
-      "Pair-wise comparison across agent trajectories is hard to attribute; the response is a multi-turn tape.",
-      "No standard LLM-judge plugin; roll your own and pin rubric + judge ID."
+  {
+    id: "position",
+    name: "Evidence position",
+    question: "GPT-3.5-Turbo, multi-document QA with 20 documents: where the answer document sits",
+    scale: 100,
+    bars: [
+      { label: "Answer document first", value: 75.8, series: 1 },
+      { label: "Answer document tenth", value: 53.8, series: 2 },
+      { label: "Answer document twentieth", value: 63.2, series: 1 },
+      { label: "Closed book, no documents", value: 56.1, series: 3 }
     ],
-    src: "Inferred: webarena predicate scope; judge-llm-bias biases apply if coerced"
-  },
-  "agent-lmeval": {
-    title: "agentic x lm-eval (mismatch)",
-    body: "lm-eval does not run environments. An agent task requires state, tools, and a reset protocol. You would be building an agent harness on top; use AgentBench / WebArena instead.",
-    pitfalls: [
-      "Multi-turn trajectories do not fit a single-response schema; truncation hides failure modes.",
-      "No slot for tool calls or environment state in task output; predicate matcher cannot run.",
-      "Running agent tasks through a generation-only harness measures prompt-engineering, not agent capability."
-    ],
-    src: "Inferred: bfcl V3 multi-turn, webarena state reset"
-  },
-  "agent-olmes": {
-    title: "agentic x OLMES (mismatch)",
-    body: "OLMES focuses on static tasks with pinned format strings. Agentic tasks need a live environment; OLMES is not the right tool. Use BFCL (V3+), WebArena, SWE-bench, or a purpose-built AgentBench task.",
-    pitfalls: [
-      "Same single-response-schema limit as lm-eval; stateful tasks do not slot in.",
-      "OLMES version discipline does not cover Docker-image digests; agent tasks need that versioning primitive instead.",
-      "Cross-harness comparison between 'OLMES agentic (coerced)' and BFCL-V3 scores is invalid."
-    ],
-    src: "Inferred: olmo-3 scope; bfcl V3 / webarena as the native home"
-  },
-  "agent-agentbench": {
-    title: "agentic x AgentBench / WebArena / BFCL-V3+",
-    body: "Native home. Env = Docker bundle with predicate checks; trajectory = sequence of (obs, thought, action); success = predicate. Version axis is Docker image digest + task JSON hash. pass^k (every of k must succeed) is the agent-reliability metric.",
-    pitfalls: [
-      "Docker image drift: package updates silently change env behaviour; pin digests explicitly.",
-      "Shortcut learning: URL-hacking, cached answers -- predicate must be strict. webarena's predicate design is a good template.",
-      "Observation format (accessibility tree vs screenshot) is a harness-version coordinate; WebArena and VisualWebArena numbers are not comparable."
-    ],
-    src: "Attested: webarena-data (Docker-compose + predicate); bfcl V3/V4 multi-turn + agentic"
+    delta: "22.0 points between the best and worst position. The middle position scores below the closed-book baseline, so an average over positions hides the shape.",
+    locus: "Lost in the Middle, arXiv:2307.03172, Table 1 and App. G Table 6."
   }
-};
+];
 
-// Score baseline per (shape, harness) -- illustrative 7B scores in [0, 100].
-const BASE = {
-  "mcq-lmeval": 62, "mcq-olmes": 64, "mcq-agentbench": 28,
-  "gen-lmeval": 40, "gen-olmes": 42, "gen-agentbench": 44,
-  "open-lmeval": 52, "open-olmes": 54, "open-agentbench": 20,
-  "agent-lmeval": 8, "agent-olmes": 10, "agent-agentbench": 32
-};
+var GAP = [
+  { skill: "Average over the suite", dev: [64.9, 68.3, 68.8], uns: [29.9, 31.9, 32.4] },
+  { skill: "Knowledge: MMLU → GPQA", dev: [65.9, 68.7, 68.2], uns: [31.9, 31.2, 35.7] },
+  { skill: "Reasoning: BBH → AGIEval", dev: [67.9, 65.8, 66.0], uns: [56.2, 61.8, 59.3] },
+  { skill: "Math: MATH → DM Mathematics", dev: [31.5, 42.0, 43.7], uns: [32.3, 33.0, 35.4] },
+  { skill: "Coding: HumanEval → BigCodeBench", dev: [86.2, 83.9, 83.9], uns: [11.5, 9.5, 7.4] },
+  { skill: "Instructions: IFEval → IFEval-OOD", dev: [72.8, 81.1, 82.4], uns: [17.6, 23.9, 24.3] }
+];
 
-// cfg deltas illustrate the third-column effect of inference_config.
-const CFG_DELTA = {
-  "greedy-short":  { mcq: 0,  gen: -8, open: -6, agent: -10 },
-  "greedy-long":   { mcq: 0,  gen: 4,  open: 0,  agent: 2 },
-  "passk":         { mcq: -2, gen: 8,  open: 2,  agent: 6 },
-  "chatty":        { mcq: -3, gen: 1,  open: 4,  agent: 0 }
-};
+var chips = document.getElementById("chips");
+var panel = document.getElementById("panel");
+var current = COORDS[0].id;
 
-// A fourth pitfall is injected based on cfg.
-const CFG_PITFALL = {
-  "greedy-short": "max_tokens=16 truncates any free-form answer; prefer this only for MCQ letter output.",
-  "greedy-long":  "T=0 can lock into deterministic wrong paths on math; pair with pass@k sampling if tree search matters.",
-  "passk":        "pass@k at T=0.8 n=10 inflates compute 10x; confirm the capability is consistency-limited before spending.",
-  "chatty":       "T=0.7 chatty config disagrees with deterministic judges; swap-and-average becomes mandatory."
-};
-
-function getKey() {
-  return document.getElementById("shape").value + "-" + document.getElementById("harness").value;
-}
-
-function matcherFor(shape, harness) {
-  if (shape === "mcq") return harness === "olmes" ? "argmax log-prob over letter tokens" : "argmax log-prob OR regex letter-extract";
-  if (shape === "gen") return harness === "agentbench" ? "unit-test / executable / AST (BFCL)" : "regex (GSM8K) or unit-test (HumanEval)";
-  if (shape === "open") return "LLM-judge with swap-and-average; reference-guided if available";
-  if (shape === "agent") return "env predicate over final state; pass^k across k rollouts";
-}
-function slicingFor(shape, harness) {
-  if (harness === "olmes") return "per-subset + per-difficulty (first-class)";
-  if (harness === "agentbench") return "per-task-category; pass^k by task family";
-  if (shape === "open") return "per-prompt, per-category (user configured)";
-  return "per-subtask (JSON output; not per-difficulty by default)";
-}
-function versioningFor(shape, harness) {
-  if (harness === "olmes") return "format-versioned task-id (e.g. olmes:mmlu:v1.1)";
-  if (harness === "agentbench") return "Docker image digest + task JSON hash";
-  return "commit SHA + task-file hash";
-}
-function cfgFor(shape) {
-  return {
-    mcq:   "T=0 for letter-perplexity or T=0 max_tokens~16 for generate-and-match; 5-shot OLMES default",
-    gen:   "pass@1: T=0 max_tokens=512; pass@k: T=0.8 top_p=0.95 n=10-100",
-    open:  "T=0.7 max_tokens=1024-2048; judge prompt pinned; swap sides; reference-guided when objective",
-    agent: "T=0 or T=0.6, tool-call-budget >=30 turns; env reset per task"
-  }[shape];
+function seriesColor(n) {
+  return n === 1 ? "var(--series-1)" : n === 2 ? "var(--series-2)" : "var(--series-3)";
 }
 
 function render() {
-  const shape = document.getElementById("shape").value;
-  const harness = document.getElementById("harness").value;
-  const cfg = document.getElementById("cfg").value;
-  const key = shape + "-" + harness;
-  const cell = CELLS[key];
-
-  // Matrix body.
-  const mb = document.getElementById("matrix-body");
-  mb.innerHTML = "";
-  const rows = [
-    ["task_shape",        shape.toUpperCase(),                                  "what the capability actually is"],
-    ["harness",           harness,                                              "the infra object; not the model"],
-    ["matcher",           matcherFor(shape, harness),                           "where accuracy is decided"],
-    ["inference_config",  cfg + "  (" + cfgFor(shape) + ")",                    "the silent third column"],
-    ["subset_slice",      slicingFor(shape, harness),                           "aggregate hides the hacks"],
-    ["harness_version",   versioningFor(shape, harness),                        "attribute drift to the harness"]
-  ];
-  for (const [ax, w, l] of rows) {
-    const tr = document.createElement("tr");
-    const c1 = document.createElement("td"); c1.innerHTML = "<code>" + ax + "</code>";
-    const c2 = document.createElement("td"); c2.textContent = w;
-    const c3 = document.createElement("td"); c3.textContent = l;
-    tr.appendChild(c1); tr.appendChild(c2); tr.appendChild(c3);
-    mb.appendChild(tr);
+  var c = null;
+  for (var i = 0; i < COORDS.length; i++) { if (COORDS[i].id === current) { c = COORDS[i]; } }
+  var parts = ['<p class="meta">' + c.question + '</p>'];
+  for (var j = 0; j < c.bars.length; j++) {
+    var b = c.bars[j];
+    var pct = Math.max(1, Math.min(100, (b.value / c.scale) * 100));
+    parts.push(
+      '<div class="row">' +
+        '<div class="label">' + b.label + '</div>' +
+        '<div class="track"><div class="bar" style="width:' + pct.toFixed(1) + '%;background:' + seriesColor(b.series) + '"></div></div>' +
+        '<div class="val">' + b.value + '</div>' +
+      '</div>'
+    );
   }
-
-  // Cell text.
-  document.getElementById("c-title").textContent = cell.title;
-  document.getElementById("c-body").textContent = cell.body;
-  document.getElementById("c-src").textContent = cell.src;
-
-  // Pitfalls.
-  const pf = document.getElementById("c-pitfalls");
-  pf.innerHTML = "";
-  for (const p of cell.pitfalls) {
-    const div = document.createElement("div");
-    div.className = "pitfall";
-    div.textContent = p;
-    pf.appendChild(div);
+  parts.push('<p class="delta">' + c.delta + '</p>');
+  parts.push('<p class="locus">Source: ' + c.locus + '</p>');
+  panel.innerHTML = parts.join("");
+  var buttons = chips.querySelectorAll("button");
+  for (var k = 0; k < buttons.length; k++) {
+    buttons[k].setAttribute("aria-pressed", buttons[k].dataset.id === current ? "true" : "false");
   }
-  const pfCfg = document.createElement("div");
-  pfCfg.className = "pitfall";
-  pfCfg.textContent = "inference_config (" + cfg + "): " + CFG_PITFALL[cfg];
-  pf.appendChild(pfCfg);
-
-  // Scores across cfg presets for the current (shape, harness).
-  const sc = document.getElementById("scores");
-  sc.innerHTML = "";
-  const presets = ["greedy-short", "greedy-long", "passk", "chatty"];
-  for (const p of presets) {
-    const base = BASE[key];
-    const delta = CFG_DELTA[p][shape];
-    const v = Math.max(0, Math.min(100, base + delta));
-    const row = document.createElement("div");
-    row.className = "score-row";
-    const lbl = document.createElement("span"); lbl.className = "lbl"; lbl.textContent = p;
-    const bar = document.createElement("div"); bar.className = "score-bar";
-    const fill = document.createElement("div"); fill.style.width = v + "%";
-    bar.appendChild(fill);
-    const val = document.createElement("span"); val.className = "val"; val.textContent = v.toFixed(0);
-    row.appendChild(lbl); row.appendChild(bar); row.appendChild(val);
-    sc.appendChild(row);
-  }
-  document.getElementById("readout").textContent =
-    "baseline " + BASE[key] + " at (shape=" + shape + ", harness=" + harness + ")  delta from cfg: " + (CFG_DELTA[cfg][shape] >= 0 ? "+" : "") + CFG_DELTA[cfg][shape];
 }
 
-["shape", "harness", "cfg"].forEach(id =>
-  document.getElementById(id).addEventListener("input", render));
+for (var i = 0; i < COORDS.length; i++) {
+  var btn = document.createElement("button");
+  btn.className = "chip";
+  btn.type = "button";
+  btn.textContent = COORDS[i].name;
+  btn.dataset.id = COORDS[i].id;
+  btn.setAttribute("aria-pressed", "false");
+  btn.addEventListener("click", function (ev) { current = ev.currentTarget.dataset.id; render(); });
+  chips.appendChild(btn);
+}
 render();
-</script>
 
+var body = document.getElementById("gapbody");
+var rows = [];
+for (var g = 0; g < GAP.length; g++) {
+  var r = GAP[g];
+  var cells = "";
+  for (var s = 0; s < 3; s++) {
+    cells += '<td><span class="dev">' + r.dev[s].toFixed(1) + '</span> / <span class="uns">' + r.uns[s].toFixed(1) + '</span></td>';
+  }
+  rows.push("<tr><td>" + r.skill + "</td>" + cells + "</tr>");
+}
+body.innerHTML = rows.join("");
+</script>
 </body>
 </html>

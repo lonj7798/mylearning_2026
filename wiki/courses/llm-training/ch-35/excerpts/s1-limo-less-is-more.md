@@ -7,6 +7,8 @@ source_urls: https://arxiv.org/abs/2501.19393 ; https://arxiv.org/abs/2502.03387
 created_at: "2026-04-23"
 ---
 
+> Superseded by the 2026-09 revision of read.md; kept for history.
+
 # Excerpt: s1 + LIMO — the "less is more" datapoint
 
 **Source libraries:** `wiki/raw-data/llm-training/papers/s1.md`, `wiki/raw-data/llm-training/papers/limo.md`

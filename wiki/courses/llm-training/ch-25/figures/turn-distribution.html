@@ -2,264 +2,174 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>Multi-Turn Dialogue — Turn-Count and Token-Length Distributions</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Reported Turn Counts and Message Lengths</title>
 <style>
-  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-         max-width: 960px; margin: 2em auto; padding: 0 1em; color: #222; }
-  h1 { font-size: 1.4em; margin-bottom: 0.2em; }
-  .subtitle { color: #666; margin-top: 0; font-size: 0.95em; }
-  .panel { border: 1px solid #ddd; border-radius: 6px; padding: 1em; margin: 1em 0;
-           background: #fafafa; }
-  .datasets { display: flex; flex-wrap: wrap; gap: 0.5em; margin: 0.6em 0; }
-  .pill { padding: 5px 11px; border: 1px solid #bbb; border-radius: 14px;
-          background: #fff; cursor: pointer; font-size: 0.88em; user-select: none;
-          transition: background 0.1s, border 0.1s; }
-  .pill.active { background: #1976d2; color: #fff; border-color: #1976d2; }
-  .pill:hover { border-color: #1976d2; }
-  canvas { background: #fff; border: 1px solid #ccc; display: block; margin: 0.6em auto; }
-  .legend { display: flex; gap: 1.2em; justify-content: center; font-size: 0.88em;
-            flex-wrap: wrap; margin-top: 0.4em; }
-  .swatch { display: inline-block; width: 12px; height: 12px; margin-right: 5px;
-            vertical-align: middle; border-radius: 2px; }
-  .stats { font-size: 0.92em; font-variant-numeric: tabular-nums; }
-  .stats table { border-collapse: collapse; width: 100%; }
-  .stats th, .stats td { padding: 5px 10px; border-bottom: 1px solid #eee; text-align: right; }
-  .stats th:first-child, .stats td:first-child { text-align: left; }
-  .note { font-size: 0.88em; color: #444; line-height: 1.5; }
-  code { background: #eef; padding: 1px 4px; border-radius: 3px; font-size: 0.88em; }
-  .mode { display: flex; gap: 0.6em; align-items: center; margin: 0.4em 0; font-size: 0.9em; }
-  .mode label { cursor: pointer; }
+  :root { --bg:#fbfbf9; --fg:#1f2328; --muted:#5b6470; --line:#d9dde3; --panel:#ffffff;
+          --syn:#2f6db5; --real:#b5562f; --human:#3d8c5a; --derived:#8a8f98; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg:#16181c; --fg:#e6e8eb; --muted:#9aa3ad; --line:#353a42; --panel:#1e2126;
+            --syn:#6aa2e8; --real:#e58a61; --human:#6cc28c; --derived:#7d838c; }
+  }
+  body { margin:0; background:var(--bg); color:var(--fg);
+         font:14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+  main { max-width:920px; margin:0 auto; padding-block:24px; padding-inline:16px; }
+  h1 { font-size:1.3em; margin:0 0 4px; }
+  .sub { color:var(--muted); margin:0 0 16px; }
+  .panel { background:var(--panel); border:1px solid var(--line); border-radius:8px; padding:14px; margin:12px 0; }
+  .controls { display:flex; flex-wrap:wrap; gap:14px; align-items:center; }
+  .controls label { cursor:pointer; }
+  svg { width:100%; height:auto; display:block; }
+  .legend { display:flex; flex-wrap:wrap; gap:14px; font-size:.9em; color:var(--muted); margin-top:6px; }
+  .sw { display:inline-block; width:11px; height:11px; border-radius:2px; margin-right:5px; vertical-align:-1px; }
+  .note { font-size:.9em; color:var(--muted); }
+  .note li { margin:3px 0; }
+  .tablewrap { overflow-x:auto; }
+  table { border-collapse:collapse; width:100%; font-size:.88em; }
+  th, td { border-bottom:1px solid var(--line); padding:4px 8px; text-align:left; }
+  td.num { text-align:right; font-variant-numeric:tabular-nums; }
 </style>
 </head>
 <body>
+<main>
+<h1>Reported turn counts and message lengths in multi-turn corpora</h1>
+<p class="sub">Every bar is a number printed in a source (or a derived value marked as such). No distribution shapes are drawn, because the sources report averages, not histograms.</p>
 
-<h1>Turn-Count and Token-Length Distributions — Multi-Turn Dialogue Corpora</h1>
-<p class="subtitle">
-  Toggle datasets to compare per-turn counts, user-token-length, or assistant-token-length.
-  Shapes reconstructed from dataset cards and public previews (see
-  <code>wiki/raw-data/llm-training/papers/</code>).
-</p>
-
-<div class="panel">
-  <div><strong>Datasets</strong> — click to toggle:</div>
-  <div class="datasets" id="datasetPills"></div>
-
-  <div class="mode">
-    <strong>Metric:</strong>
-    <label><input type="radio" name="metric" value="turns" checked> turn count per dialogue</label>
-    <label><input type="radio" name="metric" value="user"> user-turn tokens</label>
-    <label><input type="radio" name="metric" value="assistant"> assistant-turn tokens</label>
-  </div>
+<div class="panel controls">
+  <strong>View:</strong>
+  <label><input type="radio" name="view" value="turns" checked> average turns per conversation</label>
+  <label><input type="radio" name="view" value="tokens"> user vs assistant length (same tokenizer)</label>
+  <label id="convWrap"><input type="checkbox" id="convert"> convert utterance counts to exchanges (÷ 2, derived)</label>
 </div>
 
-<canvas id="plot" width="920" height="340"></canvas>
+<div class="panel">
+  <svg id="chart" viewBox="0 0 880 420" role="img" aria-label="Bar chart of reported statistics"></svg>
+  <div class="legend" id="legend"></div>
+</div>
 
-<div class="legend" id="legend"></div>
-
-<div class="panel stats">
-  <table id="statsTable">
-    <thead><tr><th>Dataset</th><th>Median</th><th>Mean</th><th>P90</th><th>Max</th><th>Dialogues</th></tr></thead>
-    <tbody></tbody>
-  </table>
+<div class="panel tablewrap">
+  <table id="tbl"><thead></thead><tbody></tbody></table>
 </div>
 
 <div class="panel note">
-  <strong>What to look for.</strong>
+  <strong>How to read this figure</strong>
   <ul>
-    <li><strong>Synthetic medians cluster at 3–7 turns.</strong> <em>Baize</em> (median 4) and <em>UltraChat-Writing</em> (median 4) are tight around the teacher's natural stopping point.</li>
-    <li><strong>CAMEL has the longest tail among synthetic corpora</strong> because termination is semantic (<code>&lt;CAMEL_TASK_DONE&gt;</code>) not a turn cap — hard tasks genuinely run 15–20 rounds.</li>
-    <li><strong>OpenAssistant and WildChat are the real-human baselines.</strong> OASST paths go to 20+ turns with a power-law tail; WildChat is bimodal — many 1–2 turn drops plus a heavy tail of 30+ turn sessions.</li>
-    <li><strong>SODA has the shortest turns</strong> (~20 tokens) — Atomic-triple grounding elicits a chatty social-exchange register, not a Q&amp;A register.</li>
-    <li><strong>User-turn tokens &lt; assistant-turn tokens</strong> in every corpus, but the <em>gap</em> is smaller in synthetic corpora (articulate synthetic users) than in WildChat (real users are short: ~20 tokens median vs. assistant ~180).</li>
+    <li>"Turn" means different units in different papers. SODA reports 7.6 counting utterances (SODA Table 2); UltraChat re-measures SODA at 3.6 counting exchanges (UltraChat Table 5). Tick the conversion box to put utterance-based averages on the exchange scale.</li>
+    <li>LMSYS-Chat-1M and WildChat average 2.02 and 2.54 exchanges (ShareGPT 3.51, Chatbot Arena 1.2), and the distribution has a tail: in WildChat about 41% of conversations have more than one turn and 3.7% have more than 10 (WildChat §3).</li>
+    <li>The length view uses only WildChat Table 1, where all corpora were tokenized with the Llama-2 tokenizer. WildChat's user length has a standard deviation of 1609.18 tokens, so a small share of very long user messages can move the mean (interpretation; the paper reports no median).</li>
+    <li>CAMEL is absent: the paper reports 25,000 AI Society conversations and a 40-message cap, but no turn or token averages (CAMEL §4.1).</li>
   </ul>
 </div>
+</main>
 
 <script>
-// Each dataset: a lognormal-ish discrete PMF per metric (turns, user tokens, assistant tokens).
-// Shapes hand-fit from raw-data dataset cards so the comparison visualizes correctly,
-// not an empirical dump. Medians / means / P90 / max below match paper claims where stated.
-const DATA = {
-  "Baize":      { color:"#1976d2",
-    turns:     { median:4,  mean:4.5,  p90:7,  max:10, shape:[0,0,8,18,22,18,13,8,5,3,2,1] },
-    user:      { median:80, mean:95,   p90:170, max:260, binw:20, shape:[5,14,22,20,14,10,7,4,2,1,1] },
-    assistant: { median:110,mean:130,  p90:240, max:360, binw:20, shape:[2,8,14,18,16,13,10,8,5,3,2,1] },
-    count: "111.5K" },
-  "UltraChat-Qworld": { color:"#d32f2f",
-    turns:     { median:6,  mean:6.5,  p90:11, max:14, shape:[0,0,3,6,12,18,18,14,10,8,5,3,2,1] },
-    user:      { median:90, mean:110,  p90:200, max:320, binw:20, shape:[3,10,18,20,16,12,9,6,3,2,1] },
-    assistant: { median:160,mean:190,  p90:340, max:480, binw:30, shape:[1,5,11,14,16,14,12,10,8,5,3,1] },
-    count: "~600K" },
-  "UltraChat-Writing": { color:"#ef6c00",
-    turns:     { median:4,  mean:4.2,  p90:7,  max:8,  shape:[0,0,12,24,28,18,10,6,2] },
-    user:      { median:70, mean:85,   p90:160, max:240, binw:20, shape:[6,16,22,20,14,10,6,3,2,1] },
-    assistant: { median:220,mean:260,  p90:460, max:620, binw:40, shape:[0,3,8,12,16,16,14,12,8,5,3,2,1] },
-    count: "~400K" },
-  "CAMEL-AI-Society": { color:"#388e3c",
-    turns:     { median:7,  mean:8.4,  p90:14, max:20, shape:[0,0,2,4,8,12,15,14,12,10,8,6,4,3,1,0.5] },
-    user:      { median:40, mean:50,   p90:90,  max:150, binw:10, shape:[4,14,22,20,14,10,7,4,3,1,1] },
-    assistant: { median:55, mean:70,   p90:130, max:200, binw:15, shape:[3,10,18,20,16,12,9,6,3,2,1] },
-    count: "~1M" },
-  "SODA":       { color:"#6a1b9a",
-    turns:     { median:7,  mean:7.6,  p90:10, max:12, shape:[0,0,2,4,8,14,18,18,14,10,7,3,1,0.5] },
-    user:      { median:18, mean:22,   p90:40,  max:70,  binw:5,  shape:[6,14,20,18,14,10,7,5,3,2,1] },
-    assistant: { median:22, mean:26,   p90:50,  max:80,  binw:5,  shape:[4,12,18,20,16,11,8,5,3,2,1] },
-    count: "1.5M" },
-  "OpenAssistant-OASST1": { color:"#00838f",
-    turns:     { median:5,  mean:6.8,  p90:14, max:25, shape:[0,0,8,12,14,14,12,10,8,6,5,4,3,2,1,0.5,0.3,0.2,0.1,0.1,0.1,0.1,0.05,0.05] },
-    user:      { median:45, mean:65,   p90:150, max:400, binw:15, shape:[8,16,18,16,12,10,7,5,3,2,1,0.5,0.3,0.2,0.1] },
-    assistant: { median:140,mean:180,  p90:360, max:700, binw:40, shape:[1,6,12,15,16,14,12,10,7,4,2,1,0.5,0.2] },
-    count: "10K trees / 161K msg" },
-  "WildChat":   { color:"#c62828",
-    turns:     { median:3,  mean:6.2,  p90:18, max:55, shape:[0,14,18,14,10,8,6,5,4,3,2.5,2,1.5,1,0.8,0.6,0.4,0.3,0.2,0.2,0.15,0.15,0.1,0.1,0.1] },
-    user:      { median:22, mean:40,   p90:110, max:350, binw:15, shape:[14,18,18,14,10,8,6,4,3,2,1.2,0.8,0.4,0.2,0.1] },
-    assistant: { median:180,mean:240,  p90:500, max:900, binw:40, shape:[0.5,3,8,12,15,14,12,10,8,6,4,3,2,1,0.5,0.3,0.1] },
-    count: "~1M" }
-};
-
-const DEFAULT_ON = new Set(["Baize","UltraChat-Qworld","CAMEL-AI-Society","SODA","OpenAssistant-OASST1","WildChat"]);
-const active = new Set([...DEFAULT_ON]);
-let metric = "turns";
-
-function normalize(shape) {
-  const s = shape.reduce((a,b)=>a+b, 0);
-  return shape.map(v => v / s);
+// Sources: Baize arXiv:2304.01196v4 Table 2; UltraChat arXiv:2305.14233v1 Table 5; SODA arXiv:2212.10465v3 Table 2;
+// ProsocialDialog arXiv:2205.12688v2 Table 1; Capybara released JSONL (card, derived); WildChat arXiv:2405.01470v1 Table 1;
+// LMSYS-Chat-1M arXiv:2309.11998v4 Table 1.
+const TURNS = [
+  { name:"Baize v1 Quora",           v:3.9,  unit:"not stated", kind:"syn",   src:"Baize Table 2" },
+  { name:"Baize v1 StackOverflow",   v:3.6,  unit:"not stated", kind:"syn",   src:"Baize Table 2" },
+  { name:"Baize (re-measured)",      v:3.1,  unit:"exchanges",  kind:"syn",   src:"UltraChat Table 5 (210,311 dialogues)" },
+  { name:"UltraChat",                v:3.8,  unit:"exchanges",  kind:"syn",   src:"UltraChat Table 5" },
+  { name:"SODA",                     v:7.6,  unit:"utterances", kind:"syn",   src:"SODA Table 2" },
+  { name:"SODA (re-measured)",       v:3.6,  unit:"exchanges",  kind:"syn",   src:"UltraChat Table 5" },
+  { name:"ProsocialDialog (GPT-3 + crowd)", v:5.7,  unit:"utterances", kind:"human", src:"ProsocialDialog Table 1" },
+  { name:"Capybara",                 v:2.58, unit:"exchanges",  kind:"syn",   src:"Capybara card (released file, derived)" },
+  { name:"OpenAssistant",            v:2.34, unit:"exchanges",  kind:"human", src:"WildChat Table 1" },
+  { name:"Anthropic HH",             v:2.3,  unit:"exchanges",  kind:"human", src:"LMSYS-Chat-1M Table 1" },
+  { name:"ShareGPT",                 v:3.51, unit:"exchanges",  kind:"real",  src:"WildChat Table 1" },
+  { name:"LMSYS-Chat-1M",            v:2.02, unit:"exchanges",  kind:"real",  src:"WildChat Table 1 (2.0 in LMSYS Table 1)" },
+  { name:"WildChat",                 v:2.54, unit:"exchanges",  kind:"real",  src:"WildChat Table 1" },
+  { name:"Chatbot Arena",            v:1.2,  unit:"exchanges",  kind:"real",  src:"LMSYS-Chat-1M Table 1" }
+];
+const TOKENS = [ // WildChat Table 1, Llama-2 tokenizer: mean ± sd
+  { name:"Alpaca",          u:19.67,  us:15.19,   a:64.51,  as:64.85,   kind:"syn" },
+  { name:"Dolly",           u:110.25, us:261.14,  a:91.14,  as:149.15,  kind:"human" },
+  { name:"Open Assistant",  u:33.41,  us:69.89,   a:211.76, as:246.71,  kind:"human" },
+  { name:"ShareGPT",        u:94.46,  us:626.39,  a:348.45, as:269.93,  kind:"real" },
+  { name:"LMSYS-Chat-1M",   u:69.83,  us:143.49,  a:215.71, as:1858.09, kind:"real" },
+  { name:"WildChat",        u:295.58, us:1609.18, a:441.34, as:410.91,  kind:"real" }
+];
+const KIND = { syn:"model-generated user side", human:"human-written (crowd or volunteer)", real:"real users of a deployed chatbot" };
+const css = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+const svg = document.getElementById("chart");
+const NS = "http://www.w3.org/2000/svg";
+function el(tag, attrs, text) {
+  const e = document.createElementNS(NS, tag);
+  for (const k in attrs) e.setAttribute(k, attrs[k]);
+  if (text !== undefined) e.textContent = text;
+  svg.appendChild(e); return e;
 }
+function color(kind) { return css(kind === "syn" ? "--syn" : kind === "human" ? "--human" : "--real"); }
 
-// Build dataset toggle pills
-const pillRow = document.getElementById("datasetPills");
-for (const name of Object.keys(DATA)) {
-  const pill = document.createElement("span");
-  pill.className = "pill" + (active.has(name) ? " active" : "");
-  pill.textContent = name;
-  pill.style.borderColor = DATA[name].color;
-  if (active.has(name)) { pill.style.background = DATA[name].color; pill.style.color = "#fff"; }
-  pill.addEventListener("click", () => {
-    if (active.has(name)) { active.delete(name); pill.classList.remove("active");
-                             pill.style.background = "#fff"; pill.style.color = "#222"; }
-    else { active.add(name); pill.classList.add("active");
-           pill.style.background = DATA[name].color; pill.style.color = "#fff"; }
-    draw();
+function drawTurns() {
+  const conv = document.getElementById("convert").checked;
+  const rows = TURNS.map(r => {
+    const derived = conv && r.unit === "utterances";
+    return { ...r, shown: derived ? r.v / 2 : r.v, derived };
   });
-  pillRow.appendChild(pill);
+  const L = 240, R = 70, T = 10, rowH = 28, W = 880;
+  svg.setAttribute("viewBox", `0 0 ${W} ${T + rows.length * rowH + 30}`);
+  const max = 8, sx = x => L + (x / max) * (W - L - R);
+  for (let g = 0; g <= max; g += 1) {
+    el("line", { x1:sx(g), x2:sx(g), y1:T, y2:T + rows.length * rowH, stroke:css("--line") });
+    el("text", { x:sx(g), y:T + rows.length * rowH + 16, "text-anchor":"middle", fill:css("--muted"), "font-size":11 }, g);
+  }
+  rows.forEach((r, i) => {
+    const y = T + i * rowH;
+    el("text", { x:L - 8, y:y + 18, "text-anchor":"end", fill:css("--fg"), "font-size":12 }, r.name);
+    const b = el("rect", { x:L, y:y + 6, width:Math.max(1, sx(r.shown) - L), height:16, rx:2,
+      fill: r.derived ? css("--derived") : color(r.kind) });
+    const t = document.createElementNS(NS, "title");
+    t.textContent = `${r.name}: ${r.v} (${r.unit}) — ${r.src}` + (r.derived ? ` → ${r.shown.toFixed(2)} exchanges (derived)` : "");
+    b.appendChild(t);
+    el("text", { x:sx(r.shown) + 6, y:y + 18, fill:css("--muted"), "font-size":11 },
+       (r.derived ? r.shown.toFixed(2) + "*" : r.v) + (r.unit === "not stated" ? " ?" : ""));
+  });
+  setLegend(true);
+  const thead = document.querySelector("#tbl thead"), tbody = document.querySelector("#tbl tbody");
+  thead.innerHTML = "<tr><th>Corpus</th><th>Reported</th><th>Unit</th><th>Source</th></tr>";
+  tbody.innerHTML = rows.map(r => `<tr><td>${r.name}</td><td class="num">${r.v}${r.derived ? " → " + r.shown.toFixed(2) + " (derived)" : ""}</td><td>${r.unit}</td><td>${r.src}</td></tr>`).join("");
 }
 
-// Metric radios
-for (const r of document.querySelectorAll('input[name="metric"]')) {
-  r.addEventListener("change", e => { metric = e.target.value; draw(); });
+function drawTokens() {
+  const L = 130, R = 70, T = 10, rowH = 44, W = 880;
+  svg.setAttribute("viewBox", `0 0 ${W} ${T + TOKENS.length * rowH + 30}`);
+  const max = 500, sx = x => L + (x / max) * (W - L - R);
+  for (let g = 0; g <= max; g += 100) {
+    el("line", { x1:sx(g), x2:sx(g), y1:T, y2:T + TOKENS.length * rowH, stroke:css("--line") });
+    el("text", { x:sx(g), y:T + TOKENS.length * rowH + 16, "text-anchor":"middle", fill:css("--muted"), "font-size":11 }, g);
+  }
+  TOKENS.forEach((r, i) => {
+    const y = T + i * rowH;
+    el("text", { x:L - 8, y:y + 24, "text-anchor":"end", fill:css("--fg"), "font-size":12 }, r.name);
+    el("rect", { x:L, y:y + 6, width:sx(r.u) - L, height:14, rx:2, fill:color(r.kind), opacity:0.55 });
+    el("text", { x:sx(r.u) + 6, y:y + 17, fill:css("--muted"), "font-size":11 }, `user ${r.u}`);
+    el("rect", { x:L, y:y + 22, width:sx(r.a) - L, height:14, rx:2, fill:color(r.kind) });
+    el("text", { x:sx(r.a) + 6, y:y + 33, fill:css("--muted"), "font-size":11 }, `assistant ${r.a}`);
+  });
+  setLegend(false);
+  const thead = document.querySelector("#tbl thead"), tbody = document.querySelector("#tbl tbody");
+  thead.innerHTML = "<tr><th>Corpus (WildChat Table 1)</th><th>User tokens (mean ± sd)</th><th>Assistant tokens (mean ± sd)</th><th>User / assistant (derived)</th></tr>";
+  tbody.innerHTML = TOKENS.map(r => `<tr><td>${r.name}</td><td class="num">${r.u} ± ${r.us}</td><td class="num">${r.a} ± ${r.as}</td><td class="num">${(r.u / r.a).toFixed(2)}</td></tr>`).join("");
 }
 
-const cvs = document.getElementById("plot");
-const ctx = cvs.getContext("2d");
-
-function xAxisSpec() {
-  if (metric === "turns") return { label: "turns per dialogue", binw: 1, xStart: 1, nBins: 26 };
-  if (metric === "user")  return { label: "user-turn tokens (bin width varies; see dataset card)",
-                                   binw: 20, xStart: 0, nBins: 20 };
-  return { label: "assistant-turn tokens (bin width varies; see dataset card)",
-           binw: 40, xStart: 0, nBins: 18 };
+function setLegend(withDerived) {
+  const lg = document.getElementById("legend");
+  lg.innerHTML = Object.entries(KIND).map(([k, v]) => `<span><span class="sw" style="background:${color(k)}"></span>${v}</span>`).join("")
+    + (withDerived ? `<span><span class="sw" style="background:${css("--derived")}"></span>derived (utterances ÷ 2)</span><span>? = unit not stated by the source</span>`
+                   : `<span>lighter bar = user; darker bar = assistant</span>`);
 }
 
 function draw() {
-  const W = cvs.width, H = cvs.height;
-  const padL = 50, padR = 20, padT = 20, padB = 56;
-  ctx.clearRect(0,0,W,H);
-
-  const axis = xAxisSpec();
-  const nBins = axis.nBins;
-  const colW = (W - padL - padR) / nBins;
-
-  // Gather PMFs for active datasets
-  const series = [];
-  for (const name of active) {
-    const d = DATA[name][metric];
-    const pmf = normalize(d.shape);
-    series.push({ name, color: DATA[name].color, pmf, stats: d });
-  }
-
-  // Y-scale: max probability across all shown PMFs
-  const yMax = Math.max(0.01, ...series.flatMap(s => s.pmf)) * 1.1;
-
-  // Axes
-  ctx.strokeStyle = "#444"; ctx.lineWidth = 1;
-  ctx.beginPath();
-  ctx.moveTo(padL, padT); ctx.lineTo(padL, H-padB); ctx.lineTo(W-padR, H-padB); ctx.stroke();
-
-  // Y ticks
-  ctx.fillStyle = "#666"; ctx.font = "11px sans-serif"; ctx.textAlign = "right";
-  for (let i = 0; i <= 4; i++) {
-    const f = i / 4;
-    const y = (H - padB) - f * (H - padT - padB);
-    ctx.fillText((f * yMax * 100).toFixed(1) + "%", padL - 6, y + 3);
-    ctx.strokeStyle = "#eee"; ctx.beginPath();
-    ctx.moveTo(padL, y); ctx.lineTo(W - padR, y); ctx.stroke();
-  }
-
-  // X ticks
-  ctx.strokeStyle = "#aaa"; ctx.textAlign = "center"; ctx.fillStyle = "#555";
-  const tickEvery = (metric === "turns") ? 2 : 2;
-  for (let i = 0; i <= nBins; i += tickEvery) {
-    const x = padL + i * colW;
-    ctx.beginPath(); ctx.moveTo(x, H-padB); ctx.lineTo(x, H-padB+3); ctx.stroke();
-    const xv = axis.xStart + i * axis.binw;
-    ctx.fillText(String(xv), x, H - padB + 15);
-  }
-  ctx.fillText(axis.label, (W - padR + padL) / 2, H - 8);
-
-  // Bars, grouped. Overlay with alpha for clarity.
-  const groupW = colW * 0.95;
-  for (const s of series) {
-    ctx.fillStyle = s.color + "aa";
-    ctx.strokeStyle = s.color;
-    for (let i = 0; i < s.pmf.length && i < nBins; i++) {
-      const p = s.pmf[i];
-      if (p <= 0) continue;
-      const h = (p / yMax) * (H - padT - padB);
-      const x = padL + i * colW + (colW - groupW) / 2;
-      const y = (H - padB) - h;
-      ctx.fillRect(x, y, groupW, h);
-    }
-  }
-
-  // Overlay per-series line connecting bin tops
-  for (const s of series) {
-    ctx.strokeStyle = s.color; ctx.lineWidth = 1.5;
-    ctx.beginPath();
-    let first = true;
-    for (let i = 0; i < s.pmf.length && i < nBins; i++) {
-      const p = s.pmf[i];
-      const x = padL + (i + 0.5) * colW;
-      const y = (H - padB) - (p / yMax) * (H - padT - padB);
-      if (first) { ctx.moveTo(x, y); first = false; } else { ctx.lineTo(x, y); }
-    }
-    ctx.stroke();
-  }
-
-  // Legend
-  const legend = document.getElementById("legend");
-  legend.innerHTML = "";
-  for (const s of series) {
-    const span = document.createElement("span");
-    span.innerHTML = `<span class="swatch" style="background:${s.color}"></span>${s.name}`;
-    legend.appendChild(span);
-  }
-
-  // Stats table
-  const tbody = document.querySelector("#statsTable tbody");
-  tbody.innerHTML = "";
-  for (const s of series) {
-    const tr = document.createElement("tr");
-    tr.innerHTML = `<td><span class="swatch" style="background:${s.color}"></span>${s.name}</td>
-                    <td>${s.stats.median}</td>
-                    <td>${s.stats.mean}</td>
-                    <td>${s.stats.p90}</td>
-                    <td>${s.stats.max}</td>
-                    <td>${DATA[s.name].count}</td>`;
-    tbody.appendChild(tr);
-  }
+  while (svg.firstChild) svg.removeChild(svg.firstChild);
+  const view = document.querySelector('input[name="view"]:checked').value;
+  document.getElementById("convWrap").style.visibility = view === "turns" ? "visible" : "hidden";
+  view === "turns" ? drawTurns() : drawTokens();
 }
-
+document.querySelectorAll('input[name="view"]').forEach(r => r.addEventListener("change", draw));
+document.getElementById("convert").addEventListener("change", draw);
 draw();
 </script>
-
 </body>
 </html>

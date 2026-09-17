@@ -2,97 +2,54 @@
 chapter: ch-28
 course: llm-training
 phase: read
-excerpt_of: Meta Llama Team — "The Llama 3 Herd of Models" (long-context subsection §3.4)
+excerpt_of: Llama Team, AI @ Meta — "The Llama 3 Herd of Models" (§3.2, §3.4.2, §4.3.4, Table 7, Table 21)
 source_url: https://arxiv.org/abs/2407.21783
 created_at: "2026-04-23"
+revised: "2026-09-15 (rewritten against arXiv v3; the previous version quoted an unverified card)"
 ---
 
-# Excerpt: Llama 3 — the 6-stage 800B-token schedule and RoPE base = 500K
+# Excerpt: Llama 3 — long-context pre-training stage and long-context SFT data
 
-**Source:** `wiki/raw-data/llm-training/papers/long-context-llama3.md`
-**Paper:** Meta Llama Team (Grattafiori et al.), 2024
-**arXiv:** https://arxiv.org/abs/2407.21783
+**Report:** arXiv 2407.21783 v3 (2024-11-23). All results in the report are for Llama 3.1 models (§1).
+**Verified library cards:** [[llama-3]], [[llama-3-recipe]].
 
----
+## RoPE base is an architecture setting for all of pre-training (§3.2)
 
-## Bibliographic header
+> "We increase the RoPE base frequency hyperparameter to 500,000. This enables us to better support longer contexts; Xiong et al. (2023) showed this value to be effective for context lengths up to 32,768." (§3.2)
 
-> *"Llama 3's 128K-context extension is split into a staged continued-pretraining schedule (8K → 16K → 32K → 64K → 128K across 800B tokens) with RoPE base rescaled to 500K, followed by a long-context SFT stage on synthetic long-doc QA."*
+The same section lists an attention mask "that prevents self-attention between different documents within the same sequence" (§3.2). The report does not describe a RoPE base change during the long-context stage.
 
-This is the production-scale recipe — more compute than any other 2024 open recipe by an order of magnitude. The lesson is not "do exactly this"; it's how Meta chose to *spend* 800B tokens of compute on the problem.
+## Long-context pre-training (§3.4.2)
 
----
+> "We increase the supported context length in increments, pre-training until the model has successfully adapted to the increased context length. We assess successful adaptation by measuring whether (1) model performance on short-context evaluations has recovered completely and (2) the model perfectly solves 'needle in a haystack' tasks up to that length. In Llama 3 405B pre-training, we increased context length gradually in six stages, starting from the original 8K context window and ending in the final 128K context window. This long-context pre-training stage was performed using approximately 800B training tokens." (§3.4.2)
 
-## The six-stage schedule
+Not printed: per-stage lengths, per-stage token counts, per-stage data mixture. Context parallelism uses an all-gather of K and V tensors, chosen partly because it supports "different types of attention masks ... such as the document mask" (§3.3.2); Table 4 lists CP 16 at sequence length 131,072.
 
-From the raw-data:
+## Long-context SFT data (§4.3.4)
 
-> *"Stage A — 8K → 16K: moderate data, ~100B tokens. Stage B — 16K → 32K: ~100B tokens. Stage C — 32K → 64K: ~150B tokens. Stage D — 64K → 128K: ~200B tokens. (Additional intermediate stages for stability.) Total: ~800B tokens across all stages."*
+> "Naively applying our existing SFT recipe with only short-context data resulted in significant regressions in long-context capabilities from pre-training ... We use earlier versions of Llama 3 to generate synthetic data based on the key long-context use-cases: (possibly multi-turn) question-answering, summarization for long documents, and reasoning over code repositories" (§4.3.4)
 
-The specific design choice: **each stage roughly doubles the context**. This is the NTK-aware position-interpolation literature's recommendation — small rescaling steps give the RoPE sinusoids time to stabilise. Jumping from 8K to 128K in one stage would cause the low-frequency dimensions to alias, producing training instability.
+- **Question answering:** "We split these documents into chunks of 8K tokens, and prompted an earlier version of the Llama 3 model to generate QA pairs conditional on randomly selected chunks. During training, the whole document is used as context."
+- **Summarization:** "hierarchical summarization of long-context documents by first summarizing the chunks of 8K input length using our strongest Llama 3 8K context model and then summarizing the summaries ... We also generate QA pairs based on the summaries of the documents and prompt the model with questions that require global understanding of the whole long document."
+- **Long context code reasoning:** "We parse Python files to identify import statements and determine their dependencies. From here, we select the most commonly depended-upon files, specifically those referenced by at least five other files. We remove one of these key files from a repository and prompt the model to identify which files depended on the missing file and to generate the necessary missing code."
+- **Length buckets:** "16K, 32K, 64K and 128K".
+- **Mixing:** "Through careful ablations, we observe that mixing 0.1% of synthetically generated long-context data with the original short-context data optimizes the performance across both short-context and long-context benchmarks." No ablation table is printed.
+- **DPO:** "using only short context training data in DPO did not negatively impact long-context performance as long as the SFT model is high quality in long context tasks. We suspect this is due to the fact that our DPO recipe has fewer optimizer steps than SFT."
 
-The token-budget profile — 100B, 100B, 150B, 200B — is increasing with context length, which makes sense per-sequence: each training step at 64K context processes 8× fewer sequences than at 8K context, so reaching the same number of sequence-equivalents requires more tokens.
+## SFT data statistics (Table 7)
 
----
+| Dataset | % of examples | Avg. turns | Avg. tokens | Avg. tokens in context | Avg. tokens in final response |
+|---|---|---|---|---|---|
+| Long context | 0.11% | 6.7 | 38,135.6 | 37,395.2 | 740.5 |
+| Total | 100% | 4.7 | 846.1 | 535.7 | 310.4 |
 
-## Data mix shift per stage
+Derived: a long-context example has 38,135.6 / 846.1 ≈ 45 times the average token count, so its token share is larger than its 0.11% example share. The token share is not printed.
 
-> *"Proportions shift toward long documents (books, code repos, papers) in later stages. Short-to-long document ratio gradually rebalances from ~80:20 (stage A) to ~40:60 (stage D)."*
+## Long-context evaluation reported (§5.2.6, Table 21)
 
-The 80:20 → 40:60 shift is the opposite of what a naïve recipe would do. A naïve recipe would say: *"At 128K context, use only 128K-capable documents; why waste capacity on short docs?"* Meta's answer: short docs serve as regularisation that preserves short-context behaviour. Pushing the long-doc fraction too high (>60% at 128K) costs short-context capability.
-
-This is the continued-pretraining analogue of the long-SFT-fraction constraint below.
-
----
-
-## RoPE base = 500K
-
-> *"Base rescaled from 10K to 500K for the final 128K model. Scaling done progressively alongside the staged training — at each stage, the RoPE base is adjusted to match the new context window."*
-
-The formula change is the most cited single line from §3.4. Llama-3 scales RoPE from `θ = 10,000` (Llama-2 default) to `θ = 500,000` — a **50× base increase** for a **16× context increase** (8K → 128K). The base scaling is *faster than the context scaling*, which is NTK-aware's expected behaviour: the rescale factor applies as `θ → θ · s^(d/(d-2))` where `s` is the context ratio, and for Llama-3's head dim 128, `s^(d/(d-2)) = s^(128/126) ≈ s`. So `s ≈ 50` producing ~50× base rescale for ~50× effective context range (16× claimed + headroom).
-
-No YaRN, no NTK-aware trick beyond the direct rescale. The paper is explicit that simple rescaling combined with the staged training schedule is sufficient — the elaborate position-encoding tricks in other work (YaRN, LongRoPE) are *not* needed at this compute budget. Compute can substitute for position-math cleverness, up to a point.
-
----
-
-## Long-context SFT at 0.1%
-
-> *"A small fraction (~0.1%) of SFT samples are long-context: synthetic QA over long documents, multi-document summarization, long-context code analysis. Generation uses a larger Llama 3 model as teacher on full documents. Keeping the long-SFT fraction low prevents short-context regression."*
-
-The 0.1% is the binding constraint. Raising it above 1% costs ~1 MMLU point.
-
-Why such a small fraction works: the base model already saw 800B tokens of long-context continued pretraining, so the capability is already present. SFT's job is just to *elicit* long-context instruction-following, not to teach it from scratch. A small fraction is enough to change the output distribution for long prompts without over-shifting behaviour on short prompts.
-
-**Notice:** this is the opposite philosophy from ProLong, which uses 70% long in SFT. The difference is compute: ProLong has 5B SFT tokens and needs to be aggressive; Llama-3 has ~50-100B SFT tokens and can afford a small long-fraction.
-
-Teacher model = Llama 3 405B itself — self-distillation on long-context SFT.
-
----
-
-## Claimed vs effective
-
-> *"Llama 3.1-70B: NIAH 128K ~99%; RULER 128K ~75% (effective context ~64K)."*
-
-The NIAH-to-RULER gap is ~24 points at 128K; the effective-context metric says the model is only Llama2-7B-4K-equivalent out to 64K, not 128K. Meta acknowledges this explicitly in the paper — it's not a contested number, it's an upstream admission. The gap motivates the reasoning-in-a-haystack evaluations (BABILong) and the multi-needle training ablations (Qwen 1M) that subsequent work adopted.
-
----
-
-## What scales and what doesn't
-
-> *"Staged schedule is compute-intensive: 800B tokens of CPT is out of reach for smaller labs."*
-
-800B is roughly 5% of Llama-3's full 15T pretraining — a significant fraction. For labs with an order of magnitude less compute, the recipe choices have to change: Fu 2024 (5B CPT on SlimPajama) or LongRoPE (<1B FT with per-dim search) are the reasonable shapes at smaller budgets.
-
-> *"RoPE base = 500K works for Llama 3's architecture; the right value depends on head-dim and pretrain base."*
-
-The 500K figure is *not* transferable to other base models. Llama-3's head dim is 128 and its pretraining base was 10K; a different base model with different pretraining would want a different rescale. LongRoPE's per-dim search is the principled way to avoid hand-tuning this scalar per model.
-
----
+Needle-in-a-Haystack: "successfully retrieving 100% of needles at all document depths and context lengths". Multi-needle ("insert 4 needles in the context and test if a model can retrieve 2 needles", average recall over 10 lengths up to 128K): 8B 98.8, 70B 97.5, 405B 98.1. InfiniteBench En.MC: 8B 65.1, 70B 78.2, 405B 83.4. The report does not include RULER.
 
 ## Connections
 
-- Chapter synthesis: [[ch-28]]
-- Data-quality thesis counterpart: [[excerpts/prolong-coherence]]
-- Search-based RoPE alternative: [[excerpts/longrope-per-dim-search]]
-- Evaluation: [[excerpts/ruler-task-family]], [[excerpts/babilong-pg19-embed]]
-- 1M-context successor: [[excerpts/qwen-1m-pipeline]]
+- [[ruler]] Table 3 is the source of the claimed 128K / effective 64K result for Llama 3.1 70B.
+- ch-28 §4; the long-context stage as a mid-training step is covered in ch-32b.

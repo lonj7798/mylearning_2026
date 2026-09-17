@@ -1,0 +1,250 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ch-45c — Context budget under five management policies</title>
+<style>
+  :root {
+    --bg: #fbfbf9; --fg: #1b1b1a; --muted: #5d5d58; --line: #d8d6cf; --panel: #ffffff;
+    --c1: #2f6f9f; --c2: #b4762a; --c3: #3c8a5d; --c4: #9a4b6e; --c5: #6b5aa6; --warn: #a33c2f;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; padding: 18px; background: var(--bg); color: var(--fg);
+         font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif; }
+  h1 { font-size: 17px; margin: 0 0 4px; }
+  h2 { font-size: 14px; margin: 18px 0 6px; }
+  p.sub { margin: 0 0 14px; color: var(--muted); max-width: 70ch; }
+  .wrap { display: flex; flex-wrap: wrap; gap: 18px; align-items: flex-start; }
+  .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 12px 14px; }
+  .controls { width: 300px; flex: 0 0 auto; }
+  .plot { flex: 1 1 420px; min-width: 320px; }
+  label { display: block; margin: 9px 0 2px; font-size: 12px; color: var(--muted); }
+  input[type=range] { width: 100%; }
+  .val { color: var(--fg); font-variant-numeric: tabular-nums; }
+  table { border-collapse: collapse; margin-top: 10px; width: 100%; font-size: 12.5px; }
+  th, td { border-bottom: 1px solid var(--line); padding: 5px 6px; text-align: right; }
+  th:first-child, td:first-child { text-align: left; }
+  th { color: var(--muted); font-weight: 600; }
+  .swatch { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 6px; }
+  caption, .cap { caption-side: bottom; text-align: left; color: var(--muted); font-size: 12px;
+                  margin-top: 10px; max-width: 78ch; }
+  svg { display: block; width: 100%; height: auto; }
+  code { background: #f0efe9; padding: 1px 4px; border-radius: 3px; font-size: 12px; }
+</style>
+</head>
+<body>
+<h1>Context budget under five management policies</h1>
+<p class="sub">Each policy is the same agent loop with a different rule for what stays in the context window.
+The chart plots context length in tokens after each tool-calling turn; the dashed line is the window limit and
+the dotted line is the trigger point. The table reports how many turns the policy completes before the window
+is exhausted, and how many tokens of history it has seen by then.</p>
+
+<div class="wrap">
+  <div class="panel controls">
+    <label>Context window W: <span class="val" id="vW"></span></label>
+    <input type="range" id="W" min="8000" max="262000" step="1000" value="128000">
+
+    <label>Tokens per reasoning block r: <span class="val" id="vr"></span></label>
+    <input type="range" id="r" min="0" max="2000" step="50" value="400">
+
+    <label>Tokens per tool call a: <span class="val" id="va"></span></label>
+    <input type="range" id="a" min="20" max="400" step="10" value="80">
+
+    <label>Tokens per tool observation o: <span class="val" id="vo"></span></label>
+    <input type="range" id="o" min="100" max="8000" step="100" value="1500">
+
+    <label>System prompt + question s: <span class="val" id="vs"></span></label>
+    <input type="range" id="s" min="200" max="8000" step="100" value="1500">
+
+    <label>Summary length u: <span class="val" id="vu"></span></label>
+    <input type="range" id="u" min="100" max="4000" step="100" value="800">
+
+    <label>keep-recent k (rounds whose observation is kept): <span class="val" id="vk"></span></label>
+    <input type="range" id="k" min="1" max="20" step="1" value="5">
+
+    <label>Trigger fraction f of the window: <span class="val" id="vf"></span></label>
+    <input type="range" id="f" min="0.5" max="0.98" step="0.01" value="0.80">
+
+    <label>Turns to simulate: <span class="val" id="vN"></span></label>
+    <input type="range" id="N" min="20" max="600" step="10" value="300">
+  </div>
+
+  <div class="panel plot">
+    <svg id="chart" viewBox="0 0 640 360" role="img" aria-label="Context length in tokens against turn number for five policies"></svg>
+    <table id="tbl">
+      <thead><tr><th>Policy</th><th>Turns completed</th><th>History tokens seen</th><th>Peak context</th></tr></thead>
+      <tbody></tbody>
+    </table>
+    <p class="cap" id="cap"></p>
+  </div>
+</div>
+
+<script>
+(function () {
+  const ids = ["W","r","a","o","s","u","k","f","N"];
+  const el = {}; ids.forEach(i => el[i] = document.getElementById(i));
+  const out = {}; ids.forEach(i => out[i] = document.getElementById("v"+i));
+  const OMIT = 12;               // tokens left behind by a folded observation
+  const COLORS = ["var(--c1)","var(--c2)","var(--c3)","var(--c4)","var(--c5)"];
+
+  function fmt(n) {
+    if (n >= 1000) return (n/1000).toFixed(n >= 10000 ? 0 : 1) + "K";
+    return String(n);
+  }
+
+  // Each simulator returns {series:[context after each completed turn], turns, seen, peak}
+  function simulate(p) {
+    const step = p.r + p.a + p.o;          // tokens added by one full turn
+    const trig = p.f * p.W;
+    const res = {};
+
+    // 1. Keep everything (ReAct). Stops when the next turn would not fit.
+    (function () {
+      const series = []; let ctx = p.s, n = 0, seen = 0;
+      while (n < p.N && ctx + step <= p.W) { ctx += step; seen += step; n++; series.push(ctx); }
+      res.react = { series, turns: n, seen, peak: ctx, stops: true };
+    })();
+
+    // 2. keep-recent-k: observations older than the last k rounds are replaced by a short note.
+    (function () {
+      const series = []; let n = 0, seen = 0, ctx = p.s, peak = p.s;
+      while (n < p.N) {
+        const m = n + 1;
+        const next = p.s + m*(p.r + p.a) + Math.min(m, p.k)*p.o + Math.max(0, m - p.k)*OMIT;
+        if (next > p.W) break;
+        n = m; ctx = next; seen += step; peak = Math.max(peak, ctx); series.push(ctx);
+      }
+      res.keepk = { series, turns: n, seen, peak, stops: true };
+    })();
+
+    // 3. Discard-all at the trigger: reset to the system prompt and question, keep no history.
+    (function () {
+      const series = []; let ctx = p.s, n = 0, seen = 0, peak = p.s;
+      while (n < p.N) {
+        ctx += step; seen += step; n++;
+        if (ctx > trig) ctx = p.s;
+        peak = Math.max(peak, ctx); series.push(ctx);
+      }
+      res.discard = { series, turns: n, seen, peak, stops: false };
+    })();
+
+    // 4. Summary at the trigger: reset to the system prompt plus a summary of u tokens.
+    (function () {
+      const series = []; let ctx = p.s, n = 0, seen = 0, peak = p.s;
+      while (n < p.N) {
+        ctx += step; seen += step; n++;
+        if (ctx > trig) { seen += p.u; ctx = p.s + p.u; }   // the summary itself is generated and charged
+        peak = Math.max(peak, ctx); series.push(ctx);
+      }
+      res.summary = { series, turns: n, seen, peak, stops: false };
+    })();
+
+    // 5. Branch and fold: sub-task turns run in a branch and return one summary to the main thread.
+    //    Half of the turns are taken inside branches in this illustration.
+    (function () {
+      const series = []; let main = p.s, branch = 0, inBranch = false, n = 0, seen = 0, peak = p.s, ctxNow = p.s;
+      let branchTurns = 0;
+      while (n < p.N) {
+        if (!inBranch && (n % 8 === 0)) { inBranch = true; branch = 0; branchTurns = 0; }
+        if (inBranch) {
+          branch += step; branchTurns++; seen += step; n++;
+          ctxNow = main + branch;
+          if (branchTurns >= 4 || ctxNow > trig) { main += p.u; branch = 0; inBranch = false; ctxNow = main; }
+        } else {
+          main += step; seen += step; n++; ctxNow = main;
+        }
+        if (ctxNow > p.W) break;
+        peak = Math.max(peak, ctxNow); series.push(ctxNow);
+      }
+      res.fold = { series, turns: series.length, seen, peak, stops: true };
+    })();
+
+    return res;
+  }
+
+  const ROWS = [
+    ["react",   "Keep everything (ReAct)"],
+    ["keepk",   "keep-recent-k (fold old observations)"],
+    ["discard", "Discard-all at the trigger"],
+    ["summary", "Summary at the trigger"],
+    ["fold",    "Branch and fold sub-tasks"]
+  ];
+
+  function draw() {
+    const p = {
+      W: +el.W.value, r: +el.r.value, a: +el.a.value, o: +el.o.value,
+      s: +el.s.value, u: +el.u.value, k: +el.k.value, f: +el.f.value, N: +el.N.value
+    };
+    out.W.textContent = fmt(p.W) + " tokens";
+    out.r.textContent = p.r; out.a.textContent = p.a; out.o.textContent = p.o;
+    out.s.textContent = p.s; out.u.textContent = p.u; out.k.textContent = p.k;
+    out.f.textContent = (p.f*100).toFixed(0) + "% (" + fmt(Math.round(p.f*p.W)) + " tokens)";
+    out.N.textContent = p.N;
+
+    const res = simulate(p);
+
+    // chart geometry
+    const Wp = 640, Hp = 360, L = 62, R = 12, T = 12, B = 34;
+    const xw = Wp - L - R, yh = Hp - T - B;
+    const ymax = p.W * 1.05;
+    const X = i => L + (i / Math.max(1, p.N - 1)) * xw;
+    const Y = v => T + yh - (v / ymax) * yh;
+
+    let g = "";
+    // axes
+    g += `<line x1="${L}" y1="${T+yh}" x2="${L+xw}" y2="${T+yh}" stroke="var(--line)"/>`;
+    g += `<line x1="${L}" y1="${T}" x2="${L}" y2="${T+yh}" stroke="var(--line)"/>`;
+    for (let t = 0; t <= 4; t++) {
+      const v = ymax * t / 4, y = Y(v);
+      g += `<line x1="${L}" y1="${y}" x2="${L+xw}" y2="${y}" stroke="var(--line)" stroke-dasharray="1 4"/>`;
+      g += `<text x="${L-6}" y="${y+4}" text-anchor="end" font-size="10" fill="var(--muted)">${fmt(Math.round(v))}</text>`;
+    }
+    for (let t = 0; t <= 4; t++) {
+      const i = Math.round(p.N * t / 4), x = X(i);
+      g += `<text x="${x}" y="${T+yh+16}" text-anchor="middle" font-size="10" fill="var(--muted)">${i}</text>`;
+    }
+    g += `<text x="${L+xw/2}" y="${Hp-4}" text-anchor="middle" font-size="11" fill="var(--muted)">tool-calling turn</text>`;
+    g += `<text x="12" y="${T+yh/2}" transform="rotate(-90 12 ${T+yh/2})" text-anchor="middle" font-size="11" fill="var(--muted)">context tokens</text>`;
+    // window and trigger lines
+    g += `<line x1="${L}" y1="${Y(p.W)}" x2="${L+xw}" y2="${Y(p.W)}" stroke="var(--warn)" stroke-dasharray="6 4"/>`;
+    g += `<text x="${L+xw}" y="${Y(p.W)-4}" text-anchor="end" font-size="10" fill="var(--warn)">window limit</text>`;
+    g += `<line x1="${L}" y1="${Y(p.f*p.W)}" x2="${L+xw}" y2="${Y(p.f*p.W)}" stroke="var(--muted)" stroke-dasharray="2 3"/>`;
+    g += `<text x="${L+xw}" y="${Y(p.f*p.W)-4}" text-anchor="end" font-size="10" fill="var(--muted)">trigger</text>`;
+
+    ROWS.forEach(([key], idx) => {
+      const ser = res[key].series;
+      if (!ser.length) return;
+      let d = "";
+      ser.forEach((v, i) => { d += (i ? "L" : "M") + X(i).toFixed(1) + "," + Y(Math.min(v, ymax)).toFixed(1); });
+      g += `<path d="${d}" fill="none" stroke="${COLORS[idx]}" stroke-width="1.8"/>`;
+      if (res[key].stops && ser.length < p.N) {
+        g += `<circle cx="${X(ser.length-1)}" cy="${Y(Math.min(ser[ser.length-1], ymax))}" r="3.2" fill="${COLORS[idx]}"/>`;
+      }
+    });
+    document.getElementById("chart").innerHTML = g;
+
+    const tb = document.querySelector("#tbl tbody");
+    tb.innerHTML = ROWS.map(([key, name], idx) => {
+      const rr = res[key];
+      const stopped = rr.stops && rr.turns < p.N;
+      return `<tr><td><span class="swatch" style="background:${COLORS[idx]}"></span>${name}</td>` +
+             `<td>${rr.turns}${stopped ? " (stopped)" : ""}</td>` +
+             `<td>${fmt(Math.round(rr.seen))}</td><td>${fmt(Math.round(rr.peak))}</td></tr>`;
+    }).join("");
+
+    document.getElementById("cap").textContent =
+      "Defaults for k (5 rounds) and for the trigger (80% of the window) are the published settings: keep-recent-k with k = 5 " +
+      "in the GLM-5 report §4.2.4, and the 80%-of-window trigger in the DeepSeek-V3.2 report §4.4. Every other default here " +
+      "(window, per-turn token counts, summary length, and the branch schedule of 4 branch turns every 8 turns) is an " +
+      "illustration chosen for this figure and is not a measured value from any source. The chart shows token bookkeeping only; " +
+      "it does not predict accuracy. The defaults reproduce the worked example in read.md \u00a76 (W = 128,000, s = 1,500, "
+      + "r = 400, a = 80, o = 1,500, u = 800): keep everything stops at 63 turns, keep-recent-k at 241.";
+  }
+
+  ids.forEach(i => el[i].addEventListener("input", draw));
+  draw();
+})();
+</script>
+</body>
+</html>

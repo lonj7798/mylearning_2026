@@ -7,6 +7,8 @@ source_url: https://arxiv.org/abs/2510.03313
 created_at: "2026-04-23"
 ---
 
+> Superseded by the 2026-09 revision of read.md; kept for history.
+
 # Excerpt: Scaling laws revisited — data quality as a scaling variable
 
 **Source library:** `wiki/raw-data/llm-training/papers/scaling-laws-data-quality.md`

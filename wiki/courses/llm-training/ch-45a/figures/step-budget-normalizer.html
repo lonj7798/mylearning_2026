@@ -1,0 +1,174 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>RL step-budget normalizer — ch-45a</title>
+<style>
+:root{
+  --bg:#f7f7f5; --panel:#ffffff; --ink:#1d1d1f; --muted:#5b5b60; --line:#d9d9de;
+  --accent:#1f6fb5; --printed:#1f6fb5; --printed-bg:#dcebf8; --derived:#7a5a1e; --derived-bg:#f5ead3;
+  --absent:#6a6a72; --absent-bg:#efeff1; --warn:#b4472c; --warn-bg:#f7e0d9;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#16171a; --panel:#1f2024; --ink:#ececef; --muted:#a3a3ab; --line:#34353b;
+    --accent:#7fb6e8; --printed:#7fb6e8; --printed-bg:#1d3346; --derived:#d8bb7a; --derived-bg:#3a3020;
+    --absent:#9a9aa2; --absent-bg:#2a2b30; --warn:#ec9a82; --warn-bg:#45271f;
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#16171a; --panel:#1f2024; --ink:#ececef; --muted:#a3a3ab; --line:#34353b;
+  --accent:#7fb6e8; --printed:#7fb6e8; --printed-bg:#1d3346; --derived:#d8bb7a; --derived-bg:#3a3020;
+  --absent:#9a9aa2; --absent-bg:#2a2b30; --warn:#ec9a82; --warn-bg:#45271f;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font:14px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;padding:16px}
+main{max-width:1000px;margin:0 auto}
+h1{font-size:1.25em;margin:0 0 4px}
+h2{font-size:1.02em;margin:0 0 8px}
+p{margin:6px 0}
+.sub{color:var(--muted)}
+section{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:14px 16px;margin:14px 0}
+label{font-size:.92em}
+select{font:inherit;color:var(--ink);background:var(--panel);border:1px solid var(--line);border-radius:6px;padding:5px 8px;max-width:100%}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:10px;margin-top:12px}
+.cell{border:1px solid var(--line);border-radius:6px;padding:9px 10px}
+.cell .k{font-size:.82em;color:var(--muted);display:block}
+.cell .v{font-size:1.18em;font-weight:600;margin-top:2px;display:block;word-break:break-word}
+.tag{display:inline-block;font-size:.72em;border-radius:4px;padding:1px 6px;margin-top:5px;letter-spacing:.02em}
+.t-printed{color:var(--printed);background:var(--printed-bg)}
+.t-derived{color:var(--derived);background:var(--derived-bg)}
+.t-absent{color:var(--absent);background:var(--absent-bg)}
+.t-conflict{color:var(--warn);background:var(--warn-bg)}
+.eq{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:.9em;background:var(--absent-bg);border:1px solid var(--line);border-radius:6px;padding:8px 10px;margin-top:10px;overflow-x:auto}
+.note{margin-top:10px;font-size:.92em;color:var(--muted)}
+.legend{display:flex;flex-wrap:wrap;gap:8px 14px;margin-top:10px;font-size:.85em;color:var(--muted)}
+.tablewrap{overflow-x:auto;margin-top:8px}
+table{border-collapse:collapse;font-size:.88em;min-width:520px}
+th,td{border:1px solid var(--line);padding:5px 8px;text-align:left;vertical-align:top}
+th{background:var(--absent-bg);font-weight:600}
+.caption{color:var(--muted);font-size:.87em;margin-top:12px}
+</style>
+</head>
+<body>
+<main>
+<h1>RL step-budget normalizer</h1>
+<p class="sub">Pick a published run. The panel converts its printed settings into samples per rollout step and
+gradient updates per rollout step, and marks every quantity as printed by the source, derived here, or absent
+from the source. Companion to ch-45a §1.1 and §3.3.</p>
+
+<section>
+  <label for="run">Run:
+    <select id="run"></select>
+  </label>
+  <div class="grid" id="cells"></div>
+  <div class="eq" id="eq"></div>
+  <p class="note" id="note"></p>
+  <div class="legend">
+    <span><span class="tag t-printed">printed</span> stated at the locus</span>
+    <span><span class="tag t-derived">derived</span> computed from printed values</span>
+    <span><span class="tag t-absent">not reported</span> checked and absent</span>
+    <span><span class="tag t-conflict">conflict</span> sources disagree</span>
+  </div>
+</section>
+
+<section>
+  <h2>All runs at once</h2>
+  <div class="tablewrap"><table id="all"></table></div>
+  <p class="caption">Values as printed in the sources cited in ch-45a's Recipe tables. "Updates per rollout" is
+  samples per step divided by the mini-batch where both are printed in the same unit, and is taken from the
+  source's own sentence where the source states it.</p>
+</section>
+</main>
+<script>
+var RUNS = [
+ {name:"DAPO (Qwen2.5-32B base)", locus:"arXiv:2503.14476v2 §4.1",
+  prompts:[512,"printed"], spp:[16,"printed"], mini:[512,"printed (samples)"], upd:[16,"printed"],
+  len:["20,480 (16,384 + 4,096 soft cache)","printed"], kl:["removed","printed"], lr:["1e-6 constant, 20-step linear warmup","printed"],
+  note:"The two 512s are in different units: 512 prompts and a 512-sample mini-batch. verl's recipe adds gen_batch_size 1536, so up to 1,536 prompts are generated to keep 512 non-degenerate groups."},
+ {name:"DeepSeek-R1-Zero", locus:"arXiv:2501.12948v2 §2.1",
+  prompts:[32,"printed"], spp:[16,"printed"], mini:[512,"derived: 8,192 outputs ÷ 16 mini-batches"], upd:[16,"printed (1 inner epoch)"],
+  len:["32,768, then 65,536 after step 8.2k","printed"], kl:["0.001 in the loss","printed"], lr:["3e-6","printed"],
+  note:"The rollout accumulates 8,192 outputs, i.e. 16 steps of 32 questions × 16 outputs, before the 16 mini-batch updates. Clip ε is not reported for R1-Zero; R1 stage-1 RL prints ε = 10."},
+ {name:"MiMo-7B-RL", locus:"arXiv:2505.07608v2 §3.3.3",
+  prompts:[512,"printed (training batch)"], spp:["not reported","absent"], mini:[32,"printed"], upd:[16,"printed"],
+  len:["32,768","printed"], kl:["removed","printed"], lr:["1e-6","printed"],
+  note:"512 ÷ 32 = 16 matches the printed update count, so batch and mini-batch share one unit. The group size G and the clip values are not printed."},
+ {name:"Llama-3.1-Tulu-3-8B (RLVR)", locus:"arXiv:2411.15124 Table 21 + open-instruct docs/tulu3.md",
+  prompts:["not reported separately","absent"], spp:["not reported","absent"], mini:[224,"printed (effective batch); 7 GPUs × 32 in the script"], upd:[4,"printed (K = 4)"],
+  len:["2,048 (1,024 for GSM8K)","printed"], kl:["0.05 subtracted from the verifier reward","printed"], lr:["3e-7 linear","printed"],
+  note:"Episodes conflict: Table 21 prints 100,000, the released script prints --total_episodes 10000000. 100,000 ÷ 224 ≈ 446 rollout steps and about 1,786 gradient updates; the steps actually run are not reported."},
+ {name:"Skywork-OR1-7B stage 1", locus:"arXiv:2505.22312v2 Table 11, §8.1",
+  prompts:[256,"printed (batch)"], spp:[16,"printed (group size)"], mini:[256,"printed"], upd:[1,"derived: batch = mini-batch"],
+  len:["16,384 in stage 1, 32,768 in stage 2","printed"], kl:["none","printed"], lr:["1e-6 constant","printed"],
+  note:"Batch equals mini-batch in both general models, so each rollout gives exactly one gradient update. Zero-advantage groups are dropped before the update."},
+ {name:"AceReason-Nemotron 7B / 14B", locus:"arXiv:2505.16400 §3.2.2",
+  prompts:[128,"printed"], spp:["8 at 8K length, 16 otherwise","printed"], mini:["one update per generation","printed"], upd:[1,"printed (ρ fixed at 1)"],
+  len:["8K → 16K → 24K → 32K","printed"], kl:["β = 0","printed"], lr:["1e-6 AdamW (math), 5e-6 (code)","printed"],
+  note:"2 or 4 updates per generation collapsed entropy around step 100 (Fig. 3c); exactly one update prevented it. Prompts with pass rate above 6/16 are removed at the 24K and 32K stages."},
+ {name:"Phi-4-reasoning-plus", locus:"arXiv:2504.21318v1 §4.2",
+  prompts:[64,"printed (problem seeds per iteration)"], spp:[8,"printed (G)"], mini:["not reported","absent"], upd:["not reported","absent"],
+  len:["32k, outputs clipped at 31,744","printed"], kl:["0.001 in the loss, against π_θold","printed"], lr:["5e-8 Adam, cosine warmup over 10 steps","printed"],
+  note:"90 steps × 64 seeds ≈ 5,760 problems, which the report rounds to ~6k examples out of a 72,401-problem seed set. The KL target is the rollout policy, not a frozen reference."},
+ {name:"SimpleRL-Zoo (10 base models)", locus:"arXiv:2503.18892v3 App. B.5",
+  prompts:[1024,"printed"], spp:[8,"printed"], mini:[256,"printed (unit not stated)"], upd:["32 if the mini-batch counts samples","derived, unit unresolved"],
+  len:["8,192","printed"], kl:["1e-4 in the loss (0.5B–14B), 1e-3 above 14B","printed"], lr:["not reported","absent"],
+  note:"The mini-batch unit is not stated, so the update count cannot be resolved from the paper. The same configuration was applied to every base model, and the paper's finding is that the prompt difficulty, not the configuration, is what had to change."},
+ {name:"Olmo 3 7B Think (released RL run)", locus:"open-instruct 7b_think_rl_no_pipeline.sh at d8a7f1c",
+  prompts:[64,"printed"], spp:[8,"printed"], mini:["1 minibatch","printed"], upd:[1,"printed"],
+  len:["32,768 response, 2,048 prompt","printed"], kl:["β = 0.0 (framework default 0.05)","printed"], lr:["1e-6 constant","printed"],
+  note:"Clip range 0.2 / 0.272 comes from the framework defaults at this commit; the pre-#1547 scripts printed --clip_higher 0.272 explicitly. The paper's Table 49 disagrees with several scripts on GPU counts."}
+];
+
+function tagClass(s){
+  if(s.indexOf("absent")===0) return "t-absent";
+  if(s.indexOf("derived")===0) return "t-derived";
+  if(s.indexOf("conflict")===0) return "t-conflict";
+  return "t-printed";
+}
+function cell(k,pair){
+  return '<div class="cell"><span class="k">'+k+'</span><span class="v">'+pair[0]+
+         '</span><span class="tag '+tagClass(pair[1])+'">'+pair[1]+'</span></div>';
+}
+function samplesPerStep(r){
+  if(typeof r.prompts[0]==="number" && typeof r.spp[0]==="number") return r.prompts[0]*r.spp[0];
+  return null;
+}
+function render(i){
+  var r = RUNS[i], html = "";
+  html += cell("Prompts per step", r.prompts);
+  html += cell("Samples per prompt", r.spp);
+  var sps = samplesPerStep(r);
+  html += cell("Samples per step", sps===null ? ["cannot be derived","absent"] : [sps.toLocaleString(),"derived: prompts × samples per prompt"]);
+  html += cell("Mini-batch", r.mini);
+  html += cell("Gradient updates per rollout", r.upd);
+  html += cell("Max response length (tokens)", r.len);
+  html += cell("KL coefficient and placement", r.kl);
+  html += cell("Learning rate", r.lr);
+  document.getElementById("cells").innerHTML = html;
+  document.getElementById("eq").textContent =
+    sps===null
+      ? "samples per step = prompts per step × samples per prompt   —   one factor is not printed for this run"
+      : "samples per step = " + r.prompts[0] + " × " + r.spp[0] + " = " + sps.toLocaleString() +
+        (typeof r.mini[0]==="number" ? ("   |   " + sps.toLocaleString() + " ÷ " + r.mini[0] + " = " + (sps/r.mini[0]) + " gradient updates per rollout") : "");
+  document.getElementById("note").textContent = r.note + "  Locus: " + r.locus + ".";
+}
+var sel = document.getElementById("run");
+for(var i=0;i<RUNS.length;i++){
+  var o = document.createElement("option");
+  o.value = String(i); o.textContent = RUNS[i].name; sel.appendChild(o);
+}
+sel.addEventListener("change", function(){ render(Number(sel.value)); });
+render(0);
+
+var rows = '<tr><th>Run</th><th>Prompts / step</th><th>Samples / prompt</th><th>Samples / step</th><th>Mini-batch</th><th>Updates / rollout</th><th>KL</th></tr>';
+for(var j=0;j<RUNS.length;j++){
+  var r = RUNS[j], sps = samplesPerStep(r);
+  rows += '<tr><td>'+r.name+'</td><td>'+r.prompts[0]+'</td><td>'+r.spp[0]+'</td><td>'+
+          (sps===null?'—':sps.toLocaleString())+'</td><td>'+r.mini[0]+'</td><td>'+r.upd[0]+'</td><td>'+r.kl[0]+'</td></tr>';
+}
+document.getElementById("all").innerHTML = rows;
+</script>
+</body>
+</html>

@@ -7,6 +7,8 @@ source_url: https://arxiv.org/abs/2505.22617
 created_at: "2026-04-23"
 ---
 
+> Superseded by the 2026-09 revision of read.md; kept for history.
+
 # Excerpt: Entropy Mechanism — the §5(b) post-mortem
 
 **Source library:** `wiki/raw-data/llm-training/papers/entropy-mechanism-llm-rl.md`

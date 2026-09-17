@@ -1,0 +1,385 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Metric Artifact Explorer</title>
+<style>
+  :root {
+    color-scheme: light;
+    --surface-0: #f6f5f2;
+    --surface-1: #fcfcfb;
+    --grid: #e4e2dd;
+    --axis: #b9b7b0;
+    --text-primary: #0b0b0b;
+    --text-secondary: #52514e;
+    --text-muted: #75736d;
+    --series-1: #2a78d6;
+    --series-2: #eb6834;
+    --focus: #2a78d6;
+    --tip-bg: #ffffff;
+    --tip-border: #d6d4ce;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      color-scheme: dark;
+      --surface-0: #121211;
+      --surface-1: #1a1a19;
+      --grid: #2e2e2c;
+      --axis: #55544f;
+      --text-primary: #ffffff;
+      --text-secondary: #c3c2b7;
+      --text-muted: #9a998f;
+      --series-1: #3987e5;
+      --series-2: #d95926;
+      --focus: #3987e5;
+      --tip-bg: #242423;
+      --tip-border: #3a3a37;
+    }
+  }
+  :root[data-theme="dark"] {
+    color-scheme: dark;
+    --surface-0: #121211;
+    --surface-1: #1a1a19;
+    --grid: #2e2e2c;
+    --axis: #55544f;
+    --text-primary: #ffffff;
+    --text-secondary: #c3c2b7;
+    --text-muted: #9a998f;
+    --series-1: #3987e5;
+    --series-2: #d95926;
+    --focus: #3987e5;
+    --tip-bg: #242423;
+    --tip-border: #3a3a37;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    padding-block: 24px;
+    padding-inline: 16px;
+    background: var(--surface-0);
+    color: var(--text-primary);
+    font: 14px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  }
+  main { max-width: 860px; margin: 0 auto; }
+  h1 { font-size: 1.35rem; margin: 0 0 4px; }
+  h2 { font-size: 1.05rem; margin: 0 0 4px; }
+  p { margin: 0 0 10px; color: var(--text-secondary); }
+  code { font-size: 13px; }
+  .card {
+    background: var(--surface-1);
+    border: 1px solid var(--grid);
+    border-radius: 10px;
+    padding: 18px 16px;
+    margin: 18px 0;
+  }
+  .controls { display: flex; flex-wrap: wrap; gap: 12px 20px; margin: 10px 0 6px; align-items: center; }
+  .control { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .control label, .control .lab { font-size: 13px; color: var(--text-secondary); }
+  input[type="range"] { width: 160px; accent-color: var(--series-1); }
+  .seg { display: inline-flex; flex-wrap: wrap; gap: 6px; }
+  .seg button, .btn {
+    font: inherit; font-size: 13px;
+    color: var(--text-primary);
+    background: transparent;
+    border: 1px solid var(--axis);
+    border-radius: 999px;
+    padding: 3px 11px;
+    cursor: pointer;
+  }
+  .seg button[aria-pressed="true"] { border-color: var(--text-primary); font-weight: 600; }
+  button:focus-visible, input:focus-visible, svg:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+  .grid2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 16px; }
+  .chart { position: relative; }
+  svg { display: block; width: 100%; height: auto; }
+  .tick text, .axis-label { fill: var(--text-muted); font-size: 11px; font-variant-numeric: tabular-nums; }
+  .gridline { stroke: var(--grid); stroke-width: 1; }
+  .baseline { stroke: var(--axis); stroke-width: 1; }
+  .endlabel { fill: var(--text-secondary); font-size: 12px; font-variant-numeric: tabular-nums; }
+  .caption { font-size: 12px; color: var(--text-muted); margin-top: 10px; }
+  .tooltip {
+    position: fixed; z-index: 10; pointer-events: none;
+    background: var(--tip-bg); border: 1px solid var(--tip-border); border-radius: 8px;
+    padding: 8px 10px; font-size: 12px; color: var(--text-secondary);
+    box-shadow: 0 2px 8px rgba(0,0,0,0.12); max-width: 260px; font-variant-numeric: tabular-nums;
+  }
+  .tooltip strong { color: var(--text-primary); font-size: 13px; display: block; margin-bottom: 2px; }
+  .tooltip .key { display: inline-block; width: 12px; height: 2px; vertical-align: middle; margin-right: 6px; }
+  .tablewrap { overflow-x: auto; margin-top: 10px; }
+  table { border-collapse: collapse; font-size: 12px; min-width: 520px; }
+  th, td { border-bottom: 1px solid var(--grid); padding: 4px 8px; text-align: right; font-variant-numeric: tabular-nums; }
+  th { color: var(--text-secondary); font-weight: 600; }
+  td { color: var(--text-primary); }
+  .stats { display: flex; flex-wrap: wrap; gap: 16px; margin: 6px 0 2px; }
+  .stat .label { font-size: 12px; color: var(--text-muted); }
+  .stat .value { font-size: 18px; font-weight: 600; color: var(--text-primary); font-variant-numeric: tabular-nums; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Metric artifact explorer</h1>
+  <p>One model family, one set of per-token probabilities, two scores. Per-token cross-entropy falls as a power law in parameters N, <code>L_CE(N) = (N/c)^α</code>; the probability that one token is correct is <code>p = exp(−L_CE)</code>. Exact match on an L-token target scores <code>p^L</code>; token edit distance scores <code>L·(1 − p)</code>. The controls change the target length and the test-set size, so the same model outputs can be compared under a thresholded score and a linear score.</p>
+
+  <section class="card" aria-labelledby="t1">
+    <h2 id="t1">Same outputs scored two ways</h2>
+    <div class="controls">
+      <div class="control">
+        <label for="lenSlider">Target length L (tokens)</label>
+        <input type="range" id="lenSlider" min="1" max="10" step="1" value="5">
+        <span class="lab" id="lenValue">5</span>
+      </div>
+      <button class="btn" id="tableToggle" aria-expanded="false" aria-controls="tbl">Show table</button>
+    </div>
+    <div class="grid2">
+      <div>
+        <p style="margin:6px 0 2px;color:var(--text-primary);font-weight:600">Exact-match accuracy, p<sup>L</sup> (higher is better)</p>
+        <div class="chart" id="chartAcc"></div>
+      </div>
+      <div>
+        <p style="margin:6px 0 2px;color:var(--text-primary);font-weight:600">Expected token edit distance, L·(1 − p) (lower is better)</p>
+        <div class="chart" id="chartTed"></div>
+      </div>
+    </div>
+    <div class="tablewrap" id="tbl" hidden></div>
+    <p class="caption">Formulas: Schaeffer, Miranda, Koyejo, "Are Emergent Abilities of Large Language Models a Mirage?", arXiv:2304.15004v2 §2 (the paper uses the power-law form for illustration and assumes independent tokens, which it states is not true). Constants c = 10<sup>8</sup> and α = −0.5 are chosen by this course for arithmetic convenience; they are not fitted to any model. The horizontal axis runs from 10<sup>7</sup> to 10<sup>11</sup> parameters. With L = 5 the markers at 10<sup>8</sup>, 10<sup>9</sup>, 10<sup>10</sup>, 10<sup>11</sup> show accuracy 0.007, 0.206, 0.607, 0.854 and token edit distance 3.16, 1.36, 0.48, 0.16, the values in ch-08b §6.</p>
+  </section>
+
+  <section class="card" aria-labelledby="t2">
+    <h2 id="t2">Resolution: chance that a finite test set scores zero</h2>
+    <p>A model with expected exact-match accuracy a, evaluated on n independent items, scores exactly zero with probability (1 − a)<sup>n</sup>.</p>
+    <div class="controls">
+      <div class="control">
+        <span class="lab" id="nLab">Test-set size n</span>
+        <div class="seg" role="group" aria-labelledby="nLab" id="nButtons"></div>
+      </div>
+    </div>
+    <div class="stats" id="stats"></div>
+    <div class="chart" id="chartZero" style="max-width:560px"></div>
+    <p class="caption">Uses the target length chosen above. ch-08b §6 worked example: L = 5, n = 100, N = 10<sup>8</sup> gives expected correct 100 × 0.0067 = 0.67 and P(zero) = (1 − 0.0067)<sup>100</sup> = 0.51; with n = 1,000 it is 0.0012. Resolution as a cause of apparent emergence: arXiv:2304.15004v2 §2 and §3 (Fig. 4).</p>
+  </section>
+</main>
+<div class="tooltip" id="tip" hidden></div>
+<script>
+(function () {
+  "use strict";
+  var C = 1e8, ALPHA = -0.5, LOG_MIN = 7, LOG_MAX = 11;
+  var TICKS = [7, 8, 9, 10, 11];
+  var DECADES = [8, 9, 10, 11];
+  var state = { L: 5, n: 100 };
+  var NS = "http://www.w3.org/2000/svg";
+  var tip = document.getElementById("tip");
+
+  function ce(logN) { return Math.pow(Math.pow(10, logN) / C, ALPHA); }
+  function pTok(logN) { return Math.exp(-ce(logN)); }
+  function acc(logN, L) { return Math.pow(pTok(logN), L); }
+  function ted(logN, L) { return L * (1 - pTok(logN)); }
+  function pZero(logN, L, n) { return Math.pow(1 - acc(logN, L), n); }
+  function supN(logN) {
+    var e = Math.round(logN * 100) / 100;
+    if (Math.abs(e - Math.round(e)) < 1e-9) return "10^" + Math.round(e);
+    return (Math.pow(10, logN)).toExponential(2).replace("e+", "×10^");
+  }
+  function fmt(v, d) { return v.toFixed(d); }
+  function fmtP(v) { return v < 0.0001 ? "<0.0001" : (v < 0.01 ? v.toFixed(4) : v.toFixed(3)); }
+
+  function el(name, attrs, parent) {
+    var e = document.createElementNS(NS, name);
+    for (var k in attrs) e.setAttribute(k, attrs[k]);
+    if (parent) parent.appendChild(e);
+    return e;
+  }
+  function niceMax(v) {
+    var steps = [0.5, 1, 2, 2.5, 5, 10];
+    for (var i = 0; i < steps.length; i++) if (v <= steps[i]) return steps[i];
+    return Math.ceil(v);
+  }
+
+  var W = 420, H = 250, M = { l: 46, r: 58, t: 14, b: 38 };
+  function xPos(logN) { return M.l + (logN - LOG_MIN) / (LOG_MAX - LOG_MIN) * (W - M.l - M.r); }
+
+  function lineChart(containerId, fn, yMax, color, yTicks, label, digits) {
+    var box = document.getElementById(containerId);
+    box.innerHTML = "";
+    var svg = el("svg", { viewBox: "0 0 " + W + " " + H, role: "img", tabindex: "0", "aria-label": label }, box);
+    function yPos(v) { return M.t + (1 - v / yMax) * (H - M.t - M.b); }
+    yTicks.forEach(function (t) {
+      el("line", { x1: M.l, x2: W - M.r, y1: yPos(t), y2: yPos(t), "class": t === 0 ? "baseline" : "gridline" }, svg);
+      var g = el("g", { "class": "tick" }, svg);
+      var tx = el("text", { x: M.l - 6, y: yPos(t) + 4, "text-anchor": "end" }, g);
+      tx.textContent = t.toString();
+    });
+    TICKS.forEach(function (d) {
+      var g = el("g", { "class": "tick" }, svg);
+      var tx = el("text", { x: xPos(d), y: H - M.b + 16, "text-anchor": "middle" }, g);
+      tx.textContent = "10";
+      var s = el("tspan", { dy: "-5", "font-size": "9" }, tx);
+      s.textContent = String(d);
+    });
+    var xl = el("text", { x: (M.l + W - M.r) / 2, y: H - 4, "text-anchor": "middle", "class": "axis-label" }, svg);
+    xl.textContent = "Parameters N (log scale)";
+    var pts = [];
+    for (var i = 0; i <= 120; i++) {
+      var ln = LOG_MIN + i * (LOG_MAX - LOG_MIN) / 120;
+      pts.push([xPos(ln), yPos(Math.min(fn(ln), yMax))]);
+    }
+    el("path", { d: "M" + pts.map(function (p) { return p[0].toFixed(1) + "," + p[1].toFixed(1); }).join("L"),
+      fill: "none", stroke: color, "stroke-width": 2, "stroke-linejoin": "round", "stroke-linecap": "round" }, svg);
+    DECADES.forEach(function (d) {
+      el("circle", { cx: xPos(d), cy: yPos(fn(d)), r: 4, fill: color, stroke: "var(--surface-1)", "stroke-width": 2 }, svg);
+    });
+    var end = el("text", { x: xPos(LOG_MAX) + 8, y: yPos(fn(LOG_MAX)) + 4, "class": "endlabel" }, svg);
+    end.textContent = fn(LOG_MAX).toFixed(digits);
+    var cross = el("line", { y1: M.t, y2: H - M.b, stroke: "var(--axis)", "stroke-width": 1, visibility: "hidden" }, svg);
+    var dot = el("circle", { r: 5, fill: color, stroke: "var(--surface-1)", "stroke-width": 2, visibility: "hidden" }, svg);
+    var hit = el("rect", { x: M.l, y: M.t, width: W - M.l - M.r, height: H - M.t - M.b, fill: "transparent" }, svg);
+    var cur = 9;
+    function show(ln, clientX, clientY) {
+      cur = ln;
+      var x = xPos(ln), y = yPos(Math.min(fn(ln), yMax));
+      cross.setAttribute("x1", x); cross.setAttribute("x2", x); cross.setAttribute("visibility", "visible");
+      dot.setAttribute("cx", x); dot.setAttribute("cy", y); dot.setAttribute("visibility", "visible");
+      tip.innerHTML = "<strong>N = " + supN(ln) + "</strong>" +
+        "L_CE = " + fmt(ce(ln), 3) + ", p = " + fmt(pTok(ln), 3) + "<br>" +
+        "<span class='key' style='background:var(--series-1)'></span>Accuracy p^" + state.L + " = " + fmt(acc(ln, state.L), 3) + "<br>" +
+        "<span class='key' style='background:var(--series-2)'></span>Token edit distance = " + fmt(ted(ln, state.L), 2) + "<br>" +
+        "P(zero correct | n = " + state.n + ") = " + fmtP(pZero(ln, state.L, state.n));
+      tip.hidden = false;
+      var r = svg.getBoundingClientRect();
+      var px = clientX !== undefined ? clientX : r.left + x / W * r.width;
+      var py = clientY !== undefined ? clientY : r.top + y / H * r.height;
+      var tw = tip.offsetWidth, th = tip.offsetHeight;
+      var left = px + 14; if (left + tw > window.innerWidth - 8) left = px - tw - 14;
+      var top = py - th - 10; if (top < 8) top = py + 14;
+      tip.style.left = Math.max(8, left) + "px"; tip.style.top = top + "px";
+    }
+    function hide() { cross.setAttribute("visibility", "hidden"); dot.setAttribute("visibility", "hidden"); tip.hidden = true; }
+    function fromEvent(ev) {
+      var r = svg.getBoundingClientRect();
+      var vx = (ev.clientX - r.left) / r.width * W;
+      var ln = LOG_MIN + (vx - M.l) / (W - M.l - M.r) * (LOG_MAX - LOG_MIN);
+      ln = Math.max(LOG_MIN, Math.min(LOG_MAX, Math.round(ln * 40) / 40));
+      show(ln, ev.clientX, ev.clientY);
+    }
+    hit.addEventListener("pointermove", fromEvent);
+    hit.addEventListener("pointerdown", fromEvent);
+    hit.addEventListener("pointerleave", hide);
+    svg.addEventListener("keydown", function (ev) {
+      if (ev.key === "ArrowRight" || ev.key === "ArrowLeft") {
+        ev.preventDefault();
+        cur = Math.max(LOG_MIN, Math.min(LOG_MAX, cur + (ev.key === "ArrowRight" ? 0.25 : -0.25)));
+        show(cur);
+      } else if (ev.key === "Escape") { hide(); }
+    });
+    svg.addEventListener("focus", function () { show(cur); });
+    svg.addEventListener("blur", hide);
+  }
+
+  function zeroChart() {
+    var box = document.getElementById("chartZero");
+    box.innerHTML = "";
+    var w = 420, h = 230, m = { l: 46, r: 16, t: 22, b: 40 };
+    var svg = el("svg", { viewBox: "0 0 " + w + " " + h, role: "img",
+      "aria-label": "Column chart: probability that a test set of " + state.n + " items scores zero, at four model sizes" }, box);
+    function yPos(v) { return m.t + (1 - v) * (h - m.t - m.b); }
+    [0, 0.25, 0.5, 0.75, 1].forEach(function (t) {
+      el("line", { x1: m.l, x2: w - m.r, y1: yPos(t), y2: yPos(t), "class": t === 0 ? "baseline" : "gridline" }, svg);
+      var g = el("g", { "class": "tick" }, svg);
+      var tx = el("text", { x: m.l - 6, y: yPos(t) + 4, "text-anchor": "end" }, g);
+      tx.textContent = t.toString();
+    });
+    var band = (w - m.l - m.r) / DECADES.length;
+    DECADES.forEach(function (d, i) {
+      var v = pZero(d, state.L, state.n);
+      var cx = m.l + band * (i + 0.5), bw = 24;
+      var y = yPos(v), base = yPos(0), hgt = Math.max(0, base - y);
+      if (hgt > 0.5) {
+        var rr = Math.min(4, hgt);
+        el("path", { d: "M" + (cx - bw / 2) + "," + base + "V" + (y + rr) + "Q" + (cx - bw / 2) + "," + y + " " + (cx - bw / 2 + rr) + "," + y +
+          "H" + (cx + bw / 2 - rr) + "Q" + (cx + bw / 2) + "," + y + " " + (cx + bw / 2) + "," + (y + rr) + "V" + base + "Z",
+          fill: "var(--series-1)" }, svg);
+      }
+      var vl = el("text", { x: cx, y: Math.min(y, base) - 6, "text-anchor": "middle", "class": "endlabel" }, svg);
+      vl.textContent = fmtP(v);
+      var g = el("g", { "class": "tick" }, svg);
+      var tx = el("text", { x: cx, y: h - m.b + 16, "text-anchor": "middle" }, g);
+      tx.textContent = "N = 10";
+      var s = el("tspan", { dy: "-5", "font-size": "9" }, tx); s.textContent = String(d);
+      var hitR = el("rect", { x: cx - band / 2, y: m.t, width: band, height: h - m.t - m.b, fill: "transparent", tabindex: "0",
+        "aria-label": "N = 10 to the " + d + ", accuracy " + fmt(acc(d, state.L), 4) + ", expected correct " + fmt(state.n * acc(d, state.L), 2) + ", probability of zero " + fmtP(v) }, svg);
+      function showTip(ev) {
+        tip.innerHTML = "<strong>N = 10^" + d + ", n = " + state.n + "</strong>Accuracy = " + fmt(acc(d, state.L), 4) +
+          "<br>Expected correct = " + fmt(state.n * acc(d, state.L), 2) + "<br>P(zero correct) = " + fmtP(v);
+        tip.hidden = false;
+        var r = hitR.getBoundingClientRect();
+        var px = ev && ev.clientX !== undefined ? ev.clientX : r.left + r.width / 2;
+        var py = ev && ev.clientY !== undefined ? ev.clientY : r.top + r.height / 2;
+        var tw = tip.offsetWidth, th = tip.offsetHeight;
+        var left = px + 14; if (left + tw > window.innerWidth - 8) left = px - tw - 14;
+        var top = py - th - 10; if (top < 8) top = py + 14;
+        tip.style.left = Math.max(8, left) + "px"; tip.style.top = top + "px";
+      }
+      hitR.addEventListener("pointermove", showTip);
+      hitR.addEventListener("focus", function () { showTip(); });
+      hitR.addEventListener("pointerleave", function () { tip.hidden = true; });
+      hitR.addEventListener("blur", function () { tip.hidden = true; });
+    });
+    var stats = document.getElementById("stats");
+    var a8 = acc(8, state.L);
+    stats.innerHTML =
+      "<div class='stat'><div class='label'>Accuracy at N = 10^8</div><div class='value'>" + fmt(a8, 4) + "</div></div>" +
+      "<div class='stat'><div class='label'>Expected correct items at N = 10^8</div><div class='value'>" + fmt(state.n * a8, 2) + "</div></div>" +
+      "<div class='stat'><div class='label'>P(zero correct) at N = 10^8</div><div class='value'>" + fmtP(pZero(8, state.L, state.n)) + "</div></div>";
+  }
+
+  function table() {
+    var rows = [8, 8.5, 9, 9.5, 10, 10.5, 11];
+    var html = "<table><thead><tr><th>N</th><th>L_CE</th><th>p</th><th>Accuracy p^" + state.L + "</th><th>Token edit distance</th><th>Expected correct (n = " + state.n + ")</th><th>P(zero correct)</th></tr></thead><tbody>";
+    rows.forEach(function (ln) {
+      html += "<tr><td>" + supN(ln) + "</td><td>" + fmt(ce(ln), 3) + "</td><td>" + fmt(pTok(ln), 3) + "</td><td>" + fmt(acc(ln, state.L), 3) +
+        "</td><td>" + fmt(ted(ln, state.L), 2) + "</td><td>" + fmt(state.n * acc(ln, state.L), 2) + "</td><td>" + fmtP(pZero(ln, state.L, state.n)) + "</td></tr>";
+    });
+    document.getElementById("tbl").innerHTML = html + "</tbody></table>";
+  }
+
+  function render() {
+    lineChart("chartAcc", function (ln) { return acc(ln, state.L); }, 1, "var(--series-1)", [0, 0.25, 0.5, 0.75, 1],
+      "Line chart of exact-match accuracy against parameters for target length " + state.L, 3);
+    var tmax = niceMax(ted(LOG_MIN, state.L));
+    var ticks = [0, tmax / 2, tmax];
+    lineChart("chartTed", function (ln) { return ted(ln, state.L); }, tmax, "var(--series-2)", ticks,
+      "Line chart of expected token edit distance against parameters for target length " + state.L, 2);
+    zeroChart();
+    table();
+  }
+
+  var slider = document.getElementById("lenSlider");
+  slider.addEventListener("input", function () {
+    state.L = parseInt(slider.value, 10);
+    document.getElementById("lenValue").textContent = String(state.L);
+    render();
+  });
+  var nb = document.getElementById("nButtons");
+  [30, 100, 300, 1000, 10000].forEach(function (n) {
+    var b = document.createElement("button");
+    b.type = "button";
+    b.textContent = n.toLocaleString("en-US");
+    b.setAttribute("aria-pressed", n === state.n ? "true" : "false");
+    b.addEventListener("click", function () {
+      state.n = n;
+      Array.prototype.forEach.call(nb.children, function (c) { c.setAttribute("aria-pressed", c === b ? "true" : "false"); });
+      render();
+    });
+    nb.appendChild(b);
+  });
+  var tt = document.getElementById("tableToggle");
+  tt.addEventListener("click", function () {
+    var t = document.getElementById("tbl");
+    t.hidden = !t.hidden;
+    tt.setAttribute("aria-expanded", String(!t.hidden));
+    tt.textContent = t.hidden ? "Show table" : "Hide table";
+  });
+  render();
+})();
+</script>
+</body>
+</html>

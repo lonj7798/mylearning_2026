@@ -7,6 +7,8 @@ source_url: https://github.com/OpenRLHF/OpenRLHF
 created_at: "2026-04-23"
 ---
 
+> Superseded by the 2026-09 revision of read.md; kept for history.
+
 # Excerpt: OpenRLHF — the DPO/IPO loss module ch-39 points at
 
 **Source library:** `wiki/raw-data/llm-training/frameworks/openrlhf-dpo.md`

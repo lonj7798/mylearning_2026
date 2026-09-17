@@ -2,255 +2,248 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>LR Schedules — Warmup, Cosine, Inverse-Sqrt, WSD</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Schedules and batch size (ch-03)</title>
 <style>
-  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-         max-width: 920px; margin: 2em auto; padding: 0 1em; color: #222; }
-  h1 { font-size: 1.4em; margin-bottom: 0.2em; }
-  .subtitle { color: #666; margin-top: 0; }
-  .panel { border: 1px solid #ddd; border-radius: 6px; padding: 1em; margin: 1em 0;
-           background: #fafafa; }
-  .controls { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-              gap: 1em; }
-  .control { display: flex; flex-direction: column; }
-  label { font-size: 0.85em; color: #555; margin-bottom: 0.2em; }
-  input[type="range"] { width: 100%; }
-  canvas { background: white; border: 1px solid #ccc; display: block; margin: 1em auto; }
-  .legend { display: flex; gap: 1.5em; justify-content: center; font-size: 0.9em;
-            flex-wrap: wrap; }
-  .swatch { display: inline-block; width: 12px; height: 12px; margin-right: 4px;
-            vertical-align: middle; border-radius: 2px; }
-  .value { font-variant-numeric: tabular-nums; color: #333; font-weight: 600; }
-  .note { font-size: 0.88em; color: #555; line-height: 1.5; }
-  code { background: #eef; padding: 1px 4px; border-radius: 3px; font-size: 0.9em; }
-  .yaxis-toggle { text-align: center; font-size: 0.85em; color: #555; }
+  :root {
+    --bg: #fbfbfa; --panel: #ffffff; --ink: #1f2328; --muted: #5a6270; --rule: #d9dde3; --grid: #eceef1;
+    --c1: #2f6db5; --c2: #c2571a; --c3: #2e8b57; --c4: #8a4fb8; --c5: #b3261e; --c6: #6b7280; --accent: #111827;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #15171a; --panel: #1d2024; --ink: #e6e8eb; --muted: #a2a9b3; --rule: #353a41; --grid: #2a2e34;
+      --c1: #7fb0ec; --c2: #f0955a; --c3: #6fcf97; --c4: #c39be6; --c5: #f07a72; --c6: #9aa3ae; --accent: #f3f4f6;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink);
+         font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+  main { max-width: 960px; margin: 0 auto; padding: 20px 16px 40px; }
+  h1 { font-size: 20px; margin: 0 0 4px; }
+  h2 { font-size: 16px; margin: 0 0 6px; }
+  p { margin: 6px 0; }
+  .muted { color: var(--muted); }
+  section { background: var(--panel); border: 1px solid var(--rule); border-radius: 8px; padding: 14px; margin: 16px 0; }
+  .controls { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 10px 16px; margin: 8px 0; }
+  .controls label { display: block; font-size: 12px; color: var(--muted); }
+  .controls input[type=range] { width: 100%; }
+  .val { font-variant-numeric: tabular-nums; font-weight: 600; color: var(--ink); }
+  .toggles { display: flex; flex-wrap: wrap; gap: 6px 14px; font-size: 13px; margin: 6px 0; }
+  .sw { display: inline-block; width: 12px; height: 3px; vertical-align: middle; margin-right: 4px; }
+  canvas { width: 100%; height: auto; display: block; border: 1px solid var(--rule); border-radius: 6px; background: var(--panel); }
+  .tablewrap { overflow-x: auto; }
+  table { border-collapse: collapse; font-size: 13px; margin-top: 8px; min-width: 520px; }
+  th, td { border-bottom: 1px solid var(--rule); padding: 4px 8px; text-align: left; font-variant-numeric: tabular-nums; }
+  th { color: var(--muted); font-weight: 600; }
+  .caption { font-size: 12px; color: var(--muted); margin-top: 8px; }
+  code { font-size: 12px; }
 </style>
 </head>
 <body>
+<main>
+<h1>Learning-rate schedules and batch size</h1>
+<p class="muted">Companion to ch-03 §1 and §3. Panel A compares schedule shapes and shows the learning rate at a chosen stop point. Panel B computes the steps–examples trade-off and the best step size for a batch size, given a gradient noise scale.</p>
 
-<h1>LR Schedules — Warmup, Cosine, Inverse-Sqrt, WSD</h1>
-<p class="subtitle">
-  Four modern learning-rate schedules plotted over <span class="value" id="totalLabel">50000</span>
-  steps at a peak LR of <span class="value" id="peakLabel">3.0e-4</span>.
-  End of warmup marked by the dashed vertical line.
-</p>
-
-<div class="panel">
+<section>
+  <h2>A. Schedule shapes and the learning rate at a stop point</h2>
+  <p class="muted">x axis: fraction of the planned run. y axis: learning rate divided by the run's peak (or constant) learning rate.</p>
   <div class="controls">
-    <div class="control">
-      <label>Total steps T</label>
-      <input type="range" id="total" min="1000" max="500000" step="1000" value="50000">
-      <span class="value" id="totalValue">50000</span>
-    </div>
-    <div class="control">
-      <label>Peak LR (log scale)</label>
-      <input type="range" id="peakLog" min="-5" max="-3" step="0.05" value="-3.523">
-      <span class="value" id="peakValue">3.0e-4</span>
-    </div>
-    <div class="control">
-      <label>Warmup fraction</label>
-      <input type="range" id="warmupFrac" min="0" max="0.10" step="0.002" value="0.02">
-      <span class="value"><span id="warmupFracLabel">2.0</span>%</span>
-    </div>
-    <div class="control">
-      <label>Min LR ratio (of peak)</label>
-      <input type="range" id="minRatio" min="0" max="0.3" step="0.01" value="0.10">
-      <span class="value"><span id="minRatioLabel">0.10</span></span>
-    </div>
-    <div class="control">
-      <label>WSD decay fraction</label>
-      <input type="range" id="decayFrac" min="0.05" max="0.30" step="0.01" value="0.15">
-      <span class="value"><span id="decayFracLabel">15</span>%</span>
-    </div>
+    <div><label>Stop point (fraction of planned run): <span class="val" id="stopV"></span></label>
+      <input id="stop" type="range" min="0.05" max="1" step="0.01" value="0.60"></div>
+    <div><label>Decay length for WSD branches (fraction of the stopped run): <span class="val" id="decV"></span></label>
+      <input id="dec" type="range" min="0.025" max="0.30" step="0.005" value="0.10"></div>
+    <div><label>Cosine final learning rate (fraction of peak): <span class="val" id="minV"></span></label>
+      <input id="minr" type="range" min="0" max="0.2" step="0.01" value="0.10"></div>
   </div>
-</div>
+  <div class="toggles" id="toggles"></div>
+  <canvas id="cA" width="900" height="380" aria-label="Learning-rate schedules plot"></canvas>
+  <div class="tablewrap"><table id="tA"><thead><tr><th>Schedule</th><th>η / η_peak at stop point</th><th>Decay finished at stop point?</th></tr></thead><tbody></tbody></table></div>
+  <p class="caption">
+    Cosine with horizon = planned run: η_min + ½(η_peak − η_min)(1 + cos(π·progress)). WSD branch: constant after warmup, then a decay over the chosen fraction ending at the stop point; linear and (1-sqrt) shapes from Hägele et al. 2024 (arXiv:2405.18392 §3.2). MiniCPM reports that a decay over 10% of tokens was sufficient and 2.5% fell short (arXiv:2404.06395 §4.3).
+    Published presets, each on its own run length: DeepSeek LLM multi-step, 31.6% of peak after 80% of tokens and 10% after 90% (arXiv:2401.02954 §2.3); Llama 3.1 405B cosine to 1% of peak over 1,200,000 steps with 8,000 warmup steps (arXiv:2407.21783 §3.4.1; the plot assumes warmup is inside the 1,200,000 steps and omits the final 40M-token anneal, which is not visible at this scale);
+    OLMo 2 7B as released: cosine planned to 10% over 5T tokens, stopped at step 928,646 (3.895T tokens) where the stage-2 config starts at 6.1499e-5 = 0.205 of the 3e-4 peak, then linear to 0 over 50B tokens (arXiv:2501.00656 Table 3; configs/official-1124 OLMo2-7B-stage1.yaml and stage2-seed42.yaml).
+    Warmup is drawn at 1% of the run for the generic curves; its true length differs by run.
+  </p>
+</section>
 
-<canvas id="plot" width="880" height="400"></canvas>
-
-<div class="legend">
-  <span><span class="swatch" style="background:#1976d2"></span>Warmup + Cosine</span>
-  <span><span class="swatch" style="background:#d32f2f"></span>Warmup + Inverse-sqrt</span>
-  <span><span class="swatch" style="background:#388e3c"></span>WSD (warmup-stable-decay)</span>
-  <span><span class="swatch" style="background:#f57c00"></span>Constant after warmup</span>
-  <span><span class="swatch" style="background:#aaa"></span>end of warmup</span>
-</div>
-
-<div class="panel note">
-  <strong>Why the horizon matters (Chinchilla Figure A1).</strong>
-  Cosine has a fixed endpoint: <code>lr(T) = min_lr</code>. If you stop early, the LR never really
-  decayed — your final optimization still has high step size and settles in a sharper-than-ideal
-  minimum. If you train <em>past</em> the cosine horizon, LR is pinned at <code>min_lr</code> and
-  you waste compute. Hoffmann et al. measured the penalty at roughly 0.3–1% validation perplexity
-  for a 2× horizon mismatch. <strong>Always size cosine to the token budget you will actually
-  complete.</strong>
-  <br><br>
-  <strong>Why WSD is checkpoint-able.</strong>
-  The stable phase is a flat line at <code>peak_lr</code> — every point on it is statistically
-  equivalent as a training state. You can save a checkpoint at, say, 60% of T, then fork a
-  short decay phase from it to produce a deployable model <em>at that token count</em>, while
-  the main trunk keeps going. DeepSeek and MiniCPM exploit this to produce many model variants
-  from a single trunk, a trick cosine cannot match because every step of cosine has a different
-  LR. Inverse-sqrt scales naturally with model width via the <code>d_model^(-0.5)</code> factor
-  but loses ~0.3% to cosine on a fixed budget; constant LR after warmup leaves 1–3% on the table
-  versus a proper decay.
-</div>
+<section>
+  <h2>B. Batch size, steps, examples, and the best step size</h2>
+  <div class="controls">
+    <div><label>Gradient noise scale B_noise: <span class="val" id="bnV"></span></label>
+      <input id="bn" type="range" min="1" max="7" step="0.01" value="3"></div>
+    <div><label>Batch size B: <span class="val" id="bV"></span></label>
+      <input id="b" type="range" min="0" max="8" step="0.01" value="2.4"></div>
+  </div>
+  <canvas id="cB" width="900" height="320" aria-label="Steps versus examples trade-off"></canvas>
+  <div class="tablewrap"><table id="tB"><thead><tr><th>B</th><th>Steps / S_min = 1 + B_noise/B</th><th>Examples / E_min = 1 + B/B_noise</th><th>ε_opt / ε_max = 1 / (1 + B_noise/B)</th><th>ε_opt ratio when B doubles</th></tr></thead><tbody></tbody></table></div>
+  <p class="caption">
+    Formulas from McCandlish et al. 2018 (arXiv:1812.06162 Eq. 2.6–2.12, App. D.1): S/S_min − 1 = (E/E_min − 1)^−1 and ε_opt(B) = ε_max/(1 + B_noise/B). At B = B_noise a run uses 2× the minimum steps and 2× the minimum examples. The table rows are B_noise/4, B_noise/2, B_noise, 2·B_noise, 4·B_noise and the current B; with B_noise = 1,000 they reproduce the ch-03 §3.1 table (5.0/1.25/0.20 at B = 250; 1.25/5.0/0.80 at B = 4,000). The model assumes SGD-like step-size behaviour under a quadratic loss; for Adam the same paper reports the best learning rate scaling as B^α with α between 0.5 and 1.0 before levelling off (§3.1, App. E.2). Measured critical batch sizes in LM pre-training grow mainly with tokens trained (Zhang et al. 2024, arXiv:2410.21676 §3.3).
+  </p>
+</section>
+</main>
 
 <script>
-const cvs = document.getElementById('plot');
-const ctx = cvs.getContext('2d');
+(function () {
+  const css = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+  const $ = id => document.getElementById(id);
 
-const d_model = 1024;  // only used for inverse-sqrt absolute scale; we renormalize to peak_lr
-const N_SAMPLES = 600;
+  // ---------- Panel A ----------
+  const WARM = 0.01;
+  function cosineAt(x, minr) {
+    if (x < WARM) return x / WARM;
+    const p = Math.min(1, (x - WARM) / (1 - WARM));
+    return minr + 0.5 * (1 - minr) * (1 + Math.cos(Math.PI * p));
+  }
+  function wsdAt(x, stop, dec, shape) {
+    if (x > stop) return NaN;
+    if (x < WARM) return x / WARM;
+    const start = stop * (1 - dec);
+    if (x <= start) return 1;
+    const u = Math.min(1, (x - start) / (stop - start));
+    return shape === 'sqrt' ? 1 - Math.sqrt(u) : 1 - u;
+  }
+  function deepseekAt(x) {
+    const w = 2000 / 211900; // derived: 7B, 2.0T tokens / (2304 x 4096 tokens per step)
+    if (x < w) return x / w;
+    if (x < 0.8) return 1;
+    if (x < 0.9) return 0.316;
+    return 0.1;
+  }
+  function llama3At(x) {
+    const w = 8000 / 1200000;
+    if (x < w) return x / w;
+    const p = (x - w) / (1 - w);
+    return 0.01 + 0.5 * 0.99 * (1 + Math.cos(Math.PI * p));
+  }
+  // OLMo 2 7B released: tokens axis normalized by 3.895T + 50B
+  const OL_STOP = 928646 * 4194304, OL_TOTAL = OL_STOP + 50e9, OL_W = 8388608000, OL_T = 5e12;
+  function olmoAt(x) {
+    const t = x * OL_TOTAL;
+    if (t < OL_W) return t / OL_W;
+    if (t <= OL_STOP) {
+      const p = (t - OL_W) / (OL_T - OL_W);
+      return 0.1 + 0.5 * 0.9 * (1 + Math.cos(Math.PI * p));
+    }
+    const start = 6.1499e-5 / 3e-4;
+    return start * (1 - (t - OL_STOP) / 50e9);
+  }
 
-function lrCosine(t, warmup, T, peak, minLr) {
-  if (t < warmup) return peak * t / Math.max(1, warmup);
-  const progress = (t - warmup) / Math.max(1, T - warmup);
-  const p = Math.min(1, Math.max(0, progress));
-  return minLr + 0.5 * (peak - minLr) * (1 + Math.cos(Math.PI * p));
-}
-
-function lrInvSqrt(t, warmup, peak) {
-  // Vaswani form: lr ~ min(t^-0.5, t * warmup^-1.5), normalized so peak is reached at t=warmup.
-  if (t < 1) t = 1;
-  const w = Math.max(1, warmup);
-  const raw = Math.min(Math.pow(t, -0.5), t * Math.pow(w, -1.5));
-  const atPeak = Math.pow(w, -0.5);     // value of raw at t=warmup
-  return peak * (raw / atPeak);
-}
-
-function lrWSD(t, warmup, T, peak, minLr, decayFrac) {
-  const decaySteps = Math.max(1, Math.floor(T * decayFrac));
-  const decayStart = T - decaySteps;
-  if (t < warmup) return peak * t / Math.max(1, warmup);
-  if (t < decayStart) return peak;
-  const p = Math.min(1, (t - decayStart) / decaySteps);
-  return peak + (minLr - peak) * p;   // linear decay peak -> minLr
-}
-
-function lrConstant(t, warmup, peak) {
-  if (t < warmup) return peak * t / Math.max(1, warmup);
-  return peak;
-}
-
-function render() {
-  const T = +document.getElementById('total').value;
-  const peakLog = +document.getElementById('peakLog').value;
-  const peak = Math.pow(10, peakLog);
-  const warmupFrac = +document.getElementById('warmupFrac').value;
-  const warmup = Math.max(1, Math.floor(T * warmupFrac));
-  const minRatio = +document.getElementById('minRatio').value;
-  const minLr = peak * minRatio;
-  const decayFrac = +document.getElementById('decayFrac').value;
-
-  document.getElementById('totalValue').textContent = T.toLocaleString();
-  document.getElementById('totalLabel').textContent = T.toLocaleString();
-  document.getElementById('peakValue').textContent = peak.toExponential(1);
-  document.getElementById('peakLabel').textContent = peak.toExponential(1);
-  document.getElementById('warmupFracLabel').textContent = (warmupFrac * 100).toFixed(1);
-  document.getElementById('minRatioLabel').textContent = minRatio.toFixed(2);
-  document.getElementById('decayFracLabel').textContent = Math.round(decayFrac * 100);
-
-  const schedules = [
-    { name: 'cos',  color: '#1976d2', fn: t => lrCosine(t, warmup, T, peak, minLr) },
-    { name: 'isq',  color: '#d32f2f', fn: t => lrInvSqrt(t, warmup, peak) },
-    { name: 'wsd',  color: '#388e3c', fn: t => lrWSD(t, warmup, T, peak, minLr, decayFrac) },
-    { name: 'con',  color: '#f57c00', fn: t => lrConstant(t, warmup, peak) },
+  const series = [
+    { id: 'cos', name: 'Cosine, horizon = planned run', color: '--c1', on: true, dash: [], f: (x, s) => cosineAt(x, s.minr), stopVal: s => cosineAt(s.stop, s.minr), done: s => s.stop >= 0.999 },
+    { id: 'wl', name: 'WSD branch, linear decay', color: '--c2', on: true, dash: [], f: (x, s) => wsdAt(x, s.stop, s.dec, 'lin'), stopVal: s => 0, done: s => true },
+    { id: 'ws', name: 'WSD branch, (1-sqrt) decay', color: '--c3', on: true, dash: [6, 4], f: (x, s) => wsdAt(x, s.stop, s.dec, 'sqrt'), stopVal: s => 0, done: s => true },
+    { id: 'ds', name: 'DeepSeek LLM multi-step (preset)', color: '--c4', on: false, dash: [], f: x => deepseekAt(x), stopVal: s => deepseekAt(s.stop), done: s => s.stop >= 0.999 },
+    { id: 'll', name: 'Llama 3.1 405B cosine to 1% (preset)', color: '--c5', on: false, dash: [], f: x => llama3At(x), stopVal: s => llama3At(s.stop), done: s => s.stop >= 0.999 },
+    { id: 'ol', name: 'OLMo 2 7B as released (preset)', color: '--c6', on: false, dash: [2, 3], f: x => olmoAt(x), stopVal: s => olmoAt(s.stop), done: s => s.stop >= 0.999 }
   ];
 
-  // sample
-  const xs = [];
-  const ys = schedules.map(() => []);
-  for (let i = 0; i < N_SAMPLES; i++) {
-    const t = Math.round((i / (N_SAMPLES - 1)) * T);
-    xs.push(t);
-    schedules.forEach((s, k) => ys[k].push(s.fn(t)));
-  }
-
-  // plot
-  ctx.clearRect(0, 0, cvs.width, cvs.height);
-  const pad = { l: 70, r: 20, t: 20, b: 48 };
-  const W = cvs.width - pad.l - pad.r;
-  const H = cvs.height - pad.t - pad.b;
-
-  const yMax = peak * 1.1;
-  const yMin = 0;
-  const xFor = t => pad.l + (t / T) * W;
-  const yFor = v => pad.t + H - ((v - yMin) / (yMax - yMin)) * H;
-
-  // grid
-  ctx.strokeStyle = '#eee';
-  ctx.lineWidth = 1;
-  for (let i = 0; i <= 5; i++) {
-    const y = pad.t + (H * i) / 5;
-    ctx.beginPath(); ctx.moveTo(pad.l, y); ctx.lineTo(pad.l + W, y); ctx.stroke();
-  }
-
-  // axis labels
-  ctx.fillStyle = '#555';
-  ctx.font = '11px sans-serif';
-  ctx.textAlign = 'right';
-  for (let i = 0; i <= 5; i++) {
-    const v = yMax * (1 - i / 5);
-    const y = pad.t + (H * i) / 5;
-    ctx.fillText(v.toExponential(1), pad.l - 6, y + 4);
-  }
-  ctx.textAlign = 'center';
-  for (let i = 0; i <= 5; i++) {
-    const step = Math.round((i / 5) * T);
-    ctx.fillText(step.toLocaleString(), xFor(step), pad.t + H + 18);
-  }
-  ctx.fillText('step t', pad.l + W / 2, pad.t + H + 38);
-
-  ctx.save();
-  ctx.translate(16, pad.t + H / 2);
-  ctx.rotate(-Math.PI / 2);
-  ctx.fillText('learning rate', 0, 0);
-  ctx.restore();
-
-  // plot schedules
-  schedules.forEach((s, k) => {
-    ctx.strokeStyle = s.color;
-    ctx.lineWidth = 2;
-    ctx.beginPath();
-    for (let i = 0; i < N_SAMPLES; i++) {
-      const x = xFor(xs[i]);
-      const y = yFor(Math.min(ys[k][i], yMax));
-      if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
-    }
-    ctx.stroke();
+  const tg = $('toggles');
+  series.forEach(sr => {
+    const lab = document.createElement('label');
+    const cb = document.createElement('input');
+    cb.type = 'checkbox'; cb.checked = sr.on;
+    cb.addEventListener('change', () => { sr.on = cb.checked; drawA(); });
+    const sw = document.createElement('span'); sw.className = 'sw'; sw.style.background = css(sr.color);
+    lab.appendChild(cb); lab.appendChild(sw); lab.appendChild(document.createTextNode(sr.name));
+    tg.appendChild(lab);
+    sr.sw = sw;
   });
 
-  // end-of-warmup marker
-  ctx.strokeStyle = '#aaa';
-  ctx.setLineDash([4, 4]);
-  ctx.beginPath();
-  ctx.moveTo(xFor(warmup), pad.t);
-  ctx.lineTo(xFor(warmup), pad.t + H);
-  ctx.stroke();
-  ctx.setLineDash([]);
-  ctx.fillStyle = '#666';
-  ctx.textAlign = 'left';
-  ctx.fillText('end of warmup', xFor(warmup) + 4, pad.t + 12);
+  function state() { return { stop: +$('stop').value, dec: +$('dec').value, minr: +$('minr').value }; }
 
-  // start-of-WSD-decay marker
-  const decayStart = T - Math.floor(T * decayFrac);
-  ctx.strokeStyle = '#c9e4c9';
-  ctx.setLineDash([2, 3]);
-  ctx.beginPath();
-  ctx.moveTo(xFor(decayStart), pad.t);
-  ctx.lineTo(xFor(decayStart), pad.t + H);
-  ctx.stroke();
-  ctx.setLineDash([]);
-  ctx.fillStyle = '#388e3c';
-  ctx.fillText('WSD decay starts', xFor(decayStart) + 4, pad.t + 26);
-}
+  function axes(ctx, W, H, pad, xlab, ylab, xt, yt, xfmt, yfmt) {
+    ctx.strokeStyle = css('--grid'); ctx.lineWidth = 1; ctx.fillStyle = css('--muted');
+    ctx.font = '12px sans-serif';
+    yt.forEach(v => { const y = pad.t + (1 - v.p) * (H - pad.t - pad.b); ctx.beginPath(); ctx.moveTo(pad.l, y); ctx.lineTo(W - pad.r, y); ctx.stroke(); ctx.textAlign = 'right'; ctx.fillText(yfmt(v.v), pad.l - 6, y + 4); });
+    xt.forEach(v => { const x = pad.l + v.p * (W - pad.l - pad.r); ctx.textAlign = 'center'; ctx.fillText(xfmt(v.v), x, H - pad.b + 16); });
+    ctx.textAlign = 'center'; ctx.fillText(xlab, pad.l + (W - pad.l - pad.r) / 2, H - 6);
+    ctx.save(); ctx.translate(14, pad.t + (H - pad.t - pad.b) / 2); ctx.rotate(-Math.PI / 2); ctx.fillText(ylab, 0, 0); ctx.restore();
+  }
 
-['total', 'peakLog', 'warmupFrac', 'minRatio', 'decayFrac'].forEach(id => {
-  document.getElementById(id).addEventListener('input', render);
-});
+  function drawA() {
+    const s = state();
+    $('stopV').textContent = s.stop.toFixed(2);
+    $('decV').textContent = (s.dec * 100).toFixed(1) + '%';
+    $('minV').textContent = s.minr.toFixed(2);
+    series.forEach(sr => sr.sw.style.background = css(sr.color));
+    const cv = $('cA'), ctx = cv.getContext('2d'), W = cv.width, H = cv.height;
+    const pad = { l: 56, r: 16, t: 14, b: 40 };
+    ctx.clearRect(0, 0, W, H);
+    const ticks = [0, 0.2, 0.4, 0.6, 0.8, 1].map(v => ({ v, p: v }));
+    const yt = [0, 0.25, 0.5, 0.75, 1].map(v => ({ v, p: v / 1.05 }));
+    axes(ctx, W, H, pad, 'fraction of planned run', 'η / η_peak', ticks, yt, v => v.toFixed(1), v => v.toFixed(2));
+    const X = x => pad.l + x * (W - pad.l - pad.r);
+    const Y = y => pad.t + (1 - y / 1.05) * (H - pad.t - pad.b);
+    series.filter(sr => sr.on).forEach(sr => {
+      ctx.strokeStyle = css(sr.color); ctx.lineWidth = 2; ctx.setLineDash(sr.dash); ctx.beginPath();
+      let started = false;
+      for (let i = 0; i <= 900; i++) {
+        const x = i / 900, y = sr.f(x, s);
+        if (isNaN(y)) { started = false; continue; }
+        if (!started) { ctx.moveTo(X(x), Y(y)); started = true; } else ctx.lineTo(X(x), Y(y));
+      }
+      ctx.stroke(); ctx.setLineDash([]);
+    });
+    ctx.strokeStyle = css('--accent'); ctx.setLineDash([3, 3]); ctx.beginPath(); ctx.moveTo(X(s.stop), pad.t); ctx.lineTo(X(s.stop), H - pad.b); ctx.stroke(); ctx.setLineDash([]);
+    ctx.fillStyle = css('--accent'); ctx.textAlign = 'left'; ctx.fillText('stop point', Math.min(X(s.stop) + 4, W - 70), pad.t + 12);
+    const tb = $('tA').querySelector('tbody'); tb.innerHTML = '';
+    series.filter(sr => sr.on).forEach(sr => {
+      const tr = document.createElement('tr');
+      const v = sr.stopVal(s);
+      tr.innerHTML = '<td>' + sr.name + '</td><td>' + v.toFixed(3) + '</td><td>' + (sr.done(s) ? 'yes' : 'no') + '</td>';
+      tb.appendChild(tr);
+    });
+  }
 
-render();
+  // ---------- Panel B ----------
+  const fmt = v => v >= 1e6 ? (v / 1e6).toFixed(v >= 1e7 ? 0 : 1) + 'M' : v >= 1e3 ? (v / 1e3).toFixed(v >= 1e4 ? 0 : 1) + 'k' : v.toFixed(v < 10 ? 1 : 0);
+  function drawB() {
+    const bn = Math.round(Math.pow(10, +$('bn').value));
+    const b = Math.max(1, Math.round(Math.pow(10, +$('b').value)));
+    $('bnV').textContent = bn.toLocaleString();
+    $('bV').textContent = b.toLocaleString();
+    const cv = $('cB'), ctx = cv.getContext('2d'), W = cv.width, H = cv.height;
+    const pad = { l: 56, r: 16, t: 14, b: 40 };
+    ctx.clearRect(0, 0, W, H);
+    // log-log axes: examples/E_min in [1, 100], steps/S_min in [1, 100]
+    const lx = v => Math.log10(v) / 2, ly = v => Math.log10(v) / 2;
+    const tv = [1, 2, 5, 10, 20, 50, 100];
+    axes(ctx, W, H, pad, 'examples / E_min (log scale)', 'steps / S_min (log)', tv.map(v => ({ v, p: lx(v) })), tv.map(v => ({ v, p: ly(v) })), v => String(v), v => String(v));
+    const X = p => pad.l + p * (W - pad.l - pad.r), Y = p => pad.t + (1 - p) * (H - pad.t - pad.b);
+    ctx.strokeStyle = css('--c1'); ctx.lineWidth = 2; ctx.beginPath();
+    let first = true;
+    for (let i = -300; i <= 300; i++) {
+      const r = Math.pow(10, i / 100); // B / B_noise
+      const e = 1 + r, st = 1 + 1 / r;
+      if (e > 100 || st > 100) continue;
+      if (first) { ctx.moveTo(X(lx(e)), Y(ly(st))); first = false; } else ctx.lineTo(X(lx(e)), Y(ly(st)));
+    }
+    ctx.stroke();
+    const r0 = b / bn, e0 = 1 + r0, s0 = 1 + 1 / r0;
+    if (e0 <= 100 && s0 <= 100) {
+      ctx.fillStyle = css('--c5'); ctx.beginPath(); ctx.arc(X(lx(e0)), Y(ly(s0)), 6, 0, 2 * Math.PI); ctx.fill();
+      ctx.fillStyle = css('--ink'); ctx.textAlign = 'left'; ctx.fillText('current B', X(lx(e0)) + 9, Y(ly(s0)) - 6);
+    }
+    ctx.fillStyle = css('--muted'); ctx.beginPath(); ctx.arc(X(lx(2)), Y(ly(2)), 4, 0, 2 * Math.PI); ctx.fill(); ctx.textAlign = 'left'; ctx.fillText('B = B_noise: (2, 2)', X(lx(2)) + 8, Y(ly(2)) - 8);
+    const rows = [bn / 4, bn / 2, bn, 2 * bn, 4 * bn, b];
+    const tb = $('tB').querySelector('tbody'); tb.innerHTML = '';
+    rows.forEach((B, i) => {
+      const st = 1 + bn / B, ex = 1 + B / bn, lr = 1 / (1 + bn / B), lr2 = (1 / (1 + bn / (2 * B))) / lr;
+      const tr = document.createElement('tr');
+      tr.innerHTML = '<td>' + (i === 5 ? 'current ' : '') + fmt(B) + '</td><td>' + st.toFixed(2) + '</td><td>' + ex.toFixed(2) + '</td><td>' + lr.toFixed(3) + '</td><td>×' + lr2.toFixed(3) + '</td>';
+      tb.appendChild(tr);
+    });
+  }
+
+  ['stop', 'dec', 'minr'].forEach(id => $(id).addEventListener('input', drawA));
+  ['bn', 'b'].forEach(id => $(id).addEventListener('input', drawB));
+  if (window.matchMedia) {
+    const mq = window.matchMedia('(prefers-color-scheme: dark)');
+    const re = () => { drawA(); drawB(); };
+    if (mq.addEventListener) mq.addEventListener('change', re); else if (mq.addListener) mq.addListener(re);
+  }
+  drawA(); drawB();
+})();
 </script>
-
 </body>
 </html>

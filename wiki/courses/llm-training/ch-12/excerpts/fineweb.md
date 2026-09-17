@@ -2,108 +2,36 @@
 chapter: ch-12
 course: llm-training
 phase: read
-excerpt_of: wiki/raw-data/llm-training/papers/fineweb.md
+excerpt_of: wiki/raw-data/llm-training/papers/fineweb.md (card verified 2026-09-14)
 source_url: https://arxiv.org/abs/2406.17557
+primary_version: arXiv:2406.17557v2 (2024-10-31; v1 2024-06); §3.4 and App. E re-read 2026-09-15
 created_at: "2026-04-23"
+revised: 2026-09 (generality revision) — rewritten to match the verified card; the earlier version explained the global-dedup result as loss of re-crawled high-quality pages, which contradicts the paper's reported diagnosis, and quoted unsupported claims about FineWeb-Edu and pipeline order
 ---
 
-# Excerpt: FineWeb — Per-Snapshot MinHash and the Dedup-Aggression Surprise
+# Excerpt: The FineWeb Datasets (deduplication sections)
 
-**Source library:** `wiki/raw-data/llm-training/papers/fineweb.md`
-**Authors:** Penedo, Kydlicek, Ben Allal, Lozhkov, Mitchell, Raffel, Von Werra, Wolf (2024)
+Guilherme Penedo, Hynek Kydlíček, Loubna Ben allal, Anton Lozhkov, Margaret Mitchell, Colin Raffel, et al. (Hugging Face). Library card: [[fineweb]]. This excerpt covers §3.4 and App. E; filtering is covered in ch-10 and ch-10a.
 
----
+## MinHash setting (§3.4, App. E.1)
+- 5-grams from an English word tokenizer; 112 hash functions in 14 buckets of 8 hashes, "targeting documents that are at least 75% similar".
+- "Documents with the same 8 MinHashes in any bucket are considered duplicates of each other." There is no separate Jaccard verification step.
+- Transitive clustering: A, B, C share a cluster if A–C and B–C are duplicates, even when A and B do not match; one randomly chosen document per cluster is kept.
+- Match probability 1 − (1 − s⁸)¹⁴: 56%, 77%, 92%, 98.8% at s = 0.7, 0.75, 0.8, 0.85 (App. E.1).
+- Compared with RefinedWeb's 9,000 hashes in 450 buckets of 20, the larger hash count gives "a steeper, more well-defined cut off" but needs more compute and storage; the authors "believe the compute and storage savings make up for the higher uncertainty on documents near the threshold" (App. E.1, Fig. 13).
+- Released config, github.com/huggingface/datatrove@acd431b examples/fineweb.py L80–88: `num_buckets=14`, `hashes_per_bucket=8`, `n_grams=5`, `hash_fc="sha1"`, `precision=64`.
 
-## Why this source anchors ch-12
+## Global versus per-snapshot (§3.4, Fig. 3–5)
+1. Global MinHash over 96 snapshots, iterating from the newest (2023-50) to the oldest, removed as much as 90% of the base-filtered data of old snapshots and left 4T tokens. A 350B-token run showed little improvement over non-deduplicated data and scored far below RefinedWeb.
+2. Snapshot 2013-48: the ~31B tokens kept by global dedup trained a worse model than 171B tokens obtained by deduplicating the ~460B removed tokens on their own. By visual inspection, kept data "contains more ads, incoherent lists of keywords and generally badly formatted text".
+3. Deduplicating each snapshot independently gave 20T tokens and matched RefinedWeb.
+4. Hypothesis (Interpretation): the main gain comes from removing very large duplicate clusters present in all crawls; further deduplicating clusters with fewer than about 100 duplicates (the number of crawls) can hurt; filtering targeted at the long tail of quality may suit that subset better.
 
-Lee 2021 set the default: dedup aggressively, ship a model that memorizes less and trains faster. FineWeb is the 2024 update that partially overturns the "aggressively" part. The headline finding for ch-12: **global MinHash across 96 Common Crawl dumps hurt downstream accuracy compared to per-snapshot MinHash.** This is the single most important post-Lee 2021 update to how pretraining pipelines dedup, and ch-12 §7 builds the chapter's canonical cascade around it.
+## Lighter global methods after per-snapshot MinHash (App. E.3, Fig. 15)
+URL dedup (71.5% of tokens removed), line dedup (77.8%), line dedup with minimum words (85%), 3-line dedup (80.9%): all performed worse than per-snapshot MinHash alone.
 
----
+## Measuring deduplication (App. E.2, Fig. 14)
+Simulation with 100 identical snapshots of 200B unique tokens each: a 1B-token sample is almost all unique although every document occurs 100 times in the full set; at 1T tokens most documents occur up to 8 times. Dedup ablations were therefore run at 350B tokens.
 
-## The per-snapshot vs global ablation
-
-From [[fineweb]] §Key Figures/Tables to Study:
-
-> **Per-dump MinHash vs global dedup** comparison — HF found per-dump outperforms naive global dedup on downstream tasks (surprising; tied to removing near-identical re-crawls).
-
-The mechanism, expanded:
-
-1. A high-quality page (Wikipedia article, canonical Stack Overflow answer) is present in most of 96 CC snapshots.
-2. Across 96 snapshots, HTML extraction is not bit-identical — Trafilatura sees slightly different boilerplate at different crawl times, so the extracted texts differ in a few paragraphs.
-3. Their shingle-Jaccard is ~0.95-0.99: clearly "near-duplicate" under any reasonable threshold.
-4. Global MinHash deletes 95 of the 96 copies. Per-snapshot MinHash deletes the duplicates *within each snapshot* but retains one copy per snapshot.
-
-Per-snapshot therefore preserves the high-quality page ~96 times over; global preserves it once. The downstream question is whether that 96x factor is "helpful repetition" or "wasteful memorization." FineWeb's ablation says: helpful, by a measurable margin on downstream evals.
-
-Ch-12 §7 reads this as: **dedup aggression is not free. Each level of aggression deletes a population, and the population's value to the model is not monotone in its redundancy.** This overturns the Lee 2021 intuition that "more dedup is more better" and replaces it with a recall/precision tradeoff mediated by downstream evals.
-
----
-
-## Why the surprise is only half-surprising
-
-Two framings to reconcile FineWeb with Lee 2021:
-
-**Framing A: data-constrained scaling.** The pre-LLM dedup literature lived in a world where training data was cheap and dedup removed "waste." By 2024, data-constrained scaling ([[data-constrained-scaling]]) had shown that 4-epoch training on a smaller corpus can match 1-epoch training on a larger one. In that regime, duplicates that are *high-quality* become *controlled repetition*, not waste. Per-snapshot dedup is a crude but effective way to preserve that repetition.
-
-**Framing B: crawl artifacts vs genuine redundancy.** What looks like near-duplication across snapshots is partly a *crawl-pipeline artifact* (the same source rendered at different times through different extraction configurations). Treating that as "duplicate" is a category error — the content is the same but the rendering noise is not redundant.
-
-Both framings suggest the same prescription: dedup *within* a snapshot, not *across*. FineWeb implements this and ships.
-
----
-
-## The full FineWeb dedup pipeline
-
-From [[fineweb]] §Technical Details:
-
-> 1. URL filter (blocklist) on Common Crawl WARC files.
-> 2. Trafilatura for HTML-to-text extraction (higher-quality than CCNet's extractor).
-> 3. fastText language ID -> English only.
-> 4. Quality heuristics adapted from Gopher + C4 (symbol ratios, line length, etc.).
-> 5. **MinHash deduplication per snapshot** (not globally). Global dedup hurt downstream because it removed documents that only re-appear once per snapshot but are high-quality.
-> 6. PII redaction (email, phone).
-
-Two process details ch-12 §7 highlights.
-
-**No suffix-array ExactSubstr.** FineWeb does not ship Lee 2021's second tool. The team's position is that MinHash plus paragraph-level heuristics is sufficient at their scale, and the suffix-array cost is prohibitive over 15T tokens. This is a reasonable 2024 call; the tradeoff is that small verbatim blocks (see the 61-word sentence) are not surgically removed.
-
-**Dedup position in the cascade.** FineWeb puts MinHash *after* language ID and quality filters but *before* PII redaction. Compare to Dolma, which puts paragraph dedup *last* after content filtering. The argument for Dolma's order: earlier filters change which paragraphs survive, so dedup operates over a cleaner distribution. The argument for FineWeb's order: dedup before redaction avoids the case where two near-duplicates differ only in their PII content (rare but real for some document types).
-
-Both orders are defensible. The invariant: **dedup runs at least once in the pipeline**, and at least one of its runs is at document or shingle granularity.
-
----
-
-## FineWeb-Edu and the "one classifier beats stacked heuristics" argument
-
-Adjacent to dedup but important for ch-12's framing. From [[fineweb]]:
-
-> **Why classifier > heuristics at scale:** heuristics (C4, CCNet) plateau - adding more heuristic filters doesn't help MMLU. A single LLM-labeled educational-value classifier captures what no regex stack can: the vibe of a textbook vs the vibe of a forum post.
-
-The parallel to SemDeDup ([[excerpts/d4]]) is direct: both use a learned similarity-or-quality function to make keep/drop decisions. The difference:
-
-- FineWeb-Edu classifier: keeps documents scoring >= 3 on an LLM-labeled educational-value rubric.
-- SemDeDup: keeps one representative per embedding-space cluster.
-
-They compose: quality-filter first, SemDeDup the filtered pool. Ch-12 §6 warns against stacking aggressions; FineWeb-Edu at threshold 3 plus SemDeDup at tau = 0.80 would narrow coverage more than either alone, and the paper does not currently ship that combination for exactly this reason.
-
----
-
-## What FineWeb does not answer
-
-Three open questions ch-12 flags:
-
-1. **Is per-snapshot always better than global?** FineWeb tested 96 CC dumps. For 10 dumps the answer might differ. For a single-crawl corpus it is undefined. The rule generalizes only to "dedup at the granularity where crawl-artifact redundancy lives."
-
-2. **Does this interact with domain mixing ([[ch-13]], DoReMi)?** Per-snapshot dedup preserves more copies of high-quality pages; DoReMi-style domain weighting later in the pipeline sees an artificially inflated mass on those pages. The two interactions have not been ablated together publicly.
-
-3. **Does FineWeb-Edu's classifier-first approach generalize to non-English?** The educational-value rubric was LLM-labeled by Llama 3 in English. Applying the same recipe to French or Chinese requires re-labeling; the dedup decisions are downstream of that labeling and may shift accordingly.
-
----
-
-## Connections
-
-- [[excerpts/deduplicating-training-data]] — Lee 2021's defaults, which FineWeb partially overturns.
-- [[excerpts/minhash-lsh]] — the primitive; FineWeb tunes its aggressiveness.
-- [[excerpts/d4]] — the semantic-dedup alternative FineWeb does not ship.
-- [[excerpts/dolma]] — the other open-pipeline reference; Dolma and FineWeb differ on dedup ordering.
-- [[ch-12]] §7 (production cascade), §8.2 (cross-domain collision as related failure mode).
-- [[ch-13]] — DoReMi and domain mixing interact with dedup aggression.
+## Ablation setting (§3.1)
+1.71B Llama-architecture models, GPT-2 tokenizer, sequence length 2,048, about 2M tokens per batch; two runs per data version; benchmarks CommonSense QA, HellaSwag, OpenBook QA, PIQA, SIQA, WinoGrande, ARC, MMLU.

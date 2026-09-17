@@ -7,6 +7,8 @@ source_url: https://arxiv.org/abs/2107.06499
 created_at: "2026-04-23"
 ---
 
+> Superseded by the 2026-09 revision of read.md; kept for history.
+
 # Excerpt: MinHash-LSH — the dedup primitive ch-29's Stage 3 implements
 
 **Source library:**

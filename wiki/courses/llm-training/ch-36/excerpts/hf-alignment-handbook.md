@@ -7,6 +7,8 @@ source_url: https://github.com/huggingface/alignment-handbook
 created_at: "2026-04-23"
 ---
 
+> Superseded by the 2026-09 revision of read.md; kept for history.
+
 # Excerpt: HF Alignment Handbook — the reference recipe ch-36 forks
 
 **Source library:** `wiki/raw-data/llm-training/blogs/hf-alignment-handbook.md`

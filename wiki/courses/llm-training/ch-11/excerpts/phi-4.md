@@ -7,6 +7,8 @@ source_url: https://arxiv.org/abs/2412.08905
 created_at: "2026-04-23"
 ---
 
+> Superseded by the 2026-09 revision of read.md; kept for history.
+
 # Excerpt: Phi-4 — textbook-style tokenizer choices and the `<think>` extension case study
 
 **Source library:** `wiki/raw-data/llm-training/model-reports/phi-4.md`

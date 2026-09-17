@@ -1,0 +1,229 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Effective Length Explorer (ch-32c)</title>
+<style>
+:root {
+  color-scheme: light;
+  --bg: #f7f6f3; --surface: #fcfcfb; --text: #0b0b0b; --text2: #52514e; --muted: #7a7973;
+  --grid: #e3e2de; --axis: #b9b8b2; --border: #dcdbd6;
+  --pass: #2a78d6; --fail: #b9b8b2; --thr: #eb6834; --accent-bg: #eef3fb;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --bg: #121211; --surface: #1a1a19; --text: #ffffff; --text2: #c3c2b7; --muted: #9a998f;
+    --grid: #2c2c2a; --axis: #55544f; --border: #33332f;
+    --pass: #3987e5; --fail: #55544f; --thr: #d95926; --accent-bg: #1d2735;
+  }
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --bg: #121211; --surface: #1a1a19; --text: #ffffff; --text2: #c3c2b7; --muted: #9a998f;
+  --grid: #2c2c2a; --axis: #55544f; --border: #33332f;
+  --pass: #3987e5; --fail: #55544f; --thr: #d95926; --accent-bg: #1d2735;
+}
+* { box-sizing: border-box; }
+[hidden] { display: none !important; }
+body { margin: 0; background: var(--bg); color: var(--text);
+  font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }
+main { max-width: 860px; margin: 0 auto; padding-inline: 16px; padding-block: 20px 32px; }
+h1 { font-size: 1.25rem; margin: 0 0 4px; }
+p.lead { color: var(--text2); margin: 0 0 16px; }
+.panel { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 14px; margin-bottom: 14px; }
+.controls { display: flex; flex-wrap: wrap; gap: 12px 20px; align-items: end; }
+label { display: flex; flex-direction: column; gap: 4px; font-size: 0.85rem; color: var(--text2); }
+select, input[type=number] { font: inherit; padding: 5px 8px; border: 1px solid var(--border); border-radius: 6px; background: var(--bg); color: var(--text); max-width: 100%; }
+fieldset { border: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: 6px 14px; }
+fieldset legend { font-size: 0.85rem; color: var(--text2); margin-bottom: 4px; width: 100%; }
+fieldset label { flex-direction: row; align-items: center; gap: 6px; color: var(--text); }
+.stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; }
+.stat { background: var(--accent-bg); border-radius: 6px; padding: 8px 10px; }
+.stat .k { font-size: 0.78rem; color: var(--text2); }
+.stat .v { font-size: 1.15rem; font-variant-numeric: tabular-nums; }
+.chart-wrap { overflow-x: auto; }
+svg text { fill: var(--text2); font-size: 11px; }
+.note { color: var(--text2); font-size: 0.85rem; }
+table { border-collapse: collapse; font-variant-numeric: tabular-nums; font-size: 0.85rem; }
+td, th { padding: 3px 8px; border-bottom: 1px solid var(--grid); text-align: right; }
+th:first-child, td:first-child { text-align: left; }
+</style>
+</head>
+<body>
+<main>
+<h1>Effective length explorer</h1>
+<p class="lead">Effective length is the largest tested length whose suite-average score exceeds a threshold. Choose a model row and a threshold rule to see how the reported effective length and RULER's weighted averages change.</p>
+
+<div class="panel">
+  <div class="controls">
+    <label>Benchmark table
+      <select id="bench">
+        <option value="ruler">RULER Table 3 (13 tasks, 4K-128K)</option>
+        <option value="nolima">NoLiMa Table 3 (1K-32K)</option>
+      </select>
+    </label>
+    <label>Model row
+      <select id="model"></select>
+    </label>
+    <fieldset>
+      <legend>Threshold rule</legend>
+      <label><input type="radio" name="rule" value="fixed" checked> fixed 85.6 (RULER)</label>
+      <label><input type="radio" name="rule" value="rel"> 0.85 × base (NoLiMa)</label>
+      <label><input type="radio" name="rule" value="custom"> custom</label>
+    </fieldset>
+    <label id="customWrap" hidden>Custom threshold
+      <input type="number" id="custom" min="0" max="100" step="0.1" value="80">
+    </label>
+  </div>
+</div>
+
+<div class="panel">
+  <div class="stats">
+    <div class="stat"><div class="k">Claimed length</div><div class="v" id="sClaimed"></div></div>
+    <div class="stat"><div class="k">Threshold used</div><div class="v" id="sThr"></div></div>
+    <div class="stat"><div class="k">Effective length (computed)</div><div class="v" id="sEff"></div></div>
+    <div class="stat"><div class="k">Effective length (as printed)</div><div class="v" id="sPrinted"></div></div>
+    <div class="stat" id="wavgBox"><div class="k">wAvg inc / dec (weights 1-6)</div><div class="v" id="sWavg"></div></div>
+  </div>
+  <div class="chart-wrap"><svg id="chart" width="600" height="260" role="img" aria-label="Score by input length with threshold line"></svg></div>
+  <p class="note" id="explain"></p>
+</div>
+
+<div class="panel">
+  <p class="note"><strong>How the rules differ.</strong> RULER compares every model with one fixed score, 85.6, the 13-task average of Llama2-7B at 4K. NoLiMa compares each model with 85% of its own base score, where the base score is the best score among the 250, 500 and 1K lengths averaged over question-needle pairs (the base and the threshold printed in NoLiMa Table 3 are used here). Applying the relative rule to a RULER row uses the 4K score as the base; the RULER paper does not do this, and the result is shown only to compare the rules.</p>
+  <p class="note"><strong>Sources.</strong> RULER: Hsieh et al., arXiv:2404.06654v3, Table 3 (threshold and weighted averages, §4). NoLiMa: Modarressi et al., arXiv:2502.05167v3, Table 3 (base score and 0.85 rule, §4.3). The weights 1-6 are a derivation that reproduces the printed wAvg values; see ch-32c read.md §1.</p>
+</div>
+</main>
+
+<script>
+(function () {
+  var DATA = {
+    ruler: {
+      lengths: ["4K", "8K", "16K", "32K", "64K", "128K"],
+      rows: [
+        ["Gemini-1.5-Pro", "1M", ">128K", [96.7, 95.8, 96.0, 95.9, 95.9, 94.4], null],
+        ["GPT-4 (1106-preview)", "128K", "64K", [96.6, 96.3, 95.2, 93.2, 87.0, 81.2], null],
+        ["Llama3.1 (70B)", "128K", "64K", [96.5, 95.8, 95.4, 94.8, 88.4, 66.6], null],
+        ["Qwen2 (72B)", "128K", "32K", [96.9, 96.1, 94.9, 94.1, 79.8, 53.7], null],
+        ["Command-R-plus (104B)", "128K", "32K", [95.6, 95.2, 94.2, 92.0, 84.3, 63.1], null],
+        ["GLM4 (9B)", "1M", "64K", [94.7, 92.8, 92.1, 89.9, 86.7, 83.1], null],
+        ["Llama3.1 (8B)", "128K", "32K", [95.5, 93.8, 91.6, 87.4, 84.7, 77.0], null],
+        ["GradientAI/Llama3 (70B)", "1M", "16K", [95.1, 94.4, 90.8, 85.4, 80.9, 72.1], null],
+        ["Mixtral-8x22B (39B/141B)", "64K", "32K", [95.6, 94.9, 93.4, 90.9, 84.7, 31.7], null],
+        ["Yi (34B)", "200K", "32K", [93.3, 92.2, 91.3, 87.5, 83.2, 77.3], null],
+        ["Phi3-medium (14B)", "128K", "32K", [93.3, 93.2, 91.1, 86.8, 78.6, 46.1], null],
+        ["Mistral-v0.2 (7B)", "32K", "16K", [93.6, 91.2, 87.2, 75.4, 49.0, 13.8], null],
+        ["LWM (7B)", "1M", "<4K", [82.3, 78.4, 73.7, 69.1, 68.1, 65.0], null],
+        ["DBRX (36B/132B)", "32K", "8K", [95.1, 93.8, 83.6, 63.1, 2.4, 0.0], null],
+        ["Together (7B)", "32K", "4K", [88.2, 81.1, 69.4, 63.0, 0.0, 0.0], null],
+        ["LongChat (7B)", "32K", "<4K", [84.7, 79.9, 70.8, 59.3, 0.0, 0.0], null],
+        ["LongAlpaca (13B)", "32K", "<4K", [60.6, 57.0, 56.6, 43.6, 0.0, 0.0], null]
+      ]
+    },
+    nolima: {
+      lengths: ["1K", "2K", "4K", "8K", "16K", "32K"],
+      rows: [
+        ["GPT-4o", "128K", "8K", [98.1, 98.0, 95.7, 89.2, 81.6, 69.7], 99.3, 84.4],
+        ["Llama 3.3 70B", "128K", "2K", [94.2, 87.4, 81.5, 72.1, 59.5, 42.7], 97.3, 82.7],
+        ["Llama 3.1 405B", "128K", "2K", [89.0, 85.0, 74.5, 60.1, 48.4, 38.0], 94.7, 80.5],
+        ["Llama 3.1 70B", "128K", "2K", [91.0, 81.8, 71.2, 62.7, 51.8, 43.2], 94.5, 80.3],
+        ["Gemini 1.5 Pro", "2M", "2K", [86.4, 82.7, 75.4, 63.9, 55.5, 48.2], 92.6, 78.7],
+        ["Jamba 1.5 Mini", "256K", "<1K", [76.3, 74.1, 70.8, 62.2, 52.7, 43.6], 92.4, 78.6],
+        ["Command R+", "128K", "<1K", [77.0, 73.5, 66.2, 39.5, 21.3, 7.4], 90.9, 77.3],
+        ["Gemini 2.0 Flash", "1M", "4K", [87.7, 87.5, 77.9, 64.7, 48.2, 41.0], 89.4, 76.0],
+        ["Mistral Large 2", "128K", "2K", [86.1, 85.5, 73.3, 51.4, 32.6, 18.8], 87.9, 74.7],
+        ["Claude 3.5 Sonnet", "200K", "4K", [85.4, 84.0, 77.6, 61.7, 45.7, 29.8], 87.5, 74.4],
+        ["Gemini 1.5 Flash", "1M", "<1K", [68.6, 61.6, 51.0, 44.4, 35.5, 28.6], 84.7, 72.0],
+        ["GPT-4o mini", "128K", "<1K", [67.7, 58.2, 44.2, 32.6, 20.6, 13.7], 84.8, 72.1],
+        ["Llama 3.1 8B", "128K", "1K", [65.7, 54.4, 44.1, 31.9, 22.6, 14.2], 76.7, 65.2]
+      ]
+    }
+  };
+  var benchEl = document.getElementById("bench");
+  var modelEl = document.getElementById("model");
+  var customEl = document.getElementById("custom");
+  var customWrap = document.getElementById("customWrap");
+
+  function fillModels() {
+    var d = DATA[benchEl.value];
+    modelEl.innerHTML = "";
+    d.rows.forEach(function (r, i) {
+      var o = document.createElement("option");
+      o.value = i; o.textContent = r[0];
+      modelEl.appendChild(o);
+    });
+    var def = benchEl.value === "ruler" ? 2 : 3;
+    modelEl.value = def;
+    var want = benchEl.value === "ruler" ? "fixed" : "rel";
+    document.querySelector('input[name=rule][value=' + want + ']').checked = true;
+  }
+  function rule() { return document.querySelector("input[name=rule]:checked").value; }
+  function css(name) { return getComputedStyle(document.documentElement).getPropertyValue(name).trim(); }
+
+  function render() {
+    var d = DATA[benchEl.value];
+    var row = d.rows[+modelEl.value];
+    var scores = row[3];
+    var base = row[4] !== null ? row[4] : scores[0];
+    var r = rule();
+    customWrap.hidden = r !== "custom";
+    var thr = r === "fixed" ? 85.6 : r === "rel" ? (row[5] !== undefined ? row[5] : Math.round(0.85 * base * 10) / 10) : +customEl.value;
+    var eff = null;
+    for (var i = 0; i < scores.length; i++) { if (scores[i] > thr) eff = i; }
+    var effText = eff === null ? "<" + d.lengths[0] : (eff === scores.length - 1 && benchEl.value === "ruler" ? ">=" + d.lengths[eff] : d.lengths[eff]);
+    document.getElementById("sClaimed").textContent = row[1];
+    document.getElementById("sThr").textContent = thr.toFixed(1) + (r === "rel" ? " (base " + base.toFixed(1) + ")" : "");
+    document.getElementById("sEff").textContent = effText;
+    document.getElementById("sPrinted").textContent = row[2];
+    var wBox = document.getElementById("wavgBox");
+    if (benchEl.value === "ruler") {
+      var inc = 0, dec = 0;
+      for (var k = 0; k < 6; k++) { inc += (k + 1) * scores[k]; dec += (6 - k) * scores[k]; }
+      document.getElementById("sWavg").textContent = (inc / 21).toFixed(1) + " / " + (dec / 21).toFixed(1);
+      wBox.hidden = false;
+    } else { wBox.hidden = true; }
+
+    var svg = document.getElementById("chart");
+    var W = 600, H = 260, ml = 36, mr = 10, mt = 12, mb = 30;
+    var pw = W - ml - mr, ph = H - mt - mb;
+    var n = scores.length, bw = pw / n;
+    var y = function (v) { return mt + ph * (1 - v / 100); };
+    var s = "";
+    [0, 25, 50, 75, 100].forEach(function (t) {
+      s += '<line x1="' + ml + '" x2="' + (W - mr) + '" y1="' + y(t) + '" y2="' + y(t) + '" stroke="' + css("--grid") + '"/>';
+      s += '<text x="' + (ml - 6) + '" y="' + (y(t) + 4) + '" text-anchor="end">' + t + '</text>';
+    });
+    for (var j = 0; j < n; j++) {
+      var x = ml + j * bw + bw * 0.18, w = bw * 0.64, v = scores[j];
+      var pass = v > thr;
+      s += '<rect x="' + x + '" y="' + y(v) + '" width="' + w + '" height="' + (y(0) - y(v)) + '" rx="2" fill="' + css(pass ? "--pass" : "--fail") + '"><title>' + d.lengths[j] + ": " + v.toFixed(1) + (pass ? " (above threshold)" : " (not above threshold)") + '</title></rect>';
+      s += '<text x="' + (x + w / 2) + '" y="' + (y(v) - 4) + '" text-anchor="middle">' + v.toFixed(1) + '</text>';
+      s += '<text x="' + (x + w / 2) + '" y="' + (H - 10) + '" text-anchor="middle">' + d.lengths[j] + '</text>';
+    }
+    s += '<line x1="' + ml + '" x2="' + (W - mr) + '" y1="' + y(thr) + '" y2="' + y(thr) + '" stroke="' + css("--thr") + '" stroke-width="2" stroke-dasharray="5 4"/>';
+    s += '<text x="' + (W - mr) + '" y="' + (y(thr) - 5) + '" text-anchor="end" style="fill:' + css("--thr") + '">threshold ' + thr.toFixed(1) + '</text>';
+    svg.innerHTML = s;
+
+    var ex = "Bars above the dashed line exceed the threshold. The computed effective length is the largest such length. ";
+    if (effText.replace(">=", ">") !== row[2] && !(row[2] === ">128K" && effText === ">=128K")) {
+      ex += "It differs from the printed value because the chosen rule differs from the one used in the source table.";
+    } else {
+      ex += "It matches the value printed in the source table.";
+    }
+    document.getElementById("explain").textContent = ex;
+  }
+  benchEl.addEventListener("change", function () { fillModels(); render(); });
+  modelEl.addEventListener("change", render);
+  customEl.addEventListener("input", render);
+  document.querySelectorAll("input[name=rule]").forEach(function (el) { el.addEventListener("change", render); });
+  fillModels(); render();
+  if (window.matchMedia) {
+    var mq = window.matchMedia("(prefers-color-scheme: dark)");
+    if (mq.addEventListener) mq.addEventListener("change", render);
+  }
+})();
+</script>
+</body>
+</html>

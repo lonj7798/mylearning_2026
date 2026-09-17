@@ -5,100 +5,40 @@ phase: read
 excerpt_of: wiki/raw-data/llm-training/papers/xlam.md
 source_url: https://arxiv.org/abs/2409.03215
 created_at: "2026-04-23"
+revised: "2026-09-15 (rewritten against arXiv:2409.03215; the library card has not been verified and its base-model, score, and DPO-recipe claims do not match the paper)"
 ---
 
-# Excerpt: xLAM — the model family that consumes the APIGen pipeline
+# Excerpt: xLAM — data unification, format augmentation, and the function-calling models
 
-**Source library:** `wiki/raw-data/llm-training/papers/xlam.md`
-**Paper:** Zhang, Lan, Zhu, Liu et al. 2024 (xLAM-v1); 2025 (xLAM-2 via APIGen-MT). Salesforce AI Research.
+**Source library:** `wiki/raw-data/llm-training/papers/xlam.md` (not yet verified; values below were read in the paper on 2026-09-15)
+**Paper:** Zhang, Lan, Zhu, Liu, Hoang, Kokane et al., "xLAM: A Family of Large Action Models to Empower AI Agent Systems", arXiv:2409.03215 (2024-09).
 
----
+## Models (Table 1, §4.2)
 
-## Why this source anchors ch-26
+| Model | Base | Context | Purpose |
+|---|---|---|---|
+| xLAM-1b-fc-r | DeepSeek-Coder-1.3B-instruct | 16k | function calling |
+| xLAM-7b-fc-r | DeepSeek-Coder-7B-instruct-v1.5 | 4k | function calling |
+| xLAM-7b-r | Mistral-7b | 32k | general |
+| xLAM-8x7b-r | Mixtral-8x7b | 32k | general |
+| xLAM-8x22b-r | Mixtral-8x22b | 64k | general |
 
-xLAM is the canonical open function-calling model family, and the clearest operationalisation of "the data pipeline is the lever, not the parameter count." xLAM-v1 is trained on APIGen-60K single-turn; xLAM-2 adds APIGen-MT multi-turn plus optional DPO. Scaling runs from 1B to 70B, but the key empirical finding is that the data-mix transition (single-turn → + multi-turn → + DPO) drives more gain than scale alone.
+## Data pipeline (§3)
 
-Ch-26 §3 and §4 name xLAM as the downstream consumer of APIGen and APIGen-MT. This excerpt expands the staged training recipe, the data-mix ratio, and the DPO details that make xLAM-2 reproducible.
+- Unification into one function-calling-style format: task instruction, available tools, format instruction, few-shot examples, query, steps (§3.1).
+- Prompt-format augmentation: shuffle the tool list, the order of name/description/parameters, and input sections; vary concatenation tokens (§3.2).
+- Format instruction-following augmentation: "To avoid the model overfitting on JSON format … we prepare 15 different output formats along with their corresponding format instructions and format converters. The output formats include JSON, XML, YAML, plain text, etc." (§3.2).
+- Quality checks: undefined functions or arguments, wrong argument types, argument hallucination (LLM judge step by step), low-quality reasoning (§3.3).
+- Synthetic function-calling data: APIGen, 3,673 APIs, 60,000 samples from DeepSeek-V2-Chat and Mixtral-8x22B-Inst (§3.4).
+- Mixture: general instruction data is 20% to 30% of the general models' training set; xLAM-7b-fc-r and xLAM-1b-fc-r draw 50% of training data from the synthetic function-calling set and 50% from other tasks (§3.5).
+- DPO: rejected samples are responses from less powerful models, with a human-verified subset (§3.5). LoRA is used for DPO in all xLAM models; SFT uses a cosine schedule with 100 warmup steps (§4.1). β is not reported.
 
----
+## Results
 
-## Data mix — the 40/60 function-calling / general-chat split
+- BFCL v2 (cutoff 2024-09-03, Table 5): xLAM-8x22b-r overall 87.31 (rank 1); xLAM-8x7b-r 83.38 (rank 6); xLAM-7b-r 80.33 (rank 14); xLAM-7b-fc-r 80.18 (rank 17), irrelevance 79.54, relevance 80.49. All models were trained before the v2 live data was released (§5.1).
+- ToolQuery-Unified (Table 3, §5.2.1): when the system prompt is given in the unified format with required structured output, GPT-4o's success drops by 42% relative to ToolQuery, while xLAM-8x22b-r is described as comparable. The authors attribute the stability to training on the unified format.
+- ToolBench pass rate (Table 4): xLAM-7b-r 0.5308 (unseen instructions), 0.5300 (unseen tools, seen category), 0.5850 (unseen tools, unseen category).
 
-From source lines 25–34:
+## Not reported
 
-> ### Data mix for xLAM-v1
-> - **APIGen-60k** (single-turn function-calling, 3-layer verified). See [[apigen]].
-> - General-purpose instruction data (preserve chat quality): OpenOrca, WildChat subsets.
-> - Ratio roughly 40% function-calling / 60% general chat.
->
-> ### Data mix for xLAM-2
-> - APIGen-60k single-turn.
-> - **APIGen-MT-5k** public + larger internal multi-turn split. See [[apigen-mt]].
-> - Optional DPO step on (preferred, rejected) tool-call pairs synthesized by sampling failure modes.
-
-The **40/60 FC-vs-chat ratio** is the load-bearing design decision. Train with higher FC share (e.g. 80%) and the model becomes a narrow tool-call specialist that degrades on open-ended conversation. Train with lower FC share (e.g. 20%) and the model doesn't consolidate the function-calling capability against general chat interference. The 40% number is the empirical sweet spot.
-
-This matters because it frames what "function-calling specialist" means in practice: not "trained only on function calls," but "trained on a balanced mix where general chat prevents over-specialisation without diluting the FC signal."
-
----
-
-## Staged training recipe
-
-From source lines 35–41:
-
-> ### Training recipe
-> - **SFT:** LR 2e-5 → 5e-6 cosine, 3 epochs, seq len 8K. Prompt masked (loss only on assistant tokens including tool calls).
-> - **Optional DPO:** β = 0.1; preference pairs = (correct tool call, common failure mode like hallucinated function name).
-> - **Bases:** Mistral-7B, Mixtral-8x7B, Llama-3.1-70B, DeepSeek-Coder-V2-8x22B.
-> - **Output shape:** SFT corpus ~100K (single-turn) + tens-of-thousands (multi-turn).
-> - **Teacher(s):** data comes from APIGen pipeline (DeepSeek-Coder-V2, GPT-4, Claude-3.5).
-> - **Cost / compute:** training not separately disclosed; dominated by the 70B / 8×22B SFT runs.
-
-Two operational details worth lifting.
-
-**Prompt-masked loss.** The loss fires only on assistant tokens, *including* the tool-call JSON. This means the model is not trained to reproduce the system prompt's tool schemas (which change per deployment); it's trained to produce calls conditioned on them. The implication for inference: at serve time you can swap the tool schema without re-training.
-
-**DPO with synthetic rejects.** The β=0.1 setting is standard. The interesting piece is how the rejected samples are constructed: by *sampling failure modes* — hallucinated function names, wrong argument types, missing required parameters. This is programmatic rejection generation, not collected real model outputs. It's cheaper but narrower; it addresses known failure modes but cannot surface unknown ones. For xLAM-2, this was sufficient to lift BFCL-V3 multi-turn by a few points on top of SFT.
-
----
-
-## Scaling behaviour
-
-From source lines 51–54:
-
-> - **xLAM-7B-fc-r:** BFCL-V1 88.24% — #1 among <13B at release (Sept 2024).
-> - **xLAM-8x22B-fc-r:** BFCL-V1 ~89% — near GPT-4 overall.
-> - **xLAM-2-70B-fc-r:** τ-bench pass^1 56.2% / pass^4 39.4% — leading open model on multi-turn; BFCL-V3 multi-turn ~72%.
-> - Smaller variants surprisingly competitive: xLAM-2-8B beats GPT-4o on τ-bench retail.
-
-The small gap between xLAM-7B (88.24) and xLAM-8x22B (~89) on BFCL-V1 is the key scaling observation: **scale alone adds <1 BFCL-V1 point at this data recipe.** The actual lifts from Sept 2024 → 2025:
-
-- APIGen-60k only → APIGen-60k + APIGen-MT-5k: +4 points on BFCL-V3 multi-turn at 8B scale.
-- APIGen-60k + APIGen-MT-5k → + DPO: +1–2 points on relevance-detection.
-
-**Data-recipe transitions, not model scale, produce the visible improvements.** This is the argument for why the chapter is taught at all — a 7B model with the right data recipe (xLAM-7B at 88.24) beats a 70B model with a weaker recipe.
-
----
-
-## Risks and gotchas
-
-From source lines 57–60:
-
-> - **License:** CC-BY-NC-4.0 (non-commercial). Not drop-in for product use.
-> - **Narrow skill:** function-calling specialist — general chat quality below general-purpose models of same size.
-> - **Chat-template sensitivity:** xLAM expects its exact tool-call format; prompt-engineering to other schemas degrades performance.
-> - **BFCL overfit risk:** community questions whether BFCL-V1 scores (91% ceiling) reflect real production reliability — pushed V2/V3 benchmarks.
-
-The chat-template-sensitivity point is where ch-26 §8's rule "match the call template to the AST matcher" comes from. xLAM's template is OpenAI `tool_calls` JSON; the AST matcher canonicalises to that form; schemas that deviate (Glaive XML, NexusRaven Python-call syntax) lose points at inference translation. Training and evaluation template alignment is a silent design axis.
-
-The narrow-skill point is the cost of the 40/60 FC mix: xLAM preserves chat quality but does not match a general-purpose chat model of the same size. This is why Granite ([[granite-function-calling]]) adds 10% OpenHermes/Dolphin to its mix — the minimum chat-preservation slice that still allows the FC capability to consolidate.
-
----
-
-## Connections
-
-- Data pipelines: [[apigen]] + [[apigen-mt]].
-- Competing 2024/25 family: [[toolace]] (same 7B-ish scale, different data pipeline — broader coverage via TSS).
-- Small-model siblings: [[hammer]] (relevance via masking), [[nexusraven]] (nested-call curriculum).
-- Enterprise mix: [[granite-function-calling]] (blends APIGen + ToolLLM + Glaive + Nexus + in-house).
-- Evaluation target: [[bfcl]] — xLAM-7B's 88.24 BFCL-V1 is the benchmark's single most-cited open-model number.
+Epoch counts, learning rates, batch sizes, DPO β, total SFT tokens, and general-capability benchmarks (MMLU, IFEval) for the function-calling models.

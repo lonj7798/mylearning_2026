@@ -5,112 +5,30 @@ phase: read
 excerpt_of: wiki/raw-data/llm-training/papers/dolma.md
 source_url: https://arxiv.org/abs/2402.00159
 created_at: "2026-04-23"
+revised: 2026-09 (generality revision) — rewritten to match the card verified on 2026-09-14; the earlier version contained a leave-one-stage-out ablation table that the paper does not report, a wrong stage order, and a document-drop PII rule
 ---
 
-# Excerpt: Dolma — the transparency benchmark and its ablation table
+# Excerpt: Dolma: an Open Corpus of Three Trillion Tokens for Language Model Pretraining Research
 
-**Source library:** `wiki/raw-data/llm-training/papers/dolma.md`
-**Paper:** Soldaini, Kinney, Bhagia, Schwenk et al. 2024, "Dolma: an Open Corpus of Three Trillion Tokens for Language Model Pretraining Research" (AI2 / Allen AI, ACL 2024).
+Soldaini, Kinney, Bhagia, Schwenk, Atkinson, Authur, et al. (36 authors; AI2 and others), arXiv 2024-01, ACL 2024. Library card: [[dolma]]. Loci refer to arXiv v2.
 
----
+## Web pipeline (§5)
+- 25 Common Crawl snapshots, 2020-05 to 2023-06; web subset 2.28T tokens (§5). Order: CCNet output → URL dedup → document dedup → quality filters → content filters → paragraph dedup (§5.5).
+- **CCNet stage** (§5.1): fastText English score ≥ 0.5 (61.7% removed by bytes); within-snapshot paragraph dedup (about 70% of paragraphs); CCNet removes 84.2% overall, 175.1 TB → 27.7 TB.
+- **Quality** (§5.2): "we keep all the Gopher rules (Gopher All) and keep a single heuristic from C4 designed to remove paragraphs that do not end in punctuation (C4 NoPunc)". Gopher All tags 15.23% and C4 NoPunc 22.73% of UTF-8 characters. The datasheet describes the 22.73% rule as "Remove documents with more than half of their line not ending in '.', '?', '!', or '"'" (App. N.4).
+- **Toxicity** (§5.3): fastText "hate" and "NSFW" classifiers trained on Jigsaw Toxic Comments score sentences; sentences above the threshold are removed. τ = 0.4 removes 5.5–7.3% "but generally yields lower downstream performance" than τ = 0.0004 (29.1–34.9% removed); τ = 0.4 adopted "to ensure we meet our minimum token count requirement".
+- **PII** (§5.3): email addresses, IP addresses, phone numbers by regular expression. "For documents with 5 or fewer PII spans, we replace the span with a special token … this affects 0.02% of documents. Otherwise, we remove entire documents … this affects 0.001% of documents." Removal vs replacement "had no effect on model performance". The datasheet lists 0.05% tagged for masking and 0.11% for removal (App. N.4).
+- **Deduplication** (§5.4, Bloom filter): exact URL 53.2% of documents; exact document 14.9% of URL-deduplicated documents; exact paragraph 18.7% of paragraphs. URL and document dedup first for efficiency; paragraph dedup last because "paragraph removal risks disrupting content analysis". The order is not ablated.
 
-## Why this source anchors ch-10
+## Ablations (§4.2, §5)
+- Models: 1.2B parameters (OLMo architecture), stopped at 150B tokens; 8 zero-shot tasks: ARC-E, ARC-C, BoolQ, HellaSwag, OpenBookQA, PIQA, SciQ, WinoGrande (§4.2, Table 2, App. D).
+- Quality (Figure 1): "C4 NoPunc on its own outperforms both C4 All as well as Gopher All on both perplexity and downstream tasks. Finally, combining Gopher All + C4 NoPunc offers the best performance."
+- Stacking (Figure 3): "positive compounding effect" of quality filters, dedup, and content filters on HellaSwag.
+- Results appear as curves; HellaSwag in the main text, other tasks and Paloma subsets in App. O. No numeric ablation table is given.
+- Heuristic filters did not change CCNet KenLM bucket proportions (high 21.9%, medium 28.5%, low 49.6%) (§5.2).
 
-Dolma is the first open pretraining pipeline that is **falsifiable**. Every earlier open corpus (CCNet, C4, The Pile, RedPajama) published a design and a dataset; Dolma publishes a design, a dataset, a toolkit, and an **ablation table** that toggles each pipeline stage against a downstream evaluation at a fixed 1B-parameter model size. Ch-10 §3 is built around this table; this excerpt pulls the specific rows out.
+## Domain fit (§9.2, Figure 5)
+1.2B models on 150B tokens of C4, mC4-en, RedPajama v1, RefinedWeb, the Pile, and Dolma, evaluated on Paloma: the Pile model fits diverse domains well; Dolma and, to a lesser extent, RedPajama give similar coverage; single-source C4, mC4-en, and RefinedWeb give higher average perplexity.
 
-From the source (lines 7–8):
-
-> **Core Insight:** A reproducible, fully documented 3T-token pretraining corpus — with every filter, threshold, and ablation published — is itself a scientific contribution, not just an engineering artifact.
->
-> **Guideline:** Apply filters in the order URL → document-dedup → language → quality → content → paragraph-dedup, and ablate each stage against a downstream task eval rather than guessing thresholds.
-
----
-
-## The six-stage cascade — source verbatim
-
-From the source (lines 29–37):
-
-> **Filter cascade (order matters):**
-> 1. **URL / document-level deduplication first** using Bloom filters — remove exact-URL repeats across CC snapshots.
-> 2. **Language identification** via fastText; keep English (lang score ≥ threshold).
-> 3. **Quality filters** adapted from Gopher/C4 heuristics (line-length, symbol-to-word ratio, stopword ratio, fraction of lines ending in punctuation, duplicate-line fraction).
-> 4. **Content filters**: fastText classifiers trained on the **Jigsaw Toxic Comments** dataset produce `hate` and `NSFW` scores; documents above threshold are dropped.
-> 5. **PII filtering** targets three high-precision categories: email addresses, IP addresses, phone numbers.
-> 6. **Paragraph-level deduplication last**, via Bloom filter exact-match on paragraphs. Alternative `dolma-ngram` splits paragraphs into n-grams and marks a paragraph duplicate if the fraction of duplicated n-grams exceeds threshold T (default T = 1.0).
-
-From the source (line 37):
-
-> **Why this order:** doing paragraph dedup last is deliberate — earlier stages change which paragraphs survive, so dedup only matters over the surviving distribution.
-
-This is the most important single sentence in the Dolma paper for ch-10. It is the scientific content of "order matters": the distribution the last filter sees is not the distribution the paper started from, so the last filter's signal is only calibrated over post-prior-stage text.
-
----
-
-## The ablation table — what the paper actually reports
-
-The source flags the ablation table without inlining it (source line 26):
-
-> - **Ablation table** — effect of removing each stage on downstream task accuracy.
-
-The Dolma paper's Table 5 (arXiv v1) presents a filter × model-size × eval grid. Setup: 1B-parameter OLMo-style model, 150B-token training budget, corpus with the named stage ablated. Evaluations: a mixed downstream suite (ARC, HellaSwag, OpenBookQA, PIQA, SciQ, WinoGrande) averaged into a single "task accuracy" number, plus C4 perplexity as a diagnostic.
-
-The **row-by-row structure** the paper reports (paraphrased from the ablation discussion, concrete percentage-point magnitudes are the headline deltas):
-
-| Pipeline variant | Avg. downstream task accuracy | Delta vs full |
-|---|---|---|
-| Full Dolma pipeline (6 stages) | baseline (highest) | 0 |
-| − URL dedup (stage 1) | lower | meaningful drop |
-| − Document-level dedup (stage 2) | lower (largest single-stage drop) | ~largest negative delta |
-| − Language ID (stage 3) | significantly lower | large drop; corpus now contaminated with non-English |
-| − Quality filter stack (stage 4) | lower (roughly half the full-pipeline gain) | ~half of full-pipeline delta |
-| − Content filter (stage 5) | near-flat on these evals | small delta — these benchmarks don't stress toxicity |
-| − Paragraph-level dedup (stage 6) | lower | smaller than doc-dedup but non-zero |
-
-The specific sign structure is what matters: document-level dedup and language ID are the two largest positive contributors; the quality stack is roughly half of the full-pipeline delta; content filtering is near-flat on general-knowledge evals (which is expected — these evals don't test toxicity behavior); paragraph dedup is smaller than doc dedup but real.
-
-This grid is what turns "stack filters and hope" into "stack filters we can defend." Every pipeline that ships without an equivalent table is, scientifically, in the C4 category.
-
----
-
-## Per-source pipelines — the web lane is not the whole pipeline
-
-From the source (lines 39–43):
-
-> **Source-specific quirks:**
-> - `peS2o` (scientific) uses different quality filters than web — it trusts publication structure.
-> - `The Stack` code uses near-dedup via MinHash on code tokens.
-> - Social media (Reddit) is filtered by subreddit-level quality lists.
->
-> **Tooling:** the `dolma` CLI accepts YAML configs, runs filters as streaming passes over JSONL shards, and emits per-document `attribute` files (one score per filter) so the final keep/drop decision is a separate, cheap pass.
-
-The per-source design is the structural argument Dolma makes against single-pipeline orthodoxy. Web documents need terminal-punctuation filters; scientific papers need section-header and LaTeX-noise filters; code needs MinHash on tokens rather than paragraph hash. **The right filter depends on the source distribution** — and Dolma is the first open pipeline to demonstrate that by shipping 6+ parallel pipelines rather than one.
-
-The `dolma` CLI's two-pass architecture (score-then-decide) is itself a contribution. It separates filter execution from threshold choice, so sweeping thresholds is free (no re-execution of the expensive filter pass). Every ablation row in the table above is a script over the attribute files, not a re-run of the full pipeline.
-
----
-
-## What Dolma does not claim
-
-- **Not a final recipe.** The paper is explicit that thresholds are defensible but not optimal; different downstream objectives justify different thresholds.
-- **Not a classifier pipeline.** Stage 4 is heuristic, not learned quality. [[excerpts/fineweb]] takes the next step.
-- **Not multilingual.** The full Dolma pipeline is English-only; the source note about multilingual extensions is future work.
-- **Not a scale claim.** 3T tokens is large for open science but smaller than FineWeb's 15T; the claim is *transparency*, not *size*.
-
----
-
-## What to take from Dolma for ch-10
-
-1. **Ablation is the scientific floor.** Any pipeline shipped without a per-stage ablation against a downstream eval is, by 2024 standards, a pre-science artifact.
-2. **Order is a design variable, not an implementation detail.** Paragraph-dedup-last is a principled choice; reversing it would ablate differently and the paper would need to defend the reversal.
-3. **The two-pass toolkit architecture (score-then-decide) is the right default.** It makes threshold-sweeps cheap and ablations even cheaper.
-4. **Per-source pipelines are the right abstraction.** One web pipeline + one code pipeline + one peS2o pipeline beats one universal pipeline forced to handle all three.
-
----
-
-## Connections
-
-- [[excerpts/ccnet]] — CCNet's three-stage template is Dolma's skeleton with transparency bolted on.
-- [[excerpts/c4]] — C4's heuristics survive inside Dolma's stage 4; Dolma ablates what C4 never did.
-- [[excerpts/fineweb]] — FineWeb replaces Dolma's stage-4 heuristics with a classifier; a direct evolution.
-- [[excerpts/scaling-laws-data-quality]] — provides the theoretical frame Dolma's ablation table empirically populates.
-- [[ch-10]] §3 (Dolma), §5 (comparison), §6 (ablation-driven critique).
+## Limitations
+English only ("reinforces the expectation of English being the 'default' language for NLP"); one 1B-scale architecture, which "might result in design decisions that are not relevant at larger model sizes"; Dolma v1.6 as released is not decontaminated (App. N.4).

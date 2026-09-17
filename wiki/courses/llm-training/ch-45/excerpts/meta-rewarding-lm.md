@@ -7,6 +7,8 @@ source_url: https://arxiv.org/abs/2407.19594
 created_at: "2026-04-23"
 ---
 
+> Superseded by the 2026-09 revision of read.md; kept for history.
+
 # Excerpt: Meta-Rewarding — push past Self-Rewarding's iter-3 ceiling
 
 **Source library:** `wiki/raw-data/llm-training/papers/meta-rewarding-lm.md`

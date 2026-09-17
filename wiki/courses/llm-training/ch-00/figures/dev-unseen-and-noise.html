@@ -1,0 +1,417 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Development vs Unseen Changes and Difference Noise</title>
+<style>
+  :root {
+    color-scheme: light;
+    --surface-0: #f6f5f2;
+    --surface-1: #fcfcfb;
+    --grid: #e4e2dd;
+    --axis: #b9b7b0;
+    --text-primary: #0b0b0b;
+    --text-secondary: #52514e;
+    --text-muted: #75736d;
+    --series-1: #2a78d6;
+    --series-2: #eb6834;
+    --focus: #2a78d6;
+    --tip-bg: #ffffff;
+    --tip-border: #d6d4ce;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      color-scheme: dark;
+      --surface-0: #121211;
+      --surface-1: #1a1a19;
+      --grid: #2e2e2c;
+      --axis: #55544f;
+      --text-primary: #ffffff;
+      --text-secondary: #c3c2b7;
+      --text-muted: #9a998f;
+      --series-1: #3987e5;
+      --series-2: #d95926;
+      --focus: #3987e5;
+      --tip-bg: #242423;
+      --tip-border: #3a3a37;
+    }
+  }
+  :root[data-theme="dark"] {
+    color-scheme: dark;
+    --surface-0: #121211;
+    --surface-1: #1a1a19;
+    --grid: #2e2e2c;
+    --axis: #55544f;
+    --text-primary: #ffffff;
+    --text-secondary: #c3c2b7;
+    --text-muted: #9a998f;
+    --series-1: #3987e5;
+    --series-2: #d95926;
+    --focus: #3987e5;
+    --tip-bg: #242423;
+    --tip-border: #3a3a37;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    padding-block: 24px;
+    padding-inline: 16px;
+    background: var(--surface-0);
+    color: var(--text-primary);
+    font: 14px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  }
+  main { max-width: 860px; margin: 0 auto; }
+  h1 { font-size: 1.35rem; margin: 0 0 4px; }
+  h2 { font-size: 1.05rem; margin: 0 0 4px; }
+  p { margin: 0 0 10px; color: var(--text-secondary); }
+  .card {
+    background: var(--surface-1);
+    border: 1px solid var(--grid);
+    border-radius: 10px;
+    padding: 18px 16px;
+    margin: 18px 0;
+  }
+  .controls { display: flex; flex-wrap: wrap; gap: 8px; margin: 10px 0 14px; align-items: center; }
+  .seg button, .btn {
+    font: inherit; font-size: 13px;
+    color: var(--text-primary);
+    background: transparent;
+    border: 1px solid var(--axis);
+    border-radius: 999px;
+    padding: 4px 12px;
+    cursor: pointer;
+  }
+  .seg button[aria-pressed="true"] { border-color: var(--text-primary); font-weight: 600; }
+  button:focus-visible, input:focus-visible, select:focus-visible, .bar-hit:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+  .legend { display: flex; flex-wrap: wrap; gap: 16px; font-size: 13px; color: var(--text-secondary); margin-bottom: 8px; }
+  .legend span { display: inline-flex; align-items: center; gap: 6px; }
+  .swatch { width: 12px; height: 12px; border-radius: 2px; display: inline-block; }
+  .chart { position: relative; }
+  .row { display: grid; grid-template-columns: minmax(120px, 190px) 1fr; gap: 10px; align-items: center; padding: 6px 0; border-top: 1px solid var(--grid); }
+  .row:first-child { border-top: none; }
+  .row-label { font-size: 13px; color: var(--text-primary); }
+  .row-label small { display: block; color: var(--text-muted); font-size: 12px; }
+  .track { position: relative; height: 40px; }
+  .zero { position: absolute; top: -6px; bottom: -6px; width: 1px; background: var(--axis); }
+  .gridline { position: absolute; top: 0; bottom: 0; width: 1px; background: var(--grid); }
+  .bar { position: absolute; height: 14px; }
+  .bar-hit { position: absolute; height: 20px; cursor: default; background: transparent; border: 0; padding: 0; }
+  .bar.dev { top: 2px; background: var(--series-1); }
+  .bar.uns { top: 22px; background: var(--series-2); }
+  .bar.pos { border-radius: 0 4px 4px 0; }
+  .bar.neg { border-radius: 4px 0 0 4px; }
+  .val { position: absolute; font-size: 12px; color: var(--text-secondary); white-space: nowrap; line-height: 14px; font-variant-numeric: tabular-nums; }
+  .axis-row { display: grid; grid-template-columns: minmax(120px, 190px) 1fr; gap: 10px; }
+  .axis { position: relative; height: 20px; font-size: 12px; color: var(--text-muted); }
+  .axis span { position: absolute; transform: translateX(-50%); font-variant-numeric: tabular-nums; }
+  .tooltip {
+    position: fixed; pointer-events: none; z-index: 10;
+    background: var(--tip-bg); border: 1px solid var(--tip-border); border-radius: 8px;
+    padding: 8px 10px; font-size: 12px; color: var(--text-secondary); max-width: 260px;
+    box-shadow: 0 2px 10px rgba(0,0,0,.12);
+  }
+  .tooltip strong { color: var(--text-primary); font-size: 14px; display: block; }
+  .tooltip .key { display: inline-block; width: 12px; height: 2px; vertical-align: middle; margin-right: 6px; }
+  .tablewrap { overflow-x: auto; margin-top: 10px; }
+  table { border-collapse: collapse; font-size: 12.5px; min-width: 520px; }
+  th, td { border-bottom: 1px solid var(--grid); padding: 4px 8px; text-align: right; font-variant-numeric: tabular-nums; }
+  th:first-child, td:first-child { text-align: left; }
+  th { color: var(--text-secondary); font-weight: 600; }
+  .caption { font-size: 12.5px; color: var(--text-muted); margin-top: 10px; }
+  .form { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px 14px; margin: 10px 0; }
+  .form label { display: flex; flex-direction: column; font-size: 12.5px; color: var(--text-secondary); gap: 4px; }
+  .form input {
+    font: inherit; font-size: 14px; color: var(--text-primary); background: var(--surface-0);
+    border: 1px solid var(--axis); border-radius: 6px; padding: 5px 8px; width: 100%;
+  }
+  .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 8px; margin: 12px 0; }
+  .stat { border: 1px solid var(--grid); border-radius: 8px; padding: 8px 10px; }
+  .stat .label { font-size: 12px; color: var(--text-muted); }
+  .stat .value { font-size: 18px; font-weight: 600; color: var(--text-primary); font-variant-numeric: tabular-nums; }
+  .ci { position: relative; height: 74px; margin: 8px 0 4px; }
+  .ci .line { position: absolute; height: 2px; border-radius: 2px; }
+  .ci .dot { position: absolute; width: 10px; height: 10px; border-radius: 50%; transform: translate(-50%, -50%); box-shadow: 0 0 0 2px var(--surface-1); }
+  .ci .lab { position: absolute; left: 0; font-size: 12px; color: var(--text-secondary); }
+  .checks { list-style: none; padding: 0; margin: 8px 0 0; }
+  .checks li { padding: 4px 0; color: var(--text-secondary); }
+  .checks b { color: var(--text-primary); }
+  @media (max-width: 520px) {
+    .row, .axis-row { grid-template-columns: 1fr; gap: 2px; }
+    .axis-row > div:first-child { display: none; }
+  }
+</style>
+</head>
+<body>
+<main>
+  <h1>Development versus unseen changes, and whether a difference exceeds its error</h1>
+  <p>Companion to ch-00 §4 and §6.1. Panel 1 shows, for each Tülu 3 8B SFT training-data source, how much the development benchmark and the unseen benchmark of each skill change when that source is removed. Panel 2 computes the standard error of a difference between two scores so the reader can check whether a reported change is larger than its sampling error.</p>
+
+  <section class="card" aria-labelledby="p1title">
+    <h2 id="p1title">Panel 1 — Contribution of one data source: development vs unseen benchmark</h2>
+    <p>Each bar is (final Tülu 3 8B SFT score) − (score of the model trained without the selected source), in score points. A source transfers to a skill when both bars point the same way and the unseen change exceeds its noise band (Panel 2).</p>
+    <div class="controls">
+      <div class="seg" role="group" aria-label="Data source removed" id="sourceButtons"></div>
+      <button class="btn" id="tableToggle" aria-expanded="false" aria-controls="table1">Show table</button>
+    </div>
+    <div class="legend" aria-hidden="true">
+      <span><i class="swatch" style="background:var(--series-1)"></i>Development benchmark change</span>
+      <span><i class="swatch" style="background:var(--series-2)"></i>Unseen benchmark change</span>
+    </div>
+    <div class="chart" id="chart1" role="img" aria-label="Diverging bar chart of development and unseen benchmark changes per skill"></div>
+    <div class="axis-row"><div></div><div class="axis" id="axis1"></div></div>
+    <div class="tablewrap" id="table1" hidden></div>
+    <p class="caption">Source: Tülu 3 report, arXiv:2411.15124v5, Table 32 (one training run per ablation; no seed variation reported). Development → unseen pairs: MMLU → GPQA, BBH → AGIEval, MATH → DeepMind Mathematics, HumanEval → BigCodeBench (hard subset, 148 tasks), IFEval → IFEval-OOD. The Persona data are Tülu 3's synthetic SFT datasets for mathematics, coding, and instruction following (§4.2). Worked examples in ch-00 §4: math data +8.0 / +9.0; persona data on instruction following +19.2 / −0.4; WildChat on instruction following +2.7 / −3.2 and on code +0.9 / +4.1.</p>
+  </section>
+
+  <section class="card" aria-labelledby="p2title">
+    <h2 id="p2title">Panel 2 — Is the difference larger than its standard error?</h2>
+    <p>Scores are treated as 0/1 per item. For fractional per-item scores such as F1 or pass@10 estimates, the 0/1 formula gives an upper bound on the standard error, so a difference that fails Condition 1 here is not shown to be measured, but it is not shown to be noise either. Enter the per-item correlation between the two models when both were scored on the same items; 0 gives the unpaired result.</p>
+    <div class="controls">
+      <div class="seg" role="group" aria-label="Presets" id="presetButtons"></div>
+    </div>
+    <div class="form">
+      <label>Items n <input id="n" type="number" min="2" step="1" inputmode="numeric"></label>
+      <label>Score A (%) <input id="a" type="number" min="0" max="100" step="0.1"></label>
+      <label>Score B (%) <input id="b" type="number" min="0" max="100" step="0.1"></label>
+      <label>Per-item correlation ρ <input id="rho" type="number" min="-1" max="1" step="0.05"></label>
+      <label>Seed or checkpoint SD (points, 0 = not measured) <input id="seed" type="number" min="0" step="0.01"></label>
+    </div>
+    <div class="stats" id="stats"></div>
+    <div class="legend" aria-hidden="true">
+      <span><i class="swatch" style="background:var(--series-1)"></i>Unpaired 95% interval</span>
+      <span><i class="swatch" style="background:var(--series-2)"></i>Paired 95% interval</span>
+    </div>
+    <div class="ci" id="ci" role="img" aria-label="Difference with unpaired and paired 95 percent intervals"></div>
+    <div class="axis" id="axis2"></div>
+    <ul class="checks" id="checks"></ul>
+    <p class="caption">Formulas: SE = sqrt(p(1 − p)/n); SE_unpaired = sqrt(SE_A² + SE_B²); SE_paired = sqrt(SE_A² + SE_B² − 2·SE_A·SE_B·ρ); interval = difference ± 1.96·SE (Miller, arXiv:2411.00640v1 §2.1, §4). Presets reproduce ch-00 §6.1: HumanEval (164 items) Tülu 3 8B SFT 86.2 vs DPO 83.9 (Table 31) with an assumed ρ = 0.6 gives SE 2.69 and 2.87, unpaired SE 3.94, paired SE 2.49, z = 0.92, interval (−2.6, 7.2), all upper bounds because pass@10 per-item scores are fractional; BigCodeBench-Hard (148 tasks) 11.5 vs 7.4 (Table 32) gives unpaired SE 3.39, z = 1.21. The MMLU-size preset uses hand numbers (65.0 vs 64.0) on 14,042 items; its SE of A is 0.40 points, as in §6.1. For reference, seed SDs for ten Llama-2-7B-architecture runs, averaged over 21 checkpoints from 10B to 210B tokens, are 0.80 (ARC-C), 1.11 (HumanEval), 0.21 (HellaSwag) (Madaan et al., arXiv:2406.10229v1 §3.1, Table 1); the Tülu 3 70B SFT average has a seed SD of 1.33 over three seeds (Table 14). A seed SD from one setting does not transfer to another model size or benchmark.</p>
+  </section>
+</main>
+<div class="tooltip" id="tip" hidden></div>
+<script>
+(function () {
+  "use strict";
+  var skills = [
+    { name: "Knowledge", dev: "MMLU", uns: "GPQA" },
+    { name: "Reasoning", dev: "BBH", uns: "AGIEval" },
+    { name: "Math", dev: "MATH", uns: "DeepMind Mathematics" },
+    { name: "Coding", dev: "HumanEval", uns: "BigCodeBench (hard)" },
+    { name: "Instruction following", dev: "IFEval", uns: "IFEval-OOD" }
+  ];
+  // Tülu 3 arXiv:2411.15124v5 Table 32: [dev, unseen] per skill.
+  var finalScores = [[62.1, 31.9], [67.9, 56.2], [31.5, 32.3], [86.2, 11.5], [72.8, 17.6]];
+  var ablations = {
+    "WildChat": [[61.0, 31.5], [65.6, 53.1], [31.8, 31.2], [85.3, 7.4], [70.1, 20.8]],
+    "Safety": [[62.0, 31.9], [68.3, 55.6], [32.6, 32.6], [84.5, 10.8], [71.0, 17.6]],
+    "Persona": [[62.4, 29.5], [68.3, 56.9], [30.1, 31.8], [84.5, 10.8], [53.6, 18.0]],
+    "Math": [[62.2, 32.6], [68.9, 54.1], [23.5, 23.3], [86.0, 8.8], [70.6, 18.3]]
+  };
+  var DMIN = -10, DMAX = 20;
+  var tip = document.getElementById("tip");
+  function r1(x) { return Math.round(x * 10) / 10; }
+  function fmt(x) { var v = r1(x); return (v > 0 ? "+" : v < 0 ? "−" : "") + Math.abs(v).toFixed(1); }
+  function sgn(x) { var v = r1(x); return (v < 0 ? "\u2212" : "") + Math.abs(v).toFixed(1); }
+  function pct(v) { return (v - DMIN) / (DMAX - DMIN) * 100; }
+
+  function showTip(evt, lines, color) {
+    tip.textContent = "";
+    var s = document.createElement("strong"); s.textContent = lines[0]; tip.appendChild(s);
+    for (var i = 1; i < lines.length; i++) {
+      var d = document.createElement("div");
+      if (i === 1 && color) { var k = document.createElement("span"); k.className = "key"; k.style.background = color; d.appendChild(k); }
+      d.appendChild(document.createTextNode(lines[i])); tip.appendChild(d);
+    }
+    tip.hidden = false;
+    var x, y;
+    if (evt.clientX !== undefined && evt.type !== "focus") { x = evt.clientX; y = evt.clientY; }
+    else { var rc = evt.target.getBoundingClientRect(); x = rc.left + rc.width / 2; y = rc.top; }
+    var w = tip.offsetWidth, h = tip.offsetHeight;
+    var left = Math.min(Math.max(8, x + 12), window.innerWidth - w - 8);
+    var top = y - h - 12 < 8 ? y + 16 : y - h - 12;
+    tip.style.left = left + "px"; tip.style.top = top + "px";
+  }
+  function hideTip() { tip.hidden = true; }
+
+  function buildAxis(el, min, max, step) {
+    el.textContent = "";
+    for (var v = min; v <= max + 1e-9; v += step) {
+      var s = document.createElement("span");
+      s.style.left = ((v - min) / (max - min) * 100) + "%";
+      s.textContent = (v > 0 ? "+" : v < 0 ? "−" : "") + Math.abs(r1(v));
+      el.appendChild(s);
+    }
+  }
+
+  var current = "Persona";
+  function renderChart() {
+    var chart = document.getElementById("chart1");
+    chart.textContent = "";
+    var abl = ablations[current];
+    skills.forEach(function (sk, i) {
+      var row = document.createElement("div"); row.className = "row";
+      var lab = document.createElement("div"); lab.className = "row-label";
+      lab.appendChild(document.createTextNode(sk.name));
+      var sm = document.createElement("small"); sm.textContent = sk.dev + " → " + sk.uns; lab.appendChild(sm);
+      row.appendChild(lab);
+      var track = document.createElement("div"); track.className = "track";
+      for (var g = DMIN; g <= DMAX; g += 5) {
+        var gl = document.createElement("div"); gl.className = g === 0 ? "zero" : "gridline"; gl.style.left = pct(g) + "%"; track.appendChild(gl);
+      }
+      [0, 1].forEach(function (j) {
+        var delta = finalScores[i][j] - abl[i][j];
+        var cls = j === 0 ? "dev" : "uns";
+        var z = pct(0), p = pct(Math.max(DMIN, Math.min(DMAX, delta)));
+        var bar = document.createElement("div");
+        bar.className = "bar " + cls + " " + (delta >= 0 ? "pos" : "neg");
+        bar.style.left = Math.min(z, p) + "%";
+        bar.style.width = Math.max(Math.abs(p - z), 0.4) + "%";
+        track.appendChild(bar);
+        var val = document.createElement("div"); val.className = "val";
+        val.style.top = (j === 0 ? 2 : 22) + "px";
+        val.textContent = fmt(delta);
+        if (delta >= 0) { val.style.left = "calc(" + p + "% + 4px)"; } else { val.style.right = "calc(" + (100 - p) + "% + 4px)"; }
+        track.appendChild(val);
+        var hit = document.createElement("button");
+        hit.className = "bar-hit"; hit.type = "button";
+        hit.style.top = (j === 0 ? 0 : 20) + "px";
+        hit.style.left = Math.max(0, Math.min(z, p) - 1) + "%";
+        hit.style.width = (Math.abs(p - z) + 8) + "%";
+        var bench = j === 0 ? sk.dev : sk.uns;
+        var lines = [fmt(delta) + " points", (j === 0 ? "Development: " : "Unseen: ") + bench,
+          "Final SFT " + finalScores[i][j].toFixed(1) + ", without " + current + " " + abl[i][j].toFixed(1)];
+        hit.setAttribute("aria-label", sk.name + ", " + lines[1] + ", " + lines[0] + ", " + lines[2]);
+        var color = getComputedStyle(document.documentElement).getPropertyValue(j === 0 ? "--series-1" : "--series-2");
+        hit.addEventListener("pointermove", function (e) { showTip(e, lines, color); });
+        hit.addEventListener("focus", function (e) { showTip(e, lines, color); });
+        hit.addEventListener("pointerleave", hideTip);
+        hit.addEventListener("blur", hideTip);
+        track.appendChild(hit);
+      });
+      row.appendChild(track);
+      chart.appendChild(row);
+    });
+    buildAxis(document.getElementById("axis1"), DMIN, DMAX, 5);
+    renderTable();
+  }
+
+  function renderTable() {
+    var wrap = document.getElementById("table1"); wrap.textContent = "";
+    var t = document.createElement("table");
+    var head = ["Skill", "Dev benchmark", "Final", "Without " + current, "Dev change", "Unseen benchmark", "Final", "Without " + current, "Unseen change"];
+    var tr = document.createElement("tr");
+    head.forEach(function (h) { var th = document.createElement("th"); th.textContent = h; tr.appendChild(th); });
+    t.appendChild(tr);
+    skills.forEach(function (sk, i) {
+      var a = ablations[current][i];
+      var cells = [sk.name, sk.dev, finalScores[i][0].toFixed(1), a[0].toFixed(1), fmt(finalScores[i][0] - a[0]),
+        sk.uns, finalScores[i][1].toFixed(1), a[1].toFixed(1), fmt(finalScores[i][1] - a[1])];
+      var row = document.createElement("tr");
+      cells.forEach(function (c) { var td = document.createElement("td"); td.textContent = c; row.appendChild(td); });
+      t.appendChild(row);
+    });
+    wrap.appendChild(t);
+  }
+
+  var sb = document.getElementById("sourceButtons");
+  Object.keys(ablations).forEach(function (k) {
+    var b = document.createElement("button"); b.type = "button"; b.textContent = k + " data";
+    b.setAttribute("aria-pressed", k === current ? "true" : "false");
+    b.addEventListener("click", function () {
+      current = k;
+      Array.prototype.forEach.call(sb.children, function (c) { c.setAttribute("aria-pressed", c === b ? "true" : "false"); });
+      renderChart();
+    });
+    sb.appendChild(b);
+  });
+  var tt = document.getElementById("tableToggle");
+  tt.addEventListener("click", function () {
+    var tbl = document.getElementById("table1");
+    tbl.hidden = !tbl.hidden;
+    tt.setAttribute("aria-expanded", String(!tbl.hidden));
+    tt.textContent = tbl.hidden ? "Show table" : "Hide table";
+  });
+
+  // Panel 2
+  var presets = [
+    { label: "HumanEval: SFT vs DPO", n: 164, a: 86.2, b: 83.9, rho: 0.6, seed: 0 },
+    { label: "BigCodeBench-Hard: WildChat", n: 148, a: 11.5, b: 7.4, rho: 0, seed: 0 },
+    { label: "MMLU-size benchmark", n: 14042, a: 65.0, b: 64.0, rho: 0.6, seed: 0 }
+  ];
+  var ids = ["n", "a", "b", "rho", "seed"];
+  var inputs = {}; ids.forEach(function (id) { inputs[id] = document.getElementById(id); inputs[id].addEventListener("input", compute); });
+  var pb = document.getElementById("presetButtons");
+  presets.forEach(function (p, idx) {
+    var b = document.createElement("button"); b.type = "button"; b.textContent = p.label;
+    b.setAttribute("aria-pressed", idx === 0 ? "true" : "false");
+    b.addEventListener("click", function () {
+      ids.forEach(function (id) { inputs[id].value = p[id]; });
+      Array.prototype.forEach.call(pb.children, function (c) { c.setAttribute("aria-pressed", c === b ? "true" : "false"); });
+      compute();
+    });
+    pb.appendChild(b);
+  });
+  function setPreset(p) { ids.forEach(function (id) { inputs[id].value = p[id]; }); }
+
+  function stat(label, value) {
+    var d = document.createElement("div"); d.className = "stat";
+    var l = document.createElement("div"); l.className = "label"; l.textContent = label;
+    var v = document.createElement("div"); v.className = "value"; v.textContent = value;
+    d.appendChild(l); d.appendChild(v); return d;
+  }
+
+  function compute() {
+    var n = parseFloat(inputs.n.value), a = parseFloat(inputs.a.value) / 100, b = parseFloat(inputs.b.value) / 100;
+    var rho = parseFloat(inputs.rho.value), seed = parseFloat(inputs.seed.value) || 0;
+    var statsEl = document.getElementById("stats"), checks = document.getElementById("checks"), ci = document.getElementById("ci");
+    statsEl.textContent = ""; checks.textContent = ""; ci.textContent = "";
+    if (!(n >= 2) || !(a >= 0 && a <= 1) || !(b >= 0 && b <= 1) || !(rho >= -1 && rho <= 1)) {
+      var li = document.createElement("li"); li.textContent = "Enter n ≥ 2, scores between 0 and 100, and ρ between −1 and 1."; checks.appendChild(li); return;
+    }
+    var seA = Math.sqrt(a * (1 - a) / n) * 100, seB = Math.sqrt(b * (1 - b) / n) * 100;
+    var diff = (a - b) * 100;
+    var seU = Math.sqrt(seA * seA + seB * seB);
+    var seP = Math.sqrt(Math.max(0, seA * seA + seB * seB - 2 * seA * seB * rho));
+    var zU = seU > 0 ? diff / seU : 0, zP = seP > 0 ? diff / seP : 0;
+    statsEl.appendChild(stat("Difference A − B", fmt(diff) + " pts"));
+    statsEl.appendChild(stat("SE of A / SE of B", seA.toFixed(2) + " / " + seB.toFixed(2)));
+    statsEl.appendChild(stat("Unpaired SE, z", seU.toFixed(2) + ", z = " + zU.toFixed(2)));
+    statsEl.appendChild(stat("Paired SE, z", seP.toFixed(2) + ", z = " + zP.toFixed(2)));
+
+    var loU = diff - 1.96 * seU, hiU = diff + 1.96 * seU, loP = diff - 1.96 * seP, hiP = diff + 1.96 * seP;
+    var span = Math.max(Math.abs(loU), Math.abs(hiU), 1) * 1.15;
+    var min = -Math.ceil(span), max = Math.ceil(span);
+    function x(v) { return (v - min) / (max - min) * 100; }
+    var zero = document.createElement("div"); zero.className = "gridline"; zero.style.left = x(0) + "%"; zero.style.background = "var(--axis)"; ci.appendChild(zero);
+    [[loU, hiU, "--series-1", 18, "Unpaired"], [loP, hiP, "--series-2", 52, "Paired"]].forEach(function (r) {
+      var line = document.createElement("div"); line.className = "line";
+      line.style.left = x(r[0]) + "%"; line.style.width = (x(r[1]) - x(r[0])) + "%"; line.style.top = r[3] + "px"; line.style.background = "var(" + r[2] + ")";
+      ci.appendChild(line);
+      var dot = document.createElement("div"); dot.className = "dot"; dot.style.left = x(diff) + "%"; dot.style.top = (r[3] + 1) + "px"; dot.style.background = "var(" + r[2] + ")";
+      ci.appendChild(dot);
+      var lab = document.createElement("div"); lab.className = "lab"; lab.style.top = (r[3] - 18) + "px";
+      lab.textContent = r[4] + ": " + fmt(diff) + " (" + sgn(r[0]) + ", " + sgn(r[1]) + ")";
+      ci.appendChild(lab);
+    });
+    var step = Math.max(1, Math.round((max - min) / 6));
+    buildAxis(document.getElementById("axis2"), min, max, step);
+
+    function addCheck(title, text) { var li = document.createElement("li"); var bb = document.createElement("b"); bb.textContent = title + " "; li.appendChild(bb); li.appendChild(document.createTextNode(text)); checks.appendChild(li); }
+    var pass1 = Math.abs(diff) > 1.96 * seP;
+    addCheck("Condition 1 (sampling error):", pass1 ? "|difference| exceeds 1.96 × paired SE (" + (1.96 * seP).toFixed(2) + " points)." : "|difference| does not exceed 1.96 × paired SE (" + (1.96 * seP).toFixed(2) + " points); not shown to be a measured difference.");
+    if (seed > 0) {
+      addCheck("Condition 2 (seed or checkpoint noise):", Math.abs(diff) > seed ? "|difference| exceeds the entered seed SD of " + seed.toFixed(2) + " points." : "|difference| is within the entered seed SD of " + seed.toFixed(2) + " points.");
+    } else {
+      addCheck("Condition 2 (seed or checkpoint noise):", "not checked; no seed or checkpoint SD entered for this benchmark and scale.");
+    }
+    addCheck("Condition 3 (format):", "not computed here; check that the sign holds under at least two plausible prompt formats (ch-00 §6.3).");
+  }
+
+  setPreset(presets[0]);
+  renderChart();
+  compute();
+  window.addEventListener("scroll", hideTip, { passive: true });
+})();
+</script>
+</body>
+</html>

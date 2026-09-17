@@ -7,6 +7,8 @@ source_url: https://arxiv.org/abs/1911.00359
 created_at: "2026-04-23"
 ---
 
+> Superseded by the 2026-09 revision of read.md; kept for history.
+
 # Excerpt: CCNet — hash-based dedup and the content-addressed lineage ancestor
 
 **Source library:** `wiki/raw-data/llm-training/papers/ccnet.md`

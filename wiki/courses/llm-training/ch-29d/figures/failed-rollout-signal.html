@@ -1,0 +1,176 @@
+<title>Failed Rollout Signal</title>
+<style>
+:root{
+  --bg:#fafaf8; --panel:#ffffff; --ink:#1d1d1b; --muted:#5f5f5a; --line:#dcdcd6;
+  --succ:#2f7d4f; --fail:#b5452f; --mask:#8a8a84; --pad:#3f64a8; --accent:#3f64a8;
+  color-scheme:light;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#161614; --panel:#1f1f1c; --ink:#ecece6; --muted:#a4a49c; --line:#3a3a35;
+    --succ:#5fb784; --fail:#e27a62; --mask:#8f8f88; --pad:#7f9fe0; --accent:#7f9fe0; color-scheme:dark;
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#161614; --panel:#1f1f1c; --ink:#ecece6; --muted:#a4a49c; --line:#3a3a35;
+  --succ:#5fb784; --fail:#e27a62; --mask:#8f8f88; --pad:#7f9fe0; --accent:#7f9fe0; color-scheme:dark;
+}
+body{background:var(--bg);color:var(--ink);font:15px/1.5 system-ui,-apple-system,"Segoe UI",sans-serif;margin:0;padding-inline:16px;padding-block:20px}
+main{max-width:920px;margin:0 auto}
+h1{font-size:1.35rem;margin:0 0 .3rem}
+h2{font-size:1.1rem;margin:0 0 .5rem}
+p{margin:.35rem 0}
+.caption{color:var(--muted);font-size:.9rem}
+section{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:14px 16px;margin:16px 0}
+.controls{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:10px 18px;margin:.6rem 0}
+label{display:flex;flex-direction:column;font-size:.9rem;color:var(--muted);gap:4px}
+input[type=range]{width:100%}
+select{font:inherit;padding:4px;background:var(--panel);color:var(--ink);border:1px solid var(--line);border-radius:6px}
+.val{color:var(--ink);font-weight:600}
+.warn{color:var(--fail);font-size:.9rem;min-height:1.2em}
+.rows{display:grid;gap:6px;margin-top:.6rem}
+.row{display:grid;grid-template-columns:90px 110px 1fr 70px;align-items:center;gap:8px;font-size:.9rem}
+.tag{padding:1px 6px;border-radius:5px;color:#fff;font-size:.8rem;text-align:center}
+.bar-wrap{position:relative;height:18px;background:transparent;border-left:1px solid var(--line)}
+.axis{position:absolute;left:50%;top:0;bottom:0;border-left:1px dashed var(--line)}
+.bar{position:absolute;top:3px;height:12px;border-radius:3px}
+.num{text-align:right;font-variant-numeric:tabular-nums}
+.summary{margin-top:.7rem;font-size:.92rem}
+table{border-collapse:collapse;font-size:.9rem;margin-top:.5rem}
+td,th{border:1px solid var(--line);padding:4px 10px;text-align:right;font-variant-numeric:tabular-nums}
+th{text-align:left;color:var(--muted);font-weight:600}
+.scroll{overflow-x:auto}
+@media (max-width:520px){.row{grid-template-columns:70px 90px 1fr 56px}}
+</style>
+<main>
+<h1>Failed rollout signal: mask versus penalize</h1>
+<p class="caption">Companion to ch-29d §5-§6. Set the outcome of each rollout in one group and the handling rule for rollouts without a verified outcome. The page recomputes which rollouts receive gradient and the advantage each receives.</p>
+
+<section id="groupPanel">
+<h2>Panel A. Group advantage for one prompt (group size 8)</h2>
+<div class="controls">
+  <label>Successes (reward 1) <span class="val" id="sV">2</span><input type="range" id="s" min="0" max="8" value="2"></label>
+  <label>Genuine failures (reward 0) <span class="val" id="fV">4</span><input type="range" id="f" min="0" max="8" value="4"></label>
+  <label>Timeouts or truncations <span class="val" id="tV">2</span><input type="range" id="t" min="0" max="8" value="2"></label>
+  <label>Environment crashes <span class="val" id="cV">0</span><input type="range" id="c" min="0" max="8" value="0"></label>
+  <label>Timeout rule
+    <select id="tRule"><option value="penalize">Penalize as reward 0</option><option value="mask">Mask (remove from group)</option></select></label>
+  <label>Crash rule
+    <select id="cRule"><option value="penalize">Penalize as reward 0</option><option value="drop">Remove from group</option><option value="glm5">GLM-5: remove, pad if more than half valid, else drop group</option></select></label>
+  <label>Baseline
+    <select id="norm"><option value="z">Group z-score: (r − mean) / std</option><option value="loo">Leave-one-out, no std (DeepSWE form)</option></select></label>
+</div>
+<p class="warn" id="warn"></p>
+<div class="rows" id="rows"></div>
+<p class="summary" id="summary"></p>
+<p class="caption">Default counts reproduce the ch-29d §6 example: penalize gives +1.732 / −0.577, mask gives +1.414 / −0.707; the leave-one-out form gives +0.857 / −0.286 and +0.800 / −0.400. Mask and crash-removal rules follow DeepSWE compact filtering (blog §2.3) and GLM-5 §4.1.2. GLM-5 does not state which valid samples are repeated when padding; this page repeats valid samples in list order, which is an assumption of the figure and changes the group mean.</p>
+</section>
+
+<section>
+<h2>Panel B. pass^k and pass@k for one task</h2>
+<div class="controls">
+  <label>Trials n <span class="val" id="nV">8</span><input type="range" id="n" min="1" max="16" value="8"></label>
+  <label>Successes c <span class="val" id="ccV">6</span><input type="range" id="cc" min="0" max="16" value="6"></label>
+  <label>k <span class="val" id="kV">2</span><input type="range" id="k" min="1" max="16" value="2"></label>
+</div>
+<div class="scroll"><table id="passTable"></table></div>
+<p class="caption">Estimators from τ-bench §3: pass^k = C(c,k)/C(n,k) (all k trials succeed), pass@k = 1 − C(n−c,k)/C(n,k) (at least one succeeds). Default n = 8, c = 6, k = 2 gives 0.536 and 0.964, as in ch-29d §4.</p>
+</section>
+</main>
+<script>
+(function(){
+  const $=id=>document.getElementById(id);
+  const css=v=>getComputedStyle(document.documentElement).getPropertyValue(v).trim();
+  const G=8;
+  function stats(r){const m=r.reduce((a,b)=>a+b,0)/r.length;const sd=Math.sqrt(r.reduce((a,b)=>a+(b-m)*(b-m),0)/r.length);return{m,sd};}
+  function adv(r,norm){
+    if(r.length===0) return [];
+    if(norm==='loo'){
+      if(r.length===1) return [0];
+      const tot=r.reduce((a,b)=>a+b,0);
+      return r.map(x=>x-(tot-x)/(r.length-1));
+    }
+    const {m,sd}=stats(r);
+    return r.map(x=>sd>0?(x-m)/sd:0);
+  }
+  function renderGroup(){
+    let s=+$('s').value,f=+$('f').value,t=+$('t').value,c=+$('c').value;
+    ['s','f','t','c'].forEach(id=>$(id+'V').textContent=$(id).value);
+    const total=s+f+t+c;
+    $('warn').textContent= total!==G ? 'Counts sum to '+total+'; set them to sum to 8 (group size).' : '';
+    const items=[];
+    for(let i=0;i<s;i++) items.push({kind:'success',r:1});
+    for(let i=0;i<f;i++) items.push({kind:'failure',r:0});
+    for(let i=0;i<t;i++) items.push({kind:'timeout',r:0});
+    for(let i=0;i<c;i++) items.push({kind:'crash',r:0});
+    const tRule=$('tRule').value,cRule=$('cRule').value,norm=$('norm').value;
+    let inGroup=items.filter(x=>{
+      if(x.kind==='timeout'&&tRule==='mask') return false;
+      if(x.kind==='crash'&&cRule!=='penalize') return false;
+      return true;
+    });
+    let note='';
+    let padded=[];
+    if(cRule==='glm5'&&c>0){
+      const valid=inGroup.length;
+      if(valid>total/2){
+        const need=total-valid;
+        for(let i=0;i<need;i++){const src=inGroup[i%valid];padded.push({kind:'pad',r:src.r,from:src.kind});}
+        note='GLM-5 rule: '+valid+' of '+total+' valid (more than half), padded with '+need+' repeated sample(s).';
+      } else {
+        inGroup=[];
+        note='GLM-5 rule: '+valid+' of '+total+' valid (not more than half), whole group dropped.';
+      }
+    }
+    const groupR=inGroup.concat(padded).map(x=>x.r);
+    const A=adv(groupR,norm);
+    const advOf=new Map();
+    inGroup.concat(padded).forEach((x,i)=>advOf.set(x,A[i]));
+    const rowsEl=$('rows');rowsEl.innerHTML='';
+    const color={success:css('--succ'),failure:css('--fail'),timeout:css('--fail'),crash:css('--fail'),pad:css('--pad')};
+    const maxAbs=Math.max(2,...A.map(Math.abs));
+    items.concat(padded).forEach((x,i)=>{
+      const has=advOf.has(x);
+      const a=has?advOf.get(x):null;
+      const row=document.createElement('div');row.className='row';
+      const name=x.kind==='pad'?('pad ('+x.from+')'):x.kind;
+      const tag=document.createElement('span');tag.className='tag';tag.textContent=name;
+      tag.style.background=has?color[x.kind]:css('--mask');
+      const lab=document.createElement('span');lab.textContent=has?('reward '+x.r):'no gradient';lab.style.color=css('--muted');
+      const wrap=document.createElement('div');wrap.className='bar-wrap';
+      const ax=document.createElement('div');ax.className='axis';wrap.appendChild(ax);
+      if(has&&a!==0){const b=document.createElement('div');b.className='bar';const w=Math.abs(a)/maxAbs*50;
+        b.style.width=w+'%';b.style.left=(a>0?50:50-w)+'%';b.style.background=a>0?css('--succ'):css('--fail');wrap.appendChild(b);}
+      const num=document.createElement('span');num.className='num';num.textContent=has?(a>=0?'+':'')+a.toFixed(3):'—';
+      row.append(tag,lab,wrap,num);rowsEl.appendChild(row);
+    });
+    const withGrad=A.filter(v=>v!==0).length;
+    const zero=groupR.length>0&&A.every(v=>Math.abs(v)<1e-12);
+    let sum='Rollouts in group statistics: '+groupR.length+'. Rollouts with non-zero advantage: '+withGrad+'.';
+    if(groupR.length>0&&norm==='z'){const st=stats(groupR);sum+=' Group mean '+st.m.toFixed(3)+', std '+st.sd.toFixed(3)+'.';}
+    if(zero) sum+=' All rewards in the group are equal, so every advantage is 0 and the group gives no policy-gradient signal.';
+    if(note) sum+=' '+note;
+    $('summary').textContent=sum;
+  }
+  function C(a,b){if(b<0||b>a) return 0;let r=1;for(let i=1;i<=b;i++){r=r*(a-b+i)/i;}return r;}
+  function renderPass(){
+    const n=+$('n').value;$('cc').max=n;$('k').max=n;
+    let c=Math.min(+$('cc').value,n),k=Math.min(+$('k').value,n);
+    $('cc').value=c;$('k').value=k;
+    $('nV').textContent=n;$('ccV').textContent=c;$('kV').textContent=k;
+    let html='<tr><th>k</th>';for(let j=1;j<=n;j++) html+='<th style="text-align:right">'+j+'</th>';html+='</tr>';
+    let r1='<tr><th>pass^k</th>',r2='<tr><th>pass@k</th>';
+    for(let j=1;j<=n;j++){
+      const hat=C(c,j)/C(n,j),at=1-C(n-c,j)/C(n,j);
+      const st=j===k?' style="font-weight:700;color:'+css('--accent')+'"':'';
+      r1+='<td'+st+'>'+hat.toFixed(3)+'</td>';r2+='<td'+st+'>'+at.toFixed(3)+'</td>';
+    }
+    $('passTable').innerHTML=html+r1+'</tr>'+r2+'</tr>';
+  }
+  ['s','f','t','c','tRule','cRule','norm'].forEach(id=>$(id).addEventListener('input',renderGroup));
+  ['n','cc','k'].forEach(id=>$(id).addEventListener('input',renderPass));
+  renderGroup();renderPass();
+  try{window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change',()=>{renderGroup();renderPass();});
+    new MutationObserver(()=>{renderGroup();renderPass();}).observe(document.documentElement,{attributes:true,attributeFilter:['data-theme']});}catch(e){}
+})();
+</script>

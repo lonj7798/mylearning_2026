@@ -1,0 +1,256 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Multi-turn rollout: which tokens carry gradient — ch-45b</title>
+<style>
+  :root{
+    --bg:#fbfbf9; --fg:#1b1b1a; --muted:#5d5d59; --line:#d8d6cf;
+    --model:#2f6f8f; --obs:#b9b5aa; --pos:#2e7d4f; --neg:#a8402c; --drop:#8a8a86;
+    --panel:#f3f2ee;
+  }
+  @media (prefers-color-scheme: dark){
+    :root{ --bg:#14140f; --fg:#eceae4; --muted:#a6a49c; --line:#3a3933;
+           --model:#6fb3d2; --obs:#55534b; --pos:#68c08c; --neg:#e08a76; --drop:#6f6e68; --panel:#1e1e18; }
+  }
+  *{box-sizing:border-box}
+  body{margin:0;padding:0;background:var(--bg);color:var(--fg);
+       font:14px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif}
+  .wrap{max-width:960px;margin:0 auto;padding-block:24px;padding-left:16px;padding-right:16px}
+  h1{font-size:19px;margin:0 0 4px}
+  h2{font-size:15px;margin:22px 0 8px;font-weight:600}
+  p.sub{color:var(--muted);margin:0 0 18px}
+  .panel{background:var(--panel);border:1px solid var(--line);border-radius:6px;padding:14px 16px;margin-bottom:16px}
+  .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:12px 20px}
+  label{display:block;font-size:12.5px;color:var(--muted);margin-bottom:3px}
+  .ctl{margin-bottom:6px}
+  input[type=range]{width:100%}
+  select{width:100%;padding:4px;background:var(--bg);color:var(--fg);border:1px solid var(--line);border-radius:4px}
+  .val{color:var(--fg);font-variant-numeric:tabular-nums;font-weight:600}
+  .seqwrap{overflow-x:auto}
+  .seq{display:flex;height:34px;min-width:520px;border:1px solid var(--line);border-radius:4px;overflow:hidden}
+  .seg{display:flex;align-items:center;justify-content:center;font-size:11px;color:#fff;white-space:nowrap}
+  .seg.m{background:var(--model)}
+  .seg.o{background:var(--obs);color:var(--fg)}
+  .legend{display:flex;gap:16px;flex-wrap:wrap;font-size:12.5px;color:var(--muted);margin-top:8px}
+  .sw{display:inline-block;width:11px;height:11px;border-radius:2px;margin-right:5px;vertical-align:-1px}
+  table{border-collapse:collapse;width:100%;font-size:13px;min-width:560px}
+  th,td{border-bottom:1px solid var(--line);padding:5px 8px;text-align:right;font-variant-numeric:tabular-nums}
+  th:first-child,td:first-child{text-align:left}
+  th{color:var(--muted);font-weight:600;font-size:12px}
+  tr.dropped td{color:var(--drop);text-decoration:line-through}
+  .pos{color:var(--pos)} .neg{color:var(--neg)}
+  .tblwrap{overflow-x:auto}
+  .kv{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:10px 18px;margin-top:6px}
+  .kv div{font-size:13px}
+  .kv b{display:block;font-size:17px;font-variant-numeric:tabular-nums}
+  .note{font-size:12.5px;color:var(--muted)}
+  code{background:var(--panel);padding:1px 4px;border-radius:3px;font-size:12.5px}
+  footer{border-top:1px solid var(--line);margin-top:26px;padding-top:12px;font-size:12.5px;color:var(--muted)}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<h1>Multi-turn rollout: which tokens carry gradient, and what advantage each rollout gets</h1>
+<p class="sub">Set the rollout shape, the group outcome, the advantage baseline and the filtering policy, and read
+off the gradient-token count and the per-rollout advantage. Figure for
+<a href="../read.md">ch-45b</a> §1, §2, §3 and §5.</p>
+
+<div class="panel">
+  <div class="grid">
+    <div class="ctl">
+      <label>Turns per rollout: <span class="val" id="vTurns"></span></label>
+      <input type="range" id="turns" min="2" max="10" step="1" value="5">
+    </div>
+    <div class="ctl">
+      <label>Model tokens per turn: <span class="val" id="vModel"></span></label>
+      <input type="range" id="model" min="100" max="2000" step="50" value="900">
+    </div>
+    <div class="ctl">
+      <label>Observation tokens per turn: <span class="val" id="vObs"></span></label>
+      <input type="range" id="obs" min="0" max="4000" step="100" value="1500">
+    </div>
+    <div class="ctl">
+      <label>Rollouts per task (group size N): <span class="val" id="vN"></span></label>
+      <input type="range" id="N" min="4" max="16" step="1" value="8">
+    </div>
+    <div class="ctl">
+      <label>Rollouts that pass the verifier: <span class="val" id="vS"></span></label>
+      <input type="range" id="S" min="0" max="16" step="1" value="2">
+    </div>
+    <div class="ctl">
+      <label>Rollouts ended by a harness limit: <span class="val" id="vT"></span></label>
+      <input type="range" id="T" min="0" max="8" step="1" value="2">
+    </div>
+    <div class="ctl">
+      <label>Observation tokens in the loss</label>
+      <select id="mask">
+        <option value="1" selected>Masked (Search-R1, GLM-5, SimpleTIR)</option>
+        <option value="0">Not masked</option>
+      </select>
+    </div>
+    <div class="ctl">
+      <label>Advantage baseline</label>
+      <select id="base">
+        <option value="loo" selected>Leave-one-out, no std division (DeepSWE, SkyRL-Agent, LOOP)</option>
+        <option value="grpo">Group mean divided by return std (GRPO)</option>
+      </select>
+    </div>
+    <div class="ctl">
+      <label>Harness-limited rollouts</label>
+      <select id="filter">
+        <option value="mask" selected>Masked from the gradient, reward kept (compact filtering)</option>
+        <option value="train">Trained as ordinary failures</option>
+        <option value="drop">Dropped from the group, no repair</option>
+      </select>
+    </div>
+    <div class="ctl">
+      <label>Loss normalization</label>
+      <select id="norm">
+        <option value="mask" selected>Divide by unmasked-token count (SimpleTIR Eq. 1)</option>
+        <option value="seq">Divide by full sequence length</option>
+      </select>
+    </div>
+  </div>
+</div>
+
+<h2>One rollout, token by token</h2>
+<div class="seqwrap"><div class="seq" id="seq"></div></div>
+<div class="legend">
+  <span><span class="sw" style="background:var(--model)"></span>model-emitted tokens</span>
+  <span><span class="sw" style="background:var(--obs)"></span>environment observation tokens</span>
+</div>
+<div class="kv" id="kv"></div>
+
+<h2>The group</h2>
+<div class="tblwrap">
+<table id="tbl">
+  <thead><tr><th>Rollout</th><th>Outcome</th><th>Reward</th><th>Advantage</th><th>Gradient tokens</th></tr></thead>
+  <tbody></tbody>
+</table>
+</div>
+<p class="note" id="groupNote"></p>
+
+<footer>
+<p><b>Numbers this figure reproduces.</b> The leave-one-out advantage is
+<code>A_i = r_i − (1/(N−1)) Σ_{j≠i} r_j</code>, derived in the DeepSWE source card from the blog's §2.3 description;
+with N = 8 and 2 successes it gives +0.86 for a success and −0.29 for a failure. The GRPO option divides
+<code>r_i − mean(r)</code> by the reward standard deviation of the group; LOOP measures 61.9 against 71.3 AppWorld
+Test-Normal task goal completion for that division (arXiv:2502.01600v3, Table 1). Observation masking is
+Search-R1 §3.1 Eq. 2; its ablation is 0.431 against 0.343 average exact match over seven QA datasets
+(arXiv:2503.09516, Table 4). Loss normalization by the unmasked-token count is SimpleTIR Eq. 1
+(arXiv:2509.02479v2). Masking harness-limited rollouts while keeping their reward is DeepSWE §2.3 and
+SkyRL-Agent §4.2 (arXiv:2511.16108v1). Token counts in the sliders are illustrative, not from any source.</p>
+</footer>
+</div>
+
+<script>
+(function(){
+  var ids=["turns","model","obs","N","S","T","mask","base","filter","norm"];
+  var el={}; ids.forEach(function(i){el[i]=document.getElementById(i);});
+
+  function fmt(n){ return n.toLocaleString("en-US"); }
+
+  function render(){
+    var turns=+el.turns.value, mt=+el.model.value, ot=+el.obs.value;
+    var N=+el.N.value;
+    el.S.max=N; el.T.max=N;
+    var S=Math.min(+el.S.value,N);
+    var T=Math.min(+el.T.value,N-S);
+    el.S.value=S; el.T.value=T;
+
+    document.getElementById("vTurns").textContent=turns;
+    document.getElementById("vModel").textContent=fmt(mt);
+    document.getElementById("vObs").textContent=fmt(ot);
+    document.getElementById("vN").textContent=N;
+    document.getElementById("vS").textContent=S;
+    document.getElementById("vT").textContent=T;
+
+    var masked=el.mask.value==="1";
+    var totalModel=turns*mt;
+    // the last turn has no observation after it
+    var totalObs=(turns-1)*ot;
+    var total=totalModel+totalObs;
+    var gradTokens= masked ? totalModel : total;
+
+    // sequence bar
+    var seq=document.getElementById("seq"); seq.innerHTML="";
+    for(var t=0;t<turns;t++){
+      var m=document.createElement("div");
+      m.className="seg m"; m.style.flex=mt; m.title="turn "+(t+1)+" model action: "+fmt(mt)+" tokens";
+      m.textContent = (mt/total>0.07) ? "a"+(t+1) : "";
+      seq.appendChild(m);
+      if(t<turns-1 && ot>0){
+        var o=document.createElement("div");
+        o.className="seg o"; o.style.flex=ot; o.title="turn "+(t+1)+" observation: "+fmt(ot)+" tokens";
+        o.textContent=(ot/total>0.07)?"obs"+(t+1):"";
+        seq.appendChild(o);
+      }
+    }
+
+    var share=total? (totalObs/total*100):0;
+    var scale = el.norm.value==="seq" ? (gradTokens/total) : 1;
+    var kv=document.getElementById("kv");
+    kv.innerHTML=
+      "<div>sequence length<b>"+fmt(total)+" tokens</b></div>"+
+      "<div>environment share of the sequence<b>"+share.toFixed(1)+"%</b></div>"+
+      "<div>tokens that carry gradient<b>"+fmt(gradTokens)+"</b></div>"+
+      "<div>per-token gradient scale<b>"+scale.toFixed(3)+"&times;</b></div>";
+
+    // group
+    var rows=[];
+    for(var i=0;i<N;i++){
+      var kind = i<S ? "pass" : (i<S+T ? "limit" : "fail");
+      rows.push({id:i+1, kind:kind, r: kind==="pass"?1:0});
+    }
+    var mode=el.filter.value;
+    var active = rows.filter(function(r){ return !(mode==="drop" && r.kind==="limit"); });
+    var n=active.length;
+    var sum=active.reduce(function(a,r){return a+r.r;},0);
+    var mean= n? sum/n : 0;
+    var variance= n? active.reduce(function(a,r){return a+(r.r-mean)*(r.r-mean);},0)/n : 0;
+    var std=Math.sqrt(variance);
+
+    rows.forEach(function(r){
+      var inGroup = !(mode==="drop" && r.kind==="limit");
+      if(!inGroup){ r.adv=null; r.grad=0; r.dropped=true; return; }
+      var a;
+      if(el.base.value==="loo"){ a = n>1 ? r.r - (sum - r.r)/(n-1) : 0; }
+      else { a = std>1e-9 ? (r.r-mean)/std : 0; }
+      r.adv=a;
+      var trains = !(mode==="mask" && r.kind==="limit");
+      r.dropped = !trains;
+      r.grad = trains ? gradTokens : 0;
+    });
+
+    var tb=document.querySelector("#tbl tbody"); tb.innerHTML="";
+    var labels={pass:"verifier passed",fail:"verifier failed",limit:"hit a harness limit"};
+    rows.forEach(function(r){
+      var tr=document.createElement("tr");
+      if(r.dropped) tr.className="dropped";
+      var advTxt = r.adv===null ? "—" :
+        '<span class="'+(r.adv>1e-9?"pos":(r.adv<-1e-9?"neg":""))+'">'+(r.adv>=0?"+":"")+r.adv.toFixed(3)+"</span>";
+      tr.innerHTML="<td>"+r.id+"</td><td style='text-align:left'>"+labels[r.kind]+"</td><td>"+r.r+"</td><td>"+
+                   advTxt+"</td><td>"+fmt(r.grad)+"</td>";
+      tb.appendChild(tr);
+    });
+
+    var note=[];
+    note.push("Group used for the baseline: "+n+" rollouts, mean reward "+mean.toFixed(3)+
+              ", reward std "+std.toFixed(3)+".");
+    if(std<1e-9) note.push("Reward variance is zero, so every advantage is 0 and this group contributes nothing to the update — this is the group StarPO-S filters out first (arXiv:2504.20073 §4.2).");
+    if(mode==="drop" && T>0) note.push("Dropping without repair changed the baseline: every advantage in the group moved because the denominator changed. GLM-5 §4.1.2 pads the group by repeating valid samples when more than half are valid, and drops the whole group otherwise.");
+    if(mode==="train" && T>0) note.push("Harness-limited rollouts are being trained as failures, so the update is partly a measurement of the context limit and the step limit rather than of the policy.");
+    if(!masked) note.push("Observation tokens are in the loss: "+share.toFixed(1)+"% of the gradient trains the model to predict its own tool output.");
+    if(el.norm.value==="seq" && masked) note.push("Dividing by the full sequence length scales this rollout's gradient by "+scale.toFixed(3)+"; a rollout with shorter observations would get a different scale for reasons unrelated to its quality.");
+    document.getElementById("groupNote").textContent=note.join(" ");
+  }
+
+  ids.forEach(function(i){ el[i].addEventListener("input",render); el[i].addEventListener("change",render); });
+  render();
+})();
+</script>
+</body>
+</html>
