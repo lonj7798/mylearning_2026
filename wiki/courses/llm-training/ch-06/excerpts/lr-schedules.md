@@ -7,6 +7,8 @@ source_url: https://arxiv.org/abs/1706.03762 ; https://arxiv.org/abs/1608.03983 
 created_at: "2026-04-23"
 ---
 
+> Superseded by the 2026-09 revision of read.md; kept for history.
+
 # Excerpt: LR Schedules — scheduler-state resume and WSD fork-from-trunk semantics
 
 **Source library:** `wiki/raw-data/llm-training/classics/lr-schedules.md`

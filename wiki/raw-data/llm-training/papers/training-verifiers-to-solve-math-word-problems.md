@@ -1,53 +1,106 @@
-<!-- scope: outcome-based verifier ranking and the GSM8K dataset
+<!-- scope: outcome-supervised verifier ranking and the GSM8K dataset
      deps: [[ppo]]
      see-also: [[lets-verify]], [[reward-model-overoptimization]], [[best-of-n]]
 -->
 
 # Training Verifiers to Solve Math Word Problems
-- **Core Insight:** For verifiable reasoning tasks, generation quality is not enough; sampling many solutions and ranking them with a separate verifier scales better than plain finetuning.
-- **Guideline:** Train a separate verifier whenever answers are checkable: keep the generator high-coverage, sample many candidates at higher temperature, and use verifier ranking as cheap test-time compute before moving to RL.
-- **Authors:** Karl Cobbe, Vineet Kosaraju, Mohammad Bavarian, Mark Chen, Heewoo Jun, Lukasz Kaiser, Matthias Plappert, Jerry Tworek, Jacob Hilton, Reiichiro Nakano, Christopher Hesse, John Schulman
-- **Year:** 2021
+- **Core Insight:** On GSM8K, sampling 100 solutions from a finetuned generator and returning the one ranked highest by a separately trained verifier gives a gain approximately equivalent to a 30× increase in model size, and 6B verification slightly outperforms a finetuned 175B model on the full training set (§1, §6).
+- **Guideline:** When the final answer of a task can be checked automatically, train a separate verifier on sampled generator solutions and select among many samples at test time, and generate those samples from a generator finetuned for only 2 epochs, because test@100 coverage peaks within the first few epochs while test@1 keeps improving (§4.1, §4.2).
+- **Authors:** Karl Cobbe, Vineet Kosaraju, Mohammad Bavarian, Mark Chen, Heewoo Jun, Lukasz Kaiser, et al.
+- **Year:** 2021 (arXiv v1 2021-10; v2 2021-11)
 - **URL:** https://arxiv.org/abs/2110.14168
-- **Relevant topics:** verifiers, best-of-N, GSM8K, sample-and-rank, outcome supervision
+- **Source type:** paper
+- **Relevant topics:** verifiers, best-of-N, GSM8K, sample-and-rank, outcome supervision, coverage
 
 ## Abstract
-The paper introduces GSM8K, a diverse 8.5K-problem dataset for grade-school mathematical reasoning, and studies verification as an alternative to direct finetuning. A separate verifier judges whether sampled candidate solutions are correct, and the system outputs the highest-ranked candidate. The paper shows that this approach significantly improves performance and appears to scale better with data than plain finetuning.
+The paper introduces GSM8K, a dataset of 8.5K human-written grade-school math word problems with natural-language solutions, and shows that even the largest transformer models tested fail to reach high test performance on it. To improve performance, the authors train verifiers that judge the correctness of model completions. At test time many candidate solutions are generated and the highest-ranked one is selected. The paper reports that verification significantly improves performance on GSM8K and scales more effectively with increased training data than a finetuning baseline.
 
 ## Key Contributions
-- Releases **GSM8K**, which became the standard open benchmark for early LLM math reasoning.
-- Establishes the **sample-and-rank** recipe for reasoning: generator + verifier instead of generator-only.
-- Shows verification can deliver a gain comparable to a very large model-size increase.
-- Finds that **dropout** is a surprisingly strong regularizer for both finetuning and verification.
+- Releases **GSM8K**: 8.5K problems split into **7.5K training** and **1K test** problems, each solvable in **2 to 8 steps** using elementary arithmetic, with an estimated **under 2%** of problems containing breaking errors (§2).
+- Shows verification gives approximately the **same performance boost as a 30× model size increase** over the finetuning baseline, and that verification scales better with data (§1, §6).
+- Finds **residual dropout at 20%** improves both finetuning and verification, mitigating solution-level verifier overfitting (§5, Figure 8).
+- Shows **token-level verifiers** (a prediction after every token) outperform solution-level verifiers and overfit less, and that adding the language-modeling objective to the verifier is a strict improvement (§4.3, Figure 6).
 
 ## Key Figures/Tables to Study
-- **Figure 4:** the verification training pipeline; still the clearest picture of the recipe.
-- **Scaling plots for finetuning vs verification:** this is the main practical reason the paper mattered.
-- **Coverage discussion around test@100:** explains why the generator must not become too overconfident.
+- **Figure 2** — final test performance for 3B, 6B, 12B, 175B GPT-3 models across training-set sizes, 3 runs.
+- **Figure 3** — 6B test solve rate at 1 guess versus 100 guesses over 100 finetuning epochs; the coverage-versus-epochs tradeoff.
+- **Figure 4** — the verifier training pipeline.
+- **Figure 5** — finetuning versus verification at 6B and 175B across training-set sizes; verification uses 100 solutions per problem.
+- **Figure 6** — three verifier ablations: token-level vs solution-level, joint vs verification-only objective, generator size vs verifier size.
+- **Figure 7** — test performance as the number of ranked completions and the number of top samples allowed to vote vary.
+- **Table 1 (Appendix B)** — full hyperparameters.
 
 ## Technical Details
 
 ### Dataset
-- GSM8K contains **8.5K** high-quality grade-school math problems.
-- Problems are designed for **high linguistic diversity** and **moderate difficulty**, with natural-language solutions rather than just equations.
+- GSM8K problems were written by human workers rather than scraped, and were designed against three stated criteria: high linguistic diversity, moderate difficulty, and natural-language rather than pure-expression solutions (§2).
+- Calculation annotations are injected into the training set so a calculator can override sampling at test time; the annotations were generated by hard-coded logic plus a finetuned language model, not by human contractors (§4, §C).
 
-### Verification pipeline
-1. Finetune a generator on the training set for **2 epochs**.
-2. Sample **100 completions per training problem**.
-3. Label each completion as correct or incorrect using the final answer.
-4. Train a verifier for **1 epoch** on these labeled solutions.
-5. At test time, sample multiple candidates and return the one with the highest verifier score.
+### Verification pipeline (§4.2)
+1. Finetune a generator for **2 epochs** on the training set.
+2. Sample **100 completions per training problem** at temperature 0.7.
+3. Label each completion correct or incorrect **based solely on whether it reaches the correct final answer** (§4.2).
+4. Train the verifier for **1 epoch** on that labeled set, jointly with the language-modeling objective, predicting a scalar after every token.
+5. At test time, sample 100 completions per test problem, rank with the verifier, return the top-ranked one.
 
-### Important implementation detail
-- The paper stresses **coverage**: a generator that is too overfit gives poor sample diversity and hurts verification.
-- They also train the model to use **calculator annotations**, reducing arithmetic mistakes inside sampled solutions.
+The verifier's scalar head is a single bias and single gain parameter applied to the logits of the language model's final unembedding layer (§E).
 
-### Why this paper still matters
-- It is the clean precursor to PRMs, best-of-N reasoning, rejection-sampling finetuning, and RLVR.
-- It showed early that **extra test-time samples plus a good scorer** can beat more brute-force generator scaling.
+### Coverage
+- Test@1 improves approximately monotonically with finetuning epochs, but test@100 degrades sharply, because repeated passes make the model overconfident and reduce coverage of the solution space (§4.1). Generators used to produce verifier training data are therefore trained for 2 epochs (§4.1).
+- Removing intermediate steps and finetuning a 6B model to output the final answer directly drops test performance from **20.6% to 5.2%** (§4.1).
+- Verification is not beneficial on the smallest training sets; the gain appears once the dataset is sufficiently large (§4.2).
+- Using a large generator with a small verifier performs significantly better than a small generator with a large verifier (§4.3, Figure 6c).
+
+## Negative samples and negative feedback
+- **Where negatives come from:** the 100 sampled completions per training problem, labeled by final-answer match (§4.2). This is automatic outcome labeling, not human labeling.
+- **False-negative and false-positive rates:** not reported as a rate. The paper states that some solutions reach the correct answer through flawed reasoning, producing **false positives** (§4.2), and Appendix F shows examples of both a false negative and a false positive in verifier scoring (§F).
+- **How negatives are used:** as **discriminator labels only**. Incorrect completions are targets for the verifier's correctness head; they are never used as, or pushed away from, generator training targets. In the terms of the course taxonomy this is not a negative gradient on the policy.
+- **Reported effect:** the paper notes the verifier "trains on a large fraction of incorrect model-generated samples", which it offers as the reason verifiers start uncertain and gain confidence as a solution progresses (§F). The share of the overall gain attributable to incorrect samples is not measured.
+
+## Recipe ledger
+
+| Model (exact release) | Size | Stage | Setting | Value | Source location | Status | Evidence for this value |
+|---|---|---|---|---|---|---|---|
+| GPT-3 family finetune | 3B / 6B / 12B / 175B | SFT | batch size | 3.2 × 10⁴ tokens | arXiv:2110.14168v2 App. B Table 1 | verified 2026-09-18 | LR and batch swept an order of magnitude each way with no significant improvement (App. B) |
+| GPT-3 family finetune | all | SFT | max sample length | 400 tokens | App. B Table 1 | verified 2026-09-18 | no ablation reported |
+| GPT-3 family finetune | all | SFT | optimizer | Adam, β₁ = 0.9, β₂ = 0.95 | App. B Table 1 | verified 2026-09-18 | no ablation reported |
+| GPT-3 family finetune | all | SFT | LR schedule | linear decay to 0 | App. B Table 1 | verified 2026-09-18 | no ablation reported |
+| GPT-3 family finetune | all | SFT | dropout (default) | 0.0 | App. B Table 1 | verified 2026-09-18 | Figure 8 ablates 0 vs 0.2 |
+| Finetuning baseline | all | SFT | epochs | 20 | App. B Table 1 | verified 2026-09-18 | no ablation reported |
+| Finetuning baseline | all | SFT | sampling temperature | 0 (argmax) | App. B Table 1 | verified 2026-09-18 | chosen empirically for best test@1 (§4.1) |
+| Finetuning baseline | 3B / 6B / 12B / 175B | SFT | base LR α | 1.6e-5 / 1.2e-5 / 1.0e-5 / 6.0e-6 | App. B Table 1 | verified 2026-09-18 | swept (App. B) |
+| Finetuning baseline | all | SFT | learning rate | 0.1 × α | App. B Table 1 | verified 2026-09-18 | swept (App. B) |
+| Verification | all | reward-model | epochs | 2 for generator, 1 for verifier | App. B Table 1, §4.2 | verified 2026-09-18 | test@100 peaks within the first few epochs (§4.1) |
+| Verification | all | reward-model | sampling temperature | 0.7 | App. B Table 1 | verified 2026-09-18 | 1.0 had negligible effect in ablations (App. B) |
+| Verification | all | reward-model | learning rate | 1.0 × 10⁻⁵ | App. B Table 1 | verified 2026-09-18 | swept (App. B) |
+| Verification | all | reward-model | verifier loss | MSE, loss weight 1.0 | App. B Table 1 | verified 2026-09-18 | cross-entropy had negligible effect (App. B) |
+| Verification | all | reward-model | completions per problem | 100 train, 100 test | App. B Table 1 | verified 2026-09-18 | Figure 7a varies 25–3200 at test time |
+| Dropout experiments | 6B | SFT / reward-model | residual dropout | 20% | §5, App. B Table 1 note | verified 2026-09-18 | chosen by hyperparameter sweep (§5) |
+| Dropout experiments | 6B | pretrain | extra pretraining with dropout | required before finetuning | §5 | verified 2026-09-18 | GPT-3 models are not pretrained with dropout (§5) |
+| All | all | — | GPU hours, hardware, pretraining data | not reported | checked body and Appendices A–F | not reported | — |
+
+## Findings relevant to generality and distillation
+- **Generality.** The paper's only generality claim is scaling: verification scales more favorably with additional training data than finetuning (§4.2), and 175B verifiers surpass the finetuning baseline with fewer training problems than 6B verifiers do (§4.2). No cross-domain or held-out-task transfer is measured.
+- **Distillation.** Not addressed. Generator and verifier are separate networks, chosen to limit the generator's exposure to the verifier's training set (§4.2), not as a teacher-student setup.
 
 ## Connections
-- [[lets-verify]] upgrades verifier training from outcome labels to step-level process supervision.
-- [[reward-model-overoptimization]] is the cautionary follow-up: once you optimize against a scorer, its failures matter.
-- [[deepseek-r1]] and [[tulu-3]] inherit the same "verifiable tasks + extra compute + learned selection signal" philosophy.
-- [[best-of-n]] is the direct downstream systems pattern this paper helped normalize.
+- [[lets-verify]] replaces outcome labels with step-level process supervision, addressing the false positives noted in §4.2.
+- [[reward-model-overoptimization]] studies what happens when a policy is optimized against a learned scorer of this kind.
+- [[best-of-n]] is the inference-time selection pattern this paper uses.
+- [[deepseek-r1]] and [[tulu-3]] use verifiable-answer rewards; this card does not claim a direct lineage stated by any of those sources.
+
+## Verification
+- Checked on 2026-09-18 against: https://arxiv.org/abs/2110.14168 (arXiv v2, 18 Nov 2021)
+- Corrections to the previous card version:
+  - "Shows verification can deliver a gain comparable to a very large model-size increase" → the paper states approximately a 30× model size increase (§1 contribution 2, §6).
+  - "GSM8K contains 8.5K high-quality grade-school math problems" → 8.5K total, split 7.5K training and 1K test (§2).
+  - "Finds that dropout is a surprisingly strong regularizer" → 20% residual dropout, and for GPT-3 models it requires additional pretraining with dropout first (§5).
+  - "Train a verifier for 1 epoch on these labeled solutions" was correct but omitted that the verifier is token-level by default and trained jointly with a language-modeling objective, with MSE loss (§4.2, §4.3, App. B).
+  - "They also train the model to use calculator annotations" → the annotations were generated by hard-coded logic plus a finetuned language model, not by human contractors (§C).
+  - Missing **Source type** field added (paper).
+- Removed as unsupported by the source:
+  - "sampling many solutions and ranking them with a separate verifier scales better than plain finetuning" as a general claim about "verifiable reasoning tasks" — the paper measures GSM8K only and states it *expects* verification to scale to harder distributions (§6).
+  - "keep the generator high-coverage, sample many candidates at higher temperature, and use verifier ranking as cheap test-time compute before moving to RL" — the "before moving to RL" framing is not in the paper; it does not discuss RL.
+  - "It is the clean precursor to PRMs, best-of-N reasoning, rejection-sampling finetuning, and RLVR" and "extra test-time samples plus a good scorer can beat more brute-force generator scaling" — course commentary; the paper's own comparison is limited to the 30× statement.
+  - "Coverage discussion around test@100: explains why the generator must not become too overconfident" as a figure entry — replaced with the actual figure (Figure 3).
+- Not reported by the source: GPU hours or hardware, pretraining corpus details, false-negative/false-positive rates for the outcome labels, GSM8K annotator count or pay.

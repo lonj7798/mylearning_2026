@@ -3,158 +3,70 @@ chapter: ch-55
 course: llm-training
 phase: read
 excerpt_of: wiki/raw-data/llm-training/frameworks/verl-rollout.md
-source_url: https://github.com/verl-project/verl
+source_url: https://github.com/verl-project/verl/tree/753aed3e1c286ba6825a74342b28669e72c083ea
 created_at: "2026-04-23"
+updated_at: "2026-09-17"
 ---
 
-# Excerpt: verl Rollout — HFRollout + async vLLM server
+# Excerpt: verl rollout — HFRollout, the async vLLM server, and the agent loop
 
-**Source library:** `wiki/raw-data/llm-training/frameworks/verl-rollout.md`
-**Artifact:** `HFRollout.generate_sequences` (reference) + `vllm_async_server.py::generate` (production). The retired `ServerAdapter.generate_sequences` (PR #4411).
-
----
-
-## Why this excerpt exists in ch-55
-
-Ch-55 §4 compares the two rollout backends. Rollout dominates RL wall-clock (≥70% typical). The file path that actually runs at 70B scale is `vllm_async_server.py`; the file you read first for correctness debugging is `hf_rollout.py`. The third backend — sync SPMD vLLM — was retired by PR #4411 and now raises.
+**Canonical extract:** `wiki/raw-data/llm-training/frameworks/verl-rollout.md` (verified 2026-09-14 against commit `753aed3`). This file was rewritten in the 2026-09 revision to match that card.
 
 ---
 
-## HFRollout — the reference path
+## HFRollout (`hf_rollout.py` L39–177)
 
-```python
-# verl/workers/rollout/hf_rollout.py, lines 40-125 (HFRollout.generate_sequences, condensed)
-class HFRollout(BaseRollout):
-    def __init__(self, module: nn.Module, config):
-        super().__init__()
-        self.config = config
-        self.module = module
+Batched Hugging Face `generate` on the training module. Sampling arguments come from `meta_info` or config; greedy when `do_sample` is false, `val_kwargs` when validating (L64–91). FSDP modules are unsharded with `summon_full_params(writeback=False, recurse=False)`, the comment linking PyTorch issue #100069 for `recurse=False` (L108–110). Output is right-padded to `prompt_length + response_length` (L132–139). The module docstring records that the class hangs under FSDP HybridShard (L16–18).
 
-    def generate_sequences(self, prompts: DataProto) -> DataProto:
-        batch_size = prompts.batch.batch_size[0]
-        num_chunks = max(batch_size // self.config.get("micro_batch_size", batch_size), 1)
-        batch_prompts = prompts.chunk(chunks=num_chunks)
-        output = [self._generate_minibatch(p) for p in batch_prompts]
-        return DataProto.concat(output)
+## Async vLLM server (`vllm_async_server.py` L556–759)
 
-    @torch.no_grad()
-    def _generate_minibatch(self, prompts: DataProto) -> DataProto:
-        do_sample = prompts.meta_info.get("do_sample", self.config.do_sample)
-        temperature = prompts.meta_info.get("temperature", self.config.temperature)
-        response_length = prompts.meta_info.get("response_length", self.config.response_length)
-        top_p = prompts.meta_info.get("top_p", self.config.get("top_p", 1.0))
-        top_k = max(0, prompts.meta_info.get("top_k", self.config.get("top_k", 0)))
+Token ids in, `TokenOutput` out (token ids, log-probs, routed experts, stop reason).
 
-        kwargs = ({"do_sample": False, "num_beams": 1} if not do_sample
-                  else {"do_sample": True, "num_beams": 1, "top_p": top_p, "top_k": top_k,
-                        "temperature": temperature, "num_return_sequences": 1})
-        generation_config = GenerationConfig(**kwargs)
+1. PD-disaggregated prefill servers forward to a decode peer (L573–583).
+2. `max_possible_tokens = max_model_len − len(prompt_ids)`; below 1 raises `ValueError` (L591–597).
+3. `max_tokens` from the request, else `max_new_tokens`, else `min(response_length, prompt_length + response_length − len(prompt_ids))` (L600–611).
+4. Clamped to `[1, max_possible_tokens]` (L615–619). The clamp reduces `max_tokens` without a warning; the assert that follows cannot fail after it.
+5. `logprobs` is 0 when log-probs are requested and None otherwise; the sampled token's log-prob is read per position (L620, L711–714).
+6. A LoRA request is attached when `lora_as_adapter` (L241–245, L650–659).
+7. Requests wait while `_submission_paused` is set (L662–665), then pass `priority` to `engine.generate` (L668–674).
+8. Aborted requests return empty token ids with `stop_reason="aborted"` (L691–701).
 
-        idx = prompts.batch["input_ids"]
-        attention_mask = prompts.batch["attention_mask"]
-        eos_token_id = prompts.meta_info["eos_token_id"]
-        pad_token_id = prompts.meta_info["pad_token_id"]
+`priority` is a per-sample index `np.arange(len(prompts))` assigned before chunking (`agent_loop.py` L1210–1214), not a staleness signal.
 
-        self.module.eval()
-        param_ctx = contextlib.nullcontext()
-        if isinstance(self.module, FSDP):
-            param_ctx = FSDP.summon_full_params(self.module, writeback=False, recurse=False)
-        with param_ctx, torch.autocast(device_type=get_device_name(), dtype=torch.bfloat16):
-            output = self.module.generate(
-                input_ids=idx, attention_mask=attention_mask,
-                do_sample=do_sample, max_new_tokens=response_length,
-                eos_token_id=eos_token_id, pad_token_id=pad_token_id,
-                generation_config=generation_config,
-                output_scores=False, return_dict_in_generate=True, use_cache=True,
-            )
-        seq = output.sequences
-        # ... pad/truncate to response_length, build response mask, return DataProto
-```
+## Weight synchronization (L932–1003)
 
-**Why this is correctness-only:** `FSDP.summon_full_params(..., recurse=False)` unshards every parameter to every rank — fine on 1B × 1 GPU, unusable at 70B × 64 GPUs. Logprob parity with training is exact because the same forward pass is used. Use it to localize numerical divergences between training and production rollout.
+`abort_all_requests` closes the submission gate, waits up to 60 s for in-flight admissions, then calls `pause_generation(wait_for_inflight_requests=False, clear_cache=...)`. The comment states that weight updates must not proceed unless every in-flight request was aborted and old-weight caches cleared (L989–991). `resume_generation` reopens the gate.
 
----
+## SPMD retirement
 
-## Async vLLM server — the production path
+`ServerAdapter.generate_sequences` raises `NotImplementedError`: "The vLLM SPMD mode was retired in PR #4411" (`vllm_rollout.py` L325–341). Config default `mode: async` (`rollout.yaml` L8). `ServerAdapter` still implements `update_weights` (L209–253); it is the server-mode adapter, not the deleted SPMD backend.
 
-```python
-# verl/workers/rollout/vllm_rollout/vllm_async_server.py, ~lines 440-525
-async def generate(self, prompt_ids, sampling_params, request_id,
-                   image_data=None, video_data=None, priority=0) -> TokenOutput:
-    prompt_ids = normalize_token_ids(prompt_ids)
-    max_possible_tokens = self.config.max_model_len - len(prompt_ids)
-    if   "max_tokens"     in sampling_params: max_tokens = sampling_params.pop("max_tokens")
-    elif "max_new_tokens" in sampling_params: max_tokens = sampling_params.pop("max_new_tokens")
-    else: max_tokens = min(
-        self.config.response_length,
-        self.config.prompt_length + self.config.response_length - len(prompt_ids),
-    )
-    max_tokens = max(0, min(max_tokens, max_possible_tokens))
-    sampling_params["logprobs"] = 0 if sampling_params.pop("logprobs", False) else None
-    sampling_params.setdefault("repetition_penalty", self.config.get("repetition_penalty", 1.0))
-    sampling_params = SamplingParams(max_tokens=max_tokens, **sampling_params)
+## Placement modes (`replica.py` L54–66)
 
-    prompt = TokensPrompt(prompt_token_ids=prompt_ids, multi_modal_data=multi_modal_data)
-    lora_request = LoRARequest(VLLM_LORA_NAME, VLLM_LORA_INT_ID, VLLM_LORA_PATH) \
-                   if self.lora_as_adapter and VLLM_LORA_INT_ID in await self.engine.list_loras() \
-                   else None
-    generator = self.engine.generate(
-        prompt=prompt, sampling_params=sampling_params,
-        request_id=request_id, lora_request=lora_request, priority=priority,
-    )
-    final_res = None
-    async for output in generator:
-        final_res = output
-    token_ids = final_res.outputs[0].token_ids
-    log_probs = ([logprobs[token_ids[i]].logprob
-                  for i, logprobs in enumerate(final_res.outputs[0].logprobs)]
-                 if sampling_params.logprobs is not None else None)
-    return TokenOutput(token_ids=token_ids, log_probs=log_probs, ...)
-```
+HYBRID: one process, shared GPUs, weight sync. COLOCATED: same placement group, separate process, no weight sync (LLM-as-judge). STANDALONE: separate GPUs, off-policy.
 
-**Six production levers** from the source's "What to notice":
+## Agent loop
 
-1. **Tokens-in-tokens-out.** No tokenizer in the server; prompts arrive as `prompt_ids`, responses come back as token ids + logprobs. Makes multi-turn tool-use loops simple.
-2. **`priority`.** Per-request ordering; lets the trainer force newly-re-weighted requests ahead of stragglers. The knob that enables partial-rollout RL (verl's "continuous batching RL" blog).
-3. **3-layer `max_tokens` clamp.** User override → global `response_length` → context-window residual. `assert max_tokens <= max_possible_tokens` avoids silent truncation.
-4. **LoRA as adapter.** Broadcast only adapter weights (MB, not GB); engine loads them as a vLLM `LoRARequest`.
-5. **Paused-state weight broadcast** (~line 628). Blocks new generates and waits for in-flight to drain before a weight update — correctness fix for async RL.
-6. **FSDP path requires `summon_full_params`** only on `HFRollout`; the async server keeps its own sharded weights, broadcast from the trainer.
+`AgentLoopBase.run` returns `AgentLoopOutput(prompt_ids, response_ids, response_mask)`; mask 1 = model-generated token, 0 = tool-response token (`agent_loop.rst` L33–72). `align_response_metadata` gives builder-inserted boundary tokens mask 0, assistant tokens mask 1 with rollout log-probs, and tool or user tokens mask 0 with log-prob 0.0 (`continuous_token.py` L390–413). `ToolAgentLoop` is a state machine PENDING → GENERATING → PROCESSING_TOOLS → TERMINATED (`tool_agent_loop.py` L48–52, L166–178), terminating at `response_length` or the turn limits (L282–287). Defaults: `multi_turn.enable: False`, `max_parallel_calls: 1`, `max_tool_response_length: 256`, `tool_response_truncate_side: middle`, `format: hermes`, `tokenization_sanity_check_mode: strict` (`rollout.yaml` L183–230). Every turn appends to one token sequence (L273, L388); nothing resets or summarizes earlier turns.
 
----
+The docs report that applying the chat template to the final message list "make PPO training not even converged in single-turn", because tool parsers rewrite assistant content and decode-then-encode is not always invertible (`agent_loop.rst` L155–182).
 
-## The retired SPMD path — PR #4411
+## Timing (fully_async_policy/README.md L333–369)
 
-```python
-# verl/workers/rollout/vllm_rollout/vllm_rollout.py, ~lines 198-214
-class ServerAdapter:
-    def generate_sequences(self, prompts):
-        raise NotImplementedError(
-            "SPMD sync vLLM mode was retired in PR #4411; use AsyncLLMEngine via "
-            "vllm_async_server.py"
-        )
-```
+128 H20 GPUs, Qwen2.5-Math-7B, DAPO, vLLM + FSDP2, 28K max response, `rollout.n` 16: 400 steps took 1d 16h 48m colocated against 17h 22m fully async at 64:64 (2.35×). AIME-2024 acc mean@1 last 0.2958 vs 0.3094; max 0.3573 vs 0.3521. In the colocated baseline `gen` is 177.85 s of a 356.30 s step (L360).
 
-Why retired: SPMD colocated the engine with the trainer → no per-request priority (no partial rollout), no paused-state weight broadcast (decoding could run on mixed weights), and throughput hit a ceiling at ~2× HFRollout. Async lifts all three limits.
+## Corrections to the previous excerpt version
 
----
-
-## Comparison table (ch-55 §4.3 verbatim)
-
-| Concern                | HFRollout                  | async vLLM server                    |
-|------------------------|----------------------------|--------------------------------------|
-| Throughput (7B, 8×H100)| ~1× (baseline)             | ~5–8× (continuous batching)          |
-| FSDP aware             | No (`summon_full_params`)  | Yes (separate worker, own weights)   |
-| Partial rollout        | No                         | Yes (via `priority`)                 |
-| Weight broadcast       | In-place                   | Paused-state + IS correction needed  |
-| Train-rollout logprob  | Exact (same forward)       | Drift (`vllm_kl` metric needed)      |
-| Multi-turn tool use    | Awkward (retokenize)       | Natural (tokens-in-tokens-out)       |
-| Use it when            | Debugging numerical bug    | Everything else                      |
-
----
+1. "Rollout dominates RL wall-clock (≥70% typical)" → the only number in this artifact is 177.85 s of 356.30 s, about 50%, for one colocated 128-GPU configuration.
+2. "`ServerAdapter` … the SPMD backend, now retired" → `ServerAdapter` is the server-mode adapter; the SPMD implementation was deleted and the method now raises.
+3. Throughput "~5–8×" for async vLLM against HFRollout — removed; no source.
+4. "Per-request priority lets the trainer force newly-weighted requests ahead of stragglers" → priority is a per-sample index.
+5. "Paused-state weight broadcast (≈ line 628)" → in-flight requests are aborted, caches cleared, and new submissions parked until `resume_generation` (L932–1003).
+6. "The async server never touches the tokenizer" → `generate` calls a VL token dedup with the processor (L633).
+7. "HF `.generate` isn't FSDP-aware" — removed as unsupported; the documented limitation is the HybridShard hang.
 
 ## Connections
 
-- [[async-rollout]] — HybridFlow architecture, IMPALA lineage, IS correction on bounded-k staleness.
-- [[verl-ppo-loss]] — `rollout_is_weights` argument is what reconciles the async path with the PPO ratio.
-- OpenRLHF equivalent: `openrlhf/trainer/ppo_trainer_async.py` — Ray `Queue` + `vllm_lock` instead of priority + paused-state.
+- [[async-rollout]] — the design this code implements.
+- [[verl-ppo-loss]], [[verl-grpo]] — consumers of `response_mask`.
+- [[gigpo-verl-agent]] — a verl fork that replaces this agent loop with a step-wise paradigm.

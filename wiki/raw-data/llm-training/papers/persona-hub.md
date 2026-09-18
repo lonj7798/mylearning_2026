@@ -1,59 +1,89 @@
-<!-- scope: 1B-persona-conditioned synthetic data pipeline for scaling diversity
+<!-- scope: Persona Hub (Tencent AI Lab, 2024): 1,015,863,523 web-derived personas used as a diversity variable in data-synthesis prompts
      deps: [[self-instruct]]
-     see-also: [[magpie]], [[evol-instruct]], [[phi-textbooks]]
+     see-also: [[magpie]], [[evol-instruct]], [[glan]], [[allenai-tulu-synth]], [[system-prompt-diversity]]
 -->
 
 # Scaling Synthetic Data Creation with 1,000,000,000 Personas
-- **Core Insight:** A persona bank is a diversity primitive: attach a persona to a prompt and the teacher LLM leaves its mean-response mode, producing output that tracks the persona but remains less similar than the persona itself.
-- **Guideline:** When synthetic data collapses onto one style, build or borrow a broad persona collection, dedup it aggressively, and use persona-conditioned zero-shot or few-shot prompts to steer task, topic, and instruction diversity.
+- **Core Insight:** Adding a persona to a data-synthesis prompt changes what the LLM creates; with 1.07M GPT-4-created, persona-conditioned math problems (no MATH instances used), a fine-tuned Qwen2-7B reaches 64.9% on MATH (§4.1.2, Table 2).
+- **Guideline:** When synthetic prompts need more diversity than a seed corpus or a key-point list provides, condition the synthesis prompt on sampled, deduplicated personas; expect generated outputs to be less similar to each other than their personas are, and more similar when the prompt adds topic constraints (§4.1.2, Fig. 10).
 - **Authors:** Tao Ge, Xin Chan, Xiaoyang Wang, Dian Yu, Haitao Mi, Dong Yu (Tencent AI Lab Seattle)
-- **Year:** 2024
+- **Year:** 2024 (arXiv v1 2024-06; technical report; v3 2025-05)
 - **URL:** https://arxiv.org/abs/2406.20094
-- **Relevant topics:** persona-conditioned synthesis, diversity control, prompt steering, math data, instructions, NPCs, tools
+- **Source type:** paper (technical report)
+- **Relevant topics:** persona-conditioned synthesis, prompt diversity, deduplication, synthetic math data, instruction synthesis, distillation risk
 
 ## Abstract
-Persona-Hub proposes a persona-driven synthesis method for scaling diverse synthetic data. It automatically constructs Persona Hub from web text with Text-to-Persona plus Persona-to-Persona expansion, then deduplicates via MinHash and embedding similarity to reach 1,015,863,523 personas. Those personas act as perspective carriers: the same generation prompt can produce math problems, user instructions, knowledge-rich text, NPCs, and tools. On math, 1.07M persona-synthesized examples fine-tuned into Qwen2-7B reach 64.9% on MATH, matching gpt-4-turbo-preview at 7B scale.
+The report proposes persona-driven data synthesis: a persona description is inserted into a data-synthesis prompt so that the LLM
+creates data from that persona's perspective. To scale this, the authors build Persona Hub, a collection of about 1 billion personas
+curated automatically from web data (about 13% of the world population). They demonstrate use cases for math and logical reasoning
+problems, instructions (user prompts), knowledge-rich texts, game NPCs, and tools (functions). A disclaimer states that querying a
+target LLM with such inputs at scale risks replicating its capabilities, citing a 7B model reaching 65% on MATH (abstract).
 
 ## Key Contributions
-- Persona collection at billion scale: 1,015,863,523 personas after dedup and low-quality filtering.
-- Two collection paths:
-  - Text-to-Persona: infer who would read, write, like, or dislike a piece of web text.
-  - Persona-to-Persona: expand from existing personas through relationship prompts, repeated six times.
-- Three prompting modes for synthesis: zero-shot, few-shot, and persona-enhanced few-shot.
-- Release includes 200K personas plus 50K math, 50K logical reasoning, 50K instructions, 10K knowledge-rich texts, 10K NPCs, and 5K tools.
-- Persona similarity correlates with output similarity, but the generated problems remain less similar than the personas themselves.
+- Two persona-collection methods: Text-to-Persona and Persona-to-Persona (§2.1, §2.2).
+- A deduplicated collection of 1,015,863,523 personas (§2.3).
+- Three prompting methods: zero-shot, few-shot, and persona-enhanced few-shot (§3, Fig. 6).
+- A math-synthesis evaluation with an out-of-distribution test on MATH (§4.1.2, Tables 1-2).
+- Initial release: 200,000 personas; 50,000 math problems; 50,000 logical reasoning problems; 50,000 instructions; 10,000 knowledge-rich texts; 10,000 game NPCs; 5,000 tools. v3 adds 370,000,000 expert personas, marked "New in Feb 2025" (§1).
 
 ## Key Figures/Tables to Study
-- Figure 3 and Figure 5: Text-to-Persona and Persona-to-Persona.
-- Figure 6: zero-shot vs few-shot vs persona-enhanced few-shot.
-- Figure 10: output similarity as a function of persona similarity.
-- Table 1 and Table 2: Qwen2-7B gains on synthetic test and MATH.
+- Fig. 3 and Fig. 5: Text-to-Persona and Persona-to-Persona prompts.
+- Fig. 6: zero-shot, few-shot, and persona-enhanced few-shot prompts.
+- Table 1 (in-distribution synthetic test) and Table 2 (MATH).
+- Fig. 9: MATH accuracy of Qwen2-7B as the number of synthetic training instances grows.
+- Fig. 10: similarity of generated math problems versus similarity of the personas.
 
-## Synthesis Pipeline (REQUIRED - be concrete)
-- **Seed input:** massive web text from RedPajama v2 for persona mining; no benchmark instances are used during math synthesis.
-- **Persona construction:** infer personas from text with prompts like "Who is likely to read/write/like/dislike this text?" then expand via relationship-based Persona-to-Persona prompts.
-- **Diversity control:** dedup with 1-gram MinHash at 0.9 similarity, then embedding cosine filtering at 0.9; tighten the threshold if the downstream target is diversity rather than count.
-- **Generation step(s):**
-  - Zero-shot: persona + task specification only.
-  - Few-shot: add demonstrations.
-  - Persona-enhanced few-shot: derive personas for each demonstration, then condition on those personas too.
-  - For math, the paper scales the synthetic task set to more than a million examples and reports generation with public LLMs such as GPT-4, Llama-3, and Qwen.
-- **Filtering/rescoring:** heuristic low-quality filtering; for math, expert audits report 96.5% validity on a 200-problem sample.
-- **Output shape:** 1B personas internally; public release of 200K personas and the synthetic samples above. The math training split keeps 1.07M examples after holding out 20K for synthetic evaluation.
-- **Teacher model(s):** publicly available LLMs including GPT-4, Llama-3, and Qwen.
-- **Cost estimate:** not fully disclosed; the math scaling experiment is explicitly constrained by GPT-4 API cost.
+## Technical Details
+**Persona construction.**
+1. Text-to-Persona: prompt an LLM with a web text and ask "Who is likely to [read|write|like|dislike|...] the text?"; the prompt asks for descriptions as specific as possible (§2.1, Fig. 3).
+2. Persona-to-Persona: ask "Who is in close relationship with the given persona?" to reach personas with low web visibility; six iterations of relationship expansion are run for each Text-to-Persona persona (§2.2, Fig. 5).
+3. Input corpus: Text-to-Persona is run on RedPajama v2 (§2.3).
+4. MinHash deduplication on 1-gram features, signature size 128, similarity threshold 0.9 (§2.3).
+5. Embedding deduplication with a text embedding model (example given: OpenAI text-embedding-3-small); personas with cosine similarity above 0.9 are removed. The authors state the threshold can be lowered (example 0.5) when fewer instances but higher diversity are needed (§2.3).
+6. Simple heuristic filters remove low-quality persona descriptions (§2.3).
+- Models: "We mainly use publicly available LLMs such as GPT-4, Llama-3 and Qwen" (footnote 2). Figure prompts are simplified, not the exact prompt strings (§1 note).
 
-## Quality / Diversity Evaluation
-- Persona-conditioned math problems are semantically related to the persona but not copies of it; more specific constraints further tighten the output distribution.
-- Qwen2-7B fine-tuned on 1.07M persona-synthesized math problems reaches 79.4% on the synthetic test set and 64.9% on MATH.
-- The paper positions personas as a general-purpose diversity handle for text, instruction, and role-play generation, not just a math trick.
+**Math use case (§4.1.2).**
+- 1.09M personas; zero-shot prompting with GPT-4 creates 1.09M problems. No instances from benchmarks such as MATH are used.
+- Solutions are generated by gpt-4o with the "You are a helpful assistant." system message.
+- 20K problems are held out as a synthetic test set; 1.07M are used for training.
+- The synthetic test keeps only instances where at least two of three solutions agree (gpt-4o assistant, gpt-4o program-of-thought, gpt-4-turbo assistant): 11.6K instances remain.
+- Answer checking: OpenAI simple-evals protocol for MATH; Llama-3-70B-Instruct as equality checker on the synthetic test.
+- Evaluation uses greedy decoding. Fine-tuned Qwen2-7B: 79.4% on the synthetic test (Table 1); 64.9% on MATH (Table 2), versus 64.5% for gpt-4-turbo-0125-preview and 64.3% for gpt-4-turbo-1106-preview (Table 2).
+- Validity audit: two math experts judge 200 challenging problems; 7 are invalid, a 96.5% validity rate (§4.1.2).
+- Similarity study: 100 persona pairs at each persona similarity of 0.4, 0.6, and 0.8 (±0.01); one problem per persona with temperature 0; similarity measured with text-embedding-3-small (dim 512) (§4.1.2, footnote 7).
 
-## Risks + Gotchas
-- Persona outputs are still model-inferred identities, not ground-truth demographics.
-- The released dataset is research-oriented and may contain biases or inaccuracies.
-- Public release is intentionally partial because the authors explicitly call out misuse risk at billion scale.
+**Other use cases.** Instructions use zero-shot or persona-enhanced 2-shot prompts with WildChat demonstrations whose personas are inferred by Text-to-Persona (§4.3, Fig. 13). Knowledge-rich texts are written as Quora articles by a persona (§4.4). Tools are interface definitions that an LLM can later implement as code (§4.6, Figs. 17-18).
+
+## Recipe ledger
+| Model (exact release) | Size | Stage | Setting | Value | Source location | Status | Evidence for this value |
+|---|---|---|---|---|---|---|---|
+| Qwen2-7B fine-tuned on persona math (not released under a name) | 7B | distill-SFT | base model | Qwen2-7B | arXiv:2406.20094v3 §4.1.2 | verified 2026-09-14 | no ablation reported |
+| same | 7B | distill-SFT | training examples | 1.07M problems (1.09M created, 20K held out) | §4.1.2 | verified 2026-09-14 | Fig. 9 scales the instance count; no numbers given in text |
+| same | 7B | distill-SFT | problem generator; prompting | GPT-4; zero-shot persona prompt | §4.1.2 | verified 2026-09-14 | no ablation reported |
+| same | 7B | distill-SFT | solution generator | gpt-4o (assistant system message) | §4.1.2 | verified 2026-09-14 | no ablation reported |
+| same | 7B | distill-SFT | learning rate, epochs, batch size, sequence length, loss masking | not reported | checked body, footnotes, figures, tables of v3 | not reported | — |
+
+## Findings relevant to generality, distillation
+- **Out-of-distribution measurement.** MATH is treated as out-of-distribution because no MATH instances are used for synthesis or training (§4.1.2). The authors state the in-distribution result (79.4%) "should be taken as a reference only", because synthetic answers are not fully reliable and their model may be the only one trained on in-distribution data (§4.1.2).
+- **Diversity.** Similarity between generated problems is correlated with, and lower than, persona similarity. Adding a topic constraint (finance and probability) raises problem similarity (Fig. 10b). At persona similarity 0.9, most problem similarities for gpt-4o and gpt-35-turbo fall between 0.6 and 0.75 (Fig. 10c).
+- **Distillation risk.** §5.2.1 states that persona-synthesized instructions covering most use cases could extract and replicate a target LLM's knowledge and capabilities; the authors cite the math experiment as validation.
+- **Stated limits.** Hallucination limits the breadth and quality of the synthetic data (§5.1.3). Persona descriptions cover major aspects only and lack fine-grained details (§6). Diverse personas may make machine-generated text harder to detect and may worsen data contamination (§5.2.2).
 
 ## Connections
-- Complements [[magpie]]: Magpie mines prompts; Persona-Hub expands perspectives.
-- Similar goal to [[evol-instruct]], but the diversification axis is "who asks / who writes" rather than instruction complexity.
-- Useful when you need breadth in SFT or preference-prompt generation but do not have a strong seed corpus.
+- [[self-instruct]] — an instance-driven method; §1 argues such methods are limited by the seed corpus.
+- [[glan]] — a key-point-driven method; §1 argues comprehensive key-point lists are hard to curate outside narrow domains.
+- [[magpie]], [[evol-instruct]] — other prompt-diversification methods in the library.
+- [[allenai-tulu-synth]], [[tulu-3-sft-mix]] — Tülu 3 persona-conditioned prompt synthesis.
+- [[apigen-mt]], [[system-prompt-diversity]] — cards that use persona collections as inputs.
+
+## Verification
+- Checked on 2026-09-14 against: https://arxiv.org/abs/2406.20094 (PDF v3, 2025-05-08).
+- Corrections to the previous card version:
+  - "For math, … generation with public LLMs such as GPT-4, Llama-3, and Qwen" → math problems were created by GPT-4 with zero-shot prompting and solutions by gpt-4o; footnote 2 names GPT-4, Llama-3, and Qwen as the models used across experiments (§4.1.2, footnote 2).
+  - "Dedup with 1-gram MinHash at 0.9" → also signature size 128; embedding filter removes cosine similarity greater than 0.9 (§2.3).
+  - "Filtering/rescoring: heuristic low-quality filtering" was placed under generation → the heuristic filter applies to persona descriptions (§2.3); the math test set is filtered by solution agreement (11.6K of 20K) (§4.1.2).
+  - Release list now includes the v3 addition of 370,000,000 expert personas (§1).
+  - "Diversity control … tighten the threshold if the downstream target is diversity rather than count" → restated with the paper's example (0.5) (§2.3).
+- Removed as unsupported by the source: "Cost estimate: the math scaling experiment is explicitly constrained by GPT-4 API cost"; "Public release is intentionally partial because the authors explicitly call out misuse risk"; "The released dataset is research-oriented and may contain biases or inaccuracies"; "Persona outputs are model-inferred identities, not ground-truth demographics"; "a teacher LLM leaves its mean-response mode" (metaphor, not a paper claim); "Useful when you … do not have a strong seed corpus" (connection clause without source support).
+- Not reported by the source: SFT hyperparameters for Qwen2-7B; number of seeds; API cost; the exact prompt strings.

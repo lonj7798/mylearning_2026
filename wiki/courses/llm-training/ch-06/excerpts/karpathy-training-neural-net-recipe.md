@@ -7,6 +7,8 @@ source_url: https://karpathy.github.io/2019/04/25/recipe/
 created_at: "2026-04-23"
 ---
 
+> Superseded by the 2026-09 revision of read.md; kept for history.
+
 # Excerpt: Karpathy's Recipe — "training fails silently, so instrument everything and verify resumes bit-exactly"
 
 **Source library:** `wiki/raw-data/llm-training/blogs/karpathy-training-neural-net-recipe.md`

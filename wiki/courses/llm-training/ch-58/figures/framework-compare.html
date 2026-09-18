@@ -2,350 +2,281 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>Framework Recommender - verl / OpenRLHF / TRL</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Stack selection and instrumentation — ch-58</title>
 <style>
-  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-         max-width: 1180px; margin: 1.6em auto; padding: 0 1em; color: #1f1f1f;
-         background: #fafafa; }
-  h1 { font-size: 1.3em; margin-bottom: 0.25em; }
-  .subtitle { color: #5a5a5a; margin-top: 0; font-size: 0.92em; line-height: 1.5; }
-  .layout { display: grid; grid-template-columns: 340px 1fr; gap: 1.2em; margin-top: 1em; }
-  .panel { border: 1px solid #dcdcdc; border-radius: 6px; background: #fff;
-           padding: 0.9em 1em; }
-  h2 { font-size: 1.0em; margin: 0 0 0.6em 0; color: #2b2b2b;
-       border-bottom: 1px solid #ececec; padding-bottom: 0.3em; }
-  .ctrl { margin-bottom: 0.8em; }
-  .ctrl label { display: block; font-family: 'SF Mono', Menlo, monospace;
-                font-size: 0.82em; color: #333; margin-bottom: 0.2em; }
-  .ctrl select, .ctrl input[type=number] {
-    width: 100%; font-family: 'SF Mono', Menlo, monospace; font-size: 0.88em;
-    padding: 0.28em 0.4em; border: 1px solid #c9c9c9; border-radius: 4px;
-    background: #fcfcfc; }
-  .toggle-row { display: flex; flex-wrap: wrap; gap: 0.35em 0.6em; }
-  .toggle-row label { font-size: 0.82em; color: #333; display: inline-flex;
-                      align-items: center; gap: 0.3em; }
-  .toggle-row input[type=checkbox] { accent-color: #2e5aa8; }
-  .pick { font-family: 'SF Mono', Menlo, monospace; font-size: 1.1em;
-          padding: 0.5em 0.7em; border-radius: 5px; background: #eef3fb;
-          border-left: 4px solid #2e5aa8; color: #1d3a6e; margin-bottom: 0.6em; }
-  .pick .fw { font-weight: bold; font-size: 1.25em; color: #204080; }
-  .why { font-size: 0.88em; color: #2a2a2a; line-height: 1.55; margin-top: 0.2em; }
-  .why ul { margin: 0.3em 0 0.3em 1.1em; padding: 0; }
-  .why li { margin-bottom: 0.25em; }
-  .alt { margin-top: 0.8em; font-size: 0.82em; color: #5a6a80;
-         padding: 0.4em 0.55em; background: #fafafa; border: 1px dashed #d0d0d0;
-         border-radius: 4px; }
-  .matrix { font-family: 'SF Mono', Menlo, monospace; font-size: 0.78em;
-            width: 100%; border-collapse: collapse; margin-top: 0.5em; }
-  .matrix th, .matrix td { border: 1px solid #e0e0e0; padding: 0.28em 0.42em;
-                           text-align: left; vertical-align: top; }
-  .matrix th { background: #f3f5f9; color: #253a5c; font-weight: 600; }
-  .matrix td.cite { color: #5a6a80; font-size: 0.9em; }
-  .row-hit { background: #fff8ea; }
-  .row-key { background: #eaf3ff; }
-  code { background: #eef; padding: 1px 4px; border-radius: 3px;
-         font-family: 'SF Mono', Menlo, monospace; font-size: 0.85em; }
-  .hint { font-size: 0.78em; color: #666; margin-top: 0.35em; }
-  .legend { font-size: 0.78em; color: #666; margin-top: 0.6em; }
+  :root {
+    --bg: #fafafa; --panel: #ffffff; --ink: #1f1f1f; --muted: #5a5a5a;
+    --line: #dcdcdc; --rule: #ececec; --accent: #2e5aa8; --accent-bg: #eef3fb;
+    --warn: #8a5a00; --warn-bg: #fff6e5; --ok: #1f6b3a; --ok-bg: #eaf5ee;
+    --mono: 'SF Mono', Menlo, Consolas, monospace;
+  }
+  * { box-sizing: border-box; }
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+         max-width: 1120px; margin: 0 auto; padding: 1.6em 16px; color: var(--ink);
+         background: var(--bg); line-height: 1.55; }
+  h1 { font-size: 1.28em; margin: 0 0 0.2em 0; }
+  .subtitle { color: var(--muted); margin: 0 0 1.2em 0; font-size: 0.9em; }
+  .layout { display: grid; grid-template-columns: 330px 1fr; gap: 1.1em; align-items: start; }
+  @media (max-width: 820px) { .layout { grid-template-columns: 1fr; } }
+  .panel { border: 1px solid var(--line); border-radius: 6px; background: var(--panel); padding: 0.9em 1em; }
+  h2 { font-size: 0.98em; margin: 0 0 0.6em 0; border-bottom: 1px solid var(--rule); padding-bottom: 0.3em; }
+  .q { margin-bottom: 0.9em; }
+  .q p { margin: 0 0 0.35em 0; font-size: 0.87em; }
+  .qid { font-family: var(--mono); font-size: 0.8em; color: var(--accent); }
+  .btns { display: flex; gap: 0.4em; }
+  button { font-family: var(--mono); font-size: 0.84em; padding: 0.3em 0.9em;
+           border: 1px solid #c2c2c2; border-radius: 4px; background: #f6f6f6;
+           color: var(--ink); cursor: pointer; }
+  button[aria-pressed="true"] { background: var(--accent-bg); border-color: var(--accent); color: #1d3a6e; }
+  button:disabled { opacity: 0.45; cursor: default; }
+  .reset { margin-top: 0.4em; }
+  .leaf { font-family: var(--mono); font-size: 1.02em; padding: 0.55em 0.75em; border-radius: 5px;
+          background: var(--accent-bg); border-left: 4px solid var(--accent); color: #1d3a6e; margin-bottom: 0.7em; }
+  .leaf.pending { background: #f3f3f3; border-left-color: #bbb; color: var(--muted); }
+  .path { font-family: var(--mono); font-size: 0.8em; color: var(--muted); margin-bottom: 0.8em; }
+  ul { margin: 0.3em 0 0.8em 1.1em; padding: 0; }
+  li { font-size: 0.87em; margin-bottom: 0.25em; }
+  .gate { background: var(--warn-bg); border-left: 4px solid var(--warn); padding: 0.55em 0.75em;
+          border-radius: 5px; font-size: 0.87em; margin-bottom: 0.7em; }
+  .gate b { color: var(--warn); }
+  .tablewrap { overflow-x: auto; }
+  table { border-collapse: collapse; width: 100%; font-size: 0.8em; }
+  th, td { border: 1px solid var(--rule); padding: 0.32em 0.45em; text-align: left; vertical-align: top; }
+  th { background: #f4f4f4; font-weight: 600; }
+  td.dim { color: var(--muted); }
+  code { font-family: var(--mono); font-size: 0.93em; background: #f2f2f2; padding: 0 0.2em; border-radius: 3px; }
+  .cap { font-size: 0.79em; color: var(--muted); margin-top: 0.5em; }
+  .note { font-size: 0.82em; color: var(--muted); border-top: 1px solid var(--rule); margin-top: 1em; padding-top: 0.7em; }
 </style>
 </head>
 <body>
 
-<h1>Framework Recommender</h1>
-<p class="subtitle">
-  Pick the run's requirements on the left. The right panel picks one of
-  <code>verl</code>, <code>OpenRLHF</code>, <code>TRL</code> and cites the
-  matrix rows (<code>ch-58 read.md</code> §2) behind the choice. All cells are
-  attested from the <code>wiki/raw-data/llm-training/frameworks/</code> library.
-</p>
+<h1>Choosing a post-training stack, and checking that it can see generality</h1>
+<p class="subtitle">Companion to ch-58 §7. Answer the questions on the left; the procedure has seven questions, five leaves,
+and no answer returns to an earlier question. Every recommendation is followed by the instrumentation gate of §2, which is
+the part a throughput comparison does not cover. Commit and date of every matrix cell is given in the table below.</p>
 
 <div class="layout">
 
-<div class="panel">
-<h2>Run requirements</h2>
-
-<div class="ctrl">
-  <label for="scale">Scale (GPUs, training)</label>
-  <select id="scale">
-    <option value="1">1 GPU (single-node exp)</option>
-    <option value="8" selected>8 GPUs (one node)</option>
-    <option value="32">32 GPUs (multi-node mid)</option>
-    <option value="128">128 GPUs (multi-node prod)</option>
-    <option value="512">512+ GPUs (frontier)</option>
-  </select>
-</div>
-
-<div class="ctrl">
-  <label for="algo">Primary algorithm</label>
-  <select id="algo">
-    <option value="ppo">PPO (actor-critic)</option>
-    <option value="grpo" selected>GRPO / Dr.GRPO</option>
-    <option value="dapo">DAPO / CISPO / SAPO (GRPO zoo)</option>
-    <option value="dpo-offline">DPO (offline)</option>
-    <option value="dpo-online">Online DPO / Nash-MD / XPO / SPIN</option>
-    <option value="rlvr">RLVR (verifiable reward)</option>
-    <option value="rloo">RLOO / REINFORCE-family</option>
-  </select>
-</div>
-
-<div class="ctrl">
-  <label for="modelsize">Model size</label>
-  <select id="modelsize">
-    <option value="1b">1B</option>
-    <option value="3b">3B</option>
-    <option value="7b" selected>7B</option>
-    <option value="32b">32B</option>
-    <option value="70b">70B</option>
-    <option value="moe">MoE (Mixtral / DS-MoE)</option>
-  </select>
-</div>
-
-<div class="ctrl">
-  <label>Special requirements</label>
-  <div class="toggle-row">
-    <label><input type="checkbox" id="r-async"> async rollout</label>
-    <label><input type="checkbox" id="r-partial"> partial rollout</label>
-    <label><input type="checkbox" id="r-moe"> MoE router-aware</label>
-    <label><input type="checkbox" id="r-vlm"> VLM / multimodal</label>
-    <label><input type="checkbox" id="r-megatron"> Megatron TP/PP</label>
-    <label><input type="checkbox" id="r-adaptkl"> AdaptiveKL</label>
-    <label><input type="checkbox" id="r-iscorr"> vLLM IS correction</label>
-    <label><input type="checkbox" id="r-priority"> per-request priority</label>
-    <label><input type="checkbox" id="r-zoo"> GRPO/DPO zoo variants</label>
-    <label><input type="checkbox" id="r-debug"> primary goal = read code</label>
+  <div class="panel">
+    <h2>Decision procedure</h2>
+    <div id="questions"></div>
+    <div class="reset"><button id="reset" type="button">Start over</button></div>
   </div>
+
+  <div class="panel">
+    <h2>Result</h2>
+    <div id="leaf" class="leaf pending">Answer Q1 to begin.</div>
+    <div id="path" class="path"></div>
+    <div id="detail"></div>
+
+    <div class="gate">
+      <b>Instrumentation gate — apply once at the leaf you reach.</b>
+      <ul>
+        <li>Periodic in-loop evaluation on a held-out suite with at least one task family the reward does not target
+            (verl <code>trainer.test_freq</code>, default −1; OpenRLHF <code>--eval.steps</code>, default −1;
+            TRL <code>eval_strategy</code>). All three default to off.</li>
+        <li>A logged rollout-versus-training log-probability diagnostic, with a correction available
+            (OpenRLHF <code>vllm_kl</code>; verl <code>algorithm.rollout_correction</code>, default <code>rollout_is: null</code>;
+            TRL vLLM IS correction, on by default when <code>use_vllm=True</code>).</li>
+        <li>Reward or environment routing that preserves the domain identity of each score, so one domain's regression
+            does not average away.</li>
+      </ul>
+      If a leaf fails a check and the hook cannot be added, the next candidate is taken from the fixed order A → B → C → D and the gate is applied once more.
+      The order is fixed and has four entries, so the procedure ends after at most four gate evaluations.
+    </div>
+  </div>
+
 </div>
 
-<div class="hint">
-  Tip: start by picking scale + algo, then toggle the constraints that really
-  matter for your run. The recommender re-evaluates on every change.
-</div>
-
-</div>
-
-<div class="panel">
-<h2>Recommendation</h2>
-<div id="pick" class="pick">
-  <div><span class="fw" id="pick-fw">—</span> <span id="pick-tag"></span></div>
-  <div class="why" id="pick-why"></div>
-</div>
-<div id="alt" class="alt"></div>
-
-<h2 style="margin-top:1em">Matrix evidence (hit rows highlighted)</h2>
-<table class="matrix" id="matrix-tbl">
+<h2 style="margin-top:1.4em">Matrix cells the recommendation uses</h2>
+<div class="tablewrap">
+<table>
   <thead>
-    <tr><th>#</th><th>Dimension</th><th>verl</th><th>OpenRLHF</th><th>TRL</th></tr>
+    <tr><th>Dimension</th><th>verl @753aed3 (2026-09-14)</th><th>OpenRLHF @64c1cc4 (2026-04-19)</th><th>TRL @a08e713 (2026-04-21) / main a04ffd3 (2026-09-14)</th></tr>
   </thead>
-  <tbody id="matrix-body"></tbody>
+  <tbody>
+    <tr><td>Actor-critic PPO in mainline</td><td>yes (<code>adv_estimator=gae</code>)</td><td>yes, Ray actor/critic split</td><td>removed: PR #7020 deleted <code>trl/experimental/ppo/</code> on 2026-09-04, released in v1.13.0</td></tr>
+    <tr><td>Asynchronous rollout</td><td><code>fully_async_policy</code>, partial rollout</td><td><code>PPOTrainerAsync</code>, <code>async_queue_size</code> default 1</td><td><code>trl/experimental/async_grpo/</code>, <code>max_staleness</code> default 4</td></tr>
+    <tr><td>KL to reference</td><td>reward or loss, both off by default; <code>kl_loss_coef</code> 0.001, <code>low_var_kl</code></td><td>reward by default, <code>FixedKLController</code> <code>init_coef</code> 0.01; adaptive only if <code>--algo.kl.target</code> set</td><td>GRPO: loss only, β default <b>0.0</b> (no reference model created)</td></tr>
+    <tr><td>Rollout–training IS correction</td><td><code>rollout_is: null</code> (off), threshold 2.0</td><td><code>is_correction_enable</code> off, band [0.5, 5.0], modes <code>tis</code>/<code>icepop</code>/<code>seq-mask-tis</code></td><td>on by default with <code>use_vllm=True</code>, <code>sequence_mask</code>, cap 3.0</td></tr>
+    <tr><td>In-loop evaluation</td><td><code>test_freq</code> −1, <code>val_before_train</code> True</td><td><code>--eval.steps</code> −1; <code>--eval.dataset</code> requires <code>--reward.remote_url</code></td><td><code>eval_strategy</code>, <code>num_generations_eval</code></td></tr>
+    <tr><td>Multi-domain reward routing</td><td>reward config group (see ch-55)</td><td>remote reward service</td><td><code>reward_funcs</code> list, <code>reward_weights</code>, <code>multi_objective_aggregation</code></td></tr>
+    <tr><td>LoRA</td><td>adapter-only weight sync in rollout path</td><td><code>--ds.lora.rank</code>, default 0</td><td>PEFT integration</td></tr>
+    <tr><td>Merging hook called by the training loop</td><td class="dim">none in the files read</td><td class="dim"><code>cli/lora_combiner.py</code> is a separate command</td><td><code>MergeModelCallback</code> (experimental, a04ffd3): mergekit merge of the checkpoint with a target model; default method <code>linear</code> at 0.5/0.5, merges at <code>on_train_end</code> unless <code>merge_at_every_checkpoint</code></td></tr>
+    <tr><td>Long-sequence parallelism</td><td>Ulysses SP used in the flash-rl DAPO script (learner SP 8)</td><td><code>--ds.ring_attn_size</code>, default 1, auto-enables sample packing</td><td>async trainer packs micro-batches balanced by Σ Lᵢ²</td></tr>
+    <tr><td>Tool / environment loop</td><td><code>ToolAgentLoop</code> with response masks</td><td><code>--train.agent_func_path</code> example script</td><td><code>tools</code>, experimental <code>environment_factory</code>; OpenEnv <code>HarnessAdapter</code> in async GRPO</td></tr>
+    <tr><td>Published async throughput claim</td><td>2.35× (400 steps: 17 h 22 m vs 1 d 16 h 48 m), Qwen2.5-Math-7B DAPO, 128 H20</td><td class="dim">not reported in the repository or in any of the six arXiv versions of the framework paper</td><td class="dim">not reported</td></tr>
+  </tbody>
 </table>
-<div class="legend">
-  Rows tagged <span class="row-key" style="padding:0 4px">blue</span> are the
-  primary drivers of the current recommendation;
-  <span class="row-hit" style="padding:0 4px">yellow</span> rows are secondary
-  support. Cell citations refer to <code>wiki/raw-data/llm-training/frameworks/</code>.
 </div>
-</div>
+<p class="cap">Cells read at the commits in the column headers. "Not reported" means no measurement exists in the source read, not that the feature is absent.
+Sources: verl-project/verl@753aed3, OpenRLHF/OpenRLHF@64c1cc4 (main b117b2b checked), huggingface/trl@a08e713 (main a04ffd3 checked).</p>
 
+<h2 style="margin-top:1.4em">Why the instrumentation gate exists: one measurement</h2>
+<div class="tablewrap">
+<table>
+  <thead><tr><th>Max staleness η</th><th>AIME24 without decoupled objective</th><th>AIME24 with</th><th>MATH-500 without</th><th>MATH-500 with</th></tr></thead>
+  <tbody>
+    <tr><td>0 (synchronous oracle)</td><td>42.0</td><td>42.0</td><td>89.2</td><td>89.2</td></tr>
+    <tr><td>1</td><td>41.8</td><td>42.1</td><td>89.9</td><td>89.8</td></tr>
+    <tr><td>4</td><td>23.3</td><td>42.2</td><td>66.9</td><td>89.5</td></tr>
+    <tr><td>8</td><td>35.7</td><td>41.0</td><td>87.8</td><td>89.2</td></tr>
+    <tr><td>∞</td><td>34.0</td><td>36.9</td><td>87.1</td><td>88.1</td></tr>
+  </tbody>
+</table>
 </div>
+<p class="cap">AReaL (arXiv:2505.24298) Table 2, 1.5B model on math reasoning. One infrastructure setting, the staleness bound, moves AIME24 by 18.7 points
+and MATH-500 by 22.3 points at η = 4 when the decoupled PPO objective is absent. A run logging only training reward would not separate the two configurations.</p>
+
+<p class="note">All content in this page is static text from ch-58; no external scripts, styles, fonts or images are loaded.</p>
 
 <script>
-// ---------- matrix data (attested from raw-data library) ----------
-const MATRIX = [
-  {n:1,  k:"rollout",     d:"Rollout backend",
-   verl:"async vLLM AsyncLLMEngine (verl-rollout L440-525)",
-   openrlhf:"Ray + vLLM + vllm_lock (async-rollout)",
-   trl:"HF .generate default; _generate_vllm_server/colocate"},
-  {n:2,  k:"orch",        d:"Rollout orchestration",
-   verl:"worker groups + DataProto + per-req priority",
-   openrlhf:"rollout_queue + rollout_slots + partial_rollout_enable",
-   trl:"single Python process + Accelerate"},
-  {n:3,  k:"parallel",    d:"Parallelism",
-   verl:"FSDP + Megatron TP/PP via HybridFlow",
-   openrlhf:"DeepSpeed ZeRO-1/2/3 + Ray actor/critic split",
-   trl:"Accelerate + DeepSpeed/FSDP; no Megatron"},
-  {n:4,  k:"ppo",         d:"PPO (actor-critic)",
-   verl:"@register_policy_loss('vanilla'), asym clip + dual-clip",
-   openrlhf:"PolicyLoss module + asym + dual + IS",
-   trl:"trl/experimental/ppo/ (symmetric clip only)"},
-  {n:5,  k:"grpo",        d:"GRPO / Dr.GRPO",
-   verl:"@register_adv_est(GRPO) + norm_adv_by_std toggle + Pass@k",
-   openrlhf:"group baseline in experience buffer; reuses PolicyLoss",
-   trl:"GRPOTrainer loss_type switch (grpo/dr_grpo/dapo/cispo/...)"},
-  {n:6,  k:"dpo-off",     d:"DPO (offline)",
-   verl:"not focus",
-   openrlhf:"DPOLoss + concatenated_forward + MoE aux + NLL + IPO",
-   trl:"DPOTrainer loss_type ∈ {sigmoid, hinge, ipo, kto_pair, ...}"},
-  {n:7,  k:"dpo-on",      d:"Online DPO / judge-driven",
-   verl:"n/a",
-   openrlhf:"n/a",
-   trl:"trl/experimental/online_dpo/ + nash_md + xpo + self_distillation"},
-  {n:8,  k:"kl-loc",      d:"KL-to-ref location",
-   verl:"reward shaping (k1/k2/k3 switch)",
-   openrlhf:"reward shaping via AdaptiveKLController",
-   trl:"PPO: reward shaping; GRPO: β·K3 in loss"},
-  {n:9,  k:"entropy",     d:"Entropy logging",
-   verl:"actor/entropy (true H)",
-   openrlhf:"mean -logp (biased)",
-   trl:"objective/entropy + policy/entropy_avg; GRPO _metrics[entropy]"},
-  {n:10, k:"iscorr",      d:"vLLM-vs-train IS correction",
-   verl:"rollout_is_weights passed to loss",
-   openrlhf:"tis / seq-mask-tis / icepop + vllm_kl",
-   trl:"GRPO: vllm_importance_sampling_correction; PPO: n/a"},
-  {n:11, k:"dapo",        d:"DAPO asymmetric clip",
-   verl:"clip_ratio_low/high + delta",
-   openrlhf:"clip_eps_low/high",
-   trl:"GRPO: epsilon_low/high + delta"},
-  {n:12, k:"gspo",        d:"GSPO (sequence-level IS)",
-   verl:"via loss registry (custom)",
-   openrlhf:"policy_loss_type='gspo' (native)",
-   trl:"importance_sampling_level='sequence' in GRPO"},
-  {n:13, k:"dcp",         d:"Distributed checkpointing",
-   verl:"FSDP DCP + Megatron ckpt",
-   openrlhf:"DeepSpeed ZeRO + CPU offload",
-   trl:"Accelerate / safetensors"},
-  {n:14, k:"async",       d:"Async / partial rollout",
-   verl:"priority + pause-state (~L628)",
-   openrlhf:"ppo_trainer_async + partial_rollout_enable (1.6-2.0x)",
-   trl:"no mainline async trainer"},
-  {n:15, k:"multinode",   d:"Multi-node / 128-GPU+",
-   verl:"primary target (HybridFlow)",
-   openrlhf:"Ray cluster; 70B production reports",
-   trl:"practical ≤8xH100; 70B feasible no partial-rollout"},
-  {n:16, k:"moe",         d:"MoE support",
-   verl:"Megatron MoE + async weight broadcast",
-   openrlhf:"DPO preserves aux-loss; PPO via DeepSpeed-MoE",
-   trl:"basic HF MoE forward; no router capture"},
-  {n:17, k:"vlm",         d:"VLM / multimodal",
-   verl:"multi_modal_data plumbed through async server",
-   openrlhf:"experimental",
-   trl:"mainline Vision(DPO|GRPO)Trainer"},
-  {n:18, k:"maint",       d:"Maintenance velocity (2026-04)",
-   verl:"active (Bytedance Seed prod; monthly tags)",
-   openrlhf:"active; monthly releases",
-   trl:"weekly merges; GRPO zoo expands fastest"},
-];
+(function () {
+  var QUESTIONS = [
+    { id: 'Q1', text: 'Does the run put a stateful environment in the loop — episodes with more than one model call against an external system that holds state between calls?', no: 'Q2', yes: 'Q5' },
+    { id: 'Q2', text: 'Does one node hold the training model, its optimizer state, and the rollout engine?', yes: 'A', no: 'Q3' },
+    { id: 'Q3', text: 'Do you need Megatron-style tensor or pipeline parallelism, MoE routed-expert replay, or token-in/token-out rollout with per-request abort during weight sync?', yes: 'C', no: 'Q4' },
+    { id: 'Q4', text: 'Do you need a Ray-managed actor/critic split with a separate value model, or a remote reward-model service as a process boundary?', yes: 'B', no: 'C' },
+    { id: 'Q5', text: 'Does the run need more than about one hundred concurrent environment instances, or episodes longer than about ten turns or 30K tokens? (Thresholds read off the published runs: GiGPO uses 128 concurrent environments; SkyRL-Agent caps episodes at 50 turns and 32K tokens.)', yes: 'D', no: 'Q6' },
+    { id: 'Q6', text: 'Is the environment expressible as function-call tools that return text into the context?', no: 'D', yes: 'Q7' },
+    { id: 'Q7', text: 'Does one node hold the training model, its optimizer state, and the rollout engine?', yes: 'A2', no: 'C2' }
+  ];
 
-function $(id){ return document.getElementById(id); }
-
-function collectReqs(){
-  return {
-    scale:      parseInt($("scale").value,10),
-    algo:       $("algo").value,
-    modelsize:  $("modelsize").value,
-    async_:     $("r-async").checked,
-    partial:    $("r-partial").checked,
-    moe:        $("r-moe").checked,
-    vlm:        $("r-vlm").checked,
-    megatron:   $("r-megatron").checked,
-    adaptkl:    $("r-adaptkl").checked,
-    iscorr:     $("r-iscorr").checked,
-    priority:   $("r-priority").checked,
-    zoo:        $("r-zoo").checked,
-    debug:      $("r-debug").checked,
+  var LEAVES = {
+    A: { name: 'LEAF A — TRL', body: [
+      'GRPOTrainer for critic-free RL; DPOTrainer or KTOTrainer for preference optimization.',
+      'trl/experimental/async_grpo/ when rollout and training must overlap: max_staleness default 4, queue_maxsize 1024, weight_sync_steps 1, model dtype default float32.',
+      'Not available: mainline actor-critic PPO. PR #7020 deleted it on 2026-09-04; pin a release before v1.13.0 if it is required.',
+      'Gate item 2 is satisfied by default when use_vllm=True (sequence_mask, cap 3.0). Gate item 1 is not: eval_strategy must be set.'
+    ]},
+    A2: { name: 'LEAF A — TRL (tools path)', body: [
+      'Tool loop with tools or the experimental environment_factory; tool-result tokens are excluded from the loss by tool_mask.',
+      'The async GRPO trainer bridges to OpenEnv environments through a HarnessAdapter and records per-token generator log-probabilities per turn.',
+      'Failures become {"error": ...} tool messages read on the next turn; tools/call_frequency and tools/failure_frequency are logged.',
+      'Gate item 1 must be added explicitly: an agent run with no held-out evaluation cannot show whether tool competence came at the cost of other capability.'
+    ]},
+    B: { name: 'LEAF B — OpenRLHF', body: [
+      'PPOTrainerAsync or the synchronous trainer; DeepSpeed ZeRO with a Ray actor/critic split.',
+      'Reward through --reward.remote_url as a process boundary.',
+      'Coupling to check before planning: --eval.dataset asserts that --reward.remote_url is set, so in-loop evaluation requires the remote reward service.',
+      'Gate item 2 is off by default: set --algo.advantage.is_correction_enable and log vllm_kl from step 0.'
+    ]},
+    C: { name: 'LEAF C — verl', body: [
+      'FSDP or Megatron backends; async vLLM rollout with per-request abort and cache clearing at weight sync.',
+      '@register_adv_est and @register_policy_loss allow an algorithm change without modifying the trainer.',
+      'fully_async_policy adds partial rollout: 400 steps in 17 h 22 m against 1 d 16 h 48 m colocated, Qwen2.5-Math-7B DAPO on 128 H20.',
+      'Gate items 1 and 2 are both off by default: test_freq is −1 and rollout_is is null.'
+    ]},
+    C2: { name: 'LEAF C — verl (tools path)', body: [
+      'ToolAgentLoop as a state machine, with response_mask 1 on model-generated tokens and 0 on tool and template tokens.',
+      'Build the training sequence from generated token ids plus tokenized tool responses; the documentation reports that re-applying the chat template to the final history prevented PPO convergence even in single-turn training.',
+      'Turn control through max_assistant_turns, max_user_turns, max_parallel_calls (default 1) and max_tool_response_length (default 256 characters).',
+      'Gate items 1 and 2 are both off by default.'
+    ]},
+    D: { name: 'LEAF D — a stack built for environments', body: [
+      'SkyRL-Agent when the bottleneck is long-tail episode latency across stages: its three-stage pipeline dispatcher is about 1.55× faster than bounded async batching at roughly 90% GPU utilization during generation (batch 64 × 8 rollouts on 2×8 H100).',
+      'verl-agent when episodes are long enough that concatenating history is the constraint: step-wise rollout with a memory module, gym-style parallel environments; anchor-state grouping raised ALFWorld overall success from 72.8 to 86.1 and WebShop success rate from 56.8 to 67.4 at Qwen2.5-1.5B-Instruct over 3 seeds (GiGPO without std normalization), adding 0.54 s to a 362.83 s iteration.',
+      'AReaL when rollouts must be interrupted at weight sync and staleness bounded: interruptible workers plus a decoupled PPO objective, up to 2.77× end-to-end reduction at matched scores.',
+      'prime-rl when environments should come from and be shared with one interface: the orchestrator abstracts multi-turn rollout and scoring behind verifiers environments, and the same interface covers synthetic data, SFT, RL and evaluation.',
+      'Gate item 3 is the one to check first here: per-environment reward, and environment-crash rate separated from task-failure rate.'
+    ]}
   };
-}
 
-function recommend(r){
-  // hard overrides -> TRL
-  if(r.algo === "dpo-online")
-    return {fw:"TRL", tag:"(mandatory)", primary:[7],
-      reasons:["Online DPO / Nash-MD / XPO / SPIN live only in trl/experimental/online_dpo/ and siblings (row 7). OpenRLHF and verl have no mainline equivalent."],
-      alt:"If you must stay on a non-TRL backend, you will reimplement -- budget ~2 eng-weeks."};
+  var answers = {};
+  var qEl = document.getElementById('questions');
+  var leafEl = document.getElementById('leaf');
+  var pathEl = document.getElementById('path');
+  var detailEl = document.getElementById('detail');
 
-  if(r.debug)
-    return {fw:"TRL", tag:"(read / learn)", primary:[4,5],
-      reasons:["Primary goal is reading the algorithm. TRL's one-file PPO and GRPOTrainer._compute_loss (rows 4-5) are the clearest surfaces."],
-      alt:"After reading, port the algorithm to OpenRLHF or verl for production."};
-
-  if(r.zoo && (r.algo === "grpo" || r.algo === "dapo"))
-    return {fw:"TRL", tag:"(zoo breadth)", primary:[5],
-      reasons:["GRPO loss_type switch covers grpo/dr_grpo/bnpo/dapo/cispo/sapo/luspo/vespo (row 5) -- only TRL ships all of them in-tree."],
-      alt:"Scale past 64 GPUs with the zoo: port the specific loss_type branch you need into verl's @register_policy_loss."};
-
-  // hard overrides -> verl
-  if(r.scale >= 128 || r.priority || (r.partial && r.scale >= 32))
-    return {fw:"verl", tag:"(frontier scale)", primary:[14,15],
-      reasons:["≥128 GPUs or partial-rollout-with-priority: HybridFlow dataflow + per-request priority + pause-state (rows 14-15) is the only option designed for this envelope."],
-      alt:"OpenRLHF async works up to ~64 GPUs cleanly but lacks vLLM-scheduler-level reordering."};
-
-  if(r.vlm)
-    return {fw:"verl", tag:"(VLM)", primary:[17,1],
-      reasons:["Multimodal rollouts require the engine to accept multi_modal_data; verl's async server plumbs image_data/video_data through (row 17, row 1)."],
-      alt:"TRL's Vision(DPO|GRPO)Trainer handles simpler mainline cases but lacks async multi_modal rollouts at scale."};
-
-  if(r.megatron || r.modelsize === "70b")
-    return {fw:"verl", tag:"(Megatron / 70B)", primary:[3,15],
-      reasons:["Megatron TP/PP via HybridFlow is first-class in verl (rows 3, 15); OpenRLHF runs 70B but without Megatron integration in mainline."],
-      alt:"OpenRLHF can run 70B with DeepSpeed ZeRO-3; if activation recomputation is the bottleneck, verl wins."};
-
-  if(r.moe && r.algo !== "dpo-offline")
-    return {fw:"verl", tag:"(MoE RL)", primary:[16,3],
-      reasons:["MoE under RL with router-aware async weight broadcast is verl-specific (row 16). OpenRLHF preserves MoE aux-loss for DPO but the routing machinery during async PPO rollouts is rough."],
-      alt:"For DPO-only MoE runs, OpenRLHF's aux-loss-preserving DPOLoss is sufficient (row 6)."};
-
-  // OpenRLHF sweet spot
-  if(r.scale >= 8 && (r.async_ || r.iscorr || r.adaptkl || r.algo === "ppo" || r.algo === "rlvr")){
-    const primary = [];
-    if(r.adaptkl) primary.push(8);
-    if(r.iscorr) primary.push(10);
-    if(r.async_) primary.push(14);
-    if(!primary.length) primary.push(4);
-    return {fw:"OpenRLHF", tag:"(production middle)", primary,
-      reasons:[
-        "Scale ≥8 GPUs with async / adaptive-KL / IS correction / PPO-RLVR: OpenRLHF's PolicyLoss module + AdaptiveKLController + three IS modes (tis/seq-mask-tis/icepop) (rows 8, 10, 14) is the smallest production-grade surface.",
-        r.modelsize==="moe" ? "MoE: OpenRLHF's DPOLoss preserves aux-loss; PPO on MoE via DeepSpeed-MoE works out of the box (row 16)." : "Ray actor/critic split scales to 70B cleanly without Megatron (row 3).",
-      ],
-      alt:"If you hit straggler-dominated rollouts or need per-request priority, graduate to verl (row 14)."};
+  function byId(id) {
+    for (var i = 0; i < QUESTIONS.length; i++) { if (QUESTIONS[i].id === id) return QUESTIONS[i]; }
+    return null;
   }
 
-  // TRL default (small scale)
-  if(r.scale <= 8){
-    const primary = [];
-    if(r.algo === "dpo-offline") primary.push(6);
-    else if(r.algo.startsWith("grpo") || r.algo === "dapo") primary.push(5);
-    else primary.push(4);
-    return {fw:"TRL", tag:"(single-node / pedagogical)", primary,
-      reasons:[
-        "≤8 GPUs: TRL's single Python process + Accelerate + monolithic _compute_loss is the fastest to set up and debug (rows 4-6).",
-        r.algo === "dpo-offline" ? "Offline DPO: TRL's DPOTrainer loss_type covers the widest variant set (sigmoid/hinge/ipo/kto_pair/...)." : "No Ray / dataflow overhead.",
-      ],
-      alt:"When rollout exceeds 70% wall time or you need IS correction on PPO, graduate to OpenRLHF."};
+  function walk() {
+    var path = [];
+    var cur = 'Q1';
+    while (byId(cur)) {
+      var q = byId(cur);
+      var a = answers[q.id];
+      if (a !== 'yes' && a !== 'no') return { active: q.id, path: path, leaf: null };
+      path.push(q.id + '=' + a.toUpperCase());
+      cur = (a === 'yes') ? q.yes : q.no;
+    }
+    return { active: null, path: path, leaf: cur };
   }
 
-  // default middle
-  return {fw:"OpenRLHF", tag:"(default mid-scale)", primary:[4,8,14],
-    reasons:["Mid-scale RL (8-64 GPUs) with standard PPO/GRPO: OpenRLHF's async Ray + PolicyLoss + AdaptiveKLController is the broadest sweet spot."],
-    alt:"Graduate to verl if you hit 128 GPUs or need per-request priority; drop to TRL if scale collapses back to one node."};
-}
+  function render() {
+    var state = walk();
+    var reached = {};
+    var cur = 'Q1';
+    while (byId(cur)) {
+      reached[cur] = true;
+      var q = byId(cur);
+      var a = answers[q.id];
+      if (a !== 'yes' && a !== 'no') break;
+      cur = (a === 'yes') ? q.yes : q.no;
+    }
 
-function render(){
-  const r = collectReqs();
-  const rec = recommend(r);
-  $("pick-fw").textContent = rec.fw;
-  $("pick-tag").textContent = rec.tag;
-  const w = $("pick-why");
-  w.innerHTML = "<ul>" + rec.reasons.map(x => "<li>"+x+"</li>").join("") + "</ul>";
-  $("alt").textContent = "Alternative / graduation path: " + rec.alt;
+    qEl.innerHTML = '';
+    QUESTIONS.forEach(function (q) {
+      var live = !!reached[q.id];
+      var div = document.createElement('div');
+      div.className = 'q';
+      var p = document.createElement('p');
+      p.innerHTML = '<span class="qid">' + q.id + '.</span> ' + q.text;
+      if (!live) { p.style.color = '#9a9a9a'; }
+      div.appendChild(p);
+      var btns = document.createElement('div');
+      btns.className = 'btns';
+      ['yes', 'no'].forEach(function (v) {
+        var b = document.createElement('button');
+        b.type = 'button';
+        b.textContent = v.toUpperCase();
+        b.disabled = !live;
+        b.setAttribute('aria-pressed', answers[q.id] === v ? 'true' : 'false');
+        b.addEventListener('click', function () {
+          answers[q.id] = v;
+          QUESTIONS.forEach(function (later, i) {
+            if (i > QUESTIONS.indexOf(q)) { delete answers[later.id]; }
+          });
+          render();
+        });
+        btns.appendChild(b);
+      });
+      div.appendChild(btns);
+      qEl.appendChild(div);
+    });
 
-  const body = $("matrix-body");
-  body.innerHTML = MATRIX.map(row => {
-    const hit = rec.primary.includes(row.n);
-    const cls = hit ? "row-key" : "";
-    return "<tr class='"+cls+"'>" +
-      "<td>"+row.n+"</td>" +
-      "<td>"+row.d+"</td>" +
-      "<td>"+row.verl+"</td>" +
-      "<td>"+row.openrlhf+"</td>" +
-      "<td>"+row.trl+"</td>" +
-      "</tr>";
-  }).join("");
-}
+    pathEl.textContent = state.path.length ? 'path: ' + state.path.join('  ->  ') : '';
+    if (!state.leaf) {
+      leafEl.className = 'leaf pending';
+      leafEl.textContent = state.active ? 'Answer ' + state.active + ' to continue.' : 'Answer Q1 to begin.';
+      detailEl.innerHTML = '';
+      return;
+    }
+    var leaf = LEAVES[state.leaf];
+    leafEl.className = 'leaf';
+    leafEl.textContent = leaf.name;
+    var ul = document.createElement('ul');
+    leaf.body.forEach(function (t) {
+      var li = document.createElement('li');
+      li.textContent = t;
+      ul.appendChild(li);
+    });
+    detailEl.innerHTML = '';
+    detailEl.appendChild(ul);
+  }
 
-document.querySelectorAll("select, input").forEach(el => {
-  el.addEventListener("change", render);
-  el.addEventListener("input", render);
-});
-render();
+  document.getElementById('reset').addEventListener('click', function () {
+    answers = {};
+    render();
+  });
+
+  render();
+})();
 </script>
 
 </body>

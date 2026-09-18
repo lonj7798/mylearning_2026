@@ -7,6 +7,8 @@ source_url: https://arxiv.org/abs/2304.11277
 created_at: "2026-04-23"
 ---
 
+> Superseded by the 2026-09 revision of read.md; kept for history.
+
 # Excerpt: PyTorch FSDP — the sharded-state reality DCP exists to serialize
 
 **Source library:** `wiki/raw-data/llm-training/papers/fsdp-sft.md`

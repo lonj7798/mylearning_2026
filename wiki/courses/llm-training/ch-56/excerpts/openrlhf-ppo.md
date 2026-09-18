@@ -3,115 +3,93 @@ chapter: ch-56
 course: llm-training
 phase: read
 excerpt_of: wiki/raw-data/llm-training/frameworks/openrlhf-ppo.md
-source_url: https://github.com/OpenRLHF/OpenRLHF
+source_url: https://github.com/OpenRLHF/OpenRLHF/tree/64c1cc4f30d4c0dab772c8aa1dc11288c425e0da
 created_at: "2026-04-23"
+revised: "2026-09 (generality revision; rewritten to match the verified card)"
 ---
 
-# Excerpt: OpenRLHF — PolicyLoss and the loss-object-as-logger idiom
+# Excerpt: OpenRLHF `PolicyLoss`, KL wiring, and advantage handling
 
 **Source library:** `wiki/raw-data/llm-training/frameworks/openrlhf-ppo.md`
-**Files:** `openrlhf/models/loss.py` (lines 68–168), `openrlhf/trainer/ppo_trainer.py` (~line 172)
-**Version/commit:** `main` branch (fetched 2026-04-21)
+**Version/commit:** `64c1cc4f30d4c0dab772c8aa1dc11288c425e0da` (2026-04-19); loss file also read at `main` b117b2b (2026-09-14)
+**Files:** `openrlhf/models/loss.py`, `openrlhf/models/utils.py`, `openrlhf/trainer/ppo_trainer.py`,
+`openrlhf/trainer/ppo_utils/{kl_controller,experience_maker}.py`, `openrlhf/trainer/ray/ppo_actor.py`,
+`openrlhf/cli/train_ppo_ray.py`
 
 ---
 
-## Why this source anchors ch-56
+## What ch-56 takes from this source
 
-`PolicyLoss` is the architectural fulcrum of OpenRLHF. Every other design
-decision — the AdaptiveKLController living *outside* the loss, the
-`(loss, clip_ratio, ppo_kl, vllm_kl)` return tuple, the three vLLM IS
-correction modes — is visible in this one `nn.Module`. Read it once and
-you have read the stylistic difference between OpenRLHF and TRL / verl.
-
----
-
-## The load-bearing five lines
-
-Of the 100-line `PolicyLoss.forward` body, five lines are doing the real work:
+### 1. The clipped surrogate (`loss.py` L136–148, L175–182, verbatim)
 
 ```python
-log_ratio = log_probs - old_log_probs
-ratio = log_ratio.exp()
 surr1 = ratio * advantages
 surr2 = ratio.clamp(1 - self.clip_eps_low, 1 + self.clip_eps_high) * advantages
-loss = -torch.min(surr1, surr2)
+if self.dual_clip is None:
+    loss = -torch.min(surr1, surr2)
+else:
+    clip1 = torch.min(surr1, surr2)
+    clip2 = torch.max(clip1, self.dual_clip * advantages)
+    loss = -torch.where(advantages < 0, clip2, clip1)
+...
+loss = (masked_mean(loss, action_mask, dim=None) if self.token_level_loss
+        else masked_mean(loss, action_mask, dim=-1).mean())
+clip_ratio = masked_mean(torch.lt(surr2, surr1).float(), action_mask, dim=None)
+ppo_kl = masked_mean(-log_ratio.detach(), action_mask, dim=None)
+return loss, clip_ratio, ppo_kl, vllm_kl
 ```
 
-This is Schulman 2017 PPO with asymmetric clip. Everything else (`gspo`
-branch, `dual_clip`, three vLLM IS modes, `vllm_kl` metric) is an
-optional modifier. The point is pedagogical: **the PPO loss is actually
-five lines**; the rest is the cost of being a production framework.
+`PolicyLoss` covers token-level PPO (`policy_loss_type="ppo"`, L122–124) and sequence-level GSPO
+(`"gspo"`, L125–134, which forces `token_level_loss=False`). `dual_clip` applies only where A < 0 and must
+exceed 1.0 (L105–107, L143–148); its default is `None` (`train_ppo_ray.py` L389).
+
+### 2. Behaviour by advantage sign (derived from L136–148)
+
+For A < 0 the objective is A·max(r, 1 − ε_low): the gradient is zero below 1 − ε_low, and the loss grows
+without bound as r increases unless `dual_clip` caps it at c·|A|. For A > 0 it is A·min(r, 1 + ε_high).
+Worked example at ε_low = ε_high = 0.2, A = −1: r = 0.7 gives loss 0.8 with zero gradient; r = 1.5 gives
+loss 1.5 with gradient; r = 5 with `dual_clip` = 3 gives loss 3 with zero gradient.
+
+### 3. KL placement (`models/utils.py` L48–110; `ray/ppo_actor.py` L296–314)
+
+Default: KL is a per-token reward. `compute_approx_kl` returns k1 = log π − log π_ref, k2 = (log-ratio)²/2,
+or k3 = exp(−log-ratio) − 1 + log-ratio, clamped to [−10, 10]. `compute_reward` writes −β·kl_t on every
+response token plus the scalar reward, clipped to `--reward.clip_range` (default (−10, 10)), on the last
+response token. With `--algo.kl.use_loss`, the experience maker zeroes `kl` and the actor adds
+`kl_loss * kl_ctl` to the policy loss instead. The CLI prints a recommendation of k1 for reward placement
+and k2/k3 for loss placement (`train_ppo_ray.py` L675–680).
+
+### 4. Controllers (`ppo_utils/kl_controller.py` L4–29; `ppo_trainer.py` L171–176, L252–253)
+
+`AdaptiveKLController` docstring cites arXiv:1909.08593; the rule is
+`error = clip(KL/target − 1, −0.2, 0.2)`, then `β ← β·(1 + error·n_steps/horizon)`. It is used **only** when
+`--algo.kl.target` is set; the default is `None`, which selects `FixedKLController(init_coef=0.01)`. The
+update call carries the comment "TODO: KL controller must be FixedKLController; AdaptiveKLController is
+incompatible here."
+
+### 5. Advantages and normalization (`experience_maker.py` L264–270, L315–328)
+
+Estimators: `gae`, `reinforce`, `rloo`, `reinforce_baseline`, `group_norm`, `dr_grpo`. For `gae`,
+`reinforce` and `reinforce_baseline`, advantages are mean-centred over the batch and divided by the batch
+standard deviation unless `--algo.advantage.no_std_norm` is passed.
+
+### 6. vLLM importance-sampling correction (`loss.py` L150–173)
+
+`w = exp(old_log_probs − rollout_log_probs)`, detached. `tis` clamps w into the band; `icepop` zeroes
+tokens outside it; `seq-mask-tis` drops sequences whose geometric-mean w is outside it. `vllm_kl` is the
+masked mean of `rollout_log_probs − old_log_probs`. Defaults: off, band [0.5, 5.0], type `tis`
+(`train_ppo_ray.py` L257–271). At this commit L154 reassigns `log_ratio` inside the correction branch, so
+with IS correction on, `ppo_kl` reports the same quantity as `vllm_kl`.
 
 ---
 
-## The two KLs, attested
+## Limits
 
-Source lines 42–44 and 76 show the loss returns two distinct KL metrics:
-
-> `ppo_kl = masked_mean(-log_ratio.detach(), action_mask, dim=None)`
->
-> `vllm_kl = masked_mean(rollout_log_probs - old_log_probs, action_mask, dim=None)`
-
-- `ppo_kl` is K1-style train-vs-old-logprob ([[entropy-logging-patterns]]).
-  Diagnoses whether the trust region is still holding.
-- `vllm_kl` is rollout-engine-vs-trainer-forward. Diagnoses whether
-  bf16 vLLM decoding and fp32 trainer forward pass have drifted enough
-  to need IS correction.
-
-No other framework in ch-55..ch-57 returns both from the loss. TRL
-computes `objective/kl` on the rollout side; verl exposes a `k1/k2/k3`
-switch but in `core_algos.py`, not inside the loss object.
+The repository contains no training results. Every value above is a default or a code behaviour; the card
+records no ablation for `eps_clip_low_high`, `dual_clip`, or the IS thresholds.
 
 ---
 
-## Where KL-to-reference actually lives
+## Links
 
-Source §Context is explicit:
-
-> KL is *not* in the loss — it's added to per-token rewards through
-> `kl_ctl` outside.
-
-The instantiation is around line 172 of `ppo_trainer.py`:
-
-```python
-self.kl_ctl = (AdaptiveKLController(init_coef, target, horizon)
-               if adaptive else FixedKLController(init_coef))
-```
-
-This split — loss handles ratio + clip; trainer handles KL-to-ref via
-reward shaping — is the InstructGPT recipe ([[rlhf-instructgpt]]
-Eq. 2) taken seriously. [[kl-control-rlhf]] explains why: KL-in-reward
-keeps GAE (and for GRPO, the group-relative z-score) well-defined.
-
----
-
-## The three vLLM IS modes — when each applies
-
-Source "What to notice" enumerates:
-
-- **`tis`** — Truncated IS; clamp per-token ratio into `[low, high]`.
-  Safe default; what you want if `vllm_kl` is small and bounded.
-- **`seq-mask-tis`** — mask the entire sequence if its mean IS weight
-  exits `[low, high]`. Aggressive; drops whole rollouts but keeps
-  surviving sequences cleanly on-policy.
-- **`icepop`** — zero per-token IS weight outside `[low, high]`. Used
-  when token-level drift is heterogeneous (some tokens fine, others
-  catastrophic).
-
-The lesson for ch-56 §2.1: the correction type is a function of *how*
-your rollouts drift, not just whether they do.
-
----
-
-## Connections
-
-- [[excerpts/openrlhf-dpo]] — the DPO counterpart; `DPOLoss` has the
-  same nn.Module style.
-- [[excerpts/entropy-logging-patterns]] — cross-framework KL metric
-  comparison table; OpenRLHF's `ppo_kl` + `vllm_kl` slot into the K1
-  column.
-- [[excerpts/async-rollout]] — the IS modes exist because async
-  rollout exists.
-- Host chapter: [[ch-56]] §2.
-- Forward to [[ch-57]] (TRL) — same loss, inlined into the train loop;
-  no nn.Module wrapper.
+[[openrlhf-ppo]] · [[openrlhf-ppo-recipe]] · [[verl-ppo-loss]] · [[async-rollout]] · [[openrlhf-dpo]]

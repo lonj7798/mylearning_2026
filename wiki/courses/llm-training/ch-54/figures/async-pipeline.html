@@ -1,274 +1,319 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-<meta charset="UTF-8">
-<title>ch-54 — Async rollout pipeline</title>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ch-54 — Staleness in asynchronous RL</title>
 <style>
-  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-         background: #fafafa; color: #222; margin: 0; padding: 24px; }
-  h1 { font-size: 20px; margin: 0 0 4px; }
-  h2 { font-size: 14px; margin: 18px 0 6px; color: #444; }
-  .sub { font-size: 13px; color: #666; margin-bottom: 16px; line-height: 1.45; }
-  .panel { background: #fff; border: 1px solid #ddd; border-radius: 6px; padding: 16px; margin-bottom: 18px; }
-  .controls { display: flex; flex-wrap: wrap; gap: 18px; margin-bottom: 12px; }
-  .control { display: flex; flex-direction: column; font-size: 12px; min-width: 160px; }
-  .control label { color: #555; margin-bottom: 4px; }
-  .control input[type=range] { width: 160px; }
-  .control .v { font-family: ui-monospace, "SF Mono", monospace; color: #0a6; }
-  canvas { display: block; border: 1px solid #eee; background: #fff; }
-  .legend { font-size: 12px; margin-top: 8px; line-height: 1.6; }
-  .legend span.sw { display: inline-block; width: 12px; height: 12px; vertical-align: middle; margin: 0 4px 0 10px; border-radius: 2px; }
-  .readout { font-family: ui-monospace, "SF Mono", monospace; font-size: 12px; color: #333;
-             background: #f5f5f5; padding: 8px 10px; border-radius: 4px; margin-top: 6px;
-             display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px 14px; }
-  .readout b { color: #0a6; }
-  .warn { color: #b84a1c; }
-  .note { font-size: 12px; color: #666; margin-top: 8px; line-height: 1.5; }
-  .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
-  @media (max-width: 900px) { .grid { grid-template-columns: 1fr; } }
-  code { font-family: ui-monospace, "SF Mono", monospace; background: #f3f3f3; padding: 1px 4px; border-radius: 3px; }
-  button { font-family: inherit; font-size: 12px; padding: 4px 10px; border: 1px solid #888;
-           background: #fff; border-radius: 4px; cursor: pointer; }
-  button.active { background: #0a6; color: #fff; border-color: #0a6; }
+  :root {
+    --bg: #fbfbf9; --fg: #1b1b1b; --muted: #5d5d5d; --line: #d8d6d0;
+    --panel: #ffffff; --accent: #1f5d8c; --warn: #9a3d1e; --ok: #24614a;
+    --grid: #ebe9e4;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #17181a; --fg: #e9e8e4; --muted: #a2a09b; --line: #34363a;
+      --panel: #1e2023; --accent: #79b4dd; --warn: #e0906c; --ok: #7fc4a8;
+      --grid: #2a2c30;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 20px 16px 40px; background: var(--bg); color: var(--fg);
+    font: 15px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  }
+  .wrap { max-width: 940px; margin: 0 auto; }
+  h1 { font-size: 19px; margin: 0 0 4px; font-weight: 600; }
+  h2 { font-size: 15px; margin: 26px 0 8px; font-weight: 600; }
+  p.sub { color: var(--muted); margin: 0 0 18px; font-size: 13.5px; }
+  .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 14px 16px; }
+  .controls { display: flex; flex-wrap: wrap; gap: 20px; align-items: flex-end; }
+  .ctl { flex: 1 1 220px; min-width: 200px; }
+  label { display: block; font-size: 12.5px; color: var(--muted); margin-bottom: 5px; }
+  input[type=range] { width: 100%; accent-color: var(--accent); }
+  .val { font-variant-numeric: tabular-nums; font-weight: 600; color: var(--fg); }
+  .toggle { display: flex; align-items: center; gap: 8px; font-size: 13.5px; }
+  .readouts { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 12px; margin-top: 16px; }
+  .ro { border: 1px solid var(--line); border-radius: 5px; padding: 9px 11px; }
+  .ro .k { font-size: 11.5px; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
+  .ro .v { font-size: 20px; font-variant-numeric: tabular-nums; font-weight: 600; margin-top: 2px; }
+  .ro .n { font-size: 11.5px; color: var(--muted); margin-top: 2px; }
+  .delta-bad { color: var(--warn); }
+  .delta-ok { color: var(--ok); }
+  svg { display: block; width: 100%; height: auto; }
+  table { border-collapse: collapse; width: 100%; font-size: 13px; }
+  th, td { border-bottom: 1px solid var(--line); padding: 7px 8px; text-align: left; vertical-align: top; }
+  th { font-weight: 600; color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: .03em; }
+  td.num { font-variant-numeric: tabular-nums; text-align: right; }
+  .cap { font-size: 12.5px; color: var(--muted); margin-top: 10px; }
+  code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12.5px;
+         background: var(--grid); padding: 1px 4px; border-radius: 3px; }
+  .scroll { overflow-x: auto; }
+  .note { border-left: 3px solid var(--accent); padding: 8px 12px; margin-top: 14px; font-size: 13.5px; color: var(--muted); }
 </style>
 </head>
 <body>
+<div class="wrap">
 
-<h1>Async rollout pipeline — queue, staleness, IS correction</h1>
-<div class="sub">
-  ch-54 companion. Live simulation of the [[async-rollout]] architecture: R rollout workers fill a bounded queue;
-  a single learner pops, trains, and broadcasts weights. Adjust queue depth <code>d</code>, rollout:learner speed
-  ratio <code>ρ</code>, partial-rollout, and IS-correction mode. Watch throughput rise with <code>d</code>,
-  but watch <code>vllm_kl</code> and clipfrac creep up as staleness <code>k</code> grows.
-</div>
+  <h1>Staleness in asynchronous RL — what the cap sets, and what it costs</h1>
+  <p class="sub">Companion to ch-54 §4. Move the staleness cap and the generator/trainer speed ratio.
+  The left panel computes the admission rule of AReaL (arXiv:2505.24298v5 §5.1, Eq. 3) exactly.
+  The right panel reports measured results from the same paper's Table 2 and Figure 5c — no simulation.</p>
 
-<div class="panel">
-  <h2>Controls</h2>
-  <div class="controls">
-    <div class="control">
-      <label>Queue depth d <span class="v" id="vD">1</span></label>
-      <input type="range" id="d" min="1" max="4" step="1" value="1">
-    </div>
-    <div class="control">
-      <label>Rollout:learner ratio ρ <span class="v" id="vRho">2.0</span></label>
-      <input type="range" id="rho" min="0.5" max="4.0" step="0.1" value="2.0">
-    </div>
-    <div class="control">
-      <label>Rollout workers R <span class="v" id="vR">2</span></label>
-      <input type="range" id="R" min="1" max="4" step="1" value="2">
-    </div>
-    <div class="control">
-      <label>Partial rollout</label>
-      <div><button id="partialBtn">off</button></div>
-    </div>
-    <div class="control">
-      <label>IS correction mode</label>
-      <div>
-        <button class="is-btn" data-mode="off">off</button>
-        <button class="is-btn active" data-mode="tis">tis</button>
-        <button class="is-btn" data-mode="icepop">icepop</button>
+  <div class="panel">
+    <div class="controls">
+      <div class="ctl">
+        <label for="eta">Maximum staleness η (training steps): <span class="val" id="etaOut">4</span></label>
+        <input type="range" id="eta" min="0" max="6" step="1" value="3">
+      </div>
+      <div class="ctl">
+        <label for="ratio">Generator throughput ÷ trainer throughput: <span class="val" id="ratioOut">2.0×</span></label>
+        <input type="range" id="ratio" min="5" max="40" step="1" value="20">
+      </div>
+      <div class="ctl">
+        <label for="batch">Training batch B (prompts): <span class="val" id="batchOut">512</span></label>
+        <input type="range" id="batch" min="0" max="4" step="1" value="3">
+      </div>
+      <div class="ctl">
+        <label>Objective</label>
+        <div class="toggle">
+          <input type="checkbox" id="decoupled" checked>
+          <label for="decoupled" style="margin:0; color:var(--fg)">Decoupled PPO objective (π_prox as trust-region centre)</label>
+        </div>
       </div>
     </div>
-    <div class="control">
-      <label>&nbsp;</label>
-      <div><button id="resetBtn">reset</button></div>
-    </div>
-  </div>
-  <div class="readout">
-    <span>throughput: <b id="rThru">0.00</b> upd/s</span>
-    <span>effective k: <b id="rK">0.00</b></span>
-    <span>vllm_kl (proxy): <b id="rKl">0.000</b></span>
-    <span>PPO clipfrac: <b id="rCF">0.00</b></span>
-  </div>
-</div>
 
-<div class="grid">
-  <div class="panel">
-    <h2>A — pipeline topology</h2>
-    <canvas id="cTop" width="560" height="220"></canvas>
-    <div class="note" id="topoNote">
-      Dots flow rollout→queue→learner. Red dots are stale (<code>k ≥ 3</code>); the red-bar near the learner
-      is the weight-broadcast pause (verl <code>engine to paused state</code>, OpenRLHF <code>vllm_lock</code>).
+    <div class="readouts">
+      <div class="ro">
+        <div class="k">Generator lead, max</div>
+        <div class="v" id="leadOut">5 batches</div>
+        <div class="n">= η + 1, from Eq. 3</div>
+      </div>
+      <div class="ro">
+        <div class="k">Generator utilisation</div>
+        <div class="v" id="utilOut">50%</div>
+        <div class="n">rate-limited once the cap binds</div>
+      </div>
+      <div class="ro">
+        <div class="k">AIME24, 1.5B, 250 steps</div>
+        <div class="v" id="aimeOut">42.2</div>
+        <div class="n" id="aimeNote">Table 2, measured</div>
+      </div>
+      <div class="ro">
+        <div class="k">MATH-500, same run</div>
+        <div class="v" id="mathOut">89.5</div>
+        <div class="n" id="mathNote">Table 2, measured</div>
+      </div>
+      <div class="ro">
+        <div class="k">Effective throughput</div>
+        <div class="v" id="thrOut">356.6k</div>
+        <div class="n">tokens/s, Fig. 5c bar label</div>
+      </div>
     </div>
-  </div>
-  <div class="panel">
-    <h2>B — staleness &amp; vllm_kl (proxy)</h2>
-    <canvas id="cStale" width="560" height="220"></canvas>
-    <div class="legend">
-      <span class="sw" style="background:#4a7"></span>effective k (queue depth + partial)
-      <span class="sw" style="background:#d64"></span>vllm_kl proxy (after IS)
-      <span class="sw" style="background:#aaa"></span>PPO clipfrac
-    </div>
-    <div class="note">
-      vllm_kl proxy is <code>k · 0.04 · leak(mode)</code>. <code>leak</code> is 1.0 for off, 0.2 for tis
-      (matches <code>PolicyLoss.forward</code> clip to <code>[0.5, 2.0]</code>), 0.05 for icepop
-      (per-token mask). Clipfrac pegs at 1 once <code>vllm_kl &gt; 0.10</code> — the canary in
-      [[async-rollout]] §Failure signature.
-    </div>
-  </div>
-</div>
 
-<div class="panel">
-  <h2>What this simulates vs what is a cartoon</h2>
-  <div class="note">
-    <b>Attested numbers</b>: throughput ratio 1.6–2.0× at sync→async on 8×H100 / 7B ([[async-rollout]] Figure 5);
-    queue depth <code>d=1..2</code> as the production default (both OpenRLHF and verl); <code>vllm_kl &gt; 0.1</code>
-    with clipfrac pegged as the failure signature; clip range <code>[0.5, 2.0]</code> on the IS weight from
-    [[openrlhf-ppo]] <code>vllm_is_truncated_threshold</code>. <br>
-    <b>Cartoons</b>: the 0.04 nat/step drift constant is illustrative; real drift depends on LR · token entropy.
-    Dot colors are simulated staleness, not real tokens. The "partial rollout" mode here just halves the
-    in-flight penalty — the real [[verl-rollout]] implementation interrupts decoding mid-sequence via the
-    priority queue.
+    <div class="note" id="verdict"></div>
   </div>
+
+  <h2>Admission rule, evaluated</h2>
+  <div class="panel">
+    <svg id="timeline" viewBox="0 0 900 200" role="img" aria-label="Generator lead against the trainer under the staleness cap"></svg>
+    <p class="cap">The rule is <code>⌊(N_r − 1)/B⌋ ≤ i + η</code>, where <code>N_r</code> is the cumulative number of
+    generated trajectories, <code>i</code> the current policy version, and <code>B</code> the training batch size in prompts.
+    Generation requests beyond the bound are rejected until the trainer advances, so the generator can run at most
+    η + 1 batches ahead however fast it is. A generator faster than that bound idles; a generator slower than the
+    trainer never reaches the bound and the run is generation-limited.</p>
+  </div>
+
+  <h2>Measured effect of the cap (AReaL, 1.5B, math, 250 PPO steps, seed 1)</h2>
+  <div class="panel scroll">
+    <table>
+      <thead>
+        <tr><th>η</th><th class="num">AIME24 without decoupled objective</th><th class="num">AIME24 with</th>
+            <th class="num">MATH-500 without</th><th class="num">MATH-500 with</th><th class="num">Effective throughput (k tok/s)</th></tr>
+      </thead>
+      <tbody id="tbody"></tbody>
+    </table>
+    <p class="cap">Accuracy columns: arXiv:2505.24298v5 §7.4, Table 2 (η = 0 is the synchronous oracle).
+    Throughput column: bar labels of Figure 5c in the same paper. One seed per configuration (§B).
+    The η = 4 row without the decoupled objective is lower than η = 8; the paper does not explain the non-monotonicity.</p>
+  </div>
+
+  <h2>Four ways production systems bound staleness</h2>
+  <div class="panel scroll">
+    <table>
+      <thead><tr><th>System</th><th>Mechanism</th><th>What it bounds</th><th>Locus</th></tr></thead>
+      <tbody>
+        <tr>
+          <td>AReaL</td>
+          <td>Admission control: reject generation requests that would violate <code>⌊(N_r−1)/B⌋ ≤ i + η</code>; prefer older trajectories when forming a batch</td>
+          <td>Batch-level staleness in training steps</td>
+          <td>arXiv:2505.24298v5 §5.1</td>
+        </tr>
+        <tr>
+          <td>OpenRLHF async trainer</td>
+          <td>Bounded queue plus a slot semaphore of the same capacity; default <code>async_queue_size = 1</code></td>
+          <td>Number of in-flight rollout batches. The payload carries no policy-version field and neither loop filters by age</td>
+          <td>OpenRLHF@64c1cc4 <code>ppo_trainer_async.py</code> L287–297; <code>train_ppo_ray.py</code> L274–283</td>
+        </tr>
+        <tr>
+          <td>verl <code>fully_async_policy</code></td>
+          <td><code>staleness_threshold</code> (0.5 in the released experiment) with <code>partial_rollout</code>: interrupt before parameter sync, resume after</td>
+          <td>Share of a batch allowed to be stale; long responses are split across versions rather than discarded</td>
+          <td>verl@753aed3 <code>fully_async_policy/README.md</code> L351–352, L380–396</td>
+        </tr>
+        <tr>
+          <td>GLM-5 (slime)</td>
+          <td>Record the version sequence (w₀ … w_k) of each response; discard when w′ − w₀ &gt; τ. Exclude samples that failed by environment collapse; pad the group if more than half remain, else drop it</td>
+          <td>Per-trajectory version gap, for agent rollouts spanning several weight updates</td>
+          <td>GLM-5 technical report §4.1.2</td>
+        </tr>
+        <tr>
+          <td>MiniMax Forge</td>
+          <td>Windowed FIFO: the trainer may fetch any completed trajectory inside a sliding window [T_i, T_i+W−1] and nothing beyond it</td>
+          <td>Drift of the training distribution toward short, fast tasks, which greedy fetching causes</td>
+          <td>Forge post §1.2, §3.1</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  <p class="cap">Every number on this page appears in ch-54 read.md at the same locus. Nothing here is simulated
+  except the generator-utilisation arithmetic, which is the admission rule applied to the speed ratio you set.</p>
+
 </div>
 
 <script>
-(() => {
-  const $ = (id) => document.getElementById(id);
-  const ctxT = $("cTop").getContext("2d");
-  const ctxS = $("cStale").getContext("2d");
+(function () {
+  var ETAS = [0, 1, 2, 4, 8, 16, Infinity];
+  var ETA_LABEL = ["0", "1", "2", "4", "8", "16", "∞"];
+  // arXiv:2505.24298v5 Table 2 (1.5B, math, 250 steps) and Fig. 5c bar labels.
+  var DATA = [
+    { aimeWo: 42.0, aimeW: 42.0, mathWo: 89.2, mathW: 89.2, thr: 128.7, oracle: true },
+    { aimeWo: 41.8, aimeW: 42.1, mathWo: 89.9, mathW: 89.8, thr: 269.3 },
+    { aimeWo: 40.0, aimeW: 41.8, mathWo: 89.6, mathW: 89.6, thr: 356.6 },
+    { aimeWo: 23.3, aimeW: 42.2, mathWo: 66.9, mathW: 89.5, thr: 356.6 },
+    { aimeWo: 35.7, aimeW: 41.0, mathWo: 87.8, mathW: 89.2, thr: 371.7 },
+    { aimeWo: 35.8, aimeW: 38.7, mathWo: 87.4, mathW: 89.1, thr: 382.4 },
+    { aimeWo: 34.0, aimeW: 36.9, mathWo: 87.1, mathW: 88.1, thr: 396.8 }
+  ];
+  var BATCHES = [64, 128, 256, 512, 1024];
 
-  const state = { d:1, rho:2.0, R:2, partial:false, isMode:"tis",
-    t:0, queue:[], trainT:0, history:[], lastBroadcast:0, thruAcc:0, thruN:0 };
-  const leak = m => m === "off" ? 1.0 : m === "tis" ? 0.20 : 0.05;
-  function reset() { Object.assign(state, { t:0, queue:[], trainT:0, history:[],
-    lastBroadcast:0, thruAcc:0, thruN:0 }); }
+  var eta = document.getElementById('eta');
+  var ratio = document.getElementById('ratio');
+  var batch = document.getElementById('batch');
+  var decoupled = document.getElementById('decoupled');
 
-  $("d").addEventListener("input", e => { state.d = +e.target.value; $("vD").textContent = state.d; });
-  $("rho").addEventListener("input", e => { state.rho = +e.target.value; $("vRho").textContent = state.rho.toFixed(1); });
-  $("R").addEventListener("input", e => { state.R = +e.target.value; $("vR").textContent = state.R; });
-  $("partialBtn").addEventListener("click", e => {
-    state.partial = !state.partial;
-    e.target.textContent = state.partial ? "on" : "off";
-    e.target.classList.toggle("active", state.partial);
-  });
-  document.querySelectorAll(".is-btn").forEach(b => {
-    b.addEventListener("click", () => {
-      state.isMode = b.dataset.mode;
-      document.querySelectorAll(".is-btn").forEach(x => x.classList.remove("active"));
-      b.classList.add("active");
-    });
-  });
-  $("resetBtn").addEventListener("click", reset);
-
-  function step(dt) {
-    state.t += dt;
-    // Producer: R workers yield rollouts at rate R·ρ; queue capped at d.
-    if (Math.random() < state.R * state.rho * dt && state.queue.length < state.d)
-      state.queue.push({ age: 0 });
-    state.queue.forEach(q => q.age += dt);
-    // Consumer: 1.0s cycle + 0.15s broadcast pause.
-    state.trainT += dt;
-    if (state.trainT >= 1.0 && state.queue.length > 0) {
-      const popped = state.queue.shift();
-      const kEff = popped.age;
-      const klRaw = kEff * 0.04 * leak(state.isMode);
-      const klEff = state.partial ? klRaw * 0.5 : klRaw;
-      const cf = Math.min(1.0, Math.max(0.05, (klEff - 0.02) * 8));
-      state.history.push({ t: state.t, k: kEff, kl: klEff, cf });
-      if (state.history.length > 300) state.history.shift();
-      state.lastBroadcast = state.t; state.trainT = 0;
-      state.thruAcc += 1; state.thruN += 1.15;
-    }
+  function fillTable() {
+    var rows = DATA.map(function (d, i) {
+      return '<tr><td>' + ETA_LABEL[i] + (d.oracle ? ' (oracle)' : '') + '</td>' +
+        '<td class="num">' + d.aimeWo.toFixed(1) + '</td>' +
+        '<td class="num">' + d.aimeW.toFixed(1) + '</td>' +
+        '<td class="num">' + d.mathWo.toFixed(1) + '</td>' +
+        '<td class="num">' + d.mathW.toFixed(1) + '</td>' +
+        '<td class="num">' + d.thr.toFixed(1) + '</td></tr>';
+    }).join('');
+    document.getElementById('tbody').innerHTML = rows;
   }
 
-  function drawTop() {
-    const c = ctxT; c.clearRect(0, 0, 560, 220);
-    c.strokeStyle = "#888"; c.lineWidth = 1.5; c.font = "11px sans-serif";
-    for (let i = 0; i < state.R; i++) {
-      const y = 40 + i * 40;
-      c.strokeRect(30, y, 100, 30);
-      c.fillStyle = "#333"; c.fillText("RolloutActor " + (i+1), 38, y + 19);
-    }
-    c.strokeRect(160, 80, 180, 60);
-    c.fillStyle = "#333"; c.fillText("rollout_queue (d=" + state.d + ", len=" + state.queue.length + ")", 168, 75);
-    for (let i = 0; i < state.d; i++) {
-      const x = 170 + i * 40;
-      c.strokeStyle = "#ccc"; c.strokeRect(x, 95, 30, 30);
-      if (i < state.queue.length) {
-        const age = state.queue[i].age, red = Math.min(220, age * 80);
-        c.fillStyle = "rgb(" + (80+red) + ",160," + Math.max(0,160-red) + ")";
-        c.fillRect(x + 4, 99, 22, 22);
+  function drawTimeline(lead, util, etaIdx) {
+    var W = 900, H = 200, x0 = 60, x1 = 860, yT = 70, yG = 140, span = x1 - x0;
+    var maxB = 12;
+    var step = span / maxB;
+    var trainerAt = 3;                       // trainer has consumed 3 batches, for illustration
+    var genAt = Math.min(trainerAt + lead, maxB);
+    var cssLine = 'var(--line)', cssFg = 'var(--fg)', cssMuted = 'var(--muted)';
+    var s = '';
+    s += '<rect x="0" y="0" width="' + W + '" height="' + H + '" fill="none"/>';
+    for (var b = 0; b <= maxB; b++) {
+      var x = x0 + b * step;
+      s += '<line x1="' + x + '" y1="40" x2="' + x + '" y2="165" stroke="var(--grid)" stroke-width="1"/>';
+      if (b % 2 === 0) {
+        s += '<text x="' + x + '" y="182" fill="' + cssMuted + '" font-size="11" text-anchor="middle">' + b + '</text>';
       }
     }
-    const tX = 390;
-    c.strokeStyle = "#888"; c.strokeRect(tX, 70, 140, 80);
-    c.fillStyle = "#333";
-    ["TrainingActor", "", "score → GAE/GRPO", "clipped PG step", "backward + broadcast"]
-      .forEach((s, i) => c.fillText(s, tX + 8, 65 + i * 15));
-    if (state.t - state.lastBroadcast < 0.15) {
-      c.fillStyle = "rgba(216,100,60,0.35)"; c.fillRect(tX - 2, 68, 144, 84);
-      c.fillStyle = "#b84a1c"; c.fillText("PAUSE (weight broadcast)", tX + 10, 165);
+    s += '<text x="' + (x0 + span / 2) + '" y="197" fill="' + cssMuted + '" font-size="11" text-anchor="middle">batches of B prompts, cumulative</text>';
+    s += '<text x="10" y="' + (yT + 4) + '" fill="' + cssMuted + '" font-size="11.5">trainer</text>';
+    s += '<text x="10" y="' + (yG + 4) + '" fill="' + cssMuted + '" font-size="11.5">generator</text>';
+    s += '<line x1="' + x0 + '" y1="' + yT + '" x2="' + x1 + '" y2="' + yT + '" stroke="' + cssLine + '" stroke-width="1"/>';
+    s += '<line x1="' + x0 + '" y1="' + yG + '" x2="' + x1 + '" y2="' + yG + '" stroke="' + cssLine + '" stroke-width="1"/>';
+    s += '<rect x="' + x0 + '" y="' + (yT - 11) + '" width="' + (trainerAt * step) + '" height="22" fill="var(--accent)" opacity="0.75" rx="3"/>';
+    s += '<rect x="' + x0 + '" y="' + (yG - 11) + '" width="' + (genAt * step) + '" height="22" fill="var(--ok)" opacity="0.6" rx="3"/>';
+    var capX = x0 + Math.min(trainerAt + lead, maxB) * step;
+    s += '<line x1="' + capX + '" y1="30" x2="' + capX + '" y2="170" stroke="var(--warn)" stroke-width="2" stroke-dasharray="5 4"/>';
+    var capLabel = ETAS[etaIdx] === Infinity ? 'no cap' : 'admission bound: i + η + 1';
+    s += '<text x="' + Math.min(capX + 8, W - 10) + '" y="26" fill="var(--warn)" font-size="11.5" text-anchor="' + (capX > W - 200 ? 'end' : 'start') + '">' + capLabel + '</text>';
+    s += '<text x="' + (x0 + trainerAt * step / 2) + '" y="' + (yT + 4) + '" fill="#fff" font-size="11.5" text-anchor="middle">policy version i</text>';
+    s += '<text x="' + (x0 + genAt * step / 2) + '" y="' + (yG + 4) + '" fill="' + cssFg + '" font-size="11.5" text-anchor="middle">' +
+         (ETAS[etaIdx] === Infinity ? 'unbounded lead' : 'lead ≤ ' + lead + ' batches') + '</text>';
+    document.getElementById('timeline').innerHTML = s;
+  }
+
+  function update() {
+    var i = parseInt(eta.value, 10);
+    var e = ETAS[i];
+    var r = parseInt(ratio.value, 10) / 10;
+    var B = BATCHES[parseInt(batch.value, 10)];
+    var d = DATA[i];
+
+    document.getElementById('etaOut').textContent = ETA_LABEL[i];
+    document.getElementById('ratioOut').textContent = r.toFixed(1) + '×';
+    document.getElementById('batchOut').textContent = B;
+
+    var lead = (e === Infinity) ? 12 : e + 1;
+    document.getElementById('leadOut').textContent = (e === Infinity) ? 'unbounded' : (lead + ' batches');
+
+    // Once the cap binds, the generator is rate-limited to the trainer's rate.
+    var util = (e === Infinity) ? 1 : Math.min(1, 1 / r);
+    // A generator slower than the trainer is never rate-limited: it is the bottleneck instead.
+    if (r <= 1) util = 1;
+    document.getElementById('utilOut').textContent = Math.round(util * 100) + '%';
+
+    var useD = decoupled.checked;
+    var aime = useD ? d.aimeW : d.aimeWo;
+    var math = useD ? d.mathW : d.mathWo;
+    document.getElementById('aimeOut').textContent = aime.toFixed(1);
+    document.getElementById('mathOut').textContent = math.toFixed(1);
+    document.getElementById('thrOut').textContent = d.thr.toFixed(1) + 'k';
+
+    var dA = aime - DATA[0].aimeW;
+    var dM = math - DATA[0].mathW;
+    var cls = function (v) { return v <= -1.0 ? 'delta-bad' : (v >= -0.5 ? 'delta-ok' : ''); };
+    document.getElementById('aimeNote').innerHTML =
+      '<span class="' + cls(dA) + '">' + (dA >= 0 ? '+' : '') + dA.toFixed(1) + ' vs synchronous oracle</span>';
+    document.getElementById('mathNote').innerHTML =
+      '<span class="' + cls(dM) + '">' + (dM >= 0 ? '+' : '') + dM.toFixed(1) + ' vs synchronous oracle</span>';
+
+    var v;
+    if (e === 0) {
+      v = 'η = 0 is synchronous RL: the admission rule permits no lead at all, and effective throughput is the lowest measured in the sweep (128.7k tokens/s).';
+    } else if (!useD && e >= 2) {
+      v = 'With the behaviour policy as the trust-region centre, this cap cost ' + Math.abs(dA).toFixed(1) +
+          ' AIME24 points and ' + Math.abs(dM).toFixed(1) + ' MATH-500 points against the synchronous oracle in the measured run. ' +
+          'Switch the objective before raising the cap.';
+    } else if (useD && e <= 8) {
+      v = 'With the decoupled objective this cap stayed within ' + Math.abs(dA).toFixed(1) +
+          ' AIME24 points of the synchronous oracle while effective throughput rose from 128.7k to ' + d.thr.toFixed(1) + 'k tokens/s.';
+    } else {
+      v = 'Above η = 8 the decoupled objective no longer holds the oracle score: ' + aime.toFixed(1) +
+          ' AIME24 against 42.0 synchronous. Throughput gains past this point were small in the measured sweep.';
     }
-    c.strokeStyle = "#888"; c.beginPath();
-    c.moveTo(130, 110); c.lineTo(160, 110);
-    c.moveTo(340, 110); c.lineTo(390, 110); c.stroke();
-    c.fillStyle = "#555"; c.fillText("generate(π_{t−k})", 132, 100); c.fillText("pop", 352, 100);
-    c.strokeStyle = "#b84a1c"; c.beginPath();
-    c.moveTo(460, 150); c.lineTo(460, 185); c.lineTo(80, 185); c.lineTo(80, 70); c.stroke();
-    c.fillStyle = "#b84a1c"; c.fillText("broadcast_weights (via vllm_lock)", 180, 200);
-  }
-
-  function drawStale() {
-    const c = ctxS, W = 560, H = 220;
-    c.clearRect(0, 0, W, H);
-    // Axes.
-    c.strokeStyle = "#ccc"; c.beginPath();
-    c.moveTo(40, 20); c.lineTo(40, 190); c.lineTo(540, 190); c.stroke();
-    c.fillStyle = "#777"; c.font = "11px sans-serif";
-    c.fillText("time →", 500, 205);
-    c.fillText("k / kl / cf", 5, 30);
-    if (state.history.length < 2) return;
-    const h = state.history;
-    const xScale = 500 / Math.max(30, h.length);
-    const yScaleK = 160 / 5;  // k in [0,5]
-    const drawLine = (key, color, mul=1, cap=5) => {
-      c.strokeStyle = color; c.lineWidth = 1.5;
-      c.beginPath();
-      h.forEach((p, i) => {
-        const x = 40 + i * xScale;
-        const y = 190 - Math.min(cap, p[key] * mul) * (160/cap);
-        if (i === 0) c.moveTo(x, y); else c.lineTo(x, y);
-      });
-      c.stroke();
-    };
-    drawLine("k", "#4a7", 1, 5);
-    drawLine("kl", "#d64", 20, 5);  // kl in [0, 0.25] → scale to [0, 5]
-    drawLine("cf", "#aaa", 5, 5);   // cf in [0, 1] → scale to [0, 5]
-    // Guides: kl=0.1 canary.
-    const yCan = 190 - (0.1 * 20) * (160/5);
-    c.strokeStyle = "#d64"; c.setLineDash([4, 3]);
-    c.beginPath(); c.moveTo(40, yCan); c.lineTo(540, yCan); c.stroke();
-    c.setLineDash([]);
-    c.fillStyle = "#d64"; c.fillText("vllm_kl = 0.10 canary", 420, yCan - 4);
-  }
-
-  function readout() {
-    const last = state.history[state.history.length - 1];
-    const thru = state.thruN > 0 ? state.thruAcc / state.thruN : 0;
-    $("rThru").textContent = thru.toFixed(2);
-    if (last) {
-      $("rK").textContent = last.k.toFixed(2);
-      $("rKl").textContent = last.kl.toFixed(3);
-      $("rCF").textContent = last.cf.toFixed(2);
-      $("rKl").className = last.kl > 0.10 ? "warn" : "";
-      $("rCF").className = last.cf >= 0.95 ? "warn" : "";
+    if (r > 1 && e !== Infinity) {
+      v += ' At ' + r.toFixed(1) + '× generator speed the cap binds, so the generator is rate-limited to the trainer and sits idle about ' +
+           Math.round((1 - util) * 100) + '% of the time; that idle capacity is what a larger η, partial rollout, or a smaller rollout replica would recover.';
+    } else if (r <= 1) {
+      v += ' At ' + r.toFixed(1) + '× the generator is slower than the trainer, so the cap never binds and the run is generation-limited: adding rollout replicas helps, raising η does not.';
     }
+    v += ' Batch size B = ' + B + ' prompts sets the unit of the bound, not its size: the lead is counted in batches.';
+    document.getElementById('verdict').textContent = v;
+
+    drawTimeline(lead, util, i);
   }
 
-  reset();
-  let last = performance.now();
-  function loop() {
-    const now = performance.now();
-    const dt = Math.min(0.08, (now - last) / 1000);
-    last = now;
-    step(dt);
-    drawTop(); drawStale(); readout();
-    requestAnimationFrame(loop);
-  }
-  loop();
+  [eta, ratio, batch].forEach(function (el) { el.addEventListener('input', update); });
+  decoupled.addEventListener('change', update);
+  fillTable();
+  update();
 })();
 </script>
-
 </body>
 </html>

@@ -1,0 +1,277 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Stage Chain Explorer — ch-58a</title>
+<style>
+  :root {
+    color-scheme: light;
+    --surface-0: #f6f5f2; --surface-1: #fcfcfb; --surface-2: #efede8;
+    --border: #d9d6cf; --grid: #e4e2dd;
+    --text-primary: #111110; --text-secondary: #4f4e4a; --text-muted: #6f6d67;
+    --pre: #2a6fc9; --mid: #2d8a4e; --lc: #16808a; --sft: #c05a1c;
+    --pref: #8a3fb0; --rl: #c0392b; --merge: #9a6a00; --ext: #6b6b66;
+    --focus: #2a6fc9;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      color-scheme: dark;
+      --surface-0: #131312; --surface-1: #1b1b1a; --surface-2: #242422;
+      --border: #3a3a37; --grid: #2e2e2c;
+      --text-primary: #f4f3ef; --text-secondary: #c4c3ba; --text-muted: #9a998f;
+      --pre: #5b9bec; --mid: #5cbf7d; --lc: #45b7c1; --sft: #e08043;
+      --pref: #b77ddb; --rl: #e8675a; --merge: #d9a93a; --ext: #a3a39b;
+      --focus: #5b9bec;
+    }
+  }
+  :root[data-theme="dark"] {
+    color-scheme: dark;
+    --surface-0: #131312; --surface-1: #1b1b1a; --surface-2: #242422;
+    --border: #3a3a37; --grid: #2e2e2c;
+    --text-primary: #f4f3ef; --text-secondary: #c4c3ba; --text-muted: #9a998f;
+    --pre: #5b9bec; --mid: #5cbf7d; --lc: #45b7c1; --sft: #e08043;
+    --pref: #b77ddb; --rl: #e8675a; --merge: #d9a93a; --ext: #a3a39b;
+    --focus: #5b9bec;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--surface-0); color: var(--text-primary);
+         font: 14px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; }
+  main { max-width: 1000px; margin: 0 auto; padding: 20px 16px 40px; }
+  h1 { font-size: 20px; margin: 0 0 4px; }
+  h2 { font-size: 15px; margin: 0 0 6px; }
+  p { margin: 0 0 8px; color: var(--text-secondary); }
+  .card { background: var(--surface-1); border: 1px solid var(--border); border-radius: 8px;
+          padding: 14px; margin-top: 16px; }
+  .controls { display: flex; flex-wrap: wrap; gap: 8px 20px; margin: 8px 0 4px; align-items: center; }
+  .controls fieldset { border: 0; padding: 0; margin: 0; display: flex; flex-wrap: wrap; gap: 4px 12px; align-items: center; }
+  .controls legend { float: left; margin-right: 8px; color: var(--text-muted); font-size: 12px; }
+  label { cursor: pointer; color: var(--text-secondary); }
+  input:focus-visible, button:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+  .chart { width: 100%; overflow-x: auto; }
+  svg { display: block; width: 100%; height: auto; min-width: 680px; }
+  .rowlabel { fill: var(--text-primary); font-size: 12px; }
+  .sublabel { fill: var(--text-muted); font-size: 10px; }
+  .seg { cursor: pointer; }
+  .seg rect { stroke: var(--surface-1); stroke-width: 1; }
+  .seg.sel rect { stroke: var(--text-primary); stroke-width: 2; }
+  .seglabel { fill: #fff; font-size: 10px; pointer-events: none; }
+  .axisline { stroke: var(--border); stroke-width: 1; }
+  .tick { fill: var(--text-muted); font-size: 10px; }
+  .legend { display: flex; flex-wrap: wrap; gap: 4px 14px; margin-top: 10px; }
+  .legend span { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--text-secondary); }
+  .sw { width: 14px; height: 12px; border-radius: 2px; display: inline-block; }
+  .caption { font-size: 12px; color: var(--text-muted); margin-top: 10px; }
+  table { border-collapse: collapse; width: 100%; font-size: 13px; }
+  th, td { text-align: left; padding: 5px 8px; border-bottom: 1px solid var(--grid); vertical-align: top; }
+  th { color: var(--text-muted); font-weight: 600; font-size: 12px; }
+  code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
+  .status-verified { color: var(--mid); }
+  .status-conflict { color: var(--rl); }
+  .status-notreported { color: var(--text-muted); }
+  .status-derived { color: var(--merge); }
+</style>
+</head>
+<body>
+<main>
+  <h1>Stage chains of eight open recipes</h1>
+  <p>Each row is one released checkpoint, drawn as its stages in training order. Bar width is tokens seen in that stage;
+     stages whose token count is not reported are drawn at a fixed minimum width and marked. Select a stage to read its
+     settings, its source locus, and its status. Values are the verified rows of ch-58a §2 and the Recipe table.</p>
+
+  <div class="card">
+    <div class="controls">
+      <fieldset>
+        <legend>Width scale</legend>
+        <label><input type="radio" name="scale" value="log" checked> logarithmic</label>
+        <label><input type="radio" name="scale" value="linear"> linear in tokens</label>
+      </fieldset>
+      <fieldset>
+        <legend>Show</legend>
+        <label><input type="checkbox" id="onlyPost"> post-training stages only</label>
+      </fieldset>
+    </div>
+    <div class="chart"><svg id="chart" role="img" aria-label="Stage chains of eight open model recipes"></svg></div>
+    <div class="legend" id="legend"></div>
+    <p class="caption">A pale block with a dashed outline marks a stage whose token count the source does not report. A red status marks a
+       setting that two artifacts of the same release print differently.</p>
+  </div>
+
+  <div class="card">
+    <h2 id="detailTitle">Select a stage</h2>
+    <table id="detail"><tbody></tbody></table>
+  </div>
+</main>
+
+<script>
+const TYPES = {
+  pre:   {name: "pre-training",           color: "var(--pre)"},
+  mid:   {name: "mid-training / anneal",  color: "var(--mid)"},
+  lc:    {name: "long-context",           color: "var(--lc)"},
+  sft:   {name: "SFT / distill-SFT",      color: "var(--sft)"},
+  pref:  {name: "preference",             color: "var(--pref)"},
+  rl:    {name: "RL",                     color: "var(--rl)"},
+  merge: {name: "merge",                  color: "var(--merge)"},
+  ext:   {name: "external base",          color: "var(--ext)"}
+};
+
+// tokens: tokens seen in the stage, or null when not reported.
+const MODELS = [
+  {name: "OLMo 2 7B Instruct", note: "arXiv:2501.00656v3", stages: [
+    {t:"pre",  label:"pretrain", tokens:3.90e12, set:"batch 1024 × 4096; peak LR 3.0e-4; cosine over 5T truncated at 4T", loc:"Table 3, §2.3", st:"verified", ev:"§4.1: peaks 3–12e-4 within two points on 9 OLMES tasks after a decay, one seed"},
+    {t:"mid",  label:"anneal ×3", tokens:50e9, set:"three 50B anneals on different data orders, averaged; 50B Dolmino mix", loc:"§2.3, Table 13", st:"verified", ev:"§4.5: the 7B uses the 50B mix, the 13B the 100B mix, keeping the anneal step count equal"},
+    {t:"sft",  label:"SFT", tokens:null, set:"939,104 prompts; 2 epochs; batch 128; length 4,096; LR 2e-5", loc:"§5, Table 17", st:"verified", ev:"Table 17 (batch 128, linear, warmup 0.3): 2 epochs at 1e-5 with sum loss 49.97; 3 epochs at 4e-6 with mean loss 48.25"},
+    {t:"pref", label:"DPO", tokens:null, set:"366.7k prompts; dpo_norm; β 5; LR 1e-6 (script) vs 5e-7 (YAML)", loc:"§5; dpo_7b.sh L28", st:"conflict", ev:"§5 sweep selects 1e-6 for the 7B"},
+    {t:"rl",   label:"RLVR", tokens:null, set:"PPO with RM-initialized value; β 0.05; LR 4e-7; GSM8K + MATH + constraint prompts", loc:"§5", st:"verified", ev:"Table 16: AVG 55.9 (DPO) → 56.5 (Instruct)"}
+  ]},
+  {name: "Olmo 3 7B Instruct", note: "arXiv:2512.13961v2 + open-instruct d8a7f1c", stages: [
+    {t:"pre",  label:"pretrain", tokens:5.93e12, set:"batch 4,194,304 tokens; peak LR 3.0e-4 → 3.0e-5; cosine over 5T stretched to 5.93T", loc:"Table 35, Fig. 3", st:"verified", ev:"no ablation of the stretch reported"},
+    {t:"mid",  label:"mid-train", tokens:100e9, set:"batch 2,097,152 tokens; LR 2.074e-4 → 0, warmup 0; Dolmino mix", loc:"Table 35; midtrain script L40-43", st:"conflict", ev:"script prints 2.0712e-4; decontaminated anneal compared against a matched non-decontaminated 100B anneal (§3.5.4)"},
+    {t:"lc",   label:"long-context", tokens:50e9, set:"length 65,536; batch 4,194,304 tokens; YaRN factor 8 from 8,192; 34% long / 66% short", loc:"Table 35; long-context script L37-51", st:"verified", ev:"§3.6.3: 34/66 lowered a subset of OlmoBaseEval by 0.8 points vs 2.5 for 66/34"},
+    {t:"sft",  label:"Think SFT", tokens:45.4e9, set:"2,268,468 prompts; 2 epochs; length 32,768; batch 1,048,576 tokens; LR 5e-5", loc:"Tables 17, 47; 7b_think_sft.sh", st:"verified", ev:"§4.2: LR sweep, evaluation suite, qualitative checks, then a merge of two LR checkpoints"},
+    {t:"pref", label:"Think DPO", tokens:null, set:"150,000 pairs; LR 8e-8 linear; length 16,384; batch 128; dpo_norm; β 5 (framework default after PR #1547)", loc:"7b_think_dpo.sh L3-40", st:"verified", ev:"A.6.2: LR and dataset size swept"},
+    {t:"sft",  label:"Instruct SFT", tokens:3.4e9, set:"2,152,112 prompts; starts from the Think SFT checkpoint; LR 8e-5", loc:"Table 30, Table 47", st:"verified", ev:"§5.5: starting from Think SFT increases benchmark performance (Table 29)"},
+    {t:"pref", label:"Instruct DPO", tokens:null, set:"260,000 pairs (derived from the mixer counts); LR 1e-6 linear; length 16,384; batch 128", loc:"7b_instruct_dpo.sh L3-48", st:"conflict", ev:"Table 48 prints 16 GPUs where the script gives 32 (derived)"},
+    {t:"rl",   label:"Instruct RL", tokens:null, set:"64 prompts × 8 samples; LR 1e-6 constant; response length 8,192; β 0.0; clip 0.2 / 0.272", loc:"7b_instruct_rl.sh L42-85", st:"conflict", ev:"Table 49 dataset size 171,950 against 172,000 summed from the script"}
+  ]},
+  {name: "Tülu 3 8B", note: "arXiv:2411.15124v5 + open-instruct 098424c", stages: [
+    {t:"ext",  label:"Llama 3.1 8B base", tokens:null, set:"base model not trained by this team; '15T+' tokens is a model-card cell shared by 8B, 70B and 405B", loc:"Llama 3.1 model card", st:"not reported", ev:"n/a"},
+    {t:"sft",  label:"SFT", tokens:null, set:"2 epochs; batch 128 sequences; length 4,096; LR 5e-6 linear; warmup 0.03; sum loss", loc:"Table 11; docs/tulu3.md L39-43", st:"verified", ev:"§4.3.2: 'training for longer did not yield further improvements'"},
+    {t:"pref", label:"DPO", tokens:null, set:"length-normalized DPO; β 5; LR 5e-7; batch 128 pairs; 1 epoch; length 2,048", loc:"Table 20; docs/tulu3.md L144-159", st:"verified", ev:"Table 18: DPO-norm β 5, 1 epoch → 57.3 vs 55.7 for the SFT base and 55.2 for DPO"},
+    {t:"rl",   label:"RLVR", tokens:null, set:"PPO; LR 3e-7; β 0.05; batch 224 responses; response length 2,048; α = 10; 29,946 prompts", loc:"Tables 21-22", st:"verified", ev:"§6.2.1 Fig. 21: higher KL divergence gives lower average scores; checkpoints evaluated every 100 steps"}
+  ]},
+  {name: "SmolLM3-3B", note: "HF blog, July 8 2025 + released configs", stages: [
+    {t:"pre",  label:"pretrain ×3", tokens:11.2e12, set:"batch 2,359,296 tokens; LR 2e-4; WSD with 2,000 warmup steps and linear decay over the final 10%; 384 H100 for 24 days", loc:"blog 'Training Configuration'", st:"conflict", ev:"total printed as 11T, 11.2T and 11.1T in the same post; batch 2M–4M had 'minimal impact'"},
+    {t:"lc",   label:"long-context ×2", tokens:100e9, set:"two 50B stages; 4k → 32k (RoPE θ 1.5M) and 32k → 64k (θ 5M)", loc:"blog; released configs", st:"conflict", ev:"the 4k → 32k config prints rope_theta 2000000.0"},
+    {t:"mid",  label:"reasoning mid-train", tokens:140e9, set:"35B tokens for 4 epochs", loc:"blog 'Mid-training'", st:"verified", ev:"later identified as the cause of the RULER regression"},
+    {t:"sft",  label:"SFT", tokens:7.2e9, set:"1.8B tokens for 4 epochs; best-fit-decreasing packing; loss masked on user turns and tool results", loc:"blog 'Post-training'", st:"verified", ev:"no ablation reported"},
+    {t:"pref", label:"APO", tokens:null, set:"Anchored Preference Optimization; chosen from Qwen3-32B, rejected from Qwen3-0.6B; data capped at 24k tokens", loc:"blog 'Off-policy model alignment with APO'", st:"not reported", ev:"'higher downstream performance in our internal ablations', no numbers"},
+    {t:"merge",label:"soup + merge", tokens:null, set:"soup of APO checkpoints, then a linear merge with weights 0.9 (soup) and 0.1 (a mid-training checkpoint), MergeKit", loc:"blog 'Model Merging'", st:"verified", ev:"'recover the base model's RULER score on contexts up to 128k tokens'; no numbers printed"}
+  ]},
+  {name: "Llama 3.1 405B", note: "arXiv:2407.21783v3", stages: [
+    {t:"pre",  label:"pretrain", tokens:15.6e12, set:"3.8e25 FLOPs; peak LR 8e-5; batch 4M → 8M → 16M tokens; 8,000-step warmup; cosine to 8e-7 over 1.2M steps", loc:"§3.4.1", st:"verified", ev:"§3.2.1: scaling law extrapolates to 402B parameters at this budget"},
+    {t:"lc",   label:"long-context ×6", tokens:800e9, set:"six stages from 8K to 128K; per-stage tokens not printed", loc:"§3.4.2", st:"verified", ev:"a stage advanced only when short-context evaluations recovered and needle-in-a-haystack was solved at that length"},
+    {t:"mid",  label:"anneal", tokens:40e6, set:"LR linearly to 0 at 128K context; high-quality sources upsampled; Polyak averaging over the anneal", loc:"§3.4.3", st:"verified", ev:"§3.1.3: annealing on GSM8k/MATH training sets gave +24.0% and +6.4% at 8B and 'negligible' at 405B"},
+    {t:"sft",  label:"SFT ×6 rounds", tokens:null, set:"rejection sampling K = 10–30 per prompt from the previous round's best checkpoint; LR 1e-5 over 8.5K–9K steps; prompt tokens masked", loc:"§4.1.3, §4.2.2", st:"verified", ev:"no ablation reported; batch and epochs not printed"},
+    {t:"pref", label:"DPO ×6 rounds", tokens:null, set:"LR 1e-5; β 0.1; NLL coefficient 0.2 on chosen; most recent preference batches only; short-context data only", loc:"§4.1.4", st:"verified", ev:"§4.3.4: short-only DPO did not hurt long context when the SFT model was strong on long context"},
+    {t:"merge",label:"averaging", tokens:null, set:"models from runs with different data or hyper-parameters averaged at the RM, SFT and DPO stages; weights not printed", loc:"§4.1.5", st:"not reported", ev:"no ablation reported"}
+  ]},
+  {name: "Qwen2.5 (open weights)", note: "arXiv:2412.15115v2", stages: [
+    {t:"pre",  label:"pretrain", tokens:18e12, set:"context 4,096; peak LR, batch, optimizer and compute not given", loc:"Abstract, §3.1-3.3", st:"not reported", ev:"Fig. 1 plots 3T → 7T → 18T across model generations; model and data change together"},
+    {t:"lc",   label:"final stage at 32k", tokens:null, set:"4,096 → 32,768; RoPE base 10,000 → 1,000,000; stage token count not given", loc:"§3.3", st:"not reported", ev:"Table 16: RULER at 128K is 67.0 without and 88.4 with inference-time YaRN + DCA"},
+    {t:"sft",  label:"SFT", tokens:null, set:">1M examples; 2 epochs; length 32,768; LR 7e-6 → 7e-7; weight decay 0.1; clip 1.0", loc:"§4.1", st:"conflict", ev:"§1 says '1 million examples', §4 intro says 'millions'"},
+    {t:"pref", label:"DPO", tokens:null, set:"≈150,000 pairs; 1 epoch; LR 7e-7; Online Merging Optimizer; β not given", loc:"§4.2", st:"not reported", ev:"no ablation reported"},
+    {t:"rl",   label:"GRPO", tokens:null, set:"8 responses per query; 2,048 samples per episode; queries ordered by reward-score variance; LR, β, ε, length and episodes not given", loc:"§4.3", st:"not reported", ev:"no ablation reported"}
+  ]},
+  {name: "DeepSeek-V3 → R1", note: "arXiv:2412.19437v2, arXiv:2501.12948v2", stages: [
+    {t:"pre",  label:"V3 pretrain", tokens:14.8e12, set:"warmup to 2.2e-4, constant to 10T, cosine to 2.2e-5 over 4.3T, then 2.2e-5 and 7.3e-6; batch 3072 → 15360 (unit not printed); 2,664K H800 hours", loc:"V3 §4.2, Table 1", st:"verified", ev:"no schedule ablation reported"},
+    {t:"lc",   label:"V3 long-context", tokens:null, set:"4K → 32K (batch 1920, 1,000 steps) and 32K → 128K (batch 480, 1,000 steps) at LR 7.3e-6; 119K H800 hours; tokens not printed", loc:"V3 §4.3, Table 1", st:"not reported", ev:"Fig. 8: needle-in-a-haystack robust to 128K, measured after SFT"},
+    {t:"sft",  label:"V3 SFT", tokens:null, set:"1.5M instances; 2 epochs; cosine 5e-6 → 1e-6; sample masking inside packed sequences; reasoning data from per-domain expert models", loc:"V3 §5.1", st:"verified", ev:"Table 9 on V2.5: LiveCodeBench-CoT 31.1 → 37.4, MATH-500 74.6 → 83.2"},
+    {t:"rl",   label:"V3 GRPO", tokens:null, set:"rule-based and model-based rewards; prompts across coding, math, writing, role-play and QA; β, ε, G, LR and steps not printed; 5K H800 hours for all post-training", loc:"V3 §5.2, Table 1", st:"not reported", ev:"no ablation reported"},
+    {t:"sft",  label:"R1 cold start", tokens:null, set:"'thousands' of long-chain examples; 2–3 epochs; cosine 5e-5 → 5e-6; length 32,768; batch 128; from V3-Base", loc:"R1 §3, B.3.2, B.4.2", st:"verified", ev:"Table 3: Dev1 IF-Eval 46.6 → 71.7 while AIME 2024 falls 77.9 → 59.0"},
+    {t:"rl",   label:"R1 reasoning RL", tokens:null, set:"LR 3e-6; KL β 0.001; clip ε 10; 32 questions × 16 outputs; length 32,768; language-consistency reward", loc:"R1 §3.2.1", st:"verified", ev:"§3.2.1: a lower ε truncates gradients for many tokens; step count not reported"},
+    {t:"sft",  label:"R1 RS-SFT", tokens:4.31e9, set:"804,745 samples (mean 5,355.3 tokens) = 4.31B tokens per epoch (derived); 2–3 epochs gives 8.6B to 12.9B tokens seen, and the bar shows one epoch; restarted from V3-Base, not from the RL checkpoint", loc:"R1 B.3.3, Table 5, Fig. 2", st:"derived", ev:"Table 3: Dev2 → Dev3 AlpacaEval 2.0 55.8 → 62.1, Aider-Polyglot 25.6 → 44.8"},
+    {t:"rl",   label:"R1 mixed RL", tokens:null, set:"1,700 steps; temperature 0.7; rule + RM + format + language rewards; preference rewards only in the final 400 steps; 41K H800 hours", loc:"R1 §3.2.2, Table 7", st:"verified", ev:"B.5 Fig. 6: with the helpful RM, reward rises while Codeforces pass@1 falls"}
+  ]},
+  {name: "K2-V2 70B", note: "arXiv:2512.06201v2", stages: [
+    {t:"pre",  label:"pretrain", tokens:12.25e12, set:"batch 1,200 × 8,192 = 9.8e6 tokens; LR 1.5e-4 with a 1.5e-6 floor held constant; weight decay 0.05; 1.25e6 steps", loc:"§3.2", st:"verified", ev:"257M pilot on 41.48B tokens: SlimPajama loss 2.815 (cosine d2z), 2.845 (to 10%), 2.817 (linear d2z)"},
+    {t:"mid",  label:"mid-1", tokens:1769e9, set:"context 8,192; RoPE 0.5M; cosine 1.5e-5 → 6e-6; global batch 13,107,200 tokens; introduces reasoning traces", loc:"Table 3, §4.1", st:"verified", ev:"no ablation reported"},
+    {t:"lc",   label:"mid-2", tokens:590e9, set:"context 65,536; RoPE 1M; constant 6e-6; context parallel 1", loc:"Table 3", st:"verified", ev:"raising the RoPE base is stated to improve long-context behaviour"},
+    {t:"lc",   label:"mid-3", tokens:229e9, set:"context 131,072; RoPE 10M; constant 6e-6; context parallel 2", loc:"Table 3", st:"verified", ev:"no ablation reported"},
+    {t:"lc",   label:"mid-4", tokens:131e9, set:"context 524,288; RoPE 10M; constant 6e-6; context parallel 8", loc:"Table 3", st:"verified", ev:"§5: 'mild degradation in stage 4' attributed to the scarcity of long reasoning data"},
+    {t:"sft",  label:"distill-SFT", tokens:52.2e9, set:"17.4B tokens per epoch × 3; batch 128; length 65,536; cosine 2e-5 → 2e-6 with 10% warmup; answers regenerated by GPT-OSS-120B", loc:"§6.1, §6.3", st:"verified", ev:"no teacher-versus-no-teacher comparison reported"}
+  ]}
+];
+
+const POST = new Set(["sft", "pref", "rl", "merge"]);
+const fmt = t => t === null ? "not reported"
+  : t >= 1e12 ? (t / 1e12).toFixed(2).replace(/\.?0+$/, "") + "T tokens"
+  : t >= 1e9 ? (t / 1e9).toFixed(1).replace(/\.0$/, "") + "B tokens"
+  : (t / 1e6).toFixed(0) + "M tokens";
+
+let scale = "log", onlyPost = false, selected = null;
+
+function widths(stages) {
+  const MIN = 26;
+  const vals = stages.map(s => {
+    if (s.tokens === null) return null;
+    if (scale === "log") return Math.log10(s.tokens) - 5;   // 1e6 tokens maps to 1 unit
+    return s.tokens;
+  });
+  const total = vals.reduce((a, v) => a + (v === null ? 0 : v), 0) || 1;
+  return {vals, total, MIN};
+}
+
+function render() {
+  const svg = document.getElementById("chart");
+  const rows = MODELS.map(m => ({
+    name: m.name, note: m.note,
+    stages: m.stages.filter(s => !onlyPost || POST.has(s.t) || s.t === "ext")
+  }));
+  const LEFT = 150, RIGHT = 12, TOP = 26, ROW = 46, H = TOP + rows.length * ROW + 16, W = 960;
+  const plot = W - LEFT - RIGHT;
+  let out = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${W} ${H}" width="${W}" height="${H}">`;
+  out += `<text class="tick" x="${LEFT}" y="16">${scale === "log" ? "stage width: log10 of tokens seen" : "stage width: tokens seen, linear"}</text>`;
+
+  rows.forEach((r, i) => {
+    const y = TOP + i * ROW;
+    const {vals, total, MIN} = widths(r.stages);
+    const nNull = vals.filter(v => v === null).length;
+    const usable = plot - nNull * MIN - (r.stages.length - 1) * 2;
+    out += `<text class="rowlabel" x="0" y="${y + 18}">${r.name}</text>`;
+    out += `<text class="sublabel" x="0" y="${y + 32}">${r.note}</text>`;
+    let x = LEFT;
+    r.stages.forEach((s, j) => {
+      const w = vals[j] === null ? MIN : Math.max(10, usable * vals[j] / total);
+      const col = TYPES[s.t].color;
+      const id = `${i}-${j}`;
+      const sel = selected === id ? " sel" : "";
+      const unknown = s.tokens === null;
+      out += `<g class="seg${sel}" data-id="${id}" data-m="${i}" data-s="${j}" tabindex="0" role="button" aria-label="${r.name}, ${s.label}">`;
+      out += `<rect x="${x}" y="${y + 6}" width="${w}" height="26" rx="3" fill="${col}"`
+           + (unknown ? ` fill-opacity="0.38" stroke="${col}" stroke-width="1.5" stroke-dasharray="3 2"` : ``) + `/>`;
+      if (w > 52) out += `<text class="seglabel" x="${x + 5}" y="${y + 23}"${unknown ? ' style="fill:var(--text-primary)"' : ''}>${s.label}</text>`;
+      out += `</g>`;
+      x += w + 2;
+    });
+  });
+  out += `</svg>`;
+  svg.outerHTML = out.replace("<svg xmlns", '<svg id="chart" xmlns');
+  document.querySelectorAll(".seg").forEach(g => {
+    g.addEventListener("click", () => select(g.dataset.m, g.dataset.s, g.dataset.id));
+    g.addEventListener("keydown", e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); select(g.dataset.m, g.dataset.s, g.dataset.id); } });
+  });
+}
+
+function select(mi, si, id) {
+  const m = MODELS[+mi];
+  const visible = m.stages.filter(s => !onlyPost || POST.has(s.t) || s.t === "ext");
+  const s = visible[+si];
+  selected = id;
+  document.getElementById("detailTitle").textContent = `${m.name} — ${s.label} (${TYPES[s.t].name})`;
+  const cls = {verified: "status-verified", conflict: "status-conflict", "not reported": "status-notreported", derived: "status-derived"}[s.st] || "";
+  document.querySelector("#detail tbody").innerHTML =
+    `<tr><th>Tokens seen</th><td>${fmt(s.tokens)}</td></tr>` +
+    `<tr><th>Settings as printed</th><td>${s.set}</td></tr>` +
+    `<tr><th>Source location</th><td><code>${s.loc}</code></td></tr>` +
+    `<tr><th>Status</th><td class="${cls}">${s.st}</td></tr>` +
+    `<tr><th>Evidence for this value</th><td>${s.ev}</td></tr>`;
+  render();
+}
+
+function legend() {
+  document.getElementById("legend").innerHTML = Object.values(TYPES)
+    .map(t => `<span><i class="sw" style="background:${t.color}"></i>${t.name}</span>`).join("");
+}
+
+document.querySelectorAll('input[name="scale"]').forEach(r =>
+  r.addEventListener("change", e => { scale = e.target.value; render(); }));
+document.getElementById("onlyPost").addEventListener("change", e => {
+  onlyPost = e.target.checked; selected = null; render();
+});
+
+legend();
+render();
+</script>
+</body>
+</html>

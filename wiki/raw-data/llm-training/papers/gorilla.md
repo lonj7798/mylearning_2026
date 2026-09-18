@@ -1,56 +1,103 @@
-<!-- scope: tool-calling synthesis — retriever-augmented API-calling LLM with self-instruct-style data
+<!-- scope: Gorilla (arXiv 2305.15334 v1) - LLaMA-7B fine-tuned on 16,450 GPT-4 self-instruct instruction-API pairs over 1,645 TorchHub/TensorFlow Hub/HuggingFace APIs (APIBench); retriever-aware training with oracle API docs; AST sub-tree accuracy and hallucination metrics
      deps: [[self-instruct]]
-     see-also: [[toolllm]], [[api-bank]], [[bfcl]]
+     see-also: [[api-bank]], [[toolformer]], [[toolllm]], [[bfcl]], [[granite-function-calling]]
 -->
 
 # Gorilla: Large Language Model Connected with Massive APIs
-- **Core Insight:** Pairing a fine-tuned API-calling LLM with an **API retriever** (BM25 or GPT-embedding) substantially reduces hallucinated API calls and enables zero-shot generalization to new APIs via retrieval-augmented fine-tuning; the retriever at train time teaches the model to lean on retrieved documentation rather than memorize API names.
-- **Guideline:** Always train function-calling models with retrieval-in-the-loop — include the retrieved API doc in the prompt context during SFT, so the model learns `condition on doc → emit call` rather than `recall name from memory`.
-- **Authors:** Shishir G. Patil, Tianjun Zhang, Xin Wang, Joseph E. Gonzalez (UC Berkeley)
-- **Year:** 2023
-- **URL:** https://arxiv.org/abs/2305.15334
-- **Relevant topics:** function calling, API retrieval, retrieval-augmented fine-tuning, Gorilla
+- **Core Insight:** Without any retriever, LLaMA-7B fine-tuned on GPT-4-generated instruction-API pairs reaches AST accuracy 59.13 / 71.68 / 83.79 on TorchHub / HuggingFace / TensorFlow Hub with hallucination 6.98 / 10.95 / 5.40, against 38.70 / 19.80 / 18.20 accuracy and 36.55 / 37.16 / 78.65 hallucination for zero-shot GPT-4 (gpt-4-0314) (Table 1).
+- **Guideline:** When training a model to read API documentation retrieved at inference time, use documents in training only if the deployed retriever is close to oracle quality, because the model trained with oracle documents scores 67.20 / 91.26 / 94.16 with oracle retrieval but 40.32 / 17.04 / 41.89 with BM25, below the 59.13 / 71.68 / 83.79 of the model trained and evaluated without documents (Table 2).
+- **Authors:** Shishir G. Patil, Tianjun Zhang, Xin Wang, Joseph E. Gonzalez (UC Berkeley; Xin Wang: Microsoft Research)
+- **Year:** 2023 (arXiv v1 2023-05-24; the only version listed on arXiv; "Preprint. Under review.")
+- **URL:** https://arxiv.org/abs/2305.15334 ; project page named in the abstract: https://gorilla.cs.berkeley.edu
+- **Source type:** paper
+- **Relevant topics:** function calling, API call generation, retrieval-aware fine-tuning, hallucination measurement, self-instruct data
 
 ## Abstract
-Gorilla is a Llama-7B fine-tuned for API-call generation across three ML hubs (TorchHub, TensorHub, HuggingFace — ~1,600 APIs total). The key insight is retriever-aware training: at training time, each example's prompt includes the retrieved top-k API documentation; the model is trained to produce the correct call given the docs. At inference, the retriever is still used, so the model generalizes to new/updated APIs without retraining. Gorilla outperforms GPT-4 on the three-hub eval in direct API-call accuracy.
+LLMs, including GPT-4, struggle to call APIs because they generate inaccurate arguments and hallucinate API usage. The authors release Gorilla, a fine-tuned LLaMA-based model that surpasses GPT-4 at writing API calls. Combined with a document retriever, Gorilla adapts to test-time documentation changes such as version updates, and it reduces hallucination compared with prompting LLMs directly. To evaluate this, the authors introduce APIBench, built from HuggingFace, TorchHub and TensorHub APIs. Code, model, data and demo are released at the project page.
 
 ## Key Contributions
-- **Retriever-aware fine-tuning** — first to systematically train with retrieved context.
-- **APIBench dataset** (~16K instruction-API pairs) from three ML-library docs.
-- Demonstration that AST-level accuracy and hallucination rate both improve with retriever context.
-- Released Gorilla-7B, Gorilla-MPT-7B, and a Gradio demo.
+- APIBench: 1,645 API calls from three model hubs, each converted to a JSON document, with 10 GPT-4-generated instructions per API (§3.1, Fig. 3).
+- Gorilla: LLaMA-7B fine-tuned on single-round instruction-API conversations, with and without an appended API document (§3.2).
+- An AST sub-tree matching evaluation that separates hallucination (a non-existent API) from error (a real API used incorrectly) (§3.3).
+- Experiments on retriever choice, retriever-aware training, test-time documentation change and accuracy constraints (§4).
 
-## Synthesis pipeline (REQUIRED — concrete, modality-specific)
-- **Step 1 — API scraping:** crawl TorchHub, TensorHub, HuggingFace model documentation. Each API has a function signature, description, arg types, and example invocation.
-- **Step 2 — Instruction generation (self-instruct style):** for each API, prompt GPT-4 with the doc and ask it to generate 10 diverse user instructions that would plausibly call this API. Produces ~16K (instruction, API) pairs.
-- **Step 3 — Retriever training:** off-the-shelf BM25 + a contrastively fine-tuned dense retriever (GPT-embeddings → Gorilla-retriever).
-- **Step 4 — Retriever-augmented SFT:** training input includes the user instruction + top-1 retrieved API doc; target is the correct API invocation code. For 20% of examples, the retriever is "oracled" (perfect); 80% are real retrieval results (noisy).
-- **Step 5 — Filtering:** accept pairs where the generated instruction's gold API matches the one documented.
-- **Output shape:** 16,450 (instruction, retrieved-doc, API-call) triplets; single-turn. Average call length ~50 tokens.
-- **Teacher model:** GPT-4 (for instruction generation).
-- **Cost / compute:** ~$5K GPT-4 API + standard Llama-7B fine-tuning.
+## Key Figures/Tables to Study
+- Fig. 3: data curation, self-instruct generation, training and the two inference modes (zero-shot, retrieval).
+- Fig. 4: AST sub-tree match example. Table 1: accuracy, hallucination and error for 5 models × 4 retriever settings × 3 hubs.
+- Table 2: model trained without documents vs with oracle documents, under each evaluation retriever.
+- Table 3: accuracy-constrained API selection. Fig. 6: documentation-change examples. App. Table 4: hyperparameters.
 
-## Modality-specific technical details (REQUIRED — tool-calling)
-- **API registry size:** ~1,645 APIs (TorchHub 94 + TensorHub 626 + HuggingFace 925).
-- **Exact verification rules:** AST match between predicted and gold API invocation — checks function name, args, arg types.
-- **Hallucination-rate measurement:** 11% for Gorilla-7B with retriever, vs 40% for GPT-4 without retriever. Hallucination defined as predicting an API that doesn't exist in the hub.
-- **Call format:** natural Python code (e.g., `model = torch.hub.load('pytorch/vision', 'resnet50', pretrained=True)`), not JSON tool-calls.
-- **Why retrieval-in-training matters:** models trained without retriever context memorize APIs from the training distribution and fail on updated/new APIs; retriever-trained models learn `doc → call`, which transfers.
+## Technical Details
+- **API collection (§3.1):** HuggingFace hosts about 203,681 models; the top 20 per domain are kept across 7 multimodal, 8 CV, 12 NLP, 5 audio, 2 tabular and 2 RL domains, giving 925. TensorFlow Hub v2 has 801 models, 626 after removing cards with little information. TorchHub gives 95 (§3.1) or 94 (§1, Fig. 3). Total 1,645 (Fig. 3, §3.1). The paper also prints TensorHub = 696 (§1, App. 8.1); 94 + 626 + 925 = 1,645 (derived).
+- **API document fields (§3.1):** domain, framework, functionality, api_name, api_call, api_arguments, environment_requirements, example_code, performance, description.
+- **Instruction generation (§3.1):**
+  1. The authors write 6 instruction-API examples per hub, 18 in total, the only hand-written data.
+  2. For each API, 3 of its hub's 6 examples plus the API document are given to GPT-4, which is told not to use API names or hints.
+  3. 10 instruction-API pairs are generated per API, 16,450 pairs in total (Fig. 3). §6 describes the released dataset as "over 11,000 instruction-API pairs".
+- **Training format (§3.2):** each pair becomes a one-round user-agent chat; standard instruction fine-tuning of LLaMA-7B. Retriever-aware variant: "Use this API documentation for reference: <retrieved_API_doc_JSON>" is appended to the user prompt (§3.2); in the §4.1 experiment the document is the ground-truth (oracle) document and the target is "the example output generated by GPT-4".
+- **Output format (App. Fig. 8):** fields <domain>, <api_call>, <api_provider>, <explanation>, <code>, with a one-line Python call such as torch.hub.load(...).
+- **Retrievers (§4):** top-1 document from BM25 (each API is one document), GPT-Index (text-davinci-003 retrieval model), or an oracle. No retriever is trained.
+- **Metric (§3.3, App. 8.3.1):** the generated code is parsed to an AST and matched as a sub-tree of a reference API. Checked arguments: repo_or_dir and model for torch.hub.load; handle for hub.KerasLayer and hub.load; pretrained_model_name_or_path for HuggingFace calls except pipeline. Optional arguments such as pretrained=True are not checked. Hallucination = a call that is not a sub-tree of any API in the database; error = a real API invoked incorrectly. For HuggingFace, models other than Gorilla are only checked for the correct domain name (§4.1).
+- **Baselines (§4):** gpt-4-0314, gpt-3.5-turbo-0301, claude-v1, LLaMA-7B, all zero-shot prompts.
+- **Selected results (Table 1; accuracy / hallucination, %):**
 
-## Quality / diversity evaluation
-- Gorilla-7B with retriever: **AST accuracy ~72%** on APIBench (TorchHub 67, TensorHub 87, HuggingFace 71).
-- Beats GPT-4 with retriever (~63%) on HuggingFace and TensorHub.
-- Hallucination rate cut to 11% from 40% baseline.
-- Zero-shot generalization demo: model still produces correct calls for APIs added after training cutoff, given retrieved docs.
+| Model (evaluation retriever) | TorchHub | HuggingFace | TensorFlow Hub |
+|---|---|---|---|
+| GPT-3.5 (0-shot) | 48.38 / 18.81 | 16.81 / 35.73 | 41.75 / 47.88 |
+| GPT-4 (0-shot) | 38.70 / 36.55 | 19.80 / 37.16 | 18.20 / 78.65 |
+| Gorilla (0-shot) | 59.13 / 6.98 | 71.68 / 10.95 | 83.79 / 5.40 |
+| GPT-4 (GPT-Index) | 59.13 / 1.07 | 44.58 / 11.18 | 43.94 / 31.53 |
+| Gorilla (GPT-Index) | 61.82 / 0 | 47.46 / 8.19 | 64.96 / 2.33 |
+| GPT-4 (Oracle) | 66.12 / 0.53 | 85.07 / 10.62 | 55.91 / 37.95 |
+| Gorilla (Oracle) | 67.20 / 0 | 91.26 / 7.08 | 94.16 / 1.89 |
 
-## Risks + gotchas
-- **Retriever failure = model failure:** if retriever returns wrong API, model cheerfully hallucinates a call for the retrieved-but-wrong API.
-- **Narrow domain:** ML-library APIs only; does not cover general REST APIs or long-tail enterprise tools.
-- **Python-code format** not aligned with modern OpenAI tool-call JSON convention; newer Gorilla releases migrate.
-- **Benchmark overlap with training** — APIBench generated from the same hubs used for training, risk of memorization.
+- **Retriever-aware training (Table 2):** the model trained without documents scores 37.63 / 11.28 / 34.30 with BM25 and 54.83 / 45.58 / 82.91 with the oracle. The model trained with oracle documents scores 0 / 0 / 0 zero-shot (hallucination 100 / 99.67 / 100). The Gorilla retriever rows of Table 1 match this oracle-trained model's Table 2 values (one cell differs: HuggingFace BM25 17.03 vs 17.04). §4.1 text states some differences as percentages (e.g., "12.37% better ... in Torch Hub and 23.46% better in HuggingFace"); the Torch Hub value equals 67.20 − 54.83, and the HuggingFace value does not match a difference of Table 2 cells.
+- **Constraints (§4.3, Table 3):** on the 65.26% of TorchHub APIs whose cards give an accuracy, the accuracy-constraint score is 47.88 for Gorilla zero-shot vs 43.66 for GPT-3.5 and GPT-4 zero-shot; with the oracle retriever Claude 69.71, GPT-3.5 69.01, Gorilla 67.60, GPT-4 59.15.
+
+## Recipe ledger
+| Model (exact release) | Size | Stage | Setting | Value | Source location | Status | Evidence for this value |
+|---|---|---|---|---|---|---|---|
+| Gorilla (LLaMA-7B) | 7B | SFT | Base model | LLaMA-7B | arXiv:2305.15334v1 §3.2 | verified 2026-09-14 | no ablation reported |
+| Gorilla (LLaMA-7B) | 7B | SFT | Data | 16,450 GPT-4-generated instruction-API pairs; split HuggingFace 90/10, TorchHub and TensorFlow Hub 80/20 train/test | Fig. 3; App. 8.2 | verified 2026-09-14 | no ablation reported |
+| Gorilla (LLaMA-7B) | 7B | SFT | Prompt variant | none, or oracle API document JSON appended to the user prompt | §3.2; §4.1 | verified 2026-09-14 | Table 2 (with vs without documents, 4 evaluation retrievers) |
+| Gorilla (LLaMA-7B) | 7B | SFT | LR; schedule; warmup | 2e-5; cosine decay; warmup ratio 0.03 | App. 8.2; App. Table 4 | verified 2026-09-14 | no ablation reported |
+| Gorilla (LLaMA-7B) | 7B | SFT | Batch size | 64 (unit not stated) | App. Table 4 | verified 2026-09-14 | no ablation reported |
+| Gorilla (LLaMA-7B) | 7B | SFT | Epochs; weight decay; max seq length | 5; 0; 2048 | App. 8.2; App. Table 4 | verified 2026-09-14 | no ablation reported |
+| Gorilla (LLaMA-7B) | 7B | SFT | Compute | 8 × A100 40GB | App. 8.2 | verified 2026-09-14 | — |
+| Gorilla (LLaMA-7B) | 7B | SFT | Optimizer, loss masking, packing, GPU-hours, generation cost | not reported | checked §3-§6, App. 8 | not reported | — |
+
+## Findings relevant to generality and agentic training
+- **Split level:** the holdout set divides instruction-API pairs, not APIs (§4, App. 8.2); the paper reports no evaluation on APIs absent from training.
+- **Retrieval can hurt (Result, single study):** "augmenting a LLM with retrieval, does not always lead to improved performance, and can at-times hurt" (§3.2); BM25 lowers the no-document model from 71.68 to 11.28 on HuggingFace (Table 2).
+- **Dependence on documents:** the oracle-document model outputs no correct call without a document (0 accuracy, Table 2).
+- **Documentation change:** Fig. 6 shows two qualitative cases (fcn_resnet50 → fcn_resnet101; pytorch/vision → NVIDIA/DeepLearningExamples:torchhub); no quantitative test (§4.2).
+- **Hallucination by frontier models:** GPT-4 invents GitHub repository names or local paths such as your_model_name for HuggingFace calls (App. 8.3.2, Fig. 9). The authors state GPT-3.5 hallucinates less than GPT-4 in all hubs and settings and suggest RLHF as a cause (§4.1; Interpretation); Table 1 has exceptions (TorchHub GPT-Index 1.61 vs 1.07; Oracle 1.60 vs 0.53).
+- **Scope:** ML APIs were chosen for their functional similarity (§6); one API call per task (§3.3).
 
 ## Connections
-- Parallel 2023 tool-use work: [[toolformer]], [[toolllm]] (ToolBench 16K real APIs, DFS-DT).
-- Retriever lineage: every modern FC pipeline uses retrieval at inference when API pool is large.
-- Evaluation superseded by [[bfcl]] (same Berkeley team).
-- Related: [[api-bank]] (evaluation-first contemporaneous benchmark).
+- [[self-instruct]] — the generation method used for APIBench instructions (§3.1).
+- [[toolformer]] — cited prior tool-use work over a small, specific tool set (§2).
+- [[api-bank]] — contemporaneous benchmark with executable APIs and multi-turn dialogues; its Table 1 lists APIBench.
+- [[toolllm]] — later work over RapidAPI APIs; not cited in this v1.
+- [[bfcl]] — later Berkeley function-calling benchmark whose card lists this paper as a prerequisite.
+- [[granite-function-calling]] — reports Gorilla-OpenFunctions-v2, a later model from this project, tied on BFCL overall accuracy (Table 4 of that paper).
+
+## Verification
+- Checked on 2026-09-14 against: https://arxiv.org/abs/2305.15334 (arXiv v1, 2023-05-24).
+- Corrections to the previous card version:
+  - "each example's prompt includes the retrieved top-k API documentation" → top-1 retrieval at evaluation; the retriever-aware training experiment uses the ground-truth document (§4, §4.1).
+  - "Retriever training: BM25 + a contrastively fine-tuned dense retriever (GPT-embeddings → Gorilla-retriever)" → no retriever is trained; BM25 and GPT-Index (text-davinci-003) are used as-is (§4).
+  - "For 20% of examples the retriever is oracled; 80% are real retrieval results" → removed; no such mix is described (§3.2, §4.1).
+  - "prompt GPT-4 with the doc and ask for 10 diverse user instructions" → 3 of 6 hand-written examples per hub as in-context examples; 10 pairs per API (§3.1).
+  - "APIBench (~16K pairs)" → 16,450 generated (Fig. 3); §6 describes the release as over 11,000 pairs.
+  - "Registry TorchHub 94 + TensorHub 626 + HuggingFace 925" → these match Fig. 3, but the paper also prints TorchHub 95 and TensorHub 696 (§1, §3.1, App. 8.1).
+  - "AST match checks function name, args, arg types" → API name plus selected arguments; optional arguments and types are not checked; HuggingFace baselines are checked only for domain name (§3.3, §4.1, App. 8.3.1).
+  - "Hallucination 11% for Gorilla-7B with retriever vs 40% for GPT-4 without" → 10.95% is Gorilla zero-shot (no retriever) on HuggingFace, vs 37.16% for GPT-4 zero-shot (Table 1).
+  - "AST accuracy ~72% (TorchHub 67, TensorHub 87, HuggingFace 71)" → zero-shot 59.13 / 83.79 / 71.68; oracle 67.20 / 94.16 / 91.26 (Table 1).
+  - "Beats GPT-4 with retriever (~63%) on HuggingFace and TensorHub" → with GPT-Index, 47.46 vs 44.58 (HuggingFace) and 64.96 vs 43.94 (TensorFlow Hub) (Table 1).
+  - "AST-level accuracy and hallucination both improve with retriever context" → retrieval can lower accuracy (§3.2, Table 2).
+  - "correct calls for APIs added after training cutoff" → two qualitative documentation-change examples (Fig. 6).
+  - "Call format: natural Python code, not JSON tool-calls" → tagged fields with a Python call (App. Fig. 8).
+  - "Released Gorilla-7B, Gorilla-MPT-7B, and a Gradio demo" → code, model, data and demo at the project page (Abstract); no MPT or Gradio mention.
+- Removed as unsupported by the source: "Step 5 filtering: accept pairs where the gold API matches"; "average call length ~50 tokens"; "~$5K GPT-4 API cost"; "models trained without retriever context fail on updated/new APIs"; "newer Gorilla releases migrate to JSON"; "every modern FC pipeline uses retrieval at inference"; "evaluation superseded by BFCL (same team)"; "first to systematically train with retrieved context" as a fact (the paper says "to the best of our knowledge", §2).
+- Not reported by the source: evaluation on held-out APIs; optimizer; number of training examples after the split; per-hub instruction counts after filtering.

@@ -7,6 +7,8 @@ source_url: https://arxiv.org/abs/2512.13961
 created_at: "2026-04-23"
 ---
 
+> Superseded by the 2026-09 revision of read.md; kept for history.
+
 # Excerpt: OLMo 3 — model-flow as release artifact; 1M GPU-hour budget math
 
 **Source library:** `wiki/raw-data/llm-training/model-reports/olmo-3.md`

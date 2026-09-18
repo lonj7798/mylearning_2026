@@ -1,43 +1,43 @@
-<!-- scope: process reward models with step-by-step verification (PRM800K)
-     deps: [[prm800k]]
-     see-also: [[math-shepherd]], [[rlvr-tulu3]], [[deepseek-r1]]
+<!-- scope: redirect card — duplicate of [[lets-verify]] (same artifact: Lightman et al., arXiv:2305.20050)
+     see-also: [[lets-verify]], [[prm800k]]
 -->
 
-# Let's Verify Step by Step
-- **Core Insight:** On math problems, a **Process Reward Model** (PRM) that verifies each reasoning step outperforms an outcome-only Reward Model (ORM) at ranking solutions — and the gap widens with the number of candidates.
-- **Guideline:** For verifiable-reasoning tasks, collect step-level labels (not just final-answer correctness) and train a PRM; use it as a ranker or as the reward signal for RL. On MATH, PRM + best-of-N gives a ≥10-pt absolute lift over ORM at N=64.
-- **Authors:** Hunter Lightman, Vineet Kosaraju, Yura Burda, Harri Edwards, Bowen Baker, Teddy Lee, Jan Leike, John Schulman, Ilya Sutskever, Karl Cobbe
-- **Year:** 2023 (OpenAI)
+# Let's Verify Step by Step (redirect card)
+
+> **Duplicate card.** This file and [[lets-verify]] described the same artifact: "Let's Verify Step by Step",
+> Lightman et al., OpenAI, arXiv:2305.20050 (v1, 31 May 2023). The verified extract lives in
+> [[lets-verify]]. A second full extract of the same paper, organized figure by figure, is [[prm800k]].
+> The file name is kept because other pages link to `[[let-verify]]`; do not cite it for numbers.
+
+- **Exact title:** Let's Verify Step by Step
+- **Authors:** Hunter Lightman, Vineet Kosaraju, Yura Burda, Harri Edwards, Bowen Baker, Teddy Lee, et al. (OpenAI; ten authors, last-listed Karl Cobbe)
+- **Year:** 2023 (arXiv v1 2023-05-31; ICLR 2024)
 - **URL:** https://arxiv.org/abs/2305.20050
-- **Relevant topics:** process reward models, verifiable rewards, MATH benchmark, chain-of-thought, best-of-N
+- **Source type:** paper
 
-## Abstract
-In recent years, large language models have greatly improved in their ability to perform complex multi-step reasoning. However, even state-of-the-art models still regularly produce logical mistakes. To train more reliable models, we can turn either to outcome supervision, which provides feedback for a final result, or process supervision, which provides feedback for each intermediate reasoning step. Given the importance of training reliable models, and given the high cost of human feedback, it is important to carefully compare the both methods. Recent work has already begun this comparison, but many questions still remain. We conduct our own investigation, finding that process supervision significantly outperforms outcome supervision for training models to solve problems from the challenging MATH dataset. Our process-supervised model solves 78.2% of problems from a representative subset of the MATH test set. Additionally, we show that active learning significantly improves the efficacy of process supervision. To support related research, we also release PRM800K, the complete dataset of 800,000 step-level human feedback labels used to train our best reward model.
+## Where to find the content
+| Topic | Card |
+|---|---|
+| Headline PRM vs ORM vs majority-voting numbers, PRM800K size and label schema, recipe ledger | [[lets-verify]] |
+| Figure-by-figure and table-by-table breakdown, difficulty quintiles, scoring-strategy comparison | [[prm800k]] |
+| Automatic step labels that replace the human labels used here | [[math-shepherd]], [[omegaprm]] |
+| The outcome-supervised verifier baseline this paper builds on | [[training-verifiers-to-solve-math-word-problems]] |
 
-## Key Contributions
-- Trained and released **PRM800K**: 800K step-level labels (positive / negative / neutral) across ~75K MATH solutions — the canonical process-supervision dataset.
-- Showed the process RM outperforms outcome RM at best-of-N selection: 78.2% vs 72.4% on a MATH test subset at N=1860.
-- Introduced **active learning** for PRM: route uncertain steps to labelers, yielding ~2.6× label efficiency.
-- Provided the "credit assignment = reasoning step" operational definition that now underlies all process-reward work (Math-Shepherd, RLVR, DeepSeek-R1).
-
-## Key Figures/Tables to Study
-- **Figure 1 (MATH test-set accuracy vs N):** PRM curve dominates ORM at every N; gap grows as N grows.
-- **Figure 3 (calibration):** PRM is better calibrated per-step than ORM on full-solution.
-- **Figure 6 (active learning):** active-PRM reaches the same quality as random with 38% of the labels.
-- **Table 1 (MATH subset):** 78.2% PRM vs 72.4% ORM vs 69.6% majority-vote — key headline.
-
-## Technical Details
-- **Base generator:** GPT-4 (prompted) and a fine-tuned variant; base PRM and ORM are small-scale fine-tunes.
-- **Labeling protocol:** labelers see one step at a time, mark ∈{positive, negative, neutral}; first negative step is the failure point.
-- **PRM training:** binary classifier per step on (prefix, step) → ∈{good, bad}, cross-entropy.
-- **Scoring a full solution:** multiply per-step "good" probabilities → solution score.
-- **Dataset stats:** 800K labels, ~75K solutions, 12K problems from MATH training set.
-- **Active learning:** rank unlabeled steps by model uncertainty (entropy on the good/bad head); label top quantile.
-- **Inference cost:** PRM scores every step (1 forward per step); ORM scores final answer (1 forward per solution) — PRM is ~L× more expensive at inference where L is step count.
-
-## Connections
-- Direct precursor to [[math-shepherd]] (automatic PRM labeling via Monte-Carlo rollouts) and [[rlvr-tulu3]] (verifiable rewards replacing PRM on problems with programmatic checkers).
-- The "ORM vs PRM at high N" result motivates **Best-of-N selection** as a deployment strategy — see [[best-of-n]].
-- DeepSeek-R1 ([[deepseek-r1]]) abandoned PRMs in favor of pure outcome RL + group-relative advantages (GRPO); Let-Verify is the paper they ablate against.
-- The PRM800K dataset remains the reference benchmark — any new process-reward method reports numbers on it.
-- Links to chain-of-thought reasoning — step-level labels presume a step-structured CoT; the paper's label schema is what makes reasoning auditable.
+## Verification
+- Checked on 2026-09-18 against: https://arxiv.org/abs/2305.20050 (v1, the only arXiv version).
+- Corrections to the previous card version:
+  - The card was a second full extract of the artifact already covered by [[lets-verify]] and [[prm800k]]; it is reduced to a redirect so recipe and evaluation numbers have one home.
+  - "**Year:** 2023 (OpenAI)" is correct; the sibling card's "2024 / OpenReview" header was the erroneous one and has been fixed there.
+  - "78.2% vs 72.4% on a MATH test subset at N=1860" → correct, and the third baseline is majority voting at 69.6% (§3, Fig. 3). Retained in [[lets-verify]].
+  - "Figure 1 (MATH test-set accuracy vs N)" and "Figure 3 (calibration)" → Fig. 1 is the labeling interface and Fig. 3 is the best-of-N curves; the paper reports no calibration figure.
+- Removed as unsupported by the source:
+  - "On MATH, PRM + best-of-N gives a ≥10-pt absolute lift over ORM at N=64" — no such number in the paper.
+  - "PRM scores every step (1 forward per step) … PRM is ~L× more expensive at inference where L is step count" — §2.6 states one forward pass over the whole solution yields all step predictions.
+  - "Figure 6 (active learning): active-PRM reaches the same quality as random with 38% of the labels" — Fig. 6 (App. G) is the difficulty-quintile breakdown; the active-learning estimate is 2.6× data efficiency (§4.2, Fig. 4a).
+  - "Figure 3 (calibration): PRM is better calibrated per-step than ORM on full-solution" — the paper reports no calibration measurement.
+  - "Active learning: rank unlabeled steps by model uncertainty (entropy on the good/bad head)" — selection is by the current PRM's score on wrong-answer solutions, not by entropy (§2.4, §4.2).
+  - "PRM training: binary classifier per step on (prefix, step) → {good, bad}" — the PRM predicts positive/negative/neutral, with neutral counted as positive at scoring time (§2.6, App. F.2).
+  - "Base generator: GPT-4 (prompted) and a fine-tuned variant; base PRM and ORM are small-scale fine-tunes" — all large-scale models are fine-tuned from base GPT-4 (§2.2).
+  - "Introduced active learning for PRM: route uncertain steps to labelers, yielding ~2.6× label efficiency" — the 2.6× figure comes from the small-scale synthetic ablation, not from the human collection (§4.2).
+  - "Provided the credit-assignment = reasoning step operational definition that now underlies all process-reward work" and "any new process-reward method reports numbers on it" — no source given for either claim.
+  - "The ORM vs PRM at high N result motivates Best-of-N selection as a deployment strategy — see [[best-of-n]]"; "DeepSeek-R1 … Let-Verify is the paper they ablate against" — R1 lists PRMs among unsuccessful attempts and cites this paper, but reports no ablation against it.

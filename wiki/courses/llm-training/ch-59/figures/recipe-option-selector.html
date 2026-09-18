@@ -1,0 +1,227 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ch-59 — Reproduction option selector</title>
+<style>
+  :root{
+    --bg:#fbfbf9; --fg:#1d1d1b; --muted:#5d5d58; --line:#d8d8d2;
+    --panel:#ffffff; --accent:#2f5d7c; --warn:#8a5a10; --ok:#2c6a44;
+  }
+  @media (prefers-color-scheme: dark){
+    :root{ --bg:#16181a; --fg:#e8e8e4; --muted:#a3a39d; --line:#33363a;
+           --panel:#1e2124; --accent:#7fb3d5; --warn:#d9a441; --ok:#7fc19a; }
+  }
+  *{box-sizing:border-box}
+  body{margin:0;padding:20px;background:var(--bg);color:var(--fg);
+       font:14px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif}
+  .wrap{max-width:1000px;margin:0 auto}
+  h1{font-size:19px;margin:0 0 4px;font-weight:650}
+  p.sub{margin:0 0 18px;color:var(--muted);font-size:13px}
+  .tabs{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:16px}
+  button.tab{font:inherit;font-size:12.5px;padding:7px 11px;border:1px solid var(--line);
+    border-radius:6px;background:var(--panel);color:var(--fg);cursor:pointer;text-align:left}
+  button.tab[aria-selected="true"]{border-color:var(--accent);box-shadow:inset 0 0 0 1px var(--accent);
+    font-weight:600}
+  .grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}
+  @media (max-width:700px){ .grid{grid-template-columns:1fr} }
+  .card{border:1px solid var(--line);border-radius:8px;background:var(--panel);padding:12px 14px}
+  .card h2{font-size:12px;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);
+    margin:0 0 8px;font-weight:650}
+  ul{margin:0;padding-left:17px}
+  li{margin:0 0 6px}
+  .anchor{border-left:3px solid var(--accent);padding-left:10px;margin-top:14px}
+  .anchor b{font-weight:650}
+  code{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:12.5px;
+    background:rgba(127,127,127,.12);padding:1px 4px;border-radius:3px}
+  .tag{display:inline-block;font-size:11px;padding:1px 6px;border-radius:10px;border:1px solid var(--line);
+    color:var(--muted);margin-right:5px}
+  .tag.warn{color:var(--warn);border-color:var(--warn)}
+  .tag.ok{color:var(--ok);border-color:var(--ok)}
+  footer{margin-top:18px;font-size:12px;color:var(--muted);border-top:1px solid var(--line);padding-top:10px}
+</style>
+</head>
+<body>
+<div class="wrap">
+<h1>Reproduction option selector — ch-59</h1>
+<p class="sub">Select one of the six stages the capstone can reproduce. Each panel lists what the primary
+source pins, what it does not print, the smallest downscale that keeps the stage intact, and the gate slices
+that option makes mandatory. Every number shown appears in the chapter text with the same locus.</p>
+
+<div class="tabs" id="tabs" role="tablist"></div>
+<div class="grid">
+  <div class="card"><h2>What the source pins</h2><ul id="pins"></ul></div>
+  <div class="card"><h2>What the source does not print</h2><ul id="gaps"></ul></div>
+  <div class="card"><h2>Smallest honest downscale</h2><ul id="small"></ul></div>
+  <div class="card"><h2>Gate slices this option requires</h2><ul id="gate"></ul></div>
+</div>
+<div class="card anchor" id="anchor"></div>
+
+<footer id="foot"></footer>
+</div>
+
+<script>
+const OPTIONS = [
+{
+  key:"A", name:"A — Tülu 3 SFT then DPO",
+  pins:[
+    "SFT: LR 5e-6 linear, warmup ratio 0.03, weight decay 0.0, 2 epochs, effective batch 128 sequences, max length 4,096 (docs/tulu3.md L35–L65 @ open-instruct 098424c).",
+    "DPO: <code>dpo_norm</code>, &beta; = 5, LR 5e-7 linear with warmup 0.1, 1 epoch, 128 pairs, max length 2,048 (L134–L159).",
+    "RLVR: PPO, LR 3e-7, KL &beta; 0.05, 224 responses per update, no-EOS reward &minus;10.0 (L313–L346)."
+  ],
+  gaps:[
+    "Which RLVR checkpoint step was released; the paper says \"an earlier than final checkpoint\" (&sect;6.3).",
+    "<code>--reduce_loss sum</code> was present at commit 8781471 and absent at 098424c, where the default is mean.",
+    "GPU count conflicts: the doc says 64 H100; the paper says 32 GPUs for 6 hours (&sect;4.3)."
+  ],
+  small:[
+    "A 1B–3B base with the same mixture, holding effective batch at 128 sequences by raising gradient accumulation.",
+    "Seed the run three times: the published 8B seed range is 0.3 points, so one run cannot establish agreement."
+  ],
+  gate:[
+    "Forgetting report over all 12 benchmarks of the published table, not the average alone.",
+    "Per-benchmark bands; safety and IFEval move independently of the reasoning columns.",
+    "Chat template diffed byte for byte against the source's."
+  ],
+  anchor:"<b>Anchor to compare against:</b> Tülu 3 8B SFT 12-benchmark average <b>60.1</b>; the five seeds of the same recipe give 59.9 / 60.1 / 59.8 / 59.8 / 59.8, and the 70B seeds give 71.8 / 70.0 / 72.6 (Tülu 3 report Tables 9 and 14)."
+},
+{
+  key:"B", name:"B — Olmo 3 Think DPO or one RL-Zero domain",
+  pins:[
+    "7B Think DPO: 150,000 pairs, LR 8e-8 linear, weight decay 0.0, max length 16,384, batch 128 (<code>7b_think_dpo.sh</code> L3–L40 @ d8a7f1c).",
+    "7B Think RL (released run): 64 unique prompts &times; 8 samples, 1 minibatch, LR 1e-6 constant, prompt/response/pack 2,048 / 32,768 / 35,840, temperature 1.0.",
+    "Framework defaults at d8a7f1c: clip 0.2 / 0.272, <code>dapo</code> loss, <code>centered</code> advantages, &rho; cap 2.0."
+  ],
+  gaps:[
+    "Script and paper disagree: 32B Think RL uses 64 unique prompts in the script and 128 in Table 49.",
+    "PR #1547 moved &beta;, loss type, clip and normalization from flags into defaults, so a script read at the wrong commit runs a different recipe.",
+    "No ablation is reported inside the repository for any value."
+  ],
+  small:[
+    "One RL-Zero domain from the base at 1B–7B: the RL-Zero scripts are the shortest complete stage in the set.",
+    "Budget from measured throughput: 881 tok/s on the OLMo 2 stack against 2,949 tok/s with continuous batching and in-flight updates (Table 23)."
+  ],
+  gate:[
+    "The full post-training suite at every stage, since DPO and RL trade IFEval against AlpacaEval in opposite directions.",
+    "A mixed-domain comparison run: single-domain RL raised the trained domain and lowered an untrained one (&sect;4.5, Figure 20 left).",
+    "Variance buckets: GPQA 1.4798, AlpacaEval 3 1.2406, IFEval 0.8835; MMLU 0.2219, PopQA 0.1554."
+  ],
+  anchor:"<b>Anchor to compare against:</b> Olmo 3 Think 32B per-stage columns — AIME 2024 73.5 &rarr; 76.0 &rarr; 76.8 &rarr; 80.6 and AlpacaEval 2 LC 69.1 &rarr; 78.6 &rarr; 74.2 &rarr; 69.1 across SFT, DPO, Think 3.0 and Think 3.1 (Table 14)."
+},
+{
+  key:"C", name:"C — SmolLM3 context extension and repair merge",
+  pins:[
+    "Two 50B-token stages: 4k &rarr; 32k with RoPE theta 1.5M, then 32k &rarr; 64k with RoPE theta 5M; 100B tokens total.",
+    "YaRN at inference to reach 128k, twice the 64k training length.",
+    "Repair: linear merge of the APO model soup with a mid-training checkpoint at weights 0.9 and 0.1."
+  ],
+  gaps:[
+    "No RULER scores before or after the merge, so the size of the repair is not available.",
+    "No learning rate, batch size or optimizer settings in the blog text for either extension stage."
+  ],
+  small:[
+    "A 1B base extended 4k &rarr; 16k &rarr; 32k with the same theta-scaling pattern and proportionally reduced token counts.",
+    "Reproduce the negative ablation first: upsampling long code repositories, books and long web pages gave no further RULER or HELMET gain."
+  ],
+  gate:[
+    "Short-context regression check alongside the long-context check at the trained length.",
+    "RULER for the synthetic length-controlled slice and natural long documents for the realistic slice.",
+    "Re-run the long-context check after every later stage, since the regression appeared after mid-training and APO, not after the extension."
+  ],
+  anchor:"<b>Anchor to compare against:</b> recovery of the base model's RULER score up to 128k after the 0.9 / 0.1 merge. The blog reports the recovery qualitatively and prints no scores, so a reproduction must publish the numbers the source omitted."
+},
+{
+  key:"D", name:"D — Phi-4-reasoning distill-SFT and 90-step GRPO",
+  pins:[
+    "SFT: 1.4M prompt-response pairs, 8.3B unique tokens, 16B trained tokens, ~16K steps, global batch 32, 32K context, AdamW LR 1e-5, linear warmup 450 steps, weight decay 1e-4.",
+    "GRPO (verl): global batch 64 across 32 H100, Adam LR 5e-8 with cosine warmup over 10 steps, group size G = 8, KL &beta; 0.001, entropy coefficient 0.001.",
+    "Seed set 72,401 math problems; 64 subsampled per iteration; released checkpoint at 90 steps over about 6k examples."
+  ],
+  gaps:[
+    "The prompt-filter thresholds that define \"the boundary of base-model capability\".",
+    "The 50 synthetic-data categories of the Phi-4 base."
+  ],
+  small:[
+    "A 1.5B–7B student on a public reasoning-trace set, with the same 32K context and the same LR grid range [1e-6, 2e-5].",
+    "Keep the GRPO stage short: the report states that training past 90 steps gave no additional gains, with the caveat that outputs beyond 31k tokens were clipped."
+  ],
+  gate:[
+    "The full general-purpose table, not the math benchmarks: two entries fell relative to the base.",
+    "Temperature held equal across compared checkpoints; the source's own table compares at 0.8 and 0.0.",
+    "A non-math domain the RL stage never touched, since the RL data contained no coding exercises."
+  ],
+  anchor:"<b>Anchor to compare against:</b> Phi-4 &rarr; Phi-4-reasoning &rarr; Phi-4-reasoning-plus on off-target benchmarks — IFEval Strict 62.3 &rarr; 83.4 &rarr; 84.9, Kitab no-context recall 8.2 &rarr; 4.9 &rarr; 6.3, ToxiGen neutral 90.0 &rarr; 84.7 &rarr; 90.5 (Table 2)."
+},
+{
+  key:"E", name:"E — R1-style distillation into a small base",
+  pins:[
+    "Six students trained SFT-only on the ~800K sample set: Qwen2.5-Math-1.5B, Qwen2.5-Math-7B, Qwen2.5-14B, Qwen2.5-32B, Llama-3.1-8B, Llama-3.3-70B-Instruct (Supp. B.4.3, Table 6).",
+    "Cost split: 101K GPU-hours for R1-Zero, 41K for R1, 5K for SFT data creation, 147K total (Table 7).",
+    "The rejection-sampling SFT keeps only correct responses out of about 600K reasoning samples (Supp. B.3.3)."
+  ],
+  gaps:[
+    "Per-student batch sizes and schedules beyond what Table 6 prints.",
+    "The false-negative rate of the correctness filter."
+  ],
+  small:[
+    "One student at 1.5B on a released subset of the teacher's traces, with the same correct-only filter.",
+    "Teacher-token cost is its own budget line when the teacher is an API rather than an in-house checkpoint."
+  ],
+  gate:[
+    "pass@k at a large k next to pass@1, to separate coverage from concentration.",
+    "A non-reasoning suite: R1-Zero scored 46.6 on IF-Eval and 24.7 on AlpacaEval 2.0 before the general stages were added.",
+    "A contamination check on the anchor benchmark before any number is reported."
+  ],
+  anchor:"<b>Anchor to compare against:</b> at 32B, RL from Qwen2.5-32B-Base for over 10K steps reached AIME 2024 47.0 / MATH-500 91.6 / GPQA 55.0 / LiveCodeBench 40.2, while SFT-only distillation reached 72.6 / 94.3 / 62.1 / 57.2 (Table 16)."
+},
+{
+  key:"F", name:"F — Agentic: DeepSWE RL, SWE-smith SFT, or Toucan SFT",
+  pins:[
+    "SWE-smith: 5,016 resolved trajectories capped at 3 per task instance; full-parameter torchtune fine-tuning, LR 5e-5, at most 3 epochs, 32,768 context, 2–8 H100 (App. F.1).",
+    "Toucan: 119.3K instances, LR 2e-5, 2 epochs, effective batch 64, 32,768 context, AdamW &beta; = (0.9, 0.999), ZeRO-3 (Table 5).",
+    "DeepSWE: 4.5K R2E-Gym problems, six days on 64 H100, GRPO++ with compact filtering (blog intro, &sect;2.3)."
+  ],
+  gaps:[
+    "DeepSWE: the blog and the released script disagree on batch size (64 &times; 8 against 8), GPU count (64 against 16), timeout (20 minutes against 5,400 s) and step limit.",
+    "No false-negative rate is reported for any of the three execution verifiers."
+  ],
+  small:[
+    "Toucan SFT on a 1.5B–4B instruct checkpoint: one supervised pass, published data, published hyper-parameters.",
+    "For the RL variant, a database-backed tool environment rather than container-per-task SWE environments."
+  ],
+  gate:[
+    "A held-out environment family, not held-out instances of the trained family.",
+    "An abstention check on prompts whose required tool is absent.",
+    "Two non-agentic suites plus every BFCL-style slice reported separately.",
+    "Cost and scaffold reported next to accuracy."
+  ],
+  anchor:"<b>Anchors to compare against:</b> SWE-agent-LM-32B 40.2% SWE-bench Verified, 8.4% SWE-bench Multilingual against its base at 6.5%, pass@6 54.8 (Table 3, Fig. 22, App. F.4). Toucan at 7B: BFCL V3 overall +3.16 with non-live AST &minus;5.67 and relevance &minus;5.55 (Table 2)."
+}
+];
+
+const tabs = document.getElementById('tabs');
+const fill = (id, arr) => {
+  const el = document.getElementById(id);
+  el.innerHTML = arr.map(x => '<li>' + x + '</li>').join('');
+};
+function select(i){
+  const o = OPTIONS[i];
+  [...tabs.children].forEach((b,j)=>b.setAttribute('aria-selected', String(j===i)));
+  fill('pins', o.pins); fill('gaps', o.gaps); fill('small', o.small); fill('gate', o.gate);
+  document.getElementById('anchor').innerHTML = o.anchor;
+  document.getElementById('foot').innerHTML =
+    'Sources for option ' + o.key + ' are listed in the chapter’s Sources section. ' +
+    'Loci are given as printed in the primary artifact; a value absent from the artifact is listed under ' +
+    '“What the source does not print” rather than estimated.';
+}
+OPTIONS.forEach((o,i)=>{
+  const b=document.createElement('button');
+  b.className='tab'; b.type='button'; b.setAttribute('role','tab'); b.textContent=o.name;
+  b.addEventListener('click',()=>select(i));
+  tabs.appendChild(b);
+});
+select(0);
+</script>
+</body>
+</html>

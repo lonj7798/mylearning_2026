@@ -1,0 +1,212 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>verl policy-loss branches — ch-55</title>
+<style>
+  :root{ --bg:#fbfbf9; --fg:#1b1b1b; --muted:#5b5f63; --line:#d8d6d0; --card:#ffffff;
+         --accent:#2f5d50; --warn:#8a3324; --code:#f2f1ec; --grid:#e6e4de; }
+  @media (prefers-color-scheme: dark){
+    :root{ --bg:#16181a; --fg:#e8e6e1; --muted:#a2a7ab; --line:#33373a; --card:#1e2124;
+           --accent:#7fc0ab; --warn:#e08a6e; --code:#232729; --grid:#2c3033; }
+  }
+  *{box-sizing:border-box}
+  body{margin:0;padding:20px 16px 48px;background:var(--bg);color:var(--fg);
+       font:14px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif}
+  .wrap{max-width:900px;margin:0 auto}
+  h1{font-size:19px;margin:0 0 4px}
+  .sub{color:var(--muted);margin:0 0 18px;font-size:13px}
+  .panel{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:18px}
+  .box{background:var(--card);border:1px solid var(--line);border-radius:7px;padding:14px 16px}
+  .ctl{margin:0 0 12px}
+  .ctl label{display:flex;justify-content:space-between;font-size:13px;margin-bottom:3px}
+  .ctl label span:last-child{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;color:var(--accent)}
+  input[type=range]{width:100%}
+  .seg{display:flex;gap:8px;margin-bottom:12px}
+  .seg button{flex:1;padding:6px 8px;border:1px solid var(--line);background:var(--card);color:inherit;
+              border-radius:6px;cursor:pointer;font:inherit;font-size:13px}
+  .seg button[aria-pressed="true"]{border-color:var(--accent);color:var(--accent);font-weight:600}
+  table{border-collapse:collapse;width:100%;font-size:13px}
+  th,td{border:1px solid var(--line);padding:5px 7px;text-align:left}
+  th{color:var(--muted);font-weight:600}
+  td.num{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+  .active{color:var(--accent);font-weight:600}
+  .verdict{margin-top:12px;padding:10px 12px;border-radius:6px;background:var(--code);font-size:13px}
+  .zero{color:var(--warn);font-weight:600}
+  code{background:var(--code);padding:1px 4px;border-radius:3px;
+       font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:12.5px}
+  svg{width:100%;height:auto;display:block}
+  .cap{margin-top:22px;border-top:1px solid var(--line);padding-top:12px;color:var(--muted);font-size:12.5px}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Which branch of verl's policy loss selects, and what the gradient is</h1>
+  <p class="sub">Implements <code>compute_policy_loss_vanilla</code> at <code>verl/trainer/ppo/core_algos.py</code> L1336–1361, commit <code>753aed3</code>. Move the controls to reproduce the two worked examples in §2 of the chapter by hand.</p>
+
+  <div class="panel">
+    <div class="box">
+      <div class="seg" id="sign">
+        <button type="button" data-a="1" aria-pressed="true">advantage A = +1</button>
+        <button type="button" data-a="-1" aria-pressed="false">advantage A = −1</button>
+      </div>
+      <div class="ctl">
+        <label><span>probability ratio r</span><span id="rv">1.00</span></label>
+        <input type="range" id="r" min="0.05" max="6" step="0.05" value="1">
+      </div>
+      <div class="ctl">
+        <label><span>clip_ratio_low (ε_low)</span><span id="lv">0.20</span></label>
+        <input type="range" id="lo" min="0.02" max="0.6" step="0.01" value="0.2">
+      </div>
+      <div class="ctl">
+        <label><span>clip_ratio_high (ε_high)</span><span id="hv">0.20</span></label>
+        <input type="range" id="hi" min="0.02" max="0.6" step="0.01" value="0.2">
+      </div>
+      <div class="ctl">
+        <label><span>clip_ratio_c (dual clip, A &lt; 0 only)</span><span id="cv">3.00</span></label>
+        <input type="range" id="c" min="1.1" max="6" step="0.1" value="3">
+      </div>
+      <p class="sub" style="margin:0">Defaults in verl: ε_low = ε_high = 0.2 (<code>actor.yaml</code> L39, L42), c = 3.0 (L83). The DAPO recipe sets ε_high = 0.28 (<code>docs/algo/dapo.md</code> L52–57).</p>
+    </div>
+
+    <div class="box">
+      <table>
+        <tr><th>quantity</th><th>value</th></tr>
+        <tr id="row1"><td><code>pg_losses1 = −A·r</code></td><td class="num" id="p1"></td></tr>
+        <tr id="row2"><td><code>pg_losses2 = −A·clip(r, 1−ε_low, 1+ε_high)</code></td><td class="num" id="p2"></td></tr>
+        <tr><td><code>clip_pg_losses1 = max(1, 2)</code></td><td class="num" id="p12"></td></tr>
+        <tr id="row3"><td><code>pg_losses3 = −A·c</code> (A &lt; 0 branch)</td><td class="num" id="p3"></td></tr>
+        <tr><td><strong>selected loss</strong></td><td class="num" id="sel"></td></tr>
+        <tr><td><strong>∂L/∂ log π<sub>θ</sub></strong></td><td class="num" id="grad"></td></tr>
+      </table>
+      <div class="verdict" id="verdict"></div>
+    </div>
+  </div>
+
+  <div class="box" style="margin-top:18px">
+    <svg id="plot" viewBox="0 0 640 260" role="img" aria-label="Selected loss as a function of the probability ratio"></svg>
+    <p class="sub" style="margin:8px 0 0">Selected per-token loss against r at the current settings. Flat regions are the regions where the gradient is zero: the lower clip below 1−ε_low, the upper clip above 1+ε_high when A ≥ 0, and the dual-clip cap above c when A &lt; 0.</p>
+  </div>
+
+  <div class="cap">
+    <strong>Source of the numbers.</strong> The four expressions and the <code>torch.where(advantages &lt; 0, …)</code> selection are quoted from <code>core_algos.py</code> L1336–1361 at commit <code>753aed3e1c286ba6825a74342b28669e72c083ea</code>; the defaults are from <code>verl/trainer/config/actor/actor.yaml</code> L36–42 and L83. The gradient shown is <code>−A·r</code> on an unclipped branch and 0 on a clipped branch, which follows from the expressions above and is not printed by verl. The reason for the dual-clip bound is stated by Ye et al., arXiv:1912.09729v3 Eq. 5: with off-policy data and Â<sub>t</sub> &lt; 0 a large ratio "will introduce a big and unbounded variance". This figure shows one token in isolation; the batch loss is the aggregation of these values under <code>loss_agg_mode</code>.
+  </div>
+</div>
+
+<script>
+const el = id => document.getElementById(id);
+let A = 1;
+
+el('sign').addEventListener('click', e => {
+  const b = e.target.closest('button'); if(!b) return;
+  A = Number(b.dataset.a);
+  [...el('sign').children].forEach(x => x.setAttribute('aria-pressed', String(x === b)));
+  render();
+});
+['r','lo','hi','c'].forEach(id => el(id).addEventListener('input', render));
+
+function evaluate(r, lo, hi, c){
+  const p1 = -A * r;
+  const p2 = -A * Math.min(Math.max(r, 1 - lo), 1 + hi);
+  const p12 = Math.max(p1, p2);
+  const p3 = -A * c;
+  let sel, branch;
+  if (A < 0){
+    sel = Math.min(p3, p12);
+    if (sel === p3 && p3 < p12) branch = 'dual-clip cap';
+    else branch = (p12 === p2 && p2 !== p1) ? 'lower/upper clip' : 'unclipped';
+  } else {
+    sel = p12;
+    branch = (p12 === p2 && p2 !== p1) ? 'lower/upper clip' : 'unclipped';
+  }
+  const grad = branch === 'unclipped' ? -A * r : 0;
+  return {p1, p2, p12, p3, sel, branch, grad};
+}
+
+function render(){
+  const r = Number(el('r').value), lo = Number(el('lo').value),
+        hi = Number(el('hi').value), c = Number(el('c').value);
+  el('rv').textContent = r.toFixed(2);
+  el('lv').textContent = lo.toFixed(2);
+  el('hv').textContent = hi.toFixed(2);
+  el('cv').textContent = c.toFixed(2);
+
+  const v = evaluate(r, lo, hi, c);
+  el('p1').textContent = v.p1.toFixed(3);
+  el('p2').textContent = v.p2.toFixed(3);
+  el('p12').textContent = v.p12.toFixed(3);
+  el('p3').textContent = A < 0 ? v.p3.toFixed(3) : 'not used (A ≥ 0)';
+  el('sel').textContent = v.sel.toFixed(3);
+  el('grad').innerHTML = v.grad === 0
+    ? '<span class="zero">0 — no update from this token</span>'
+    : v.grad.toFixed(3);
+
+  el('row1').className = v.branch === 'unclipped' ? 'active' : '';
+  el('row2').className = v.branch === 'lower/upper clip' ? 'active' : '';
+  el('row3').className = v.branch === 'dual-clip cap' ? 'active' : '';
+
+  let msg;
+  if (v.branch === 'unclipped'){
+    msg = 'Unclipped branch: the loss is −A·r and the token receives a gradient of magnitude ' +
+          Math.abs(v.grad).toFixed(3) + '.';
+  } else if (v.branch === 'lower/upper clip'){
+    msg = A >= 0
+      ? 'The upper clip is active: r is above 1 + ε_high = ' + (1 + hi).toFixed(2) +
+        ', so this positive-advantage token stops being reinforced. Raising ε_high — the DAPO Clip-Higher change — moves this boundary out.'
+      : 'The lower clip is active: r is below 1 − ε_low = ' + (1 - lo).toFixed(2) +
+        ', so this negative-advantage token receives no further push-down. DAPO keeps ε_low at 0.2 because a larger value drives these probabilities toward 0.';
+  } else {
+    msg = 'The dual clip is active: the loss is capped at c·|A| = ' + Math.abs(v.p3).toFixed(2) +
+          ' and is constant in r, so the gradient is 0. Only negative-advantage tokens reach this branch.';
+  }
+  el('verdict').innerHTML = '<strong>' + v.branch + '.</strong> ' + msg;
+
+  plot(lo, hi, c, r);
+}
+
+function plot(lo, hi, c, rCur){
+  const W = 640, H = 260, m = {l:48, r:14, t:14, b:32};
+  const xmax = 6;
+  const pts = [];
+  let ymin = Infinity, ymax = -Infinity;
+  for (let i = 0; i <= 300; i++){
+    const x = 0.05 + (xmax - 0.05) * i / 300;
+    const y = evaluate(x, lo, hi, c).sel;
+    pts.push([x, y]);
+    if (y < ymin) ymin = y;
+    if (y > ymax) ymax = y;
+  }
+  const pad = (ymax - ymin) * 0.12 || 1;
+  ymin -= pad; ymax += pad;
+  const X = x => m.l + (x / xmax) * (W - m.l - m.r);
+  const Y = y => H - m.b - ((y - ymin) / (ymax - ymin)) * (H - m.t - m.b);
+
+  let s = '';
+  s += '<rect x="0" y="0" width="' + W + '" height="' + H + '" fill="none"/>';
+  for (let k = 0; k <= 6; k++){
+    const gx = X(k);
+    s += '<line x1="' + gx + '" y1="' + m.t + '" x2="' + gx + '" y2="' + (H - m.b) +
+         '" stroke="var(--grid)" stroke-width="1"/>';
+    s += '<text x="' + gx + '" y="' + (H - m.b + 16) + '" fill="var(--muted)" font-size="11" text-anchor="middle">' + k + '</text>';
+  }
+  if (ymin < 0 && ymax > 0){
+    s += '<line x1="' + m.l + '" y1="' + Y(0) + '" x2="' + (W - m.r) + '" y2="' + Y(0) +
+         '" stroke="var(--grid)" stroke-width="1"/>';
+  }
+  s += '<text x="' + (W / 2) + '" y="' + (H - 4) + '" fill="var(--muted)" font-size="11" text-anchor="middle">probability ratio r</text>';
+  s += '<text x="12" y="' + (m.t + 10) + '" fill="var(--muted)" font-size="11">loss</text>';
+  s += '<text x="12" y="' + (H - m.b) + '" fill="var(--muted)" font-size="11">' + ymin.toFixed(1) + '</text>';
+
+  const d = pts.map((p, i) => (i ? 'L' : 'M') + X(p[0]).toFixed(1) + ' ' + Y(p[1]).toFixed(1)).join(' ');
+  s += '<path d="' + d + '" fill="none" stroke="var(--accent)" stroke-width="2"/>';
+
+  const cy = evaluate(rCur, lo, hi, c).sel;
+  s += '<circle cx="' + X(rCur) + '" cy="' + Y(cy) + '" r="4.5" fill="var(--accent)"/>';
+  el('plot').innerHTML = s;
+}
+
+render();
+</script>
+</body>
+</html>

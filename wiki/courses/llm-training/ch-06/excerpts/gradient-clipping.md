@@ -7,6 +7,8 @@ source_url: https://arxiv.org/abs/1211.5063
 created_at: "2026-04-23"
 ---
 
+> Superseded by the 2026-09 revision of read.md; kept for history.
+
 # Excerpt: Gradient Clipping — clip-norm history as the earliest spike-detection signal
 
 **Source library:** `wiki/raw-data/llm-training/classics/gradient-clipping.md`

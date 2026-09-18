@@ -1,65 +1,101 @@
-<!-- scope: Evol-Instruct on math problems + RLEIF (Reinforcement Learning from Evol-Instruct Feedback)
+<!-- scope: Math Evol-Instruct (downward + upward evolution) and RLEIF — an instruction reward model and a GPT-4-labelled process reward model combined in step-by-step PPO; WizardMath checkpoints on GSM8k and MATH
      deps: [[evol-instruct]]
-     see-also: [[wizardcoder]], [[math-shepherd]], [[prm800k]]
+     see-also: [[wizardcoder]], [[math-shepherd]], [[prm800k]], [[metamath]]
 -->
 
-# WizardMath: Empowering Mathematical Reasoning via Reinforced Evol-Instruct (RLEIF)
-- **Core Insight:** Evolving math problems in *two* directions — downward to grade-school and upward to competition-hard — combined with reinforcement on both answer correctness *and* process-reward signals, closes most of the open-vs-frontier gap on math reasoning.
-- **Guideline:** For math-specialist SFT+RL, take GSM8K/MATH seeds, apply bidirectional Evol-Instruct (make-easier + make-harder), generate candidate solutions, train an Instruction Reward Model (IRM) on instruction quality and a Process Reward Model (PRM) on step correctness, then PPO against IRM·PRM.
-- **Authors:** Haipeng Luo, Qingfeng Sun, Can Xu, Pu Zhao, Jianguang Lou, Chongyang Tao, Xiubo Geng, Qingwei Lin, Shifeng Chen, Yansong Tang (Microsoft + Tsinghua)
-- **Year:** 2023
+# WizardMath: Empowering Mathematical Reasoning for Large Language Models via Reinforced Evol-Instruct
+- **Core Insight:** Evolving GSM8k and MATH training questions in two directions and then running PPO against the product of an instruction reward model and a process reward model raises Mistral-7B from 82.8/48.1 (SFT only) to 90.7/55.4 pass@1 on GSM8k/MATH, and WizardMath-Llama 70B reaches 92.8/58.6 (§4.2 Table 1, §4.3 Table 3).
+- **Guideline:** When building a math-specialist model from a small human-annotated seed set, evolve the seed both downward and upward before SFT, because in the Mistral-7B ablation two downward rounds alone give 74.5/34.7 and three upward rounds alone give 78.6/42.5 against 59.7/15.1 for the original 7.5k data, and all five rounds together give 81.2/46.2 (§4.3, Table 6). The result is reported only for GSM8k and MATH.
+- **Authors:** Haipeng Luo, Qingfeng Sun, Can Xu, Pu Zhao, Jianguang Lou, Chongyang Tao, et al. (11 authors; Tsinghua University SIGS, Microsoft, SIAT CAS)
+- **Year:** 2023 (arXiv v1 2023-08; v3 2025-06; ICLR 2025)
 - **URL:** https://arxiv.org/abs/2308.09583
-- **Relevant topics:** math reasoning, Evol-Instruct, process reward models, RLEIF
+- **Source type:** paper
+- **Relevant topics:** math reasoning, instruction evolution, process reward models, PPO, verifier reranking
 
 ## Abstract
-WizardMath applies the Evol-Instruct paradigm (from [[evol-instruct]]) to math problems in both directions: "downward evolution" produces easier grade-school-style variants; "upward evolution" produces harder, multi-step competition-style variants. The evolved dataset is used for SFT, then RLEIF — Reinforcement Learning from Evol-Instruct Feedback — trains an Instruction Reward Model plus a Process Reward Model and optimizes the policy with PPO against their product. WizardMath-70B surpasses GPT-3.5-Turbo, Claude 2, Gemini Pro, and GPT-4-early on GSM8K / MATH at release; the 7B-Mistral version beats prior open SOTA with higher data efficiency.
+The paper presents RLEIF (Reinforcement Learning from Evol-Instruct Feedback) applied to mathematical
+chain-of-thought reasoning without external Python tools. Math Evol-Instruct evolves GSM8k and MATH
+training questions along a downward line (easier questions) and an upward line (harder questions), and the
+evolved instructions are answered by GPT-4-0613 for supervised fine-tuning. Two reward models are then
+trained: an instruction reward model that ranks evolved instructions by difficulty and clarity, and a
+process-supervised reward model trained on GPT-4-labelled step correctness. PPO optimizes the product of
+the two rewards. WizardMath-Mistral 7B and WizardMath-Llama 70B exceed several proprietary models on
+GSM8k and MATH (Abstract, §3, §4.2).
 
 ## Key Contributions
-- **Math Evol-Instruct**: bidirectional (downward + upward) evolution operators specialized for math.
-- **RLEIF**: joint optimization against an instruction reward model (IRM) and a process reward model (PRM).
-- Public release of WizardMath 7B/13B/70B models.
-- Established the "Evol + RLEIF" template for specialist vertical RL (later imitated in code and reasoning domains).
+- Math Evol-Instruct with two evolution lines: downward (lower difficulty, or an easier question on a different topic) and upward (add constraints, concretize, increase reasoning) (§3.1).
+- An instruction reward model (IRM) trained with a pairwise ranking loss on GPT-4 rankings of evolved instructions (§3.2, Eq. 1).
+- A process-supervised reward model (PRM) trained on fully AI-labelled step correctness rather than human annotation (§3.2, Eq. 2).
+- Step-by-step PPO whose reward is the product of the instruction reward and the minimum step score (§3.3, Eq. 3).
+- Use of the same PRM as a verifier for reranking sampled solutions (§3.4, Eq. 4, §4.3 Table 5).
 
 ## Key Figures/Tables to Study
-- **Figure illustrating bidirectional evolution** — a GSM8K seed, its simplified variants, and its MATH-hard variants.
-- **Table: GSM8K / MATH scores across WizardMath sizes vs closed models.**
-- **Ablation: Evol only vs RLEIF full** — RLEIF contributes several percentage points.
+- **Table 1** (§4.2) — GSM8k and MATH pass@1 for WizardMath across base models from GPT-2-Small to Llama-2 70B.
+- **Table 3** (§4.3) — SFT vs +PRM vs +PRM+IRM at GPT-2-XL, Llama2-7B and Mistral-7B.
+- **Table 4** (§4.3) — the authors' PRM against ORM, PRM800k and Math-Shepherd as the PPO reward.
+- **Table 6** (§4.3) — downward and upward evolution rounds ablated separately and jointly on Mistral-7B SFT.
 
-## Synthesis pipeline (REQUIRED — be concrete)
-- **Seed input:** GSM8K + MATH training splits (and related open math datasets).
+## Technical Details
+- Seed: GSM8k and MATH training sets; the ablation table names the original manually annotated data as 7.5k examples (§4.1, §4.3 Table 6 caption).
+- Evolution: 5 rounds per instruction, 2 downward and 3 upward, each round generated from the previous one; each round evolves each instruction 6 times at temperature 0.7 (§3.1, §4.1).
+- Data volume: 17k duplicates removed, giving 448k unique instructions; 30k removed by contamination filtering, leaving 418k for SFT (§4.1).
+- Answers for SFT are generated by GPT-4-0613 in step-by-step format (§4.1).
+- Reward-model data: 5 additional evolution rounds give 90k instructions; GPT-4-0613 ranks each instruction list from 1 to 6 for IRM. For PRM, the Llama-2 70B SFT model generates 5 answers per instruction and GPT-4-0613 judges each reasoning step (§4.1).
+- IRM loss: `L_IRM = − log σ(r_j^q − r_k^q − m)`, where `r_j^q` is the reward of the chosen instruction, `r_k^q` the reward of the rejected instruction, and `m` a margin (§3.2, Eq. 1).
+- PRM loss: cross-entropy over steps, `L_PRM = Σ_{i=1..L} y_i log r_i^a + (1 − y_i) log(1 − r_i^a)`, where `L` is the number of reasoning steps, `y_i = 1` if step `i` is correct, and `r_i^a` is the PRM score of step `i` (§3.2, Eq. 2).
+- PPO reward: `r = r_q · r_a`, where `r_q` is the IRM score of the instruction and `r_a` is the minimum PRM score across the answer's reasoning steps (§3.3, Eq. 3).
+- Verifier: `â = arg max_a Σ_i 1[a_i = a] · PRM(q, a_i)`, combining majority voting with PRM scores (§3.4, Eq. 4).
+- Main results (pass@1, greedy CoT, no Python tool): WizardMath-Llama 70B 92.8 GSM8k / 58.6 MATH; WizardMath-Mistral-v0.1 7B 90.7 / 55.4; WizardMath-Llama 2 13B 89.7 / 50.6; WizardMath-Llama 2 7B 84.1 / 43.5; WizardMath-Qwen (Qwen2.5-Math 7B) 93.9 / 77.8 (§4.2, Table 1).
+- Baselines in the same table: MetaMath-Llama-2 70B 82.3 / 26.6; GPT-3.5-Turbo 81.6 / 43.1; GPT-4-0314 94.7 / 52.6 (§4.2, Table 1).
+- MATH subtopic breakdown for the 70B model: Algebra 78.5, Prealgebra 74.6, Number Theory 58.5, Counting & Probability 54.8, Geometry 48.3, Precalculus 38.9, Intermediate Algebra 36.3, overall 58.6 (§4.2, Table 2).
 
-- **Generation step(s):**
-  - **Downward evolution operators** (per Math Evol-Instruct): *reduce constraints*, *replace concepts with simpler ones*, *shorten the chain*, *make arithmetic easier*.
-  - **Upward evolution operators**: *add constraints*, *compose with another concept*, *increase reasoning depth*, *require multiple solution steps*.
-  - Each seed is evolved multiple times per direction to yield a broader difficulty spectrum.
-  - Solutions generated via teacher LLM sampling with step-by-step format.
+## Recipe ledger
 
-- **Filtering/rescoring:** answer-verifier (exact match for GSM8K-style; symbolic equivalence for MATH) rejects incorrect solutions; duplicate instruction filter.
+| Model (exact release) | Size | Stage | Setting | Value | Source location | Status | Evidence for this value |
+|---|---|---|---|---|---|---|---|
+| WizardMath-Llama 2 7B | 7B | SFT | peak LR / epochs | 2e-5, 3 epochs | arXiv:2308.09583v3 §4.1 | verified 2026-09-18 | no ablation reported |
+| WizardMath-Llama 2 13B | 13B | SFT | peak LR / epochs | 2e-5, 3 epochs | arXiv:2308.09583v3 §4.1 | verified 2026-09-18 | no ablation reported |
+| WizardMath-Llama 2 70B | 70B | SFT | peak LR / epochs | 1e-5, 3 epochs | arXiv:2308.09583v3 §4.1 | verified 2026-09-18 | no ablation reported |
+| WizardMath-Mistral 7B | 7B | SFT | peak LR / epochs | 5e-6, 3 epochs | arXiv:2308.09583v3 §4.1 | verified 2026-09-18 | no ablation reported |
+| all WizardMath SFT runs | 7B–70B | SFT | global batch (sequences) / sequence length | 512 / 2048 | arXiv:2308.09583v3 §4.1 | verified 2026-09-18 | no ablation reported |
+| all WizardMath SFT runs | 7B–70B | SFT | training examples | 418k evolved instructions (448k unique minus 30k contamination-filtered) | arXiv:2308.09583v3 §4.1 | verified 2026-09-18 | §4.3 Fig. 2: data-size sweep 15k–390k against MetaMathQA on Mistral-7B |
+| WizardMath (Llama 2 based) | 7B–70B | reward-model | LR / epochs | 4e-6, 1 epoch | arXiv:2308.09583v3 §4.1 | verified 2026-09-18 | no ablation reported |
+| WizardMath (Mistral-7B based) | 7B | reward-model | LR / epochs | 1e-6, 1 epoch | arXiv:2308.09583v3 §4.1 | verified 2026-09-18 | no ablation reported |
+| WizardMath (Llama 2 based) | 7B–70B | RL | PPO LR / epochs | 4e-7, 1 epoch | arXiv:2308.09583v3 §4.1 | verified 2026-09-18 | §4.3 Table 3: +PRM+IRM over SFT |
+| WizardMath (Mistral-7B based) | 7B | RL | PPO LR / epochs | 1e-7, 1 epoch | arXiv:2308.09583v3 §4.1 | verified 2026-09-18 | §4.3 Table 3: 82.8→90.7 GSM8k, 48.1→55.4 MATH |
+| all WizardMath RL runs | 7B–70B | RL | KL coefficient, clip ε, samples per prompt, batch, rollout length | not reported (checked §3.3, §4.1, App. A) | arXiv:2308.09583v3 | not reported | — |
 
-- **RLEIF step:**
-  - **IRM** — trained on pairs of evolved instructions to score instruction quality/evolution success.
-  - **PRM** — trained on step-level labels (similar to [[prm800k]] lineage) to score partial-solution correctness.
-  - PPO objective: maximize `IRM(instruction, response) × PRM(response_steps)` with KL penalty to SFT reference.
-
-- **Output shape:** tens of thousands of evolved math problems with step-by-step solutions (not all publicly released). WizardMath model checkpoints released.
-
-- **Teacher model(s):** GPT-3.5/GPT-4-class for evolution + solution generation; later iterations use WizardMath itself.
-
-- **Cost estimate:** not disclosed.
-
-## Quality / diversity evaluation
-- WizardMath-70B: GSM8K ~81.6 / MATH ~22.7 at release — above GPT-3.5-Turbo, Claude 2.
-- WizardMath-Mistral-7B: strong pareto point — beats LLemma-34B with fewer params at release.
-- RLEIF ablation: +~3 points on GSM8K, +~2 on MATH over SFT-only.
-
-## Risks + gotchas
-- **Reward hacking**: PRM signal is noisy; overtraining on PRM can produce surface-correct chains with wrong answers.
-- **Benchmark saturation** since release — newer 7B reasoning models now exceed WizardMath-70B.
-- **License:** WizardLM-family data has had access restrictions; check before redistribution.
-- **Process-reward labeling scale**: PRM data is expensive; WizardMath uses model-labeled step correctness, inheriting the teacher's error modes.
+## Findings relevant to generality and negative feedback
+- The PRM provides negatives as gradient through PPO: the answer reward is the minimum step score, so a single step judged incorrect lowers the whole trajectory's reward (§3.3).
+- Reward-model ablation at Mistral-7B SFT: +ORM gives 84.6/49.6, +PRM800k 85.4/50.8, +Math-Shepherd 86.1/50.3, and the paper's own AI-labelled PRM 87.2/52.7 on GSM8k/MATH (§4.3, Table 4). The authors state that AI-labelled process supervision outperforms the human-annotated PRM800k here.
+- Component ablation: at Llama2-7B, SFT 77.4/35.6 → +PRM 81.7/39.9 → +PRM+IRM 84.1/43.5; at Mistral-7B, 82.8/48.1 → 87.2/52.7 → 90.7/55.4 (§4.3, Table 3).
+- Verifier reranking over 256 samples: SFT+PRM generator with a PRM verifier reaches 95.2 GSM8k and 64.7 MATH, above self-consistency (92.3/59.3) and an ORM verifier (94.1/60.8) (§4.3, Table 5).
+- Data efficiency: fine-tuning Mistral-7B on 15k–390k examples, the evolved data exceeds MetaMathQA by 3–6 points on GSM8k and 15–20 points on MATH at matched size (§4.3, Fig. 2).
+- Breadth is measured only on GSM8k and MATH; the paper reports no held-out general-capability evaluation, so forgetting outside math is not measured.
 
 ## Connections
-- Direct math-specialized descendant of [[evol-instruct]].
-- Companion to [[wizardcoder]] (Evol-Instruct on code).
-- PRM component in the [[prm800k]] / [[math-shepherd]] / [[lets-verify]] lineage.
-- Precursor to later math-RL recipes: [[grpo]] / [[rlvr-tulu3]] / [[deepseek-r1]] use verifiable-reward but drop the IRM and the evol-based data construction.
+- [[evol-instruct]] — the general-domain instruction-evolution method this adapts.
+- [[wizardcoder]] — the code adaptation, cited in §3.1 as the precedent for this work.
+- [[prm800k]] — the human-annotated process-supervision dataset used as a baseline reward model in Table 4.
+- [[math-shepherd]] — the MCTS-annotated process reward model used as the other baseline in Table 4.
+- [[metamath]] — the data-augmentation baseline compared in Table 1 and in the data-size sweep.
+
+## Verification
+- Checked on 2026-09-18 against: https://arxiv.org/abs/2308.09583 (arXiv v3, 4 June 2025; ICLR 2025 camera-ready)
+- Corrections to the previous card version:
+  - Title "…via Reinforced Evol-Instruct (RLEIF)" → "WizardMath: Empowering Mathematical Reasoning for Large Language Models via Reinforced Evol-Instruct" (title page).
+  - Author list omitted Dongmei Zhang and gave affiliations as "Microsoft + Tsinghua"; the paper lists 11 authors across Tsinghua University SIGS, Microsoft Corporation, and Shenzhen Institute of Advanced Technology, CAS (title page).
+  - "WizardMath-70B: GSM8K ~81.6 / MATH ~22.7" → 92.8 / 58.6 (§4.2, Table 1). 81.6 is the GSM8k score of GPT-3.5-Turbo in the same table.
+  - "RLEIF ablation: +~3 points on GSM8K, +~2 on MATH over SFT-only" → at Llama2-7B the full PPO stage adds 6.7 on GSM8k and 7.9 on MATH; at Mistral-7B, 7.9 and 7.3 (§4.3, Table 3).
+  - "PPO objective: maximize IRM(instruction, response) × PRM(response_steps) with KL penalty to SFT reference" → the IRM scores the instruction alone (`IRM: Q → R`), the answer term is the minimum PRM step score, and the paper does not state a KL penalty (§3.2, §3.3).
+  - "Filtering: answer-verifier (exact match / symbolic equivalence) rejects incorrect solutions" → the paper reports duplicate removal (17k) and contamination filtering (30k), and SFT answers come from GPT-4-0613 without a stated correctness verifier (§4.1).
+  - "Output shape: tens of thousands of evolved math problems" → 418k instructions after filtering (§4.1).
+  - "Teacher: GPT-3.5/GPT-4-class … later iterations use WizardMath itself" → GPT-4-0613 is named for instruction evolution, SFT answer generation, IRM ranking and PRM step labelling; the Llama-2 70B SFT model generates the candidate answers that GPT-4 labels (§4.1).
+  - "Downward operators: reduce constraints, replace concepts with simpler ones, shorten the chain, make arithmetic easier" → the paper gives two downward forms: revise a high-difficulty question to lower difficulty, or produce a new easier question on a different topic (§3.1). Upward forms are: add more constraints, concretize, increase reasoning (§3.1).
+- Removed as unsupported by the source:
+  - "surpasses … Gemini Pro and GPT-4-early at release; the 7B-Mistral version beats prior open SOTA with higher data efficiency" as a release-time claim — the comparisons in v3 are against a 2024–2025 baseline table, not the 2023 release state.
+  - "Reward hacking: overtraining on PRM can produce surface-correct chains with wrong answers" — not reported.
+  - "Benchmark saturation since release — newer 7B reasoning models now exceed WizardMath-70B" — not a statement of the paper.
+  - "License: WizardLM-family data has had access restrictions" — not stated.
+  - "each seed is evolved multiple times per direction" as an unquantified claim → replaced with the stated 6 evolutions per round at temperature 0.7 (§4.1).
+- Not reported by the source: PPO KL coefficient, clip range, rollout batch size and samples per prompt; training hardware and compute; whether the 418k SFT set was released.

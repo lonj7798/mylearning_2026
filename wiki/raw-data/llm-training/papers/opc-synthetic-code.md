@@ -1,57 +1,83 @@
-<!-- scope: OpenCoder OPC synthetic code SFT datasets (stage1/stage2) — 4.5M examples
+<!-- scope: OpenCoder report — OPC-SFT two-stage code instruction data (stage 1 / stage 2), synthetic annealing data, and the disclosed pretraining, annealing, and SFT settings
      deps: [[oss-instruct]]
-     see-also: [[wizardcoder]], [[code-evol-instruct]]
+     see-also: [[code-evol-instruct]], [[wizardcoder]], [[mammoth-2]], [[wildchat]], [[deduplicating-training-data]], [[minhash-lsh]]
 -->
 
-# OpenCoder OPC-SFT: Open Cookbook Synthetic Code SFT Datasets
-- **Core Insight:** A top-tier open code LLM needs a **two-stage SFT mix** — stage 1 broad (~4.21M filtered + extracted + large-scale diverse code instructions) to instill general coding competence, stage 2 narrow (~375K educational + evolved + test-verified) to polish — totaling ~4.5M high-quality code SFT examples.
-- **Guideline:** For code-specialist fine-tuning, run a two-stage SFT: first a broad filtered mix (public code instructions + real-user code chats + synthetic diverse), then a smaller stage of verified-correct + evolved examples; include test-case validation in the stage-2 pipeline.
-- **Author(s):** OpenCoder team (InfLM)
-- **Year:** 2024
-- **URL:** https://huggingface.co/datasets/OpenCoder-LLM/opc-sft-stage1 ; https://huggingface.co/datasets/OpenCoder-LLM/opc-sft-stage2 ; https://github.com/OpenCoder-llm/OpenCoder-llm
-- **Relevant topics:** code SFT, two-stage post-training, OSS-Instruct, verified synthetic code
+# OpenCoder: The Open Cookbook for Top-Tier Code Large Language Models
+- **Core Insight:** For OpenCoder-1.5B-Instruct, training on the diverse stage-1 instruction set and then on the code-specific stage-2 set gives HumanEval 70.1 and MBPP 74.6, compared with 52.4 / 68.7 for stage 1 only and 55.5 / 52.0 when both stages are mixed and shuffled (§6.4, Table 10).
+- **Guideline:** When fine-tuning a code model on a large, diverse but lower-quality instruction set plus a smaller high-quality code-specific set, train them sequentially (diverse first) rather than as one shuffled mix, because the sequential order scored higher on every benchmark in Table 10 (1.5B model, single comparison).
+- **Authors:** Siming Huang, Tianhao Cheng, J.K. Liu, Jiaran Hao, Liuyihan Song, Yang Xu, et al. (INF, M-A-P, Nanjing University)
+- **Year:** 2024 (arXiv v1 2024-11; v3 2025-03)
+- **URL:** https://arxiv.org/abs/2411.04905 (datasets: https://huggingface.co/datasets/OpenCoder-LLM/opc-sft-stage1, https://huggingface.co/datasets/OpenCoder-LLM/opc-sft-stage2; repo: https://github.com/OpenCoder-llm/OpenCoder-llm)
+- **Source type:** paper (with released dataset cards and repository README)
+- **Relevant topics:** code SFT data, synthetic instruction data, test-verified synthesis, two-stage SFT, annealing data, deduplication, decontamination
 
-## Overview
-OpenCoder releases its full post-training recipe including an **open 4.5M+ SFT corpus** split across two stages. Stage 1 is broad and large; stage 2 is small, verified, and polished. The mix is the clearest public template for how to structure modern code SFT.
+## Abstract
+OpenCoder is a code LLM released with model weights, inference code, training data, the data-processing pipeline, ablation results, and training protocols. The authors identify three ingredients for building a "top-tier" code LLM (their wording): code-specific heuristic rules for cleaning and deduplication, recall of code-related text from web corpora, and high-quality synthetic data in the annealing and supervised fine-tuning stages. The released models have 1.5B and 8B parameters; the authors state that OpenCoder achieves performance comparable to leading code models.
 
-## Stage 1 — opc-sft-stage1 (~4.21M samples)
-Three primary components:
-- **Filtered_infinity_instruct:** filtered from the large `infinity_instruct` corpus, keeping only code-related entries via LLM filtering.
-- **Realuser_instruct:** bilingual code-related instructions extracted from real user GPT conversation histories (ShareGPT, WildChat) — grounds the distribution in actual user asks.
-- **Largescale_diverse_instruct:** large-scale diverse synthetic code instructions (Self-Instruct / Evol-Instruct family).
+## Key Contributions
+- RefineCode, a pretraining corpus of about 960B tokens in 607 programming languages with over 130 language-specific rules (§2.1).
+- An annealing mixture that adds an algorithmic corpus and two synthetic sets (test-passing code snippets, code textbooks) to original-distribution data (§2.2, Table 3).
+- A post-training corpus built from filtered open data, real user queries, and three synthesis pipelines, used in two SFT stages (§4.1–4.2, Table 5).
+- Ablations on file- vs repository-level deduplication, high-quality annealing data, GitHub-star filtering, and two-stage SFT (§6).
 
-## Stage 2 — opc-sft-stage2 (~375K samples)
-Four polished components:
-- **Educational_instruct:** uses an algorithmic corpus as seed; synthesizes `(instruction, code, test case)` triples; **validates each triple via a Python compiler + test execution**; only passing triples are kept.
-- **Evol_instruct:** directly uses Magicoder-Evol-Instruct-110K open version (see [[evol-instruct]] / [[wizardcoder]]).
-- **McEval_instruct:** multi-language eval-adjacent synthetic instructions.
-- **Package_instruct:** library-usage tasks (Python packages like numpy, pandas, sklearn).
+## Key Figures/Tables to Study
+- **Table 5:** two-stage SFT composition. **Table 10:** Stage 1 vs Stage 1 + Stage 2 vs mixed training.
+- **Fig. 5:** the three instruction-synthesis workflows. **Table 3:** annealing mixture.
+- **Tables 7–8:** instruct-model results (HumanEval, MBPP, BigCodeBench, LiveCodeBench, MultiPL-E).
+- **Table 9, Fig. 8:** file-level vs repository-level deduplication. **Figs. 10–11:** GitHub-star filtering and data diversity.
 
-## Pipeline highlights
-- **Test-case verification** in stage-2 educational_instruct is the distinguishing filter — ensures correctness of synthesized code.
-- **Multi-language** coverage via McEval_instruct.
-- **Real-user grounding** via ShareGPT/WildChat extraction in stage 1.
-- **Companion datasets:**
-  - `opc-annealing-corpus` — synthetic pretraining-adjacent data + algorithmic corpus.
-  - Preference data for DPO / ORPO stage.
+## Technical Details
+- **Stage 1 sources (§4.1, Table 5):** Filtered Infinity-Instruct (LLM binary classification keeps code-related samples), RealUser-Instruct (code-related dialogues extracted by an LLM from WildChat and Code-290k-ShareGPT; low-quality responses regenerated by a stronger LLM), Large-scale Diverse-Instruct (web pages cleaned by an LLM as question seeds, following Yue et al. 2024; questions sampled at temperature 1.0; answers checked by code execution and unit tests; an LLM adds comments and explanation).
+- **Stage 2 sources (§4.1, Table 5):** McEval-Instruct (multilingual, from raw code snippets sampled by language at a fixed ratio), Evol-Instruct (footnote link: evol-codealpaca-v1; the stage-2 dataset card names Magicoder-Evol-Instruct-110K), Educational-Instruct (a scorer model selects high-quality Python seed snippets, a teacher model writes tasks and multiple test cases, only samples that pass in a Python interpreter are kept), Package-Instruct (PyDoc API signatures and examples for common Python libraries such as NumPy, pandas, TensorFlow prompt a teacher model).
+- **Prompts:** the Educational-Instruct prompt asks for task, analysis, solution, and ten assert statements (App. G).
+- **Stated purpose of the stages:** stage 1 data has high diversity and lower average quality; stage 2 data is high-quality and code-specific (§6.4). The §4.2 prose instead describes stage 1 as theoretical computer-science QA and stage 2 as GitHub-code tasks.
+- **Teacher models for SFT synthesis:** not named ("strong LLM", "teacher model") (§4.1). Code Textbooks in annealing use Qwen2-72B-Instruct on hqcode, which was synthesized with GPT-4o-mini (§2.2).
+- **Results (Table 7):** OpenCoder-8B-Instruct HumanEval 83.5, MBPP 79.1, BigCodeBench-Hard 16.9, LiveCodeBench 23.2; Qwen2.5-Coder-7B-Instruct 88.4, 83.5, 18.2, 37.6. OpenCoder-1.5B-Instruct HumanEval 72.5, LiveCodeBench 12.8; Qwen2.5-Coder-1.5B-Instruct 70.7, 15.7. LiveCodeBench uses the 2305–2409 split (§5.2).
+- **Languages (Table 8, MultiPL-E):** OpenCoder-8B-Instruct Python 83.5, C++ 61.5, Bash 44.3, average 71.0 (Qwen2.5-Coder-7B-Instruct 76.5).
+- **Pretraining data ablations (1.5B models):** file-level deduplication retains 32.74B Python tokens vs 99.47B for repository level and gives higher HumanEval/MBPP during training (§6.1, Table 9, Fig. 8); filtering by GitHub stars ≥ 5 lowers downstream scores and training loss, which the authors attribute to reduced diversity (§6.3, Figs. 10–11); removing algorithmic and synthetic data from annealing lowers HumanEval/MBPP (§6.2, Fig. 9; values shown only in figures).
 
-## Training outcome
-- OpenCoder-8B-Instruct at release: strong HumanEval / MBPP / LiveCodeBench numbers; close to Qwen2.5-Coder-7B-Instruct.
-- OpenCoder-1.5B-Instruct: best-in-class at its size point.
+## Recipe ledger
+| Model (exact release) | Size | Stage | Setting | Value | Source location | Status | Evidence for this value |
+|---|---|---|---|---|---|---|---|
+| OpenCoder-8B-Base | 8B | pretrain-stable | tokens; epochs | 2.5T tokens; 3.5 epochs | arXiv:2411.04905v3 §3.2 | verified 2026-09-14 | no ablation reported |
+| OpenCoder-8B-Base | 8B | pretrain-stable | sequence length; global batch | 8192; 1024; first 130,000 steps at 4096 and 2048 (unit not stated) | §3.2 | verified 2026-09-14 | no ablation reported |
+| OpenCoder-8B-Base | 8B | pretrain-stable/decay | LR schedule | WSD, warmup 2,000 steps (8B tokens); "mirrored" the 1.5B schedule; decay phase 100B tokens | §3.2 | verified 2026-09-14 | schedule from MiniCPM (§3.2); no ablation reported |
+| OpenCoder-8B-Base | 8B | pretrain | parallelism; compute | micro-batch 1, TP 2; 512 H100, 187.5 h, 96,000 GPU hours | §3.2 | verified 2026-09-14 | — |
+| OpenCoder-1.5B-Base | 1.5B | pretrain-stable | tokens; epochs; context | 2T tokens; 4 epochs; 4096 | §3.2; Table 4 | verified 2026-09-14 | no ablation reported |
+| OpenCoder-1.5B-Base | 1.5B | pretrain-stable/decay | LR | WSD; warmup 2,000 steps (8B tokens); peak 3e-4 held constant; exponential decay to 1e-5 over 100B annealing tokens | §3.2 | verified 2026-09-14 | no ablation reported |
+| OpenCoder-1.5B-Base | 1.5B | pretrain | batch; compute | micro-batch 4, global 1024; 256 H800, 109.5 h, 28,034 GPU hours | §3.2 | verified 2026-09-14 | — |
+| RefineCode (pretraining corpus) | — | pretrain-stable | composition (tokens, share) | GitHub code 755B (78.4%); The Stack v2 120B (12.5%); FineWeb 55B (5.7%); CC 13B (1.4%); Jupyter 11B (1.1%); SkyPile 3B; AutoMathText 3B; about 730B tokens after downsampling Java and HTML | §2.1, Table 2; §2.1.1 "Data Sampling" | verified 2026-09-14 | §2.1.3 Fig. 1: 1.5B trained to 600B tokens on RefineCode vs The Stack v2 |
+| OpenCoder annealing | not stated per size | pretrain-decay/anneal | mixture (tokens) | RefineCode 83.94B; Algorithmic Corpus 12.44B; High Quality Code Snippet 2.71B; Code Textbooks 0.91B; 84% original distribution | §2.2, Table 3 | verified 2026-09-14 | §6.2 Fig. 9 (1.5B, with vs without high-quality data); ratio "might not be ideal" (§2.2) |
+| OpenCoder Instruct (size not distinguished) | 1.5B, 8B | SFT stage 1 | examples | RealUser-Instruct 0.7M; Large-scale Diverse-Instruct 2.3M; Filtered Infinity-Instruct 1.0M | Table 5 | conflict | README: 4.21M; HF viewer 2026-09-14: 4,216,321 rows (676k / 2.51M / 1.03M); release files vs trained mix not reconciled by the source |
+| OpenCoder Instruct | 1.5B, 8B | SFT stage 1 | epochs; batch; LR; warmup; schedule | 1; 4096 (unit not stated); 2e-5; 100 steps; cosine | §4.3 | verified 2026-09-14 | no ablation reported |
+| OpenCoder Instruct | 1.5B, 8B | SFT stage 2 | examples | McEval-Instruct 36K; Evol-Instruct 111K; Educational-Instruct 110K; Package-Instruct 110K | Table 5 | conflict | README: 375K; HF viewer 2026-09-14: 436,347 rows (35.9k / 111k / 118k / 171k) |
+| OpenCoder Instruct | 1.5B, 8B | SFT stage 2 | epochs; batch; LR; warmup; schedule | 3; 512 (unit not stated); 5e-5; 100 steps; cosine | §4.3 | verified 2026-09-14 | no ablation reported |
+| OpenCoder-1.5B-Instruct | 1.5B | SFT | stage order | stage 1 then stage 2 (not mixed) | §4.2; §6.4 | verified 2026-09-14 | Table 10: Stage1+Stage2 > Stage1 and > Mix on HE, HE+, MBPP, MBPP+, BigCodeBench, CodeArena |
+| OpenCoder Instruct | 1.5B, 8B | SFT | max sequence length; packing; loss masking; teacher model | not reported | checked §4, App. G, README, dataset cards | not reported | — |
+| OpenCoder Instruct | 1.5B, 8B | eval-gate | SFT decontamination | remove samples containing HumanEval/MBPP entry points; remove samples with 10-gram overlap with test sets | §4.4 | verified 2026-09-14 | no ablation reported |
 
-## Practitioner takeaways
-- **Two-stage SFT** (broad → polished) is the current best open code recipe.
-- **Real-user extraction** counters distribution bias from pure synthetic.
-- **Test-case validation** is load-bearing — removes wrong-code noise that degrades smaller models.
-- **Multi-language coverage** still challenging; McEval_instruct is a small but important share.
-
-## Risks + gotchas
-- **Language skew toward Python** — non-Python benchmarks lag.
-- **Test harness scope** — only simple executable tests; algorithmic correctness beyond tests unguaranteed.
-- **ShareGPT / WildChat extraction** inherits source-license nuances.
+## Findings relevant to generality and forgetting
+- **Order of specialization:** mixing stage-1 and stage-2 data lowered MBPP to 52.0, below stage 1 alone (68.7); the sequential order reached 74.6; CodeArena win rate vs GPT-4 (about 400 prompts, GPT-4 judge) 5.3 / 6.9 / 3.8 for Stage1 / Stage1+Stage2 / Mix (§6.4, Table 10). **Result (single study, 1.5B).**
+- **Forgetting (stated design rationale):** 84% of annealing data comes from the original RefineCode distribution because "a significant distribution shift can lead to catastrophic forgetting"; no ablation of this ratio is reported (§2.2).
+- **Diversity at pretraining:** star-based filtering reduces data diversity and lowers downstream scores despite lower loss (§6.3).
 
 ## Connections
-- Heavy use of [[oss-instruct]] (MagicoderS) philosophy in stage 1.
-- Evol subset overlaps with [[wizardcoder]] line.
-- Practical reference companion to [[llama-3-synthetic-pipeline]]'s code subsection.
-- Template for future open code-model releases (Qwen-Coder open siblings, etc.).
+- [[oss-instruct]] — Magicoder (Wei et al. 2023b), cited for seeding instruction synthesis with real code snippets (§4.1, Educational-Instruct).
+- [[code-evol-instruct]] and [[wizardcoder]] — source of the stage-2 Evol-Instruct subset.
+- [[mammoth-2]] — Yue et al. (2024), the web-seeded synthesis approach followed by Large-scale Diverse-Instruct.
+- [[wildchat]] — source of real user queries for RealUser-Instruct.
+- [[deduplicating-training-data]] and [[minhash-lsh]] — the exact and fuzzy deduplication used for RefineCode (§2.1.1).
+
+## Verification
+- Checked on 2026-09-14 against: https://arxiv.org/abs/2411.04905 (arXiv v3, 20 Mar 2025, full PDF incl. App. A–G); HF dataset cards opc-sft-stage1 and opc-sft-stage2; GitHub README (OpenCoder-llm/OpenCoder-llm)
+- Corrections to the previous card version:
+  - Title "OpenCoder OPC-SFT: Open Cookbook Synthetic Code SFT Datasets" → the published title above; authors "OpenCoder team (InfLM)" → Huang, Cheng, et al. (INF, M-A-P, NJU).
+  - "Stage 1 ~4.21M; stage 2 ~375K" → paper Table 5 lists 0.7M + 2.3M + 1.0M and 36K + 111K + 110K + 110K; 4.21M and 375K are README figures; recorded as conflict.
+  - "Largescale_diverse_instruct: Self-Instruct / Evol-Instruct family" → web-page seeds following Yue et al. 2024 (MAmmoTH2), with execution and unit-test validation (§4.1).
+  - "McEval_instruct: eval-adjacent synthetic instructions" → instruction data created from multilingual raw code snippets sampled by language (§4.1).
+  - "Package_instruct: numpy, pandas, sklearn" → examples named are NumPy, pandas, TensorFlow; data built from PyDoc documentation (§4.1).
+  - "[[oss-instruct]] philosophy in stage 1" → the Magicoder citation supports seed-snippet synthesis for Educational-Instruct in stage 2 (§4.1).
+  - "OpenCoder-8B-Instruct close to Qwen2.5-Coder-7B-Instruct" → HumanEval 83.5 vs 88.4, LiveCodeBench 23.2 vs 37.6 (Table 7); "1.5B best-in-class" → highest HumanEval among listed 1.5B models (72.5), lower LiveCodeBench than Qwen2.5-Coder-1.5B-Instruct (12.8 vs 15.7).
+- Removed as unsupported by the source: "preference data for DPO / ORPO stage"; "two-stage SFT is the current best open code recipe"; "real-user extraction counters distribution bias from pure synthetic"; "test-case validation removes wrong-code noise that degrades smaller models"; "multi-language coverage still challenging"; "test harness scope" and "source-license nuances" risks; "language skew toward Python" (replaced by Table 8 numbers).
+- Not reported by the source: SFT teacher model names, SFT sequence length, packing, loss masking, optimizer and weight decay for any stage.

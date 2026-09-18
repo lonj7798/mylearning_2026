@@ -1,0 +1,191 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ch-08 — target metric against broad-suite mean (Shi et al. 2024, Table 1)</title>
+<style>
+  :root{
+    --bg:#fbfbfa; --fg:#1b1b1a; --muted:#5d5d59; --grid:#dcdcd6; --panel:#ffffff; --line:#c9c9c2;
+    --it:#b4541f; --im:#1f5fa8; --neft:#5c5f66; --base:#3c7a4a; --chat:#7a4a8c;
+  }
+  @media (prefers-color-scheme: dark){
+    :root{ --bg:#16171a; --fg:#ececeb; --muted:#a3a39e; --grid:#33353a; --panel:#1f2126; --line:#42454b;
+           --it:#e58a53; --im:#7fb2e8; --neft:#a9adb6; --base:#7fc08f; --chat:#c49ad8; }
+  }
+  html,body{margin:0;padding:0;background:var(--bg);color:var(--fg);
+    font:15px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif;}
+  .wrap{max-width:900px;margin:0 auto;padding:20px 16px 40px;}
+  h1{font-size:19px;margin:0 0 6px;font-weight:600;}
+  p.lede{margin:0 0 16px;color:var(--muted);font-size:14px;}
+  .controls{display:flex;flex-wrap:wrap;gap:14px;align-items:center;margin:0 0 12px;
+    padding:10px 12px;background:var(--panel);border:1px solid var(--line);border-radius:6px;}
+  .controls label{font-size:13px;display:flex;align-items:center;gap:6px;cursor:pointer;}
+  .swatch{width:11px;height:11px;border-radius:50%;display:inline-block;}
+  figure{margin:0;}
+  svg{width:100%;height:auto;display:block;background:var(--panel);
+    border:1px solid var(--line);border-radius:6px;}
+  .axis line,.axis path{stroke:var(--line);}
+  .grid line{stroke:var(--grid);}
+  text{fill:var(--fg);font-size:11px;}
+  text.muted{fill:var(--muted);}
+  .pt{cursor:pointer;}
+  .pt:hover{stroke:var(--fg);stroke-width:1.5;}
+  #detail{margin-top:12px;padding:11px 13px;background:var(--panel);border:1px solid var(--line);
+    border-radius:6px;font-size:13.5px;min-height:3.4em;}
+  #detail b{font-weight:600;}
+  table{border-collapse:collapse;width:100%;margin-top:16px;font-size:12.5px;}
+  th,td{border:1px solid var(--line);padding:4px 7px;text-align:right;}
+  th:first-child,td:first-child{text-align:left;}
+  th{background:var(--panel);font-weight:600;}
+  figcaption{margin-top:14px;font-size:12.5px;color:var(--muted);}
+  code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px;}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>One SFT run moves two numbers: target metric and broad-suite mean</h1>
+  <p class="lede">Every point is one LLaMA-2-7B checkpoint from Table 1 of Shi et al. 2024
+    (arXiv:2405.14394v2). Horizontal axis: AlpacaEval 1.0 win rate, the target-style metric. Vertical axis:
+    mean over 18 traditional NLP tasks in 6 categories, the broad suite. The dashed line is the base model's
+    broad-suite mean, 49.32. Points below it are checkpoints that gained on the target metric and lost
+    broad-suite score in the same run.</p>
+
+  <div class="controls" id="controls"></div>
+
+  <figure>
+    <svg id="chart" viewBox="0 0 860 470" role="img" aria-label="Scatter of broad-suite mean against AlpacaEval win rate"></svg>
+    <div id="detail">Select a point to read its numbers.</div>
+    <figcaption>
+      Source: Shi, Yang, Wu, Aitchison, Yilmaz, Lipani, "Instruction Tuning With Loss Over Instructions",
+      arXiv:2405.14394v2, Table 1. IT = loss on response tokens only; IM = loss over instruction tokens as
+      well; NEFTUNE = response-only loss with noisy input embeddings. Setting: LLaMA-2-7B base, total batch 128
+      sequences, max length 2048, LR 2e-5, 2 epochs (10 for the LIMA NEFTUNE row), one seed per cell; the paper
+      reports no variance. LLaMA-2-CHAT (49.15, 79.04) is plotted for reference and is not a run from this
+      table's training sets.
+    </figcaption>
+  </figure>
+
+  <table id="tbl"></table>
+</div>
+
+<script>
+const DATA = [
+  {set:"— (reference)",           n:null,  method:"BASE",    y:49.32, x:0.01,  mt:1.16},
+  {set:"— (reference)",           n:null,  method:"CHAT",    y:49.15, x:79.04, mt:6.63},
+  {set:"Alpagasus Alpaca 5k",     n:5305,  method:"IT",      y:45.29, x:16.29, mt:3.62},
+  {set:"Alpagasus Alpaca 5k",     n:5305,  method:"NEFTUNE", y:45.62, x:21.37, mt:3.50},
+  {set:"Alpagasus Alpaca 5k",     n:5305,  method:"IM",      y:47.47, x:19.52, mt:3.48},
+  {set:"Alpagasus Dolly 3k",      n:2996,  method:"IT",      y:46.58, x:13.42, mt:4.23},
+  {set:"Alpagasus Dolly 3k",      n:2996,  method:"NEFTUNE", y:47.07, x:14.04, mt:4.42},
+  {set:"Alpagasus Dolly 3k",      n:2996,  method:"IM",      y:48.95, x:15.11, mt:4.06},
+  {set:"Alpagasus Dolly 9k",      n:9229,  method:"IT",      y:45.54, x:21.54, mt:4.33},
+  {set:"Alpagasus Dolly 9k",      n:9229,  method:"NEFTUNE", y:45.99, x:31.61, mt:4.21},
+  {set:"Alpagasus Dolly 9k",      n:9229,  method:"IM",      y:48.00, x:30.77, mt:4.55},
+  {set:"Less Tydiqa",             n:13533, method:"IT",      y:48.21, x:5.12,  mt:4.08},
+  {set:"Less Tydiqa",             n:13533, method:"NEFTUNE", y:47.47, x:8.35,  mt:4.19},
+  {set:"Less Tydiqa",             n:13533, method:"IM",      y:48.70, x:10.10, mt:4.36},
+  {set:"Less MMLU Chat",          n:13533, method:"IT",      y:47.18, x:4.42,  mt:3.86},
+  {set:"Less MMLU Chat",          n:13533, method:"NEFTUNE", y:47.74, x:6.22,  mt:4.06},
+  {set:"Less MMLU Chat",          n:13533, method:"IM",      y:47.84, x:9.78,  mt:4.54},
+  {set:"Less BBH ICL",            n:13533, method:"IT",      y:48.28, x:36.20, mt:4.78},
+  {set:"Less BBH ICL",            n:13533, method:"NEFTUNE", y:49.03, x:39.81, mt:5.05},
+  {set:"Less BBH ICL",            n:13533, method:"IM",      y:49.15, x:44.15, mt:5.03},
+  {set:"LIMA",                    n:1030,  method:"IT",      y:48.79, x:33.06, mt:4.77},
+  {set:"LIMA",                    n:1030,  method:"NEFTUNE", y:48.70, x:30.51, mt:4.79},
+  {set:"LIMA",                    n:1030,  method:"IM",      y:49.60, x:32.94, mt:4.83}
+];
+const COLORS = {IT:"--it", IM:"--im", NEFTUNE:"--neft", BASE:"--base", CHAT:"--chat"};
+const METHODS = ["IT","NEFTUNE","IM","BASE","CHAT"];
+const shown = new Set(METHODS);
+const BASE_Y = 49.32;
+
+const W=860,H=470,M={t:24,r:24,b:52,l:60};
+const xMin=0,xMax=82,yMin=44.5,yMax=50.2;
+const px = v => M.l + (v - xMin)/(xMax - xMin)*(W - M.l - M.r);
+const py = v => H - M.b - (v - yMin)/(yMax - yMin)*(H - M.t - M.b);
+const cssvar = name => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+
+function el(tag, attrs, text){
+  const e = document.createElementNS("http://www.w3.org/2000/svg", tag);
+  for (const k in attrs) e.setAttribute(k, attrs[k]);
+  if (text !== undefined) e.textContent = text;
+  return e;
+}
+
+function draw(){
+  const svg = document.getElementById("chart");
+  svg.textContent = "";
+  // grid + axes
+  const g = el("g",{class:"grid"});
+  for (let v=45; v<=50; v+=1){ g.appendChild(el("line",{x1:M.l,x2:W-M.r,y1:py(v),y2:py(v)}));
+    svg.appendChild(el("text",{x:M.l-9,y:py(v)+4,"text-anchor":"end",class:"muted"}, v.toFixed(0))); }
+  for (let v=0; v<=80; v+=10){ g.appendChild(el("line",{x1:px(v),x2:px(v),y1:M.t,y2:H-M.b}));
+    svg.appendChild(el("text",{x:px(v),y:H-M.b+18,"text-anchor":"middle",class:"muted"}, v)); }
+  svg.insertBefore(g, svg.firstChild);
+  svg.appendChild(el("text",{x:(M.l+W-M.r)/2,y:H-14,"text-anchor":"middle"},"AlpacaEval 1.0 win rate (%)"));
+  const yl = el("text",{x:16,y:(M.t+H-M.b)/2,"text-anchor":"middle",transform:`rotate(-90 16 ${(M.t+H-M.b)/2})`},
+    "Mean over 18 NLP tasks");
+  svg.appendChild(yl);
+  // base line
+  svg.appendChild(el("line",{x1:M.l,x2:W-M.r,y1:py(BASE_Y),y2:py(BASE_Y),
+    stroke:cssvar("--base"),"stroke-dasharray":"6 4","stroke-width":1.4}));
+  svg.appendChild(el("text",{x:W-M.r-4,y:py(BASE_Y)-7,"text-anchor":"end",fill:cssvar("--base")},
+    "base model, 18-task mean = 49.32"));
+  // points
+  DATA.forEach((d,i)=>{
+    if (!shown.has(d.method)) return;
+    const c = cssvar(COLORS[d.method]);
+    const isRef = d.method==="BASE" || d.method==="CHAT";
+    const node = isRef
+      ? el("rect",{x:px(d.x)-5,y:py(d.y)-5,width:10,height:10,fill:c,class:"pt"})
+      : el("circle",{cx:px(d.x),cy:py(d.y),r:6,fill:c,"fill-opacity":0.85,class:"pt"});
+    node.addEventListener("click",()=>select(i));
+    node.addEventListener("mouseenter",()=>select(i));
+    svg.appendChild(node);
+  });
+}
+
+function select(i){
+  const d = DATA[i];
+  const delta = (d.y - BASE_Y).toFixed(2);
+  const sign = (d.y - BASE_Y) >= 0 ? "+" : "";
+  document.getElementById("detail").innerHTML =
+    `<b>${d.method}</b> · ${d.set}${d.n ? " (" + d.n.toLocaleString() + " examples)" : ""} — ` +
+    `18-task mean <b>${d.y.toFixed(2)}</b> (${sign}${delta} against the base model), ` +
+    `AlpacaEval 1.0 <b>${d.x.toFixed(2)}</b>, MT-Bench ${d.mt.toFixed(2)}.`;
+}
+
+function controls(){
+  const box = document.getElementById("controls");
+  METHODS.forEach(m=>{
+    const lab = document.createElement("label");
+    const cb = document.createElement("input");
+    cb.type="checkbox"; cb.checked=true;
+    cb.addEventListener("change",()=>{ cb.checked ? shown.add(m) : shown.delete(m); draw(); });
+    const sw = document.createElement("span");
+    sw.className="swatch"; sw.style.background=`var(${COLORS[m]})`;
+    lab.appendChild(cb); lab.appendChild(sw);
+    lab.appendChild(document.createTextNode(m==="BASE"?"LLaMA-2-BASE":m==="CHAT"?"LLaMA-2-CHAT":m));
+    box.appendChild(lab);
+  });
+}
+
+function table(){
+  const t = document.getElementById("tbl");
+  let html = "<tr><th>Training set</th><th>Method</th><th>18-task mean</th><th>Δ vs base</th>"
+           + "<th>AlpacaEval 1.0</th><th>MT-Bench</th></tr>";
+  DATA.forEach(d=>{
+    const delta = d.y - BASE_Y;
+    html += `<tr><td>${d.set}</td><td>${d.method}</td><td>${d.y.toFixed(2)}</td>`
+          + `<td>${delta>=0?"+":""}${delta.toFixed(2)}</td><td>${d.x.toFixed(2)}</td>`
+          + `<td>${d.mt.toFixed(2)}</td></tr>`;
+  });
+  t.innerHTML = html;
+}
+
+controls(); draw(); table();
+matchMedia("(prefers-color-scheme: dark)").addEventListener("change", draw);
+</script>
+</body>
+</html>

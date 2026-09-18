@@ -1,54 +1,64 @@
-<!-- scope: Nvidia Nemotron 3 (Nano/Super/Ultra) — multi-environment RL + GenRM
-     deps: [[nemotron]]
-     see-also: [[llama-3]], [[qwen-3]]
+<!-- scope: NVIDIA Nemotron 3 white paper (arXiv:2512.20856, Dec 2025) — family overview of Nano, Super, and Ultra: hybrid Mamba-Transformer MoE, LatentMoE, multi-token prediction, NVFP4 pretraining, 1M-token context, multi-environment RL with GRPO, reasoning budget control. Training values for the released Nano model are in nemotron-ultra-recipe. The file name does not refer to Llama-Nemotron Ultra or to the later Nemotron 3 Ultra technical report.
+     deps: [[grpo]]
+     see-also: [[nemotron-ultra-recipe]], [[nemotron-4-synthetic]], [[deepseek-v3]], [[ruler]], [[qwen-3]]
 -->
 
-# Nemotron 3 (Ultra / Super / Nano)
-- **Core Insight:** "Multi-environment reinforcement learning" — one RL run across reasoning, tool-use, and agentic environments with a GenRM reward model — beats single-environment RL stages for agentic generalization.
-- **Guideline:** Ship your reward model alongside the policy; Nvidia's open GenRM release lets downstream users resume RLHF without retraining the RM.
-
-- **Authors / Lab:** NVIDIA (Nemotron team)
-- **Year:** 2025 (Nemotron 3 Nano + white paper Dec 24, 2025; Super and Ultra releases to follow)
-- **URL:** https://arxiv.org/abs/2512.20856 — https://research.nvidia.com/labs/nemotron/Nemotron-3/
-- **Relevant topics:** multi-environment RL, GenRM, agentic reasoning, reasoning budget control, open RLHF datasets
+# NVIDIA Nemotron 3: Efficient and Open Intelligence
+- **Core Insight:** NVIDIA trains Nemotron 3 with RL on all environments at once (math and science reasoning, competitive coding, instruction following, software engineering, search, chat, agentic tool use, long context) and states that this is more stable, less prone to reward hacking, and better than the staged RL of its previous models; the only evidence printed is Figure 7, where eight benchmark curves rise during one Nemotron 3 Nano RL run of about 500 steps (§2.6).
+- **Guideline:** When one RL stage must improve several capabilities, the white paper supports training all environments simultaneously with GRPO instead of sequential single-task stages, because NVIDIA reports that staged approaches often degrade some capabilities (§2.6). This is a qualitative claim: no staged-versus-simultaneous numbers are printed, so a reader who needs the size of the effect must measure it.
+- **Authors:** NVIDIA: Aaron Blakeman, Aaron Grattafiori, Aarti Basant, Abhibha Gupta, Abhinav Khattar, Adi Renduchintala, et al. (arXiv author list)
+- **Year:** 2025 (arXiv v1 2025-12-24; no venue)
+- **URL:** https://arxiv.org/abs/2512.20856 (PDF also at https://research.nvidia.com/labs/nemotron/files/NVIDIA-Nemotron-3-White-Paper.pdf; project page https://research.nvidia.com/labs/nemotron/Nemotron-3/)
+- **Source type:** official technical report (white paper)
+- **Relevant topics:** hybrid Mamba-Transformer MoE, LatentMoE, multi-token prediction, NVFP4 training, long-context extension, multi-environment RL, GRPO with masked importance sampling, reasoning budget control
 
 ## Abstract
-Nemotron 3 is NVIDIA's 2025 open family: Nano (3.2B active / 31.6B total — MoE), Super, Ultra. Nano is released first, with white paper + tech report + GenRM reward model + curated training datasets. Post-training philosophy centers on **multi-environment RL** — a single RL run spanning reasoning, multi-step tool use, and agentic environments — with a granular "reasoning budget control" lever letting users trade tokens for accuracy at inference.
+The white paper introduces the Nemotron 3 family: Nano, Super, and Ultra, aimed at agentic, reasoning, and conversational use. All three use a Mixture-of-Experts hybrid Mamba-Transformer architecture for inference throughput and support contexts of up to 1M tokens. Super and Ultra are trained in the NVFP4 number format, use LatentMoE, and include multi-token prediction (MTP) layers. All models are post-trained with multi-environment reinforcement learning for reasoning and multi-step tool use, and support granular reasoning budget control. Nano was released with its own technical report and this white paper; the paper states that Super and Ultra would follow in the coming months. NVIDIA states it will release weights, pre- and post-training software, recipes, and the data it has rights to redistribute.
 
 ## Key Contributions
-- **Nemotron 3 Nano:** 3.2B active (3.6B w/ embeddings), 31.6B total MoE — <50% of activated params vs Nemotron 2 Nano at better accuracy.
-- **Multi-environment RL:** a unified RL stage across reasoning, tool use, and agentic task environments rather than sequential reasoning-then-tools RL.
-- **GenRM release:** a generative reward model trained on NVIDIA-curated preference data, released as an open asset for downstream RLHF.
-- **Reasoning budget control:** inference-time parameter for number of thinking tokens — similar in spirit to Qwen 3's thinking budget.
-- Open artifact bundle: weights, GenRM, training recipes, curated datasets — intended as a reproducible stack.
-
-## Post-training pipeline
-- **SFT data:** NVIDIA-curated mix covering reasoning, agentic, multi-step tool use; size not publicly itemized in the Nano release summary. Uses NVIDIA's prior Nemotron-4 data pipeline as a base.
-- **Preference / RL algorithm:** Multi-environment RL; specific algorithm (PPO vs GRPO vs DPO) not stated in Nano release notes — white paper details expected. Nemotron-4 used an iterative RLHF approach, so PPO-family is likely.
-- **Reward model:** **GenRM** — generative reward model. Released as an open asset alongside the policy. Architecture and training corpus summarized in the white paper; details beyond "generative" not in the release blog.
-- **KL / entropy handling:** Not disclosed in summary.
-- **Rollout scale:** Not disclosed.
-- **Hyperparameters:** Not disclosed in search-surfaced summary — LR, batch, clip ε, group size all reserved.
-- **Verifiable rewards:** Multi-environment RL includes environments with verifiable signals (tool-use success, code execution) alongside GenRM-scored outputs.
-- **Self-improvement / iterative:** Nemotron-4 used iterative SFT↔RLHF loops; the same template presumably carries forward but is not explicitly described for Nemotron 3.
-
-## Innovations vs predecessors
-Changes from **Nemotron-4 340B → Nemotron 3**:
-- Shifted to MoE for Nano (Nemotron-4 was dense).
-- Multi-environment RL supersedes the sequential RLHF stages used in Nemotron-4.
-- GenRM released publicly — Nemotron-4's RM was not open.
-- Granular reasoning-budget control introduced; absent in Nemotron-4.
-- Smaller active-parameter footprint (3.2B vs 340B dense) reflects the 2025 MoE efficiency shift.
+- A layer pattern of mostly Mamba-2 and MoE layers with a few self-attention layers; Nano 30B-A3B has 3.3× the throughput of Qwen3-30B-A3B at 8k input / 16k output (§2.1, Figures 1-2).
+- LatentMoE (Super, Ultra): routed experts compute in a smaller latent dimension, and the saved memory and communication are spent on more total and more active experts (§2.2, Table 1).
+- MTP layers (Super, Ultra), with about 2.4% average benchmark gain in an 8B-active ablation (§2.3, Table 2).
+- Native NVFP4 pretraining on a hybrid Mamba-MoE for up to 25T tokens (§2.4).
+- Context extension to 1M tokens without RoPE, multi-environment RL with GRPO, and inference-time reasoning budget control (§2.5-§2.7).
 
 ## Key Figures/Tables to Study
-- Multi-environment RL diagram — conceptual contrast with sequential reasoning-then-tool RL.
-- Nano accuracy-vs-activated-params plot — the efficiency-frontier claim.
-- GenRM training overview — the only public window into NVIDIA's RM recipe at this scale.
+- **Table 1:** Standard MoE vs LatentMoE at matched active and total parameters. **Table 2:** MTP ablation.
+- **Figure 4:** NVFP4 vs BF16 loss gap at two scales, including the ablation that quantizes sensitive layers.
+- **Table 3 and Figure 6:** RULER at 128k-1M for two base models; per-position NLL on code sequences over 1M tokens.
+- **Figure 7:** eight benchmark curves during one multi-environment RL run. **Figure 8:** accuracy vs generated tokens under a budget.
+
+## Technical Details
+- **Hybrid layout:** MoE layers are interleaved mainly with Mamba-2 layers, which keep a constant state during generation, instead of with attention layers, whose KV cache grows with length (§2.1). Each attention layer uses grouped-query attention with 2 KV heads (§2.4).
+- **LatentMoE mechanism:** each token is projected from hidden dimension d to a latent dimension ℓ < d, routed to experts that operate in the latent space, and projected back to d (§2.2). Per-expert weight loads and all-to-all traffic shrink by d/ℓ, "typically about 4×" (Figure 3 caption). Total experts grow from N to N′ = N·d/ℓ and active experts from K to K′ = K·d/ℓ (§2.2). Here d is the model hidden size, ℓ the latent size, N the number of routed experts, and K the number of active experts per token. The router, shared experts, and non-expert layers stay in dimension d (§2.2).
+- **LatentMoE ablation:** two models with 8B active and 73B total parameters, 1T tokens, identical hyperparameters (§2.2). Standard MoE: d = 4096, 128 experts, 6 active. LatentMoE: ℓ = 1024, 512 experts, 22 active (§2.2). MMLU-Pro 48.30 → 52.87, MMLU 70.10 → 72.11, Code average 51.95 → 55.14, Math average 78.32 → 80.19, Commonsense average 81.73 → 82.10 (Table 1).
+- **MTP ablation:** 8B-active transformer MoE base trained on 1T tokens; MMLU 70.06 → 71.26, MMLU-Pro 45.05 → 47.84, GSM8K 82.49 → 84.46 (Table 2); "roughly 2.4% on average" (§2.3). A lightweight MTP module reached about 97% acceptance on the first two predicted tokens in an 8B-active ablation (§2.3).
+- **NVFP4 format:** 16-element micro-blocks, E4M3 block scales, a second-level FP32 global scale, and E2M1 elements; weights, activations, and gradients are quantized (§2.4). Stabilizers: 2D block scaling for weights, Random Hadamard Transforms on wgrad inputs, stochastic rounding on gradients (§2.4).
+- **NVFP4 exceptions:** the last 15% of the network stays in high precision; latent projections, MTP layers, QKV and attention projections stay in BF16; Mamba output projections use MXFP8 because up to 40% of values flush to zero on Nano in NVFP4 (§2.4). Relative loss gap to BF16 is < 1% on Nano and < 0.6% on an 8B-active MoE (§2.4, Figure 4). Peak FP4 throughput on GB300 is 3× FP8 throughput (§2.4).
+- **Long context:** attention layers use no RoPE, because Mamba layers supply positional information (§2.5). Nano used continued pretraining at 512k sequence length, SFT at 256k, and an RL long-context environment with inputs up to 32k tokens; all three stages included synthetic retrieval, multi-hop, and multi-document aggregation data (§2.5). NVIDIA did not need a staged 8k → 512k length increase in continued pretraining (§2.5).
+- **RL system:** an asynchronous architecture decouples training from inference, MTP accelerates rollout generation, and GRPO with masked importance sampling accounts for the mismatch between training and rollout policies (§2.6). NeMo-RL (training) and NeMo-Gym (environments) are released under Apache 2.0 (§2.6).
+- **Reasoning budget control:** when the thinking trace reaches a user-set token budget, `</think>` is appended and the model writes its answer from the partial trace; Figure 8 plots Nano accuracy against average generated tokens per query (§2.7). The method follows Nemotron Nano 2 (§2.7).
+- **Release scope:** NVIDIA states it will release "over 10 trillion tokens of datasets" with weights and recipes (§1).
+
+## Recipe ledger
+The white paper prints few training settings. The ledger for Nemotron 3 Nano 30B-A3B, combining white-paper rows with the companion Nano technical report (arXiv:2512.20848v1: pretraining schedule, long-context phase, SFT, RLVR, GenRM, RLHF), is in [[nemotron-ultra-recipe]]. Verified 2026-09-14. No Super or Ultra training values are in either document.
+
+## Findings relevant to generality, long context, and agentic training
+- **Generality (simultaneous multi-environment RL):** the white paper contrasts "separate training stages for different tasks" in previous models (Nemotron Nano 2) with simultaneous training, and cites DeepSeek-V3.2-Exp for the observation that staged approaches often degrade some capabilities (§2.6). Status: Result (single study), qualitative; no per-environment weights or ablation numbers.
+- **Long context:** both base models were trained up to 512k. Nemotron 3 Nano 30B-A3B base scores lower than Nemotron-Nano-12B-v2-Base at 128k, 256k, and 512k (74.48 vs 85.13, 71.67 vs 79.85, 66.02 vs 75.12) and higher at 1M (54.19 vs 23.43) (Table 3). The authors interpret this as the MoE hybrid extrapolating beyond training length more gracefully than the dense hybrid (Interpretation). Cumulative average NLL on repository-level code sequences over 1M tokens decreases with position, with a power-law fit R² = 0.883 (Figure 6).
+- **Agentic training:** software engineering, search, and general agentic tool-use environments are part of the single RL mix (§2.6); the white paper prints no per-environment results beyond Figure 7 (τ²-Bench average is one of its eight panels).
 
 ## Connections
-- [[nemotron]] — Nemotron-4 340B; direct ancestor with published RM recipe.
-- [[llama-3]] — comparison point for dense RLHF pipeline.
-- [[qwen-3]] — thinking budget concept shared; different algorithmic approach.
+- [[nemotron-ultra-recipe]] — training values for Nemotron 3 Nano 30B-A3B with loci.
+- [[grpo]] — the RL algorithm named in §2.6.
+- [[deepseek-v3]] — the white paper cites it for MTP quality gains (§2.3).
+- [[ruler]] — the long-context benchmark in Table 3.
+- [[nemotron-4-synthetic]] — an earlier NVIDIA alignment report (Nemotron-4 340B); the white paper does not compare against it.
+- [[qwen-3]] — another report with an inference-time thinking budget; the white paper does not cite it.
+- Related artifacts without library cards: Nemotron 3 Nano technical report (arXiv:2512.20848); Nemotron 3 Super and Ultra technical reports (PDFs linked from the project page, released after the white paper); Llama-Nemotron: Efficient Reasoning Models (arXiv:2505.00949).
 
-## Gaps / what the report does NOT disclose
-Nano white-paper summary is thin on hyperparameters. Not disclosed: exact RL algorithm, KL β, LR, batch size, clip ε, group size G, rollouts per prompt, RL step counts, GenRM loss form, preference-data sizes, multi-environment reward mixing weights. Super and Ultra tech reports are not yet released at time of writing; their post-training deltas vs Nano are unknown.
+## Verification
+- Checked on 2026-09-14 against: https://arxiv.org/abs/2512.20856 (arXiv v1, the only version) and the project page https://research.nvidia.com/labs/nemotron/Nemotron-3/ (Super and Ultra report PDFs resolved on that date).
+- Corrections to the previous card version: title "Nemotron 3 (Ultra / Super / Nano)" → exact white-paper title; Core Insight "one RL run … with a GenRM reward model beats single-environment RL stages for agentic generalization" → simultaneous training is described as more stable, less prone to reward hacking, and better than staged RL, with no numbers, and the white paper does not mention a GenRM (§2.6); "specific algorithm (PPO vs GRPO vs DPO) not stated … PPO-family is likely" → GRPO with masked importance sampling (§2.6); "Multi-environment RL supersedes the sequential RLHF stages used in Nemotron-4" → the comparison is with the staged RL of Nemotron Nano 2 (§2.6); "reasoning budget control similar in spirit to Qwen 3's thinking budget" → the white paper says "Similar to Nemotron 2 Nano" (§2.7); "Nano (3.2B active / 31.6B total)" → not in the white paper; stated in the Nano report §1 and §2.1 (moved to [[nemotron-ultra-recipe]]); "GenRM trained on NVIDIA-curated preference data" → per the Nano report §3.3.1 the GenRM is Qwen3-235B-A22B-Thinking-2507 trained with GRPO on HelpSteer3, a commercial-friendly subset of arena-human-preference-140k, and a synthetic safety blend; "GenRM released publicly — Nemotron-4's RM was not open" → Nemotron-4-340B-Reward was released ([[nemotron-4-synthetic]] §1); "Nano accuracy-vs-activated-params plot" → Figure 2 shows accuracy and relative throughput per benchmark; "Not disclosed: exact RL algorithm, batch size, group size G, rollouts per prompt …; Super and Ultra reports not yet released" → the algorithm is in §2.6, prompts per step, generations per prompt, batch size, and SFT settings are in the Nano report §3.1.6 and §3.2.5, and the project page now links both later reports; "Year: Nemotron 3 Nano + white paper Dec 24, 2025" → arXiv v1 2025-12-24, project page dated 2025-12-15.
+- Removed as unsupported by the source: the Guideline "ship your reward model alongside the policy … resume RLHF without retraining the RM"; "SFT data uses NVIDIA's prior Nemotron-4 data pipeline as a base"; "Nemotron-4 used an iterative RLHF approach … the same template presumably carries forward"; "Innovations vs predecessors" list (shift to MoE vs Nemotron-4, "3.2B vs 340B dense reflects the 2025 MoE efficiency shift"); Key Figures "multi-environment RL diagram" and "GenRM training overview — the only public window into NVIDIA's RM recipe".
+- Not reported by the white paper: RL learning rate, KL coefficient, clip ε, per-environment sampling weights, RL step count, staged-vs-simultaneous RL numbers, any GenRM or SFT-data description, and any training value for Super or Ultra.

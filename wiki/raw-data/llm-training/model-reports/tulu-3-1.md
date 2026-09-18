@@ -1,47 +1,41 @@
-<!-- scope: Tülu 3.1 — Allen AI refresh of Tülu 3 recipe on updated bases
+<!-- scope: redirect — duplicate card for the Tülu 3.1 artifact; canonical card is [[tulu-3.1]]
      deps: [[tulu-3]]
-     see-also: [[olmo-3]]
+     see-also: [[tulu-3.1]], [[grpo]], [[rlvr-tulu3]]
 -->
 
-# Tülu 3.1
-- **Core Insight:** Tülu 3's four-stage recipe (prompt curation → SFT → off-and-on-policy DPO → RLVR) generalizes across base models — Tülu 3.1 is the propagation of the same recipe onto Llama 3.1 and OLMo 2 bases, not a new algorithm.
-- **Guideline:** Treat Tülu's recipe as a base-agnostic alignment pipeline; when a new base ships, re-run the stack rather than redesign it.
+# Tülu 3.1 (redirect)
 
-- **Authors / Lab:** Allen Institute for AI (Ai2)
-- **Year:** 2024-11-22 update (refresh of Tülu 3 Nov 21)
-- **URL:** https://allenai.org/blog/tulu-3-technical — https://arxiv.org/abs/2411.15124
-- **Relevant topics:** open post-training stack, SFT + DPO + RLVR, multi-base propagation (Llama 3.1 + OLMo 2)
+> **Redirect card.** This file and `model-reports/tulu-3.1.md` described the same artifact. The canonical
+> card is **[[tulu-3.1]]**, which is built on the primary source (the Hugging Face model card for
+> `allenai/Llama-3.1-Tulu-3.1-8B`). This file is kept only so existing `[[tulu-3-1]]` links resolve.
+> Cite [[tulu-3.1]] for the 3.1 delta and [[tulu-3]] for the underlying recipe.
 
-## Abstract
-"Tülu 3.1" in practice refers to Ai2's Nov 22, 2024 refresh of the Tülu 3 post-training stack applied to both Llama 3.1 and OLMo 2 base models. The pipeline — prompt curation + SFT + preference tuning (DPO) combining off- and on-policy data + RLVR with verifiable rewards — is unchanged; the refresh is a multi-base release, not a new algorithm. The **DR Tulu** (2025) release is a separate follow-up for long-form deep-research training. For new algorithmic Tülu-family work, see **OLMo 3** (2025), which extends the recipe with thinking / RL-Zero paths and Dolci data.
+- **URL of the primary artifact:** https://huggingface.co/allenai/Llama-3.1-Tulu-3.1-8B
+- **Source type:** model card
+- **Underlying report:** [[tulu-3]] (arXiv:2411.15124)
 
-## Key Contributions
-- Re-running the Tülu 3 recipe on updated bases: Llama-3.1-Tulu-3-8B, Llama-3.1-Tulu-3-70B, Llama-3.1-Tulu-3-405B.
-- Matching/exceeding Llama 3.1-Instruct, Qwen 2.5-Instruct, Mistral-Instruct, Nemotron at the same base.
-- **DR Tulu** (2025): extends Tülu to long-form deep-research workflows with bespoke RL environments.
-- OLMo 3 (see separate entry) eventually carries the Tülu-derived recipe forward with DPO (delta-learning) + RLVR + thinking paths.
-
-## Post-training pipeline (inherited from Tülu 3, unchanged)
-- **SFT data:** carefully curated prompts and completions targeting core skills (reasoning, coding, math, IF, safety, multilingual).
-- **Preference / RL algorithm:** DPO combining off-policy (pre-compiled) and on-policy (rolled-out) preference data.
-- **Reward model:** trained RM for DPO-pair scoring; specific composition documented in the original Tülu 3 paper.
-- **RLVR:** verifiable-reward RL for math / code / IF — rule-based verifiers, no learned RM.
-- **KL / entropy / LR / batch / clip / group / rollouts / RL-step counts:** documented in the Tülu 3 paper; 3.1 refresh does not publish per-base-model hyperparameter deltas.
-- **Self-improvement / iterative:** iterative DPO (offline + online rollouts) is the in-pipeline iterative element; no multi-round outer loop.
-
-## Innovations vs predecessors
-- Tülu 3.1 relative to Tülu 3: same recipe, new bases (Llama 3.1, OLMo 2 joined).
-- DR Tulu (follow-up) adds long-form deep-research RL environments.
-- vs 2024 open post-training norms: Tülu stack remains the most fully-reproducible open recipe — all data, code, RM, evals, scripts public.
-
-## Key Figures/Tables to Study
-- Tülu 3 paper Figure 1 (pipeline overview).
-- 8B / 70B / 405B benchmark tables vs Llama 3.1-Instruct — the 3.1 refresh evidence.
+## What the primary source says, in one paragraph
+The model card states that the 3.1 version comes from an improvement only in the final RL stage of
+training: the PPO stage was replaced by GRPO with no reward model, followed by further hyperparameter
+tuning. The card lists the GRPO settings for that stage, including learning rate 5e-7, a constant learning
+rate schedule, 16 samples per prompt, and KL penalty coefficient β = 0.01. The parent checkpoint is
+`allenai/Llama-3.1-Tulu-3-8B-DPO` and the RL training set is
+`allenai/RLVR-GSM-MATH-IF-Mixed-Constraints`. The full numbers and their loci are in [[tulu-3.1]].
 
 ## Connections
-- [[tulu-3]] — primary reference; algorithmic details live here.
-- [[olmo-3]] — successor recipe that builds on Tülu's DPO+RLVR foundation with thinking + RL-Zero.
-- [[llama-3]] — base model for the 3.1 Tülu refresh.
+- [[tulu-3.1]] — canonical card for this artifact.
+- [[tulu-3]] — the report that documents the SFT and DPO stages that 3.1 leaves unchanged.
+- [[grpo]] — the algorithm the final stage was switched to.
+- [[rlvr-tulu3]] — the verifiable-reward RL setting both versions use.
 
-## Gaps / what the report does NOT disclose
-Tülu 3.1 itself is a refresh release without a separate tech report. Not separately disclosed: per-base-model hyperparameter changes, whether DPO β / RLVR LR / rollouts per prompt changed when moving from Llama-3.1 to OLMo 2 base, exact RM changes between the original Tülu 3 release and the refresh. Chapter authors should cite the Tülu 3 paper (arxiv 2411.15124) for algorithmic detail and the 3.1 blog / HF cards for base-model-specific benchmarks.
+## Verification
+- Checked on 2026-09-18 against: https://huggingface.co/allenai/Llama-3.1-Tulu-3.1-8B (model card) and https://arxiv.org/abs/2411.15124 (arXiv v5)
+- Corrections to the previous card version:
+  - "Tülu 3.1 is the propagation of the same recipe onto Llama 3.1 and OLMo 2 bases, not a new algorithm" → the model card states the only change is in the final RL stage, PPO → GRPO with no reward model, on an 8B checkpoint whose parent is `Llama-3.1-Tulu-3-8B-DPO`. The card describes no OLMo 2 variant.
+  - "Year: 2024-11-22 update (refresh of Tülu 3 Nov 21)" → the model card gives no such date for 3.1; the Tülu 3 report itself is arXiv:2411.15124 (v1 2024-11). The 3.1 release date is not established by either primary source read here.
+  - "URL: https://allenai.org/blog/tulu-3-technical — https://arxiv.org/abs/2411.15124" → the card mixed two artifacts; the artifact named by the slug is the Tülu 3.1 model card.
+  - "KL / entropy / LR / batch / clip / group / rollouts / RL-step counts ... 3.1 refresh does not publish per-base-model hyperparameter deltas" → the 3.1 model card does publish GRPO settings, including learning rate 5e-7, constant schedule, 16 samples per prompt and β = 0.01.
+  - "Re-running the recipe on updated bases: Llama-3.1-Tulu-3-8B, -70B, -405B" → those are the Tülu 3 checkpoints, not Tülu 3.1 checkpoints.
+  - "Reward model: trained RM for DPO-pair scoring" → DPO preference labels in the Tülu 3 report come from LLM-judge pairwise comparisons (§5.2.1, Table 17), and the 3.1 final stage uses no reward model at all.
+- Removed as unsupported by the source: the claim that Tülu 3.1 joined OLMo 2 bases; the claim that the pipeline is "unchanged"; the DR Tulu and OLMo 3 paragraphs (they describe other artifacts and belong on their own cards); "the most fully-reproducible open recipe"; the "Key Figures/Tables to Study" entries, which pointed at the Tülu 3 paper rather than at this artifact.
+- Not reported by the source: benchmark deltas for any size other than 8B; whether the SFT or DPO data changed for 3.1.

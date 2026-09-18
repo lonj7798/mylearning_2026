@@ -1,106 +1,95 @@
-<!-- scope: synthetic long-context task-generation protocol for controlled retrieval, tracing, aggregation, and QA stress tests
-     see-also: [[magpie]], [[toolformer]], [[toolllm]]
+<!-- scope: synthetic long-context benchmark generator — configurable retrieval, multi-hop tracing, aggregation and QA tasks, and the effective-context-length measure
+     see-also: [[magpie]], [[persona-hub]]
 -->
 
 # RULER: What's the Real Context Size of Your Long-Context Language Models?
-- **Core Insight:** RULER is valuable less as a leaderboard and more as a parameterized synthetic-task generator that separates context length from task complexity, exposing long-context failure modes that simple needle-in-a-haystack tests miss.
-- **Guideline:** When designing long-context data or evals, generate task families with explicit knobs for length, distractors, multi-target recall, multi-hop dependency depth, and aggregation difficulty; do not rely on single-needle retrieval alone.
-- **Authors:** Cheng-Ping Hsieh, Simeng Sun, Samuel Kriman, Shantanu Acharya, Dima Rekesh, Fei Jia, Yang Zhang, Boris Ginsburg
-- **Year:** 2024
+- **Core Insight:** Of 17 long-context models that all claim context windows of 32K tokens or more, only half stay above the fixed quality threshold at 32K, and almost all fall below it before reaching their claimed length, even though nearly all score close to perfect on the vanilla needle-in-a-haystack test (Abstract; §1; §4 Table 3).
+- **Guideline:** When reporting a usable context length, report the maximum length at which the model's 13-task RULER average stays above the Llama2-7B-at-4K threshold of 85.6, not the configured window, because the two differ by one to five doublings for every model measured except Gemini-1.5-Pro (§4 Table 3).
+- **Authors:** Cheng-Ping Hsieh, Simeng Sun, Samuel Kriman, Shantanu Acharya, Dima Rekesh, Fei Jia, et al. (NVIDIA)
+- **Year:** 2024 (arXiv v1 2024-04; arXiv v3 2024-08; COLM 2024)
 - **URL:** https://arxiv.org/abs/2404.06654
-- **Relevant topics:** long-context evaluation, synthetic data generation, retrieval stress tests, multi-hop tracing, aggregation, context-length scaling
+- **Source type:** paper
+- **Relevant topics:** long-context evaluation, synthetic task generation, retrieval stress tests, multi-hop tracing, aggregation, context-length scaling
 
 ## Abstract
-RULER is a synthetic long-context benchmark built to measure what context length models can actually use, not just what length they claim to support. Instead of only testing single-needle retrieval, it defines configurable task generators spanning retrieval, multi-hop tracing, aggregation, and long-context QA. The paper evaluates 17 long-context models across 13 representative task settings and shows large accuracy drops as length increases, even for models that perform nearly perfectly on simple needle-in-a-haystack tests. The durable contribution is the controlled generation protocol: labs can vary sequence length and task complexity independently and inspect which long-context behaviors break first.
+The needle-in-a-haystack test measures only a shallow form of long-context understanding. RULER is a synthetic benchmark with configurable sequence length and task complexity. It extends vanilla NIAH to variations with diverse needle types and quantities, and adds two new categories, multi-hop tracing and aggregation, that test behaviors beyond searching the context. The paper evaluates 17 long-context language models on 13 representative RULER tasks. Despite near-perfect vanilla NIAH accuracy, almost all models degrade substantially as context length grows; although all claim 32K tokens or more, only half maintain satisfactory performance at 32K. An analysis of Yi-34B, which supports 200K, shows large room for improvement as input length and task complexity increase. RULER is open-sourced.
 
 ## Key Contributions
-- Introduces a **synthetic task-generation framework** with controllable context length and controllable task complexity, rather than a fixed benchmark corpus.
-- Expands long-context testing from vanilla retrieval to **four categories**: retrieval, multi-hop tracing, aggregation, and QA.
-- Defines **13 representative task settings** selected from a larger configuration space after a task-correlation study, so the benchmark covers distinct failure modes instead of redundant variants.
-- Uses **recall-based accuracy**, **effective context size**, and **weighted averages across lengths** to evaluate robustness under context scaling.
-- Shows that many models with advertised windows of `32K+` degrade sharply once distractors, multiple targets, or aggregation are introduced.
+- A synthetic generator with independent knobs for sequence length and task complexity, rather than a fixed corpus (§1; §3).
+- Two task categories not present in prior needle tests: multi-hop tracing (variable tracking) and aggregation (common and frequent word extraction) (§3.2, §3.3).
+- Effective context length: the largest evaluated length whose 13-task average exceeds the Llama2-7B score at 4K, 85.6% (§4, Table 3).
+- Two weighted averages, wAvg. (inc) and wAvg. (dec), with weights increasing or decreasing linearly with length, for ranking under different length distributions (§4).
+- A failure-mode analysis of Yi-34B up to 256K covering needle type, distractor count, output cardinality, hop count, and aggregation load (§5).
 
 ## Key Figures/Tables to Study
-- **Table 1** - why RULER matters: it is synthetic like NIAH, but unlike simple retrieval tests it has diverse tasks, minimal parametric-knowledge dependence, and controllable context.
-- **Table 2** - compact examples of the generation templates for retrieval, tracing, aggregation, and QA tasks.
-- **Table 3** - the practical headline: claimed context length versus effective context length across models.
-- **Figure 2** - breakdown of Yi-34B across task types; useful for seeing that different long-context failures emerge under different generators.
-- **Figure 3** - shows how performance changes when complexity knobs are adjusted for retrieval, tracing, aggregation, and QA.
-- **Table 5** - the most useful table for data designers: the exact 13 task configurations chosen for large-scale evaluation.
+- **Table 1** — RULER against existing long-context benchmarks on task diversity, parametric-knowledge reliance, and controllability.
+- **Table 3** — claimed length against effective length and per-length scores for the 17 models.
+- **Figure 2** — Yi-34B across the four NIAH variants; shows which knob breaks first.
+- **Figure 3** — Yi-34B on variable tracking, frequent words extraction, and QA under complexity scaling.
+- **Table 5** (App. B) — the exact 13 task configurations.
 
 ## Technical Details
-**Why RULER is a synthetic-data reference, not just a benchmark card:**
-- RULER generates examples on demand instead of collecting a static long-context dataset.
-- The key design goal is to hold the evaluation domain narrow and controlled so that **input length** and **task complexity** can be varied independently.
-- That makes it a better lineage reference than simple needle tests: labs can see whether failures come from raw length, distractor density, output-cardinality, chain depth, or aggregation burden.
+**Task families (§3).**
+- **Retrieval, four NIAH variants.** S-NIAH inserts one key-value needle. MK-NIAH inserts additional needles as hard distractors and queries one. MV-NIAH associates several values with one key and requires all of them. MQ-NIAH inserts several needles with distinct keys and requires all of them.
+- **Multi-hop tracing (VT).** A variable X1 is bound to a value V, then a linear chain of bindings (X2 = X1, X3 = X2, …) is scattered through the input; the model must return every variable name bound to V. Complexity scales with hops or chains (§3.2).
+- **Aggregation.** CWE samples words from discrete uniform distributions with a fixed number of common words while uncommon words grow with sequence length; FWE samples from a Zeta distribution where the k-th ranked word has frequency k^(−α)/ζ(α)N. The model returns the top-K frequent words; K equals the number of common words in CWE and is fixed at 3 in FWE, because larger K performs poorly even at short lengths (§3.3).
+- **QA.** SQuAD and HotpotQA gold paragraphs are inserted among distractor paragraphs sampled from the same dataset (§3.4).
 
-**Task families and generation protocol:**
-- **Retrieval:** RULER extends needle-in-a-haystack into four retrieval families.
-- **Single NIAH (`S-NIAH`):** one key-value pair is inserted into a long haystack, and the model must return the value for a queried key.
-- **Multi-keys NIAH (`MK-NIAH`):** multiple key-value needles are inserted, but only one is queried; the extra needles become hard distractors.
-- **Multi-values NIAH (`MV-NIAH`):** one key is associated with multiple values and the model must return all of them, turning retrieval into high-recall set output.
-- **Multi-queries NIAH (`MQ-NIAH`):** multiple distinct queried keys appear and the model must return all corresponding values.
-- **Multi-hop tracing (`VT`):** variable-binding chains like `X2 = X1`, `X3 = X2` are scattered through the context; the model must return every variable name linked to the same underlying value.
-- **Aggregation:** two synthetic summarization-style tasks are introduced.
-- **Common Words Extraction (`CWE`):** tokens are drawn from a uniform process with a fixed set of common words and a growing set of uncommon words; the model must recover the common words.
-- **Frequent Words Extraction (`FWE`):** token frequencies are sampled from a Zeta distribution and the model must output the top-`K` frequent words.
-- **QA:** SQuAD and HotpotQA are converted into long-context settings by inserting the gold paragraphs among randomly sampled distractor paragraphs from the same dataset.
+**Generation knobs (§3.1, App. B).**
+- Needle key/value type: words, 7-digit numbers, or 32-digit UUIDs.
+- Haystack type: repeated noise sentences ("The grass is green. The sky is blue. …") or Paul Graham essays.
+- Needle template: "the special magic number for XXX is: YYY" (§3.1, footnote 2).
+- Distractor count in MK-NIAH: from 4 keys up to a haystack filled entirely with distractor needles.
+- VT: number of chains and hops per chain. CWE: counts and frequencies of common and uncommon words. FWE: the Zeta parameter α.
 
-**Concrete generation knobs:**
-- **Context length:** examples are generated at `4K`, `8K`, `16K`, `32K`, `64K`, and `128K` tokens for the main benchmark, with additional analysis on longer settings such as `200K` and `256K`.
-- **Needle type:** keys and values can be **words**, **7-digit numbers**, or **32-digit UUIDs**.
-- **Haystack type:** distractor background can be repeated noise sentences or natural long text such as **Paul Graham essays**.
-- **Distractor density:** `MK-NIAH` can scale from `4` keys to a haystack filled entirely with distractor needles.
-- **Output cardinality:** `MV-NIAH` and `MQ-NIAH` turn retrieval into multi-item recall rather than single-span lookup.
-- **Tracing difficulty:** `VT` increases complexity by increasing the number of chains or the number of hops per chain.
-- **Aggregation difficulty:** `CWE` varies the number and frequency of common versus uncommon words; `FWE` varies the Zeta parameter `alpha`.
+**The 13 configurations used in the paper (App. B, Table 5).**
+- S-NIAH ×3: word→number with repeated-noise haystack (≈passkey retrieval); word→number with essay haystack (≈vanilla NIAH); word→UUID with essay haystack.
+- MK-NIAH ×3: num keys = 4, word→number, essay haystack (three distractor needles added); num keys = full haystack, word→number (≈line retrieval); num keys = full haystack, UUID→UUID (≈KV retrieval).
+- MV-NIAH: 4 values for one key. MQ-NIAH: 4 queried keys.
+- VT: 1 chain, 4 hops, so 5 variable names must be returned.
+- CWE: 10 common words each appearing 30 times, uncommon words 3 times each. FWE: α = 2.0, K = 3.
+- QA ×2: SQuAD and HotpotQA.
 
-**Representative 13-task suite used in the paper:**
-- `S-NIAH`: word->number with repeated-noise haystack, roughly passkey retrieval.
-- `S-NIAH`: word->number with essay haystack, roughly vanilla NIAH.
-- `S-NIAH`: word->UUID with essay haystack.
-- `MK-NIAH`: `4` keys, word->number, essay haystack.
-- `MK-NIAH`: full-haystack distractor keys, word->number, line-retrieval-like setup.
-- `MK-NIAH`: full-haystack distractor keys, UUID->UUID, KV-retrieval-like setup.
-- `MV-NIAH`: `4` values for one key.
-- `MQ-NIAH`: `4` queried keys.
-- `VT`: `1` chain and `4` hops.
-- `CWE`: `10` common words, each appearing `30` times, while uncommon words appear `3` times.
-- `FWE`: `alpha = 2.0`, with the model returning the top `3` frequent words.
-- `QA`: SQuAD long-context adaptation.
-- `QA`: HotpotQA long-context adaptation.
+**Evaluation protocol (§4).**
+- 17 models: 15 open-source plus GPT-4 (gpt-4-1106-preview) and Gemini-1.5-Pro; sizes 7B to 8x22B MoE; claimed lengths 32K to 1M (§4, App. A Table 4).
+- 500 generated examples per task per length, at 4K, 8K, 16K, 32K, 64K, 128K, each wrapped in the model's chat template.
+- An answer prefix is appended to prevent refusals and explanations; scoring is recall-based string matching.
+- Inference in BFloat16 on 8 NVIDIA A100 GPUs with vLLM and greedy decoding.
+- Effective length = maximum length whose 13-task average exceeds 85.6, the Llama2-7B chat score at 4K.
 
-**Metrics and evaluation protocol:**
-- The paper evaluates **500 generated examples per task per length**.
-- Inputs are wrapped in each model's native chat template.
-- An **answer prefix** is appended so models respond directly instead of refusing or adding explanations.
-- Accuracy is computed with **recall-based matching** of the target outputs.
-- **Effective context size** is defined as the maximum length whose average score stays above the `Llama2-7B @ 4K` baseline of `85.6`.
-- Two weighted averages are reported: `wAvg. (inc)` and `wAvg. (dec)`, where the weights increase or decrease linearly with context length.
+**Selected rows of Table 3** (claimed / effective / 32K / 64K / 128K / wAvg. inc):
+- Gemini-1.5-Pro 1M / >128K / 95.9 / 95.9 / 94.4 / 95.5 (1st).
+- GPT-4 128K / 64K / 93.2 / 87.0 / 81.2 / 89.0 (2nd).
+- Llama3.1-70B 128K / 64K / 94.8 / 88.4 / 66.6 / 85.5 (4th).
+- Llama3.1-8B 128K / 32K / 87.4 / 84.7 / 77.0 / 85.4 (5th).
+- Qwen2-72B 128K / 32K / 94.1 / 79.8 / 53.7 / 79.6 (9th).
+- Yi-34B 200K / 32K / 87.5 / 83.2 / 77.3 / 84.8 (6th).
+- LWM-7B 1M / <4K / 69.1 / 68.1 / 65.0 / 69.9 (12th).
 
-**Why RULER beats simple needle-in-a-haystack as a lineage reference:**
-- Vanilla NIAH mainly checks whether a model can search for one cue and copy one answer.
-- RULER adds failure modes that matter for training:
-- models may retrieve one item correctly but fail when **needle format changes** from numbers to UUIDs;
-- models may find the right item once but fail to **ignore hard distractors**;
-- models may retrieve one target but fail at **high-recall multi-target output**;
-- models may copy local clues but fail at **chain tracing** across long-range dependencies;
-- models may do sparse lookup but fail at **aggregation** when relevant evidence occupies a large fraction of the context.
+**Leaderboard extension (secondary locus).** The project repository keeps an updated table with the same protocol. Rows added after the paper, read at github.com/NVIDIA/RULER README on 2026-09-18: Jamba-1.5-Large (94B/398B) claimed 256K, effective >128K, 95.1 at 128K; Qwen2.5-14B-Instruct-1M claimed 1M, effective >128K, 92.2 at 128K (the README notes these Qwen2.5-1M numbers are reported by the Qwen authors, arXiv:2501.15383); Qwen3-235B-A22B effective >128K, 90.6 at 128K. Repository numbers are not part of the COLM 2024 paper and should be cited to the README, not to the paper.
 
-**What labs can learn for long-context data design:**
-- Train and evaluate on **families of synthetic generators**, not one canned test.
-- Separate **length scaling** from **reasoning/load scaling** so you can diagnose what really broke.
-- Include tasks where the answer is a **set**, not just a single span, because long-context systems often fail on recall completeness.
-- Add synthetic tasks that mimic **coreference / state tracking** and **aggregation / summarization**, not only retrieval.
-- Use both **clean synthetic contexts** and **natural distractor contexts**; success on repeated-noise haystacks does not transfer automatically to essay-like backgrounds.
-- Record the exact generator knobs, because long-context quality claims are otherwise not comparable across labs.
+## Findings relevant to long context
+- **Training length does not determine effective length.** Top open-source models include both brute-force scaling (Llama3.1 trained at 128K) and inference-time extrapolation (Qwen2 trained at 32K), while LWM and GradientAI/Llama3, both trained at 1M, rank far lower (§4). Within the LWM series, the 1M variant is worse at 256K than the 512K variant (§6).
+- **Model size correlates with long-context quality.** Yi-34B, Yi-9B and Yi-6B, trained to the same length on the same data blend, rank in that order both at 4K and in relative degradation (§6).
+- **Needle format matters.** Yi-34B is near-perfect on word-number needles but degrades on other types, worst on UUIDs, where above 128K it sometimes fails to return all 32 digits (§5).
+- **Hard distractors.** Increasing distracting needles lowers accuracy monotonically; in the full-haystack setting Yi drops about 40 points at 256K and returns values from positions near the target (§5).
+- **Non-Transformer architectures.** RWKV-v5 and Mamba-2.8B-slimpj degrade sharply by 8K and trail Llama2-7B up to 4K (§6).
+- **Behaviors that appear with length.** The paper reports increased reliance on parametric knowledge and an increased tendency to copy from the context on non-retrieval tasks (§1; §5).
 
 ## Connections
-- Contrasts with simple passkey or vanilla NIAH evaluations by turning long-context testing into a configurable synthetic-data pipeline.
-- Useful alongside synthetic-data pages like [[magpie]] and [[persona-hub]] because it shows a different use of synthesis: not instruction creation, but controlled capability measurement.
-- Relevant for any long-context training report because it gives a concrete language for distinguishing claimed context window from effective usable context.
+- [[magpie]], [[persona-hub]] — synthetic generation used to create instruction data, against RULER's use of synthesis for controlled measurement.
+- Any long-context training report — supplies the claimed-versus-effective-length distinction and the 85.6 threshold.
 
-## Sources Used
-- https://arxiv.org/abs/2404.06654
-- https://arxiv.org/pdf/2404.06654
-- https://github.com/NVIDIA/RULER
+## Verification
+- Checked on 2026-09-18 against: https://arxiv.org/abs/2404.06654 (arXiv v3, 6 Aug 2024; COLM 2024) and github.com/NVIDIA/RULER README for the post-paper leaderboard rows.
+- Corrections to the previous card version:
+  - Added the abstract's headline, which was missing: all 17 models claim 32K or more, only half hold up at 32K, and almost all fall below the threshold before their claimed length (Abstract; §1).
+  - "evaluates 17 long-context models across 13 representative task settings" was correct but unsourced; the 17 are 15 open-source plus GPT-4 and Gemini-1.5-Pro (§4, App. A Table 4).
+  - "additional analysis on longer settings such as 200K and 256K" → the main benchmark runs 4K-128K; the Yi-34B error analysis extends to 256K only (§4; §5).
+  - "FWE: alpha = 2.0, with the model returning the top 3 frequent words" → K = 3 is a global FWE setting chosen because larger K fails even at short lengths, not a property of that one configuration (§3.3).
+  - "MK-NIAH: 4 keys" → the configuration is num keys = 4, made by adding three distractor needles (App. B).
+  - Effective-length rows were absent; Table 3 values for Gemini-1.5-Pro, GPT-4, Llama3.1-70B/8B, Qwen2-72B, Yi-34B and LWM are now listed with their loci.
+  - Author list shortened to the first six plus "et al." per the card standard; organization NVIDIA added.
+  - Added source type, year with arXiv version, and this Verification section, all absent before.
+- Removed as unsupported by the source: the "What labs can learn for long-context data design" list, which gave training recommendations the paper does not make (RULER is an evaluation benchmark and the paper does not train on its generators); the framing that RULER is "valuable less as a leaderboard and more as a parameterized generator", which is a course judgment; "Sources Used" section replaced by the single canonical URL plus the repository locus.
+- Not reported by the source: correlation between the RULER average and downstream long-context task performance (the HELMET result belongs to a separate paper and must be cited there, not here); per-task scores for closed-source models beyond the aggregate rows; token costs of running the benchmark.

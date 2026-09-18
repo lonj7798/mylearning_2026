@@ -7,6 +7,8 @@ source_url: https://arxiv.org/abs/2402.00159
 created_at: "2026-04-23"
 ---
 
+> Superseded by the 2026-09 revision of read.md; kept for history.
+
 # Excerpt: Dolma — the ablation protocol and `attributes/` pattern ch-17 inherits
 
 **Source library:** `wiki/raw-data/llm-training/papers/dolma.md`

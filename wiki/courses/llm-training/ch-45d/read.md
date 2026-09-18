@@ -427,7 +427,7 @@ to credit-assignment problems covered in ch-45b.
    intermediate policy checkpoints". Subagent trajectories are excluded from the objective, so
    subagent outputs are environment observations rather than differentiable decisions. Stated
    motivation: "credit assignment ambiguity and training instability", since "a correct final answer
-   does not guarantee flawless subagent execution, just as a failure does not imply universal
+   does not guarantee flawless subagent execution, in the same way that a failure does not imply universal
    subagent error".
 2. **Reward.** `r_PARL(x, y) = λ1 · r_parallel + λ2 · r_finish + r_perf(x, y)`. `r_perf` is the task
    outcome. `r_parallel` rewards sub-agent instantiation, countering "serial collapse", the local

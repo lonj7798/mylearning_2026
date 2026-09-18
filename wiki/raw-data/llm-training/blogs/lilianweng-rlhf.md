@@ -1,44 +1,52 @@
-<!-- scope: Lilian Weng's RLHF survey blog post — canonical reference on RLHF algorithmic structure
-     deps: [[README]]
-     see-also: [[ppo]], [[dpo]], [[rlhf-instructgpt]]
+<!-- scope: redirect card — no Lil'Log post on RLHF exists; see [[lilianweng-reward-hacking]]
+     see-also: [[lilianweng-reward-hacking]], [[hf-rlhf-illustrated]], [[rlhf-instructgpt]], [[nathan-lambert-rl-overview]]
 -->
 
-# Lil'Log — "The Transformer Family" lineage: RLHF posts
-- **Core Insight:** RLHF decomposes cleanly into (1) preference data collection, (2) reward model training with Bradley-Terry loss, (3) KL-regularized policy optimization against that RM — and the bottleneck is usually (1) or (2), not the RL algorithm.
-- **Guideline:** Debug RLHF from the bottom up: verify RM calibration on held-out preferences before touching PPO hyperparameters.
-- **Author:** Lilian Weng (formerly OpenAI Head of Safety Systems)
-- **Year:** 2023 series ("LLM Powered Autonomous Agents", RLHF-focused posts)
-- **URL:** https://lilianweng.github.io/tags/rlhf/
-- **Relevant topics:** RLHF pipeline, Bradley-Terry reward model, KL-regularized PPO, preference data, reward hacking
+# Redirect: lilianweng-rlhf → [[lilianweng-reward-hacking]]
 
-## Summary
-Lil'Log is the single most-cited tutorial-grade source on RLHF. Weng's RLHF-lineage posts ("Reinforcement Learning from Human Feedback," "Reward Hacking in RL," "LLM Powered Autonomous Agents") lay out the InstructGPT-style three-stage pipeline with enough mathematical rigor to serve as a reference. She frames RLHF as preference-data -> Bradley-Terry RM -> KL-regularized policy gradient, with each stage's failure modes (annotator disagreement, RM overoptimization, entropy collapse in PPO) documented separately.
+> **No verifiable primary source.** This card described a Lil'Log post, or series of posts, on the RLHF
+> pipeline. No such post exists. The card's URL, https://lilianweng.github.io/tags/rlhf/, is a tag index,
+> and as of 2026-09-18 that tag lists exactly one post: "Reward Hacking in Reinforcement Learning"
+> (2024-11-28), which is already covered by [[lilianweng-reward-hacking]]. The full Lil'Log archive
+> (https://lilianweng.github.io/archives/, 52 posts checked on 2026-09-18) contains no post on
+> reinforcement learning from human feedback. The card's title also named "The Transformer Family",
+> a real Lil'Log post (2020-04-07) about transformer architecture variants, not about RLHF.
 
-## Key Contributions
-- Unified tutorial on RLHF stages with consistent notation across posts.
-- "Reward Hacking in RL" (2024) surveys Goodhart's law as it appears in RLHF specifically — with examples from sycophancy, mode collapse, and length bias.
-- Clear derivation of why KL regularization is required (PPO to reference policy) and how it interacts with entropy bonuses.
-- Pointers to canonical implementation choices (value head, reward whitening, advantage normalization).
+- **Status:** redirect stub. Do not cite this card as evidence.
+- **Checked on:** 2026-09-18
+- **Searched:** https://lilianweng.github.io/tags/rlhf/ (1 post), https://lilianweng.github.io/archives/ (full post list), https://lilianweng.github.io/posts/2024-11-28-reward-hacking/ (full text).
 
-## Key Figures/Tables to Study
-- **Three-stage RLHF pipeline diagram** (SFT -> RM -> PPO-against-RM) — the reference schematic every subsequent RLHF paper reuses.
-- **Bradley-Terry derivation:** P(y_w > y_l | x) = sigmoid(r(x, y_w) - r(x, y_l)).
-- **KL-regularized PPO objective:** reward = r(x,y) - beta * KL(pi || pi_ref).
-- **Reward-hacking taxonomy:** length hacking, sycophancy, specification gaming.
+## Where the content actually lives
+- [[lilianweng-reward-hacking]] — the one Lil'Log post under the `rlhf` tag. Covers the three rewards in
+  an RLHF setup (oracle, human, proxy), reward-model overoptimization, judge bias, and in-context reward
+  hacking. This is the card to link when a chapter wants Weng on RLHF.
+- [[rlhf-instructgpt]] — Ouyang et al. 2022, the primary source for the three-stage SFT → reward model →
+  PPO pipeline and for the KL-penalized objective.
+- [[hf-rlhf-illustrated]] — tutorial-level walkthrough of the same pipeline with the Bradley-Terry
+  reward-model loss.
+- [[nathan-lambert-rl-overview]] — practitioner overview of RLHF algorithm choices.
+- [[costa-huang-ppo-details]] — the implementation-level facts
+  (reward whitening, advantage normalization, value-head sharing, per-token KL) that this card had
+  attributed to Weng.
+- [[ppo]], [[trpo]] — GAE, γ and λ, the clipped surrogate objective, and the entropy bonus coefficient.
+- [[kl-control-rlhf]], [[john-schulman-kl-tricks]] — KL estimators and where the KL term is applied.
 
-## Technical Details
-Weng's posts cover:
-- **Bradley-Terry model:** the pairwise preference probability is sigmoid of reward difference; training loss is the negative log-likelihood of observed preferences.
-- **KL penalty implementation:** beta is the KL coefficient; the per-token reward becomes `r_total = r(x,y) 1[y=EOS] - beta * log(pi(y|x) / pi_ref(y|x))`.
-- **Reward normalization:** whitening (subtract mean, divide by std within batch) is standard to stabilize PPO.
-- **GAE lambda:** typical 0.95 for RLHF; gamma = 1.0 (undiscounted, because rewards concentrate at EOS).
-- **Value head:** shares the trunk with policy or uses separate network; Weng notes the tradeoff.
-- **Entropy bonus:** often dropped in RLHF because KL-to-reference already regularizes exploration; re-introduced in some GRPO variants.
-- **Reward hacking vulnerabilities:** Weng catalogs (a) length bias in RMs, (b) sycophancy (RM rewards agreement), (c) specification gaming (model finds prompt exploits that score high).
-
-## Connections
-- [[rlhf-instructgpt]] — the Ouyang 2022 paper Weng's pipeline mirrors.
-- [[ppo]] — algorithmic foundation.
-- [[dpo]] — the DPO post is a companion explaining the closed-form alternative.
-- [[reward-hacking-taxonomy]] — Weng's reward-hacking post is one of the primary references for this topic.
-- [[lilianweng-reasoning-llms]] — follow-up post "Why We Think" (2025) extends to reasoning RL.
+## Verification
+- Checked on 2026-09-18 against: https://lilianweng.github.io/tags/rlhf/ and https://lilianweng.github.io/archives/
+- Corrections to the previous card version: the card described an artifact that does not exist. Title
+  "Lil'Log — 'The Transformer Family' lineage: RLHF posts" mixed a real post title with a topic that post
+  does not cover; **Year** "2023 series" is unsupported (the only `rlhf`-tagged post is from 2024-11);
+  **URL** pointed at a tag index rather than an artifact.
+- Removed as unsupported by the source: the Bradley-Terry derivation, the per-token reward form
+  `r_total = r(x,y)·1[y=EOS] − β·log(π/π_ref)`, reward whitening, GAE λ = 0.95 with γ = 1.0, the
+  value-head sharing tradeoff, the claim that the entropy bonus is usually dropped in RLHF, the
+  three-stage pipeline diagram, and the reward-hacking taxonomy of "length hacking, sycophancy,
+  specification gaming". None of these appear in any Lil'Log post attributable to this slug. Several are
+  true statements about RLHF, but their support is [[ppo]], [[rlhf-instructgpt]],
+  [[costa-huang-ppo-details]], not Weng.
+- **Chapters to repair:** `wiki/courses/llm-training/ch-37/read_kor.md` and
+  `wiki/courses/llm-training/ch-38/read.md` / `read_kor.md` cite this slug as evidence for the entropy-bonus,
+  γ = 1.0, λ = 0.95, and per-token KL claims, including a direct quotation attributed to Weng. Those
+  citations need to be repointed to the cards listed above. `wiki/raw-data/llm-training/blogs/hf-rlhf-illustrated.md`,
+  `nathan-lambert-rl-overview.md`, and `lilianweng-reasoning-llms.md` link to this slug in "see-also" and
+  Connections lines only, which this redirect resolves.

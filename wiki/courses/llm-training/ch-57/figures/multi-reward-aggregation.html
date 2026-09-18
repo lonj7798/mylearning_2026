@@ -1,0 +1,234 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ch-57 — GRPO multi-reward aggregation: sum_then_normalize vs normalize_then_sum</title>
+<style>
+  :root {
+    --bg: #fafaf8; --panel: #ffffff; --ink: #1f2328; --muted: #5b6470; --rule: #d9dde3;
+    --pos: #1f7a4d; --neg: #c2410c; --grid: #eceef1; --accent: #1d5fa8; --warn: #a1132e;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #16181c; --panel: #1e2126; --ink: #e6e8eb; --muted: #a0a8b3; --rule: #353a42;
+      --pos: #4cc38a; --neg: #f0883e; --grid: #2a2e35; --accent: #6aa6e8; --warn: #f2708a;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #16181c; --panel: #1e2126; --ink: #e6e8eb; --muted: #a0a8b3; --rule: #353a42;
+    --pos: #4cc38a; --neg: #f0883e; --grid: #2a2e35; --accent: #6aa6e8; --warn: #f2708a;
+  }
+  body { margin: 0; background: var(--bg); color: var(--ink);
+         font: 14px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+  main { max-width: 960px; margin: 0 auto; padding-block: 20px 40px; padding-inline: 16px; }
+  h1 { font-size: 19px; margin: 0 0 4px; }
+  h2 { font-size: 15px; margin: 0 0 8px; }
+  p.sub { color: var(--muted); margin: 0 0 16px; }
+  .panel { background: var(--panel); border: 1px solid var(--rule); border-radius: 8px; padding: 16px; margin-bottom: 18px; }
+  .controls { display: flex; flex-wrap: wrap; gap: 12px 20px; margin-bottom: 12px; }
+  .ctl { display: flex; flex-direction: column; min-width: 190px; flex: 1 1 220px; }
+  .ctl label { font-size: 12px; color: var(--muted); margin-bottom: 3px; }
+  input[type=text], input[type=number] { font: inherit; color: var(--ink); background: var(--bg);
+    border: 1px solid var(--rule); border-radius: 6px; padding: 4px 8px; width: 100%; box-sizing: border-box;
+    font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 13px; }
+  button { font: inherit; color: var(--ink); background: var(--panel); border: 1px solid var(--rule);
+    border-radius: 6px; padding: 4px 10px; cursor: pointer; }
+  button:hover { border-color: var(--accent); }
+  .row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 10px; }
+  svg { width: 100%; height: auto; display: block; }
+  table { border-collapse: collapse; width: 100%; font-size: 13px; }
+  th, td { border: 1px solid var(--rule); padding: 5px 8px; text-align: right; }
+  th:first-child, td:first-child { text-align: left; }
+  th { color: var(--muted); font-weight: 600; }
+  td.num { font-family: ui-monospace, "SF Mono", Menlo, monospace; }
+  tr.flag td { background: color-mix(in srgb, var(--warn) 12%, transparent); }
+  .readout { font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 12.5px; background: var(--bg);
+    border: 1px solid var(--rule); border-radius: 6px; padding: 8px 10px; margin-top: 10px;
+    white-space: pre-wrap; overflow-x: auto; }
+  .cap { font-size: 12.5px; color: var(--muted); margin-top: 12px; }
+  .err { color: var(--warn); font-size: 13px; }
+  .scroll { overflow-x: auto; }
+  .axis text, .lbl { fill: var(--muted); font-size: 11px; }
+  .gridline { stroke: var(--grid); }
+  .axisline { stroke: var(--muted); }
+  code { font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 12.5px; }
+</style>
+</head>
+<body>
+<main>
+<h1>GRPO multi-reward aggregation: the two orders and when they disagree</h1>
+<p class="sub">Companion to ch-57 read.md §4.3. Edit the two reward vectors and the weights; the advantages are
+recomputed exactly as <code>grpo_trainer.py</code> L2787-L2826 computes them at commit <code>a04ffd3</code>, with
+<code>scale_rewards="group"</code>, one prompt, and G = the vector length. Rows where the two orders give
+advantages of opposite sign are marked.</p>
+
+<section class="panel">
+  <div class="controls">
+    <div class="ctl"><label for="r1">Reward 1 — comma-separated, one value per completion</label>
+      <input id="r1" type="text" value="1, 0, 1, 0"></div>
+    <div class="ctl"><label for="r2">Reward 2 — same length</label>
+      <input id="r2" type="text" value="-120, -100, -60, -80"></div>
+    <div class="ctl"><label for="w1">reward_weights[0]</label>
+      <input id="w1" type="number" step="0.1" value="1"></div>
+    <div class="ctl"><label for="w2">reward_weights[1]</label>
+      <input id="w2" type="number" step="0.1" value="1"></div>
+  </div>
+  <div class="row">
+    <button type="button" id="ex1">Chapter example: correctness + raw length penalty</button>
+    <button type="button" id="ex2">Same scale: correctness + normalized length</button>
+    <button type="button" id="ex3">Format reward with a rare violation</button>
+  </div>
+  <div id="err" class="err" hidden></div>
+
+  <div class="scroll">
+  <table id="tbl">
+    <thead><tr>
+      <th>Completion</th><th>r₁</th><th>r₂</th>
+      <th>A — sum_then_normalize (default)</th><th>A — normalize_then_sum</th><th>Signs</th>
+    </tr></thead>
+    <tbody></tbody>
+  </table>
+  </div>
+
+  <svg id="chart" viewBox="0 0 720 220" role="img" aria-label="Advantage per completion under each aggregation order"></svg>
+
+  <div class="readout" id="work"></div>
+
+  <p class="cap">Standard deviations use TRL's <code>nanstd</code>, which applies the unbiased correction
+  <code>count / (count − 1)</code> (<code>trl/trainer/utils.py</code> L881-L885), and every division adds
+  <code>1e-4</code> to the denominator as the code does. A sign disagreement means the default aggregation is
+  pushing the policy in the opposite direction from the one the equal weights were meant to express — the failure
+  described in read.md §4.3.</p>
+</section>
+</main>
+
+<script>
+function parseVec(s) {
+  const parts = s.split(",").map(x => x.trim()).filter(x => x.length);
+  const v = parts.map(Number);
+  if (!v.length || v.some(x => !isFinite(x))) return null;
+  return v;
+}
+function mean(v) { return v.reduce((a, b) => a + b, 0) / v.length; }
+function nanstd(v) {
+  if (v.length < 2) return 0;
+  const m = mean(v);
+  const mv = mean(v.map(x => (x - m) * (x - m)));
+  return Math.sqrt(mv * v.length / (v.length - 1));
+}
+function sumThenNormalize(r1, r2, w1, w2) {
+  const s = r1.map((x, i) => w1 * x + w2 * r2[i]);
+  const m = mean(s), sd = nanstd(s);
+  return { adv: s.map(x => (x - m) / (sd + 1e-4)), s: s, m: m, sd: sd };
+}
+function normalizeThenSum(r1, r2, w1, w2) {
+  const n = v => { const m = mean(v), sd = nanstd(v); return v.map(x => (x - m) / (sd + 1e-4)); };
+  const n1 = n(r1), n2 = n(r2);
+  const t = n1.map((x, i) => w1 * x + w2 * n2[i]);
+  const m = mean(t), sd = nanstd(t);
+  return { adv: t.map(x => (x - m) / (sd + 1e-4)), n1: n1, n2: n2, t: t, m: m, sd: sd };
+}
+const f = (x, d) => (Math.abs(x) < 5e-5 ? 0 : x).toFixed(d === undefined ? 3 : d);
+
+function draw(A, B) {
+  const svg = document.getElementById("chart");
+  const W = 720, H = 220, L = 50, R = 16, Tp = 22, Bt = 34;
+  const n = A.length;
+  const lim = Math.max(1, ...A.map(Math.abs), ...B.map(Math.abs)) * 1.15;
+  const y = v => Tp + (H - Tp - Bt) * (1 - (v + lim) / (2 * lim));
+  const bandW = (W - L - R) / n, barW = Math.min(26, bandW / 3.2);
+  let out = "";
+  [-lim, -lim / 2, 0, lim / 2, lim].forEach(g => {
+    out += '<line class="gridline" x1="' + L + '" x2="' + (W - R) + '" y1="' + y(g).toFixed(1) +
+           '" y2="' + y(g).toFixed(1) + '"/>' +
+           '<text class="lbl" x="' + (L - 8) + '" y="' + (y(g) + 4).toFixed(1) + '" text-anchor="end">' +
+           g.toFixed(1) + '</text>';
+  });
+  out += '<line class="axisline" x1="' + L + '" x2="' + (W - R) + '" y1="' + y(0).toFixed(1) +
+         '" y2="' + y(0).toFixed(1) + '"/>';
+  for (let i = 0; i < n; i++) {
+    const cx = L + bandW * (i + 0.5);
+    [[A[i], -0.55, "var(--accent)"], [B[i], 0.55, "var(--pos)"]].forEach(p => {
+      const v = p[0], x = cx + p[1] * barW - barW / 2;
+      const yy = Math.min(y(v), y(0)), hh = Math.abs(y(v) - y(0));
+      out += '<rect x="' + x.toFixed(1) + '" y="' + yy.toFixed(1) + '" width="' + barW.toFixed(1) +
+             '" height="' + Math.max(1, hh).toFixed(1) + '" fill="' + p[2] + '" opacity="0.85"/>';
+    });
+    out += '<text class="lbl" x="' + cx.toFixed(1) + '" y="' + (H - 14) + '" text-anchor="middle">c' + (i + 1) + '</text>';
+  }
+  out += '<rect x="' + (W - R - 236) + '" y="4" width="10" height="10" fill="var(--accent)" opacity="0.85"/>' +
+         '<text class="lbl" x="' + (W - R - 222) + '" y="13">sum_then_normalize</text>' +
+         '<rect x="' + (W - R - 118) + '" y="4" width="10" height="10" fill="var(--pos)" opacity="0.85"/>' +
+         '<text class="lbl" x="' + (W - R - 104) + '" y="13">normalize_then_sum</text>';
+  svg.innerHTML = out;
+}
+
+function update() {
+  const r1 = parseVec(document.getElementById("r1").value);
+  const r2 = parseVec(document.getElementById("r2").value);
+  const w1 = Number(document.getElementById("w1").value);
+  const w2 = Number(document.getElementById("w2").value);
+  const err = document.getElementById("err");
+  if (!r1 || !r2 || r1.length !== r2.length || r1.length < 2 || !isFinite(w1) || !isFinite(w2)) {
+    err.hidden = false;
+    err.textContent = "Both reward vectors must be numeric, the same length, and at least 2 entries; weights must be numbers.";
+    return;
+  }
+  err.hidden = true;
+  const A = sumThenNormalize(r1, r2, w1, w2);
+  const B = normalizeThenSum(r1, r2, w1, w2);
+  const tb = document.querySelector("#tbl tbody");
+  tb.innerHTML = "";
+  let flags = 0;
+  r1.forEach((_, i) => {
+    const a = A.adv[i], b = B.adv[i];
+    const disagree = (a > 1e-6 && b < -1e-6) || (a < -1e-6 && b > 1e-6);
+    if (disagree) flags++;
+    const tr = document.createElement("tr");
+    if (disagree) tr.className = "flag";
+    [["c" + (i + 1), false], [f(r1[i], 3), true], [f(r2[i], 3), true],
+     [f(a), true], [f(b), true], [disagree ? "opposite" : "same", false]].forEach(c => {
+      const td = document.createElement("td");
+      if (c[1]) td.className = "num";
+      td.textContent = c[0];
+      tr.appendChild(td);
+    });
+    tb.appendChild(tr);
+  });
+  draw(A.adv, B.adv);
+  document.getElementById("work").textContent =
+    "sum_then_normalize\n" +
+    "  weighted sum      = [" + A.s.map(x => f(x, 3)).join(", ") + "]\n" +
+    "  group mean        = " + f(A.m, 4) + "\n" +
+    "  group std (n-1)   = " + f(A.sd, 4) + "\n" +
+    "  A = (s - mean) / (std + 1e-4)\n\n" +
+    "normalize_then_sum\n" +
+    "  r1 normalized     = [" + B.n1.map(x => f(x, 3)).join(", ") + "]\n" +
+    "  r2 normalized     = [" + B.n2.map(x => f(x, 3)).join(", ") + "]\n" +
+    "  weighted sum      = [" + B.t.map(x => f(x, 3)).join(", ") + "]\n" +
+    "  std of the sum    = " + f(B.sd, 4) + "\n" +
+    "  A = (t - mean) / (std + 1e-4)\n\n" +
+    "completions whose advantage changes sign between the two orders: " + flags;
+}
+
+const EX = {
+  ex1: ["1, 0, 1, 0", "-120, -100, -60, -80", 1, 1],
+  ex2: ["1, 0, 1, 0", "-1.2, -1.0, -0.6, -0.8", 1, 1],
+  ex3: ["0.4, 0.9, 0.8, 0.2", "1, 1, 1, 0", 1, 1]
+};
+Object.keys(EX).forEach(k => {
+  document.getElementById(k).addEventListener("click", () => {
+    const e = EX[k];
+    document.getElementById("r1").value = e[0];
+    document.getElementById("r2").value = e[1];
+    document.getElementById("w1").value = e[2];
+    document.getElementById("w2").value = e[3];
+    update();
+  });
+});
+["r1", "r2", "w1", "w2"].forEach(id => document.getElementById(id).addEventListener("input", update));
+update();
+</script>
+</body>
+</html>

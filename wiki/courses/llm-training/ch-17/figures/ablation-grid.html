@@ -2,208 +2,247 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>ch-17 — Interactive ablation grid (CCNet-style filter stack)</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ch-17 — Ablation cell planner, banding calculator, and breadth worksheet</title>
 <style>
+  :root {
+    --bg: #0f1115; --panel: #161b22; --line: #232a36; --ink: #dde3ea;
+    --dim: #8892a3; --key: #d9e6f7; --accent: #5aa3ff; --warn: #e2a33c; --ok: #64d28f;
+  }
+  * { box-sizing: border-box; }
   body {
     font-family: -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
-    background: #0f1115; color: #dde3ea; margin: 0; padding: 2rem; line-height: 1.5;
+    background: var(--bg); color: var(--ink); margin: 0; padding: 1.6rem; line-height: 1.55;
   }
-  h1 { color: #e7ecf3; font-size: 1.35rem; margin-bottom: 0.3rem; }
-  .subtitle { color: #8892a3; font-size: 0.88rem; margin-bottom: 1.4rem; }
-  .wrap { max-width: 1040px; margin: 0 auto; }
-  .panel {
-    background: #161b22; border: 1px solid #232a36; border-radius: 8px;
-    padding: 1.1rem 1.3rem; margin-bottom: 1.2rem;
+  .wrap { max-width: 1060px; margin: 0 auto; }
+  h1 { font-size: 1.28rem; margin: 0 0 0.3rem; }
+  h2 { font-size: 1.02rem; margin: 0 0 0.7rem; color: var(--key); font-weight: 600; }
+  .sub { color: var(--dim); font-size: 0.87rem; margin-bottom: 1.3rem; }
+  .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 8px;
+           padding: 1rem 1.15rem; margin-bottom: 1.1rem; }
+  .row { display: flex; flex-wrap: wrap; gap: 0.9rem; align-items: flex-end; }
+  .field { display: flex; flex-direction: column; gap: 0.25rem; font-size: 0.83rem; color: var(--dim); }
+  .field input, .field select {
+    background: #1c232e; color: var(--ink); border: 1px solid #2a313d; border-radius: 5px;
+    padding: 0.35rem 0.5rem; font-size: 0.92rem; width: 8.5rem; font-variant-numeric: tabular-nums;
   }
-  .toggles { display: flex; flex-wrap: wrap; gap: 0.8rem; }
-  .toggle {
-    display: inline-flex; align-items: center; gap: 0.45rem;
-    padding: 0.4rem 0.7rem; background: #1c232e; border: 1px solid #2a313d;
-    border-radius: 6px; cursor: pointer; user-select: none; font-size: 0.9rem;
-    transition: background 120ms, border-color 120ms;
-  }
-  .toggle.on { background: #24344a; border-color: #3a5a88; color: #d9e6f7; }
-  .toggle input { accent-color: #5aa3ff; }
-  table { width: 100%; border-collapse: collapse; margin-top: 0.8rem; font-size: 0.92rem; }
-  th, td {
-    padding: 0.55rem 0.65rem; text-align: center; border-bottom: 1px solid #232a36;
-  }
-  th { color: #9aa6b8; font-weight: 500; text-align: left; }
-  th.task, td.task { text-align: center; }
-  th.row-label, td.row-label { text-align: left; color: #bfcad8; min-width: 260px; }
-  td.delta { font-variant-numeric: tabular-nums; font-weight: 500; }
-  .pos { color: #64d28f; }
-  .neg { color: #ef6666; }
-  .neu { color: #7a8290; }
-  .active-row { background: #1a2330; }
-  .cite { color: #8892a3; font-size: 0.82rem; line-height: 1.55; }
-  .cite code { background: #1c232e; padding: 1px 5px; border-radius: 3px; }
-  .footer { font-size: 0.8rem; color: #6b7583; margin-top: 1.2rem; }
-  .pill { display: inline-block; padding: 1px 7px; border-radius: 10px;
-          background: #1f2731; color: #8fa0b8; font-size: 0.75rem; margin-left: 4px; }
+  button { background: #24344a; color: var(--key); border: 1px solid #3a5a88; border-radius: 5px;
+           padding: 0.38rem 0.7rem; font-size: 0.85rem; cursor: pointer; }
+  button:hover { background: #2c4059; }
+  table { width: 100%; border-collapse: collapse; margin-top: 0.7rem; font-size: 0.87rem; }
+  th, td { padding: 0.42rem 0.55rem; border-bottom: 1px solid var(--line); text-align: right;
+           font-variant-numeric: tabular-nums; }
+  th:first-child, td:first-child { text-align: left; }
+  th { color: var(--dim); font-weight: 500; }
+  .out { font-size: 0.93rem; }
+  .out b { color: var(--key); font-weight: 600; }
+  .flag-warn { color: var(--warn); }
+  .flag-ok { color: var(--ok); }
+  .note { color: var(--dim); font-size: 0.82rem; margin-top: 0.7rem; }
+  .note code { background: #1c232e; padding: 1px 5px; border-radius: 3px; }
+  .blank { color: #4b5361; }
+  caption { caption-side: bottom; text-align: left; color: var(--dim); font-size: 0.8rem;
+            padding-top: 0.5rem; }
+  .anchor td { color: var(--dim); }
 </style>
 </head>
 <body>
 <div class="wrap">
 
-<h1>ch-17 — Interactive ablation grid</h1>
-<div class="subtitle">
-  Toggle filters below. Deltas show illustrative gain (+) or loss (−) over the
-  <em>no-filter</em> baseline on each eval task, scaled to ~125M models from
-  published 1.8B / 7B results in Dolma Table 5 and FineWeb Figure 4.
-  Use this to make predictions <strong>before</strong> running the lab, then sanity-check signs after.
-</div>
+  <h1>ch-17 — Ablation cell planner, banding calculator, and breadth worksheet</h1>
+  <p class="sub">
+    Every published number on this page is quoted at its locus. The worksheet in panel C is empty on
+    purpose: it is filled with your own measurements, not with reference values.
+  </p>
 
-<div class="panel">
-  <div style="margin-bottom: 0.5rem; color: #9aa6b8; font-size: 0.88rem;">Filter stack (stage order is Dolma-style, paragraph-dedup last):</div>
-  <div class="toggles" id="toggles"></div>
-</div>
-
-<div class="panel">
-  <table>
-    <thead>
-      <tr>
-        <th class="row-label">Filter configuration</th>
-        <th class="task">ARC-E</th>
-        <th class="task">HellaSwag</th>
-        <th class="task">LAMBADA</th>
-        <th class="task">MMLU-tiny</th>
-      </tr>
-    </thead>
-    <tbody id="grid-body"></tbody>
-  </table>
-  <div class="cite" style="margin-top: 0.9rem;">
-    Baseline row is <code>none</code>: HellaSwag 28.5, ARC-E 35.1, LAMBADA 31.2, MMLU-tiny 25.3
-    (random ≈ 25 on MMLU-tiny; close-to-random is expected at 125M — what matters is the filter delta, not the absolute).
+  <!-- ================= PANEL A ================= -->
+  <div class="panel">
+    <h2>A. Cell budget: FLOPs, hours, and epochs over the kept pool</h2>
+    <div class="row">
+      <label class="field">Parameters N (millions)
+        <input id="pN" type="number" value="412" min="1" step="1"></label>
+      <label class="field">Tokens per cell D (billions)
+        <input id="pD" type="number" value="8.2" min="0.01" step="0.1"></label>
+      <label class="field">Unique tokens kept (billions)
+        <input id="pU" type="number" value="8.2" min="0.01" step="0.1"></label>
+      <label class="field">Cells
+        <input id="pC" type="number" value="8" min="1" step="1"></label>
+      <label class="field">Seeds per cell
+        <input id="pS" type="number" value="2" min="1" step="1"></label>
+      <button id="presetFull">DCLM 400M-1x</button>
+      <button id="presetSmall">WebOrganizer 50M proxy</button>
+    </div>
+    <p class="out" id="budgetOut"></p>
+    <table>
+      <thead><tr><th>Published anchor</th><th>Parameters</th><th>Tokens</th><th>6ND</th><th>H100 hours</th></tr></thead>
+      <tbody>
+        <tr class="anchor"><td>DCLM 400M-1x (Table 1)</td><td>412M</td><td>8.2B</td><td>2.0e19</td><td>26</td></tr>
+        <tr class="anchor"><td>DCLM 1B-1x (Table 1)</td><td>1.4B</td><td>28.8B</td><td>2.4e20</td><td>240</td></tr>
+        <tr class="anchor"><td>DCLM 7B-1x (Table 1)</td><td>6.9B</td><td>138B</td><td>5.7e21</td><td>3,700</td></tr>
+        <tr class="anchor"><td>WebOrganizer RegMix proxy (App. C)</td><td>50M</td><td>1B</td><td>3.0e17 (derived)</td><td>0.70 (360 h / 512 runs)</td></tr>
+      </tbody>
+      <caption>
+        DCLM rows: arXiv:2406.11794v4 §3.2 Table 1, hours estimated by the authors for the OpenLM
+        framework. WebOrganizer row: arXiv:2502.10341v3 §3 and App. C. The hour estimate below is
+        derived by scaling the DCLM 400M-1x row by FLOPs and is not a measurement of your code. The
+        FLOP scaling under-predicts small runs: it gives 0.39 H100 hours for the 50M / 1B row, against
+        the 0.70 hours per run that WebOrganizer reports.
+      </caption>
+    </table>
+    <p class="note">
+      Epoch rule: up to about 4 epochs of repeated data changes held-out loss negligibly, and downstream
+      scores start dropping after about 4 epochs (Muennighoff et al., arXiv:2305.16264v5, Abstract, §6,
+      App. L). A cell above 4 epochs is reported as confounded, because it measures repetition as well
+      as the filter.
+    </p>
   </div>
-</div>
 
-<div class="panel">
-  <h2 style="font-size: 1.05rem; margin-top: 0; color: #cdd6e0;">Published-literature deltas this grid draws from</h2>
-  <div class="cite">
-    <p><strong>Dolma Table 5</strong> ablation (Soldaini et al. 2024 §6): URL-dedup +0.4 avg, lang-ID +1.1, Gopher-style quality +1.9, content-filter neutral, paragraph-dedup +0.8. Applied here as the lang-ID (+lang) and perplexity (+ppl) rows since our small-scale run has no URL list and collapses content-filter into quality.</p>
-    <p><strong>FineWeb Figure 4</strong> (Penedo et al. 2024 §3): exact + near-dedup together deliver +2.4 HellaSwag but a <em>known LAMBADA regression</em> because dedup removes documents that locally match LAMBADA's continuation style. The memo should reproduce this sign pattern on its slice.</p>
-    <p><strong>FineWeb §3.3</strong>: per-snapshot MinHash beats global MinHash by ~+0.6 on MMLU — the single most novel ablation in the paper; stretch-goal row in the lab.</p>
-    <p><strong>Lee et al. 2021 §5</strong>: train/val overlap of 3.2% in C4 alone; decontamination FP rate at n=13 is 5–15%, at n=8 is ~50%. Not plotted here — it is a scalar the memo must report.</p>
+  <!-- ================= PANEL B ================= -->
+  <div class="panel">
+    <h2>B. MinHash banding: P(candidate | s) = 1 − (1 − s<sup>h</sup>)<sup>B</sup></h2>
+    <div class="row">
+      <label class="field">Buckets B
+        <input id="bB" type="number" value="14" min="1" step="1"></label>
+      <label class="field">Hashes per bucket h
+        <input id="bH" type="number" value="8" min="1" step="1"></label>
+      <button id="presetFW">FineWeb: B=14, h=8</button>
+      <button id="presetLee">Lee et al. NearDup: B=450, h=20</button>
+    </div>
+    <table>
+      <thead><tr><th>Jaccard similarity s</th><th>s<sup>h</sup></th><th>P(candidate)</th><th>FineWeb printed value</th></tr></thead>
+      <tbody id="bandBody"></tbody>
+      <caption>
+        FineWeb uses 112 hashes in 14 buckets of 8 and prints P = 56%, 77%, 92%, 98.8% at
+        s = 0.70, 0.75, 0.80, 0.85 (arXiv:2406.17557v2 §3.4, App. E.1). Lee et al. use 9,000 hashes in
+        450 buckets of 20, and treat a candidate as a duplicate only if Jaccard &gt; 0.8 and edit
+        similarity &gt; 0.8 (arXiv:2107.06499v2 §4.2, App. A). Setting B=14, h=8 reproduces the four
+        FineWeb values in the right-hand column.
+      </caption>
+    </table>
   </div>
-</div>
 
-<div class="footer">
-  Delta magnitudes are <strong>illustrative</strong>, scaled down from published 1.8B results.
-  Signs should match; magnitudes at 125M will be noisier (often ±0.5).
-  Build: self-contained, no CDN, no external JS.
-</div>
+  <!-- ================= PANEL C ================= -->
+  <div class="panel">
+    <h2>C. Breadth worksheet: one row per cell, three measurement families</h2>
+    <table>
+      <thead>
+        <tr>
+          <th>Cell</th><th>Kept tokens</th><th>Epochs</th>
+          <th>Task avg ± seed spread</th><th>Bits-per-byte ± spread</th>
+          <th>Macro domain ppl</th><th>Worst domain ppl</th><th>Base-pool ppl</th>
+          <th>Largest topic-share change</th><th>Held-out task delta</th>
+        </tr>
+      </thead>
+      <tbody id="cellBody"></tbody>
+      <caption>
+        Columns 4-5: signal-bearing scores with seed variance; a gap below the spread is reported as
+        unresolved (arXiv:2406.11794v4 App. L.2.1; arXiv:2508.13144v1 §5.3). Columns 6-7: macro-averaged
+        per-domain perplexity and the worst domain, documents scored separately after &lt;BOS&gt;
+        (arXiv:2312.10523v2 §3, §4.1, App. H). Column 8: perplexity on the unfiltered base pool as a
+        distribution-shift readout (arXiv:2502.10341v3 §5). Column 9: topic and format shares from the
+        released 24-category classifiers (arXiv:2502.10341v3 §2.2). Column 10: tasks that had no role in
+        designing the cell's classifier (arXiv:2502.10341v3 Table 10).
+      </caption>
+    </table>
+    <p class="note">
+      Cell definitions, in the chapter's §4: A raw extraction; B + language ID; C + heuristic filters;
+      D + exact-substring dedup; E + MinHash near-dedup; F + broad classifier (fastText OH-2.5 + ELI5,
+      top 10%); G + benchmark-targeted classifier (educational score ≥ 3); H + per-domain quota mixture.
+    </p>
+  </div>
 
 </div>
 
 <script>
-// Filter definitions. 'delta' is per-task gain over baseline (none), additive.
-// Magnitudes are illustrative, scaled from Dolma T5 / FineWeb F4.
-const FILTERS = [
-  {
-    key: "lang",
-    name: "Language ID (fastText, en ≥ 0.65)",
-    source: "Dolma T5 row 2 / CCNet §3",
-    delta: { arce: 0.8, hs: 1.4, lam: 0.5, mmlu: 0.3 },
-  },
-  {
-    key: "ppl",
-    name: "Perplexity filter (KenLM vs Wikipedia, head+middle)",
-    source: "CCNet §4 / Dolma quality",
-    delta: { arce: 1.6, hs: 1.9, lam: 1.1, mmlu: 0.9 },
-  },
-  {
-    key: "exact",
-    name: "Exact dedup (suffix array, ≥50 tokens)",
-    source: "Lee et al. 2021 §ExactSubstr",
-    delta: { arce: 0.5, hs: 0.8, lam: -0.4, mmlu: 0.3 },
-  },
-  {
-    key: "minhash",
-    name: "MinHash near-dedup (Jaccard ≥ 0.8, per-snapshot)",
-    source: "Lee et al. §NearDup / FineWeb §3.3",
-    delta: { arce: 0.7, hs: 1.2, lam: -0.6, mmlu: 0.5 },
-  },
-];
+(function () {
+  "use strict";
 
-const TASKS = [
-  { key: "arce",  label: "ARC-E" },
-  { key: "hs",    label: "HellaSwag" },
-  { key: "lam",   label: "LAMBADA" },
-  { key: "mmlu",  label: "MMLU-tiny" },
-];
+  // ---------- Panel A ----------
+  var A = {
+    N: document.getElementById('pN'), D: document.getElementById('pD'),
+    U: document.getElementById('pU'), C: document.getElementById('pC'),
+    S: document.getElementById('pS'), out: document.getElementById('budgetOut')
+  };
+  // Derived conversion anchor: DCLM 400M-1x, 2.0e19 FLOPs reported at 26 H100 hours.
+  var ANCHOR_FLOPS = 2.0e19, ANCHOR_HOURS = 26;
 
-const BASELINE = { arce: 35.1, hs: 28.5, lam: 31.2, mmlu: 25.3 };
-
-// State: each filter on/off.
-const state = { lang: true, ppl: true, exact: true, minhash: true };
-
-function fmt(d) {
-  if (Math.abs(d) < 0.05) return `<span class="neu">0.0</span>`;
-  const sign = d > 0 ? "+" : "";
-  const cls  = d > 0 ? "pos" : "neg";
-  return `<span class="${cls}">${sign}${d.toFixed(1)}</span>`;
-}
-
-function computeRow(enabled) {
-  const d = { arce: 0, hs: 0, lam: 0, mmlu: 0 };
-  for (const f of FILTERS) if (enabled[f.key]) for (const t of TASKS) d[t.key] += f.delta[t.key];
-  return d;
-}
-
-function renderToggles() {
-  const el = document.getElementById("toggles");
-  el.innerHTML = "";
-  for (const f of FILTERS) {
-    const label = document.createElement("label");
-    label.className = "toggle" + (state[f.key] ? " on" : "");
-    label.innerHTML = `<input type="checkbox" ${state[f.key] ? "checked" : ""}> ${f.name}
-                       <span class="pill">${f.source}</span>`;
-    label.querySelector("input").addEventListener("change", (e) => {
-      state[f.key] = e.target.checked; renderAll();
-    });
-    el.appendChild(label);
+  function fmt(x, d) { return Number(x).toFixed(d === undefined ? 2 : d); }
+  function sci(x) {
+    var e = Math.floor(Math.log10(x));
+    return (x / Math.pow(10, e)).toFixed(2) + 'e' + e;
   }
-}
 
-function rowLabel(enabled) {
-  const on = FILTERS.filter(f => enabled[f.key]).map(f => f.key);
-  if (on.length === 0) return "none (raw extracted text)";
-  return "+ " + on.join(" + ");
-}
-
-function renderGrid() {
-  const body = document.getElementById("grid-body");
-  body.innerHTML = "";
-
-  // Fixed cumulative rows: none, +lang, +lang+ppl, +lang+ppl+exact, full-stack.
-  const cumulative = [
-    {},
-    { lang: true },
-    { lang: true, ppl: true },
-    { lang: true, ppl: true, exact: true },
-    { lang: true, ppl: true, exact: true, minhash: true },
-  ];
-
-  cumulative.forEach((enabled) => {
-    const tr = document.createElement("tr");
-    const isActive = FILTERS.every(f => !!enabled[f.key] === !!state[f.key]);
-    if (isActive) tr.classList.add("active-row");
-    const d = computeRow(enabled);
-    tr.innerHTML = `
-      <td class="row-label">${rowLabel(enabled)}</td>
-      <td class="delta">${(BASELINE.arce + d.arce).toFixed(1)} (${fmt(d.arce)})</td>
-      <td class="delta">${(BASELINE.hs + d.hs).toFixed(1)} (${fmt(d.hs)})</td>
-      <td class="delta">${(BASELINE.lam + d.lam).toFixed(1)} (${fmt(d.lam)})</td>
-      <td class="delta">${(BASELINE.mmlu + d.mmlu).toFixed(1)} (${fmt(d.mmlu)})</td>
-    `;
-    body.appendChild(tr);
+  function updateBudget() {
+    var N = Math.max(1, +A.N.value) * 1e6;
+    var D = Math.max(0.01, +A.D.value) * 1e9;
+    var U = Math.max(0.01, +A.U.value) * 1e9;
+    var C = Math.max(1, Math.round(+A.C.value));
+    var S = Math.max(1, Math.round(+A.S.value));
+    var flops = 6 * N * D;
+    var runs = C * S;
+    var hours = flops / ANCHOR_FLOPS * ANCHOR_HOURS;
+    var epochs = D / U;
+    var epochClass = epochs > 4 ? 'flag-warn' : 'flag-ok';
+    var epochMsg = epochs > 4
+      ? 'above the 4-epoch bound: report this cell as confounded by repetition'
+      : 'at or under the 4-epoch bound';
+    A.out.innerHTML =
+      'Per cell: <b>' + sci(flops) + '</b> FLOPs (6ND), <b>' + fmt(hours, 1) +
+      '</b> H100 hours (derived from the DCLM 400M-1x row). ' +
+      'Grid: <b>' + runs + '</b> runs, <b>' + sci(flops * runs) + '</b> FLOPs, <b>' +
+      fmt(hours * runs, 0) + '</b> H100 hours (derived). ' +
+      'Epochs over the kept pool: <span class="' + epochClass + '"><b>' + fmt(epochs, 2) +
+      '</b> — ' + epochMsg + '</span>.';
+  }
+  ['N', 'D', 'U', 'C', 'S'].forEach(function (k) {
+    A[k].addEventListener('input', updateBudget);
   });
-}
+  document.getElementById('presetFull').addEventListener('click', function () {
+    A.N.value = 412; A.D.value = 8.2; A.U.value = 8.2; updateBudget();
+  });
+  document.getElementById('presetSmall').addEventListener('click', function () {
+    A.N.value = 50; A.D.value = 1; A.U.value = 1; updateBudget();
+  });
 
-function renderAll() { renderToggles(); renderGrid(); }
-renderAll();
+  // ---------- Panel B ----------
+  var bB = document.getElementById('bB'), bH = document.getElementById('bH');
+  var bandBody = document.getElementById('bandBody');
+  var S_VALUES = [0.50, 0.60, 0.70, 0.75, 0.80, 0.85, 0.90, 0.95];
+  var FW_PRINTED = { '0.70': '56%', '0.75': '77%', '0.80': '92%', '0.85': '98.8%' };
+
+  function updateBanding() {
+    var B = Math.max(1, Math.round(+bB.value));
+    var h = Math.max(1, Math.round(+bH.value));
+    var rows = '';
+    S_VALUES.forEach(function (s) {
+      var sh = Math.pow(s, h);
+      var p = 1 - Math.pow(1 - sh, B);
+      var printed = FW_PRINTED[s.toFixed(2)] || '—';
+      rows += '<tr><td>' + s.toFixed(2) + '</td><td>' + sh.toExponential(3) + '</td><td>' +
+              (100 * p).toFixed(2) + '%</td><td>' + printed + '</td></tr>';
+    });
+    bandBody.innerHTML = rows;
+  }
+  bB.addEventListener('input', updateBanding);
+  bH.addEventListener('input', updateBanding);
+  document.getElementById('presetFW').addEventListener('click', function () {
+    bB.value = 14; bH.value = 8; updateBanding();
+  });
+  document.getElementById('presetLee').addEventListener('click', function () {
+    bB.value = 450; bH.value = 20; updateBanding();
+  });
+
+  // ---------- Panel C ----------
+  var CELLS = ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H'];
+  var cellBody = document.getElementById('cellBody');
+  cellBody.innerHTML = CELLS.map(function (c) {
+    var blanks = new Array(9).fill('<td class="blank">—</td>').join('');
+    return '<tr><td>' + c + '</td>' + blanks + '</tr>';
+  }).join('');
+
+  updateBudget();
+  updateBanding();
+})();
 </script>
-
 </body>
 </html>

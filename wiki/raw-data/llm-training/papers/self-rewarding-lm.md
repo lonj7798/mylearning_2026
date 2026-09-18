@@ -1,46 +1,85 @@
-<!-- scope: self-rewarding LM — policy acts as its own judge
+<!-- scope: self-rewarding LM — the policy generates its own prompts, responses, and rewards for Iterative DPO
      deps: [[dpo]], [[rlhf-instructgpt]]
-     see-also: [[meta-rewarding-lm]], [[spin]], [[trl-online-dpo]]
+     see-also: [[meta-rewarding-lm]], [[spin]], [[trl-online-dpo]], [[self-taught-evaluators]]
 -->
 
 # Self-Rewarding Language Models
-- **Core Insight:** The same LM that generates can also judge — and iterating DPO on self-generated, self-judged preference pairs lifts both the actor's instruction-following *and* its reward-modeling skill beyond the supervision ceiling set by a frozen human-trained reward model.
-- **Guideline:** When human preference data is scarce, use the current policy as an LLM-as-a-Judge to label its own samples, do DPO, then repeat — but cap the number of iterations at 3, because reward-signal drift starts dominating after that.
+- **Core Insight:** When one Llama 2 70B model both generates candidate responses and scores them with an LLM-as-a-Judge prompt, three rounds of Iterative DPO raise the AlpacaEval 2.0 win rate over GPT-4 Turbo from 9.94% (M1) to 15.38% (M2) to 20.44% (M3), and the same model's pairwise agreement with held-out human rankings rises from 78.7% (M1) to 81.7% (M3) (Table 1, Table 4).
+- **Guideline:** When human preference data is limited and the target is open-ended instruction following, use the current policy as its own judge under a fixed additive 5-point prompt and run Iterative DPO; the paper reports gains only through three iterations on Open Assistant-derived prompts, and reports no gain on math, code, and reasoning (Table 2).
 - **Authors:** Weizhe Yuan, Richard Yuanzhe Pang, Kyunghyun Cho, Xian Li, Sainbayar Sukhbaatar, Jing Xu, Jason Weston
-- **Year:** 2024 (Meta AI / NYU)
+- **Year:** 2024 (arXiv v1 2024-01; v3 2025-03-28; Meta and NYU)
 - **URL:** https://arxiv.org/abs/2401.10020
-- **Relevant topics:** self-improvement, LLM-as-a-judge, iterative DPO, preference-model distillation
+- **Source type:** paper
+- **Relevant topics:** self-improvement, LLM-as-a-Judge, iterative DPO, reward modeling, synthetic preference data
 
 ## Abstract
-We posit that to achieve superhuman agents, future models require superhuman feedback in order to provide an adequate training signal. Current approaches commonly train reward models from human preferences, which may then be bottlenecked by human performance level, and secondly these separate frozen reward models cannot then learn to improve during LLM training. In this work, we study Self-Rewarding Language Models, where the language model itself is used via LLM-as-a-Judge prompting to provide its own rewards during training. We show that during Iterative DPO training not only does instruction following ability improve, but also the ability to provide high-quality rewards to itself. Fine-tuning Llama 2 70B on three iterations of our approach yields a model that outperforms many existing systems on the AlpacaEval 2.0 leaderboard, including Claude 2, Gemini Pro, and GPT-4 0613.
+The authors argue that reward models trained from human preferences are bounded by human performance and cannot improve once frozen. They study Self-Rewarding Language Models, in which the language model itself supplies its rewards through LLM-as-a-Judge prompting during training. During Iterative DPO training both instruction-following ability and the ability to produce rewards improve. Fine-tuning Llama 2 70B for three iterations yields a model that outperforms several systems on the AlpacaEval 2.0 leaderboard, including Claude 2, Gemini Pro, and GPT-4 0613.
 
 ## Key Contributions
-- Introduced the **Self-Rewarding** training loop: one model plays both Actor and Judge, with the Judge role invoked via a fixed evaluation prompt template.
-- Showed the judge signal *improves* with each iteration — an emergent property absent from fixed-RM pipelines.
-- Demonstrated 3 iterations of Iterative DPO on Llama-2-70B lifts AlpacaEval 2.0 win-rate from 9.94% (SFT) → 15.38% → 20.44% → 20.8%, passing GPT-4 (June 2023) at iter 2.
-- Showed the judge's Spearman correlation with held-out human preference improves from 0.62 (iter 0) to 0.71 (iter 3) on the same Open-Assistant rubric.
-- Established the "self-rewarding" family — direct ancestor of Meta-Rewarding, SPIN-variants, and the 2024–2025 on-policy DPO recipes.
+- Defines a training loop in which the same model performs instruction following and reward assignment, so the reward model is updated at every iteration instead of being frozen (§2).
+- Defines the seed data split: IFT (instruction fine-tuning) data and EFT (evaluation fine-tuning) data that teaches the LLM-as-a-Judge format (§2.1).
+- Reports that reward-modeling quality improves across iterations without any additional EFT data: pairwise accuracy 78.7% → 80.4% → 81.7% for M1 → M2 → M3 (Table 4).
+- Reports AlpacaEval 2.0 win rates of 9.94%, 15.38%, 20.44% for the three iterations, with M3 above GPT-4 0613 (15.76%), Gemini Pro (16.85%), and Claude 2 (17.19%) (Table 1).
+- Measures the judge prompt as a controlling factor: the additive 5-point prompt gives 65.1% pairwise accuracy on the SFT baseline versus 26.6% for a multiple-choice-bucket prompt (§3.2.2).
 
 ## Key Figures/Tables to Study
-- **Figure 1:** the overall loop — Seed SFT → Self-Instruction + Self-Evaluation → Preference-pair DPO → repeat. Every ablation in the paper is a modification of one arrow in this diagram.
-- **Figure 3 (AlpacaEval win-rate vs iteration):** shows the monotonic gain up to iter 3 and the plateau after.
-- **Table 2 (judge agreement with Open-Assistant humans):** the critical table — the judge gets *better* as iterations proceed.
-- **Table 4 (IFEval + MT-Bench):** shows instruction-following gains aren't lost on standard benchmarks.
+- **Figure 1:** the two-step loop — self-instruction creation, then instruction-following training on self-built preference pairs.
+- **Figure 2:** the exact LLM-as-a-Judge prompt with the five additive criteria.
+- **Table 1:** AlpacaEval 2.0 win rates for M1, M2, M3 against leaderboard models.
+- **Table 3:** the nine NLP benchmarks, where M2 and M3 fall below M1 on ARC-Challenge and HellaSwag.
+- **Table 4:** reward-modeling metrics (pairwise accuracy, exact match, Spearman, Kendall τ) across the training-data conditions.
 
 ## Technical Details
-- **Seed data:** Open Assistant SFT pool → 3,200 prompts for initial SFT; a 1,775-pair subset for EFT (Evaluation Fine-Tuning) that teaches the judge rubric.
-- **Judge prompt:** a 5-point rubric ("Additive scoring (1–5) of helpfulness, relevance, depth, clarity, and completeness") appended to every completion — identical across iterations.
-- **Preference-pair construction per iteration:**
-  1. Sample 4 responses per prompt from the current policy at T=0.7, top-p=0.9.
-  2. Score all 4 with the policy-as-judge (pairwise or 5-point, averaged over 3 judge samples).
-  3. Take the highest-scored response as `chosen`, lowest as `rejected`.
-  4. Run DPO with β = 0.1 for 1 epoch from the previous iteration's checkpoint.
-- **Base model:** Llama-2-70B, context 4096, AdamW lr=5e-7 for DPO steps.
-- **Stopping:** 3 iterations — the paper notes iter 4 regresses on reward bench (likely reward hacking).
-- **Cost asymmetry:** each iteration's judge pass dominates total compute (4 generations × 3 judge calls per prompt × ~20K prompts).
+- **Base model:** Llama 2 70B (§3.1). Prompts for the self-instruction step are generated by a separate fixed model, Llama 2-Chat 70B, with 8-shot prompting and T = 0.6, p = 0.9 (§3.1.3).
+- **IFT seed data:** 3,200 first-turn English examples from Open Assistant, restricted to human-annotated rank 0 (§3.1.1).
+- **EFT seed data:** built from Open Assistant's multiple ranked responses; chain-of-thought justifications and 1–5 scores are generated by the SFT baseline and kept only when their score ranking agrees with the human ranking, then resampled to reduce skew toward score 4. Result: 1,630 train and 541 evaluation examples, non-overlapping with the IFT data (§3.1.1).
+- **Judge prompt:** five additive criteria — relevance, coverage, usefulness, clarity, expertise — producing a score in [0, 5] after a written justification (§2.1, Figure 2).
+- **Model chain (§3):** M0 = base Llama 2 70B; M1 = SFT on IFT+EFT; M2 = DPO on AIFT(M1); M3 = DPO on AIFT(M2). Each DPO run starts from the previous model.
+- **Preference-pair construction:** N = 4 candidate responses per prompt at T = 0.7, p = 0.9; each candidate is judged 3 times with sampled decoding and the scores averaged; the highest-scoring response becomes the winner and the lowest-scoring the loser (§2.2, §3.1.3).
+- **Pair counts:** 3,964 pairs form AIFT(M1) used to train M2; 6,942 pairs form AIFT(M2) used to train M3 (§3.1.3).
+- **Evaluation:** head-to-head GPT-4 judging over 256 IFT test prompts, both orders with disagreement counted as a tie; AlpacaEval 2.0 over 805 prompts against GPT-4 Turbo; MT-Bench; nine NLP benchmarks; human evaluation on 50 instructions with 3 annotators per pair (§3.1.2, §3.2.1).
+- **Reward-model evaluation set:** the held-out Open Assistant split, averaging 2.85 ranked responses per instruction (§3.1.2).
+
+## Recipe ledger
+
+| Model (exact release) | Size | Stage | Setting | Value | Source location | Status | Evidence for this value |
+|---|---|---|---|---|---|---|---|
+| Self-Rewarding M1 (Llama 2 70B) | 70B | SFT | learning rate, cosine decay | 5.5e-6 decaying to 1.1e-6 | arXiv:2401.10020v3 §3.1.3 | verified (2026-09-18) | no ablation reported |
+| Self-Rewarding M1 | 70B | SFT | batch size; dropout; loss masking | 16; 0.1; loss on target tokens only | arXiv:2401.10020v3 §3.1.3 | verified (2026-09-18) | no ablation reported |
+| Self-Rewarding M1 | 70B | SFT | seed data | 3,200 IFT + 1,630 EFT examples | arXiv:2401.10020v3 §3.1.1 | verified (2026-09-18) | §3.2.2 Table 4: IFT+EFT raises pairwise accuracy 65.1% → 78.7% over IFT alone |
+| Self-Rewarding M2 | 70B | preference (DPO) | learning rate; batch size; dropout; β | 1e-6 decaying to 1e-7; 16; 0.1; 0.1 | arXiv:2401.10020v3 §3.1.3 | verified (2026-09-18) | no ablation reported |
+| Self-Rewarding M2 | 70B | preference (DPO) | preference pairs | 3,964 pairs, AIFT(M1) | arXiv:2401.10020v3 §3.1.3 | verified (2026-09-18) | no ablation reported |
+| Self-Rewarding M3 | 70B | preference (DPO) | preference pairs | 6,942 pairs, AIFT(M2) | arXiv:2401.10020v3 §3.1.3 | verified (2026-09-18) | no ablation reported |
+| Self-Rewarding M2, M3 | 70B | preference (DPO) | checkpoint selection | every 200 steps, pairwise judged by Claude 2 on 253 validation examples | arXiv:2401.10020v3 §3.1.3 | verified (2026-09-18) | no ablation reported |
+| Self-Rewarding M2, M3 | 70B | preference (DPO) | sampling for pair construction | N = 4, T = 0.7, p = 0.9, 3 judge samples averaged | arXiv:2401.10020v3 §3.1.3 | verified (2026-09-18) | §3.1.3 states the averaging is used because judge scores vary |
+| Self-Rewarding | 70B | preference (DPO) | epochs; total compute | not reported | body and §3.1.3 checked | not reported | — |
+
+## Findings relevant to generality
+- MT-Bench overall rises 6.78 (M1) → 7.01 (M2) → 7.25 (M3), but the math, code, and reasoning sub-score moves only 3.83 → 4.05 → 4.17, while the humanities/STEM/roleplay/writing/extraction sub-score moves 8.55 → 9.10. The authors attribute the narrow gain to the Open Assistant seed prompts under-representing reasoning tasks (Table 2, §3.2.1).
+- On the nine NLP benchmarks, performance is mostly maintained but some scores decline across iterations: ARC-Challenge 57.51 (M1) → 54.51 (M2) → 53.13 (M3), HellaSwag 84.99 → 84.27 → 83.29 (Table 3). The authors compare this to the "alignment tax" reported for InstructGPT (§3.2.1).
+- The analysis of prompt complexity reports that the approach "mainly allows the models to better utilize their existing knowledge", with no improvement on mathematics and logical reasoning (§3.2.1).
+
+## Findings relevant to negative feedback
+- Negatives enter only as the rejected term of the DPO loss (negative as gradient): the lowest-scoring of the 4 judged candidates (§2.3). The paper reports no separate measurement of the negatives' contribution.
 
 ## Connections
-- Direct precursor to [[meta-rewarding-lm]] (adds a meta-judge to regulate judge quality), [[spin]] (self-play with human-written data as implicit positive), and [[trl-online-dpo]] (online DPO with judge as reward source).
-- Uses the DPO loss of [[dpo]] verbatim — the innovation is the preference *source*.
-- Related to [[rlaif-scaling]]: both remove the human preference bottleneck, but RLAIF uses a separate frozen judge model; Self-Rewarding uses the policy itself.
-- The emergent "judge improves with iteration" finding mirrors [[star]]-style rationale bootstrap: the model distills its own competence into a narrower subset.
+- Applies the loss of [[dpo]] without change; the contribution is the source of the preference pairs.
+- [[meta-rewarding-lm]] adds a meta-judge over the judge role introduced here.
+- [[spin]] is a self-play alternative that uses human-written responses as the winner instead of a self-assigned score.
+- [[self-taught-evaluators]] trains the judge role as the target rather than as a by-product.
+- [[trl-online-dpo]] implements the online variant where a judge scores freshly sampled responses.
+- Contrast with [[rlaif-scaling]], which uses a separate fixed model as the AI labeler.
+- Motivated against the frozen reward model of [[rlhf-instructgpt]] (§1).
+
+## Verification
+- Checked on 2026-09-18 against: https://arxiv.org/abs/2401.10020 (arXiv v3, 2025-03-28).
+- Corrections to the previous card version:
+  - "9.94% (SFT) → 15.38% → 20.44% → 20.8%" → the paper reports three values, 9.94% (M1), 15.38% (M2), 20.44% (M3); M1 is Iteration 1 (IFT+EFT), not the SFT baseline, and no fourth value exists (Table 1).
+  - "passing GPT-4 (June 2023) at iter 2" → M2 at 15.38% is below GPT-4 0613 at 15.76%; M3 at 20.44% is above it (Table 1).
+  - "judge's Spearman correlation improves from 0.62 (iter 0) to 0.71 (iter 3)" → Spearman is 0.253 (SFT baseline), 0.279 (M1), 0.331 (M2), 0.349 (M3) (Table 4).
+  - "a 1,775-pair subset for EFT" → 1,630 train and 541 evaluation examples (§3.1.1).
+  - "AdamW lr=5e-7 for DPO steps" → DPO learning rate 1e-6 decaying to 1e-7; SFT learning rate 5.5e-6 decaying to 1.1e-6; the optimizer is not named (§3.1.3).
+  - "5-point rubric of helpfulness, relevance, depth, clarity, and completeness" → the five additive criteria are relevance, coverage, usefulness, clarity, expertise (§2.1, Figure 2).
+  - "Scored pairwise or 5-point, averaged over 3 judge samples" → scoring is only the 5-point additive prompt, averaged over 3 samples (§3.1.3).
+- Removed as unsupported by the source: "cap the number of iterations at 3, because reward-signal drift starts dominating after that"; "the paper notes iter 4 regresses on reward bench (likely reward hacking)" (the paper runs three iterations and reports no fourth); "context 4096"; "4 generations × 3 judge calls per prompt × ~20K prompts" and the claim that the judge pass dominates total compute (no compute accounting is given); "Table 2 (judge agreement with Open-Assistant humans)" as a figure pointer (that content is Table 4; Table 2 is MT-Bench); "Table 4 (IFEval + MT-Bench)" (IFEval is not used); "direct ancestor of ... the 2024–2025 on-policy DPO recipes" and the [[star]] comparison (no such claim in the source).
+- Not reported by the source: DPO epochs per iteration, total training compute or GPU hours, the number of generated prompts per iteration, the AIFT pair-filtering threshold.

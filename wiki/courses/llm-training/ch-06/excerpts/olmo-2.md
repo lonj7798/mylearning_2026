@@ -7,6 +7,8 @@ source_url: https://arxiv.org/abs/2501.00656
 created_at: "2026-04-23"
 ---
 
+> Superseded by the 2026-09 revision of read.md; kept for history.
+
 # Excerpt: OLMo 2 — intermediate checkpoints as the public release artifact
 
 **Source library:** `wiki/raw-data/llm-training/model-reports/olmo-2.md`

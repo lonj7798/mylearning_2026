@@ -7,6 +7,8 @@ source_url: https://arxiv.org/abs/1803.05407 ; https://arxiv.org/abs/2203.05482
 created_at: "2026-04-23"
 ---
 
+> Superseded by the 2026-09 revision of read.md; kept for history.
+
 # Excerpt: Early Stopping, Checkpointing, SWA, Model Soups — what "state" means before FSDP
 
 **Source library:** `wiki/raw-data/llm-training/classics/early-stopping-and-checkpointing.md`

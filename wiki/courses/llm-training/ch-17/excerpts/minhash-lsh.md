@@ -7,6 +7,8 @@ source_url: https://doi.org/10.1109/SEQUEN.1997.666900
 created_at: "2026-04-23"
 ---
 
+> Superseded by the 2026-09 revision of read.md; kept for history.
+
 # Excerpt: MinHash + LSH — the banding math that picks (b, r) in ch-17 §4
 
 **Source library:** `wiki/raw-data/llm-training/papers/minhash-lsh.md`

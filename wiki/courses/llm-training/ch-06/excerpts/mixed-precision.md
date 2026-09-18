@@ -7,6 +7,8 @@ source_url: https://arxiv.org/abs/1710.03740
 created_at: "2026-04-23"
 ---
 
+> Superseded by the 2026-09 revision of read.md; kept for history.
+
 # Excerpt: Mixed Precision Training — loss-scaler state and why optim-state stays fp32
 
 **Source library:** `wiki/raw-data/llm-training/classics/mixed-precision.md`

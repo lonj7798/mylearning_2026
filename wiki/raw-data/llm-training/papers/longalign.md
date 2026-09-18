@@ -1,188 +1,117 @@
-<!-- scope: long-context alignment recipe — synthetic long instruction data, efficient SFT, and long-context chat evaluation
+<!-- scope: LongAlign — long-context instruction data construction (LongAlign-10k), efficient long-context SFT (packing, loss weighting, sorted batching), and the LongBench-Chat evaluation
      deps: [[self-instruct]]
-     see-also: [[toolformer]], [[openmathinstruct]], [[olmo-3]]
+     see-also: [[longbench]], [[longalpaca]], [[longmit]], [[sequence-packing]], [[prolong]], [[long-context-llama3]], [[needle-in-haystack-data]]
 -->
 
 # LongAlign: A Recipe for Long Context Alignment of Large Language Models
-- **Core Insight:** Long-context ability is not solved by context-window extension alone; you need dedicated long instruction data, length-aware SFT, and evaluation on realistic 10k-100k-token prompts.
-- **Guideline:** Treat long-context alignment as its own training problem: synthesize long tasks from real long documents, mix them with short SFT data, and train with packing or sorted batching plus sequence-level loss correction.
-- **Authors:** Yushi Bai, Xin Lv, Jiajie Zhang, Yuze He, Ji Qi, Lei Hou, Jie Tang, Yuxiao Dong, Juanzi Li
-- **Year:** 2024
-- **URL:** https://aclanthology.org/2024.findings-emnlp.74/
-- **Relevant topics:** long-context SFT, synthetic instruction data, packing, sorted batching, loss weighting, LongBench-Chat
+- **Core Insight:** After a base model's context window is extended, long-context ability still depends on the SFT stage: with 76k ShareGPT examples held fixed, adding 10k synthetic 8k-64k instruction examples raised LongBench-Chat from the LongAlign-0k baseline, and packing with per-sequence loss weighting raised LongBench-Chat from 5.76 to 6.21 on ChatGLM3-6B-64k and 5.89 to 6.10 on Llama-2-7B-64k (§4.2, §4.3, Table 3).
+- **Guideline:** When fine-tuning on a length distribution mixing 8k-64k documents with short chat data, use packing with per-sequence loss weighting or sorted batching, because both cut training time to under half of naive batching, and because unweighted packing weights long and target-dense sequences more heavily than intended (§3.3, Figure 5, Table 3). When the target model is Llama-2-7B or Llama-2-13B, the paper's measurements favor sorted batching; for ChatGLM3-6B they favor packing with loss weighting (§4.3).
+- **Authors:** Yushi Bai, Xin Lv, Jiajie Zhang, Yuze He, Ji Qi, Lei Hou, Jie Tang, Yuxiao Dong, Juanzi Li (Tsinghua University; Zhipu.AI)
+- **Year:** 2024 (arXiv v1 2024-01; published in Findings of ACL: EMNLP 2024, November 2024)
+- **URL:** https://arxiv.org/abs/2401.18058 (venue version: https://aclanthology.org/2024.findings-emnlp.74/; code: https://github.com/THUDM/LongAlign)
+- **Source type:** paper
+- **Relevant topics:** long-context SFT, synthetic instruction data, packing, sequence-level loss weighting, sorted batching, LongBench-Chat
 
 ## Abstract
-LongAlign proposes an end-to-end recipe for long-context instruction tuning. The paper argues that after position/interpolation tricks extend a model’s context window, the model still needs supervised alignment on prompts of comparable length. To do this, the authors build `LongAlign-10k`, a synthetic long-instruction dataset with sequences of 8k-64k tokens generated from diverse long documents using a Self-Instruct-style pipeline, add efficient training methods for heavy long-tailed length distributions, and introduce `LongBench-Chat`, a benchmark of realistic 10k-100k-token instruction-following queries. Across ChatGLM3-6B, Llama-2-7B, and Llama-2-13B, the recipe materially improves long-context task performance without hurting short-context chat quality.
+LongAlign is a recipe covering data, training, and evaluation for long-context alignment. The authors construct a long instruction-following dataset with Self-Instruct over documents from 9 sources, investigate packing and sorted batching as ways to speed up SFT on an uneven length distribution, develop a loss weighting method that equalizes the contribution of each sequence under packing, and introduce LongBench-Chat, a benchmark of real-world queries 10k-100k tokens long annotated by PhD students. Experiments on ChatGLM3-6B, Llama-2-7B, and Llama-2-13B, each first extended to a 64k context, show improved long-context performance without degradation on short tasks.
 
 ## Key Contributions
-- Defines long-context alignment as a distinct stage after context extension / continual pretraining.
-- Builds `LongAlign-10k`: 10,000 synthetic long instruction-response examples spanning 8k-64k tokens, with 10% Chinese data.
-- Shows that **data quantity and diversity** matter: more long data helps until about 10k examples, and diverse source/task coverage beats narrower long-data sets like LongAlpaca-12k.
-- Introduces two efficiency recipes for long SFT under long-tailed lengths: **packing** and **sorted batching**.
-- Identifies a subtle bias in packing loss averaging and fixes it with **sequence-level loss weighting**, improving LongBench-Chat by roughly 4-8% depending on model.
-- Releases `LongBench-Chat`, a 50-example long-context instruction benchmark with realistic queries, expert references, and GPT-4 grading calibrated against humans.
+- Builds `LongAlign-10k`: 10k supervised examples, 8k-64k tokens, 10% Chinese, generated by Claude 2.1 from 9 document sources (§3.2, Appendix A).
+- Shows that context extension alone is insufficient: the LongAlign-0k condition (ShareGPT only, extended base model) underperforms on all long tasks (§4.2).
+- Identifies the weighting bias of naive packing and derives a per-sequence correction (§3.3, Eq. 2-4).
+- Introduces sorted batching as a simpler alternative with comparable speed (§3.3).
+- Releases LongBench-Chat, 50 long-context instruction queries with expert references and a GPT-4 few-shot scoring protocol validated against human annotators (§3.4, Table 1).
 
 ## Key Figures/Tables to Study
-- **Figure 3:** why long-tailed sequence lengths create GPU idle time, and how packing / sorted batching change the compute profile.
-- **Figure 4:** scaling curve showing long-task gains from `LongAlign-0k -> 5k -> 10k`, with little or no short-task regression.
-- **Figure 5:** diversity comparison versus `LongAlpaca-12k`; useful for seeing why long-context data quality is not just "more tokens".
-- **Figure 6:** wall-clock training time on `8xA800 80G`; packing and sorted batching cut time by more than half versus naive batching.
-- **Table 2:** the main evidence for loss weighting and the efficiency-quality tradeoff across ChatGLM and Llama-2.
-- **Table 1:** validates GPT-4 + few-shot scoring on `LongBench-Chat` against human judgments.
+- **Figure 3** — how a long-tailed length distribution creates idle time under naive batching, and how packing and sorted batching change it (arXiv v1 Figure 3; EMNLP Figure 3).
+- **Figure 4** — the data-scaling curve over LongAlign-0k / 5k / 10k on LongBench-Chat, LongBench, NIAH, and MT-Bench.
+- **Figure 5 (arXiv v1) / Figure 6 (EMNLP)** — training time in hours on 8×A800 80G under the three batching methods.
+- **Table 3 (arXiv v1) / Table 2 (EMNLP)** — the training-method comparison; the main evidence for loss weighting.
+- **Table 1** — correlation of F1, ROUGE-L, GPT-4, GPT-4 + few-shot, and a second human annotator with human scores on LongBench-Chat.
 
 ## Technical Details
-### Why long-context data is a distinct training problem
-- The paper’s main claim is that **context extension is necessary but insufficient**. RoPE scaling + long continual pretraining lets the model accept long inputs, but not necessarily follow long user instructions over books, codebases, or papers.
-- Long-context SFT examples have a very different shape from ordinary chat data:
-  - Inputs are dominated by the long document.
-  - Targets are short relative to the prompt.
-  - Useful tasks require synthesis across distant spans, not local QA.
-- This changes both **data construction** and **training dynamics**. In LongAlign-10k, the average assistant target is about **200 tokens**, while the average ratio of target tokens to full sequence length is only **0.015**. For ShareGPT short data, the average target length is **330 tokens** and the target-to-sequence ratio is **19.3%**. That mismatch is why naive batching and naive loss aggregation behave poorly.
+### Data construction (`LongAlign-10k`, §3.2, Appendix A)
+- **Size:** 10k supervised instances, of which **10% is in Chinese** (§3.2).
+- **Length range:** **8k-64k** tokens, measured with the ChatGLM tokenizer, chosen for its higher compression rate on Chinese characters (§3.2).
+- **Sources (9):** Arxiv, Books3, C4, CLUECorpus2020, CommonCrawl, GitHub, Stack Exchange, Wikipedia, WuDaoCorpora (Appendix A).
+- **Sampling:** articles under 64k tokens are sampled, with longer articles upsampled so the dataset covers more long texts (Appendix A).
+- **Teacher:** **Claude 2.1** (§3.2).
+- **Generation procedure:** for each long article, one of **four task prompts** is selected at random — general, summarization/integration across multiple parts, multi-hop reasoning, information-seeking extraction — and Claude is asked to propose **5 questions** that are diverse and cover all parts of the text; **one of the five is then chosen at random** and Claude is asked for its answer (Appendix A). The stated purpose of the 5-question step is to ensure questions cover content from multiple spans within the long text.
+- **Data statistics:** for ShareGPT short data, the average ratio between target tokens and instruction sequence length is **19.3** and the average target length is **330** tokens; for LongAlign-10k the ratio is **0.015** and the average target length is **200** tokens (Appendix A, "Data statistics"). The source prints 19.3 without a unit next to a 0.015 value for the long data.
+- **Verification:** 4 PhD students manually checked **100** randomly sampled generated instances; **94 of 100** had correct answers, with 2 incorrect, 3 incomplete, and 1 irrelevant (Appendix A).
 
-### Long instruction data construction (`LongAlign-10k`)
-- **Size:** `10,000` supervised examples.
-- **Length range:** `8k-64k` tokens, measured with the ChatGLM tokenizer.
-- **Language mix:** about `90%` English, `10%` Chinese.
-- **Seed document sources (9):**
-  - `Arxiv`
-  - `Books3`
-  - `C4`
-  - `CLUECorpus2020`
-  - `CommonCrawl`
-  - `GitHub`
-  - `Stack Exchange`
-  - `Wikipedia`
-  - `WuDaoCorpora`
-- **Sampling rule:** sample documents shorter than `64k` tokens, then upsample longer examples so the final dataset is not dominated by the short end of the length range.
-- **Teacher model:** `Claude 2.1`.
-- **Generation pattern:** Self-Instruct-style two-stage synthesis:
-  1. Feed a long document plus a task-type prompt to Claude and ask it to generate **5 candidate questions** that cover the whole text.
-  2. Randomly choose one question and ask Claude for the answer.
-  3. Store the resulting conversation as:
-     - `user`: long document + chosen task
-     - `assistant`: generated answer
-- **Task prompt families (4):**
-  - general questions
-  - summarization / multi-part integration
-  - multi-hop reasoning
-  - information extraction
-- **Prompt intent:** force coverage over multiple spans rather than a trivial local question. This is the core trick that makes the data useful for long-context alignment instead of just long-context retrieval.
-- **Verification:** 4 PhD students manually checked 100 samples; `94/100` were judged correct, with the remaining errors split across wrong, incomplete, or irrelevant answers.
+### Base models and context extension (§4.1)
+- Base models: **ChatGLM3-6B, Llama-2-7B, Llama-2-13B**, all base (non-chat) checkpoints.
+- Before SFT, each is extended to **64k** by expanding the RoPE base frequency **200 times, from 10,000 to 2,000,000**, and continually training on pre-training data under 64k for a total of **10 billion tokens** (§4.1).
 
-### Training data mix
-- LongAlign does **not** train on long data alone.
-- The SFT mixture combines:
-  - all `76k` filtered `ShareGPT` examples as the short/general instruction set
-  - one of several long-data suites: `LongAlign-0k`, `5k`, `10k`, `20k`, or `LongAlpaca-12k`
-- The intended effect is:
-  - preserve short-chat competence
-  - add long-context instruction following
-  - expose the model to a broad length distribution rather than a single fixed window
-- Empirically, the paper reports that long-task performance improves up to about `10k` long examples and then starts to saturate, while MT-Bench and general short-task quality do not noticeably degrade.
+### Training mixture (§3.3, §4.1)
+- The long data is mixed with the **entire 76k ShareGPT** set rather than replacing it (§4.1). Long-data conditions compared: LongAlign-0k, -5k, -10k, and LongAlpaca-12k.
 
-### Base models and context extension before alignment
-- Base models studied:
-  - `ChatGLM3-6B`
-  - `Llama-2-7B`
-  - `Llama-2-13B`
-- Before SFT, the authors first extend all of them to `64k` context:
-  - expand the RoPE base frequency by `200x`, from `10,000` to `2,000,000`
-  - continually train on pretraining data up to `64k` for `10B` tokens
-- LongAlign is therefore a recipe for **post-extension alignment**, not a substitute for long-context pretraining.
+### Packing and the loss-weighting correction (§3.3, Appendix B)
+- Sequences are concatenated into packs; a 1D mask of sequence start indices is passed to `flash_attn_varlen_func` from FlashAttention 2 through `cu_seqlens_q` and `cu_seqlens_k`, so each query attends only within its own sequence (block-diagonal attention) (Appendix B).
+- Bias: since each pack contributes equally to the batch loss, sequences in packs holding fewer sequences (typically the longest) and sequences with more target tokens receive greater influence on the final loss (§3.3).
+- Correction: preprocessing builds a weighted 1D mask with weight `1/N` at target-token positions, `N` the number of target tokens in that sequence, and 0 elsewhere; with `M` sequences packed into `K` packs in the current batch, the token loss is scaled by `K/(M·N)`, which equals the per-sequence mean loss (§3.3 Eq. 4, Appendix B).
+- Reported effect: LongBench-Chat **5.76 → 6.21** (ChatGLM3-6B-64k) and **5.89 → 6.10** (Llama-2-7B-64k); on the same rows single-document QA moves 65.0 → 64.0 and 61.7 → 60.8 (arXiv v1 Table 3). The paper summarizes the effect as "about 5%" on LongBench-Chat in §4.3 and as "a 10% improvement in downstream tasks" in §3.3; the EMNLP version prints the per-model deltas as +7.8% and +3.6% (EMNLP Table 2).
 
-### Efficient long-context SFT
-- **Hardware/setup:** `8xA800 80G`, `DeepSpeed + ZeRO-3 + CPU offload`.
-- **Max training length:** `64k` tokens; sequences longer than this are right-truncated.
-- **Epochs:** `2`.
-- **Total steps:** about `1500-2000`, depending on the configuration.
+### Sorted batching (§3.3, §4.3)
+- The dataset is sorted by length and each batch takes a random consecutive group with no repetition, so sequences within a batch are of similar length. The stated cost is a bias in the data distribution across batches, since batches consist either of all long or all short sequences; the paper notes large gradient accumulation may mitigate it (§3.3).
 
-### Packing
-- Long and short sequences are concatenated into packs up to the max length before dispatch to GPUs.
-- The implementation uses `FlashAttention 2` with `flash_attn_varlen_func` and sequence boundary indices so each sequence attends only within itself via block-diagonal attention.
-- This avoids the large waste from naive padding and also avoids the heavier 2D attention-mask implementation.
-- **Average pack composition:** about `12` sequences per pack.
-- **Batching setup for packing:** total batch size `8`, giving a **global batch size of 96** because each pack contains multiple sequences.
+### Evaluation (§3.4, §4.1)
+- **LongBench-Chat:** 50 queries of 10k-100k length; 30 written by the authors to mimic real user queries (20 English, 10 Chinese) and 20 taken from long-dependency QA in LooGLE, with long texts from post-2022 Wikipedia pages and movie scripts (Appendix C.1). Overall 40 tasks in English, 10 in Chinese (§3.4).
+- Four task categories, each about one quarter of the data: Information Extraction, Multi-segment Integration, Multi-segment Reasoning, Full-text Comprehension (§3.4).
+- Ground truth written by experts, each answer verified by at least two experts; GPT-4 scores responses 1-10 against the reference plus few-shot scoring examples (Appendix C.1).
+- **Metric validation (Table 1, Spearman / Kendall against human scores):** F1 0.129 / 0.093; ROUGE-L 0.370 / 0.273; GPT-4 0.788 / 0.656; GPT-4 + few-shot 0.844 / 0.716; second human annotator 0.817 / 0.694.
+- Other evaluations: LongBench (12 subsets, normalized 0-100), MT-Bench, NIAH at 10 positions and lengths 1k-60k, and four Open LLM Leaderboard tasks (ARC, HellaSwag, TruthfulQA, MMLU) (§4.1).
 
-### Why naive packing loss is biased
-- If each pack contributes equally to the batch loss, then packs with fewer sequences, usually the longest ones, get overweighted.
-- Sequences with more target tokens also get overweighted because their token-average loss contributes more strongly inside the pack average.
-- This creates an optimization bias toward long examples and toward responses with more supervised target tokens, which is not the intended objective.
+### Reported results
+- **Data scaling (§4.2, Figure 4):** more long instruction data improves LongBench-Chat, LongBench, and NIAH, and "this upward trend reaches saturation at a data size of 10k"; MT-Bench and the four Open LLM Leaderboard tasks show no negative impact.
+- **Diversity (§4.2):** LongAlign-10k beats LongAlpaca-12k on LongBench-Chat and MT-Bench, while **LongAlpaca-12k slightly outperforms LongAlign-10k on LongBench**, which the authors attribute to its advantage on 2WikiMQA and NarrativeQA, whose Wikipedia and novel sources resemble LongAlpaca's instruction sources.
+- **Efficiency (§4.3, arXiv v1 Figure 5):** training time on 8×A800 80G — ChatGLM3-6B-64k naive 45.4h, packing 20.5h, sorted 19.1h; Llama-2-7B-64k 67.2h / 23.4h / 23.3h; Llama-2-13B-64k 117.2h / 41.2h / 44.5h.
+- **Scaling to 13B (§4.4):** Llama-2-13B-64k fine-tuned on LongAlign-10k improves 10% on LongBench-Chat relative to the 7B model; sorted batching 7.02 against packing with loss weighting 6.79 (Table 2, EMNLP). The authors also align ChatGLM3-6B under a 128k window using human-annotated SFT data up to 128k and packing with loss weighting.
 
-### Loss weighting
-- The desired objective is equal average contribution **per sequence**, not per pack.
-- To implement this, the authors build a weighted 1D mask during preprocessing:
-  - target-token positions for a sequence get weight `1/N`
-  - non-target positions get `0`
-  - `N` is the number of target tokens for that sequence
-- During training, if the current batch has `M` sequences packed into `K` packs, token losses are scaled by `K / (M * N)`.
-- This makes the packed loss algebraically match the true equal-per-sequence objective.
-- Reported effect:
-  - `ChatGLM3-6B-64k`: LongBench-Chat `5.76 -> 6.21`
-  - `Llama-2-7B-64k`: `5.89 -> 6.10`
-- The gain on LongBench is smaller, but the long instruction-following gain is material; this is the main training trick to keep from forgetting the actual objective under aggressive packing.
+## Recipe ledger
+| Model (exact release) | Size | Stage | Setting | Value | Source location | Status | Evidence for this value |
+|---|---|---|---|---|---|---|---|
+| ChatGLM3-6B-64k / Llama-2-7B-64k / Llama-2-13B-64k | 6B / 7B / 13B | long-context | RoPE base frequency | 10,000 → 2,000,000 (200×) | arXiv:2401.18058v1 §4.1 | verified 2026-09-18 | no ablation reported |
+| same three | 6B / 7B / 13B | long-context | continual pre-training tokens for extension to 64k | 10B tokens | arXiv:2401.18058v1 §4.1 | verified 2026-09-18 | footnote cites Fu et al. (2023) that 10B suffices |
+| same three | 6B / 7B / 13B | SFT | short/general data | entire 76k ShareGPT | arXiv:2401.18058v1 §4.1 | verified 2026-09-18 | no ablation reported |
+| same three | 6B / 7B / 13B | SFT | long data | LongAlign-10k (10k examples, 8k-64k, 10% Chinese) | arXiv:2401.18058v1 §3.2, §4.1 | verified 2026-09-18 | §4.2 Figure 4: long-task gains saturate at 10k, short tasks unaffected |
+| same three | 6B / 7B / 13B | SFT | max training length; truncation | 64k; truncated from the right | arXiv:2401.18058v1 §4.1 | verified 2026-09-18 | set by GPU memory on 8×A800 80G |
+| ChatGLM3-6B-64k | 6B | SFT | truncation under naive and sorted batching | 56k | arXiv:2401.18058v1 §4.3 footnote 5 | verified 2026-09-18 | gradient accumulation raises memory use; avoids overflow |
+| same three | 6B / 7B / 13B | SFT | epochs; steps | 2 epochs; approximately 1500-2000 steps | arXiv:2401.18058v1 §4.1 | verified 2026-09-18 | no ablation reported |
+| same three | 6B / 7B / 13B | SFT | batch (packing): packs per batch; sequences per pack; global batch in sequences | 8 packs; about 12 sequences per pack; 96 sequences | arXiv:2401.18058v1 §4.1 | verified 2026-09-18 | matched to batch 8 with gradient accumulation 12 for non-packing methods |
+| same three | 6B / 7B / 13B | SFT | loss weighting under packing | scale token loss by K/(M·N) | arXiv:2401.18058v1 §3.3 Eq. 4 | verified 2026-09-18 | Table 3: LongBench-Chat 6.21 vs 5.76 (6B) and 6.10 vs 5.89 (7B) |
+| same three | 6B / 7B / 13B | SFT | hardware; framework | 8×A800 80G; DeepSpeed + ZeRO-3 + CPU offload | arXiv:2401.18058v1 §4.1 | verified 2026-09-18 | no ablation reported |
+| same three | 6B / 7B / 13B | SFT | peak LR, warmup, optimizer betas, weight decay | — | arXiv:2401.18058v1 §4.1 | not reported (checked §4.1, Appendix B, Appendix C) | — |
 
-### Sorted batching
-- Sort the dataset by length and sample random contiguous groups so each batch contains sequences of similar size.
-- This reduces intra-batch idle time without sequence concatenation.
-- Tradeoff:
-  - simpler objective than packing
-  - but batches become length-homogeneous, which introduces distributional bias across steps
-- In practice, the paper finds sorted batching is often as fast as packing and can even be the best option for Llama-2, likely because large gradient accumulation softens the batch-order bias.
+## Findings relevant to generality
+- Adding long instruction data up to 10k examples did not reduce MT-Bench or the four Open LLM Leaderboard tasks (§4.2, Table 3 short-task columns).
+- The paper reports that models trained with LongAlign generalize to out-of-distribution long-context queries not present in the long SFT data, such as writing a review for a research paper, and that larger models generalize more (§4.4, Appendix E).
+- Narrowing evidence: LongAlpaca-12k, the lower-diversity dataset, improves only specific task types — after adding it, the model shows no improvement on multi-segment integration (§4.2).
+- Measurement caveat stated by the authors: LongBench-Chat has only 50 examples, and GPT-4 scoring has a known bias toward the reference answer's style (§3.4, Limitations).
 
-### Efficiency results
-- Wall-clock training time on `8xA800 80G`:
-  - `ChatGLM3-6B-64k`: naive `45.4h`, packing `20.5h`, sorted batching `19.1h`
-  - `Llama-2-7B-64k`: naive `67.2h`, packing `23.4h`, sorted batching `23.3h`
-  - `Llama-2-13B-64k`: naive `117.2h`, packing `41.2h`, sorted batching `44.5h`
-- This is the paper’s practical message: long-context SFT is not only a data problem but a throughput problem, and batching strategy changes whether the recipe is usable.
-
-### LongBench-Chat
-- **Purpose:** evaluate realistic long-context instruction following, not just retrieval.
-- **Size:** `50` examples.
-- **Input length:** `10k-100k` tokens.
-- **Composition:**
-  - `30` authored to mimic real user queries (`20` English, `10` Chinese)
-  - `20` adapted from `LooGLE` long-dependency QA and re-annotated
-- **Task categories (roughly one quarter each):**
-  - Information Extraction
-  - Multi-segment Integration
-  - Multi-segment Reasoning
-  - Full-text Comprehension
-- **Ground truth:** expert-written answers, each verified by at least two experts.
-- **Evaluation:** GPT-4 scores model outputs from `1-10` using the reference answer plus few-shot grading examples.
-- **Metric validation:** GPT-4 with few-shot examples correlates substantially better with humans than F1 or ROUGE-L.
-
-## Evaluation Findings
-- Long-context SFT matters: `LongAlign-0k` underperforms badly on long tasks, showing that context extension alone is insufficient.
-- Data scaling matters: moving from `0k -> 5k -> 10k` long examples improves `LongBench-Chat`, `LongBench`, and NIAH; gains saturate near `10k`.
-- Data diversity matters: `LongAlign-10k` beats `LongAlpaca-12k`, especially on multi-segment integration and broader instruction-following categories.
-- Efficiency tricks mostly do not cost quality:
-  - packing and sorted batching are both much faster than naive batching
-  - with proper loss weighting, packing recovers or beats the naive baseline
-- Model scaling still helps: `Llama-2-13B-64k` outperforms the 7B version, indicating the recipe scales with model size.
-
-## Practical Takeaways
-- Long-context SFT data should be generated from **real long source materials**, not just by concatenating short chat samples.
-- The instruction prompt should force **cross-span coverage**, otherwise the model learns long retrieval but not long instruction following.
-- You should mix long data with ordinary chat data instead of replacing the short set.
-- If using packing, correct the objective with **sequence-aware loss weighting**; otherwise training is biased toward the longest / densest examples.
-- If engineering simplicity matters more than exact objective control, **sorted batching** is a strong baseline and may be the best option on some models.
-- Evaluation needs realistic long prompts with open-ended outputs; short-answer retrieval benchmarks are too narrow.
-
-## Risks + Limitations
-- The long data is still synthetic, with `Claude 2.1` as the teacher; the data quality ceiling is bounded by teacher behavior.
-- LongBench-Chat is only `50` examples, so it is high-signal but not broad enough to be the only benchmark.
-- The recipe mostly covers long QA, summarization, and reasoning, not longer-horizon chat/agent settings like life-long dialogue or long-history tool use.
-- The released experiments stop at relatively modest open models and mostly `64k`; the recipe’s behavior at frontier scale is suggestive rather than fully settled here.
+## Findings relevant to long context
+- The LongAlign-0k condition isolates the claim that context extension alone is insufficient: the extended base model trained on ShareGPT only performs worst on all long tasks (§4.2).
+- The long/short learning curves on LongBench-Chat and MT-Bench have the same shape — rapid improvement over 0-500 steps, then slow rise, stabilizing after 1000 steps (§4.3, Figure 7).
 
 ## Connections
-- [[self-instruct]] is the direct data-construction ancestor: LongAlign adapts it from short instruction synthesis to long-document-conditioned instruction synthesis.
-- LongBench is the underlying long-context benchmark lineage; LongBench-Chat is the instruction-following extension for more realistic long prompts.
-- [[toolformer]] is a useful contrast in synthetic data design: Toolformer teaches API-use insertion, while LongAlign teaches long-range document-conditioned instruction following.
-- [[openmathinstruct]] is another example where synthetic supervision must match deployment structure; in both cases, the data format is the real algorithm.
-- [[olmo-3]] and later frontier reports generalize this lesson: long-context capability usually requires a dedicated stage, dedicated data, and dedicated eval, not just a bigger context window.
+- [[self-instruct]] — the data-construction framework LongAlign adapts to long-document-conditioned synthesis.
+- [[longbench]] — the underlying benchmark; LongBench-Chat is its instruction-following extension.
+- [[longalpaca]] — the lower-diversity long-instruction baseline compared in §4.2.
+- [[longmit]] — later work that measures LongAlign-10k at 87.7 high-quality and 52.6 multi-hop and reports higher LongBench scores from multi-hop data.
+- [[sequence-packing]] — the same per-pack weighting problem described for BERT pre-training.
+- [[long-context-llama3]], [[prolong]] — long-context recipes whose SFT stages face the same short-context-regression constraint.
+- [[needle-in-haystack-data]] — the NIAH protocol used in §4.1 evaluation.
 
-## Source URLs
-- https://aclanthology.org/2024.findings-emnlp.74/
-- https://aclanthology.org/2024.findings-emnlp.74.pdf
-- https://github.com/THUDM/LongAlign
+## Verification
+- Checked on 2026-09-18 against: https://arxiv.org/abs/2401.18058 (arXiv v1, 2024-01-31) and https://aclanthology.org/2024.findings-emnlp.74/ (Findings of ACL: EMNLP 2024), §3.2-3.4, §4.1-4.4, Tables 1-3, Figures 3-7, Appendices A-C.
+- Corrections to the previous card version:
+  - "improving LongBench-Chat by roughly 4-8% depending on model" → the source states about 5% (§4.3) and 10% (§3.3) in prose, and the EMNLP version prints +7.8% (ChatGLM3-6B-64k) and +3.6% (Llama-2-7B-64k) (EMNLP Table 2).
+  - "Figure 6: wall-clock training time" → training time is Figure 5 in arXiv v1 and Figure 6 in the EMNLP version.
+  - "Table 2: the main evidence for loss weighting" → Table 3 in arXiv v1, Table 2 in the EMNLP version.
+  - "LongAlign-10k beats LongAlpaca-12k, especially on multi-segment integration" → LongAlign-10k is better on LongBench-Chat and MT-Bench, and LongAlpaca-12k slightly outperforms it on LongBench (§4.2). The multi-segment-integration point is that LongAlpaca produces no improvement there, not that LongAlign wins by the largest margin there.
+  - "Verification: 4 PhD students … 94/100" and "5 candidate questions, then pick one" were unverified in the previous card; both are confirmed in Appendix A of the EMNLP version.
+  - "The gain on LongBench is smaller, but the long instruction-following gain is material" → on the same rows LongBench single-document QA decreases (65.0 → 64.0 and 61.7 → 60.8), so the correct statement is a tradeoff, not a smaller gain (arXiv v1 Table 3).
+  - Added `Source type`, the ACL Anthology and arXiv version loci, the metric-correlation numbers (Table 1), the training-time numbers, and the 56k truncation footnote.
+- Removed as unsupported by the source: "Sampling rule: … upsample longer examples so the final dataset is not dominated by the short end" reworded to the source's phrasing; "this is the core trick that makes the data useful"; "the data format is the real algorithm"; "the recipe's behavior at frontier scale is suggestive rather than fully settled"; "[[olmo-3]] and later frontier reports generalize this lesson"; the practitioner-takeaway section's unsourced recommendations.
+- Not reported by the source: SFT learning rate, warmup, optimizer hyperparameters; the token count of LongAlign-10k (LongMIT Table 3 reports 9.89k samples / 0.17B tokens for it, which is a third-party measurement, not this paper's).

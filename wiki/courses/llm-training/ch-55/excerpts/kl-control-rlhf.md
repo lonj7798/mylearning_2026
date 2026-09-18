@@ -5,86 +5,43 @@ phase: read
 excerpt_of: wiki/raw-data/llm-training/papers/kl-control-rlhf.md
 source_url: https://arxiv.org/abs/2203.02155
 created_at: "2026-04-23"
+updated_at: "2026-09-17"
 ---
 
-# Excerpt: KL-control in RLHF — why verl puts KL in the reward
+# Excerpt: KL control in RLHF — the reference term and its two placements
 
-**Source library:** `wiki/raw-data/llm-training/papers/kl-control-rlhf.md`
-**Artifact:** the Stiennon/Ouyang/Korbak framework; k1/k2/k3 estimator math; reward-shaping vs in-loss KL.
-
----
-
-## Why this excerpt exists in ch-55
-
-Ch-55 §3 and §5 both claim that verl applies KL-to-reference as a *reward shaper*, not a loss term. This excerpt is the theoretical grounding: why reward-shaping is the right choice for PPO/GRPO, and why the K3 estimator is the modern default.
+**Canonical extract:** `wiki/raw-data/llm-training/papers/kl-control-rlhf.md`. This file was rewritten in the 2026-09 revision; its earlier version asserted that verl places KL in the reward and not in the loss, which is wrong.
 
 ---
 
-## Core insight from the source
+## The objective
 
-> Standard RLHF is not "pure RL" but KL-regularized RL — the objective is `E[r(x,y)] − β · KL(π‖π_ref)`, which is mathematically equivalent to variational inference over a target distribution `π*(y|x) ∝ π_ref(y|x) · exp(r(x,y)/β)`.
+RLHF optimizes a KL-regularized objective rather than the reward alone: the policy maximizes `E[r(x, y)] − β·KL(π ‖ π_ref)`, where `π_ref` is the SFT checkpoint and β sets how far the policy may move from it. The closed-form optimum of that objective is `π*(y|x) ∝ π_ref(y|x)·exp(r(x, y)/β)`, so β is the inverse temperature of a reward-tilted version of the reference policy rather than a tuning constant with no interpretation.
 
-So β isn't a "fudge factor" — it's the inverse temperature of a tilted posterior the policy is amortized-sampling from. verl's `beta_kl` plays the same role whether you call it a penalty or a Bayesian prior strength.
+## Two placements, and what verl does
 
----
+- **In the reward:** the per-token reward becomes `r − β·KL_estimator`, and the advantage estimator sees the adjusted reward. verl implements this as `algorithm.use_kl_in_reward`, default `False`, estimator `kl` (k1), controller `fixed` with `kl_coef: 0.001` (ppo_trainer.yaml L98–101).
+- **In the loss:** a KL term is added to the policy loss. verl implements this as `actor.use_kl_loss`, default `false`, with `kl_loss_coef: 0.001` and `kl_loss_type: low_var_kl` (k3) (actor.yaml L103, L113, L116). The verl GRPO documentation recommends this placement and says to set it True for GRPO (grpo.md L43–47).
 
-## The canonical RLHF objective
+Both default to off. A verl run that does not set one of them has no reference term at all.
 
-From §Key Contributions:
+## Estimators
 
-> `J(φ) = E_{(x,y)~π_φ}[ r_θ(x,y) − β · log( π_φ(y|x) / π_SFT(y|x) ) ] + γ · E_{x~D_pretrain}[log π_φ(x)]`
+k1 = δ, k2 = δ²/2, k3 = exp(−δ) − 1 + δ, with δ = log π_θ − log π_ref for a sampled token. k1 is unbiased for the KL but takes negative values per token; k3 is non-negative per token, so its curve reads directly as a drift magnitude. verl exposes k1, `abs`, k2, k3 and `+` variants that keep the value of one estimator with the gradient of k2.
 
-The KL is **added to the per-token reward**, then standard PPO is run. β ≈ 0.02 in InstructGPT (in reward-scale units); practitioners tune in [0.01, 0.5]. verl defaults to β ≈ 0.04 — the DeepSeekMath/[[grpo]] value.
+## Why the term matters for breadth
 
----
+The reward is defined on the trained domains; the reference policy is the only term that refers to behaviour anywhere else. [[prorl]] keeps the KL term for exactly this reason and additionally hard-resets the reference policy and optimizer when validation stagnates, on the argument that the KL term "may increasingly dominate the loss" over a long run (§2.3.1, §3.3). That is one training history, not an ablation.
 
-## The three KL estimators
+## Corrections to the previous excerpt version
 
-Schulman's blog, quoted in the source:
-
-- `k1 = log(π/π_ref)` — unbiased but high variance, can be negative.
-- `k2 = 0.5 · (log(π/π_ref))^2` — biased (always positive), low variance.
-- `k3 = (π_ref/π) − 1 − log(π_ref/π)` — **unbiased AND always ≥ 0**; recommended, used in modern TRL / OpenRLHF / verl.
-
-verl's `kl_penalty(logprob, ref_logprob, mode)` exposes all three; default is `k3`. When `actor/kl_loss` under k3 ever goes negative, the ref forward pass is broken — a useful correctness invariant.
-
----
-
-## Why reward, not loss
-
-From §Key Contributions / Why reward + not loss:
-
-> adding KL to the reward keeps the PPO advantage estimator well-defined per token; adding KL to the loss breaks the advantage-based policy gradient and empirically trains worse.
-
-This is the load-bearing claim for verl's design. verl subtracts `β · kl_penalty(...)` from `token_level_rewards` *before* `compute_grpo_outcome_advantage` runs, so the GRPO group-baseline z-score sees a KL-adjusted reward. The advantage absorbs the KL signal through the same baseline mechanism as RM reward.
-
-TRL-GRPO deliberately chooses the other path (add K3 to the loss). Ch-55 §3 flags that the two choices give different optimizer dynamics on long-tailed KL distributions — same algebra on the mean, different gradients on the tail.
-
----
-
-## Korbak reformulation — the Bayesian view
-
-`argmax_π E_π[r] − β · KL(π‖π_ref)` has closed-form optimum `π*(y|x) ∝ π_ref(y|x) · exp(r(x,y)/β)`.
-
-Interpretation: RLHF is not reward maximization. It is *amortized sampling* from the reward-tilted posterior. Large β means the prior π_ref dominates (model barely moves); small β means the RM signal dominates (model wanders, reward hacks).
-
----
-
-## Failure modes as β-regime diagnosis
-
-From §Technical Details:
-
-- **β too small** → reward hacking and mode collapse (the policy finds degenerate reward-max outputs that the SFT prior would never have generated).
-- **β too large** → policy cannot depart from SFT, ignores RM signal (reward-margin barely moves).
-
-These are the two ends of the ch-46 DPO sweep (β ∈ {0.05, 0.1, 0.3}) — the same KL-budget phenomenology plays out whether the KL is an explicit term (PPO/GRPO) or an implicit one (DPO's `r̂_θ = β · log(π_θ/π_ref)`).
-
----
+1. "verl subtracts β·KL from `token_level_rewards` before the advantage runs; it intentionally does not put KL in the loss" → verl supports both placements; the GRPO docs recommend the loss placement.
+2. "verl defaults to β ≈ 0.04 — the DeepSeekMath value" → verl's defaults are `kl_loss_coef: 0.001` and `kl_coef: 0.001`. β = 0.04 is DeepSeekMath's setting.
+3. "adding KL to the loss breaks the advantage-based policy gradient and empirically trains worse" — removed; no source supports it, and verl's own GRPO documentation recommends the loss form.
+4. "k3 … recommended, used in modern TRL / OpenRLHF / verl" → TRL GRPO's β defaults to 0.0 (no reference model loaded); OpenRLHF defaults to k1 in the reward; verl defaults to both placements off.
 
 ## Connections
 
-- [[verl-ppo-loss]] — `ppo_kl` is the K1 *monitor*, not a regularizer; the regularizer is in `kl_penalty(..., "k3")`.
-- [[entropy-logging-patterns]] — cross-framework table showing verl/OpenRLHF reward-shape while TRL-GRPO adds to loss.
-- [[grpo]] — Eq. 3 has KL in the loss (paper); verl intentionally moves it to the reward.
-- [[reward-hacking-taxonomy]] — "β too small" is the upstream cause of most hacking modes.
-- Schulman's "Approximating KL Divergence" blog — the k1/k2/k3 derivations.
+- [[entropy-logging-patterns]] — the per-framework defaults table.
+- [[verl-ppo-loss]] — where the two placements are applied in code.
+- [[prorl]] — a long multi-domain run that keeps the term and resets the reference.

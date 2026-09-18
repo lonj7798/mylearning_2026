@@ -1,67 +1,85 @@
-<!-- scope: detecting distribution preservation/corruption in synthetic data (2024/2025 line)
+<!-- scope: former synthesis card on auditing synthetic data for distribution preservation; no single primary artifact exists
      deps: [[model-collapse]]
      see-also: [[strong-model-collapse]], [[prismatic-synthesis]], [[genie]]
 -->
 
-# Faithful Synthetic-Data Evaluation: Detecting Distribution Preservation vs Corruption
-- **Core Insight:** Averaged loss / perplexity *hide* tail degradation in synthetic corpora — to detect whether synthetic data preserves the target distribution you need tail-mass measurements (rare-event recall, per-cluster density, gradient-space coverage) and external-verifier pipelines; several 2024/25 papers make this explicit.
-- **Guideline:** When auditing a synthetic corpus before training, measure: (1) rare-token / rare-ngram recall vs real reference, (2) embedding-cluster occupancy, (3) (optionally) gradient-space coverage (G-Vendi), (4) external-verifier flag rate; reject corpora that drop in any of these even if average PPL looks fine.
-- **Authors / papers:**
-  - "Escaping Model Collapse via Synthetic Data Verification" (Zhang et al. 2025, arxiv 2510.16657) — external verifier for convergence guarantees.
-  - "A Closer Look at Model Collapse: From a Generalization-to-Memorization Perspective" (2025, arxiv 2509.16499).
-  - "Collapse or Thrive?" (2025 openreview Xr5iINA3zU) — empirical tail behavior.
-  - Related: [[prismatic-synthesis]] (gradient-space diversity as an upstream quality metric).
-- **Year:** 2024–2025
-- **URL:** https://arxiv.org/abs/2510.16657 ; https://arxiv.org/html/2509.16499v1
-- **Relevant topics:** synthetic data audit, distribution preservation, tail recall, external verification
+# Faithful Synthetic-Data Evaluation: Detecting Distribution Preservation vs Corruption — Synthesis Card
+- **Source type:** none (synthesis card without a primary artifact)
+- **Status:** no verifiable primary source. Chapters must not cite this card; cite the works listed below instead.
 
-## Abstract (aggregate)
-This cluster of 2024–25 papers formalizes the problem of **distinguishing "safe" from "corrupting" synthetic data** before training on it. Core move: don't trust aggregate perplexity / loss; measure *tail preservation* directly. Several papers converge on three complementary strategies:
-1. **Tail recall metrics** — fraction of rare real-ngrams / rare concepts reproducible from the synthetic corpus.
-2. **External verification** — a stronger model or rule-based verifier filters out low-quality synthetic (e.g., answer-match for math, NLI for RAG).
-3. **Gradient / embedding coverage** — G-Vendi (see [[prismatic-synthesis]]), embedding-cluster occupancy, or kNN diversity.
+> **No verifiable primary source.** The previous card described itself as an aggregate of "2024/2025" papers and named
+> no paper, report, or code that defines its four-axis audit (tail recall, embedding-cluster occupancy, gradient-space
+> coverage, external-verifier flag rate). Searched: the card's two URLs (arXiv:2510.16657 v3, arXiv:2509.16499 v3);
+> an arXiv title search for "Faithful Synthetic-Data Evaluation" (one result, arXiv:2102.08921, a different 2021 work);
+> the card's OpenReview id Xr5iINA3zU (page not accessible: browser verification); arXiv:2410.16713, the arXiv
+> version of the title "Collapse or Thrive?". None of these works proposes the four-axis protocol, and none reports
+> that average perplexity hides tail degradation in a synthetic text corpus. A web search could not be run in this
+> session (search budget exhausted).
 
-"Escaping Model Collapse via Synthetic Data Verification" (2025) gives both analytical convergence guarantees and empirical evidence that external verification breaks the collapse loop even under repeated training. "Closer Look at Model Collapse" (2025) reframes collapse in terms of **generalization → memorization drift** as synthetic fraction grows.
+## Verifiable pointers to related works
+Each item below was read at the stated locus on 2026-09-14. Each item is a fact about that work only.
 
-## Key evaluation axes (consolidated)
-
-### 1. Tail-mass measurements
-- **Rare-token recall:** does the synthetic corpus produce real-reference's rare tokens at comparable frequency?
-- **Rare n-gram overlap:** same for multi-token patterns.
-- **Rare-concept recall:** LLM-tagged categorical entities (named entities, terminologies) — are long-tail ones preserved?
-
-### 2. External verification
-- **Task-specific verifier:** math → answer matcher; code → unit tests; NLI → entailment classifier (à la [[genie]]); factual → retrieval-grounded checker.
-- **Strong-judge filter:** a model substantially stronger than the synthesizer audits outputs.
-- **Provides the convergence-guaranteeing filter** Zhang et al. (2025) prove keeps iterated training bounded.
-
-### 3. Coverage / diversity metrics
-- **G-Vendi** (see [[prismatic-synthesis]]): entropy of gradient-density matrix.
-- **Embedding-cluster occupancy:** count distinct embedding clusters inhabited.
-- **kNN diversity:** average kNN distance in embedding space.
-
-### 4. Drift-over-iteration signals (if iterative training)
-- Monitor delta on (1–3) across training rounds — early warning of collapse.
-
-## What the 2025 papers add specifically
-- **Convergence guarantees under verification:** Zhang et al. show that with a reliable external verifier, iterated synthetic training converges (no collapse) in analytical regression settings, and empirically in LLM text generation.
-- **Memorization↔generalization tradeoff:** "Closer Look at Model Collapse" identifies that increasing synthetic fractions shift models toward memorization-heavy regimes, which surface-metrics don't catch.
-- **Mixture-ratio optima:** derive analytic optimal real:synthetic ratios (He et al. 2025, Garg et al. 2025) as a function of data quality.
-
-## Practitioner takeaways
-- **Never audit a synthetic corpus by average PPL alone.** Always include tail + diversity metrics.
-- **Build an external verifier into the pipeline** before training, not after.
-- **Accumulate, don't replace** real data — the single most robust mitigation.
-- **Audit per-cluster** — mode collapse often appears in specific topic clusters before showing up globally.
-
-## Risks + gotchas
-- **Verifier quality ceiling:** the verifier itself may have bias or blind spots; compound-verifier (multi-axis) reduces this.
-- **Tail metrics are statistics of rare events** — noisy for small corpora; requires large samples.
-- **G-Vendi is proxy-dependent** — changing proxy model changes rankings.
-- **Research is moving fast** — 2026 may introduce better primitives.
+- **Verifier-filtered synthetic retraining.** Bingji Yi, Qiyuan Liu, Yuwei Cheng, Haifeng Xu, "Escaping Model
+  Collapse via Synthetic Data Verification: Near-term Improvements and Long-term Convergence", arXiv:2510.16657
+  (v1 2025-10; v3 2026-07 read). In linear regression, retraining on verifier-filtered synthetic data can improve the
+  estimate in the short term through a bias-variance trade-off (Theorem 3.1, §3.2). Iterated retraining converges to
+  the verifier's "knowledge center", not to the true parameter, unless the verifier has no bias; verifier selectivity
+  changes the convergence rate but not the limit (Theorem 4.1, §4; §1). The abstract states that early gains "will
+  plateau and may even reverse" unless the verifier is perfectly reliable. Experiments: a VAE on MNIST that starts
+  from 500 real images improves over 40 rounds with verified retraining and degrades without it (Fig. 1, §5.2).
+  SmolLM2-135M is fine-tuned for one epoch on 12.5% of the XSUM training set; each round an oracle verifier keeps
+  the top 12.5% of generated summaries by ROUGE-1 against references. Over 15 rounds filtered retraining improves
+  and then stabilizes, while unfiltered retraining fluctuates around its initial score (§5.3, Fig. 5). The analysis
+  assumes a well-specified linear-regression setting (§6).
+- **Generalization-to-memorization in self-consuming diffusion models.** Lianghe Shi, Meng Wu, Huijie Zhang, Zekai
+  Zhang, Molei Tao, Qing Qu, "A Closer Look at Model Collapse: From a Generalization-to-Memorization Perspective",
+  arXiv:2509.16499 (v3 2025-12 read). The setting is image diffusion models, not language models. On CIFAR-10 with a
+  UNet DDPM retrained only on its previous generation's samples, models shift from generating new images to
+  replicating training images (§3.1). The entropy of the synthetic training set falls over iterations (§3.2). Training-set
+  entropy and the log of the generalization score have Pearson correlation 0.91 (§3.3, Fig. 4a). Entropy-based data
+  selection (Greedy Selection, Threshold Decay Filter) lowers FID in recursive training (§4-5, Fig. 6).
+- **Replace vs accumulate workflows.** Joshua Kazdan, Rylan Schaeffer, Apratim Dey, Matthias Gerstgrasser, Rafael
+  Rafailov, David Donoho, Sanmi Koyejo, "Collapse or Thrive? Perils and Promises of Synthetic Data in a
+  Self-Generating World", arXiv:2410.16713 (v4 2025-03 read). Three task settings: multivariate Gaussian estimation,
+  kernel density estimation, and language-model fine-tuning. Replacing real data with successive synthetic
+  generations collapses in all settings. Accumulating synthetic data alongside real data and training on all of it
+  keeps test losses from diverging. Accumulating but training each generation on a fixed-size subset gives slow,
+  gradual degradation (abstract). Whether OpenReview id Xr5iINA3zU is this paper was not confirmed.
+- **Sample-level fidelity and diversity metrics.** Ahmed M. Alaa, Boris van Breugel, Evgeny Saveliev, Mihaela van
+  der Schaar, "How Faithful is your Synthetic Data? Sample-level Metrics for Evaluating and Auditing Generative
+  Models", arXiv:2102.08921 (v1 2021-02; v2 2022-07 read). Defines a three-part metric (α-Precision, β-Recall,
+  Authenticity) for fidelity, diversity, and generalization (copying of training data), estimated through sample-level
+  binary classification, and a "model auditing" use that discards low-quality generated samples post hoc (abstract).
 
 ## Connections
-- Theoretical backbone: [[model-collapse]] and [[strong-model-collapse]].
-- Upstream gradient-coverage approach: [[prismatic-synthesis]].
-- Content-grounded faithfulness filter: [[genie]].
-- Key auditing primitive for every other §2b target — implicitly or explicitly.
+- [[model-collapse]], [[strong-model-collapse]] — library cards for the model-collapse results this topic builds on.
+- [[prismatic-synthesis]] — library card for the gradient-space diversity metric G-Vendi (not re-checked in this pass).
+- [[genie]] — links here for the idea of filtering synthetic data by faithfulness.
+- Chapters ch-23 and ch-51 link here; they should cite the works above or the library cards instead.
+
+## Verification
+- Checked on 2026-09-14 against: https://arxiv.org/abs/2510.16657 (v3); https://arxiv.org/abs/2509.16499 (v3);
+  https://arxiv.org/abs/2410.16713 (v4); https://arxiv.org/abs/2102.08921 (v2); arXiv title search (one result).
+- Corrections to the previous card version:
+  - "Zhang et al. 2025, arXiv 2510.16657" → authors are Bingji Yi, Qiyuan Liu, Yuwei Cheng, Haifeng Xu (title page).
+  - "external verification breaks the collapse loop even under repeated training"; "with a reliable external verifier,
+    iterated synthetic training converges (no collapse)" → iterated retraining converges to the verifier's knowledge
+    center; gains plateau and may reverse unless the verifier is perfectly reliable (abstract; Theorem 4.1).
+  - "empirically in LLM text generation" → one language experiment: SmolLM2-135M on XSUM summarization with an
+    oracle ROUGE-1 verifier (§5.3).
+  - "Closer Look: increasing synthetic fractions shift models toward memorization-heavy regimes" → a study of image
+    diffusion models; the transition is tied to falling training-set entropy over iterations (abstract; §3).
+  - "Collapse or Thrive? (2025 openreview Xr5iINA3zU) — empirical tail behavior" → arXiv:2410.16713 studies replace,
+    accumulate, and fixed-subset workflows; its text does not discuss distribution tails (full-text search).
+  - Title "Faithful Synthetic-Data Evaluation: …" and year "2024-2025" → no artifact with this title was found.
+- Removed as unsupported by any listed source:
+  - The four audit axes as a consolidated protocol: rare-token recall, rare n-gram overlap, rare-concept recall,
+    embedding-cluster occupancy, kNN diversity, verifier flag rate, drift-over-iteration monitoring.
+  - "Averaged loss / perplexity hide tail degradation in synthetic corpora" as a finding of these papers.
+  - "Reject corpora that drop in any of these even if average PPL looks fine."
+  - "Mixture-ratio optima: analytic optimal real:synthetic ratios (He et al. 2025, Garg et al. 2025)."
+  - "Accumulate, don't replace — the single most robust mitigation" (the ranking is not in any listed source).
+  - "Mode collapse often appears in specific topic clusters before showing up globally."
+  - "Verifier examples: answer matcher, unit tests, NLI entailment classifier, retrieval-grounded checker" attributed to
+    these papers; "compound verifiers reduce bias"; "tail metrics are noisy for small corpora"; "G-Vendi rankings
+    change with the proxy model"; "research is moving fast".

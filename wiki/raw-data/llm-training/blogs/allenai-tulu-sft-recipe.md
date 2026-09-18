@@ -1,76 +1,120 @@
-<!-- scope: Tülu 3 SFT recipe — Allen AI's fully-open post-training stack; scale + ablation depth
+<!-- scope: the SFT stage of Tülu 3 — prompt mixture, decontamination, loss aggregation, hyperparameters
      deps: [[sequence-packing]], [[loss-masking-prompt]]
      see-also: [[hf-alignment-handbook]], [[rlvr-tulu3]], [[tulu-3]]
 -->
 
-# Allen AI Tülu 3 SFT Recipe
-- **Core Insight:** Scaling SFT quality is overwhelmingly about *data composition* (math vs code vs chat vs safety mix) and *dedup against eval sets*, not about loss-function tricks; Tülu 3's SFT mix of 939K prompts with careful contamination filtering matches or beats closed-source instruct models at 8B / 70B.
-- **Guideline:** Follow Tülu 3's data recipe: explicitly mix persona / math / code / chat / safety in known ratios, dedup against all eval sets via n-gram + embedding match, and run SFT for 2 epochs at LR ~5e-6 with packing + response-only loss.
-- **Authors:** Nathan Lambert, Jacob Morrison, Valentina Pyatkin, Shengyi Huang, Hamish Ivison, Faeze Brahman, Lester James V. Miranda, Alisa Liu, Nouha Dziri, Shane Lyu, Yuling Gu, Saumya Malik, Victoria Graf, Jena D. Hwang, Jiangjiang Yang, Ronan Le Bras, Oyvind Tafjord, Chris Wilhelm, Luca Soldaini, Noah A. Smith, Yizhong Wang, Pradeep Dasigi, Hannaneh Hajishirzi
-- **Year:** 2024
-- **URL:** https://allenai.org/blog/tulu-3 ; paper: https://arxiv.org/abs/2411.15124
-- **Relevant topics:** fully-open SFT, data curation, contamination dedup, multi-domain mix, scale ablations
+# Tülu 3: Pushing Frontiers in Open Language Model Post-Training — SFT stage (§3-§4)
+- **Core Insight:** The Tülu 3 SFT stage trains Llama 3.1 on 939,344 prompts assembled from 19 named datasets across seven skill categories (§3, Table 7); the reported gains come from adding skill-targeted data and from fixing loss aggregation, not from a new loss function — Tülu 3 8B SFT scores 60.1 average across the 12 evaluations of Table 9 against 48.3 for Tülu 2 8B SFT.
+- **Guideline:** When a skill lags, add data that targets that skill and measure the isolated removal: Tülu 3's math data moves GSM8K from 64.1 to 76.2 and MATH from 23.5 to 31.5 at 8B (Table 10). When training with gradient accumulation or data parallelism, use a token-summed loss rather than a per-batch mean, because the per-example mean reweights tokens by sequence length and made Tülu 3's 8B runs worse at every learning rate tested (§4.3.2, Figure 5).
+- **Authors:** Nathan Lambert, Jacob Morrison, Valentina Pyatkin, Shengyi Huang, Hamish Ivison, Faeze Brahman, et al. (Allen Institute for AI; University of Washington)
+- **Year:** 2024 (arXiv v1 2024-11; v5 2025-04-14)
+- **URL:** https://arxiv.org/abs/2411.15124 (report). Companion post: https://allenai.org/blog/tulu-3
+- **Source type:** official technical report
+- **Relevant topics:** SFT data curation, prompt decontamination, loss aggregation, multi-skill mixtures
 
-## Overview
-Tülu 3 is Allen AI's fully-open post-training suite: data, code, checkpoints, evals. The blog post distills the SFT half: mix construction, dedup, loss, hparams, ablations. The paper expands with DPO-then-RLVR.
+## Summary
+This card covers only the SFT half of the Tülu 3 report: prompt curation (§3.1), decontamination (§3.2),
+the SFT mix (§4.1), key data experiments (§4.2), the SFT recipe (§4.3). DPO (§5) and RLVR (§6) are held
+in [[tulu-3]] and [[rlvr-tulu3]]. Responses were obtained by keeping human or frontier-model responses
+where they existed and otherwise generating new ones with GPT-4o (§4.1.1).
 
 ## Key Contributions
-- Open release of the 939K SFT mix with full provenance.
-- Explicit decontamination against MMLU, GSM8K, MATH, IFEval, BBH, AlpacaEval, Arena-Hard, HumanEval.
-- Systematic skill-level ablation: math / code / chat / safety / precise-IF contributed additively.
-- Public 8B, 70B, and (later) 405B SFT + DPO checkpoints.
+- A prompt table with per-dataset counts and per-stage usage: 23,327,961 collected, 939,344 in SFT,
+  425,145 in DPO (Table 7).
+- An 8-gram decontamination procedure with an explicit dataset-level removal rule (§3.2), and
+  isolated-removal ablations for safety, WildChat, Persona and math data at 8B (Table 10).
+- The batch-aggregation result: mean loss over non-padding tokens interacts with gradient accumulation
+  and distributed averaging, so Tülu 3 uses a summed loss (§4.3.2, Eq. 1-2, Figures 5-6). Stratified
+  subsampling (5-100%): the average rises with mix size while TruthfulQA falls (Figure 4).
 
-## Data Mix (939K prompts)
+## Key Figures/Tables to Study
+- **Table 7** (§3.1): per-dataset prompt counts and which stage used them. **Table 9** (§4.1.2):
+  Tülu 3 8B/70B SFT against Tülu 2 and other Llama-3-based SFT-only models.
+- **Table 10** (§4.2): the four isolated-removal ablations. **Table 11** (§4.3): SFT hyperparameters.
+  **Figures 5-6** (§4.3.2): loss type × learning rate, and average performance vs number of epochs.
 
-| Bucket | Share | Notable sources |
-|--------|-------|-----------------|
-| Chat / general | 27% | OpenAssistant-2, WildChat-1M curated |
-| Math | 21% | Tülu-3 Persona-Math (synthetic), OpenMathInstruct-2 |
-| Code | 14% | OpenCodeInterpreter, Evol-CodeAlpaca |
-| Precise IF | 11% | IFEval-persona + No-Robots |
-| Safety | 10% | WildJailbreak, Tülu-3 Safety |
-| Multilingual | 7% | Aya, Tülu-3 Persona-Multiling |
-| Reasoning / knowledge | 10% | FLAN-v2 subset, SciRIFF |
+## Technical Details
+**Prompt mix by category** — shares computed from the "# Prompts used in SFT" column of Table 7,
+denominator 939,344. **Derived**; the report prints counts, not percentages.
 
-All generated or curated responses are from GPT-4o / Claude / Llama-3.1-70B-Instruct; no human rewrites for response content.
+| Category | Prompts used in SFT | Share | Datasets (Table 7) |
+|---|---|---|---|
+| Math reasoning | 334,252 | 35.6% | Persona MATH 149,960; Persona GSM 49,980; Persona Algebra 20,000; OpenMathInstruct 2 50,000; NuminaMath-TIR 64,312 |
+| Coding | 142,275 | 15.1% | Persona Python 34,999; Evol CodeAlpaca 107,276 |
+| General | 116,872 | 12.4% | WildChat GPT-4 subset 100,000; No Robots 9,500; OpenAssistant 7,132; Hardcoded 240 |
+| Safety & non-compliance | 110,983 | 11.8% | WildJailbreak 50,000; WildGuardMix 50,000; CoCoNot 10,983 |
+| Knowledge recall | 104,982 | 11.2% | FLAN v2 89,982; SciRIFF 10,000; TableGPT 5,000 |
+| Multilingual | 100,000 | 10.6% | Aya 100,000 |
+| Precise IF | 29,980 | 3.2% | Persona IF 29,980 |
 
-## Decontamination
-- 8-gram overlap ≥ 50% against every eval set → drop.
-- Embedding similarity > 0.9 to eval-set items → drop.
-- Documented "surviving overlap" rates per eval.
+**Decontamination** (§3.2). Overlap is computed on prompts only, because completions are often
+regenerated by a model. A token of a test instance matches if the test and train instance share an
+8-gram containing that token; the test instance has significant overlap with a train instance if more
+than 50% of its tokens have 8-gram matches with that same train instance. A training set counts as
+contaminated if any of its instances overlap with more than 2% of the instances of any evaluation in
+the development or unseen suite. Sets contaminated with the **unseen** suite were removed entirely;
+sets contaminated with the **development** suite were removed entirely when that did not significantly
+reduce performance, and otherwise had the matching instances removed. The report tried full-string and
+embedding matching and chose n-gram matching because embeddings could not distinguish distributional
+similarity from paraphrasing.
 
-## SFT Hyperparameters (8B / 70B)
+**Ablations at 8B, isolated removal** (Table 10; baseline Tülu 3 8B SFT average 60.1; each is one
+run, one seed — **Result (single study)**):
 
-| Knob | 8B | 70B |
-|------|-----|-----|
-| Max seq length | 4096 | 4096 |
-| Packing | yes | yes |
-| Response-only loss | yes | yes |
-| Optimizer | AdamW (0.9, 0.95) | same |
-| Learning rate | 5e-6 | 2e-6 |
-| LR schedule | linear, 3% warmup | same |
-| Epochs | 2 | 2 |
-| Global batch (prompts) | 128 | 128 |
-| Precision | BF16 | BF16 |
-| Distributed | FSDP FULL_SHARD | FSDP + HYBRID_SHARD |
-| Gradient checkpointing | true | true |
-| NEFTune | off (found neutral on 939K) | off |
+| Removed | Average | Largest single change |
+|---|---|---|
+| Math data | 58.2 | GSM8K 76.2 → 64.1; MATH 31.5 → 23.5 |
+| Safety data | 58.0 | Safety 93.1 → 74.7 |
+| Persona data | 58.6 | IFEval 72.8 → 53.6 |
+| WildChat | 58.9 | AlpacaEval 2 12.4 → 7.5 |
 
-## Ablation findings (from paper)
-- Removing Persona-Math drops GSM8K by 15 pts; removing code drops HumanEval by 12.
-- Removing safety data barely moves capability evals but tanks WildJailbreak from 98% → 52%.
-- 2 epochs > 1 epoch > 3 epochs at this mix size; later epochs hurt IFEval.
-- NEFTune gain saturates — no improvement at 939K; small gain ≤ 100K.
-- Packing: 2.5× throughput, no quality delta.
+**Epochs and loss type** (§4.3.2, Figures 5-6). The loss-type and learning-rate sweep finetuned
+Llama 3.0 on the *Tülu 2* mixture, not the Tülu 3 mixture. Sum loss at LR 5e-6 was best; epochs were
+swept from 2 to 7 and 2 was best (average performance, 1 seed).
 
-## Post-SFT chain
-1. SFT on 939K (this blog).
-2. DPO on Tülu-3-Preference (~270K pairs from UltraFeedback + on-policy).
-3. RLVR (verifiable-reward RL) for math / IF specialization → [[rlvr-tulu3]].
+## Recipe ledger
+Moved to [[allenai-tulu-sft-recipe-recipe]]: 8B / 70B / 405B SFT settings, and what is not reported.
+
+## Findings relevant to generality
+- More SFT data raises the average but not every metric: over stratified subsamples at 5-100% of the
+  mix, the average and GSM8K rise with mix size while TruthfulQA falls (§4.2, Figure 4).
+- Safety data is approximately orthogonal to capability: removing it moves the safety average from
+  93.1 to 74.7 while MMLU, BBH and GSM8K stay within about 1 point (Table 10).
+- Over-refusal: the report states CoCoNot contrastive prompts helped prevent over-refusal of safe
+  prompts (§4.2); no number is given for that claim.
+- Decontamination reduced measured performance: intermediate mixes 4 and 5 came from further
+  decontamination rounds and "caus[ed] small drops in performance" (Figure 3 caption).
+- Base model matters for math: the same full SFT mix gives GSM8K 76.2 on Llama 3.1 8B, 79.2 on
+  Qwen 2.5 7B, and 91.1 on Llama 3.1 70B (Table 12).
 
 ## Connections
-- Upstream SFT mechanics: [[sequence-packing]], [[loss-masking-prompt]].
-- HF counterpart (smaller mix, same mechanics): [[hf-alignment-handbook]].
-- DPO stage foundation: [[dpo]].
-- RLVR follow-up: [[rlvr-tulu3]].
-- Full model report: [[tulu-3]] (model-reports).
+- [[tulu-3]] — the full model report, including DPO and RLVR. [[rlvr-tulu3]] — the RLVR stage.
+- [[loss-masking-prompt]] and [[sequence-packing]] — neither is stated by this report.
+- [[hf-alignment-handbook]] — a smaller open SFT pipeline for comparison.
+
+## Verification
+- Checked on 2026-09-18 against https://arxiv.org/abs/2411.15124 (v5, 2025-04-14). Corrections:
+  - "Embedding similarity > 0.9 → drop" → the report tried embedding matching and did not use it; the
+    rule is 8-gram matching with the >50%-of-test-tokens and >2%-of-eval-instances thresholds, plus the
+    dev/unseen split the card omitted (§3.2). The old "8-gram overlap ≥ 50%" also misstated the
+    threshold: it is on the share of *test-instance tokens* matched, not on n-gram overlap.
+  - Bucket shares (chat 27, math 21, code 14, precise IF 11, safety 10, multilingual 7, knowledge 10%)
+    → recomputed from Table 7: 12.4 / 35.6 / 15.1 / 3.2 / 11.8 / 10.6 / 11.2%.
+  - "OpenCodeInterpreter" under Code → not in Table 7; the code sources are Persona Python and Evol
+    CodeAlpaca. (OpenMathInstruct 2 *is* a component, 50,000 prompts.) "No-Robots" under Precise IF →
+    No Robots is a General-category dataset (Table 7).
+  - "Removing Persona-Math drops GSM8K by 15 pts" → removing math data moves GSM8K 76.2 → 64.1, a drop
+    of 12.1 (Table 10). "Removing code drops HumanEval by 12" → no code-removal ablation exists.
+  - "WildJailbreak from 98% → 52%" → the reported ablation is the safety average, 93.1 → 74.7 (Table 10).
+  - "2 epochs > 1 epoch > 3 epochs … later epochs hurt IFEval" → Figure 6 sweeps 2-7 epochs on the
+    average only; 1 epoch is not in the sweep and no per-metric breakdown is given.
+  - "Shane Lyu" → Xinxi Lyu (title page). "~270K pairs" → 271,409 prompts in the 8B mix (Table 15).
+    Source type "blog" → the numbers are from the technical report; the blog is a companion.
+- Removed as unsupported: the packing row and "2.5× throughput, no quality delta"; the response-only-
+  loss row; AdamW (0.9, 0.95); FSDP FULL_SHARD / HYBRID_SHARD; BF16; gradient checkpointing; NEFTune
+  ("neutral on 939K", "small gain ≤ 100K"); "documented surviving overlap rates per eval"; "skill-level
+  ablation … contributed additively"; "all responses are from GPT-4o / Claude / Llama-3.1-70B-Instruct"
+  (§4.1.1 names GPT-4o and keeping human or frontier-model responses); "matches or beats closed-source
+  instruct models at 8B / 70B" (Table 9 compares open SFT-only models).
+- Not reported: optimizer name and betas, weight decay, precision, sharding strategy, packing,
+  prompt-token masking, per-eval surviving-overlap rates after decontamination.

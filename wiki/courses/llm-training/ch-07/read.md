@@ -1,334 +1,411 @@
 <!-- chapter: ch-07
      track: foundations
-     title: Common Training Failure Modes
-     sources: [[gradient-clipping]], [[mixed-precision]], [[adam]], [[loss-masking-prompt]], [[sequence-packing]], [[fsdp-sft]], [[karpathy-training-neural-net-recipe]], [[olmo-2]], [[olmo-3]], [[llama-3]], [[openrlhf-entropy-debugging]], [[entropy-collapse-ppo]]
+     kind: content
+     title: Training Failure Modes: Numerical, Masking, and Capability-Level Failures
+     deps: [ch-06]
+     sources: [[small-scale-proxies-instabilities]], [[gradient-clipping]], [[sequence-packing]], [[packing-position-id-evidence]], [[hf-gradient-accumulation-fix]], [[tulu-3]], [[llama-3]], [[data-constrained-scaling]], [[catastrophic-forgetting-continual-finetuning]], [[mitigating-alignment-tax-rlhf]], [[sft-memorizes-rl-generalizes]], [[entropy-mechanism-llm-rl]], [[reward-model-overoptimization]], [[reward-hacking-taxonomy]], [[swe-bench-illusion]], [[paloma]]
      figures: figures/failure-modes-tree.html
+     revised: 2026-09 (generality revision)
 -->
 
-# Chapter 7 — Common Training Failure Modes
+# Chapter 7 — Training Failure Modes: Numerical, Masking, and Capability-Level Failures
 
-> **Core insight.** Training a modern LLM never *crashes* first; it *drifts* first. Every expensive incident — a dead NaN at step 84k, a hang in the 712th `all_reduce`, an SFT run that silently trained on `<|pad|>` tokens for a day — was preceded by a logged quantity that changed shape before the loss did. Treat the training loop as a pipeline of invariants (finite loss, non-empty batch, prompt-masked labels, synchronised collectives, bounded entropy) and every failure mode becomes "which invariant broke, and how long ago." The failures in this chapter are the ones that repeatedly break those invariants silently.
+> **Core insight.** Training failures fall into three classes that need different instruments. Numerical failures (NaN, Inf, divergence) are visible in the loss and gradient logs and are reproducible at small scale: attention-logit growth and output-logit divergence appear in models from 2.4M to 1.2B parameters at high learning rates, and a quadratic fit over small models predicted a 4.8B divergence that a 4.8B run then confirmed ([[small-scale-proxies-instabilities]], §3.1, §3.3). Masking, packing and loss-aggregation bugs are invisible in the loss curve because they change what the loss is computed over, not whether it is finite; they are caught by equality tests against a reference batching, such as padding versus packing validation loss 1.129 versus 1.127 when position IDs and step counts are kept ([[packing-position-id-evidence]] item 2, Table 2). Capability-level failures — overfitting to repeated data, forgetting, contamination, template narrowing, entropy collapse — are invisible in *both* logs and are only observable in a held-out capability measurement: BLOOMZ-7.1b loses 18.37% of its MMLU score over five continual instruction tasks while every target task improves ([[catastrophic-forgetting-continual-finetuning]], Tables 3–4).
 >
-> **Guideline.** Run Karpathy's two cheap tests on every new pipeline before you even attempt a full run: *initial loss equals* `ln(V)`, *then overfit a single batch to near-zero* ([[karpathy-training-neural-net-recipe]]). Instrument `pre_clip_grad_norm`, per-token entropy, active-token count, and per-rank heartbeat at every step, and assert liveness constraints inline — an `assert torch.isfinite(loss)` that halts a run cheaply is worth more than a clever recovery that hides the bug.
+> **Guideline.** When a run produces a non-finite or diverging loss, check in the order attention logits → output logits → optimizer state, because each stage has a distinct mitigation with published evidence (qk-layernorm for attention logits, z-loss 1e-4 for output logits, a smaller AdamW ε for a collapsing update; [[small-scale-proxies-instabilities]] §3.1, §3.4). When a run is numerically healthy but underperforms a reference, test batching equivalence before tuning hyperparameters: same data and same global batch must give the same loss under gradient accumulation 1 and 4 ([[tulu-3]] §4.3.2, [[hf-gradient-accumulation-fix]]), and packed must match unpacked when position IDs are reset. When a checkpoint improves the target task, judge it against a held-out capability suite and a previous checkpoint, not against its own training curve, because target-task improvement and general-capability loss occur together ([[catastrophic-forgetting-continual-finetuning]] Tables 3–4; [[mitigating-alignment-tax-rlhf]] §4).
 
 ---
 
-## Why this chapter exists
+## Why this chapter matters for a general-purpose model
 
-Chapters 1–6 built a mechanically correct training step: an optimizer ([[adam]]) that respects mixed precision ([[mixed-precision]]), a norm-clipped backward pass ([[gradient-clipping]]), a packed and masked SFT batch ([[sequence-packing]], [[loss-masking-prompt]]), an FSDP-sharded forward ([[fsdp-sft]]), and a bit-exact resume ([ch-06]). Everything in those chapters assumes the loop is *healthy*. This chapter is the catalog of how that loop dies.
+Chapters 1 to 6 built a training step that is mechanically correct: an optimizer (ch-01), a precision policy (ch-02), a schedule (ch-03), packing and masking (ch-04), a distributed layout (ch-05), and a checkpoint and evaluation loop (ch-06). This chapter is about the ways that step stops producing a generally capable model, and about which instrument detects each way.
 
-The shape of the catalog is fixed by the frontier reports. Llama 3's 405B run burned 3.8e25 FLOPs across 15.6 T tokens ([[llama-3]]) — an incident window long enough that *any* low-probability failure mode is guaranteed to fire. OLMo 2 ([[olmo-2]]) devoted an architectural ablation to pre-empting the loss-spike phenotype that killed OLMo 1. OLMo 3 ([[olmo-3]]) ran pretraining on 1 024 H100s, mid-training on 128, and post-training on 256 — three distinct clusters where a single rank dropping its collective hangs the whole world group. Each of these projects earned its stability by cataloging the failures of the prior generation and wiring assertions against them. That catalog is this chapter.
+The three classes matter in different places in the pipeline. Numerical failures dominate pre-training, where the run is long and a divergence costs the most wall-clock. Masking, packing and loss-aggregation failures dominate SFT, where sequences are short, heterogeneous and padded, and where the loss is computed over a subset of tokens. Capability-level failures dominate everything after pre-training: mid-training, SFT, preference optimization and RL all optimize a narrow objective on top of a broad model, and all can raise the objective while lowering breadth.
 
-Every section below is organized the same way: **symptom → invariant broken → diagnostic tree → fix → log that would have caught it sooner.** Karpathy's maxim — *"neural net training fails silently, so the only defense is an obsessive, data-first, incremental workflow where every step is verified against an explicit prediction"* ([[karpathy-training-neural-net-recipe]]) — is the organizing rule. Every fix below is an instance of that rule.
+One belief worth correcting at the start: large runs do not fail only by slow drift. In a 54-day snapshot of Llama 3 405B pre-training there were 466 job interruptions, 419 of them unexpected, and about 78% of the unexpected ones were attributed to confirmed or suspected hardware issues ([[llama-3]] §3.3.4, Table 5). Those failures are abrupt and loud. The failures in this chapter are the complementary set: the ones that leave the job running. The operational handling of crashes, stragglers and distributed hangs belongs to the infrastructure material and to the separate training-memory course; this chapter keeps the failures whose detection is a *measurement* question.
 
----
-
-## 1. NaN / Inf — the three arithmetic sources
-
-NaN is never spontaneous. It comes from one of three operations in the transformer step, and the diagnostic tree is short.
-
-**1a. Softmax / logit overflow.** Attention computes `softmax(QKᵀ / √d_k)`. If `QKᵀ` grows large — which happens when the query/key magnitudes aren't controlled — `exp()` overflows in fp16 (max ≈ 6.5e4) and, more subtly, loses all precision in bf16 (mantissa 7 bits; `exp(89)` already saturates). The output-softmax at the language-model head has the same failure mode on the vocabulary axis. OLMo 1's spike phenotype was exactly this: the paper attributes its cure to a *stack* of logit-scaling interventions — QK-Norm on attention, Z-loss on the output logits — rather than any single fix ([[olmo-2]]).
-
-> *"Architectural stability recipe: RMSNorm + reordered norm + QK-Norm + RoPE + Z-loss. Prevents the training-spike phenotype that plagued OLMo 1."* — [[olmo-2]]
-
-The arithmetic fix inside the kernel is standard: subtract the row-max before `exp`.
-
-```python
-# numerically stable softmax — the only one you should ever see
-m = x.amax(dim=-1, keepdim=True)       # per-row max
-z = (x - m).exp()
-p = z / z.sum(dim=-1, keepdim=True)
-```
-
-Every production attention kernel (FlashAttention, SDPA, xFormers) does this; if you roll your own and forget the `amax` subtraction, fp16 softmax on a 128-token row will NaN within the first few steps.
-
-**1b. `log(0)` in KL / log-softmax / CE.** The second source is any `log(p)` where `p` can be exactly zero. RL's KL-to-reference penalty (ch ~40) is the most common offender: the k3 estimator `(π_ref/π) − 1 − log(π_ref/π)` ([[openrlhf-entropy-debugging]]) NaNs the instant `π` has a single vocab entry at exactly zero — easy if the policy has collapsed. Cross-entropy with `torch.nn.functional.cross_entropy(logits, targets)` is safe (it fuses log-softmax with CE), but hand-rolled `torch.log(softmax(x)) * y` is not. The defensive guard is either to call `log_softmax` directly or clamp: `logp = torch.log(p.clamp_min(1e-9))`. Under fp16, `1e-9` itself underflows; [[mixed-precision]] warns: *"Keep softmax computation in fp32. Keep cross-entropy loss in fp32."* This is the reason.
-
-**1c. Division by zero in advantage / reward normalization.** RL training normalizes advantages per batch: `A ← (A − mean) / (std + eps)`. If a batch happens to contain K identical rewards (all rollouts got the same binary score), `std = 0`, `eps` is too small, and every advantage in the batch becomes NaN. The same pattern appears in Adam's update `α · m̂ / (√v̂ + ε)` when `v̂` underflows ([[adam]]):
-
-> *"Setting `eps` too small under fp16 → division-by-zero NaNs. Bump to `1e-5` if you see NaN in optimizer step."* — [[adam]]
-
-Defensive pattern: `std.clamp_min(1e-6)`, and on RL you additionally want a log counter for "fraction of batches with `std < 1e-4`." A sudden rise in that counter is the earliest signal of entropy collapse (§6) — the policy has stopped producing diverse completions and every rollout of a prompt earns the same reward.
-
-| NaN symptom | Most likely source | First check |
-|---|---|---|
-| NaN in `loss.backward()` output only | softmax / attention overflow | log `logits.abs().max()`; add QK-Norm or Z-loss |
-| NaN in loss scalar itself | `log(0)` in CE / KL | verify `log_softmax` not `log(softmax(...))`; clamp |
-| NaN in `optimizer.step()` | `v̂` underflow or /0 in advantage norm | bump `eps`, use `std.clamp_min(1e-6)`, check fp32 master |
-| NaN appears only after resume | loss-scaler state dropped ([[mixed-precision]]) | persist `GradScaler.state_dict()` (see ch-06 §5.2) |
-
-**The liveness assertion.** In any production trainer, the single cheapest bug-catcher is:
-
-```python
-loss = model(**batch).loss
-assert torch.isfinite(loss), f"non-finite loss at step {step}: {loss.item()}"
-```
-
-This catches NaN at the point of origin, not 300 steps later when the gradient history has been poisoned. Combine with `pre_clip_grad_norm` logged per step ([[gradient-clipping]]) — a 100× spike in that scalar predicts the NaN by one to five steps, giving you a buffer for skip-step mitigation.
+An interactive version of the diagnostic order below is in [figures/failure-modes-tree.html](figures/failure-modes-tree.html): select a symptom and the page shows the checks in cost order, the mitigation, and the source locus for every number it displays.
 
 ---
 
-## 2. Loss divergence vs loss spike vs loss plateau — the diagnostic tree
+## §1 Numerical failures, in diagnostic order
 
-Three loss pathologies share the visual shape "line stops doing the expected thing," but their causes and fixes are disjoint. Wrong diagnosis costs hours. The tree:
+A non-finite value is not informative on its own; the diagnostic question is which stage produced a value the next stage could not represent. Three stages are worth separating, and each has its own evidence.
 
-**Loss spike.** A single-step or few-step jump (1–20×) followed by either recovery or divergence. Near-universal root cause is an out-of-distribution micro-batch colliding with an already-large weight step. [[gradient-clipping]]: *"a sudden 100× spike usually predicts an imminent loss-spike or NaN."* The OLMo 2 mitigation stack is layered specifically for this shape:
+### 1.1 Attention-logit growth
 
-> *"Loss spikes in pretraining: the standard Llama-3 / OLMo-2 mitigation stack is: (1) global-norm clip 1.0, (2) skip-step on loss-spike, (3) embedding-norm monitoring."* — [[gradient-clipping]] (cross-ref)
+**Definition.** The attention logit is `z_ij = ⟨q_i, k_j⟩ / √d_h`, where `q_i` is the query vector at position `i`, `k_j` the key vector at position `j`, and `d_h` the head dimension ([[small-scale-proxies-instabilities]] §3.1.1). Attention-logit growth is the case where `max_ij z_ij` rises during training instead of staying bounded.
 
-Skip-step means: if `loss > running_mean + k·running_std` (k≈5), discard the gradient, advance the dataloader, keep optimizer state. This loses one batch of compute; the alternative is a divergence rollback that loses hours.
+**Why it matters as a measurable problem.** `softmax` over a row of logits with a large maximum saturates: the row becomes one-hot, the gradient through that row goes to zero, and in fp16 `exp` of a large value overflows. The paper reports the boundary empirically: every run whose max attention logit exceeded about `1e4` diverged (§3.3, Fig. 9). When the max attention logit of a 10M model is *forced* to a value `κ`, loss deteriorates around `κ = 1e3`, and at `κ = 1e4` it is worse than a zero-layer bigram baseline (§3.3, Fig. 10). So the logit value is not a symptom of divergence; it is sufficient to cause it.
 
-**Loss divergence.** The curve monotonically climbs over hundreds of steps without a single jump. Spike mitigation is useless here — no single batch is the culprit. Common causes: learning rate too high (try the Karpathy sanity `ln(V)` check — if init loss is already above `ln(V)`, LR is not the only problem), warmup too short (ch-03), softmax / logits overflowing but bf16 is hiding it (no NaN because bf16's range is fp32-class, but precision is gone). Diagnostic: log `||W_embed||` and per-layer weight norms. If weight norm trends upward across the divergence, weight decay is insufficient or disabled; if it trends downward, the gradient is dominated by noise.
+**Mechanism of the growth.** The growth comes from larger query and key norms, not from higher cosine similarity between them (Fig. E.1), and it also occurs in a pointwise attention variant with no softmax (§3.2.5, Fig. E.11).
 
-**Loss plateau.** The curve flattens at a value above what the data justifies. Three disjoint causes:
+**Mitigation and evidence.** qk-layernorm applies LayerNorm to queries and keys before the logits are computed. With qk-layernorm and z-loss, models from 2.4M to 1.2B non-embedding parameters trained to low loss across peak learning rates 3e-4 to 3e-1, including a 1.2B model at LR 0.3 (§3.1.1, Fig. 1). Per-head qk-layernorm performed better than qk-layernorm over the whole model dimension (Fig. E.8). **Result (single study).**
 
-1. **Dead learning rate** — schedule decayed to zero (cosine hit zero, WSD decayed past the cooldown), or LR scheduler off-by-one ([ch-06 §5.3]).
-2. **Clip threshold too low** — [[gradient-clipping]]: *"Clipping threshold too low (e.g. 0.1) → optimizer never makes a real step on hard examples; loss plateaus."*
-3. **Dead data pipeline** — the batch is structurally wrong (all padding, all one label, loss-masked to nothing). §3 is this cause in detail.
+**Prediction, not only diagnosis.** Fitting the max attention logit at step 2e3 as a quadratic in model size, per learning rate, predicted that the next scale at LR 1e-2 would cross `1e4`; a 4.8B model trained at LR 1e-2 then diverged, and the fit extrapolated its max attention logit closely (§3.3, Fig. 9). The chapter starts with this failure because it is the one of the three that a series of small runs can predict before the large run is launched.
 
-The fastest distinguishing signal is `pre_clip_grad_norm`. Dead LR → norm healthy but optimizer step scaled to zero (log `lr` as well). Over-clipping → raw norm large but clipped to threshold every step. Dead pipeline → norm near zero because *there are no real labels in the loss*.
+### 1.2 Output-logit divergence
 
-**The diagnostic call-flow (top-to-bottom):**
+For output logits `y`, `p_i = e^{y_i} / Z` with `Z = Σ_j e^{y_j}`. Output-logit divergence is the case where the logits drift far from the log-probabilities — in the paper's runs, becoming very negative late in training (§3.1.2, Fig. 4). The mitigation is **z-loss**, an auxiliary term `log²Z` with coefficient `1e-4`. The divergence occurred in models with no weight decay at every scale tested; z-loss resolved it, and weight decay also mitigated it for the larger models tested (§3.1.2, Fig. 3). **Result (single study).**
 
-```
-Loss pathology observed
-├── single-step jump → SPIKE branch
-│   ├── grad_norm pre-clip > 100× running → skip-step + investigate batch
-│   └── logits |max| > 50 (bf16) → QK-Norm / Z-loss / lower LR
-├── monotone climb → DIVERGENCE branch
-│   ├── ||W|| climbing → LR too high or WD off
-│   ├── ||W|| falling → gradient noise dominates; check init, lower LR
-│   └── no clear trend → try reverting last code change (Karpathy's rule)
-└── flat above expected floor → PLATEAU branch
-    ├── lr == 0 → scheduler bug (see ch-06 §5.3)
-    ├── clipped_fraction == 1.0 → raise clip threshold
-    └── active_tokens_per_batch ≈ 0 → §3 dead pipeline
-```
+### 1.3 The optimizer-state stage: AdamW ε
 
-Each branch has a persistent metric that distinguishes it. This is the ch-06 instrumentation investment paying back: without `pre_clip_grad_norm`, `clipped_fraction`, `active_tokens_per_batch`, `||W_embed||`, and `lr` logged per step, the tree collapses into guesswork.
+The AdamW update before the learning rate is `Δ = v / (√u + ε)`, where `v` and `u` are exponential moving averages of the first and second gradient moments and `ε` is the numerical floor. As model size and learning rate grow, the gradient RMS of the first MLP layer falls, and at the largest scale and LR tested it is of the same order as the default `ε = 1e-8` (§3.4, Figs. 11, 13). When that happens `Δ` shrinks toward zero: the run does not NaN, it stops moving. For a 4.8B model at LR 0.3, `ε = 1e-15` improved loss and removed the collapse in gradient RMS, while `ε = 1e-6` diverged (§3.4, Fig. 12, Fig. E.15).
+
+The practical consequence is a correction to a common habit. Raising `ε` is sometimes described as a NaN fix; in this study the measured failure is the opposite direction, where `ε` is too *large* relative to the gradient scale and the update collapses. Diagnose by logging gradient RMS per layer alongside `ε`, not by changing `ε` and watching the loss.
+
+### 1.4 Logarithms of zero
+
+Cross-entropy computed as `torch.log(torch.softmax(x))` can take the log of an underflowed zero; the fused `log_softmax` and `F.cross_entropy` paths do not, because they subtract the row maximum internally. When cross-entropy is written by hand, use `F.cross_entropy` or `log_softmax` rather than composing `torch.log` with `torch.softmax`. This is a coding rule, not an empirical result, and no number is attached to it here.
+
+Two related claims are worth stating precisely, because loose versions of them circulate:
+
+1. `torch.softmax` already implements the max-subtracted form, so an attention implementation that calls it does not need a separate `amax` subtraction. The hand-rolled hazard is real only for code that exponentiates raw logits itself.
+2. The k3 KL estimator used in RL is computed on the **sampled token's** log-probabilities, which come from `log_softmax` and are finite. A sampled token cannot have had probability exactly zero under the policy that sampled it. The real hazard in that estimator is the exponential of a large log-ratio overflowing in low precision, which is a range problem, not a `log(0)` problem.
+
+### 1.5 Zero variance in advantage normalization: a worked example
+
+Group-normalized RL divides by a standard deviation, `A ← (A − mean) / (std + ε)`. Take a group of 8 rollouts on one prompt with binary rewards.
+
+*Mixed group*, rewards `[1, 1, 0, 0, 0, 0, 0, 0]`: mean `= 0.25`; variance `= 0.25 − 0.25² = 0.1875`; `std = 0.4330`. With `ε = 1e-6`, correct rollouts get `A = (1 − 0.25)/0.4330 = +1.732` and incorrect ones `A = (0 − 0.25)/0.4330 = −0.577`. Both signs are present, and the group contributes gradient.
+
+*Uniform group*, rewards `[1, 1, 1, 1, 1, 1, 1, 1]`: mean `= 1`; `std = 0`. Every numerator is exactly `1 − 1 = 0`, so `A = 0 / (0 + 1e-6) = 0` for every rollout. The result is **zero advantage, not NaN**, for any `ε > 0`. The group is not a numerical failure; it is a group that carries no learning signal at all, neither positive nor negative. A NaN appears only if `ε = 0`, or if the arithmetic underflows in fp16.
+
+This distinction matters because the mitigations differ. A NaN wants a numerical guard. A dead group wants a *sampling* change: the entropy study drops prompts whose responses are all correct or all incorrect before the update ([[entropy-mechanism-llm-rl]] §2.2, Recipe ledger). Log the fraction of groups with `std = 0` per step; a rising fraction means the prompt set has become too easy or too hard for the current policy, which is a curriculum signal, not an arithmetic one.
 
 ---
 
-## 3. Dead data pipeline — training on padding in silence
+## §2 Masking, packing, and loss-aggregation correctness
 
-The most demoralising bug. The loss curve looks plausible (flat, or slowly descending on a fake signal); the model is learning nothing. The mechanism: an upstream filter emits empty or all-padding batches, the collate function pads them into a rectangular tensor, the loss mask zeros out every position, and `reduction="mean"` over zero un-masked tokens silently produces `0.0` or `nan` depending on your framework — which then hits the divide-by-zero guard and produces "training-loss-equals-epsilon" forever.
+These bugs share one property: the loss stays finite and smooth, so no numerical alarm fires. They are detected by equality tests against a reference computation.
 
-A concrete SFT version from [[loss-masking-prompt]]: the canonical masking code is
+### 2.1 The label shift, and the off-by-one that actually happens
+
+Causal-LM loss pairs logit position `i` with label index `i + 1`. Take `input_ids = [p0, p1, p2, r0, r1, r2]` with `prompt_len = 3`, where `p*` are prompt tokens and `r*` response tokens. The shifted pairs are:
+
+| logit position | 0 | 1 | 2 | 3 | 4 |
+|---|---|---|---|---|---|
+| target label index | 1 | 2 | 3 | 4 | 5 |
+| target token | `p1` | `p2` | `r0` | `r1` | `r2` |
+
+The correct masking applies `-100` to the **unshifted** labels:
 
 ```python
 labels = input_ids.clone()
-labels[:prompt_len] = -100          # mask prompt
-loss = F.cross_entropy(logits[..., :-1, :].reshape(-1, V),
-                       labels[..., 1:].reshape(-1),
+labels[:, :prompt_len] = -100          # masks label indices 0, 1, 2 -> p0, p1, p2
+loss = F.cross_entropy(logits[:, :-1, :].reshape(-1, V),
+                       labels[:, 1:].reshape(-1),
                        ignore_index=-100)
 ```
 
-Three ways this silently dies:
+This drops the pairs whose *target* is a prompt token, leaving three trained pairs: `p2 → r0`, `r0 → r1`, `r1 → r2`. Predicting the first response token from the last prompt token is part of correct training, not a leak: it is the transition the model must make at inference.
 
-- `prompt_len == input_ids.size(-1)` because the generator returned a truncated example where the response was dropped by a length filter; the mask covers everything; `loss` is computed on zero tokens.
-- The chat-template renderer gave back only `<|system|> ... <|end|>` with no assistant turn because the assistant field was empty in the raw record.
-- A deduplication filter removed all completions longer than K tokens, and the SFT mix happens to have a cluster where every prompt has only long completions; the batch becomes structurally empty.
-
-**The invariant.** An SFT batch must satisfy
+The bug that occurs in practice is masking **after** the shift:
 
 ```python
-active = (labels != -100).sum()
-assert active > 0, f"batch {step} has zero active tokens"
-logger.log_scalar("tokens/active", active.item(), step=step)
+labels_shift = labels[:, 1:].clone()      # [p1, p2, r0, r1, r2]
+labels_shift[:, :prompt_len] = -100       # masks p1, p2, r0  <- removes the first response token
 ```
 
-Log `active_tokens_per_batch` every step. A sudden drop from `~batch_size · 512` to `~batch_size · 5` is unambiguous. OLMo 3's own report records an operational scare around this class: *"Moving SFT from Open Instruct to Olmo Core reportedly improved throughput by 8×"* ([[olmo-3]]) — throughput jumps like that almost always have a correct and an incorrect explanation. The correct one is the new kernel; the incorrect one, which every team checks for first, is "we started training on mostly padding because the collator changed." Both teams in the OLMo 3 disclosure ran the `tokens/active` assertion before shipping the swap.
+The effect is the reverse of the folk description: the first response token is removed from the loss, so the model is never trained to enter the response from the prompt. On a chat template whose first response token is a role or format marker, this is exactly the token whose omission later shows up as malformed turn starts.
 
-**Adjacent failures in the data layer:**
+**Detection.** Two checks, both cheap and both exact:
 
-- **Empty-batch from a rank-local filter.** Under FSDP the global batch is `micro_batch · grad_accum · dp_size`; a single rank producing an empty micro-batch under DDP hangs the `all_reduce` because the other ranks are waiting on gradients that never appear. Log per-rank `active_tokens` and alarm on zero.
-- **Iterator exhaustion.** A single-epoch iterator without `StopIteration` handling silently restarts at the top when cycled, replaying the first epoch's data under the same labels. Observed as slow loss decrease that looks like a legitimate second epoch but isn't; detectable by hashing the first 100 samples and asserting non-repetition against an older epoch's hash (see ch-06 §5.1).
-- **All-one-label batch.** Pure-RL (all rollouts succeed or all fail in a reward-verifier batch) — covered in §1c as the advantage-normalization /0. It is the RL instance of dead pipeline.
+```python
+active = (labels[:, 1:] != -100).sum(dim=-1)          # per sample
+assert (active == response_len).all()                  # off-by-one shows up as response_len - 1
+print(tok.decode(input_ids[0][labels[0] != -100]))     # must be exactly the assistant text
+```
+
+A second variant to watch for is `labels[:prompt_len] = -100` written for a 2-D tensor: on a batched tensor that indexes **rows**, so it masks the first `prompt_len` samples entirely and leaves every prompt in the remaining samples in the loss. The `active` assertion above catches this immediately, because the masked rows report zero active tokens.
+
+### 2.2 Packing: what the mask does, and what position IDs actually do
+
+Packing concatenates several samples into one sequence. Correctness requires a block-diagonal attention mask, usually supplied to a variable-length kernel as cumulative sequence lengths (`flash_attn_varlen_func(..., cu_seqlens_q, cu_seqlens_k, max_seqlen)`). Without it, the softmax denominator of a token in sample 2 includes scores against sample 1's tokens, which changes the gradient of both samples ([[sequence-packing]] §3.2.1).
+
+The evidence for each adjustment is separable ([[packing-position-id-evidence]] item 1, Krell et al. §4.2.1, Fig. 4, BERT pre-training):
+
+- Without the **mask** adjustment, loss and accuracy worsen substantially and longer training does not recover them.
+- Without the **position** adjustment, loss and accuracy nearly match the baseline, but MLM accuracy stalls at 71.8% against a 72.1% target.
+
+Note the asymmetry, and note the setting: BERT uses learned absolute positional embeddings, so an un-reset position index looks up the wrong embedding vector. The correct risk model for a **RoPE** decoder is different, and this is a correction to a claim that appears in several places, including an earlier version of this chapter:
+
+> RoPE attention scores depend on the relative offset `i − j`. With a correct block-diagonal mask, every attended pair lies inside the same document, and offsets within a document are unchanged whether that document starts at pack position 0 or at pack position `L₁`. Un-reset positions therefore do **not** distort intra-document relative-position math.
+
+What un-reset positions do break, in order of how often it matters:
+
+1. **Boundary derivation.** Implementations that reconstruct `cu_seq_len` *from* `position_ids` — the documented mechanism of `DataCollatorWithFlattening` ([[packing-position-id-evidence]] item 2, §3.3) — cannot find the boundaries at all if positions never reset, so the block-diagonal mask silently becomes a dense causal mask.
+2. **Trained-range overflow.** If the pack length exceeds the position range the model was trained on, un-reset positions place tokens at indices the model has never seen. This does not arise when packs are built at or below the trained context length.
+3. **Learned absolute position embeddings**, as in the BERT result above.
+
+The measured cost of getting this wrong, on a decoder ([[packing-position-id-evidence]] item 2, Mistral-7B on FLAN_20k, Table 2): padding gives 742 tokens/s at validation loss 1.129; packing **without** position IDs gives 2986 tokens/s at 1.306; offline packing **with** position IDs gives 3010 tokens/s at 1.284; online minibatch packing with position IDs gives 1408 tokens/s at 1.127. The authors attribute the residual gap of offline packing to having far fewer optimizer steps in one epoch, not to attention contamination — minibatch packing keeps the step count and matches the padding loss (§4.1, §4.3).
+
+**Conditions and limits.** A third study compares padding, random packing and greedy packing on LLaMA-3-8B and 70B without stating that attention is reset between packed conversations, and reports greedy-packing averages above padding in all 8 model-dataset settings (Table 3; [[packing-position-id-evidence]] item 3). The size of the cross-contamination effect for decoder SFT is therefore an **open question**; the correctness argument for the mask is not.
+
+**The equality test that settles it for a given implementation:**
+
+```python
+out_packed   = model(input_ids=packed, position_ids=pos, cu_seqlens=cu).logits
+out_unpacked = torch.cat([model(input_ids=s).logits for s in split_by_cu(packed, cu)], dim=1)
+assert (out_packed - out_unpacked).abs().max() < 1e-4
+```
+
+### 2.3 Loss aggregation under gradient accumulation and data parallelism
+
+A mean loss over non-padding tokens is not invariant to how a batch is split. Tülu 3 states the two cases directly ([[tulu-3]] §4.3.2, Eqs. 1–2). With two samples having `n₁`, `n₂` non-padding tokens and summed token losses `l₁`, `l₂`:
+
+- one forward pass: `L = (l₁ + l₂) / (n₁ + n₂)` — every **token** weighted equally;
+- two accumulated micro-batches: `L = (l₁/n₁ + l₂/n₂) / 2` — every **sample** weighted equally.
+
+*Worked example.* `n₁ = 10`, `l₁ = 20`; `n₂ = 90`, `l₂ = 90`. Token-weighted: `110 / 100 = 1.10`. Sample-weighted: `(2.0 + 1.0) / 2 = 1.50`. The same data and the same global batch give a 36% different loss and a different effective weighting of the short sample. The same effect appears across data-parallel ranks, since cross-device averaging averages per-rank means.
+
+Hugging Face shipped the corresponding fix in `transformers` in October 2024 ([[hf-gradient-accumulation-fix]]): "the correct loss should be computed by the total loss across all batches in a gradient accumulation step divided by the total number of all non padding tokens in those batches. This is not the same as the average of the per-batch loss values." The patch changes the causal-LM default loss to `reduction="sum"` followed by division by `num_items`.
+
+Tülu 3's own response was to train with a **sum loss** and re-tune the learning rate; fine-tuning Llama 3.0 on the Tülu 2 mixture, sum loss with LR 5e-6 performed best, and 2 epochs beat 3 to 7 ([[tulu-3]] §4.3.2, Figs. 5–6). **Replicated** across an official framework fix and an independent model report.
+
+**Detection.** Run 50 steps with `grad_accum = 1` and with `grad_accum = 4` at the same global batch and the same data order. The loss curves must match to floating-point tolerance. If they do not, the aggregation is sample-weighted somewhere.
 
 ---
 
-## 4. Masking bugs — off-by-one, and cross-sample attention leakage
+## §3 Divergence, spikes, and plateaus
 
-The two masking bugs are nearly invisible because they degrade loss by only ~0.5–2% absolute — small enough to look like "slightly worse hyperparameters" on a short run, large enough to lose a benchmark position on a long one.
+Divergence, spikes and plateaus are three loss shapes with different causes, and each is separated by a different logged quantity.
 
-**4a. Prompt-masking off-by-one.** The shift-for-next-token pattern in causal LM loss is `logits[..., :-1, :]` vs `labels[..., 1:]`. The prompt mask must be applied *before* the shift, on the original `labels` of length T, so that after the shift a prompt token of index `i` is masked at logit position `i-1`. Common incorrect forms:
+**Divergence at high learning rate** is the shape the small-proxy study measures. Its summary statistic is **LR sensitivity**: `E_{η∈[a,b]}[min(ℓ(A(η)), ℓ₀) − ℓ*]`, where `η` is the peak LR of a warmup-plus-cosine schedule, `A(η)` the weights after training with `η`, `ℓ` validation loss, `ℓ₀` loss at initialization, and `ℓ*` the best loss over the sweep range (default `[3e-4, 3e-1]`, [[small-scale-proxies-instabilities]] §2.2). Longer warmup reduced LR sensitivity and loss, most for the larger models, which were not stable at LR 3e-1 without long warmup (§3.2.1, Fig. 5). Independent weight decay at `λ = 1e-4` gave lower LR sensitivity than the coupled PyTorch/Optax form at `λ = 0.1` (§3.2.2, Fig. 6). The metric has documented limits: it does not account for a shift in the optimal LR, and it is invariant to loss scale, so a model at random performance for every LR scores 0 (App. B).
 
-```python
-# WRONG #1 — mask applied post-shift
-labels_shift = labels[..., 1:].clone()
-labels_shift[:, :prompt_len] = -100         # off by one: position prompt_len-1 not masked
+**Spikes** — a jump of one or a few steps — are a different phenomenon, and this course's verified sources are thinner here than folklore suggests. Two facts to hold onto:
 
-# WRONG #2 — prompt_len computed on packed block
-labels[:prompt_len] = -100                  # in a packed block, this only masks the first pack's prompt
+- The small-proxy study explicitly scopes itself to instabilities that cause slow divergence, **not** fast loss spikes (footnote 1, §4).
+- Llama 3 405B, at 15.6T tokens, reports the opposite of a spike-intervention stack: "We found this training recipe to be very stable: we observed few loss spikes and did not require interventions to correct for model training divergence" ([[llama-3]] §3.4.1). Its stated stability measure is a batch-size ramp — 4M tokens at sequence 4,096, doubling to 8M at sequence 8,192 after 252M tokens, doubling again to 16M after 2.87T tokens — together with peak LR 8e-5 and 8,000 warmup steps.
 
-# RIGHT
-labels = input_ids.clone()
-labels[:prompt_len] = -100                  # full-length mask
-loss = F.cross_entropy(logits[..., :-1, :].reshape(-1, V),
-                       labels[..., 1:].reshape(-1),
-                       ignore_index=-100)
-```
+The one spike-adjacent ablation with a number in the library is an optimizer setting: in the data-constrained study, `β₂ = 0.95` gave slightly lower final loss and fewer loss spikes than `0.999` at two of the FLOP budgets ([[data-constrained-scaling]] App. S). Treat skip-step heuristics as engineering practice without a controlled ablation in these sources, and say so when you use them.
 
-Wrong #1 leaks the final prompt token into the loss — that token's label is the response's first token, and the gradient flows back through what should have been a masked position. Net effect: the model receives a tiny but consistent signal to "predict the first response token from the immediate predecessor," which is benign on single-turn prompts but is *actively harmful* on multi-turn where it collapses the user↔assistant boundary. [[loss-masking-prompt]] makes the multi-turn rule explicit:
+**Plateaus** have three causes that the same three logged scalars separate:
 
-> *"For a conversation with turns `[u_1, a_1, u_2, a_2, …, u_k, a_k]`: mask **all** user turns; mask **all** prior assistant turns (a_1..a_{k−1}); train on a_k tokens only."*
+| Observed | `lr` | `clipped_fraction` | active tokens per batch | Cause |
+|---|---|---|---|---|
+| flat loss | 0 | any | normal | schedule exhausted or resumed at the wrong step (ch-06) |
+| flat loss | normal | ≈ 1.0 | normal | clip threshold below the natural gradient scale |
+| flat loss | normal | ≈ 0 | ≈ 0 | masking or data bug: nothing is being trained on |
+| flat loss | normal | ≈ 0 | normal | update collapse: check gradient RMS against AdamW `ε` (§1.3) |
 
-The debugging move: pick three random samples from the batch, run the tokenizer's `decode` on `input_ids[labels != -100]` — the output must be exactly the assistant text you intended to train on. If it contains a `<|user|>` or template token, the mask is off by at least one.
-
-**4b. Cross-sample attention leakage under packing.** [[sequence-packing]] formalizes the correct kernel: `flash_attn_varlen_func(q, k, v, cu_seqlens_q, cu_seqlens_k, max_seqlen)` computes block-diagonal causal attention. If any of three things is wrong, samples bleed into each other's attention:
-
-1. **`cu_seqlens` is omitted** and the kernel defaults to dense causal → sample 2 attends to sample 1's tokens through the lower-triangular.
-2. **`position_ids` are not reset** at sub-sequence boundaries → RoPE rotates using absolute offsets across the whole pack, so sample 2's token 0 has position ≈ L₁, distorting relative-position math.
-3. **A custom attention override** (Liger, TorchTune, HF `attn_implementation="eager"`) silently ignores `cu_seqlens` because the hand-rolled path did not thread it through.
-
-[[sequence-packing]]:
-
-> *"Without masking, token t in sequence 2 can attend to sequence 1's tokens → the softmax's partition function leaks across documents → changes gradients even on sequence 1 tokens."*
-
-The impact is quantitative: ablation reports ([[sequence-packing]]) show packing *with correct masking* is mathematically equivalent to unpacked (no metric change) at 2× throughput; packing *without masking* degrades GLUE-class metrics by 0.5–2 points — small enough to look like noise on a short SFT run, large enough to show on the official eval. The unit test that catches every variant:
-
-```python
-# at unit-test time, with deterministic weights
-out_packed   = model(input_ids_packed, cu_seqlens=cu)
-out_unpacked = torch.stack([model(s) for s in split_by_cu(input_ids_packed, cu)])
-assert (out_packed - out_unpacked).abs().max() < 1e-4, "cross-sample leak"
-```
-
-Put this in CI. Every framework swap in ch-06-era OLMo 3 had to re-pass it.
+Global-norm clipping rescales the whole gradient by `threshold / ‖g‖` when `‖g‖ > threshold`, which preserves direction and bounds step size ([[gradient-clipping]]). A threshold far below the run's usual gradient norm converts every step into a fixed-length step in the gradient direction; the quantity that identifies it is `clipped_fraction` pinned at 1.0, not the loss itself. Both verified pre-training recipes in this chapter's sources use global-norm 1.0 ([[small-scale-proxies-instabilities]] §2.1; [[data-constrained-scaling]] App. S).
 
 ---
 
-## 5. Distributed hangs — NCCL, all-reduce rank drop, py-spy / gdb attach
+## §4 Capability-level failures
 
-The most terrifying class of failure: the run is not crashed, not progressing, not logging — every rank is sitting in a collective that is never going to complete. Under FSDP FULL_SHARD ([[fsdp-sft]]):
+These are the failures that motivated the revision of this chapter. None of them produces an abnormal loss curve. All of them reduce breadth while the training objective improves.
 
-> *"FSDP shards model parameters, gradients, and optimizer states across the data-parallel group and reconstructs full parameters on demand via AllGather; gradients are reduced via ReduceScatter."*
+### 4.1 Overfitting from repeated data
 
-Every transformer block's forward emits an `AllGather`; every backward emits an `AllGather` + a `ReduceScatter`. For a 32-layer model that is ~96 collectives per step. If any rank misses any of them, every other rank is stuck at the NCCL wait with no exception. Causes, ordered by frequency in incident logs:
+**The measurable problem.** Repeating data raises training-set fit faster than held-out fit, so a train-loss-only view reports improvement while the model gets worse.
 
-1. **Rank-local control-flow divergence.** A branch like `if batch["has_images"]:` triggers on some ranks but not others; the ranks that take the branch emit an extra collective (e.g. a vision-tower forward) that the others don't — mismatch, hang.
-2. **Empty micro-batch on one rank.** A per-rank data filter emits a zero-token batch, the forward short-circuits, the subsequent `AllGather` never fires. §3's empty-batch bug in its distributed form.
-3. **OOM on one rank.** One rank sees a slightly longer sequence after the collator, OOMs, and the CUDA caching allocator aborts that process without tearing down NCCL cleanly; peers wait out the 30-minute NCCL timeout.
-4. **Infra: dropped network link, sled reboot, GPU ECC error.** On Llama 3's 405B run ([[llama-3]]) and OLMo 3's 1 024-H100 pretraining ([[olmo-3]]), these are *common* at scale. Llama 3 trained on 15.6 T tokens across thousands of GPUs; any component with MTBF of months fires multiple times per week at that fleet size.
+**Evidence at pre-training scale.** In the data-constrained study (GPT-2 architecture, C4 subsets, more than 400 runs up to 9B parameters and 900B tokens), training on data repeated up to **4 epochs** changes held-out loss almost not at all — an 8.7B model at 4 epochs ends 0.5% higher in validation loss than at 1 epoch — and downstream performance on 19 tasks starts dropping after about 4 epochs ([[data-constrained-scaling]] Abstract, §6, App. L, Fig. 6). The fitted effective-data formula is `D′ = U_D + U_D · R*_D · (1 − e^{−R_D/R*_D})` with `R*_D = 15.387756`, where `U_D` is the unique-token budget and `R_D = D/U_D − 1` is the number of repetitions.
 
-**The NCCL timeout.** PyTorch's default NCCL timeout is 30 minutes. That means a single stuck collective wastes 30 minutes of the *entire cluster* before the first rank raises. For a 1 024-H100 cluster that is 512 H100-hours per hang — at 2024 cloud rates, hundreds of dollars per hang. Set it tight:
+*Worked example.* 4 epochs means `R_D = 3`, so `D′ = U_D(1 + 15.39 × (1 − e^{−3/15.39})) = 3.73 U_D` against `D = 4 U_D`: repeated tokens are worth 93% of unique ones. At 16 epochs (`R_D = 15`), `D′ = 10.58 U_D`, or 66%. The study also notes it uses held-out test loss rather than training loss precisely because models overfit repeated data (App. H, Fig. 14).
 
-```python
-import datetime
-torch.distributed.init_process_group(
-    backend="nccl",
-    timeout=datetime.timedelta(minutes=5),   # not the 30-minute default
-)
-```
+**Evidence at SFT scale.** Fine-tuning Llama 3.0 on the Tülu 2 mixture, 2 epochs beat 3 through 7 on the evaluation average ([[tulu-3]] §4.3.2, Fig. 6). **Result (single study)** in each case, but the direction agrees across scales.
 
-5 minutes is long enough to absorb a slow checkpoint save, short enough that a real hang fails fast and dumps a py-spy trace you can act on.
+**Detector.** Held-out loss on data from the same distribution, plus a broad benchmark average. Training loss alone cannot see this.
 
-**The py-spy / gdb attach ritual.** When a hang is detected (cadence-less loss curve; tokens/sec → 0 on the dashboard), the first-response protocol:
+### 4.2 Catastrophic forgetting during continual fine-tuning
 
-```bash
-# On the node you suspect is the straggler (or all nodes, in parallel via pdsh):
-py-spy dump --pid $(pgrep -f "train.py" | head -1)   # native Python stack
-# If py-spy shows a C-level wait:
-gdb -p $(pgrep -f "train.py" | head -1)
-(gdb) thread apply all bt
-(gdb) detach
-```
+**Definition and metric.** Forgetting is the loss of previously acquired ability while a new task is learned. The forgetting metric is an average *relative* decrease: `FG_i = (1/|E_i|) Σ_e (1/N) Σ_m (R_e^0 − R_e^m)/R_e^0 × 100%`, where `E_i` is one evaluation set, `R_e^m` the score after `m` continually trained tasks, and `R_e^0` the initial model's score ([[catastrophic-forgetting-continual-finetuning]] Eq. 1).
 
-What you want to see: every rank stopped at `ncclAllReduce` or `ncclAllGather` at roughly the same layer. If rank 3 is stopped *earlier* in the step than everyone else, rank 3 is the rank that dropped the collective — that is the rank to debug. If rank 3 is *later* (inside an extra op the others skipped), rank 3 is the rank that took a divergent branch. The distinction is worth one `git blame` round of the dataloader code.
+**Evidence.** Continually instruction-tuning BLOOMZ on five tasks in a fixed order, with MMLU, commonsense reasoning and RACE as the general suite (Table 4):
 
-**Heartbeat instrumentation.** Under the liveness-invariant framing, a hang is "per-rank heartbeat counter stopped advancing." Implement as a background thread that writes `step, rank, wall_time` to a shared file every second. The monitoring job alarms on "max rank wall_time – min rank wall_time > 60s" — a stale-by-60s rank is the straggler before NCCL's 5-minute timeout fires. OLMo 3 reports moving to *"continuous batching and threading work made RL training about 4× more efficient"* ([[olmo-3]]); the same threading infrastructure is the home of the heartbeat thread.
+| Model | Domain knowledge FG | Reasoning FG | Reading comprehension FG |
+|---|---|---|---|
+| BLOOMZ-1.1b | 9.54% | 6.73% | 18.04% |
+| BLOOMZ-1.7b | 10.72% | 6.48% | 24.29% |
+| BLOOMZ-3b | 14.63% | 11.09% | 27.56% |
+| BLOOMZ-7.1b | 18.37% | 13.62% | 26.75% |
+
+Over the 1.1b–7.1b range tested, forgetting increases with scale; the authors attribute this partly to the larger model's higher starting scores. Meanwhile the target tasks improve (BLOOMZ-7.1b on the explanation task, 51.47 → 68.71, Table 3). Both facts come from the same runs, which is what makes the pairing informative: target-task improvement is not evidence of retained breadth.
+
+One mitigation appears in the same paper: LLAMA-7b shows FG 34.57 / 31.33 / 31.72 on the three sets, while ALPACA-7b — the same base model after general instruction tuning — shows 18.14 / 7.56 / 10.31 (Table 6). **Result (single study).**
+
+### 4.3 The alignment tax
+
+The RLHF version of the same failure has its own name. On OpenLLaMA-3B instruction-tuned on ShareGPT and then aligned with rejection-sampling fine-tuning, PPO or DPO, the reward rises while WMT14 French→English BLEU and SQuAD/DROP F1 fall continuously, and commonsense QA rises before falling ([[mitigating-alignment-tax-rlhf]] §4, App. E.1, Fig. 12).
+
+Every mitigation tested reduced the tax *and* the reward: early stopping, L1/L2 regularization toward the pre-RLHF weights, LoRA, and distillation from the pre-RLHF policy (§4.1, Fig. 3). The method with the best alignment-forgetting Pareto front was weight interpolation, `π_{(1−α)θ₀ + αθ}` for `α ∈ [0, 1]`, and Heterogeneous Model Averaging — a separate ratio per block, default `K = 3` — pushed that front further (§6, Fig. 5). The reported curve degrades as `K` grows to 6 and 9, which the authors attribute to overfitting the in-domain reward.
+
+The transferable lesson is the axis choice: the tax is only visible when a general-capability metric is plotted **against** the alignment metric, one point per checkpoint or per `α`. Plotted against training step, each curve looks like progress.
+
+### 4.4 Contamination inflating apparent generality
+
+A benchmark score can rise because the model is better or because the benchmark is in the training data. The cleanest recent demonstration: given only a repository name and the issue text — no repository contents — ten OpenAI and Anthropic models named a file changed by the gold patch in 60–76% of SWE-Bench Verified instances, but in under 53% of 245 SWE-Bench-style tasks from seven repositories not in SWE-Bench. Function-reproduction 5-gram overlap reached a maximum of 34.9% on SWE-Bench Verified against 13.9% on the outside repositories and 18.1–18.2% on RefactorBench and SWE-Bench Extra — the last of which still draws on SWE-Bench repositories, so it is not a clean held-out set ([[swe-bench-illusion]] §4.1, §4.3). **Result (single study).**
+
+The detector generalizes: hold out a slice the benchmark builders could not have published — a different repository set, issues created after the benchmark was built, a re-templated variant — and compare. ch-14 covers pretraining-side decontamination; ch-47 covers suite design.
+
+### 4.5 Template and format narrowing
+
+Training on a narrow input format teaches the format as well as the task. A measured instance: packing a single-turn-only SFT set (a filtered 200K subset of OpenHermes 2.5) produced a significant MATH drop that returned to normal after adding one multi-turn conversation per 20 to 40 samples; a different internal 200K single-turn set showed no drop ([[packing-position-id-evidence]] item 3, §5.3, Fig. 3). The effect is data-dependent, which is why the detector has to be an evaluation and not a rule: evaluate the same capability under at least two prompt formats, including one that does not appear in training.
 
 ---
 
-## 6. RL-specific: entropy collapse and reward explosion
+## §5 RL failures as loss of output diversity
 
-Two RL-only failures deserve their own section because they don't appear in pretraining or SFT. Both are loss-curve-healthy — the usual §2 tree fails on them.
+RL on a verifiable or learned reward can raise the training objective while narrowing what the model can produce. Two mechanisms have quantitative evidence.
 
-**Entropy collapse.** [[entropy-collapse-ppo]]:
+### 5.1 Entropy collapse
 
-> *"Per-token entropy `H(π)` drops from ~2–3 nats to below 0.1 nats within a few hundred PPO updates; reward plateaus; rollouts become repetitive."*
+**Definition.** Policy entropy is `H(π_θ, D) = −E[log π_θ(y_t | y_<t)]`, averaged over the tokens of responses to training prompts ([[entropy-mechanism-llm-rl]] §2.1, Eq. 5).
 
-The fingerprint is a *sudden inflection* in entropy rather than a gradual decline. If entropy drops faster than reward rises in the first 200 updates, the policy is collapsing, not converging. [[openrlhf-entropy-debugging]] gives the community-standard triage exactly:
+**Measured law.** Across 11 base models from 4 families (0.5B–32B), math and code tasks and 4 RL algorithms, validation accuracy `R` and entropy `H` fit `R = −a·exp(H) + b` (§2.2–2.4). Two consequences are reported directly: at `H = 0` the accuracy is bounded by `−a + b`, and **73% of entropy consumption and 76% of the performance gain occur in the first 200 of 2400 gradient steps** (§2.3–2.4). Fitting `a` and `b` on the first 36 steps predicted the next 200 with RMSE 0.9% on math and 1.2% on code (§2.4, Fig. 5).
 
-> *"(1) confirm KL-to-reference term is on and finite, (2) bump rollout temperature by 0.1–0.2, (3) raise entropy coefficient an order of magnitude, (4) check advantage normalization is per-batch zero-mean unit-var, (5) only then suspect the reward signal."*
+**Mechanism.** For a softmax policy, the step-wise entropy change is approximately the negative covariance between an action's log-probability and its logit change; under a natural-policy-gradient update this reduces to `ΔH ≈ −η·Cov(log π(a|s), A(s,a))` (§3.2, Theorems 1–2). The covariance is concentrated: at training step 1 on Qwen2.5-7B, the mean covariance of the top 0.02% of tokens is 5.654 against 0.003 over all tokens (Table 1).
 
-The advantage-norm ON/OFF default is a recurring footgun: OpenRLHF and verl default to ON, TRL defaults to OFF ([[openrlhf-entropy-debugging]]). A framework swap mid-project can silently disable normalization, drive entropy to 0, and leave you wondering why reward plateaued — the sequence of checks above is ordered by cost, not probability.
+**What does not work, with numbers.** Entropy-loss coefficients of 0.0001 and 0.001 had minor influence, 0.01 caused entropy explosion, and 0.005 stabilized entropy without outperforming the baselines (§4.1, Fig. 9). Reference-KL coefficients from 0.001 to 0.1 stabilized entropy but lowered accuracy (§4.1, Fig. 10). **What did work in this study:** restricting the update on the `1e-4` to `1e-3` fraction of tokens with the largest centered log-probability × advantage product. On Qwen2.5-32B, the 7-benchmark math average went from GRPO 45.8 to Clip-Cov 50.3 and KL-Cov 52.2 (Table 2). **Result (single study).**
 
-**Reward explosion / NaN in PPO ratio.** [[openrlhf-entropy-debugging]]: *"`NaN` in PPO ratio → very aggressive update; lower LR and clip range."* The PPO ratio `r = π(a|s)/π_old(a|s)` NaNs when `π_old` has underflowed to zero on a token that `π` still assigns mass to. Mitigation: clamp `π_old` at `exp(-50)` before the division, and log the *pre-clip PPO ratio* every step. A ratio exceeding 10 on any token is out-of-distribution for the clip ε = 0.2 regime and should trigger a skip-step.
+Note what this chapter does **not** claim: there is no published entropy threshold such as "below 0.1 nats means collapse". The paper reports a monotone decline toward zero and a fitted relation, not a cut-off. Use the trajectory and the fit, not a threshold.
 
-**The entropy dashboard.** For any RL run, the minimum survivable log surface is:
+### 5.2 Reward over-optimization
 
-| Metric | Cadence | Alarm condition |
+When the reward is a learned model, optimizing it past a point lowers the true objective. In a synthetic setup where a 6B "gold" reward model labels the data used to train 3M–3B proxy reward models and a 1.2B policy is optimized against the proxy, the gold score rises and then falls as `d = √KL(π‖π_init)` grows, fitting `R_bon(d) = d(α − β·d)` for best-of-n and `R_RL(d) = d(α − β·log d)` for RL ([[reward-model-overoptimization]] §1, §3.2, Fig. 1). Differentiating gives the peaks `d* = α_bon/(2β_bon)` and `d* = exp(α_RL/β_RL − 1)`.
+
+Two results from the same study are worth carrying: RL spends far more KL than best-of-n for the same amount of optimization, so KL is not a common currency for comparing methods (§3.5); and a nonzero KL penalty behaved like early stopping and did not raise the gold-score-versus-KL frontier, a result the authors themselves call hyperparameter-sensitive (§3.6, Fig. 9).
+
+The structural reason not to look for a better proxy instead: over the class of all stochastic policies, two reward functions are "unhackable" — proxy improvements never lower the true reward — only in degenerate cases, essentially when one is a positive affine transform of the other or one is constant ([[reward-hacking-taxonomy]]). The available controls are therefore structural: restrict the policy class, bound the optimization, or ground the reward in a verifier (ch-44).
+
+### 5.3 Which detector separates memorization from generalization
+
+Held-out data from the training distribution does not distinguish a model that learned the rule from one that memorized the training instances, because both score well on it. Changing the **rule** or the **visual attribute** while holding the task fixed does. On GeneralPoints and V-IRL with a Llama-3.2-Vision-11B backbone, RL raised OOD success rate on all four variants (for example V-IRL-L 80.8% → 91.8%) while SFT lowered it on all four (V-IRL-L 80.8% → 1.3%; GP-L 11.5% → 3.4%) ([[sft-memorizes-rl-generalizes]] §5.1). On visual variation, RL gained +17.6 and +61.1 points where SFT lost 9.9 and 5.6 (§5.2).
+
+Two conditions the same paper attaches, which keep this from becoming "RL instead of SFT": the base model could not follow the task instructions, so SFT was required before RL to make RL train at all (§5.4), and RL started from an extremely overfitted SFT checkpoint stayed below 1% success (App. D.3).
+
+---
+
+## Negative samples and negative feedback
+
+This chapter uses negatives in sense (4) of the standard taxonomy — **negative as gradient**, an explicit decrease of a sample's likelihood — because that is the form in which RL failures appear here. Senses (1) to (3) belong to the data and SFT chapters.
+
+**Where negatives come from at this stage.** A verifier or reward model labels each rollout; the group-normalized advantage turns those labels into per-sample signs. Label quality is where this stage fails: a reward model is a proxy whose over-optimization is measurable (§5.2), and a verifier can be gamed by output-format tricks.
+
+**The failure mode specific to diagnostics.** A group with zero reward variance produces `A = 0` for every member (§1.5). Such a group is often described as a division-by-zero hazard; the more consequential fact is that it supplies **neither** positive nor negative gradient. A rising fraction of zero-variance groups is therefore a silent reduction in effective batch size, and the fix is prompt selection, as in the entropy study's filter that drops prompts whose responses are all correct or all incorrect ([[entropy-mechanism-llm-rl]] §2.2).
+
+**Mechanism, for the sign asymmetry.** For a softmax head, `∂ log p_y / ∂ z_j = 1[j = y] − p_j`: pushing down an already-unlikely sampled token moves its mass onto the currently most likely alternative, which sharpens the distribution. Read with the entropy study's Eq. 10, a sampled token with below-mean log-probability and below-mean advantage has a **positive** centered product and therefore lowers entropy, while a negative advantage on an above-mean-probability token raises it (§3.2 and Eq. 10, with the caveat that the paper does not report results split by advantage sign — that split is an **open question**).
+
+**Controls with evidence.** Restricting the update on the highest-covariance `1e-4`–`1e-3` of tokens raised both entropy and accuracy where a flat entropy bonus did not (§4.1, §4.3, Table 2). Bounding total optimization by tracking a gold or held-out score against `√KL` and stopping near its peak is the reward-model analogue ([[reward-model-overoptimization]] §3.2, Fig. 8).
+
+**Diagnostics to log.** Fraction of zero-variance groups; entropy per update; the advantage distribution split by sign; pass@1 together with pass@k at large k — noting that the entropy study does not report pass@k, so the diversity cost of its interventions is not measured there.
+
+---
+
+## Recipe
+
+Values relevant to preventing or detecting the failures above. Every row is quoted from its locus; no row is transferred across model sizes or stages.
+
+| Model (exact release) | Size | Stage | Setting | Value | Source location | Status | Evidence for this value |
+|---|---|---|---|---|---|---|---|
+| Small-scale-proxies default Transformer (NanoDO, C4) | 2.4M–1.2B | pretrain-stable | gradient clipping | global norm 1 | arXiv:2309.14322v2 §2.1 | verified 2026-09-14 (card) | no ablation reported |
+| same | 2.4M–1.2B | pretrain-stable | z-loss coefficient on `log²Z` | 1e-4 | §2.1, §3.1.2 | verified 2026-09-14 (card) | Figs. 3–4: without z-loss and without weight decay the output logits diverge |
+| same | 2.4M–1.2B | pretrain-stable | qk-layernorm | on, per head with shared parameters | §2.1, §3.2.5 | verified 2026-09-14 (card) | Figs. 1–2; Fig. E.8 (per head better than whole dimension) |
+| same | 2.4M–1.2B | pretrain-stable | warmup; total steps | 5e3 linear; 1e5 | §2.1 | verified 2026-09-14 (card) | Fig. 5: longer warmup lowers LR sensitivity and loss |
+| same | 2.4M–1.2B | pretrain-stable | weight decay | independent, 1e-4 (0.1 when coupled) | §2.1, §3.2.2 | verified 2026-09-14 (card) | Fig. 6: independent form gives lower LR sensitivity |
+| Small-scale-proxies 4.8B intervention run at LR 0.3 | 4.8B | pretrain-stable | AdamW ε | 1e-15 | §3.4, Fig. 12 | verified 2026-09-14 (card) | lower loss than 1e-8; 1e-6 diverged (Figs. 12, E.15); one run per value |
+| datablations GPT-2-architecture study models | ≤ 9B | pretrain-stable | Adam β₂ | 0.95 at FLOP budgets 9.3e20 and 2.1e21; 0.999 otherwise | arXiv:2305.16264v5 App. S | verified 2026-09-14 (card) | slightly lower final loss and fewer loss spikes than 0.999 (App. S, no table) |
+| datablations GPT-2-architecture study models | ≤ 9B | pretrain-stable | epochs with negligible loss penalty | up to 4 (`R_D = 3`) | §6, App. L | verified 2026-09-14 (card) | 8.7B at 4 epochs: +0.5% validation loss vs 1 epoch; 19-task average drops after ~4 |
+| Llama 3 405B | 405B | pretrain-stable | peak LR; warmup; batch ramp | 8e-5; 8,000 steps; 4M tokens @ seq 4,096 → 8M @ 8,192 after 252M tokens → 16M after 2.87T | arXiv:2407.21783 §3.4.1 | verified 2026-09-17 | the report attributes stability to the ramp: "few loss spikes … no interventions" (§3.4.1); no ablation printed |
+| Tülu 3 SFT study run (Llama 3.0 base, Tülu 2 SFT mixture) | not stated in §4.3.2 | SFT | loss aggregation; LR; epochs | sum loss; 5e-6; 2 | arXiv:2411.15124v5 §4.3.2, Figs. 5–6 | verified 2026-09-17 | Fig. 5: sum loss at 5e-6 best of the sweep; Fig. 6: 2 epochs beat 3–7 |
+| Mistral-7B on FLAN_20k (Kundu et al.) | 7B | SFT | batching for correctness and throughput | online minibatch packing with per-example position IDs | arXiv:2407.09105v6 §4.1, Table 2 | verified 2026-09-17 | validation loss 1.127 vs padding 1.129; packing without position IDs 1.306; offline packing with position IDs 1.284 |
+| Entropy-mechanism §2 runs | 0.5B–32B | RL | prompt filter | drop prompts whose responses are all correct or all incorrect | arXiv:2505.22617v1 §2.2 | verified 2026-09-14 (card) | no ablation reported |
+| Qwen2.5-32B (entropy-mechanism §4.3) | 32B | RL | KL-Cov `k`; `β` | 2e-4; 1 | §4.3 | verified 2026-09-14 (card) | 7-benchmark math average 45.8 (GRPO) → 52.2 (Table 2) |
+| Gao et al. proxy-RM study policy | 1.2B | RL | KL penalty coefficient | 0 in all RL experiments except §3.6 | arXiv:2210.10760 §2, App. C | verified 2026-09-14 (card) | §3.6, Fig. 9: a nonzero penalty behaved like early stopping and did not raise the frontier |
+
+**Starting point for a small general-purpose run.** For a dense decoder under about 1B parameters trained on web text, the verified rows above support: global-norm clipping at 1.0, z-loss coefficient 1e-4, per-head qk-layernorm, linear warmup of 5e3 steps within a 1e5-step cosine schedule, and independent weight decay 1e-4 — all measured on 2.4M–1.2B models on C4 at sequence length 512 and batch 256 sequences ([[small-scale-proxies-instabilities]] §2.1). For an SFT stage on top, sum-loss aggregation with LR 5e-6 and 2 epochs is the setting Tülu 3 selected by sweeping a Llama 3.0 base model on the Tülu 2 SFT mixture ([[tulu-3]] §4.3.2, Figs. 5–6); the model size for that sweep is not printed at the locus, so re-run the LR sweep at your own size, since sum loss changes the gradient scale. Do not carry the 4.8B `ε = 1e-15` row into a smaller run: it was selected at LR 0.3 on one model.
+
+---
+
+## Generalization lens
+
+**(a) What increases breadth.** Keeping the number of epochs over unique data at or below about 4 at pre-training scale, where held-out loss is within 0.5% of the single-epoch value and the 19-task average is unchanged ([[data-constrained-scaling]] §6, Fig. 6), and 2 epochs at the SFT scale measured by Tülu 3 (§4.3.2, Fig. 6). Performing general instruction tuning before task-specific continual tuning: ALPACA-7b forgets 18.14% / 7.56% / 10.31% where LLAMA-7b forgets 34.57% / 31.33% / 31.72% ([[catastrophic-forgetting-continual-finetuning]] Table 6). Interpolating post-alignment weights with pre-alignment weights, which gave the best measured alignment-forgetting Pareto front ([[mitigating-alignment-tax-rlhf]] §4.1). Keeping RL entropy from collapsing by restricting the highest-covariance tokens rather than by a flat entropy bonus ([[entropy-mechanism-llm-rl]] §4.3).
+
+**(b) What causes narrowing or forgetting.** Repetition past the measured knee (19-task average drops after about 4 epochs). Continual fine-tuning on a task sequence, which costs 9.54%–18.37% of MMLU across the BLOOMZ sizes tested while every target task improves. Alignment optimization, which lowers translation and reading comprehension monotonically as reward rises. Reward over-optimization, where the gold score peaks and falls while the proxy score keeps rising ([[reward-model-overoptimization]] Fig. 1). Entropy consumption, where 73% of the entropy is spent in the first 200 of 2400 steps and the accuracy ceiling at `H = 0` is `−a + b`. Single-format training data, as in the single-turn packing result that moved MATH until multi-turn data was reintroduced.
+
+**(c) How to measure it for this stage.** Four instruments, each detecting something the others miss:
+
+1. **Held-out multi-domain perplexity.** One held-out loss hides domain gaps: among 6 controlled 1B baselines, the C4-only model reaches perplexity up to 391,171 on the RedPajama arXiv domain, and no single perplexity source correlates with all 8 downstream tasks tested ([[paloma]] §4.1–4.2). Report macro-averaged per-domain perplexity on decontaminated data with a fixed vocabulary.
+2. **A broad benchmark average against a previous checkpoint**, not against the training curve; this is the axis that exposes forgetting and the alignment tax.
+3. **An out-of-distribution variant of the target task** — changed rule, changed surface attribute, changed template — which is what separates rule learning from memorization ([[sft-memorizes-rl-generalizes]] §5.1–5.2).
+4. **A contamination probe**: the same capability measured on material the benchmark builders could not have published ([[swe-bench-illusion]] §4.1).
+
+Mapped to the failures above, the regression suite is one row per failure, and a run should not be promoted until each row has been read against the previous checkpoint:
+
+| Failure | Instrument that exposes it | Comparison |
 |---|---|---|
-| per-token entropy | every update | `H < 0.1` or sudden inflection |
-| KL(π ‖ π_ref) | every update | climbing monotonically past target |
-| PPO ratio mean / max | every update | max > 10 |
-| advantage std | every batch | std < 1e-4 |
-| response-length histogram | every 50 updates | bimodal or mean diverging |
-| clipped-fraction | every update | > 0.5 |
-
-These are exactly the metrics OpenRLHF, verl, and TRL expose by default — the convergence across three independent frameworks is evidence that this surface is the minimum, not a preference ([[openrlhf-entropy-debugging]]).
-
----
-
-## 7. The silent-failure checklist — one page to paste at the top of every new trainer
-
-Distilled from every section above and from Karpathy's maxim-list ([[karpathy-training-neural-net-recipe]]). Run these as unit tests or inline asserts. Every one of them is the distilled form of a bug that has killed a real run.
-
-```python
-# --- one-time, pre-run ---
-assert initial_loss == pytest.approx(math.log(vocab_size), rel=0.02)  # Karpathy's init check
-overfit_single_batch_to_near_zero(model, batch, steps=200)            # Karpathy's pipeline check
-
-# --- every step ---
-assert torch.isfinite(loss), f"non-finite loss at step {step}"
-active = (labels != -100).sum().item()
-assert active > 0, f"zero-active-token batch at step {step}"
-assert grad_norm < cfg.hard_ceiling, f"runaway grad_norm {grad_norm}"     # e.g. 1000× clip threshold
-
-# --- periodic (every N=100) ---
-assert packed_vs_unpacked_max_diff(model, batch) < 1e-4                   # §4b leak check
-assert all_ranks_heartbeat_within(60)                                     # §5 hang guard
-assert abs(embed_norm - embed_norm_prev) / embed_norm_prev < 1e-4         # §1a logit drift
-
-# --- on resume (ch-06) ---
-assert bit_exact_resume_loss_delta(ckpt, steps=1) < 1e-6
-assert scheduler.last_epoch == saved_step
-```
-
-The list is short on purpose. Each assertion costs << 1% of step time, and each one catches a failure mode that has burned ≥ 1 person-week at ≥ 1 lab. The economics are unambiguous.
+| Repeated-data overfitting | held-out loss on the same distribution; 19-task-style broad average | current vs 1-epoch or 2-epoch run ([[data-constrained-scaling]] §6) |
+| Forgetting after continual tuning | fixed general suite (MMLU, commonsense, reading comprehension), scored as FG | current vs pre-tuning checkpoint ([[catastrophic-forgetting-continual-finetuning]] Eq. 1) |
+| Alignment tax | general-capability metric plotted against the alignment metric | one point per checkpoint or per interpolation ratio ([[mitigating-alignment-tax-rlhf]] §4) |
+| Contamination | matched tasks from unpublished material | public benchmark vs matched slice ([[swe-bench-illusion]] §4.1) |
+| Template narrowing | same capability under a second, untrained prompt format | format A vs format B, same checkpoint |
+| Memorization instead of rule learning | rule- or attribute-changed variant of the task | in-distribution vs variant ([[sft-memorizes-rl-generalizes]] §5.1) |
+| Entropy collapse and reward over-optimization | entropy trajectory with the fitted `R = −a·exp(H) + b`; held-out or gold score against `√KL` | across updates, not at the end only ([[entropy-mechanism-llm-rl]] §2.4; [[reward-model-overoptimization]] §3.2) |
+| Domain-specific loss regression hidden by one average | macro-averaged per-domain perplexity | current vs previous checkpoint ([[paloma]] §4.1) |
 
 ---
 
-## Connections and what's next
+## Common mistakes and how to detect them
 
-- **[[gradient-clipping]] / ch-01** — `pre_clip_grad_norm` is the earliest of all the warning signals in this chapter.
-- **[[mixed-precision]] / ch-02** — bf16 vs fp16 governs which NaN modes you even see; fp32 master weights are the baseline safety.
-- **[[adam]] / ch-01** — `eps` placement and `v̂` underflow; the optimizer-step NaN surface.
-- **[[loss-masking-prompt]] / ch-04** — the off-by-one surface of §4a.
-- **[[sequence-packing]] / ch-04** — the cross-sample attention leak of §4b.
-- **[[fsdp-sft]] / ch-05** — the collective topology that makes §5's hangs possible at all.
-- **[[karpathy-training-neural-net-recipe]]** — the organizing rule; every section here is an instance of "neural net training fails silently."
-- **[[olmo-2]] / [[olmo-3]] / [[llama-3]]** — three frontier-scale incident logs; the engineering response to the failures in this chapter.
-- **[[openrlhf-entropy-debugging]] / [[entropy-collapse-ppo]]** — RL-specific extension in §6.
-- **ch-06 (checkpointing)** — the resume-time subset of §1, §2 (scaler drop, LR off-by-one, data-iter desync).
-- **ch-08 (lab)** — the mandatory first artifact: a failure-mode-checklist.md that enumerates exactly the assertions in §7 for your trainer.
+| Mistake | Observable symptom | Check |
+|---|---|---|
+| Masking applied after the label shift | The first response token is never trained; malformed turn starts at inference | `(labels[:, 1:] != -100).sum(-1) == response_len` per sample |
+| `labels[:prompt_len] = -100` on a batched (2-D) tensor | Whole samples silently excluded; prompts trained on in the rest | Active-token count is 0 for the first `prompt_len` rows |
+| Packing without `cu_seqlens`, or a kernel that ignores it | Loss slightly worse than unpacked; no error | Logit equality test, packed vs per-sample forward, tolerance 1e-4 |
+| Deriving boundaries from `position_ids` that never reset | The varlen kernel silently falls back to dense causal attention | Assert `position_ids.min() == 0` per packed row and that the recovered `cu_seq_len` count equals the sample count |
+| Mean loss under gradient accumulation | Loss and results change when `grad_accum` changes; short samples over-weighted | Same data, `grad_accum` 1 vs 4, losses must match ([[tulu-3]] §4.3.2) |
+| Raising AdamW `ε` as a NaN remedy | The update shrinks and the loss plateaus | Log per-layer gradient RMS and compare it with `ε` ([[small-scale-proxies-instabilities]] §3.4) |
+| Treating a zero-variance RL group as a numerical bug | Fraction of groups with `std = 0` rises; reward curve flattens | The advantage is exactly 0, not NaN; filter such prompts instead of clamping |
+| Reading a rising proxy reward as progress | Gold or human score peaks then falls while proxy rises | Plot the held-out score against `√KL` and stop near the peak ([[reward-model-overoptimization]] §3.2) |
+| Judging a fine-tune by its target task | Target task improves; MMLU, RACE, translation fall | Report FG against the pre-tuning checkpoint on a fixed general suite |
+| Reading a benchmark gain as capability | Score high on the public set, low on a matched unpublished set | Held-out-repository or post-cutoff slice ([[swe-bench-illusion]] §4.1) |
 
-## Further reading
+---
 
-- [[gradient-clipping]] — Pascanu 2013; the 100× pre-spike signal and the FSDP global-norm pitfall.
-- [[mixed-precision]] — Micikevicius 2017; why bf16 removes most §1 failures at the cost of 7 mantissa bits.
-- [[adam]] — Kingma 2014 / Loshchilov 2017; `eps` placement and `v̂` underflow under fp16.
-- [[loss-masking-prompt]] — Shi 2024; response-only loss and the multi-turn mask rule.
-- [[sequence-packing]] — Krell 2021; `cu_seqlens` and the block-diagonal invariant.
-- [[fsdp-sft]] — Zhao 2023; the AllGather/ReduceScatter topology whose breakage causes §5 hangs.
-- [[karpathy-training-neural-net-recipe]] — Karpathy 2019; the `ln(V)` init check and "overfit a single batch."
-- [[olmo-2]] — the three-layer spike-mitigation stack; the QK-Norm + Z-loss logit-overflow defense.
-- [[olmo-3]] — the 1 024-H100 pretraining incident surface; why staged model flow multiplies §5 hang risk.
-- [[llama-3]] — 15.6 T-token 405B run; DPO NLL stabilizer as a chosen-logprob-collapse fix.
-- [[openrlhf-entropy-debugging]] — framework-level entropy triage that converged across OpenRLHF / verl / TRL.
-- [[entropy-collapse-ppo]] — Andrychowicz 2020 + LLM-RL derivative; the sudden-inflection fingerprint.
+## Check your understanding
 
-## Companion visualization
+1. A group of 8 rollouts all receive reward 1 and the run uses `(A − mean)/(std + 1e-6)`. Explain why the result is exactly 0 rather than NaN, and why the correct response is a change to prompt selection rather than a numerical guard.
+2. A colleague reports that not resetting `position_ids` under packing "breaks RoPE's relative positions". State why that is wrong for intra-document attention with a correct block-diagonal mask, and give two situations in which un-reset positions still break the run.
+3. Two runs use the same data, the same global batch and the same seed, but `grad_accum = 1` and `grad_accum = 4`, and their losses differ by 30%. Derive which quantity is being weighted differently and what fix restores equality.
+4. A 4.8B run at a high learning rate plateaus with healthy `lr`, `clipped_fraction` near 0, and a normal active-token count. Which optimizer-level measurement would you take next, and what result would confirm the diagnosis?
+5. An SFT checkpoint improves the target benchmark by 6 points and loses 3 points of MMLU. Using the FG definition, explain why "3 points" and "FG = x%" can rank two checkpoints differently, and which you would report.
+6. Entropy in an RLVR run falls steadily while accuracy rises and then flattens. Explain, using `R = −a·exp(H) + b` and the covariance mechanism, why a flat entropy bonus of 0.01 was reported to cause entropy explosion while restricting a `1e-4` fraction of tokens raised both entropy and accuracy.
+7. You are given two checkpoints with identical scores on a held-out split of the training distribution. Design the single cheapest measurement that would tell you which one learned the rule, and say what result would be evidence of memorization.
 
-**[figures/failure-modes-tree.html](figures/failure-modes-tree.html)** — interactive diagnostic tree. Click a symptom (Loss NaN, Loss Spike, Loss Plateau, NCCL Hang, Grad Clip Triggers Every Step, Entropy Collapse) and the page walks you through the decision branch: which logged metrics confirm the diagnosis, which invariant broke, which fix applies, which log would have caught it sooner. The tree is the §2 flowchart made tactile — use it to practice the diagnostic ordering until it is reflex, because in a real incident the cost of a wrong branch is measured in cluster-hours.
+---
+
+## Connections
+
+- **Previous:** ch-06 — Checkpointing, In-Loop Evaluation, and Checkpoint Selection. The instrumentation and checkpoint-selection rules there are what make the diagnostics in this chapter available.
+- **Next:** ch-08 — Lab: Minimal Trainer with a Target-versus-General Capability Measurement. The lab implements the equality tests and the general-capability comparison used here.
+- ch-01 — Optimizers for LLM Training: AdamW, Update Size, and Retention of Prior Ability: the AdamW `ε` and update-scale material behind §1.3.
+- ch-02 — Numerical Precision, Determinism, and Train–Inference Mismatch: precision choices that decide which numerical failures are reachable.
+- ch-03 — Learning-Rate Schedules, Batch Size, Initialization, and Normalization: warmup and batch-ramp settings referenced in §3.
+- ch-04 — Sequence Packing, Loss Masking, and Chat Templates: the mechanics this chapter tests for correctness.
+- ch-14 — Data-Constrained Scaling, Repetition, and Pretraining Decontamination: repetition limits and decontamination in depth.
+- ch-30 — SFT Design Choices and Their Effect on Generalization: Masking, Packing, Templates, Epochs, and Learning Rate: the SFT-side treatment of §2 and §4.
+- ch-43 — Entropy, Output Diversity, and KL Control in RL: the full treatment of §5.1.
+- ch-47 — Evaluation Harness and Suite Design for General Capability: how to build the suite the generalization lens assumes.
+
+---
+
+## Sources
+
+- [[small-scale-proxies-instabilities]] — attention-logit growth, output-logit divergence, LR sensitivity, warmup and weight-decay effects, and the AdamW-ε result; the evidence base for §1 and §3.
+- [[gradient-clipping]] — definition of global-norm clipping used in §3.
+- [[sequence-packing]] — block-diagonal masking and per-sequence position indices for packed training.
+- [[packing-position-id-evidence]] — chapter-local extract of the three primary packing studies (Krell 2021, Kundu 2024, Wang 2024) with the loci used in §2.2 and §4.5.
+- [[hf-gradient-accumulation-fix]] — chapter-local extract of the October 2024 `transformers` fix; the correctness rule and patch quoted in §2.3.
+- [[tulu-3]] — batch-aggregation equations, the sum-loss decision, and the epoch and LR sweeps (§4.3.2).
+- [[llama-3]] — 405B pre-training schedule and batch ramp, the loss-spike statement, and the interruption counts used in the opening section.
+- [[data-constrained-scaling]] — repetition limits, the effective-data formula, and the β₂ note.
+- [[catastrophic-forgetting-continual-finetuning]] — chapter-local extract: the FG metric and the BLOOMZ, LLAMA and ALPACA forgetting tables used in §4.2.
+- [[mitigating-alignment-tax-rlhf]] — chapter-local extract: the alignment-tax setup, the mitigation comparison (§4.1), and heterogeneous model averaging (§6).
+- [[sft-memorizes-rl-generalizes]] — chapter-local extract: OOD rule and visual variation results used in §5.3 and in the generalization lens.
+- [[entropy-mechanism-llm-rl]] — the entropy-performance law, the covariance mechanism, and the intervention results in §5.1.
+- [[reward-model-overoptimization]] — gold-versus-proxy curves in `√KL` and the KL-penalty result in §5.2.
+- [[reward-hacking-taxonomy]] — the formal statement that non-trivial unhackable proxies do not exist over all stochastic policies.
+- [[swe-bench-illusion]] — the contamination probe and its numbers in §4.4.
+- [[paloma]] — per-domain perplexity as the held-out instrument in the generalization lens.

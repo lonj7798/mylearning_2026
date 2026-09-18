@@ -1,0 +1,20 @@
+<!-- chapter excerpt for ch-54. Primary-source extract, read 2026-09-17.
+     If a library card of this slug exists under wiki/raw-data/llm-training/, prefer the card. -->
+
+# Forge: Scalable Agent RL Framework and Algorithm (MiniMax)
+- **Artifact:** MiniMax, "Forge: Scalable Agent RL Framework and Algorithm", company research post describing the RL system behind MiniMax M2.5. Source type: official blog / technical post. Read from the page text cached 2026-09-17.
+- **Core Insight:** Agent rollout completion times range from seconds to hours, so a scheduler must choose between head-of-line blocking (strict FIFO) and a training distribution that drifts toward short, easy tasks (greedy fetch); Forge's answer is Windowed FIFO, which allows out-of-order fetching inside a sliding window of size W and blocks beyond it (§1.2, §3.1).
+- **Guideline:** When rollout latency is long-tailed, bound how far ahead the trainer may consume completed trajectories rather than consuming whichever finishes first, because greedy fetching makes the training stream non-stationary — early batches dominated by easy tasks, later batches by clustered hard ones (§1.2, §3.1).
+
+## Technical details (with loci)
+- **Windowed FIFO (§3.1).** The generation queue is `Q = [T₀, …, T_{N−1}]` with head index `i`. The training scheduler may fetch any completed trajectory in `[T_i, T_{i+W−1}]` (for example `W = 0.3N`), but is forbidden from fetching a completed task at index `j > i + W`. The window slides forward only as head tasks are consumed, so the scheduler must wait for stragglers inside the current window.
+- **System decomposition (§2.1).** Three modules: an Agent Side that acts as a pure trajectory producer; a Middleware Abstraction Layer containing a Gateway Server (standard completion protocol) and a Data Pool (distributed buffer that asynchronously collects trajectories and decouples generation from training); and a Training/Inference Side with a Rollout Engine and a Train Engine. The post states that hundreds of scaffold types and thousands of tool-invocation formats were integrated.
+- **Black-box agents (§2.3).** Agents route requests to the RL gateway; Forge is agnostic to the agent's internals, so context compression, history rewriting, and multi-agent loops are supported without modifying the training loop.
+- **Context management as an action (§2.2).** Context management is folded into the RL interaction loop and treated as an agent action that drives state transitions, because applying it only at inference creates a distribution shift from the RL training data.
+- **Prefix tree merging (§3.2).** Multi-turn agent samples share long prefixes. Completions sharing a prefix are merged into one prefix tree at the sample level, run through one forward pass with attention primitives, then deconstructed by metadata to compute the loss. The post reports a 40× training speedup with strict mathematical equivalence to standard per-sample processing.
+- **Inference acceleration (§3.3).** Multi-token-prediction speculative decoding with draft heads fine-tuned by top-K KL loss to track the evolving RL policy; heterogeneous prefill-decode disaggregation; a DFS-backed global L3 KV-cache pool with a cost-aware scheduler that weighs queuing delay against cache migration cost.
+- **Algorithm (§4).** CISPO as the core algorithm, with a unified mixed-domain training stage over reasoning, general QA, and agent tasks instead of sequential per-domain stages, which the post credits with avoiding negative transfer and improving generalizability.
+- **Reward (§4.2).** Composite reward on contexts up to 200k: process reward for intermediate behaviors (for example penalizing language mixing or tool-invocation errors), a relative task-completion-time reward to incentivize parallel tool use, and reward-to-go to reduce gradient variance.
+
+## Not reported
+No numbers for Windowed FIFO's effect on final accuracy, no value of W used in the production run, no ablation separating any single component, no per-benchmark results in this post.

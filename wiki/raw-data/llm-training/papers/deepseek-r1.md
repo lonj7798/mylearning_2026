@@ -1,46 +1,30 @@
-<!-- scope: pure-RL reasoning model training from a rule-based verifier
-     deps: [[rlvr-tulu3]]
-     see-also: [[entropy-mechanism-llm-rl]], [[math-shepherd]]
+<!-- scope: redirect — DeepSeek-R1 (arXiv:2501.12948) is carded in full at model-reports/deepseek-r1.md
+     deps: [[deepseek-v3]]
+     see-also: [[deepseek-r1-recipe]], [[grpo]], [[rlvr-tulu3]], [[entropy-mechanism-llm-rl]]
 -->
 
-# DeepSeek-R1: Incentivizing Reasoning Capability in LLMs via RL
-- **Core Insight:** Reasoning behavior (long chains-of-thought, self-correction, "aha moments") can emerge from pure RL on a base LM with only a rule-based verifier reward — no SFT traces, no PRM, no preference RM needed — if you use GRPO with very long rollouts.
-- **Guideline:** For verifiable domains, start with a capable base model, define a rule-based reward = (accuracy via exact-match grader) + (format reward for `<think>…</think><answer>…</answer>`), use GRPO with a large group size and long rollout budgets (≥8k tokens), and let chain-of-thought length grow on its own.
-- **Authors:** DeepSeek-AI (Daya Guo, Dejian Yang, Haowei Zhang, et al.; 200+ contributors)
-- **Year:** 2025 (Nature 645, 633–638)
+# DeepSeek-R1: Incentivizing Reasoning Capability in LLMs via Reinforcement Learning
+- **Core Insight:** GRPO training on DeepSeek-V3-Base with only rule-based accuracy and format rewards, and no SFT, raised AIME 2024 pass@1 from 15.6% to 77.9% (DeepSeek-R1-Zero, arXiv v2 §2.3).
+- **Guideline:** See the full card; recommendations and their evidence are kept in one place.
+- **Authors:** DeepSeek-AI (core contributors Daya Guo, Dejian Yang, Haowei Zhang, Junxiao Song, Peiyi Wang, Qihao Zhu, et al.)
+- **Year:** 2025 (arXiv v1 2025-01; v2 2026-01; Nature 645, 633–638, published 2025-09 under the title "DeepSeek-R1 incentivizes reasoning in LLMs through reinforcement learning")
 - **URL:** https://arxiv.org/abs/2501.12948
-- **Relevant topics:** GRPO, RLVR, rule-based reward, R1-Zero, emergent long CoT, aha moment, format reward
+- **Source type:** official technical report
+- **Relevant topics:** GRPO, rule-based rewards, R1-Zero, cold-start SFT, distillation
 
-## Abstract
-The DeepSeek-R1 report introduces two models: **R1-Zero**, trained directly from a DeepSeek-V3-Base checkpoint with pure RL and a rule-based reward (no SFT); and **R1**, which adds a small amount of cold-start SFT and a multi-stage RL pipeline to fix readability and language-mixing issues. Both demonstrate that long-horizon reasoning behaviors (reflection, backtracking, working through multiple approaches) emerge from the RL pressure alone. DeepSeek-R1 matches or surpasses OpenAI o1 on AIME 2024 (79.8 vs 79.2 pass@1), MATH-500 (97.3 vs 96.4), and LiveCodeBench, among other benchmarks.
+> Duplicate of [[deepseek-r1]] (full card: `model-reports/deepseek-r1.md`; recipe ledger: [[deepseek-r1-recipe]]). This file is kept so existing links resolve.
 
-## Key Contributions
-- **R1-Zero: pure-RL reasoning from a base LM.** Pure GRPO training from DeepSeek-V3-Base with only two reward components:
-  - **Accuracy reward:** rule-based grader (exact-match math answers, unit-test execution for code, regex match for instruction following).
-  - **Format reward:** +1 iff output follows `<think>...</think><answer>...</answer>`.
-- **Why rule-based rewards sidestep reward hacking:** the reward is a deterministic, closed-form function; there is no learned RM to overoptimize, no Goodhart drift. The only remaining exploit surfaces are bugs in the grader itself.
-- **Emergent long chain-of-thought:** average response length grows from ~400 tokens early training to 10k+ tokens late training, without any supervised example of such length.
-- **"Aha moment":** mid-training, the model spontaneously develops self-reflection patterns ("Wait, let me reconsider…", "Let me check step 3…") — documented as a phase transition in behavior, not a gradient-trained style.
-- **R1 multi-stage pipeline:** (1) small cold-start SFT on clean CoT, (2) reasoning-RL, (3) rejection-sampling SFT, (4) broad-domain RL with mixed reward; fixes R1-Zero's language mixing and unreadable traces.
-- **Distillation transfer:** R1 traces distilled into Qwen-7B / Llama-8B produce models competitive with much larger baselines.
-
-## Key Figures/Tables to Study
-- **Fig. 2** (R1-Zero AIME accuracy vs training step) — the iconic monotone climb from ~15% to ~70% pass@1 with pure RL.
-- **Fig. 3** (average response length vs step) — length grows; correlates with capability gain.
-- **Fig. 4** ("aha moment" snippet) — sampled rollout showing self-correction emerging mid-training.
-- **Benchmark table** — AIME / MATH-500 / Codeforces numbers vs o1, Claude 3.5, GPT-4o.
-
-## Technical Details
-- **Algorithm:** GRPO (no value model; advantage = normalized group reward). Group size G = 16–64 rollouts per prompt. Sequence length up to 32k.
-- **Reward:** `r = r_acc + r_format` where `r_acc ∈ {0, 1}` from a rule grader and `r_format ∈ {0, 1}` from a regex check.
-- **KL penalty:** KL-to-reference term kept (β small, applied per token on reward) for R1-Zero; arguably the only regularizer preventing entropy collapse in this regime — links directly to **[[entropy-mechanism-llm-rl]]**.
-- **No critic / no PRM:** advantages are pure group-relative: `A_i = (r_i − mean(r_{1:G})) / std(r_{1:G})`.
-- **Cold-start SFT (R1 only):** ~thousands of hand-cleaned long-CoT examples before RL.
-- **Language-mixing fix:** add a "language consistency reward" in later RL stages.
-- **Failure modes reported:** R1-Zero responses become hard to read (interleaved English/Chinese/symbols); repetition loops; occasional reward hacking of the format tag via hollow `<think>` blocks — mitigated by careful format checker.
-
-## Connections
-- Most prominent industrial validation of **[[rlvr-tulu3]]**'s verifier-grounded reward thesis.
-- Entropy dynamics during R1-Zero training are the canonical testbed for **[[entropy-mechanism-llm-rl]]**.
-- Distillation pipeline shows how RLVR-trained reasoning transfers — bridges to pre-RL SFT literature.
-- Rule-based reward sidesteps all of **[[reward-model-overoptimization]]** on verifiable prompts by construction.
+## Verification
+- Checked on 2026-09-14 against: https://arxiv.org/abs/2501.12948 (v2, 2026-01-04; v1 2025-01-22).
+- Corrections to the previous card version (the full text now lives in the canonical card):
+  - "G = 16–64 rollouts per prompt" → 16 outputs per question in training (§2.1, §3.2.1); 64 is the evaluation sample count for AIME and GPQA (Supp. D.1).
+  - "KL-to-reference term ... applied per token on reward" → GRPO adds the KL estimator directly to the loss, not to the reward (Eq. 1–2, Supp. A.3); coefficient 0.001 (§2.1).
+  - "Format reward: +1 iff output follows `<think>…</think><answer>…</answer>`" and "r_format ∈ {0,1}" → the format reward requires reasoning inside think tags and is added to the accuracy reward with equal weight (§2.2, Eq. 4); no numeric value is given for it.
+  - "Accuracy reward: ... regex match for instruction following" → the paper describes answer matching for math and compiler test cases for code (§2.2).
+  - "Language-mixing fix: add a language consistency reward in later RL stages" → it is introduced in the first RL stage of R1 and kept in the second (§3.2.1 Eq. 7, §3.2.2 Eq. 8).
+  - "Fig. 2 ... ~15% to ~70%", "Fig. 3", "Fig. 4 aha moment" → v2 Fig. 1(a) (15.6% → 77.9%), Fig. 1(b), Table 2; v1 Fig. 2 reports 71.0%.
+  - "'Aha moment' ... a phase transition" → the paper reports a sudden increase in use of "wait": nearly absent early, occasional at steps 4000–7000, spikes after step 8000 (Supp. C.2).
+  - "Cold-start SFT (R1 only): ~thousands of hand-cleaned long-CoT examples" → "thousands" of examples built from R1-Zero outputs filtered by rules, refined by DeepSeek-V3, and verified by human annotators (Supp. B.3.2).
+  - "Distillation into Qwen-7B / Llama-8B" → six students on Qwen2.5-Math-1.5B, Qwen2.5-Math-7B, Qwen2.5-14B, Qwen2.5-32B, Llama-3.1-8B, Llama-3.3-70B-Instruct (Supp. B.4.3, Table 6).
+  - "Year: 2025 (Nature 645, 633–638)" → the Nature version has a different title (above) and was published 2025-09.
+- Removed as unsupported by the source: "long rollout budgets (≥8k tokens)"; "average response length grows from ~400 tokens ... to 10k+ tokens"; "the only regularizer preventing entropy collapse"; "no Goodhart drift ... only remaining exploit surfaces are bugs in the grader"; "reward hacking of the format tag via hollow `<think>` blocks"; "repetition loops" as an R1-Zero failure mode (the paper reports repetition for 7B dense and 16B MoE bases, Supp. G.1, and for greedy decoding at evaluation, Supp. D.1).

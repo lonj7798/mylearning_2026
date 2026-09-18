@@ -1,0 +1,230 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ch-05 — Parallelism layout to tokens per step</title>
+<style>
+  :root {
+    --bg: #fbfbfa; --fg: #1a1a1a; --muted: #5a5a5a; --line: #d8d6d0;
+    --box: #ffffff; --accent: #2f5d8a; --warn: #8a3a2f; --ok: #2f6b45;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; padding: 20px; background: var(--bg); color: var(--fg);
+         font: 15px/1.55 "Iowan Old Style", Georgia, "Times New Roman", serif; }
+  .wrap { max-width: 980px; margin: 0 auto; }
+  h1 { font-size: 20px; margin: 0 0 4px; }
+  h2 { font-size: 15px; margin: 22px 0 8px; letter-spacing: .02em; text-transform: uppercase;
+       color: var(--muted); font-weight: 600; }
+  p.lede { color: var(--muted); margin: 0 0 16px; }
+  .panel { background: var(--box); border: 1px solid var(--line); border-radius: 4px; padding: 14px; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; }
+  label { display: block; font-size: 12px; color: var(--muted); margin-bottom: 3px;
+          font-family: ui-monospace, "SF Mono", Menlo, monospace; }
+  input[type=number] { width: 100%; padding: 5px 6px; border: 1px solid var(--line);
+          border-radius: 3px; font: 14px ui-monospace, "SF Mono", Menlo, monospace; background: #fff; }
+  .presets { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 14px; }
+  button { font: 12px/1.3 ui-monospace, "SF Mono", Menlo, monospace; padding: 6px 9px;
+           border: 1px solid var(--line); background: #fff; border-radius: 3px; cursor: pointer;
+           color: var(--fg); }
+  button:hover { border-color: var(--accent); color: var(--accent); }
+  table { border-collapse: collapse; width: 100%; font-size: 14px; margin-top: 10px; }
+  th, td { border-bottom: 1px solid var(--line); padding: 6px 8px; text-align: left; vertical-align: top; }
+  th { font-size: 12px; text-transform: uppercase; letter-spacing: .03em; color: var(--muted); font-weight: 600; }
+  td.num, th.num { text-align: right; font-family: ui-monospace, "SF Mono", Menlo, monospace; }
+  .eq { font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 13px;
+        background: #f2f1ed; padding: 8px 10px; border-radius: 3px; overflow-x: auto; }
+  .out { font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 22px; }
+  .outrow { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 12px; margin-top: 12px; }
+  .cell { border: 1px solid var(--line); border-radius: 4px; padding: 10px 12px; background: #fff; }
+  .cell .k { font-size: 11px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); }
+  .flag { margin-top: 12px; padding: 9px 11px; border-radius: 3px; font-size: 13.5px; }
+  .flag.warn { background: #f7ecea; border: 1px solid #e0c4bd; color: var(--warn); }
+  .flag.ok { background: #ecf3ee; border: 1px solid #c2d9cb; color: var(--ok); }
+  .bars { margin-top: 10px; }
+  .bar { height: 15px; background: var(--accent); border-radius: 2px; }
+  .barlab { font-size: 12px; font-family: ui-monospace, Menlo, monospace; color: var(--muted); }
+  caption, .cap { caption-side: bottom; text-align: left; font-size: 12.5px; color: var(--muted);
+                  margin-top: 8px; line-height: 1.5; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<h1>From a parallelism layout to tokens per optimizer step</h1>
+<p class="lede">
+Set the four parallel degrees and the batch definition. The page computes the world size, how many
+sequences each data-parallel group holds per step, and how many gradient-accumulation micro-steps that
+implies. These are the quantities that reach the learning outcome; per-GPU memory is not modelled here.
+</p>
+
+<h2>Presets from published runs</h2>
+<div class="presets" id="presets"></div>
+
+<div class="panel">
+  <div class="grid">
+    <div><label for="tp">TP degree</label><input type="number" id="tp" min="1" value="8"></div>
+    <div><label for="pp">PP degree</label><input type="number" id="pp" min="1" value="16"></div>
+    <div><label for="cp">CP degree</label><input type="number" id="cp" min="1" value="1"></div>
+    <div><label for="dp">DP degree</label><input type="number" id="dp" min="1" value="64"></div>
+    <div><label for="seq">sequence length (tokens)</label><input type="number" id="seq" min="1" value="8192"></div>
+    <div><label for="gb">global batch (tokens/step)</label><input type="number" id="gb" min="1" value="16777216"></div>
+    <div><label for="mb">instances per rank micro-batch</label><input type="number" id="mb" min="1" value="32"></div>
+  </div>
+
+  <div class="outrow">
+    <div class="cell"><div class="k">world size = TP × PP × CP × DP</div><div class="out" id="o-world">—</div></div>
+    <div class="cell"><div class="k">sequences per step</div><div class="out" id="o-seqs">—</div></div>
+    <div class="cell"><div class="k">sequences per DP group</div><div class="out" id="o-perdp">—</div></div>
+    <div class="cell"><div class="k">micro-steps accumulated</div><div class="out" id="o-accum">—</div></div>
+    <div class="cell"><div class="k">tokens per device in attention</div><div class="out" id="o-perdev">—</div></div>
+    <div class="cell"><div class="k">optimizer steps for 1T tokens</div><div class="out" id="o-steps">—</div></div>
+  </div>
+
+  <div id="flags"></div>
+
+  <div class="eq" style="margin-top:14px">
+world_size        = TP × PP × CP × DP
+sequences_per_step = global_batch_tokens / sequence_length
+sequences_per_DP   = sequences_per_step / DP
+micro_steps        = ceil(sequences_per_DP / instances_per_rank_microbatch)
+tokens_per_device_in_attention = sequence_length / CP
+optimizer_steps(T) = T / global_batch_tokens
+  </div>
+</div>
+
+<h2>Presets side by side</h2>
+<table id="cmp">
+  <thead>
+    <tr><th>Run and stage</th><th class="num">TP</th><th class="num">CP</th><th class="num">PP</th>
+        <th class="num">DP</th><th class="num">world</th><th class="num">seq len</th>
+        <th class="num">tokens/step</th><th class="num">seq/DP</th></tr>
+  </thead>
+  <tbody></tbody>
+</table>
+<p class="cap">
+Llama 3.1 405B rows are Table 4 of arXiv:2407.21783 v3 as printed (GPUs, TP, CP, PP, DP, sequence
+length, batch size per DP, tokens per batch). OLMo 3 rows combine the GPU counts in the OLMo-core
+<code>src/scripts/official/OLMo3/README.md</code> table with the <code>GLOBAL_BATCH_SIZE</code>,
+<code>DEFAULT_SEQUENCE_LENGTH</code> and <code>cp_config</code> literals in the matching script; the DP
+degree is the quotient world ÷ (TP × CP × PP), which those scripts do not print.
+</p>
+
+<h2>Where the global batch goes at fixed tokens per step</h2>
+<div class="bars" id="bars"></div>
+<p class="cap">
+Each bar shows the share of the world size taken by one parallel axis for the selected preset. The
+tokens per step stay constant across the three Llama 3.1 405B rows (16M) while the sequence length
+rises from 8,192 to 131,072, so the product CP × DP is rearranged rather than the batch changed.
+</p>
+
+</div>
+
+<script>
+const PRESETS = [
+  { name: "Llama 3.1 405B — 8K ctx, 8,192 GPUs", tp: 8, cp: 1, pp: 16, dp: 64,
+    seq: 8192, gb: 64 * 32 * 8192, mb: 32 },
+  { name: "Llama 3.1 405B — 8K ctx, 16,384 GPUs", tp: 8, cp: 1, pp: 16, dp: 128,
+    seq: 8192, gb: 128 * 16 * 8192, mb: 16 },
+  { name: "Llama 3.1 405B — 128K ctx, 16,384 GPUs", tp: 8, cp: 16, pp: 16, dp: 8,
+    seq: 131072, gb: 8 * 16 * 131072, mb: 16 },
+  { name: "OLMo 3 7B — pretrain, 512 GPUs", tp: 1, cp: 1, pp: 1, dp: 512,
+    seq: 8192, gb: 8192 * 512, mb: 2 },
+  { name: "OLMo 3 7B — midtrain, 128 GPUs", tp: 1, cp: 1, pp: 1, dp: 128,
+    seq: 8192, gb: 2 ** 21, mb: 2 },
+  { name: "OLMo 3 7B — long-context, 256 GPUs", tp: 1, cp: 8, pp: 1, dp: 32,
+    seq: 65536, gb: 65536 * 64, mb: 1 },
+  { name: "OLMo 3 32B — pretrain, 1,024 GPUs", tp: 1, cp: 1, pp: 1, dp: 1024,
+    seq: 8192, gb: 8 * 1024 * 1024, mb: 1 },
+  { name: "OLMo 3 32B — long-context, 1,024 GPUs", tp: 1, cp: 8, pp: 1, dp: 128,
+    seq: 65536, gb: 8 * 1024 * 1024, mb: 1 }
+];
+
+const $ = id => document.getElementById(id);
+const IDS = ["tp", "pp", "cp", "dp", "seq", "gb", "mb"];
+const fmt = n => Number.isFinite(n) ? n.toLocaleString("en-US") : "—";
+
+function readState() {
+  const s = {};
+  IDS.forEach(k => { s[k] = Math.max(1, Math.floor(Number($(k).value) || 1)); });
+  return s;
+}
+
+function derive(s) {
+  const world = s.tp * s.pp * s.cp * s.dp;
+  const seqs = s.gb / s.seq;
+  const perdp = seqs / s.dp;
+  const accum = Math.ceil(perdp / s.mb);
+  return { world, seqs, perdp, accum,
+           perdev: s.seq / s.cp, steps1T: 1e12 / s.gb,
+           exactSeqs: Number.isInteger(seqs), exactPerDp: Number.isInteger(perdp) };
+}
+
+function render() {
+  const s = readState(), d = derive(s);
+  $("o-world").textContent = fmt(d.world);
+  $("o-seqs").textContent = d.exactSeqs ? fmt(d.seqs) : d.seqs.toFixed(2);
+  $("o-perdp").textContent = d.exactPerDp ? fmt(d.perdp) : d.perdp.toFixed(2);
+  $("o-accum").textContent = fmt(d.accum);
+  $("o-perdev").textContent = fmt(Math.round(d.perdev));
+  $("o-steps").textContent = fmt(Math.round(d.steps1T));
+
+  const flags = [];
+  if (!d.exactSeqs) {
+    flags.push(["warn", "global batch is not a whole number of sequences: " +
+      fmt(s.gb) + " / " + fmt(s.seq) + " = " + d.seqs.toFixed(3) +
+      ". A loader that rounds here changes tokens per step without raising an error."]);
+  } else if (!d.exactPerDp) {
+    flags.push(["warn", "sequences per step (" + fmt(d.seqs) + ") is not divisible by DP (" +
+      fmt(s.dp) + "). Some data-parallel ranks receive one sequence more than others, so the " +
+      "realized tokens per step differs from the configured value."]);
+  } else {
+    flags.push(["ok", "tokens per step = " + fmt(s.gb) + " and every DP group holds " +
+      fmt(d.perdp) + " sequence(s), accumulated over " + fmt(d.accum) + " micro-step(s)."]);
+  }
+  if (s.seq % s.cp !== 0) {
+    flags.push(["warn", "sequence length " + fmt(s.seq) + " is not divisible by CP degree " +
+      fmt(s.cp) + "; the sequence cannot be split evenly across context-parallel ranks."]);
+  }
+  $("flags").innerHTML = flags.map(f =>
+    '<div class="flag ' + f[0] + '">' + f[1] + "</div>").join("");
+
+  const total = d.world;
+  const axes = [["TP", s.tp], ["CP", s.cp], ["PP", s.pp], ["DP", s.dp]];
+  $("bars").innerHTML = axes.map(([k, v]) => {
+    const pct = Math.max(1.2, 100 * Math.log2(v + 1) / Math.log2(total + 1));
+    return '<div style="margin:7px 0"><div class="barlab">' + k + " = " + fmt(v) +
+      '</div><div class="bar" style="width:' + pct.toFixed(1) + '%"></div></div>';
+  }).join("");
+}
+
+function applyPreset(p) {
+  $("tp").value = p.tp; $("pp").value = p.pp; $("cp").value = p.cp; $("dp").value = p.dp;
+  $("seq").value = p.seq; $("gb").value = p.gb; $("mb").value = p.mb;
+  render();
+}
+
+$("presets").innerHTML = "";
+PRESETS.forEach((p, i) => {
+  const b = document.createElement("button");
+  b.textContent = p.name;
+  b.addEventListener("click", () => applyPreset(p));
+  $("presets").appendChild(b);
+});
+
+document.querySelector("#cmp tbody").innerHTML = PRESETS.map(p => {
+  const d = derive({ ...p, gb: p.gb, seq: p.seq });
+  return "<tr><td>" + p.name + "</td>" +
+    ['<td class="num">' + p.tp + "</td>", '<td class="num">' + p.cp + "</td>",
+     '<td class="num">' + p.pp + "</td>", '<td class="num">' + p.dp + "</td>",
+     '<td class="num">' + fmt(d.world) + "</td>", '<td class="num">' + fmt(p.seq) + "</td>",
+     '<td class="num">' + fmt(p.gb) + "</td>",
+     '<td class="num">' + (Number.isInteger(d.perdp) ? fmt(d.perdp) : d.perdp.toFixed(2)) + "</td>"
+    ].join("") + "</tr>";
+}).join("");
+
+IDS.forEach(k => $(k).addEventListener("input", render));
+applyPreset(PRESETS[0]);
+</script>
+</body>
+</html>

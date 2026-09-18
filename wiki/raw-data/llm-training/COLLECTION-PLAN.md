@@ -392,3 +392,67 @@ The learner explicitly flagged long-context synthesis as a must-have. Long-conte
 After the first collection pass, list any bullet above that could not be filled (source paywalled, no good extract, contradictions) here. The planner uses the gap log to decide whether a chapter needs to be cut or scope-narrowed.
 
 - (empty — populated after pass 1)
+
+---
+
+## 2026-09 revision
+
+Recorded 2026-09-18. The checklist above is kept unchanged; this section records what the revision did to the library.
+
+### Card counts
+
+| Measure | Before | After | How counted |
+|---|---|---|---|
+| Source cards (one artifact each) | 294 | 411 | `find . -name '*.md'` under the six subdirectories, excluding `*-recipe.md`; "before" is the after-count minus the 117 cards whose `## Verification` section says `Created on 2026-09-…` |
+| Companion recipe ledgers (`<slug>-recipe.md`) | not separately counted | 66 | same `find`, restricted to `*-recipe.md`; 14 of them carry a `Created on 2026-09-…` line |
+| Files in the library excluding `README.md`, `COLLECTION-PLAN.md`, `insights*.md` | — | 477 | cards + recipe ledgers |
+
+Distribution of the 411 cards: `papers/` 305, `model-reports/` 40, `blogs/` 37, `frameworks/` 11, `classics/` 10, `labs/` 8.
+
+### Verification sections
+
+Every card written or rewritten in this revision carries a `## Verification` section recording the date the claims were
+checked against the primary source, per §9 of the authoring standard. Measured coverage over the 411 cards:
+
+- 373 cards have a `## Verification` section; 372 of those record a 2026-09 date (`Checked on 2026-09-…` for a rewritten
+  card, `Created on 2026-09-…` for a new one). `papers/training-verifiers-to-solve-math-word-problems.md` has the section
+  without a date.
+- 38 cards have no `## Verification` section: the 8 `labs/` pages, 7 `blogs/` pages, 2 `classics/` pages, 19 `papers/`
+  pages and 2 `model-reports/` pages that were not touched by this revision. These are listed in the gap log below as
+  the verification backlog.
+- 45 of the 66 recipe ledgers carry a `## Verification` section; 21 do not.
+
+### New topic buckets
+
+The revision added cards in eight buckets that the original checklist did not separate:
+
+1. **Generality** — measurement of breadth, benchmark re-instantiation, contamination and shortcut effects, unseen-constraint transfer. Indexed in `[[insights-generality]]`.
+2. **Negative feedback** — the four meanings of "negative", likelihood displacement, anchored negative gradients, step-level and trajectory-level negatives. Indexed in `[[insights-negative-feedback]]`.
+3. **Recipes** — per-model `## Recipe ledger` tables and 66 `<slug>-recipe.md` companions holding the values that did not fit inside a 120-line card, in the §5.2 column format (model, size, stage, setting, value, source location, status, evidence).
+4. **Long context** — positional-encoding extension, length-upsampled continued pretraining, effective-versus-nominal context, short-context regression. Indexed in `[[insights-midtraining-context-extension]]`.
+5. **Long-context synthesis** — synthesis of long-document and long-conversation supervision, and the benchmarks used to check it. Indexed in `[[insights-long-context-synthesis]]`.
+6. **Agentic** — trajectory manufacture, multi-environment RL, agentic side effects on safety and tool honesty, agentic benchmark validity. Indexed in `[[insights-agentic]]`.
+7. **Distillation practice** — teacher selection, trace curation and verification thresholds, on-policy and pretraining-time distillation, length control of distilled students. Indexed in `[[insights-distillation]]`.
+8. **Non-paper sources** — official blogs, model and dataset cards, released configs and framework commits, each labelled `official` / `practitioner evidence` / `anecdotal` per §3 of the authoring standard.
+
+`insights.md` was rebuilt as a 39-line index over twelve theme pages (`insights-<theme>.md`), replacing the previous
+single-section page.
+
+### Gap log — slugs still missing
+
+Confirmed absent by listing the library directories on 2026-09-18. Grouped by bucket; `[ ]` means no file exists.
+
+- **Scaling and pretraining data**: `kaplan-scaling-laws`, `chinchilla-compute-optimal`, `dclm`, `nemotron-cc`, `qurating`, `repeated-data-scaling`, `quantifying-memorization`, `pretrainers-guide-training-data`, `factual-knowledge-acquisition-pretraining`, `physics-of-lm-3-1-knowledge-storage`, `smollm2`, `minicpm`, `overtraining-downstream-scaling`, `overtrained-lms-harder-to-finetune`.
+- **Generality and instruction-tuning lineage**: `flan`, `flan-collection`, `flan-palm-scaling-instruction-finetuning`, `t0-multitask-prompted-training`, `super-natural-instructions`, `gpt-3-few-shot`, `urial`, `emergent-abilities`, `emergent-abilities-mirage`, `reversal-curse`, `to-code-or-not-to-code`, `guru-cross-domain-rl`, `sft-memorizes-rl-generalizes`, `cognitive-behaviors-self-improving-reasoners`.
+- **Forgetting, merging, and the alignment tax**: `catastrophic-forgetting-continual-finetuning`, `continual-pretraining-rewarm-replay`, `lora-learns-less-forgets-less`, `lora-without-regret`, `wise-ft`, `rls-razor`, `retaining-by-doing`, `mitigating-alignment-tax-rlhf`, `sft-data-composition-dmt`.
+- **Negative feedback**: `nft-negative-aware-finetuning`, `unlikelihood-training`, `critique-fine-tuning`, `learning-dynamics-llm-finetuning`, `dpo-positive`, `negative-sample-reinforcement`, `rl-on-incorrect-synthetic-data`, `redi-reinforcement-distillation`, `raft-reinforce-rej-minimalist`, `lazy-likelihood-displacement-grpo`, `preference-ranking-accuracy`, `on-policy-suboptimal-preference-data`, `online-offline-alignment-gap`.
+- **RL algorithms and recipes**: `dapo`, `scalerl`, `unpacking-dpo-ppo`, `olmo-core-olmo3-configs`, `smollm3-training-configs`, `smol-training-playbook`, `domain-upsampling-end-of-training`.
+- **Evaluation, contamination, and judges**: `training-on-the-test-task`, `leaderboard-illusion`, `rephrased-samples-contamination`, `reasoning-or-memorization-rl-contamination`, `length-controlled-alpacaeval`, `ifeval`, `why-language-models-hallucinate`, `finetuning-new-knowledge-hallucination`.
+- **Long context and long-context synthesis**: `lost-in-multi-turn`, `instruction-hierarchy`, `ultralong-128k-to-4m`, `artificial-needles-real-haystacks`, `clipper-compression-synth`, `parrot-multi-turn`, `prefeval`, `qwenlong-l1-5`, `openai-mrcr-graphwalks`, `interconnects-llama-4-long-context`.
+- **Agentic**: `tau-bench`, `search-r1`, `swe-smith`, `simpletir`, `ragen-starpo`, `agent-data-protocol`, `agentfounder`, `agentscaler`, `midtool`, `kimi-dev`, `kimi-researcher`, `cwm-code-world-model`, `qwen3-coder-next`, `tongyi-deepresearch`, `cot-monitoring-obfuscation`.
+- **Distillation practice**: `acereason-nemotron-1-1`, `openmathreasoning`, `opencodereasoning`, `light-r1`, `klear-reasoner`, `small-models-learnability-gap`, `overthinking-o1-like-llms`, `thinkingmachines-on-policy-distillation`, `hf-open-r1-update-2-math220k`, `hf-open-r1-update-3`.
+- **Model reports**: `gemma-3`, `gemini-1-5`, `hermes-4`, `llama-nemotron`, `command-a`, `falcon-h1r`, `pangu-embedded`, `ministral-3`, `mimo-v2-flash`, `nemotron-nano-2`, `nemotron-3-nano`, `nemotron-3-super`, `nemotron-3-ultra`, `deepseek-v4`, `glm-5`, `kimi-k2-5`, `kimi-k3`, `seed-oss-36b`, `claude-4-system-card`, `gpt-5-system-card`.
+- **Verification backlog** (cards present but with no `## Verification` section): all 8 `labs/` pages; `blogs/hf-rlhf-illustrated`, `blogs/nathan-lambert-rl-overview`, `blogs/lilianweng-weight-init`, `blogs/lilianweng-reasoning-llms`, `blogs/sebastian-raschka-synthetic`, `blogs/allenai-tulu-synth`, `blogs/allenai-tulu-blog`; `classics/label-smoothing`, `classics/dropout`; `model-reports/pixtral-large`, `model-reports/skywork-o1`; and 19 `papers/` cards including `r1-zero-analysis`, `ultrachat-construction`, `yejin-choi-rainbow`, `longembed-synth`, `system-prompt-diversity`, `synthetic-data-scaling-laws`, `longalpaca`, `longrope-data`, `gemini-long-context-tricks`, `xwin-math` and `genie`.
+
+The 2026-09 candidate sweep proposed 617 slugs; 117 were written in this revision and 500 remain unwritten. The groups
+above list the ones the audits marked `must` or that a theme page needed and could not cite.

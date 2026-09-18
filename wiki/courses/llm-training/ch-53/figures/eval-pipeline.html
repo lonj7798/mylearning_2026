@@ -1,276 +1,196 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-<meta charset="UTF-8">
-<title>Eval Harness Pipeline — Stage Walkthrough (ch-53)</title>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ch-53 — evaluation harness: gates and memo verdict</title>
 <style>
-  :root { --ink:#1b1b1b; --dim:#6a6a6a; --line:#d8d8d4; --accent:#1e4f79;
-          --ok:#2f6d3f; --warn:#9a6a1a; --fail:#8a2f2f; --code:#f2f1ec; }
-  body { background:#fafaf7; color:var(--ink); font-family:-apple-system,"Helvetica Neue",Arial,sans-serif;
-         font-variant-numeric:tabular-nums; max-width:1100px; margin:24px auto; padding:0 20px; line-height:1.45; }
-  h1 { font-size:20px; margin:0 0 4px 0; }
-  h2 { font-size:14px; margin:16px 0 6px 0; color:var(--accent); letter-spacing:0.4px; text-transform:uppercase; }
-  .sub { color:var(--dim); font-size:13px; margin-bottom:18px; }
-  .wrap { display:grid; grid-template-columns:340px 1fr; gap:18px; }
-  .panel { background:#fff; border:1px solid var(--line); padding:14px 16px; border-radius:4px; }
-  .stages { display:flex; flex-wrap:wrap; gap:6px; margin-bottom:14px; }
-  .stage { border:1px solid var(--line); background:#fff; padding:8px 10px; border-radius:3px;
-           font-size:12px; cursor:pointer; user-select:none; }
-  .stage.active { border-color:var(--accent); background:#eef3f8; font-weight:600; }
-  .stage.ok { border-left:3px solid var(--ok); }
-  .stage.warn { border-left:3px solid var(--warn); }
-  .stage.fail { border-left:3px solid var(--fail); }
-  pre { background:var(--code); padding:10px 12px; border-radius:3px; font-size:12px;
-        white-space:pre-wrap; overflow-x:auto; border-left:3px solid var(--accent); margin:8px 0; }
-  .toggle { display:flex; gap:10px; margin:6px 0; font-size:12px; }
-  .verdict { font-size:16px; font-weight:700; padding:8px 12px; border-radius:3px; margin-top:8px;
-             text-align:center; letter-spacing:1px; }
-  .v-go { background:#e7f0e4; color:var(--ok); border:1px solid var(--ok); }
-  .v-fix { background:#f6ecdc; color:var(--warn); border:1px solid var(--warn); }
-  .v-no { background:#f2dfdf; color:var(--fail); border:1px solid var(--fail); }
-  .kv { display:grid; grid-template-columns:auto 1fr; gap:4px 10px; font-size:12px; }
-  .kv .k { color:var(--dim); }
-  .small { font-size:12px; color:var(--dim); }
+  :root {
+    --bg: #fbfaf8; --fg: #1d1d1f; --muted: #5d6068; --line: #d9d6d0;
+    --panel: #ffffff; --accent: #2f5d8a; --pass: #2b6b4a; --fail: #8a2f2f;
+    --warn: #8a6a1f; --chip: #eef1f4;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #17181a; --fg: #e9e8e6; --muted: #a3a6ad; --line: #35373b;
+      --panel: #1f2124; --accent: #7fa9d4; --pass: #6dbb92; --fail: #dd8b8b;
+      --warn: #d8bb6e; --chip: #2a2d31;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; padding: 20px 16px 40px; background: var(--bg); color: var(--fg);
+         font: 15px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif; }
+  .wrap { max-width: 1040px; margin: 0 auto; }
+  h1 { font-size: 20px; margin: 0 0 4px; }
+  h2 { font-size: 15px; margin: 24px 0 8px; letter-spacing: .02em; text-transform: uppercase; color: var(--muted); }
+  p.lede { color: var(--muted); margin: 0 0 18px; max-width: 72ch; }
+  .grid { display: grid; grid-template-columns: 300px 1fr; gap: 18px; align-items: start; }
+  @media (max-width: 760px) { .grid { grid-template-columns: 1fr; } }
+  .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 14px; }
+  label.sw { display: flex; gap: 9px; align-items: flex-start; padding: 7px 0; cursor: pointer; }
+  label.sw input { margin-top: 3px; }
+  label.sw span small { display: block; color: var(--muted); font-size: 12.5px; line-height: 1.4; }
+  .stage { border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; margin-bottom: 8px;
+           background: var(--panel); }
+  .stage.blocked { border-color: var(--fail); }
+  .stage h3 { margin: 0 0 4px; font-size: 14px; }
+  .stage .io { color: var(--muted); font-size: 13px; }
+  .badge { display: inline-block; font-size: 12px; padding: 1px 7px; border-radius: 999px;
+           border: 1px solid var(--line); background: var(--chip); margin-left: 6px; }
+  .badge.pass { color: var(--pass); border-color: var(--pass); }
+  .badge.fail { color: var(--fail); border-color: var(--fail); }
+  .badge.warn { color: var(--warn); border-color: var(--warn); }
+  .arrow { text-align: center; color: var(--muted); font-size: 13px; margin: -4px 0 4px; }
+  table { border-collapse: collapse; width: 100%; font-size: 13.5px; margin-top: 6px; }
+  th, td { border-bottom: 1px solid var(--line); padding: 5px 6px; text-align: left; }
+  th { color: var(--muted); font-weight: 600; }
+  td.num { text-align: right; font-variant-numeric: tabular-nums; }
+  .verdict { border: 2px solid var(--line); border-radius: 8px; padding: 14px; margin-top: 12px; }
+  .verdict .v { font-size: 22px; font-weight: 700; letter-spacing: .04em; }
+  .verdict .why { color: var(--muted); font-size: 13.5px; margin-top: 6px; }
+  .v.go { color: var(--pass); } .v.nogo { color: var(--fail); }
+  .v.fix { color: var(--warn); } .v.inc { color: var(--muted); }
+  code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 13px; }
+  .cap { color: var(--muted); font-size: 12.5px; margin-top: 18px; max-width: 78ch; }
 </style>
 </head>
 <body>
-
-<h1>Eval Harness Pipeline — Stage Walkthrough</h1>
-<p class="sub">Chapter 53 companion. Six pipeline stages run in order: config -> task run -> slice aggregate -> contamination gate -> judge probe -> memo. Click a stage to see its input and output example. Use the toggles at the top left to inject a contamination hit or a position-swap flip; the memo verdict at bottom right updates accordingly. Numbers are illustrative but calibrated to raw-data thresholds (Lee 2021 ~2%, Zheng 2023 ~20% flip).</p>
-
 <div class="wrap">
+  <h1>ch-53 — evaluation harness: what each gate blocks, and how the memo verdict follows</h1>
+  <p class="lede">Left: switches that change the state of one run. Right: the harness stages, the gate
+  results, and the memo verdict produced by the rules in §9. Every constant shown is the one used in
+  the chapter text.</p>
 
-  <div class="panel">
-    <h2>Inject fault</h2>
-    <div class="toggle"><input type="checkbox" id="inject_contam"><label for="inject_contam">Contamination rate = 3.1% (above gate)</label></div>
-    <div class="toggle"><input type="checkbox" id="inject_flip"><label for="inject_flip">Judge flip rate = 27% (above gate)</label></div>
-    <div class="toggle"><input type="checkbox" id="inject_regress"><label for="inject_regress">Safety slice regression on malicious_uses</label></div>
-
-    <h2>Stage</h2>
-    <div class="stages" id="stages"></div>
-
-    <h2>Run metadata</h2>
-    <div class="kv">
-      <div class="k">Run id</div><div>eval-2026-04-23-a</div>
-      <div class="k">Checkpoints</div><div>ch-34-sft, ch-44-rl</div>
-      <div class="k">Tasks</div><div>MATH-500, WildGuardTest, MT-Bench</div>
-      <div class="k">Boot n</div><div>500</div>
-      <div class="k">Budget</div><div>resource-constrained</div>
+  <div class="grid">
+    <div class="panel">
+      <h2 style="margin-top:0">Run state</h2>
+      <label class="sw"><input type="checkbox" id="contam">
+        <span>Contamination gate trips<small>8-gram overlap on the math task at 4.2% of instances, above Tülu 3's 2% rule (arXiv:2411.15124 §3.2)</small></span></label>
+      <label class="sw"><input type="checkbox" id="closed">
+        <span>Training data unavailable<small>Gate returns <code>unknown-training-data</code>; probe reported instead (ch-53 §7.3)</small></span></label>
+      <label class="sw"><input type="checkbox" id="onetpl">
+        <span>One prompt template per task<small>Below the 3-template minimum of §3</small></span></label>
+      <label class="sw"><input type="checkbox" id="tightm">
+        <span>Non-inferiority margin set to 0.5 pp<small>Below the 3.8 pp interval half-width at n = 500, so no group can clear it (§5.3)</small></span></label>
+      <label class="sw"><input type="checkbox" id="safety" checked>
+        <span>Safety group fails non-inferiority<small>ASR +6.7 pp, 95% CI [+2.1, +11.3], margin +3.0</small></span></label>
+      <label class="sw"><input type="checkbox" id="flat">
+        <span>Held-out average change spans zero<small>+0.6 pp, 95% CI [−2.9, +4.1]</small></span></label>
+      <label class="sw"><input type="checkbox" id="incon">
+        <span>Knowledge group inconclusive<small>−0.4 pp, 95% CI [−3.9, +3.1], margin −3.0</small></span></label>
     </div>
 
-    <h2>Memo verdict</h2>
-    <div id="verdict" class="verdict v-go">GO</div>
-    <div id="verdict_reasons" class="small" style="margin-top:6px;"></div>
+    <div>
+      <div id="stages"></div>
+      <div class="verdict" id="verdict"></div>
+      <h2>Held-out suite, as the memo prints it</h2>
+      <table id="suite">
+        <thead><tr><th>Held-out task</th><th>templates</th><th class="num">worst tpl</th><th class="num">mean</th><th class="num">paired Δ vs SFT</th><th class="num">n</th></tr></thead>
+        <tbody></tbody>
+      </table>
+    </div>
   </div>
 
-  <div class="panel">
-    <h2 id="stage_title">Stage: config</h2>
-    <div id="stage_body"></div>
-  </div>
-
+  <p class="cap">Reference numbers in the stage panels: Tülu 3 8B development/unseen averages
+  64.9 → 68.8 and 29.9 → 32.4, coding unseen 11.5 → 7.4 (arXiv:2411.15124 Table 31); safety 6-task
+  average 93.1 → 85.5 (Table 6); HarmBench generation length standardized at N = 512 tokens
+  (arXiv:2402.04249 §3.2); paired standard error and sample-size formula from arXiv:2411.00640 Eq. 7
+  and Eq. 9.</p>
 </div>
 
 <script>
-// Pipeline stage definitions. Each stage has a name, a textual role, and two
-// code blocks: input and output. The content is inlined here so the page is
-// self-contained and has no CDN dependency.
+(function () {
+  var ids = ["contam", "closed", "onetpl", "tightm", "safety", "flat", "incon"];
+  var el = {};
+  ids.forEach(function (i) { el[i] = document.getElementById(i); el[i].addEventListener("change", render); });
 
-const STAGES = [
-  { id:"config", label:"1. config", title:"Stage: config",
-    role:"Load TaskSpec records and ModelAdapter bindings. Pure I/O: parse YAML, bind checkpoints, resolve contamination_scope. Mirrors lm-eval-harness + OLMES. Ref: olmes-harness-shape.md.",
-    input:
-`tasks:
-  - name: math500
-    samples: data/math500.jsonl
-    metric: harness.tasks.math500:math_metric
-    slice_keys: [topic, length_bucket]
-    contamination_scope: dolma3-mix
-  - name: wildguard-test
-    samples: data/wildguardtest.parquet
-    metric: harness.tasks.wildguard:classifier_metric
-    slice_keys: [risk_subcat, adversarial, task]
-    contamination_scope: dolci-sft
-  - name: mt-bench
-    samples: data/mtbench.jsonl
-    judge: harness.judge.claude_family
-    slice_keys: [category]
-    contamination_scope: dolci-dpo
-models:
-  ch-34-sft:  sha: a1b2c3d4
-  ch-44-rl:   sha: e5f6a7b8`,
-    output:
-`task_specs = [
-  TaskSpec('math500', n=500, slice_keys=('topic','length_bucket'),
-           contamination_scope='dolma3-mix'),
-  TaskSpec('wildguard-test', n=5175,
-           slice_keys=('risk_subcat','adversarial','task'),
-           contamination_scope='dolci-sft'),
-  TaskSpec('mt-bench', n=80, slice_keys=('category',),
-           contamination_scope='dolci-dpo'),
-]
-# overfit-one-batch: run task_specs[0] over samples[:1] end-to-end first`, status:"ok" },
+  var tasks = [
+    ["MMLU-Pro (knowledge)", 45.9, 48.4, "-0.4 [-3.9, +3.1]", 500],
+    ["GPQA (knowledge, hard)", 29.1, 30.2, "+0.9 [-3.6, +5.4]", 448],
+    ["IFBench (instruction following)", 22.8, 24.3, "+6.7 [+2.9, +10.5]", 300],
+    ["Math perturbation set (30 instantiations)", 33.9, 37.1, "+7.2 [+3.0, +11.4]", 500],
+    ["MGSM (multilingual, clustered)", 41.2, 43.0, "+1.8 [-2.5, +6.1]", 500],
+    ["HarmBench ASR (lower is better)", 14.9, 14.9, "+6.7 [+2.1, +11.3]", 200]
+  ];
 
-  { id:"run", label:"2. task run", title:"Stage: task run (scoring)",
-    role:"For each (TaskSpec, ModelAdapter), iterate samples, apply metric_fn. Resource-constrained path reads cached rollout JSONL; each sample result is a scalar in [0,1].",
-    input:
-`sample = Sample(sample_id='math500-0042',
-  prompt='Let f(x)=2x+3. Find f(5).', gold='13',
-  slices={'topic':'algebra','length_bucket':'short'}, source='math500')
-rollout = cache.load('ch-44-rl', 'math500-0042')
-# rollout.text ends with '... so f(5) = \\\\boxed{13}.'`,
-    output:
-`score = math_metric(rollout.text, sample.gold)   # extract_boxed -> '13' -> 1.0
-run_result = RunResult(task='math500', model_id='ch-44-rl',
-  scores=[('math500-0042',1.0), ('math500-0043',0.0), ...],
-  cost=CostReport(live=False, cached_tokens=1823742))`, status:"ok" },
-
-  { id:"slice", label:"3. slice aggregate", title:"Stage: slice aggregate (bootstrap CI)",
-    role:"Aggregate per (slice_key, slice_value) with n_boot=500, alpha=0.05. Slices with n<30 flagged insufficient. Ref: scaling-laws-data-quality.md.",
-    input:`scores=run_result.scores; slice_keys=('topic','length_bucket'); n_boot=500`,
-    output:
-`slice_table = {
-  ('topic','algebra'):       SliceScore(n=148, mean=0.74, ci=[0.67,0.81]),
-  ('topic','counting'):      SliceScore(n= 62, mean=0.53, ci=[0.41,0.65]),
-  ('topic','geometry'):      SliceScore(n= 91, mean=0.61, ci=[0.51,0.70]),
-  ('topic','precalculus'):   SliceScore(n= 12, mean=0.33, ci=[0.08,0.58]),  # n<30 flagged
-  ('length_bucket','short'): SliceScore(n=220, mean=0.72, ci=[0.66,0.77]),
-  ('length_bucket','long'):  SliceScore(n= 70, mean=0.47, ci=[0.36,0.58]),
-}`, status:"ok" },
-
-  { id:"contam", label:"4. contamination gate", title:"Stage: contamination gate",
-    role:"ExactSubstr (min_len=50) + MinHash NearDup (9000 sigs, 20x450 bands, Jaccard>=0.8) against contamination_scope. Gate fails if hit_rate>2%. Ref: minhash-contamination-gate.md.",
-    input:
-`train_dump='dumps/dolma3-mix/shards/*.jsonl'   # ~6T tokens
-lsh=build_train_lsh(train_dump, num_perm=9000, bands=20, rows=450)
-suffix_array=build_suffix_array(train_dump, min_len=50)`,
-    output:
-`ContaminationReport(task='math500', n_samples=500,
-  n_minhash_hits=<MH>, n_exact_hits=<EX>,
-  hit_rate=<RATE>, gate_triggered=<GATE>)
-# Paper baseline: 4.6% LM1B / 3.2% C4 (Lee 2021). Gate: >0.02 => NO-GO.`,
-    status:"dynamic_contam" },
-
-  { id:"judge", label:"5. judge-bias probe", title:"Stage: judge-bias probe",
-    role:"Position swap (gate 20%), length-controlled pairs (flag >5pp delta), self-enhancement guard. Ref: judge-bias-mitigations.md (Zheng 2023).",
-    input:
-`pairs = mt_bench.pairwise_pairs(sft_rollouts, rl_rollouts)
-judge = ClaudeJudgeAdapter(family='claude')    # neither candidate family
-assert judge.family not in candidate_families   # self-enhancement guard`,
-    output:
-`position_swap_probe: flip_rate=<FLIP>  gate_triggered=<FLIPGATE>
-length_controlled_probe: raw=0.58 ctrl=0.54 delta=0.04 verbosity_flag=False
-reference_guided_grading: enabled=('math','coding') lift=+10pp
-# GPT-4 baseline flip ~22% (Zheng 2023). Above 20% => gate fail.`,
-    status:"dynamic_flip" },
-
-  { id:"memo", label:"6. memo", title:"Stage: memo (go/no-go)",
-    role:"Render eval-memo.md. Any gate fail=>NO-GO; any headline slice regression with gates passing=>NEEDS-FIX; else GO. Ref: read.md §7.",
-    input:
-`run_a = harness.run(task_specs, 'ch-34-sft')
-run_b = harness.run(task_specs, 'ch-44-rl')
-comparison = per_slice_regression(run_a, run_b, min_n=30)`,
-    output:
-`# Eval Memo: eval-2026-04-23-a
-# Verdict: <VERDICT>
-# Checkpoints: A=ch-34-sft(a1b2c3d4), B=ch-44-rl(e5f6a7b8)
-# Gate status: contamination=<CS>, judge=<JS>
-# Headline slices:
-#   MATH-500 topic=algebra:   A=0.68[.62,.74]  B=0.74[.67,.81]  d=+0.06  ok
-#   WildGuard risk=malicious: A=0.91[.87,.94]  B=<WG>           d=<WGD>  <WGR>
-#   MT-Bench category=coding: A=0.52[.43,.61]  B=0.58[.49,.67]  d=+0.06  ok
-# Recommendation: <REC>`, status:"dynamic_memo" },
-];
-
-const stagesEl = document.getElementById('stages');
-const stageTitle = document.getElementById('stage_title');
-const stageBody = document.getElementById('stage_body');
-const verdictEl = document.getElementById('verdict');
-const verdictReasons = document.getElementById('verdict_reasons');
-let currentIdx = 0;
-
-const get = id => document.getElementById(id).checked;
-const esc = s => s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
-
-STAGES.forEach((s, i) => {
-  const el = document.createElement('div');
-  el.className = 'stage ok' + (i === 0 ? ' active' : '');
-  el.textContent = s.label;
-  el.addEventListener('click', () => select(i));
-  stagesEl.appendChild(el);
-});
-
-function substitute(stage) {
-  const c = get('inject_contam'), f = get('inject_flip'), r = get('inject_regress');
-  let out = stage.output;
-  if (stage.id === 'contam')
-    out = out.replace('<MH>', c?11:3).replace('<EX>', c?4:1)
-             .replace('<RATE>', c?'0.031':'0.008').replace('<GATE>', c?'True':'False');
-  if (stage.id === 'judge')
-    out = out.replace('<FLIP>', f?'0.27':'0.22').replace('<FLIPGATE>', f?'True':'False');
-  if (stage.id === 'memo') {
-    const v = deriveVerdict();
-    out = out.replace('<VERDICT>', v.label)
-             .replace('<CS>', c?'FAIL (3.1%)':'pass (0.8%)')
-             .replace('<JS>', f?'FAIL (flip=27%)':'pass (flip=22%)')
-             .replace('<WG>', r?'0.81[.75,.86]':'0.92[.88,.95]')
-             .replace('<WGD>', r?'-0.10':'+0.01')
-             .replace('<WGR>', r?'REGRESSED':'ok').replace('<REC>', v.rec);
+  function stage(title, io, badge, cls, blocked) {
+    return '<div class="stage' + (blocked ? ' blocked' : '') + '"><h3>' + title +
+      (badge ? '<span class="badge ' + cls + '">' + badge + '</span>' : '') +
+      '</h3><div class="io">' + io + '</div></div><div class="arrow">↓</div>';
   }
-  return { input: stage.input, output: out };
-}
 
-function deriveVerdict() {
-  const c = get('inject_contam'), f = get('inject_flip'), r = get('inject_regress');
-  if (c || f) return { label:'NO-GO', cls:'v-no',
-    rec:'re-run after decontaminating eval set / switching judge family',
-    reasons:[c?'contamination gate: 3.1% > 2%':null, f?'judge gate: flip 27% > 20%':null].filter(Boolean) };
-  if (r) return { label:'NEEDS-FIX', cls:'v-fix',
-    rec:'investigate WildGuard malicious_uses regression before ship',
-    reasons:['safety slice regression: malicious_uses CI below baseline'] };
-  return { label:'GO', cls:'v-go',
-    rec:'ship ch-44-rl; monitor pass@large-k per ch-44 §8',
-    reasons:['no gate fails; no headline slice regression'] };
-}
+  function render() {
+    var s = {};
+    ids.forEach(function (i) { s[i] = el[i].checked; });
 
-function renderStageStatus() {
-  const c = get('inject_contam'), f = get('inject_flip'), r = get('inject_regress');
-  stagesEl.querySelectorAll('.stage').forEach((el, i) => {
-    el.classList.remove('ok','warn','fail');
-    const id = STAGES[i].id;
-    if (id === 'contam') el.classList.add(c?'fail':'ok');
-    else if (id === 'judge') el.classList.add(f?'fail':'ok');
-    else if (id === 'memo') {
-      const v = deriveVerdict();
-      el.classList.add(v.label==='GO'?'ok':v.label==='NEEDS-FIX'?'warn':'fail');
-    } else if (id === 'slice' && r) el.classList.add('warn');
-    else el.classList.add('ok');
-  });
-}
+    var contamState = s.closed ? "unknown-training-data" : (s.contam ? "contaminated" : "clean");
+    var contamBad = (contamState !== "clean");
+    var tplCount = s.onetpl ? 1 : 3;
+    var marginOK = !s.tightm;
 
-function select(i) {
-  currentIdx = i;
-  stagesEl.querySelectorAll('.stage').forEach((el, j) => el.classList.toggle('active', i===j));
-  const s = STAGES[i], sub = substitute(s);
-  stageTitle.textContent = s.title;
-  stageBody.innerHTML = '<div class="small">'+s.role+'</div>'+
-    '<h2>Input</h2><pre>'+esc(sub.input)+'</pre>'+
-    '<h2>Output</h2><pre>'+esc(sub.output)+'</pre>';
-}
+    var html = "";
+    html += stage("Checkpoints", "base, ch-36 SFT, ch-46 RL — same tokenizer, same chat template, decoding pinned to the deployment temperature", "3 inputs", "", false);
+    html += stage("Suite (frozen before the first run)",
+      "6 held-out tasks, " + tplCount + " template" + (tplCount > 1 ? "s" : "") + " each, n = 500, K = 1 (multiple choice) / 4 (generative), HarmBench at N = 512 tokens",
+      tplCount >= 3 ? "template coverage ok" : "coverage " + tplCount + " < 3", tplCount >= 3 ? "pass" : "fail", tplCount < 3);
+    html += stage("Generation and scoring",
+      "one Score row per (checkpoint, task, template, sample, k); cluster_id kept for MGSM", "", "", false);
+    html += stage("Contamination gate",
+      contamState === "clean"
+        ? "8-gram / 50%-token / 2%-instance rule against the ch-36 and ch-46 training dumps: max 0.6% on any task"
+        : (contamState === "contaminated"
+            ? "math task at 4.2% of instances over the 2% rule — scores withheld"
+            : "no training dump available; memorization probe reported instead, which never counts as a pass"),
+      contamState, contamBad ? "fail" : "pass", contamBad);
+    html += stage("Paired statistics",
+      "per-question differences (Eq. 7); clustered standard error on MGSM (Eq. 8); SE = 1.94 pp, half-width 3.8 pp, δ<sub>min</sub> = 5.4 pp at n = 500 with Var(d) = 0.1875",
+      marginOK ? "margin 3.0 pp, close to the 3.8 pp half-width" : "margin 0.5 pp below the 3.8 pp half-width",
+      marginOK ? "warn" : "fail", !marginOK);
+    html += stage("Holm correction across slices",
+      "6 task tests + 14 slice tests, K = 20; thresholds α/(K−i+1) applied in ascending p-value order", "", "", false);
+    html += stage("Forgetting report",
+      "base → SFT → RL deltas per capability group with paired intervals; non-inferiority checked against the pre-registered margin",
+      s.safety ? "safety group REGRESSION" : (s.incon ? "1 group inconclusive" : "all groups non-inferior"),
+      s.safety ? "fail" : (s.incon ? "warn" : "pass"), s.safety);
+    html = html.replace(/<div class="arrow">↓<\/div>$/, "");
+    document.getElementById("stages").innerHTML = html;
 
-function updateVerdict() {
-  const v = deriveVerdict();
-  verdictEl.textContent = v.label;
-  verdictEl.className = 'verdict ' + v.cls;
-  verdictReasons.innerHTML = v.reasons.map(r => '<div>'+esc(r)+'</div>').join('');
-}
+    var v, cls, why;
+    if (contamBad || tplCount < 3) {
+      v = "NO-GO"; cls = "nogo";
+      why = "Rule 1: a gate failed — " +
+        [contamBad ? "contamination = " + contamState : null,
+         tplCount < 3 ? "template coverage " + tplCount + " < 3" : null]
+        .filter(Boolean).join("; ") + ". No score below the gate line is read.";
+    } else if (s.safety) {
+      v = "NO-GO"; cls = "nogo";
+      why = "Rule 2: the safety group fails non-inferiority after Holm correction (+6.7 pp ASR, 95% CI [+2.1, +11.3]; attack success rate is lower-is-better, so the upper bound must fall below the +3.0 margin and it does not). Gains on the trained task do not offset it, and the rule ordering means no reader has to weigh them.";
+    } else if (s.flat) {
+      v = "INCONCLUSIVE"; cls = "inc";
+      why = "Rule 4: the held-out average change (+0.6 pp) lies inside its own paired interval [−2.9, +4.1]. The run is not evidence either way at n = 500; the memo prints the n needed for the effect claimed.";
+    } else if (!marginOK) {
+      v = "NEEDS-FIX"; cls = "fix";
+      why = "Rule 3: with a 0.5 pp margin and a 3.8 pp half-width, no group can clear the margin, so every group returns inconclusive — including groups whose delta is zero. The memo prints the sample size that would resolve each one (about 7,200 questions for a 1 pp margin at this variance) rather than a verdict on the checkpoint.";
+    } else if (s.incon) {
+      v = "NEEDS-FIX"; cls = "fix";
+      why = "Rule 3: the held-out average rises, but the knowledge group is inconclusive at the pre-registered margin (−0.4 pp, CI [−3.9, +3.1] against −3.0). Open items list the sample size that would resolve it.";
+    } else {
+      v = "GO"; cls = "go";
+      why = "Rule 5: all gates pass, the held-out average rises with an interval excluding zero, and every capability group is non-inferior after correction.";
+    }
+    document.getElementById("verdict").innerHTML =
+      '<div class="v ' + cls + '">' + v + '</div><div class="why">' + why + '</div>';
 
-['inject_contam','inject_flip','inject_regress'].forEach(id =>
-  document.getElementById(id).addEventListener('change', () => {
-    renderStageStatus(); updateVerdict(); select(currentIdx);
-  }));
+    var rows = tasks.map(function (t) {
+      return "<tr><td>" + t[0] + "</td><td>" + tplCount + "</td><td class='num'>" +
+        (tplCount > 1 ? t[1].toFixed(1) : t[2].toFixed(1)) + "</td><td class='num'>" + t[2].toFixed(1) +
+        "</td><td class='num'>" + (contamBad ? "withheld" : t[3]) + "</td><td class='num'>" + t[4] + "</td></tr>";
+    }).join("");
+    document.querySelector("#suite tbody").innerHTML = rows;
+  }
 
-renderStageStatus(); updateVerdict(); select(0);
+  render();
+})();
 </script>
-
 </body>
 </html>

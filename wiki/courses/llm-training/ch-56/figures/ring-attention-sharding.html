@@ -1,0 +1,198 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Ring attention in OpenRLHF: slicing and the overlap condition</title>
+<style>
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+         max-width: 1080px; margin: 1.4em auto; padding: 0 1em; color: #1f1f1f; background: #fafafa; }
+  h1 { font-size: 1.2em; margin-bottom: 0.2em; }
+  p.sub { color: #4a4a4a; margin-top: 0.2em; font-size: 0.9em; line-height: 1.55; }
+  .panel { border: 1px solid #dcdcdc; border-radius: 6px; background: #fff; padding: 0.9em 1em;
+           margin-top: 1em; }
+  h2 { font-size: 0.95em; margin: 0 0 0.6em 0; color: #2b2b2b; border-bottom: 1px solid #ececec;
+       padding-bottom: 0.3em; }
+  .controls { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 0.9em; }
+  label { display: block; font-size: 0.85em; color: #333; margin-bottom: 0.25em; }
+  select, input[type=range] { width: 100%; font: inherit; font-size: 0.9em; }
+  .val { font-family: 'SF Mono', Menlo, Consolas, monospace; font-size: 0.85em; color: #204080; }
+  code { background: #f2f2f5; padding: 0.05em 0.33em; border-radius: 3px;
+         font-family: 'SF Mono', Menlo, Consolas, monospace; font-size: 0.88em; }
+  svg { width: 100%; display: block; margin-top: 0.4em; }
+  .rank { stroke: #3c6aa8; stroke-width: 1.2; fill: #e5eefb; }
+  .rank.pad { fill: #f3e6e6; stroke: #b03a3a; stroke-dasharray: 4 3; }
+  .rtext { font-family: 'SF Mono', Menlo, Consolas, monospace; font-size: 10px; fill: #24303f;
+           text-anchor: middle; }
+  .verdict { margin-top: 0.8em; padding: 0.6em 0.8em; border-radius: 5px; font-size: 0.9em;
+             line-height: 1.55; }
+  .ok   { background: #eaf5e2; border: 1px solid #93bd7f; }
+  .bad  { background: #fbe9e9; border: 1px solid #d49a9a; }
+  table { border-collapse: collapse; width: 100%; font-size: 0.86em; margin-top: 0.5em; }
+  th, td { border: 1px solid #e0e0e0; padding: 0.32em 0.5em; text-align: left; }
+  th { background: #f5f6f8; font-weight: 600; }
+  td.n { font-family: 'SF Mono', Menlo, Consolas, monospace; }
+  .cap { font-size: 0.8em; color: #55606e; line-height: 1.55; margin-top: 1.1em;
+         border-top: 1px solid #e3e3e3; padding-top: 0.7em; }
+</style>
+</head>
+<body>
+
+<h1>Ring attention in OpenRLHF: slicing and the overlap condition</h1>
+<p class="sub">
+  Set the interconnect, the ring group size <code>--ds.ring_attn_size</code>, and the number of packed
+  tokens in one training micro-batch. The figure shows how OpenRLHF pads and slices the packed sequence
+  across ranks, and whether the per-rank slice is long enough for key-value transfers to overlap with
+  compute. The overlap condition and the per-host numbers are from
+  <i>Ring Attention with Blockwise Transformers for Near-Infinite Context</i> (arXiv:2310.01889 v4).
+</p>
+
+<div class="panel">
+<h2>Configuration</h2>
+<div class="controls">
+  <div>
+    <label for="host">Host and interconnect</label>
+    <select id="host">
+      <option value="a100nv">A100, NVLink (312 TF, 300 GB/s)</option>
+      <option value="a100ib">A100, InfiniBand (312 TF, 12.5 GB/s)</option>
+      <option value="tpuv4">TPU v4 (275 TF, 268 GB/s)</option>
+      <option value="tpuv3">TPU v3 (123 TF, 112 GB/s)</option>
+      <option value="tpuv5e">TPU v5e (196 TF, 186 GB/s)</option>
+    </select>
+  </div>
+  <div>
+    <label for="ring">Ring group size <span class="val" id="ring-val">8</span></label>
+    <input type="range" id="ring" min="1" max="16" step="1" value="8">
+  </div>
+  <div>
+    <label for="tok">Packed tokens in the micro-batch <span class="val" id="tok-val">32768</span></label>
+    <input type="range" id="tok" min="1024" max="262144" step="1024" value="32768">
+  </div>
+</div>
+</div>
+
+<div class="panel">
+<h2>How OpenRLHF slices the packed sequence</h2>
+<svg id="viz" viewBox="0 0 640 120" role="img" aria-label="Per-rank slices of the packed sequence"></svg>
+<p class="sub" id="slice-note"></p>
+</div>
+
+<div class="panel">
+<h2>Overlap condition</h2>
+<table>
+  <tr><th>Quantity</th><th>Value</th><th>Where it comes from</th></tr>
+  <tr><td>Minimal block size c = F / B</td><td class="n" id="q-c"></td>
+      <td>4dc&sup2;/F &ge; 4cd/B, the condition for transfer to hide behind compute (&sect;3.2)</td></tr>
+  <tr><td>Minimal sequence length per device, s = 6c</td><td class="n" id="q-s"></td>
+      <td>Six blocks are held per host: query, two key-value blocks, two incoming, one output (&sect;3.2)</td></tr>
+  <tr><td>Tokens on each rank in this configuration</td><td class="n" id="q-local"></td>
+      <td>Packed length padded to a multiple of the ring size, then split evenly
+          (<code>ring_attn_utils.py</code>, <code>get_tensor_in_current_ring_attn_rank</code>)</td></tr>
+  <tr><td>Maximum activation bytes per layer</td><td class="n" id="q-act"></td>
+      <td>6bch for ring attention against 2bhs&sup2; for vanilla attention, bfloat16, b = 1,
+          h = 4096 assumed here (Table 1)</td></tr>
+</table>
+<div class="verdict" id="verdict"></div>
+</div>
+
+<div class="cap">
+<b>What the figure asserts, with loci.</b> Minimal block sizes and minimal sequence lengths per host are
+read from Table 2 of arXiv:2310.01889 v4: A100 NVLink 1.0K and 6.2K; A100 InfiniBand 24.5K and 149.5K;
+TPU v3 1.1K and 6.6K; TPU v4 1.0K and 6.2K; TPU v5e 1.1K and 6.3K. The maximum activation size per layer
+is 6bch bytes for ring attention and 2bhs&sup2; for a vanilla transformer (Table 1, bfloat16), where b is
+batch size, h is hidden dimension, s is sequence length and c is block size; this figure fixes b = 1 and
+h = 4096 so the two can be compared, and takes c as the per-rank slice length. Slicing and padding follow
+<code>openrlhf/models/ring_attn_utils.py</code> at commit 64c1cc4:
+<code>ring_attn_pad_len = (ring_attn_size - seqlen % ring_attn_size) % ring_attn_size</code>, after which
+each rank takes a contiguous slice of length <code>total / ring_attn_size</code>. OpenRLHF turns packing on
+automatically when <code>--ds.ring_attn_size &gt; 1</code> and <code>--ds.packing_samples</code> is unset
+(<code>cli/train_ppo_ray.py</code> L638&ndash;641). Neither source reports a measured speed-up for any
+configuration, so this figure shows the condition, not a predicted throughput.
+</div>
+
+<script>
+var HOSTS = {
+  a100nv: { name: 'A100 NVLink',      flops: 312, bw: 300,  cK: 1.0,  sK: 6.2 },
+  a100ib: { name: 'A100 InfiniBand',  flops: 312, bw: 12.5, cK: 24.5, sK: 149.5 },
+  tpuv4:  { name: 'TPU v4',           flops: 275, bw: 268,  cK: 1.0,  sK: 6.2 },
+  tpuv3:  { name: 'TPU v3',           flops: 123, bw: 112,  cK: 1.1,  sK: 6.6 },
+  tpuv5e: { name: 'TPU v5e',          flops: 196, bw: 186,  cK: 1.1,  sK: 6.3 }
+};
+var H = 4096; // hidden dimension assumed for the activation comparison
+
+function fmt(n) {
+  if (n >= 1e9) return (n / 1e9).toFixed(2) + ' G';
+  if (n >= 1e6) return (n / 1e6).toFixed(2) + ' M';
+  if (n >= 1e3) return (n / 1e3).toFixed(1) + ' K';
+  return String(Math.round(n));
+}
+
+function render() {
+  var host = HOSTS[document.getElementById('host').value];
+  var ring = parseInt(document.getElementById('ring').value, 10);
+  var tok = parseInt(document.getElementById('tok').value, 10);
+  document.getElementById('ring-val').textContent = ring;
+  document.getElementById('tok-val').textContent = tok;
+
+  var pad = (ring - (tok % ring)) % ring;
+  var total = tok + pad;
+  var local = total / ring;
+
+  // drawing
+  var svg = document.getElementById('viz');
+  var parts = [];
+  var W = 620, X0 = 10, Y = 30, Hh = 44;
+  var w = W / ring;
+  for (var i = 0; i < ring; i++) {
+    var isPadRank = (pad > 0 && i === ring - 1);
+    parts.push('<rect class="rank' + (isPadRank ? ' pad' : '') + '" x="' + (X0 + i * w) +
+               '" y="' + Y + '" width="' + (w - 3) + '" height="' + Hh + '" rx="3"/>');
+    if (w > 42) {
+      parts.push('<text class="rtext" x="' + (X0 + i * w + (w - 3) / 2) + '" y="' + (Y + 20) +
+                 '">rank ' + i + '</text>');
+      parts.push('<text class="rtext" x="' + (X0 + i * w + (w - 3) / 2) + '" y="' + (Y + 35) +
+                 '">' + local + '</text>');
+    }
+  }
+  parts.push('<text class="rtext" x="' + (X0 + W / 2) + '" y="18" style="font-size:11px">' +
+             'packed sequence ' + tok + ' tokens, padded to ' + total + ', split ' + ring + ' ways' +
+             '</text>');
+  parts.push('<text class="rtext" x="' + (X0 + W / 2) + '" y="' + (Y + Hh + 20) +
+             '" style="font-size:10px;fill:#55606e">key-value blocks rotate one step around the ring per ' +
+             'iteration; ' + ring + ' iterations cover the full sequence</text>');
+  svg.innerHTML = parts.join('');
+
+  var cReq = host.cK * 1000;
+  var sReq = host.sK * 1000;
+  document.getElementById('q-c').textContent = fmt(cReq) + ' tokens';
+  document.getElementById('q-s').textContent = fmt(sReq) + ' tokens';
+  document.getElementById('q-local').textContent = local + ' tokens' + (pad ? ' (' + pad + ' padding)' : '');
+
+  // Table 1 gives bytes per layer at bfloat16 directly: 6bch for ring attention, 2bhs^2 for vanilla.
+  var ringAct = 6 * local * H;            // b = 1, c = per-rank slice
+  var vanillaAct = 2 * H * total * total; // b = 1, s = full packed length on one device
+  document.getElementById('q-act').textContent =
+    fmt(ringAct) + 'B ring vs ' + fmt(vanillaAct) + 'B vanilla on one device';
+
+  var v = document.getElementById('verdict');
+  if (local >= cReq) {
+    v.className = 'verdict ok';
+    v.innerHTML = 'Each rank holds ' + local + ' tokens, which is at least the minimal block size ' +
+      fmt(cReq) + ' for ' + host.name + '. The condition c &ge; F/B holds, so the key-value transfer for ' +
+      'the next step can be hidden behind the attention computation of the current one.';
+  } else {
+    v.className = 'verdict bad';
+    v.innerHTML = 'Each rank holds ' + local + ' tokens, below the minimal block size ' + fmt(cReq) +
+      ' for ' + host.name + '. The condition c &ge; F/B fails, so each ring step waits on communication. ' +
+      'Three ways to satisfy it: raise the packed token count per micro-batch, lower ' +
+      '<code>--ds.ring_attn_size</code>, or run the ring inside a higher-bandwidth domain.';
+  }
+}
+
+document.getElementById('host').addEventListener('change', render);
+document.getElementById('ring').addEventListener('input', render);
+document.getElementById('tok').addEventListener('input', render);
+render();
+</script>
+
+</body>
+</html>

@@ -1,63 +1,83 @@
-<!-- scope: ToolBench synthetic tool-use trajectories grounded in real API docs and executions
+<!-- scope: ToolBench synthetic tool-use trajectories grounded in real API docs and real API executions
      deps: [[toolformer]]
      see-also: [[apigen]], [[apigen-mt]], [[gorilla]]
 -->
 
 # ToolLLM: Facilitating Large Language Models to Master 16000+ Real-world APIs
-- **Core Insight:** Tool-use SFT can be scaled by grounding on a real API substrate and synthesizing full instruction-plus-trajectory data with a strong teacher; the real part is the API catalog, docs, and executed observations, while the synthetic part is the instruction, reasoning trace, and final answer.
-- **Guideline:** In modern tool-data pipelines, separate the real substrate from the synthetic supervision, execute real tools while generating traces, and keep only trajectories that pass search-time or evaluation-time verification.
-- **Authors:** Yujia Qin, Shihao Liang, Yining Ye, Kunlun Zhu, Lan Yan, Yaxi Lu, Yankai Lin, Xin Cong, Xiangru Tang, Bill Qian, Sihan Zhao, Lauren Hong, Runchu Tian, Ruobing Xie, Jie Zhou, Mark Gerstein, Dahai Li, Zhiyuan Liu, Maosong Sun
-- **Year:** 2023
+- **Core Insight:** Tool-use SFT data can be produced automatically by pairing a real API substrate (16,464 RapidAPI REST APIs, 49 categories) with ChatGPT-generated instructions and search-annotated solution paths, yielding 126,486 (instruction, solution path) pairs containing 469,585 real API calls (§2.1, §2.3, Table 1).
+- **Guideline:** When building tool-use training data, execute the real APIs during annotation and retain only solution paths that reach a valid finish, because the paper keeps only passed DFSDT annotations as training data (§2.3).
+- **Authors:** Yujia Qin, Shihao Liang, Yining Ye, Kunlun Zhu, Lan Yan, Yaxi Lu, et al.
+- **Year:** 2023 (arXiv v1 2023-07; v2 2023-10; ICLR 2024)
 - **URL:** https://arxiv.org/abs/2307.16789
+- **Source type:** paper
 - **Relevant topics:** tool use, function calling, synthetic data, ToolBench, trajectory synthesis, API grounding
 
 ## Abstract
-ToolLLM targets the gap between general instruction tuning and real tool use. The paper introduces ToolBench, an automatically constructed tool-use instruction dataset built from real-world RapidAPI APIs, then uses ChatGPT-based annotation to generate solution paths containing reasoning, API calls, and observations. To improve annotation efficiency for complex tasks, the paper adds a depth-first search-based decision tree (DFSDT), then fine-tunes LLaMA into ToolLLaMA and evaluates it with the automatic ToolEval framework.
+The paper addresses the gap between general instruction tuning and tool use in open-source LLMs. It introduces ToolBench, an instruction-tuning dataset for tool use constructed automatically with ChatGPT in three stages: API collection from RapidAPI Hub, instruction generation covering single-tool and multi-tool scenarios, and solution-path annotation. To raise annotation yield on complex instructions the authors introduce a depth-first search-based decision tree (DFSDT), which lets the model evaluate multiple reasoning traces instead of one. ToolEval, a ChatGPT-backed automatic evaluator, measures pass rate and win rate. Fine-tuning LLaMA-2 7B on ToolBench produces ToolLLaMA, which is equipped with a neural API retriever and evaluated on unseen instructions, unseen tools, and the out-of-distribution APIBench dataset.
 
 ## Key Contributions
-- Builds **ToolBench** from **16,464 real REST APIs** spanning **49 categories**, rather than toy tools.
-- Synthesizes both **single-tool** and **multi-tool** instructions, then annotates full solution paths with real API execution.
-- Introduces **DFSDT**, a search procedure that improves trajectory annotation yield over ReACT-style rollouts under similar budget constraints.
-- Adds a neural API retriever and an automatic evaluator, making the pipeline closer to an end-to-end practical tool-learning stack.
-- The public ToolBench repository later reports released data on the order of **126,486 instances**, **469,585 real API calls**, and roughly **4 reasoning steps per instance**, which is the concrete scale practitioners usually remember.
+- Constructs **ToolBench** from **16,464 real REST APIs** across **3,451 tools** and **49 categories** collected from RapidAPI Hub, with documentation, parameter schemas, and code snippets crawled per API (§2.1, Table 1).
+- Generates instructions in three settings — single-tool (I1), intra-category multi-tool (I2), intra-collection multi-tool (I3) — yielding roughly 200k qualified (instruction, relevant API) pairs: 87,413 / 84,815 / 25,251 for I1 / I2 / I3 (§2.2).
+- Introduces **DFSDT**, a decision-tree search over actions with retraction, which raises ChatGPT annotation pass rate over ReACT and over cost-matched ReACT@N (§2.3, §3.1, Table 3).
+- Trains a neural API retriever on contrastive pairs and reports NDCG@1 of 84.2 / 68.2 / 81.7 on I1 / I2 / I3 against 57.5 / 36.8 / 54.6 for text-embedding-ada-002 (§3.1, Table 2).
+- Releases ToolEval, whose agreement with human annotators is **87.1% on pass rate** and **80.3% on win rate** (§3.1).
 
 ## Key Figures/Tables to Study
-- **Figure 1** - end-to-end overview: ToolBench data construction, ToolLLaMA training, ToolEval evaluation.
-- **Table 1** - compares ToolBench against earlier tool-learning datasets and shows why scale plus real APIs are the point.
-- **Table 2** - API retriever performance on single-tool and multi-tool settings.
-- **Table 3** - DFSDT vs ReACT / ReACT@N pass rates; this is the key table for why search-based trajectory synthesis matters.
-- **Table 4** - main ToolLLaMA results, including oracle-retriever and learned-retriever settings.
+- **Figure 1** — the three-stage construction, ToolLLaMA training, and retriever-in-the-loop inference.
+- **Table 1** — ToolBench against APIBench, API-Bank, ToolAlpaca, and Xu et al.'s ToolBench: tool count, API count, instance count, real API calls, and average reasoning traces (4.0 for ToolBench).
+- **Table 2** — API retriever NDCG@1/@5 against BM25 and text-embedding-ada-002.
+- **Table 3** — pass rate of ReACT (35.3 average), ReACT@N (44.5), and DFSDT (63.8) on ChatGPT.
+- **Table 4** — main ToolBench results across six generalization settings, oracle and learned retriever.
+- **Table 5** — out-of-distribution results on APIBench against Gorilla.
 
 ## Technical Details
-**What is real versus synthetic in the pipeline:**
-- **Real:** the RapidAPI catalog, API documentation, parameter schemas, code snippets, and the actual API responses returned during annotation.
-- **Synthetic:** the generated user instructions, the reasoning/action traces proposed by ChatGPT, the final natural-language answers, and much of the automatic evaluation logic.
+**Real versus synthetic components.** The RapidAPI catalog, API documentation, parameter schemas, code snippets, and the API responses returned during annotation are real. The user instructions, the reasoning and action traces, and the final answers are generated by ChatGPT (`gpt-3.5-turbo-16k`) with function-calling enabled (§2, §2.2). ToolEval is also ChatGPT-backed (§3.1).
 
-**ToolBench generation pipeline:**
-1. **API collection:** crawl **16,464 REST APIs** from RapidAPI and store their docs and invocation details.
-2. **Instruction generation:** sample APIs and prompt **ChatGPT (`gpt-3.5-turbo-16k`) with function-calling capability** to write tool-use instructions.
-3. **Scenario coverage:** generate three settings: `G1` / `I1` for single-tool instructions, `G2` / `I2` for intra-category multi-tool instructions, and `G3` / `I3` for intra-collection multi-tool instructions.
-4. **Solution-path annotation:** use the teacher model to search for a valid trajectory containing reasoning, API selection, parameter filling, real-time API execution, observation consumption, and final answer generation.
-5. **Training export:** retain successful traces and convert them into ChatGPT-like multi-round conversation data for ToolLLaMA SFT.
+**Instruction generation.** Prompts contain a task description, documentation for each sampled API, and three in-context seed examples drawn from 12 single-tool and 36 multi-tool human-written seeds (§2.2). For multi-tool settings the authors sample 2–5 tools from the same RapidAPI category or collection and at most 3 APIs per tool, because random tool combinations across the whole set are unrelated (§2.2). Instructions referencing hallucinated APIs are filtered by checking existence in the sampled API subset (§2.2).
 
-**DFSDT trajectory synthesis:** the paper's key point is that plain ReACT is too brittle for complex multi-tool instructions. DFSDT expands a decision tree over candidate actions, allows backtracking/retraction, and explores more than one reasoning path before committing. In the appendix, the authors note that they use a preorder-style DFS variant to cut sorting cost; if no retraction is needed, the method effectively degrades to ReACT. Empirically, Table 3 reports higher pass rates than ReACT and cost-matched ReACT@N on all three settings, so the same annotation budget yields more usable training trajectories.
+**Solution-path annotation.** Each API is passed to ChatGPT's function field; two extra functions, "Finish with Final Answer" and "Finish by Giving Up", terminate a trace (§2.3). DFSDT expands a decision tree, prompts the model with previously generated sibling nodes to force distinct children, and either continues a path or abandons a node (§2.3). Depth-first search is preferred over breadth-first because one valid path suffices and BFS costs more OpenAI API calls (§2.3). Appendix A.4 states the authors skip child-node sorting — which would cost about O(n log n) evaluation calls for n children — and use pre-order traversal instead, because the first-generated node is usually the highest ranked (§A.4). Only passed solution paths are retained, producing 126,486 (instruction, solution path) pairs (§2.3).
 
-**Filtering and verification:**
-- During data creation, the important filter is **trajectory success**: only passed annotations are kept as training data.
-- The paper explicitly argues that executing the APIs and observing real outputs is necessary; some prior work only generated tool calls without real responses.
-- ToolEval is used as an automatic evaluator after training, and the paper reports substantial agreement with humans: **87.1%** on pass rate and **80.3%** on win rate.
-- The API retriever is trained contrastively using relevant APIs as positives and sampled APIs as negatives, which matters once the tool catalog is too large for oracle tool selection.
+**API response handling.** API responses longer than 1024 tokens after compression are truncated to the first 1024 tokens (§A.2).
 
-**Why ToolLLM matters for synthetic tool/function-calling data:** this paper moves the field from Toolformer's local "insert one useful call into text" idea to full synthetic agent trajectories. The data is synthetic in the supervision layer, but grounded by real API specs and real executed observations. That distinction is the durable lesson for modern pipelines: synthetic traces are much more valuable when the environment underneath them is real.
+**DFSDT results.** On ChatGPT, DFSDT reaches pass rates of 58.0 / 70.6 / 62.8 on I1 / I2 / I3 against ReACT's 37.8 / 40.6 / 27.6 and ReACT@N's 49.4 / 49.4 / 34.6 (Table 3). The gap is larger on the harder multi-tool settings I2 and I3 than on I1 (§3.1).
 
-**Practical lessons for modern pipelines:**
-- Ground the data in real tool specs and real executions whenever possible.
-- Label clearly which components are synthetic and which are environment-truth.
-- Use search or branch-and-revise methods during annotation when tasks require multi-step tool planning.
-- Keep retrieval in the loop early; manual API selection does not scale once the catalog is large.
-- Verify synthetic trajectories with success criteria or evaluator checks before turning them into SFT.
+**Out-of-distribution generalization.** On APIBench with the oracle retriever, ToolLLaMA reaches AST accuracy 88.80 / 85.88 / 88.62 on HuggingFace / TorchHub / TensorHub against Gorilla-RS + Oracle at 89.27 / 93.01 / 94.16, without training on APIBench data (§3.3, Table 5).
+
+## Recipe ledger
+
+| Model (exact release) | Size | Stage | Setting | Value | Source location | Status | Evidence for this value |
+|---|---|---|---|---|---|---|---|
+| ToolLLaMA | 7B (LLaMA-2 7B) | SFT | base model | LLaMA-2 7B | arXiv:2307.16789v2 §3.2 | verified 2026-09-18 | no ablation reported |
+| ToolLLaMA | 7B | SFT | training data | 126,486 (instruction, solution path) pairs | arXiv:2307.16789v2 §2.3, Table 1 | verified 2026-09-18 | no ablation reported |
+| ToolLLaMA | 7B | SFT | learning rate | 5 × 10⁻⁵ | arXiv:2307.16789v2 §A.3 | verified 2026-09-18 | no ablation reported |
+| ToolLLaMA | 7B | SFT | warmup ratio | 4 × 10⁻² | arXiv:2307.16789v2 §A.3 | verified 2026-09-18 | no ablation reported |
+| ToolLLaMA | 7B | SFT | total batch size (sequences) | 64 | arXiv:2307.16789v2 §A.3 | verified 2026-09-18 | no ablation reported |
+| ToolLLaMA | 7B | SFT | max sequence length | 8192 | arXiv:2307.16789v2 §3.2, §A.3 | verified 2026-09-18 | API responses exceed the 4096 native length (§3.2) |
+| ToolLLaMA | 7B | long-context | position interpolation ratio | 2 | arXiv:2307.16789v2 §A.3 | verified 2026-09-18 | no ablation reported |
+| ToolLLaMA | 7B | SFT | epochs | 2 | arXiv:2307.16789v2 §A.3 | verified 2026-09-18 | checkpoint selected by best development-set performance (§A.3) |
+| ToolLLaMA | 7B | SFT | loss masking, optimizer, weight decay, hardware | not reported | checked body and appendices A.1–A.8 | not reported | — |
+| API retriever | not reported | retrieval | negatives | sampled APIs as contrastive negatives | arXiv:2307.16789v2 §3.1 | verified 2026-09-18 | Table 2 against BM25 and ada-002 |
+
+## Findings relevant to generality and agentic training
+- **Generality.** ToolLLaMA is evaluated on unseen instructions, unseen tools within a seen category, and tools from an unseen category; it retains performance across all three levels with DFSDT (§3.2, Table 4). The paper attributes this to training on API documentation rather than memorized API names (§1, §2.1).
+- **Agentic training.** Supervision is full multi-round trajectories with real observations, not single calls, and only completed trajectories are kept (§2.3).
+- **Distillation.** Both the instructions and the solution paths come from ChatGPT, so ToolLLaMA is a distillation of a teacher's tool-use behavior onto a real API environment (§2, §3.2).
 
 ## Connections
-- [[toolformer]] is the immediate precursor: both generate tool-use supervision automatically, but Toolformer stays at single-call local annotations while ToolLLM synthesizes full trajectories.
-- [[gorilla]] is a nearby contrast point on API retrieval and invocation, but ToolLLM is stronger on multi-tool trajectory synthesis over a large real API catalog.
-- [[apigen]] and [[apigen-mt]] continue this line toward stricter verification, cleaner function-calling schemas, and more modern multi-turn agent data.
+- [[toolformer]] generates single-call annotations inside text; ToolLLM generates multi-round trajectories with executed responses.
+- [[gorilla]] is the APIBench baseline compared in Table 5.
+- [[apigen]] and [[apigen-mt]] add stricter multi-stage verification to function-calling data generation.
+
+## Verification
+- Checked on 2026-09-18 against: https://arxiv.org/abs/2307.16789 (arXiv v2, 3 Oct 2023)
+- Corrections to the previous card version:
+  - "The public ToolBench repository later reports released data on the order of 126,486 instances, 469,585 real API calls, and roughly 4 reasoning steps per instance" → these three numbers are reported in the paper itself, in Table 1 and §2.3, not only in the repository (Table 1, §2.3).
+  - "fine-tunes LLaMA into ToolLLaMA" → the fine-tuned model is LLaMA-2 7B (§3.2).
+  - Missing **Source type** field added (paper).
+  - Tool count 3,451 and the I1/I2/I3 instruction counts (87,413 / 84,815 / 25,251) added; they were absent (Table 1, §2.2).
+  - Table 3 was described only qualitatively; the pass rates are now given (Table 3).
+- Removed as unsupported by the source:
+  - "much of the automatic evaluation logic" as a synthetic component — the paper states ToolEval is ChatGPT-backed but does not describe its logic as generated data (§3.1).
+  - The closing claims "moves the field", "much more valuable", and "the durable lesson for modern pipelines" — course commentary, not source statements.
+  - The "Practical lessons for modern pipelines" list — five recommendations not stated as findings by the paper.
+- Not reported by the source: SFT optimizer and weight decay, training hardware and wall-clock cost, total annotation cost in OpenAI API calls, license of the RapidAPI-derived data.

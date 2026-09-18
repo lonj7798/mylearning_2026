@@ -1,0 +1,162 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ch-53 — MinHash banding: which pairs the index proposes</title>
+<style>
+  :root { --bg:#fbfaf8; --fg:#1d1d1f; --muted:#5d6068; --line:#d9d6d0; --panel:#fff;
+          --a:#2f5d8a; --b:#8a2f2f; --grid:#e6e3dd; --ok:#2b6b4a; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg:#17181a; --fg:#e9e8e6; --muted:#a3a6ad; --line:#35373b; --panel:#1f2124;
+            --a:#7fa9d4; --b:#dd8b8b; --grid:#2c2e32; --ok:#6dbb92; }
+  }
+  * { box-sizing: border-box; }
+  body { margin:0; padding:20px 16px 40px; background:var(--bg); color:var(--fg);
+         font:15px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif; }
+  .wrap { max-width:940px; margin:0 auto; }
+  h1 { font-size:20px; margin:0 0 4px; }
+  p.lede { color:var(--muted); max-width:74ch; margin:0 0 18px; }
+  .row { display:grid; grid-template-columns:1fr 300px; gap:18px; align-items:start; }
+  @media (max-width:800px){ .row { grid-template-columns:1fr; } }
+  .panel { background:var(--panel); border:1px solid var(--line); border-radius:8px; padding:14px; }
+  .ctl { margin-bottom:14px; }
+  .ctl label { display:block; font-size:13.5px; margin-bottom:4px; }
+  .ctl input[type=range] { width:100%; }
+  .val { font-variant-numeric:tabular-nums; color:var(--a); font-weight:600; }
+  button { font:inherit; padding:6px 10px; border:1px solid var(--line); border-radius:6px;
+           background:var(--panel); color:var(--fg); cursor:pointer; margin:2px 4px 2px 0; }
+  button:hover { border-color:var(--a); }
+  table { border-collapse:collapse; width:100%; font-size:13.5px; margin-top:10px; }
+  th,td { border-bottom:1px solid var(--line); padding:5px 6px; text-align:right; }
+  th:first-child, td:first-child { text-align:left; }
+  th { color:var(--muted); font-weight:600; }
+  .note { color:var(--muted); font-size:12.5px; margin-top:14px; max-width:78ch; }
+  svg { width:100%; height:auto; display:block; }
+  .k-a { color:var(--a); } .k-b { color:var(--b); }
+  code { font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:13px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>MinHash banding: <code>P(candidate | s) = 1 − (1 − s<sup>b</sup>)<sup>r</sup></code></h1>
+  <p class="lede">s is the Jaccard index of the two documents' 5-gram sets, b the number of hashes per
+  bucket, and r the number of buckets. Lee et al. 2021 §4.2 use k = 9,000 hashes as r = 450 buckets of
+  b = 20 hashes, then confirm candidates with Jaccard &gt; 0.8 and edit similarity &gt; 0.8. Move the
+  sliders, or press the two presets, to see what happens when b and r are exchanged.</p>
+
+  <div class="row">
+    <div class="panel">
+      <svg id="plot" viewBox="0 0 640 380" role="img" aria-label="candidate probability against Jaccard index"></svg>
+    </div>
+    <div>
+      <div class="panel">
+        <div class="ctl">
+          <label>b — hashes per bucket: <span class="val" id="bv">20</span></label>
+          <input type="range" id="b" min="1" max="600" value="20">
+        </div>
+        <div class="ctl">
+          <label>r — number of buckets: <span class="val" id="rv">450</span></label>
+          <input type="range" id="r" min="1" max="600" value="450">
+        </div>
+        <div>
+          <button id="paper">Lee et al. (b = 20, r = 450)</button>
+          <button id="swapped">Exchanged (b = 450, r = 20)</button>
+        </div>
+        <p class="note" style="margin-top:12px">signature length k = b · r = <span class="val" id="kv">9000</span><br>
+        S-curve midpoint (1/r)<sup>1/b</sup> = <span class="val" id="mid">0.737</span></p>
+      </div>
+      <div class="panel" style="margin-top:14px">
+        <table>
+          <thead><tr><th>Jaccard s</th><th>current</th><th>b=20, r=450</th></tr></thead>
+          <tbody id="tbl"></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <p class="note">Reading the curve: the index is a candidate generator, so it should propose nearly
+  every pair above the confirmation threshold of 0.8 and few pairs below it. With b = 20 and r = 450
+  the probability at s = 0.8 is 0.995 and at s = 0.5 is 0.0004. With the two numbers exchanged the
+  midpoint moves to (1/20)<sup>1/450</sup> = 0.993 and a pair at s = 0.9 is proposed with probability
+  below 1e−15, so almost every true near-duplicate is missed and the gate reports a near-zero overlap rate on every task. Library APIs commonly take the pair as
+  <code>(bands, rows_per_band)</code>, which reverses the paper's "buckets of hashes" wording; checking
+  the value at s = 0.8 catches the mistake in one line. Source: arXiv:2107.06499 §4.2, App. A.</p>
+</div>
+
+<script>
+(function () {
+  var bEl = document.getElementById("b"), rEl = document.getElementById("r");
+  var PB = 20, PR = 450;
+
+  function P(s, b, r) {
+    var t = Math.pow(s, b);
+    if (t <= 0) return 0;
+    var lg = r * Math.log1p(-t);          // stable for tiny t
+    return 1 - Math.exp(lg);
+  }
+
+  function fmt(p) {
+    if (p >= 0.001) return p.toFixed(3);
+    if (p === 0) return "0";
+    return p.toExponential(1);
+  }
+
+  function draw() {
+    var b = +bEl.value, r = +rEl.value;
+    document.getElementById("bv").textContent = b;
+    document.getElementById("rv").textContent = r;
+    document.getElementById("kv").textContent = b * r;
+    document.getElementById("mid").textContent = Math.pow(1 / r, 1 / b).toFixed(3);
+
+    var W = 640, H = 380, L = 56, R = 16, T = 18, B = 46;
+    var x = function (s) { return L + s * (W - L - R); };
+    var y = function (p) { return T + (1 - p) * (H - T - B); };
+
+    var g = "";
+    // grid + axes
+    for (var i = 0; i <= 10; i++) {
+      var s = i / 10;
+      g += '<line x1="' + x(s) + '" y1="' + T + '" x2="' + x(s) + '" y2="' + y(0) + '" stroke="var(--grid)"/>';
+      g += '<line x1="' + L + '" y1="' + y(s) + '" x2="' + (W - R) + '" y2="' + y(s) + '" stroke="var(--grid)"/>';
+      g += '<text x="' + x(s) + '" y="' + (y(0) + 16) + '" fill="var(--muted)" font-size="11" text-anchor="middle">' + s.toFixed(1) + '</text>';
+      g += '<text x="' + (L - 8) + '" y="' + (y(s) + 4) + '" fill="var(--muted)" font-size="11" text-anchor="end">' + s.toFixed(1) + '</text>';
+    }
+    g += '<line x1="' + L + '" y1="' + T + '" x2="' + L + '" y2="' + y(0) + '" stroke="var(--line)"/>';
+    g += '<line x1="' + L + '" y1="' + y(0) + '" x2="' + (W - R) + '" y2="' + y(0) + '" stroke="var(--line)"/>';
+    g += '<text x="' + ((L + W - R) / 2) + '" y="' + (H - 8) + '" fill="var(--muted)" font-size="12" text-anchor="middle">Jaccard index s</text>';
+    g += '<text x="14" y="' + ((T + y(0)) / 2) + '" fill="var(--muted)" font-size="12" text-anchor="middle" transform="rotate(-90 14 ' + ((T + y(0)) / 2) + ')">P(pair becomes a candidate)</text>';
+
+    // confirmation threshold at 0.8
+    g += '<line x1="' + x(0.8) + '" y1="' + T + '" x2="' + x(0.8) + '" y2="' + y(0) + '" stroke="var(--ok)" stroke-dasharray="4 3"/>';
+    g += '<text x="' + (x(0.8) + 5) + '" y="' + (T + 12) + '" fill="var(--ok)" font-size="11">confirmation threshold 0.8</text>';
+
+    function path(b, r) {
+      var d = "", n = 400;
+      for (var i = 0; i <= n; i++) {
+        var s = i / n;
+        d += (i ? "L" : "M") + x(s).toFixed(1) + " " + y(P(s, b, r)).toFixed(1) + " ";
+      }
+      return d;
+    }
+    g += '<path d="' + path(PB, PR) + '" fill="none" stroke="var(--b)" stroke-width="1.5" stroke-dasharray="5 4"/>';
+    g += '<path d="' + path(b, r) + '" fill="none" stroke="var(--a)" stroke-width="2.5"/>';
+    g += '<text x="' + (W - R - 6) + '" y="' + (T + 14) + '" fill="var(--a)" font-size="12" text-anchor="end">current: b = ' + b + ', r = ' + r + '</text>';
+    g += '<text x="' + (W - R - 6) + '" y="' + (T + 30) + '" fill="var(--b)" font-size="12" text-anchor="end">reference: b = 20, r = 450</text>';
+    document.getElementById("plot").innerHTML = g;
+
+    var rows = [0.5, 0.6, 0.7, 0.74, 0.8, 0.9].map(function (s) {
+      return "<tr><td>" + s.toFixed(2) + "</td><td>" + fmt(P(s, b, r)) + "</td><td>" + fmt(P(s, PB, PR)) + "</td></tr>";
+    }).join("");
+    document.getElementById("tbl").innerHTML = rows;
+  }
+
+  bEl.addEventListener("input", draw);
+  rEl.addEventListener("input", draw);
+  document.getElementById("paper").addEventListener("click", function () { bEl.value = 20; rEl.value = 450; draw(); });
+  document.getElementById("swapped").addEventListener("click", function () { bEl.value = 450; rEl.value = 20; draw(); });
+  draw();
+})();
+</script>
+</body>
+</html>

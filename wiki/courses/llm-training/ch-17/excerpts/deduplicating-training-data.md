@@ -7,6 +7,8 @@ source_url: https://arxiv.org/abs/2107.06499
 created_at: "2026-04-23"
 ---
 
+> Superseded by the 2026-09 revision of read.md; kept for history.
+
 # Excerpt: Lee et al. 2021 — the exact/near-dedup numbers ch-17 §3 and §4 implement
 
 **Source library:** `wiki/raw-data/llm-training/papers/deduplicating-training-data.md`

@@ -4,96 +4,82 @@ course: llm-training
 phase: read
 excerpt_of: wiki/raw-data/llm-training/papers/deduplicating-training-data.md
 source_url: https://arxiv.org/abs/2107.06499
-created_at: "2026-04-23"
+primary_text_checked: card verified 2026-09-14; Tülu 3 loci read 2026-09-17
+revised: 2026-09 (generality revision)
 ---
 
-# Excerpt: Lee 2021 — the operational contamination gate
+# Excerpt: the contamination gate — decision rule and index parameters
 
-**Source library:** `wiki/raw-data/llm-training/papers/deduplicating-training-data.md`
-**Anchor paper:** Lee et al. 2021/2022 — "Deduplicating Training Data Makes Language Models Better"
+Used by ch-53 §7. The gate has two parts that are often conflated: a **decision rule** that says when a
+score may not be reported, and an **index** that makes the search affordable. They come from different
+sources and have different thresholds.
 
----
+## Part 1 — the decision rule (Tülu 3, arXiv:2411.15124 §3.2)
 
-## Why this source anchors §4 of ch-53
+Matching is computed on prompts only, because completions in training sets are frequently regenerated
+by a model. The authors compared full-string, n-gram, and embedding matching and kept n-gram matching:
+embedding methods could not separate distributional similarity from paraphrase, while n-gram matching
+caught instances that differ trivially, such as a math problem in which only the numbers changed.
 
-Every number the harness ships is a lie if the eval set has bled into the training set. Lee 2021 is the single paper that operationalized the contamination check: specific algorithms, specific thresholds, specific base rates on standard corpora. The ch-53 gate is a near-verbatim port of the paper's two methods.
+1. Tokenize the evaluation prompt and the training prompt.
+2. A token of the evaluation instance counts as matched when both instances share an **8-gram**
+   containing that token.
+3. The evaluation instance **overlaps** a training instance when more than **50%** of its tokens are
+   matched against that same training instance.
+4. A training set is **contaminated** with respect to an evaluation when its instances overlap more
+   than **2%** of that evaluation's instances.
 
----
+The 2% figure is Tülu 3's own dataset-level rule. It is not a threshold from the deduplication
+literature, and Lee et al. 2021 propose no contamination threshold of any kind.
 
-## The two methods — verbatim thresholds
+Base rates the rule produced (Table 37, share of evaluation instances overlapping the dataset):
+Evol CodeAlpaca / HumanEval 70.7%; LMSys Chat 1M / AlpacaEval 46.5%; DaringAnteater / MATH 30.7%;
+NuminaMath-TIR / MATH 18.2%; LMSys Chat 1M / MMLU 10.3%, GSM8K 8.9%.
 
-From `deduplicating-training-data.md` §Technical Details:
+## Part 2 — the index (Lee et al. 2021, arXiv:2107.06499 §4.1–4.2)
 
-> **ExactSubstr** - suffix-array-based exact substring matching.
-> - Find all duplicate substrings of length >= **50 tokens** (the threshold chosen empirically - long enough to avoid common phrases).
-> - Remove one copy of each duplicate span.
-> - Runs in O(N log N) via suffix array construction on the concatenated corpus.
->
-> **NearDup** - MinHash + LSH for fuzzy document-level dedup.
-> - Compute 5-gram shingles per document.
-> - Build 9000 MinHash signatures (aggressive signature count for high recall).
-> - LSH with b = 20 bands of r = 450 rows, threshold ~ (1/b)^(1/r) ~ 0.8 Jaccard similarity.
-> - Any document exceeding threshold against another is dropped.
+**ExactSubstr.** All examples are concatenated and a suffix array is built; adjacent suffix-array
+entries sharing a prefix of at least **50 tokens** mark a repeated substring. The threshold came from
+inspection: matches shorter than 10 tokens are common, manual inspection of 25-token matches found no
+false positives, and the authors doubled 25 to 50 for margin (App. B). On one 96-core machine the
+350 GB C4 suffix array takes under 12 hours to build.
 
-The ch-53 harness uses both. ExactSubstr catches memorized long passages (think CommonCrawl overlap with MATH problem statements that were scraped from an external answer-key site). NearDup catches paraphrased near-duplicates that ExactSubstr misses.
-
----
-
-## The base rates — why the gate threshold is 2%
-
-From `deduplicating-training-data.md` §Findings on C4 and §Train-test contamination:
-
-> 3.04% of training tokens are in near-duplicate clusters.
-> A single 61-word English sentence repeats **>60,000 times**.
->
-> 4.6% of LM1B validation overlaps training.
-> 3.2% of C4 validation overlaps training.
-
-These numbers calibrate the ch-53 gate threshold. Lee 2021 observed 3-5% train-test overlap on raw standard corpora. A post-dedup dataset should sit well below 1%; if your per-task contamination rate exceeds 2%, something in the pipeline leaked. The 2% threshold is strict but reachable; relaxing to 5% would effectively match the contaminated baseline the paper was warning about.
-
----
-
-## Why both methods are required
-
-From `deduplicating-training-data.md` §Findings on memorization:
-
-> Without dedup, ~1% of unprompted 256-token completions are verbatim training copies.
-> With dedup, this drops ~10x.
-
-A MinHash-only gate catches near-duplicate documents but misses long verbatim substring copies embedded in otherwise-different documents. An ExactSubstr-only gate catches verbatim overlap but misses paraphrases generated by a synthetic-data pipeline. The harness runs both, ORs their hits, and reports the union rate. The two rates are also tracked separately in the memo — an eval set with high ExactSubstr rate but low NearDup rate implies verbatim scraping from the web; the inverse implies generation pipeline leakage.
-
----
-
-## What the contamination gate does not cover
-
-Three classes of contamination the Lee 2021 methods are known to miss:
-
-1. **Cross-lingual paraphrase.** MinHash over English shingles will not detect a translated duplicate. Mitigated in modern pipelines with multilingual sentence embeddings (not in ch-53 scope).
-2. **Prompt-engineered paraphrase.** A jailbreak that rewrites a MATH problem in different sentence structure can slip past a 5-gram shingle signature. OlmoTrace ([[olmo-3]]) layers semantic search on top for this class.
-3. **Label leakage via instructions.** If a training instruction says "the answer to Problem 42 of MATH-500 is 7", no content-level dedup catches it. Fixed by enforcing `source` metadata on training data, not by the harness gate.
-
-The harness documents these gaps in the memo so the downstream consumer is not over-reassured by a passing gate.
-
----
-
-## The decision rule the harness encodes
+**NearDup.** Documents are space-tokenized into **5-grams**. The MinHash signature has **k = 9,000**
+hash values split into **r = 450 buckets of b = 20 hashes each**. A pair becomes a candidate with
+probability
 
 ```
-if minhash_rate > 0.02 or exact_rate > 0.02:
-    memo.verdict = "NO-GO"
-    memo.gate_status.contamination = "FAIL"
-    # scores are still computed, but not compared against baseline.
-elif minhash_rate > 0.005 or exact_rate > 0.005:
-    memo.gate_status.contamination = "PASS-WITH-WARNING"
-    # memo lists the top-5 contaminated sample_ids for manual review.
-else:
-    memo.gate_status.contamination = "PASS"
+P(candidate | Jaccard s) = 1 − (1 − s^b)^r ,   b = 20 hashes per bucket, r = 450 buckets
 ```
 
-The Lee 2021 methods are the measurement; the policy (thresholds + what to do on fail) is the harness's contribution. Thresholds are deliberately strict because the alternative — quietly shipping inflated numbers — is exactly the failure mode the paper documented on LM1B and C4.
+Candidates are confirmed when Jaccard index > 0.8 **and** edit similarity > 0.8, where
+`EditSim(x_i, x_j) = 1 − EditDistance(x_i, x_j) / max(|x_i|, |x_j|)`. Connected components of the
+duplicate graph form clusters. An alternative setting is also reported: 0.9/0.9 with b = 20, r = 40,
+k = 800 (App. A, Fig. 4).
 
----
+### The parameter order has to be checked against the curve
 
-## What carries forward
+With b = 20 and r = 450 the candidate probability is 0.0004 at s = 0.5, 0.016 at s = 0.6, 0.302 at
+s = 0.7 and 0.995 at s = 0.8; the midpoint of the S-curve is `(1/r)^(1/b) = (1/450)^(1/20) = 0.737`.
 
-Chapters downstream of ch-53 (`ch-54` best-of-N, `ch-55..ch-60` infra) assume the gate has run. The RL labs (`ch-45..ch-46`) use the same gate on their RL prompt set so the eval prompts and the training prompts cannot silently overlap. This is the Lee 2021 lesson at its strongest: dedup is not a quality filter, it is correctness infrastructure.
+If the two numbers are exchanged — 20 buckets of 450 hashes — the midpoint becomes
+`(1/20)^(1/450) = 0.993` and a pair at Jaccard 0.9 is proposed with probability below 1e−15, so the
+index returns almost nothing. Library APIs usually take the pair as `(bands, rows_per_band)`, which is
+the reverse of the paper's "buckets of hashes" wording. Evaluate the S-curve at s = 0.8 before running
+the gate; the value must exceed 0.9. `figures/lsh-band-curve.html` plots both settings.
+
+## Base rates from the deduplication paper (for calibration, not as a gate)
+
+Validation examples with a near-duplicate in training (Table 2): C4 4.60%, RealNews 14.35%,
+LM1B 4.92%, Wiki-40B 0.72%. Validation tokens inside 50-token matches with training (Table 3):
+C4 1.38%, RealNews 3.37%, LM1B 0.019%, Wiki-40B 0.67%. Training examples flagged as near-duplicates:
+C4 3.04%, RealNews 13.63%, LM1B 4.86%, Wiki-40B 0.39%. Memorization after one epoch on C4 fell from
+1.926% of generated tokens to 0.189% (NearDup) and 0.138% (ExactSubstr) (Table 4).
+
+## When no training data is available
+
+String matching requires the training set. For closed checkpoints, ch-53 §7.3 substitutes a
+memorization probe ([[swe-bench-illusion]], [[gsm1k]]). A probe result never reports as `clean`; the
+gate records `unknown-training-data`.
+
+Related: [[deduplicating-training-data]], [[minhash-lsh]], [[tulu-3]], [[read]].

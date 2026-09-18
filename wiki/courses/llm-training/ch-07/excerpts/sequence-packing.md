@@ -1,3 +1,5 @@
+> Superseded by the 2026-09 revision of read.md; kept for history. Its claims about a Llama-3/OLMo-2 skip-step stack, a GLUE-point regression from unmasked packing, and RoPE relative-position distortion were not supported by the primary sources; see read.md §2.2 and §3.
+
 ---
 chapter: ch-07
 course: llm-training

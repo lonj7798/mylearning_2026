@@ -1,47 +1,82 @@
-<!-- scope: continued pretraining with token-level latent thoughts
+<!-- scope: Zelikman, Harik, Shao, Jayasiri, Haber, Goodman (arXiv:2403.09629, Mar 2024) — Quiet-STaR: continued pretraining of Mistral 7B with rationales generated after every token, mixing head, REINFORCE on thoughts; zero-shot GSM8K/CommonsenseQA gains
      deps: [[star]]
-     see-also: [[self-instruct]], [[lets-verify]], [[deepseek-r1]]
+     see-also: [[v-star]], [[front-loading-reasoning]], [[rlp-reinforcement-as-pretraining-objective]], [[interplay-pretraining-midtraining-rl]]
 -->
 
 # Quiet-STaR: Language Models Can Teach Themselves to Think Before Speaking
-- **Core Insight:** Reasoning should not be treated only as question-answer chain-of-thought; a language model can improve by learning latent thoughts at many token positions during ordinary language modeling.
-- **Guideline:** If you want reasoning gains from pretraining rather than task-specific finetuning, train the model to generate internal thought spans that explain future text, use parallel thought sampling to control cost, and continue pretraining on corpora dense in reasoning signal.
-- **Authors:** Eric Zelikman, Georges Raif Harik, Yijia Shao, Varuna Jayasiri, Nick Haber, Noah Goodman
-- **Year:** 2024
-- **URL:** https://openreview.net/forum?id=oRXPiSOGH9
-- **Relevant topics:** reasoning pretraining, internal monologue, latent thoughts, self-improvement, continued pretraining
+- **Core Insight:** Continued pretraining of Mistral 7B with Quiet-STaR, without any fine-tuning on the evaluation tasks, raises zero-shot GSM8K accuracy from 5.9% to 10.9% and CommonsenseQA accuracy from 36.3% to 47.2% (abstract; §5.1).
+- **Guideline:** When training a 7B model to use internal rationales during continued pretraining, the paper's evidence favors a reasoning-dense corpus (OpenWebMath gave larger gains than C4: GSM8K 10.9% vs 8.1%, CommonsenseQA 47.2% vs 42.6%; §5.1) and keeping the mixing head, because without it the model learned to ignore its thoughts and showed no downstream generalization (App. I); the method adds substantial inference overhead, since thought tokens are generated before each predicted token (§6).
+- **Authors:** Eric Zelikman, Georges Harik, Yijia Shao, Varuna Jayasiri, Nick Haber, Noah D. Goodman (Stanford University; Notbad AI Inc)
+- **Year:** 2024 (arXiv v1 2024-03; v2 2024-03)
+- **URL:** https://arxiv.org/abs/2403.09629
+- **Source type:** paper
+- **Relevant topics:** reasoning in pretraining, latent rationales, continued pretraining, REINFORCE, meta-tokens, parallel sampling, self-improvement
 
 ## Abstract
-Quiet-STaR extends STaR beyond supervised QA tasks into general language modeling. Instead of learning explicit rationales only for full answers, the model learns to insert internal thought spans that help predict future text. The paper proposes a tokenwise parallel sampling algorithm, learnable start/end thought tokens, and an extended teacher-forcing setup so that reasoning can be trained during continued pretraining on arbitrary text. This yields zero-shot gains on reasoning benchmarks without task-specific finetuning.
+Reasoning is implicit in most written text, not only in question answering. STaR learns rationales from few-shot question-answer examples, which is a constrained setting. Quiet-STaR generalizes STaR so that a language model learns to generate a rationale at each token that helps predict future text. The paper addresses three problems: the cost of generating continuations, the model not initially knowing how to generate or use thoughts, and the need to predict beyond the next token. It proposes a tokenwise parallel sampling algorithm, learnable tokens marking the start and end of a thought, and an extended teacher-forcing technique. Generated rationales help most on difficult-to-predict tokens. After continued pretraining on internet text, zero-shot GSM8K rises from 5.9% to 10.9% and CommonsenseQA from 36.3% to 47.2%, and perplexity on difficult tokens improves, with no task-specific fine-tuning (abstract).
 
 ## Key Contributions
-- Reframes reasoning as a **general pretraining capability**, not only an instruction-tuning capability.
-- Introduces **tokenwise parallel thought sampling** to avoid prohibitive serial cost.
-- Uses **learnable thought boundary tokens** so the model can represent internal monologue explicitly during training.
-- Shows zero-shot gains after continued pretraining, including GSM8K from 5.9% to 10.9% and CommonsenseQA from 36.3% to 47.2%.
+- Generalizes STaR to learning reasoning from unstructured text rather than curated reasoning tasks (§1, contribution 1).
+- A parallel sampling algorithm that generates rationales from all token positions of a sequence (§4.2).
+- Learned <|startofthought|> and <|endofthought|> meta-tokens (§4.4.1).
+- A mixing head that decides how much of the post-thought prediction to use (§4.3).
+- A non-myopic loss that scores thoughts on several future tokens, which improves the effect of thinking (§4.4.2; App. D).
 
 ## Key Figures/Tables to Study
-- **Figure 1 / method overview:** the cleanest picture of "think, then talk" during training.
-- **Ablations on difficult tokens:** the important result is that latent thoughts help disproportionately on hard-to-predict text.
-- **Zero-shot benchmark table:** confirms that gains come from pretraining, not task-specific SFT.
+- Figure 1 and Algorithm 1: think, talk, learn; the indicator that drops negative rewards.
+- Figure 2: zero-shot GSM8K and CommonsenseQA over training steps for five thought-length settings and a no-thought baseline.
+- Figure 3: the attention mask for parallel thought generation.
+- Appendix Figure 7: distribution of per-token log-probability changes from thoughts.
 
 ## Technical Details
+- **Objective.** θ* = argmax_θ E_x[log p_θ(x_{i:n} | x_{0:i}, rationale_θ(x_{0:i}))], where x_{0:i} is the observed prefix, x_{i:n} the remaining sequence, and rationale_θ a thought generated by the model (§3). The target is the remaining sequence, not only the next token (§3).
+- **Think (§4.2).** For each of n input tokens, r rationales of length t are generated, giving n × r candidates. A diagonal attention mask lets each thought token attend to the tokens that produced it and to itself, so one forward call extends all thoughts by one token (§4.2, Fig. 3).
+- **Talk (§4.3).** A mixing head takes the hidden state after the end-of-thought token and the hidden state of the original token and outputs a scalar weight w; the mixed prediction is log p^talk = w · log p^init + (1 − w) · log p^thought (Alg. 1). It is a three-layer ReLU MLP whose input is twice the hidden size (App. A).
+- **Meta-tokens (§4.4.1).** Start and end embeddings are initialized to the em-dash embedding, and their gradients are multiplied by a weight hyperparameter (§4.4.1).
+- **Teacher forcing (§4.4.2).** The log-probabilities of the true next n_true tokens after a thought are computed with the parallel mask; the number of future tokens is a hyperparameter.
+- **Reward (§4.4.3).** r_j = log p^talk_{j:j+n_true}(X_{j+1:j+n_true+1}) − log p̄^talk_{j:j+n_true}(X_{j+1:j+n_true+1}), where p̄^talk is the average over the rationales sampled at position j. The REINFORCE term is ∇_θ L_j = −r_j · ∇_θ log p_θ(T_j | [X_{:j}; <|startofthought|>]), where T_j is the thought. Negative rewards are excluded, which "led to more stable training, though it may introduce some bias" (§4.4.3; Alg. 1 uses 1[r_j > 0]). A standard NLL loss L^NLL is added (§4.4.3).
+- **Data and base model.** Mistral 7B base; most runs on OpenWebMath, chosen for a higher density of tokens that benefit from reasoning; additional runs on C4 (§5).
+- **Evaluation.** Zero-shot, direct answers without prompt examples; accuracy is computed over the logits of the answer tokens (e.g. A-E); thoughts are decoded greedily at evaluation (App. A).
+- **Downstream results.** CommonsenseQA +10.9 points and GSM8K +5.0 points over the base model; gains increase with the number of thought tokens (Fig. 2 settings: thought/ahead tokens 8/4, 10/4, 12/4, 16/8, 24/12). The baseline is the same model trained on the same data without thoughts. Several curves eventually deteriorate, which the authors attribute to not training on the downstream tasks (§5.1).
+- **C4.** GSM8K 5.9% → 8.1% and CommonsenseQA 36.3% → 42.6%, with 16 thought tokens and 4 true tokens ahead (§5.1).
+- **Which tokens improve.** Average improvement on arbitrary tokens is small; improvement is concentrated on difficult tokens (§5.2; App. G, Fig. 7).
+- **With chain-of-thought.** Using an 8-thought-token model, majority vote over 8 zero-shot CoT samples (temperature 0.7) on 128 GSM8K test items rises from 40.6% to 47.7% (§5.3).
+- **Ablations (12 thought tokens, 4 ahead; App. D).** Multiple thoughts per sequence beat a single with/without-thought reward baseline by about 0.5% (GSM8K) and 3% (CommonsenseQA); going beyond 2 thoughts added 0.1-0.3%. More than one token ahead helped by 0.3% (GSM8K) and 3.1% (CommonsenseQA); beyond two tokens ahead gave no further gain.
+- **Instability (App. I).** Gumbel-Softmax with a straight-through estimator gave vanishing gradients; removing the mixing head made the model ignore thoughts; separate thinking and talking heads did not learn.
 
-### Training idea
-- For many token positions, the model generates a latent thought intended to explain or support future text.
-- The next-token distribution is trained using an extended teacher-forcing setup that can condition on these thoughts.
-- Thought generation is parallelized across positions to keep training tractable.
+## Recipe ledger
+| Model (exact release) | Size | Stage | Setting | Value | Source location | Status | Evidence for this value |
+|---|---|---|---|---|---|---|---|
+| Mistral 7B base + Quiet-STaR | 7B | mid-train | optimizer; LR; warmup; weight decay | AdamW; 1e-6; 20 steps; 0.001 | arXiv:2403.09629v2 App. A | verified 2026-09-14 | no ablation reported |
+| Mistral 7B base + Quiet-STaR | 7B | mid-train | batch; sequence length | 8, fixed with gradient accumulation; random 256-token span per sample (padded if shorter) | App. A | verified 2026-09-14 | no ablation reported |
+| Mistral 7B base + Quiet-STaR | 7B | mid-train | meta-token gradient weight; policy weight | 1e2; 1e6 | App. A | verified 2026-09-14 | no ablation reported |
+| Mistral 7B base + Quiet-STaR | 7B | mid-train | sampling temperature | T = 1 for thoughts in training; REINFORCE loss computed at T = 3 (importance samples) | App. A | verified 2026-09-14 | no ablation reported |
+| Mistral 7B base + Quiet-STaR (OpenWebMath) | 7B | mid-train | thought tokens / tokens ahead | 8/4, 10/4, 12/4, 16/8, 24/12 | Fig. 2 legend | verified 2026-09-14 | Fig. 2: accuracy increases with thought length |
+| Mistral 7B base + Quiet-STaR (C4) | 7B | mid-train | thought tokens / tokens ahead | 16 / 4 | §5.1 | verified 2026-09-14 | no ablation reported |
+| Mistral 7B base + Quiet-STaR | 7B | mid-train | thoughts per token | not reported for main runs; ablation over 2, 3, 4 | App. D | not reported | App. D: > 2 thoughts adds 0.1-0.3% |
+| Mistral 7B base + Quiet-STaR | 7B | mid-train | REINFORCE baseline; negative rewards | mean over sampled rationales; negative rewards excluded | §4.4.3; Alg. 1 | verified 2026-09-14 | "more stable training" (§4.4.3; no table) |
+| Mistral 7B base + Quiet-STaR | 7B | mid-train | compute | single node, eight 80GB H100 | App. A | verified 2026-09-14 | not applicable |
+| Mistral 7B base + Quiet-STaR | 7B | mid-train | training steps; tokens seen; checkpoint selection | not reported (checked §4-5, App. A-D; Fig. 2 plots steps 10-100) | — | not reported | — |
 
-### Why it differs from STaR
-- **STaR:** question-answer setting, explicit answer verification, iterative SFT loop.
-- **Quiet-STaR:** arbitrary text continuation, token-level latent reasoning, continued pretraining objective.
-
-### Practical lesson
-- Reasoning gains can be baked into the model before post-training, especially when the corpus contains many hard prediction points.
-- If the goal is broad reasoning rather than task-specific format following, data selection for continued pretraining matters as much as the latent-thought mechanism.
+## Findings relevant to generality and negative feedback
+- **Transfer without task training.** Gains on GSM8K and CommonsenseQA come from continued pretraining on OpenWebMath or C4 with no downstream fine-tuning; C4, a more diverse corpus, gave smaller gains (§5.1).
+- **Negative samples.** Thoughts that make future text less likely than the average thought get zero policy gradient ("discarding thoughts that make the future text less likely", Fig. 1 caption; §4.4.3). Negatives are discarded, not used as gradient.
+- **Late-training drop.** Several accuracy curves deteriorate later in training (§5.1); the paper does not report a checkpoint-selection rule.
+- **Limits.** Tested only on a 7B model and only from a pretrained checkpoint (§6). Rationale faithfulness is not ensured, and there are no safeguards against harmful or biased reasoning patterns if they help prediction (Ethics Statement).
 
 ## Connections
-- [[star]] is the direct ancestor; Quiet-STaR explicitly positions itself as its generalization.
-- [[self-instruct]] bootstraps instruction data; Quiet-STaR bootstraps latent reasoning behavior.
-- [[deepseek-r1]] represents the opposite extreme: heavy post-training RL rather than reasoning-aware continued pretraining.
-- [[yejin-choi-group]] is the right place to view STaR and Quiet-STaR as part of a longer research arc around alternative training recipes.
+- [[star]] — the method Quiet-STaR generalizes; same first author.
+- [[v-star]] — cited in §2.2 as STaR follow-up that trains a verifier to guide generation.
+- [[front-loading-reasoning]], [[interplay-pretraining-midtraining-rl]], [[rlp-reinforcement-as-pretraining-objective]] — later work on moving reasoning training earlier than post-training (course links).
+- [[fireact]] — cited in App. F among works that train agents to reason.
+
+## Verification
+- Checked on 2026-09-14 against: https://arxiv.org/abs/2403.09629 (arXiv v2, 2024-03-18).
+- Corrections to the previous card version:
+  - Author "Georges Raif Harik" → "Georges Harik" (arXiv author list).
+  - URL https://openreview.net/forum?id=oRXPiSOGH9 → arXiv abs page; the OpenReview page returned a browser-verification screen and could not be checked.
+  - "Ablations on difficult tokens" → the difficult-token result is a distribution analysis, not an ablation (§5.2; App. G, Fig. 7).
+  - "Zero-shot benchmark table" → the zero-shot results are in Figure 2 and §5.1; there is no results table.
+  - "latent thoughts at many token positions" → thoughts are generated after every token in the sequence (§4.1).
+- Removed as unsupported by the source: "data selection for continued pretraining matters as much as the latent-thought mechanism"; the [[yejin-choi-group]] research-arc link (the authors are at Stanford and Notbad AI); the [[deepseek-r1]] "opposite extreme" comparison; the [[self-instruct]] connection.
+- Not reported by the source: venue (none in arXiv v2), total training steps and tokens, number of thoughts per token in the headline runs, which checkpoint produced the headline numbers.

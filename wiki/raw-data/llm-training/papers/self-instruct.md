@@ -1,57 +1,87 @@
-<!-- scope: bootstrap-from-LM-outputs pipeline to generate instruction-tuning data
+<!-- scope: bootstrap-from-LM-outputs pipeline that generates instruction-tuning data from 175 seed tasks
      deps: [[README]]
-     see-also: [[alpaca]], [[evol-instruct]], [[humpback]]
+     see-also: [[alpaca]], [[evol-instruct]], [[humpback]], [[star]], [[tulu-3]]
 -->
 
-# Self-Instruct: Aligning Language Models with Self-Generated Instructions
-- **Core Insight:** A large LM can bootstrap its own instruction-tuning dataset from ~175 seed tasks, reaching InstructGPT-001 quality without any private human annotation.
-- **Guideline:** If you need instruction data, start with a small diverse seed set, generate candidate instructions + inputs + outputs with a strong LM, and filter by ROUGE-L overlap and format validity — aim for tens of thousands of accepted instances.
-- **Authors:** Yizhong Wang, Yeganeh Kordi, Swaroop Mishra, Alisa Liu, Noah A. Smith, Daniel Khashabi, Hannaneh Hajishirzi (Yejin Choi group / UW / AI2)
-- **Year:** 2022
+# SELF-INSTRUCT: Aligning Language Models with Self-Generated Instructions
+- **Core Insight:** Prompting the vanilla GPT-3 "davinci" engine with 8 in-context task instructions and filtering the results yields 52,445 instructions and 82,439 instances; fine-tuning the same GPT-3 on that data raises zero-shot SUPERNI ROUGE-L from 6.8 to 39.9, within 0.9 points of InstructGPT-001 at 40.8 (§3.1, Table 1; §4.3, Table 3).
+- **Guideline:** When no human instruction data is available, bootstrap from a small seed pool and add a generated instruction to the pool only when its ROUGE-L similarity to every existing instruction is below 0.7, because the diversity filter is what keeps the pool from repeating its seeds (§2.2).
+- **Authors:** Yizhong Wang, Yeganeh Kordi, Swaroop Mishra, Alisa Liu, Noah A. Smith, Daniel Khashabi, Hannaneh Hajishirzi (University of Washington, Tehran Polytechnic, Arizona State University, Johns Hopkins University, Allen Institute for AI)
+- **Year:** 2022 (arXiv v1 2022-12; v2 2023-05; ACL 2023)
 - **URL:** https://arxiv.org/abs/2212.10560
-- **Relevant topics:** SFT data construction, synthetic data, bootstrapping, instruction tuning
+- **Source type:** paper
+- **Relevant topics:** SFT data construction, synthetic data, bootstrapping, instruction tuning, data filtering
 
 ## Abstract
-Large "instruction-tuned" language models (i.e., finetuned to respond to instructions) have demonstrated a remarkable ability to generalize zero-shot to new tasks. Nevertheless, they depend heavily on human-written instruction data that is often limited in quantity, diversity, and creativity, therefore hindering the generality of the tuned model. We introduce Self-Instruct, a framework for improving the instruction-following capabilities of pretrained language models by bootstrapping off their own generations. Our pipeline generates instructions, input, and output samples from a language model, then filters invalid or similar ones before using them to finetune the original model. Applying our method to the vanilla GPT3, we demonstrate a 33% absolute improvement over the original model on Super-NaturalInstructions, on par with the performance of InstructGPT-001, which was trained with private user data and human annotations. For further evaluation, we curate a set of expert-written instructions for novel tasks, and show through human evaluation that tuning GPT3 with Self-Instruct outperforms using existing public instruction datasets by a large margin, leaving only a 5% absolute gap behind InstructGPT-001. Self-Instruct provides an almost annotation-free method for aligning pre-trained language models with instructions, and we release our large synthetic dataset to facilitate future studies on instruction tuning.
+Instruction-tuned language models generalize zero-shot to new tasks but depend on human-written instruction data that is limited in quantity, diversity and creativity. SELF-INSTRUCT improves the instruction-following ability of a pretrained language model by bootstrapping off its own generations: the pipeline generates instructions, inputs and outputs from the language model, filters invalid or similar ones, and uses the result to fine-tune the original model. Applied to vanilla GPT-3, it gives a 33% absolute improvement over the original model on SUPER-NATURALINSTRUCTIONS, on par with InstructGPT-001, which was trained with private user data and human annotations. On a further set of expert-written instructions for novel tasks, human evaluation shows that GPT-3 tuned with SELF-INSTRUCT outperforms models tuned on existing public instruction datasets by a large margin and remains 5% absolute behind InstructGPT-001. The authors release the generated dataset.
 
 ## Key Contributions
-- A **four-step pipeline** (seed → instruction gen → instance gen → filter) that produces instruction data from a single LM.
-- Demonstrated **+33 absolute points on Super-NaturalInstructions** when applied to vanilla GPT-3, matching InstructGPT-001 (trained with private human data).
-- Released the synthetic dataset — the ancestor of Alpaca, Vicuna, and every subsequent "X-Instruct" derivative.
-- Established the template (seed tasks + ROUGE-L dedup + format filters) still used in 2024-era data construction.
+- A four-step pipeline — seed pool, instruction generation, classification/non-classification branching with instance generation, filtering — that produces instruction data from one language model with no human annotation beyond the seeds (§2).
+- A released dataset of 52,445 instructions and 82,439 instances generated by GPT-3 "davinci" (§3.1, Table 1).
+- Zero-shot SUPERNI evaluation: GPT-3 6.8 → GPT-3_SELF-INST 39.9 ROUGE-L; combining SELF-INSTRUCT data with SUPERNI training data gives 51.6 versus 49.5 for SUPERNI training alone (§4.3, Table 3).
+- A 252-instruction user-oriented evaluation set written by the authors, with a four-level human rating protocol (§4.4).
+- A manual quality audit of 200 sampled instructions: 92% describe a valid task, 79% have an appropriate input, 58% have a correct output, 54% are valid in all fields (§3.3, Table 2).
 
 ## Key Figures/Tables to Study
-- **Figure 1** — the four-stage pipeline diagram (instruction generation, classification/non-classification branch, instance generation, filter).
-- **Table 1 / Table 2** — task-set diversity stats before vs after bootstrapping.
-- **Performance table on Super-NI** — Self-Instruct-tuned GPT-3 vs InstructGPT-001 vs vanilla GPT-3.
+- **Figure 2** — the pipeline overview: task pool, instruction generation, classification-task identification, instance generation, filtering.
+- **Table 1** — data statistics, including 11,584 classification and 40,861 non-classification instructions and 35,878 instances with empty input.
+- **Table 2** — the data-quality audit percentages.
+- **Table 3** — SUPERNI zero-shot ROUGE-L for T5-LM, GPT-3, T0-trained, SELF-INSTRUCT and InstructGPT-001.
+- **Figure 3** — top 20 root verbs and their direct objects, covering 14% of the generated instructions.
+- **Figure 4** — distribution of ROUGE-L overlap between each generated instruction and its most similar seed.
+- **Figure 6** — human ratings on the 252 user-oriented instructions.
+- **Tables 5-8** — the four prompt templates (instruction generation, classification identification, input-first instance generation, output-first instance generation).
 
 ## Technical Details
-**Seed pool:** 175 human-written tasks (1 instruction + 1 instance each) covering classification, generation, open-ended, extraction.
+- **Seed pool:** 175 tasks with 1 instruction and 1 instance each, written by the authors and labmates at UWNLP without reference to existing datasets or the test tasks; 25 are classification tasks and 150 are non-classification (§2.1; App. A.1).
+- **Instruction generation:** 8 instructions are sampled from the task pool as in-context examples, 6 human-written and 2 model-generated; the prompt lists them as "Task 1" through "Task 8" and asks for "Task 9" (§2.2; Table 5).
+- **Classification identification:** the model is few-shot prompted to judge whether an instruction is a classification task, defined as one with a small limited output label space (§2.2, footnote 4; Table 6).
+- **Instance generation:** the **output-first** approach is used for classification tasks and the **input-first** approach for non-classification tasks (§2.2; Tables 7 and 8).
+- **Filtering:** a new instruction enters the pool only if its ROUGE-L similarity to every existing instruction is below 0.7; instructions containing keywords such as image, picture or graph are excluded; duplicate instances, instances with the same input but different outputs, and heuristically invalid generations (too long, too short, output repeating the input) are dropped (§2.2).
+- **Generating model:** the largest GPT-3 LM, the "davinci" engine at 175B parameters, accessed through the OpenAI API (§3; App. A.3).
+- **Generation sampling parameters (App. A.2, Table 4):** instruction generation temperature 0.7, top-p 0.5, presence penalty 2, max length 1024; classification identification temperature 0, max length 3; instance generation temperature 0, presence penalty 1.5, max length 300.
+- **Diversity measurement:** 26,559 of the 52,445 instructions have a parseable verb–noun root structure; the 20 most common root verbs cover 14% of the set (§3.2).
+- **SUPERNI evaluation setting:** the evaluation set of 119 tasks with 100 instances each, zero-shot, with the task definition only and no in-context demonstrations, deterministic decoding (§4.3).
+- **User-oriented evaluation:** 252 author-written instructions with 1 instance each, rated A-D by the instruction authors; inter-rater agreement κ = 0.57 on the 4-class scale (§4.4).
 
-**Pipeline:**
-1. **Instruction generation** — prompt the LM with 8 in-context examples (6 from seed, 2 from previously generated) and ask for a new task instruction.
-2. **Classification-vs-non-classification branching** — ask the LM whether the instruction is a classification task; this changes the instance-generation prompt template (input-first for classification to avoid label bias, output-first otherwise).
-3. **Instance generation** — for each accepted instruction, prompt the LM to produce an input and an output.
-4. **Filtering**:
-   - Drop instructions with **ROUGE-L > 0.7** to any existing instruction (diversity filter).
-   - Drop instances where input == output, outputs too long/short, or the instruction contains "image/graph/file".
-   - Drop ill-formatted generations.
+## Recipe ledger
 
-**Final dataset:** ~52K instructions × ~82K instances (after filtering from ~252K raw generations) produced using GPT-3 (text-davinci-001-era model).
+| Model (exact release) | Size | Stage | Setting | Value | Source location | Status | Evidence for this value |
+|---|---|---|---|---|---|---|---|
+| GPT3_SELF-INST | 175B ("davinci") | SFT | training data | 52,445 instructions / 82,439 instances | arXiv:2212.10560v2 §3.1 Table 1 | verified 2026-09-18 | no ablation reported |
+| GPT3_SELF-INST | 175B | SFT | trainer | OpenAI fine-tuning API, default hyper-parameters | §4.1; App. A.3 | verified 2026-09-18 | chosen so baselines are comparable (App. A.3) |
+| GPT3_SELF-INST | 175B | SFT | prompt_loss_weight | 0 | §4.1; App. A.3 | verified 2026-09-18 | "we find this works better in our case" (App. A.3) |
+| GPT3_SELF-INST | 175B | SFT | epochs | 2 | §4.1; App. A.3 | verified 2026-09-18 | "to avoid overfitting the training tasks" (App. A.3) |
+| GPT3_SELF-INST | 175B | SFT | input format | instruction + instance input concatenated as prompt, output as target, multiple surface templates | §2.3 | verified 2026-09-18 | robustness to formats (§2.3) |
+| GPT3_SELF-INST | 175B | SFT | cost | $338 | App. A.3 | verified 2026-09-18 | n/a |
+| GPT3 + T0 / + SUPERNI baselines | 175B | SFT | training data | 50K sampled instances covering all instructions | §4.1 | verified 2026-09-18 | "to save the training budget" and match generated-data size (§4.1) |
 
-**Prompt template sketch (instruction generation):**
-```
-Come up with a series of tasks:
-Task 1: <seed 1>
-Task 2: <seed 2>
-...
-Task 8: <seed 8>
-Task 9:
-```
+Optimizer, learning rate, batch size and sequence length are not reported: the OpenAI fine-tuning API's internals were not public and the authors state they used its defaults (App. A.3).
 
-**Failure modes observed:** hallucinated "impossible" tasks, output-bias in classification, repetition — addressed via the diversity filter.
+## Findings relevant to generality
+- SUPERNI is the held-out generalization measurement: 119 unseen tasks evaluated zero-shot with the task definition only. GPT-3 scores 6.8 ROUGE-L, GPT-3 fine-tuned on T0 training data 37.9, GPT3_SELF-INST 39.9, InstructGPT-001 40.8, T5-LM (11B) 25.7 (§4.3, Table 3).
+- SELF-INSTRUCT data is complementary rather than redundant with human task data: GPT-3 + SUPERNI training scores 49.5 and GPT3_SELF-INST + SUPERNI training 51.6 (§4.3, Table 3).
+- The authors note that SUPERNI tasks were proposed for research purposes and skew toward classification, which motivated the separate 252-instruction user-oriented set (§4.4).
+- On the user-oriented set, counting RATING-B (acceptable with minor imperfections) as valid, GPT3_SELF-INST is 5% behind InstructGPT-001 and ahead of GPT-3 variants trained on T0 or SUPERNI data (§4.4).
+
+## Findings relevant to negative feedback
+- Negatives here are negative marginal value, not gradient: the ROUGE-L, keyword, duplicate and heuristic filters discard candidates before training rather than penalizing them (§2.2).
+- The audit shows the retained data is still noisy — 58% of outputs are correct and 54% of examples are valid in all fields — and the authors report the models still improve, arguing most errors remain in the correct format or partially correct (§3.3).
 
 ## Connections
-- Direct ancestor of [[alpaca]] (same method, run on text-davinci-003), [[evol-instruct]] (adds complexity dimension), and [[humpback]] (reverses the direction: text → instruction).
-- Conceptual cousin of [[star]]: both bootstrap from model-generated intermediate traces.
-- The 175-seed + ROUGE-filter template shows up in virtually every open SFT pipeline — see `[[tulu-3]]`.
+- [[alpaca]] runs this pipeline against a later OpenAI model; [[evol-instruct]] replaces the diversity filter with an instruction-complexity rewrite loop; [[humpback]] inverts the direction by generating instructions for existing documents.
+- [[star]] bootstraps from model-generated reasoning traces rather than model-generated tasks.
+- [[tulu-3]] uses descendants of this data in its SFT mixture.
+- The SUPERNI benchmark (Wang et al., 2022) has no card in this library; its role here is the unseen-task evaluation described above.
+
+## Verification
+- Checked on 2026-09-18 against: https://arxiv.org/abs/2212.10560 (arXiv v2, 2023-05-25; ACL 2023)
+- Corrections to the previous card version:
+  - "input-first for classification to avoid label bias, output-first otherwise" → reversed: output-first is applied to classification tasks and input-first to non-classification tasks (§2.2).
+  - "produced using GPT-3 (text-davinci-001-era model)" → produced with the vanilla GPT-3 "davinci" engine (175B); text-davinci-001 is the InstructGPT-001 comparison model, not the generator (§3; §4.2).
+  - "~52K instructions × ~82K instances" → 52,445 instructions and 82,439 instances; the instances correspond to the instructions rather than multiplying them (Table 1).
+  - "Year: 2022" without version → arXiv v1 2022-12, v2 2023-05, published at ACL 2023.
+  - "Table 1 / Table 2 — task-set diversity stats before vs after bootstrapping" → Table 1 is data statistics and Table 2 is the quality audit; diversity is shown in Figures 3-5.
+  - Authors list attributed the work to the "Yejin Choi group"; the paper's affiliations are UW, Tehran Polytechnic, Arizona State, Johns Hopkins and AI2, and Yejin Choi is not an author.
+- Removed as unsupported by the source: "after filtering from ~252K raw generations" (the number 252 in the paper is the count of user-oriented evaluation instructions, not raw generations); "Established the template ... still used in 2024-era data construction"; the listed "failure modes observed: hallucinated impossible tasks, output-bias in classification, repetition" as a paper-stated finding (the paper lists filter heuristics and a quality audit, not this failure taxonomy).
+- Not reported by the source: the number of raw generations before filtering; optimizer, learning rate, batch size and sequence length for fine-tuning; the number of bootstrapping rounds.

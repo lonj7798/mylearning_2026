@@ -1,45 +1,103 @@
-<!-- scope: meta-rewarding — judging the judge to regulate self-rewarding drift
-     deps: [[self-rewarding-lm]]
-     see-also: [[spin]], [[self-play-preference]]
+<!-- scope: Meta-Rewarding (Wu et al., 2024): one model acts as actor, judge, and meta-judge; DPO on response pairs and judgment pairs, with length-controlled pair selection
+     deps: [[self-rewarding-lm]], [[dpo]]
+     see-also: [[judge-llm-bias]], [[spin]], [[self-play-preference]], [[generative-reward-models]]
 -->
 
-# Meta-Rewarding Language Models
-- **Core Insight:** Adding a third role — *meta-judge* that evaluates the judge — stabilizes self-rewarding training past the 3-iteration ceiling and keeps judge calibration from drifting into reward-hacking.
-- **Guideline:** Don't just train the actor on judge outputs; also train the judge on meta-judge outputs, using pairs of judge responses scored against each other via a consistency rubric.
-- **Authors:** Tianhao Wu, Weizhe Yuan, Olga Golovneva, Jing Xu, Yuandong Tian, Jiantao Jiao, Jason Weston, Sainbayar Sukhbaatar
-- **Year:** 2024 (Meta FAIR + UC Berkeley + NYU)
+# Meta-Rewarding Language Models: Self-Improving Alignment with LLM-as-a-Meta-Judge
+- **Core Insight:** Starting from Llama-3-8B-Instruct and training the same model as actor, judge, and meta-judge for four DPO iterations raises the AlpacaEval 2 length-controlled (LC) win rate from 22.92% to 39.44%, against 35.49% for a Self-Rewarding baseline that uses the same length control but no judge training (Table 1).
+- **Guideline:** When a self-rewarding loop selects preference pairs with a pointwise LLM judge, add length control to pair selection and log the judge's score distribution and the meta-judge's position and score biases, because in this paper removing length control (ρ = 0) lengthened responses (Table 4) and by iteration 2 the meta-judge preferred the higher-scored judgment in 97.68% of comparisons (Table 5).
+- **Authors:** Tianhao Wu, Weizhe Yuan, Olga Golovneva, Jing Xu, Yuandong Tian, Jiantao Jiao, et al. (Meta FAIR, UC Berkeley, NYU)
+- **Year:** 2024 (arXiv v1 2024-07)
 - **URL:** https://arxiv.org/abs/2407.19594
-- **Relevant topics:** self-improvement, judge calibration, LLM-as-a-judge, meta-evaluation
+- **Source type:** paper
+- **Relevant topics:** self-rewarding, LLM-as-a-judge, meta-judge, iterative DPO, length bias, positional bias, judge training
 
 ## Abstract
-Large Language Models (LLMs) are rapidly surpassing human knowledge in many domains. While improving these models traditionally relies on costly human data, recent self-rewarding mechanisms have shown that LLMs can improve by judging their own responses instead of relying on human labelers. However, existing methods have primarily focused on improving model responses rather than judgment capabilities, resulting in rapid saturation during iterative training. To address this issue, we introduce a novel Meta-Rewarding step to the self-improvement process, where the model judges its own judgments and uses that feedback to refine its judgment skills. Surprisingly, this unsupervised approach improves the model's ability to judge and follow instructions, as demonstrated by a win rate improvement of Llama-3-8B-Instruct from 22.9% to 39.4% on AlpacaEval 2 and 20.6% to 29.1% on Arena-Hard.
+Self-rewarding methods let an LLM improve by judging its own responses instead of using human labels. These methods train response quality but not judging ability, so iterative training saturates quickly. The paper adds a Meta-Rewarding step: the model judges its own judgments and uses that feedback to improve its judging. This unsupervised method improves both judging and instruction following. Llama-3-8B-Instruct improves from 22.9% to 39.4% win rate on AlpacaEval 2 and from 20.6% to 29.1% on Arena-Hard.
 
 ## Key Contributions
-- Introduces **Meta-Rewarding** — a third-role "meta-judge" that compares pairs of judge responses and selects the preferred judgment using a calibration rubric.
-- Shows judge quality (agreement with humans) continues improving up to iteration 5, vs. Self-Rewarding plateauing at 3.
-- Adds a **length-bias control term** to the judge rubric (deducting points for length-gaming), preventing the known DPO length inflation.
-- Lifts Llama-3-8B-Instruct AlpacaEval 2.0 LC win-rate from 22.9% → 39.4% over 4 meta-rewarding iterations on zero additional human data.
+- A meta-judge role: the same model compares two of its own judgments of one response under the original rubric (Figure 2), which yields preference pairs for training the judge (§2.2).
+- Length-controlled selection of actor pairs with a quality-tier parameter ρ (§2.1).
+- A position-weighted battle matrix and Elo fit to score judgments (§2.2).
+- Four iterations from Llama-3-8B-Instruct, evaluated on AlpacaEval 2, Arena-Hard, MT-Bench, and judge agreement with GPT-4 and humans (§3).
+- Reported failure modes: growing meta-judge score and positional bias, and judge scores concentrating near 5 (Table 5, Figure 5, §5).
 
 ## Key Figures/Tables to Study
-- **Figure 2:** the three-role loop — Actor / Judge / Meta-Judge — and which DPO pairs feed which role.
-- **Table 1 (AlpacaEval 2.0 and Arena-Hard LC win-rate per iteration):** the headline monotonic gains.
-- **Table 5 (judge agreement with humans):** shows the meta-rewarding loop keeps judge calibration rising while self-rewarding's flattens.
-- **Figure 5 (length bias):** illustrates the length-control term's effect — without it, responses grow 2× over iterations.
+- **Figure 1:** the training loop (actor data and judge data, combined DPO). **Figure 2:** the meta-judge prompt.
+- **Table 1:** AlpacaEval 2 LC win rate, win rate, length per iteration. **Table 2:** Arena-Hard.
+- **Table 3:** judge agreement with GPT-4. **Table 7:** judge agreement and Spearman correlation with humans.
+- **Table 4:** length-control ρ ablation. **Table 5, Figure 5:** meta-judge biases and judge score distribution.
+- **App. A.3:** training details per iteration.
 
 ## Technical Details
-- **Base:** Llama-3-8B-Instruct (Meta), 4 meta-rewarding iterations.
-- **Per-iteration data generation:**
-  1. Sample K=7 actor responses per prompt from the current policy.
-  2. Sample N=11 *judge* responses per (prompt, actor-response) pair — each a score + rationale.
-  3. **Meta-Judge** performs pairwise comparison on those 11 judge responses (per the rubric) to pick the best and worst judgment.
-  4. Actor-DPO uses (best actor response, worst actor response) pairs by aggregated judge score.
-  5. Judge-DPO uses (best judge response, worst judge response) pairs from the meta-judge.
-- **Length-bias control:** judge rubric includes "don't reward length for length's sake"; meta-judge penalizes length-gamed judgments.
-- **DPO params:** β=0.1, 1 epoch per iteration, cosine LR schedule ending at 0.
-- **Prompt pool:** 20K EvolInstruct prompts held out from any human-labelled set.
+- **Setup (§3.1):** seed Llama-3-8B-Instruct, first fine-tuned on the Evaluation Fine-Tuning (EFT) set from [[self-rewarding-lm]] (Open Assistant ranked human responses), called "SFT on EFT". Prompt pool: 20,000 prompts generated by Llama-2-70B-Chat with an 8-shot prompt; 5,000 are sampled per iteration. Iterations 1–2 train on actor and judge pairs; iterations 3–4 train on actor pairs only.
+- **Actor pairs (§2.1, §3.1):**
+  1. Sample K = 7 responses per prompt (temperature 0.8, top-p 0.95): 35,000 responses per iteration; identical responses are removed (typically no more than 50).
+  2. Generate N = 11 judgments per response with the same sampling settings, using a 5-point additive rubric (App. A.1). Unparseable or out-of-scale judgments are discarded; the response score is the mean of valid scores. N = 11 was chosen in early experiments on correlation with human judgments (§3.1 footnote 2).
+  3. Length control: with `S_max`, `S_min` the highest and lowest response scores for a prompt, the chosen response is the shortest one with score in `[(1−ρ)S_max + ρS_min, S_max]`; the rejected response is the longest one with score in `[S_min, (1−ρ)S_min + ρS_max]`. `ρ ∈ [0,1]`; ρ = 0 disables length control.
+     Arithmetic example (not from the paper): `S_max = 4.8`, `S_min = 3.0`, `ρ = 0.4` gives a chosen tier `[4.08, 4.8]` and a rejected tier `[3.0, 3.72]`.
+- **Judge pairs (§2.2):**
+  1. For each prompt, select the response whose N judgment scores have the highest variance.
+  2. Compare every pair of its judgments `(j_m, j_n)` with the meta-judge, twice, in both orders.
+  3. Position weights `ω1 = win_2nd/(win_1st + win_2nd)`, `ω2 = win_1st/(win_1st + win_2nd)`, where `win_1st` and `win_2nd` count wins in the first and second position. `r^{mn}` = 1 if m wins, −1 if n wins, 0 for tie or parse error. `B_mn = ω1·1[r^{mn} = 1] + ω2·1[r^{nm} = −1]`.
+  4. Fit Elo scores `ε` by maximizing `Σ_{m,n} B_mn · log( e^{ε_m−ε_n} / (1 + e^{ε_m−ε_n}) )`; chosen = highest Elo, rejected = lowest Elo.
+  5. Drop pairs whose chosen judgment exceeds a length threshold, because the meta-judge also prefers longer judgments.
+- **Evaluation (§3.2, §3.4):** AlpacaEval 2 (805 prompts), Arena-Hard, MT-Bench. Judge vs humans: 190 held-out Open Assistant samples with 580 responses. Judge vs gpt-4-1106-preview: 170 "GPT-4 Chosen Pairs" and "Self-Chosen Pairs" (7 seed responses per prompt).
+- **Results:**
+  - AlpacaEval 2 LC: seed 22.92%, SFT on EFT 25.47%; Meta-Rewarding iterations 27.85 / 32.66 / 35.45 / 39.44%; Self-Rewarding + LC 26.93 / 30.38 / 34.87 / 35.49%. Length 1899 (seed) and 2003 (Meta iteration 4) characters (Table 1). The authors' own run of the seed gave 24.57% LC (Table 1 footnote 3). SPPO: 38.77% LC (§3.3).
+  - Arena-Hard: 20.6% (seed) to 29.1% (Meta iteration 4); Self-Rewarding + LC iteration 4: 27.3% (Table 2).
+  - Judge vs GPT-4, Self-Chosen Pairs, agreement without ties at iteration 2: 72.34% (Meta) vs 60.00% (Self-Rewarding + LC) (Table 3).
+  - Judge vs humans, Spearman: seed 0.315; Meta iteration 2 0.382; Meta iteration 4 0.326 (Table 7). The gain is not sustained in later iterations (§3.4).
+  - Replacing the self-judge with Starling-RM-34B for actor pairs: 24.63% vs 27.85% LC at iteration 1 (§3.5).
+
+## Recipe ledger
+All rows are for runs initialized from Llama-3-8B-Instruct. "Meta" = Meta-Rewarding LLM; "SR+LC" = Self-Rewarding LLM + length control baseline. Response lengths are in characters (§3.3); the unit of the judgment length threshold is not stated.
+
+| Model (exact release) | Size | Stage | Setting | Value | Source location | Status | Evidence for this value |
+|---|---|---|---|---|---|---|---|
+| SFT on EFT (starting point for Meta and SR+LC) | 8B | SFT | epochs; learning rate; global batch; schedule | 10 epochs; 5×10⁻⁸; 32; cosine | arXiv:2407.19594v2 App. A.3 | verified 2026-09-14 | no ablation reported |
+| SFT on EFT | 8B | eval-gate | checkpoint selection | epoch 5 checkpoint (selection metric not reported) | App. A.3 | verified 2026-09-14 | no ablation reported |
+| Meta and SR+LC, all iterations | 8B | preference | loss; β; epochs; learning rate; global batch; schedule | DPO; 0.1; 10; 5×10⁻⁶; 32; cosine | App. A.3 | verified 2026-09-14 | no ablation reported |
+| Meta and SR+LC, all iterations | 8B | preference | prompts per iteration | 5,000 sampled from 20,000 prompts generated by Llama-2-70B-Chat (8-shot) | §3.1 | verified 2026-09-14 | no ablation reported |
+| Meta and SR+LC, all iterations | 8B | preference | responses per prompt; temperature; top-p | K = 7; 0.8; 0.95 (35,000 responses per iteration before de-duplication) | §3.1 | verified 2026-09-14 | no ablation reported |
+| Meta and SR+LC, all iterations | 8B | preference | judgments per response; scoring | N = 11, same sampling settings; mean of valid 5-point scores | §2.1; §3.1 and footnote 2 | verified 2026-09-14 | footnote 2: early experiments, larger N gave similar or worse correlation with human judgments (no table) |
+| Meta iteration 1 | 8B | preference | pair types; ρ; response filter; judgment filter; checkpoint | actor + judge; ρ = 0; drop chosen response > 2500 characters; drop chosen judgment > 1100; epoch 6 | §3.1; App. A.3 | verified 2026-09-14 | no ablation reported |
+| Meta iteration 2 | 8B | preference | pair types; ρ; judgment filter; checkpoint | actor + judge; ρ = 0.32; drop chosen judgment > 1000; epoch 4 | §3.1; App. A.3 | verified 2026-09-14 | no ablation reported |
+| Meta iteration 3 | 8B | preference | pair types; ρ; checkpoint | actor only; ρ = 0.32; epoch 2 | §3.1; App. A.3 | verified 2026-09-14 | no ablation reported |
+| Meta iteration 4 (reported result, 39.44% LC) | 8B | preference | pair types; ρ; checkpoint | actor only; ρ = 0.4; epoch 2 | §3.1; App. A.3; Table 4 | verified 2026-09-14 | Table 4: ρ = 0.4 gives 39.44% LC, length 2003; ρ = 0 / 0.3 / 0.35 give length 2212 / 2127 / 2067 with LC not reported |
+| SR+LC iteration 1 | 8B | preference | ρ; response filter; checkpoint | ρ = 0; drop chosen response > 2500 characters; epoch 5 | App. A.3 | verified 2026-09-14 | no ablation reported |
+| SR+LC iterations 2 and 3 | 8B | preference | ρ; checkpoint | ρ = 0; epoch 1 (iteration 2), epoch 2 (iteration 3) | App. A.3 | verified 2026-09-14 | no ablation reported |
+| SR+LC iteration 4 | 8B | preference | ρ; checkpoint | ρ = 0.1; epoch 2 | App. A.3; Table 4 | verified 2026-09-14 | Table 4: ρ = 0: 34.68% LC / length 2063; ρ = 0.1: 35.49% / 2005; ρ = 0.3: 35.83% / 1806; filter > 2500: 32.90% / 1982 |
+| Meta and SR+LC | 8B | preference | optimizer; warmup; max sequence length; hardware and compute; checkpoint selection metric | not reported | checked §2, §3, App. A.1–A.3 | not reported | n/a |
+
+Table 4 also lists iteration-4 Meta variants at ρ = 0.3 and 0.35; App. A.3 uses ρ = 0.32 only for iterations 2 and 3.
+
+## Findings relevant to generality, negative feedback
+- **Generality:** training prompts are single-turn and closer to AlpacaEval than to Arena-Hard (App. Figure 6), and Arena-Hard still rises 8.5 points (Table 2). MT-Bench Turn 1 rises from 8.319 to 8.738 while Turn 2 goes from 7.911 to 7.838 (Table 6). LC win rate improves in 17 of 18 AlpacaEval categories; Travel and Mathematics show small gains (Figure 4, §3.3). The authors report limited judge improvement on responses the model did not generate (§5).
+- **Negative feedback:** negatives are used as gradient (the rejected term of DPO) for both responses and judgments. The rejected response is the longest response in the low-score tier; the rejected judgment has the lowest Elo. False-negative rates are not reported. With ρ = 0, iteration-4 length was 2212 characters vs 2003 at ρ = 0.4 (Meta) and 2063 vs 2005 at ρ = 0.1 (Self-Rewarding) (Table 4).
+- **Judge drift:** meta-judge preference for the higher-scored judgment rose from 63.04% (iteration 1) to 97.68% (iteration 2); positional bias (all pairs) rose from 43.92% to 68.11% (Table 5). Mean judge score rose from 4.1 to 4.7+ after two iterations of judge training (Figure 5). The authors report that positional bias hindered further improvement in iteration 3 (§5). Reward hacking is stated as a motivation (§1) and is not measured.
 
 ## Connections
-- Direct extension of [[self-rewarding-lm]] — same Actor + Judge loop plus a new role.
-- Shares structural similarity with [[self-play-preference]]: both use multi-role bootstrapping; Nash-LM uses game-theoretic equilibrium, Meta-Rewarding uses hierarchical evaluation.
-- The length-bias control is the lesson from [[ipo]] / SimPO literature applied at the judge level.
-- Empirically, the judge-DPO component is what enables the non-saturating self-improvement — a direct evidence point for Ilya Sutskever's "self-play on soft targets" thesis.
+- [[self-rewarding-lm]]: the base pipeline (actor and judge roles, EFT data, prompt pool, judge prompt) that this paper extends (§1, §3.1, App. A.1).
+- [[dpo]]: the preference optimizer for both actor and judge pairs (§2).
+- [[judge-llm-bias]]: LLM-as-a-Judge prompting and MT-Bench; the Elo fit for judgments is inspired by that paper (§2.2).
+- [[generative-reward-models]], [[direct-judgement-preference]]: other methods that train an LLM judge; here the judge training signal comes from the model's own meta-judgments.
+- [[spin]], [[self-play-preference]]: other self-play training methods in the course; neither is compared in this paper.
+- [[simpo]]: (Interpretation) SimPO addresses length inside the preference loss; this paper addresses it at pair selection (§2.1).
+
+## Verification
+- Checked on 2026-09-14 against: https://arxiv.org/abs/2407.19594 (arXiv v2, 2024-07-30).
+- Corrections to the previous card version:
+  - Title lacked the subtitle "Self-Improving Alignment with LLM-as-a-Meta-Judge".
+  - "stabilizes self-rewarding training past the 3-iteration ceiling" → both methods run 4 iterations and Self-Rewarding + LC also improves each iteration (26.93→35.49% LC, Table 1); no 3-iteration ceiling is reported.
+  - "keeps judge calibration from drifting into reward-hacking" → the paper reports growing meta-judge biases and judge score saturation (Table 5, Figure 5); reward hacking is only a stated motivation (§1).
+  - "judge quality (agreement with humans) continues improving up to iteration 5, vs Self-Rewarding plateauing at 3" → 4 iterations; judge trained only in iterations 1–2; human Spearman peaks at iteration 2 (0.382) and is 0.326 at iteration 4 (Table 7).
+  - "length-bias control term in the judge rubric (deducting points)" → length control is applied in pair selection (§2.1) and as a length filter on chosen judgments (§2.2); the rubric has no length term (App. A.1).
+  - "zero additional human data" → no extra human data beyond the seed model except the EFT set used in the SFT stage (§3.3).
+  - "Figure 2: three-role loop" → Figure 1; Figure 2 is the meta-judge prompt. "Table 1 (AlpacaEval and Arena-Hard)" → Table 1 AlpacaEval 2, Table 2 Arena-Hard. "Table 5 (judge agreement with humans)" → Table 5 is meta-judge bias; humans are Table 7.
+  - "Figure 5 (length bias): responses grow 2×" → Figure 5 is the judge score distribution; Table 4 shows 2212 vs 2003 characters (Meta, iteration 4), not 2×.
+  - "Meta-judge compares the 11 judgments per (prompt, response) pair" → only for the highest-variance response per prompt, in both orders, with position weights and Elo (§2.2).
+  - "DPO params: β=0.1, 1 epoch per iteration, cosine LR ending at 0" → β = 0.1, 10 epochs with per-iteration checkpoint selection, LR 5×10⁻⁶, batch 32, cosine; final LR not reported (App. A.3).
+  - "20K EvolInstruct prompts held out from any human-labelled set" → 20,000 prompts generated by Llama-2-70B-Chat with an 8-shot prompt; 5,000 per iteration (§3.1).
+- Removed as unsupported by the source: "Ilya Sutskever's 'self-play on soft targets' thesis"; "length-bias control is the lesson from [[ipo]] / SimPO applied at the judge level"; "the judge-DPO component is what enables non-saturating self-improvement"; the Nash-LM vs hierarchical-evaluation comparison.
+- Not reported by the source: optimizer, warmup, maximum sequence length, compute, the metric used to select checkpoint epochs, units of the judgment length threshold.

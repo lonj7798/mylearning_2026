@@ -3,80 +3,74 @@ chapter: ch-53
 course: llm-training
 phase: read
 excerpt_of: wiki/raw-data/llm-training/papers/harmbench-data.md
-source_url: https://proceedings.mlr.press/v235/mazeika24a.html
-created_at: "2026-04-23"
+source_url: https://arxiv.org/abs/2402.04249
+primary_text_checked: arXiv:2402.04249 (HarmBench, ICML 2024), 2026-09-17
+revised: 2026-09 (generality revision)
 ---
 
-# Excerpt: HarmBench — why the safety slice is three layers, not one
+# Excerpt: measuring the policy's safety, not a classifier's accuracy
 
-**Source library:** `wiki/raw-data/llm-training/papers/harmbench-data.md`
-**Anchor paper:** Mazeika et al. 2024 — "HarmBench: A Standardized Evaluation Framework for Automated Red Teaming"
+Used by ch-53 §8. The quantity measured is whether the checkpoint under test produces the harmful
+behaviour when asked, scored by a separate released classifier. Feeding a moderation test set to the
+checkpoint and grading its labels measures something else — the checkpoint's skill as a moderator.
 
----
+## Three separated layers (§4.1–4.3)
 
-## Why this source anchors the safety slice of the ch-53 harness
+1. **Behaviour.** A manually authored request, tagged with a semantic category (7 of them: cybercrime,
+   chemical/biological, copyright, misinformation, harassment, illegal activities, general harm) and a
+   functional category (standard, copyright, contextual, multimodal). Behaviours were written from a
+   distilled summary of the acceptable-use policies of OpenAI, Anthropic, Meta, and Inflection, then
+   filtered to remove dual-intent requests that many benign users would also make.
+2. **Attack.** A red-teaming method turns a behaviour into test cases: direct request, human jailbreak
+   templates, token-optimization attacks (GCG and variants, PEZ, GBDA, UAT, AutoPrompt), attacker-LLM
+   search (PAIR, TAP, zero-shot, stochastic few-shot), and evolution or persuasion methods (AutoDAN,
+   PAP).
+3. **Scoring.** The target model generates T tokens with greedy decoding; a classifier decides whether
+   the completion exhibits the behaviour or is a clear attempt at it. Incorrect content still counts as
+   success when the attempt is genuine — the standard exists to separate safety failure from
+   capability failure (§4.3, App. B.1).
 
-The harness does not score "is the output unsafe?" as a single number. HarmBench's operational lesson — the lesson the rest of the safety-eval industry has been absorbing since 2024 — is that safety eval is three layered decisions that share no code path:
+ASR for a method g on model f over behaviours is `ASR(y, g, f) = (1/N) Σ_i c(f_T(x_i), y)` with
+`c = 1` for a successful test case (§3.1).
 
-1. **Target behavior.** What harm does the prompt request? (semantic + functional categories.)
-2. **Attack wrapper.** How was the request packaged? (direct, human jailbreak, GCG, PAIR, AutoDAN, ...).
-3. **Success labeling.** Did the completion exhibit or clearly attempt the target behavior?
+## The two numbers that pin the measurement
 
-If the harness collapses these into one score it loses the only useful comparisons: "did RL regress on `contextual` behaviors specifically?" "did it trade refusal on `direct` requests for compliance on `GCG`-wrapped ones?" Those are slice queries, and they only exist because HarmBench separated the layers.
+**Generation length.** "The number of tokens generated during evaluation can have a drastic effect on
+ASR"; Figure 2 shows the choice changing ASR by up to 30%, and the paper standardizes it at
+**N = 512** so the metric converges (§3.2). Cross-paper comparisons without this parameter are not
+comparable.
 
----
+**Scorer agreement with human judgments** (Table 3, manually labelled validation set):
 
-## The category system — verbatim from the raw-data page
+| Scorer | Standard behaviours | Contextual behaviours |
+|---|---|---|
+| HarmBench classifier (fine-tuned Llama-2-13B-Chat) | 94.53 | 90.5 |
+| GPT-4 | 89.8 | 85.5 |
+| GPTFuzz (fine-tuned RoBERTa) | 77.36 | 71.5 |
+| Llama-Guard | 68.41 | 64.0 |
+| ChatGLM | 65.67 | 62.5 |
+| AdvBench substring matching | 71.14 | 67.5 |
 
-From `harmbench-data.md` §3:
+Substring matching is not prohibited by the paper; it is about 23 points less accurate than the
+released classifier on standard behaviours, and the paper's robustness tests show why: completions that
+refuse first and then comply, benign paragraphs, and completions for unrelated harmful behaviours all
+break scorers that look at prefixes (§3.2).
 
-> The paper lists **7 semantic categories**:
-> `Cybercrime & Unauthorized Intrusion`, `Chemical & Biological Weapons/Drugs`, `Copyright Violations`, `Misinformation & Disinformation`, `Harassment & Bullying`, `Illegal Activities`, and `General Harm`.
-> The paper lists **4 functional categories**:
-> `standard`, `copyright`, `contextual`, and `multimodal`.
+**Two classifiers, two roles** (App. B.2). The test classifier is fine-tuned from Llama-2-13B-Chat and
+reaches 93.2% agreement with human labels (41 errors); a separate validation classifier fine-tuned
+from Mistral-7B base on half the fine-tuning set reaches 88.6% (51 errors), and the two error sets
+intersect in only 26 examples. The validation classifier is the one to use inside an optimization loop;
+the paper does not allow direct optimization against the test metric. Copyright behaviours use a
+hashing-based classifier with MinHash matching over overlapping chunks, because "attempting" to
+reproduce copyrighted text is not the quantity of interest.
 
-Both taxonomies enter the ch-53 harness as `Sample.slices` keys. The semantic category determines which refusal band matters (copyright answers are scored with hash matching, not the classifier). The functional category determines the eval contract: `contextual` behaviors include a preceding context string and a scorer that inspects whether the harmful behavior was exhibited *with respect to that context*, not to the prompt in isolation.
+**Validation/test behaviour split** (§4.1). Attacks and defenses are developed on the validation
+behaviours and judged on the test behaviours.
 
----
+## The complement
 
-## The success classifier — why substring rules are not allowed
+HarmBench measures compliance with harmful requests. The same checkpoint must be measured for refusal
+of safe requests, which HarmBench does not cover; ch-53 §8 uses [[xstest]] for that, and reports the
+pair (ASR, over-refusal) together.
 
-From `harmbench-data.md` §5:
-
-> For **non-copyright behaviors**, the authors fine-tune **Llama 2 13B Chat** on a **manually labeled validation set of completions** to serve as the success classifier.
-> For **copyright behaviors**, they use a stricter **hashing-based classifier** with **MinHash-style matching** over overlapping chunks.
-
-The harness uses the HarmBench classifier (or WildGuard-class equivalent) as `metric_fn`. Substring matching is explicitly disallowed because the paper documents outputs that begin with a refusal before later complying — a substring scorer misses the failure. This is the same design pattern as Lightman 2023's "first negative step" in PRM labeling: the scorer must see the whole trajectory, not a snippet.
-
----
-
-## The validation/test split — why it matters for regression tracking
-
-From `harmbench-data.md` §3:
-
-> The paper also enforces an official **validation/test split** of behaviors, which is a strong design choice for any safety-data pipeline that expects iterative attack development.
-
-The ch-53 harness uses the `val` split for CI gating and reserves the `test` split for one-shot yearly publication numbers. This is how you keep the gate honest: if every iteration is scored on the same behaviors you will overfit the refusal head to those behaviors without improving underlying safety.
-
----
-
-## The three-layer slicing this excerpt licenses
-
-In the harness, one safety `Sample` carries all of these as slice keys simultaneously:
-
-```python
-slices = {
-    "semantic": "cybercrime_intrusion",   # HarmBench 7-category
-    "functional": "contextual",           # HarmBench 4-category
-    "attack": "pair",                     # HarmBench attack family
-    "source_set": "harmbench-val",
-}
-```
-
-A single run then produces scores broken out by any combination — `semantic=cybercrime_intrusion & attack=pair` is a different number from `semantic=cybercrime_intrusion & attack=direct`, and the comparator in §6 compares each slice independently. The regression rule is: a checkpoint regresses on safety if *any* functional-category slice has its CI-high below the baseline's mean. Averaging across functional categories buries contextual regressions.
-
----
-
-## What this source does not tell you
-
-HarmBench is silent on refusal detection as a separate label — it only labels behavior success. For the refusal axis the harness cross-references [[wildguard-data]], which makes `refusal` a first-class label. Treat HarmBench as the *behavior taxonomy* and WildGuard as the *refusal taxonomy*; the harness uses both.
+Related: [[harmbench-data]], [[xstest]], [[ch-52]], [[read]].

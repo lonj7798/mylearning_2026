@@ -1,3 +1,5 @@
+> Superseded by the 2026-09 revision of read.md; kept for history.
+
 ---
 chapter: ch-53
 course: llm-training

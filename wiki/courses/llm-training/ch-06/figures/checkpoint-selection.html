@@ -1,0 +1,143 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Checkpoint soup vs best single checkpoint — OLMo 2 mid-training (Table 14)</title>
+<style>
+  :root { color-scheme: light; }
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+         max-width: 980px; margin: 2em auto; padding: 0 1em; color: #1c1c1c;
+         background: #fafafa; line-height: 1.5; }
+  h1 { font-size: 1.28em; margin-bottom: 0.2em; }
+  .subtitle { color: #555; margin-top: 0; font-size: 0.92em; }
+  .panel { border: 1px solid #dcdcdc; border-radius: 6px; background: #fff;
+           padding: 0.9em 1.1em; margin-top: 1.1em; }
+  .tabs { margin: 0.2em 0 0.9em 0; }
+  .tabs button { font-size: 0.85em; padding: 5px 12px; margin-right: 0.35em; border: 1px solid #bbb;
+                 background: #f2f2f2; border-radius: 4px; cursor: pointer; }
+  .tabs button[aria-pressed="true"] { background: #2b3a7a; color: #fff; border-color: #2b3a7a; }
+  table { border-collapse: collapse; width: 100%; font-size: 0.86em; }
+  th, td { text-align: left; padding: 0.35em 0.5em; border-bottom: 1px solid #eee; }
+  th { font-weight: 600; color: #333; }
+  td.num { font-variant-numeric: tabular-nums; text-align: right; }
+  .bar-cell { width: 58%; }
+  .track { position: relative; height: 26px; background: #f4f5f7; border-radius: 3px; }
+  .bar { position: absolute; top: 4px; height: 8px; border-radius: 2px; }
+  .bar.single { top: 4px; background: #9aa4c0; }
+  .bar.soup { top: 14px; background: #2b3a7a; }
+  .bar.soup.down { background: #b23b3b; }
+  .legend { font-size: 0.8em; color: #555; margin: 0.5em 0 0.8em 0; }
+  .key { display: inline-block; width: 22px; height: 8px; border-radius: 2px; vertical-align: 1px;
+         margin-right: 5px; }
+  .delta.up { color: #1b5e20; }
+  .delta.down { color: #8b1a1a; font-weight: 600; }
+  .axis { font-size: 0.74em; color: #777; display: flex; justify-content: space-between;
+          margin-top: 0.2em; }
+  .caption { font-size: 0.82em; color: #555; margin-top: 1.1em; border-top: 1px solid #e0e0e0;
+             padding-top: 0.8em; }
+  code { font-family: 'SF Mono', Menlo, Consolas, monospace; font-size: 0.85em;
+         background: #eef1fd; padding: 1px 4px; border-radius: 3px; }
+</style>
+</head>
+<body>
+
+<h1>Averaging three mid-training runs against keeping the best one</h1>
+<p class="subtitle">OLMo 2 7B, mid-training for 50B tokens from the same 7B pre-trained checkpoint, six
+candidate data mixes. For each mix, three runs differ only in the permutation of the data; "soup" is the
+parameter-wise average of those three. Switch metric to see where the aggregate claim holds and where it does
+not.</p>
+
+<div class="panel">
+  <div class="tabs" id="tabs"></div>
+  <div class="legend">
+    <span class="key" style="background:#9aa4c0"></span>best single run
+    <span class="key" style="background:#2b3a7a; margin-left:1.2em"></span>3&times; soup
+    <span class="key" style="background:#b23b3b; margin-left:1.2em"></span>soup below the best single run
+  </div>
+  <table>
+    <thead>
+      <tr><th>Mix</th><th class="bar-cell">Score</th><th class="num">Best single</th>
+          <th class="num">3&times; soup</th><th class="num">Δ</th></tr>
+    </thead>
+    <tbody id="rows"></tbody>
+  </table>
+  <div class="axis"><span id="lo"></span><span id="hi"></span></div>
+</div>
+
+<p class="caption">Source: OLMo 2 report §4.5, Table 14, read on 2026-09-17. GSM* is a sample of 200 GSM8K questions the report
+uses as a math development set, outside the OLMES averages; the report's claim is that "merging 3 checkpoints annealed on three permutations of
+the same data mix consistently produces equal or better performance than any individual training run", stated
+for the mid-training comparison as a whole. The mix-E GSM* row is the case where the aggregate claim and a
+per-task reading come apart. OLMo 2 7B ships as the average of three checkpoints on the 50B Dolmino Mix 1124
+sample. See read.md §5.</p>
+
+<script>
+var DATA = {
+  "OLMES (MCF)":  { lo: 70, hi: 80, rows: [["A",75.6,77.0],["B",75.3,77.3],["C",76.3,76.8],["D",77.5,77.8],["E",73.4,75.3],["F",77.1,77.9]] },
+  "OLMES-Gen":    { lo: 60, hi: 75, rows: [["A",68.5,69.4],["B",69.9,70.1],["C",70.9,71.3],["D",71.2,71.7],["E",63.1,64.2],["F",69.9,70.4]] },
+  "MMLU (MCF)":   { lo: 58, hi: 66, rows: [["A",61.2,62.0],["B",61.5,62.7],["C",62.8,63.5],["D",63.4,63.5],["E",62.2,63.1],["F",63.7,63.7]] },
+  "GSM*":         { lo: 40, hi: 80, rows: [["A",71.0,74.0],["B",73.0,77.0],["C",66.0,66.0],["D",59.5,60.0],["E",60.5,43.0],["F",73.5,74.5]] }
+};
+var order = ["OLMES (MCF)", "OLMES-Gen", "MMLU (MCF)", "GSM*"];
+var current = order[0];
+
+var tabs = document.getElementById("tabs");
+order.forEach(function (name) {
+  var b = document.createElement("button");
+  b.textContent = name;
+  b.setAttribute("aria-pressed", name === current ? "true" : "false");
+  b.addEventListener("click", function () { current = name; render(); });
+  tabs.appendChild(b);
+});
+
+function render() {
+  Array.prototype.forEach.call(tabs.children, function (b) {
+    b.setAttribute("aria-pressed", b.textContent === current ? "true" : "false");
+  });
+  var d = DATA[current];
+  var span = d.hi - d.lo;
+  document.getElementById("lo").textContent = d.lo;
+  document.getElementById("hi").textContent = d.hi;
+  var tb = document.getElementById("rows");
+  tb.innerHTML = "";
+  d.rows.forEach(function (r) {
+    var mix = r[0], single = r[1], soup = r[2];
+    var tr = document.createElement("tr");
+
+    var c0 = document.createElement("td"); c0.textContent = mix;
+
+    var c1 = document.createElement("td"); c1.className = "bar-cell";
+    var track = document.createElement("div"); track.className = "track";
+    var b1 = document.createElement("div");
+    b1.className = "bar single";
+    b1.style.left = "0"; b1.style.width = pct(single, d.lo, span);
+    var b2 = document.createElement("div");
+    b2.className = "bar soup" + (soup < single ? " down" : "");
+    b2.style.left = "0"; b2.style.width = pct(soup, d.lo, span);
+    track.appendChild(b1); track.appendChild(b2);
+    c1.appendChild(track);
+
+    var c2 = document.createElement("td"); c2.className = "num"; c2.textContent = single.toFixed(1);
+    var c3 = document.createElement("td"); c3.className = "num"; c3.textContent = soup.toFixed(1);
+    var delta = soup - single;
+    var c4 = document.createElement("td");
+    c4.className = "num delta " + (delta < 0 ? "down" : "up");
+    c4.textContent = (delta > 0 ? "+" : "") + delta.toFixed(1);
+
+    tr.appendChild(c0); tr.appendChild(c1); tr.appendChild(c2); tr.appendChild(c3); tr.appendChild(c4);
+    tb.appendChild(tr);
+  });
+}
+
+function pct(v, lo, span) {
+  var f = (v - lo) / span;
+  if (f < 0) { f = 0; }
+  if (f > 1) { f = 1; }
+  return (f * 100).toFixed(1) + "%";
+}
+
+render();
+</script>
+
+</body>
+</html>
