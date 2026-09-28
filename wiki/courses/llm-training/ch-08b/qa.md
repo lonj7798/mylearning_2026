@@ -72,3 +72,19 @@
 ## Q15. ICL vs IWL 중 무엇이 더 좋은가? (2026-09-28)
 
 **Kernel.** 이 장에 둘의 순위를 매긴 결과는 없다. 평가가 서로 다른 시험이라 점수를 직접 비교할 수 없음(ICL: holdout class, context 예시 있음, chance 1/2 / IWL: 학습 class, context 예시 없음, chance 약 1/1,600). ICL은 새롭거나 드문 대상·weight 변경 없는 즉시 반영에 맞고, IWL은 자주 나오는 대상·context 없이 사용하는 경우에 맞음. §3: 균등 빈도에서는 상쇄(둘 다 유지하는 모델 없음), Zipfian α=1에서는 상위 10개 class는 IWL·드문 class는 ICL로 분업, 드문 class는 어떤 α에서도 외워지지 않음. §2의 ICL 근거: task별 학습 데이터 불필요, spurious correlation 주장(GPT-3 저자들); 한계: WiC 49.4%(random), ANLI 175B 미만 약 33%(chance), "그 자리에서 배우는가 vs 알아보는가"는 Open question. 범용 모델은 둘 다 필요하다는 것과 LLM 행동의 ICL/IWL 분류는 이 course의 해석(Interpretation, 미검증). see [[read]] §2, §3.
+
+## Q16. §10의 네 발견에 적절한 비율이 있나? 다른 챕터에서 배우나? (2026-09-28)
+
+**Kernel.** §10에는 네 발견 어디에도 권장 비율이 없다. 나온 숫자는 측정값·실험 설정이다: (1) WebText 40GB 중 프랑스어 10MB(약 0.025%, 이 course가 계산한 값)와 French→English 11.5 BLEU — 관찰이지 권고 아님; (2) Omniglot 실험 설정(p(bursty)=0.9, class 수, α=1) — text 미검증; (3) 사람마다 템플릿 1,000개 vs 고정 전기 1,000번 반복 — 두 조건 비교만, 최적 템플릿 수는 알 수 없음; (4) phi-1 유사 문제 81.7% vs 비유사 26.9%, τ=0.95는 close match 판정 기준(AST 일치율)이지 데이터 비율이 아님. §10의 권고는 비율이 아니라 평가 절차(유사도 분할, 기준 모델과 격차 비교, 반사실 변형). 비율·mixture는 outline 기준 ch-09(소스별 능력 기여, Llama 3 mixture 비중), ch-10a(모델 기반 filtering·benchmark-targeted 선택), ch-13(도메인 mixture 선택·규모 간 검증; Aioli: 많은 방법이 stratified sampling을 일관되게 못 이김), ch-14a(공개 run의 stage별 mixture 비율)에서 다룸 — outline 개념 설명 기준이며 해당 read.md는 미확인. see [[read]] §10.
+
+## Q17. Discussion 기록 (§1-§5, §10 범위; verdict 없음) (2026-09-28)
+
+**Probe 1 (ICL과 §3 조건).** ICL은 learning이 아니라 forward pass — 정확. 조건은 burstiness와 long tail(많은 class) 둘 다 필요 — 정확. "왜 둘 다인가"는 보완 후 정확: class 100개에서는 각 class가 자주 나와 weight에 외울 수 있어 IWL이 높고, 12,800개에서는 개별 class가 드물어 외우기 어려워 context 사용으로 기움; burstiness가 없으면 query와 같은 class의 예시가 context에 없어 매칭을 배울 재료가 없음(학습자가 "instruction"이라고 쓴 부분은 "query와 같은 class의 예시"로 정정).
+
+**Probe 2 (GPT-2 global-minimum 주장이 보장하지 않는 것).** 정확: (a) 낮은 loss ≠ task 성능(ch-08a §6-§7), (b) 낮은 loss ≠ global minimum 도달(저자들이 스스로 열어 둔 질문).
+
+**Probe 3 (§10 발견 4, phi-1).** 초기 답은 "학습하지 않은 모델과 비교"만 있었고, 이후 설명으로 정리: (1) HumanEval 164문제를 학습 연습문제와의 close match 여부로 similar 71 / non-similar 93으로 분할, (2) 총점이 아니라 격차(similar − non-similar)를 학습하지 않은 모델(StarCoder-Prompted)의 격차와 비교(54.8 vs 28.7; 차이 약 26점은 이 course의 거친 추정, 난이도 효과가 같다는 가정 위), (3) 저확률·반사실 변형 추가. non-similar만 보면 phi-1 26.9 < StarCoder-Prompted 29.0. close match 제거 후 재학습: 격차 54.8→42.3, 총점 50.6 유지; similar 81.7→74.6, non-similar 26.9→32.3이나 93문제 묶음의 표본오차가 약 ±5점(이 course의 대략 계산)이라 단정 불가.
+
+**정정된 오해.** (a) "close match 제거 = long tail 확보"가 아님: 제거 기준이 평가 문제와의 유사도이며 class 분포는 측정되지 않음. (b) "결론 = 같은 난이도에 dedup이 좋다"가 아님: §10 발견 4의 결론은 평가 절차이고, dedup의 일반화 효과는 시험되지 않음(학습 데이터 내부 dedup이 분포 모양·ICL을 바꾸는지는 §3 Implication의 Open question).
+
+**미독 범위.** §6-§9(emergence의 지표 착시, loss threshold, 같은 loss 다른 downstream, embers of autoregression)는 읽지 않음.
