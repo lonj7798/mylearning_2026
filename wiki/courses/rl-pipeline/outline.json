@@ -1,0 +1,543 @@
+{
+ "slug": "rl-pipeline",
+ "title": "RL Pipelines at Scale: Async Rollouts, Staleness, Numerical Parity, and Fault Tolerance",
+ "kind": "approved",
+ "created": "2026-11-24",
+ "scope": "A systems course built around Microsoft AI's Rocket post (Nov 2026): how a weeks-long RL-from-base run is structured (controller/workers/sampler/learner), how policy staleness is measured and bounded, how low-precision rollouts and bitwise sampler-learner parity are achieved, and how the job survives failures and resizes. Each chapter pairs the Rocket design with open-source counterparts (slime, verl, AReaL) and the papers Rocket cites. Algorithms (GRPO/DAPO/etc.) are assumed from llm-training ch-40+.",
+ "tactic_blind": true,
+ "phases": [
+  {
+   "id": "foundations",
+   "title": "Loop architecture"
+  },
+  {
+   "id": "staleness",
+   "title": "Staleness"
+  },
+  {
+   "id": "numerics",
+   "title": "Numerics"
+  },
+  {
+   "id": "agentic",
+   "title": "Agentic rollouts"
+  },
+  {
+   "id": "rl-design",
+   "title": "Designing the RL problem: task, rollout, grader, reward"
+  },
+  {
+   "id": "domain-pipelines",
+   "title": "Domain pipelines and recipes"
+  },
+  {
+   "id": "operations",
+   "title": "Long-run operations"
+  },
+  {
+   "id": "capstone",
+   "title": "Capstone"
+  },
+  {
+   "id": "bonus",
+   "title": "Bonus"
+  }
+ ],
+ "chapters": [
+  {
+   "id": "ch-01",
+   "title": "Why RL-from-Base Needs Its Own Infrastructure",
+   "phase": "foundations",
+   "summary": "Distilled-start RL (short refinement, restartable) vs a weeks-long climb from base; Rocket's three challenges (staleness, numerical consistency, fault tolerance/elasticity); build vs adopt (verl/slime) and owning learner + RL loop + inference fork; reuse of Kubernetes/Slurm + Ray.",
+   "deps": [],
+   "sources": [
+    "mai-rl-infrastructure",
+    "mai-thinking-1",
+    "slime",
+    "verl-rollout",
+    "olmo-3-rl-pipeline",
+    "scalerl"
+   ]
+  },
+  {
+   "id": "ch-02",
+   "title": "Anatomy of the Async Loop: Controller, Workers, Sampler, Learner",
+   "phase": "foundations",
+   "summary": "Rocket Fig.1 end to end: curriculum controller, problem worker, rollout worker pool, sampler, tool dispatcher, per-rollout vs group graders, rollout store, learner; batches of references + advantages instead of tokens; training segments. Contrast with colocated (verl hybrid engine) and disaggregated/fully-async (slime, AReaL) designs.",
+   "deps": [
+    "ch-01"
+   ],
+   "sources": [
+    "mai-rl-infrastructure",
+    "slime",
+    "verl-rollout",
+    "areal-async-rl",
+    "async-rollout",
+    "olmo-3-rl-pipeline",
+    "open-instruct-rlvr-pipeline",
+    "pipelinerl",
+    "slime-agentic-and-mismatch-examples"
+   ],
+   "figure": "figures/async-loop.html"
+  },
+  {
+   "id": "ch-03",
+   "title": "Policy Staleness: Definition, Decomposition, and Why It Hurts",
+   "phase": "staleness",
+   "summary": "Staleness as policy-version gap per token; staleness ≈ sampler lag + (t_trained − t_generated)/Δt_step; Fig.3 log-prob gap growing with staleness; Fig.4 GRPO-group timeline (24 min wait, 6 weight versions, 7.6 h group wait, 12 s queue); off-policy corrections in open frameworks (importance ratios, staleness bounds, AReaL decoupled objective).",
+   "deps": [
+    "ch-02"
+   ],
+   "sources": [
+    "mai-rl-infrastructure",
+    "areal-async-rl",
+    "async-rollout",
+    "slime",
+    "pipelinerl",
+    "areal-agent-pipelines",
+    "truncated-importance-sampling",
+    "scalerl"
+   ],
+   "figure": "figures/staleness-timeline.html"
+  },
+  {
+   "id": "ch-04",
+   "title": "Staleness Levers: Priority, Dropping Failures, and Inference-Bound Sizing",
+   "phase": "staleness",
+   "summary": "Rollout-age priority (staleness starts at the first token; timeout implications), drop vs retry failed rollouts and the GRPO-baseline bias, overallocating the learner to stay inference-bound, and the counter-intuitive result that more inference at fixed batch size raises staleness.",
+   "deps": [
+    "ch-03"
+   ],
+   "sources": [
+    "mai-rl-infrastructure",
+    "grpo",
+    "slime",
+    "olmo-3-rl-pipeline",
+    "areal-agent-pipelines",
+    "scalerl"
+   ],
+   "figure": "figures/inference-vs-staleness.html"
+  },
+  {
+   "id": "ch-05",
+   "title": "Weight Transfer: Keeping the Sampler Current",
+   "phase": "staleness",
+   "summary": "Two-stage weight transfer (selected engines pull packed chunks, then fan out to matching ranks) and why per-replica sends do not scale; 15 s transfer and 4-step sync cadence; compare slime/verl weight sync (pause admission → push → resume, NCCL broadcast, CUDA IPC in colocated mode).",
+   "deps": [
+    "ch-04"
+   ],
+   "sources": [
+    "mai-rl-infrastructure",
+    "slime",
+    "verl-rollout",
+    "deepseek-open-infra",
+    "open-instruct-rlvr-pipeline",
+    "pipelinerl",
+    "slime-agentic-and-mismatch-examples"
+   ]
+  },
+  {
+   "id": "ch-06",
+   "title": "Low-Precision Rollouts: MXFP8 Weights and KV Caches",
+   "phase": "numerics",
+   "summary": "Why the sampler moves to lower precision at 3T scale; MXFP8 storage + BF16 compute for MoE experts (>95% params, ~half memory, smaller EP); learner fake-quantization; 5:1 local/global attention and global-only KV quantization (+67% global tokens); last 3 global layers kept BF16.",
+   "deps": [
+    "ch-02"
+   ],
+   "sources": [
+    "mai-rl-infrastructure",
+    "verl-rollout-correction-and-lowprec",
+    "fp16-train-infer-mismatch",
+    "deepseek-train-infer-consistency"
+   ],
+   "figure": "figures/precision-map.html"
+  },
+  {
+   "id": "ch-07",
+   "title": "Bitwise Sampler–Learner Parity",
+   "phase": "numerics",
+   "summary": "Sources of train–inference mismatch beyond precision: kernels, parallelism, reduction order, tiling; why the gap grows during RL; the three Rocket fixes (replicated o_proj after head all-gather, local FP32 MoE combine, shared FA4 with aligned sliding-window tiles and fixed KV split); Thinking Machines batch invariance, NeMo RL TP accuracy, FlashAttention stability, DeepSeek consistency work, and importance-sampling patches used when parity is not achieved.",
+   "deps": [
+    "ch-06"
+   ],
+   "sources": [
+    "mai-rl-infrastructure",
+    "thinking-machines-nondeterminism",
+    "flash-attention-stability",
+    "nemo-rl-tp-accuracy",
+    "deepseek-train-infer-consistency",
+    "truncated-importance-sampling",
+    "fp16-train-infer-mismatch",
+    "verl-rollout-correction-and-lowprec",
+    "slime-agentic-and-mismatch-examples"
+   ],
+   "figure": "figures/reduction-order.html"
+  },
+  {
+   "id": "ch-08",
+   "title": "Agentic Rollouts: Tools, Sandboxes, and Graders",
+   "phase": "agentic",
+   "summary": "Agent loops inside rollout workers: tool dispatcher, sandbox execution environments, search, MCP tools; per-rollout vs group grading; hour-long mixed with minute-long tasks; rollouts holding VMs before first token; how open agentic RL stacks structure the same pieces.",
+   "deps": [
+    "ch-04"
+   ],
+   "sources": [
+    "mai-rl-infrastructure",
+    "rstar2-agent",
+    "slime",
+    "kimi-k2-agentic-data",
+    "tito-token-in-token-out",
+    "slime-agentic-and-mismatch-examples",
+    "areal-agent-pipelines",
+    "tau2-bench",
+    "mai-thinking-1"
+   ]
+  },
+  {
+   "id": "ch-09",
+   "title": "Designing the Task: Prompts, Reference Answers, and Verifiability",
+   "phase": "rl-design",
+   "summary": "How an RL problem set is built: sourcing and synthesizing prompts, creating reference answers (existing labels, strong-model generation + consensus/majority vote, execution-verified tests, procedural generators), checking that answers are correct and uniquely verifiable, normalizing answer formats, removing ambiguous or unverifiable items, contamination checks, and difficulty measurement by policy pass rate.",
+   "deps": [
+    "ch-08"
+   ],
+   "sources": [
+    "numina-math",
+    "big-math",
+    "deepmath-103k",
+    "reasoning-gym",
+    "swe-smith",
+    "r2e-gym",
+    "olmo-3-rl-pipeline",
+    "verifier-pitfalls",
+    "rl-design-guide"
+   ]
+  },
+  {
+   "id": "ch-10",
+   "title": "Designing the Rollout: Sampling, Group Size, Length, and Multi-Turn",
+   "phase": "rl-design",
+   "summary": "Rollout design choices and their measured effects: temperature/top-p and entropy, group size n per prompt, max response length and overlong handling, oversampling and dynamic sampling for zero-variance groups, partial rollouts, multi-turn agent loops and tool-call parsing, token-in/token-out to avoid re-tokenization drift, recording sampler log-probs, and sync vs async rollout scheduling.",
+   "deps": [
+    "ch-09"
+   ],
+   "sources": [
+    "scalerl",
+    "pipelinerl",
+    "polaris",
+    "skywork-or1",
+    "brorl",
+    "dapo",
+    "kimi-k1-5-recipe",
+    "async-rollout",
+    "verl-rollout",
+    "slime",
+    "tito-token-in-token-out",
+    "rl-design-guide"
+   ],
+   "figure": "figures/rollout-design.html"
+  },
+  {
+   "id": "ch-11",
+   "title": "Designing the Grader: Rule Verifiers, Execution, LLM Judges, and Rubrics",
+   "phase": "rl-design",
+   "summary": "The grader ladder (string/math-equivalence rules, code execution, model-based verifiers, LLM-as-judge, rubric/checklist rewards, generative reward models, pairwise/group judges as in Rocket's group graders); false negatives of rule verifiers and false positives of model verifiers; judge hacking (format tokens, length, injected text); judge prompt design, calibration and auditing; grader latency/cost as a service.",
+   "deps": [
+    "ch-10"
+   ],
+   "sources": [
+    "math-verify",
+    "verifier-pitfalls",
+    "master-rm-one-token",
+    "deepseek-grm",
+    "general-reasoner-verifier",
+    "rlcf-checklists",
+    "rubrics-as-rewards",
+    "generative-reward-models",
+    "judge-llm-bias",
+    "reward-hacking-taxonomy",
+    "mai-rl-infrastructure",
+    "rl-design-guide",
+    "mai-thinking-1"
+   ],
+   "figure": "figures/grader-ladder.html"
+  },
+  {
+   "id": "ch-12",
+   "title": "Composing Rewards and Selecting Prompts",
+   "phase": "rl-design",
+   "summary": "Combining correctness, format, length and safety terms; partial credit vs binary; multi-objective weighting across domains; spurious-reward evidence; prompt selection by pass-rate window, curriculum and replay; monitoring for reward hacking during the run.",
+   "deps": [
+    "ch-11"
+   ],
+   "sources": [
+    "spurious-rewards-rlvr",
+    "dapo",
+    "polaris",
+    "reward-model-overoptimization",
+    "natural-emergent-misalignment-reward-hacking",
+    "metr-frontier-reward-hacking",
+    "scalerl",
+    "mai-thinking-1",
+    "rl-design-guide",
+    "skywork-or1"
+   ]
+  },
+  {
+   "id": "ch-13",
+   "title": "Diversity Axes of the RL Task Distribution",
+   "phase": "rl-design",
+   "summary": "Which kinds of diversity an RL task set must cover and how each is measured and controlled: domain, difficulty/pass rate, tool calls per turn (parallel vs sequential), turns per episode and horizon length, tasks per episode (multi-intent, task switching), toolset size and unseen tools, environment count, system-prompt and user-persona diversity, user behavior via user simulators, constraint count, answer format, output length, language; measured evidence for what fails when an axis is missing; how labs balance axes with mixture weights.",
+   "deps": [
+    "ch-12"
+   ],
+   "sources": [
+    "diversity-axes",
+    "system-prompt-diversity",
+    "kimi-k2-agentic-data",
+    "demystifying-agentic-rl",
+    "deepseek-v3-2",
+    "glm-4-5-recipe",
+    "apigen-mt",
+    "toolace",
+    "tau-bench",
+    "bfcl",
+    "persona-hub",
+    "consistentchat",
+    "user-oriented-dialogue-generation",
+    "rest-multi-problem-stress",
+    "tau2-bench",
+    "agentscaler"
+   ],
+   "figure": "figures/diversity-axes.html"
+  },
+  {
+   "id": "ch-14",
+   "title": "Instruction-Following RL Pipeline",
+   "phase": "domain-pipelines",
+   "summary": "End-to-end IF RL: prompt construction with verifiable constraints (IFEval/IFBench-style constraint taxonomies, held-out constraint types), programmatic constraint checkers as per-rollout graders, LLM-judge or rubric graders for soft constraints, mixing hard and soft rewards, reward hacking (satisfying the checker while degrading response quality), and the reasoning-vs-instruction-following tension; where IF RL sits in lab recipes.",
+   "deps": [
+    "ch-12"
+   ],
+   "sources": [
+    "ifbench",
+    "rlvr-tulu3",
+    "tulu-3",
+    "scaling-reasoning-losing-control-mathif",
+    "rubrics-as-rewards",
+    "mai-thinking-1",
+    "open-instruct-rlvr-pipeline",
+    "olmo-3-rl-pipeline",
+    "rlcf-checklists"
+   ],
+   "figure": "figures/if-pipeline.html"
+  },
+  {
+   "id": "ch-15",
+   "title": "Web-Search and Deep-Research RL Pipeline",
+   "phase": "domain-pipelines",
+   "summary": "End-to-end search-agent RL: question sources (multi-hop QA, synthesized hard queries), the search/browse tool server and its cost/latency, simulated or cached search for training (ZeroSearch), masking retrieved tokens from the loss, outcome graders (exact match, F1, LLM judge), long-horizon rollouts and context management, and asynchronous rollout for hour-long trajectories (ASearcher on AReaL).",
+   "deps": [
+    "ch-12"
+   ],
+   "sources": [
+    "search-r1",
+    "zerosearch",
+    "asearcher",
+    "websailor-tongyi-deepresearch",
+    "deepresearcher",
+    "gemini-2.5-deep-research",
+    "mai-rl-infrastructure",
+    "slime-search-r1-pipeline",
+    "verl-search-tool-pipeline",
+    "areal-agent-pipelines"
+   ],
+   "figure": "figures/search-pipeline.html"
+  },
+  {
+   "id": "ch-16",
+   "title": "Math, Code, and SWE RL Pipelines",
+   "phase": "domain-pipelines",
+   "summary": "The verifiable-domain pipelines side by side: math answer-matching graders, code execution against unit tests in sandboxes, and SWE repository environments (container images, test-based rewards, rollout timeouts); what each domain demands from the rollout worker, the sandbox fleet, and the grader.",
+   "deps": [
+    "ch-12"
+   ],
+   "sources": [
+    "swe-rl",
+    "r2e-gym",
+    "deepswe",
+    "rstar2-agent",
+    "deepseek-v3-2",
+    "swe-smith",
+    "slime-agentic-and-mismatch-examples",
+    "areal-agent-pipelines",
+    "minimax-m1",
+    "mai-thinking-1",
+    "math-verify"
+   ]
+  },
+  {
+   "id": "ch-17",
+   "title": "Multi-Domain RL Recipes: Stage Order and Mixture",
+   "phase": "domain-pipelines",
+   "summary": "How labs order and mix RL domains (e.g., instruction following → reasoning → search/agentic → general alignment, or one joint mixture): staged vs joint RL, per-domain graders under one loop, mixture weights as runtime config (Rocket's problem-mixture weights and curriculum controller), and what each recipe reports about interference and retention. Compares MAI Thinking 1, GLM-4.5, Qwen3, Kimi K2, DeepSeek-V3.2, Olmo 3, MiniMax-M1, Nemotron.",
+   "deps": [
+    "ch-14",
+    "ch-15",
+    "ch-16"
+   ],
+   "sources": [
+    "mai-thinking-1",
+    "glm-4-5-recipe",
+    "qwen-3-recipe",
+    "kimi-k2-recipe",
+    "deepseek-v3-2",
+    "olmo-3-recipe",
+    "minimax-m1",
+    "nemotron-ultra-recipe",
+    "mai-rl-infrastructure",
+    "recipe-crosswalk"
+   ],
+   "figure": "figures/stage-recipes.html"
+  },
+  {
+   "id": "ch-18",
+   "title": "Choosing the RL Algorithm by Domain: PPO, GRPO, RLOO, DAPO, GSPO, CISPO, DPO, and Agentic Variants",
+   "phase": "domain-pipelines",
+   "summary": "Which algorithm each lab used for each domain/stage (instruction following, verifiable math/code, search and multi-turn agents, SWE, non-verifiable chat preference, large MoE), the stated reason for each choice, and the stated reasons alternatives were rejected: critic cost and value-model instability (PPO vs group baselines), length and std-normalization bias (GRPO vs Dr. GRPO/DAPO), token-ratio instability on MoE (GSPO, CISPO), clipped-token gradient loss (CISPO), turn-level credit for agents (GiGPO), and offline preference (DPO) vs online RL for non-verifiable rewards. Algorithm mechanics are assumed from llm-training ch-40/45a; this chapter is the selection crosswalk.",
+   "deps": [
+    "ch-17"
+   ],
+   "sources": [
+    "algorithm-crosswalk",
+    "recipe-crosswalk",
+    "ppo",
+    "grpo",
+    "rloo",
+    "rloo-vs-grpo",
+    "reinforce-plus-plus",
+    "dr-grpo",
+    "dpo",
+    "gigpo-verl-agent",
+    "minimax-m1",
+    "scalerl",
+    "olmo-3-rl-pipeline",
+    "mai-rl-infrastructure",
+    "dapo",
+    "mai-thinking-1",
+    "search-r1"
+   ],
+   "figure": "figures/algorithm-by-domain.html"
+  },
+  {
+   "id": "ch-19",
+   "title": "RL Without a Clear Score: Rewards for Naturalness, Style, and Other Subjective Qualities",
+   "phase": "domain-pipelines",
+   "summary": "How to build a training signal when no verifier exists: collecting pairwise human preferences and fitting Bradley-Terry reward models, generative/pairwise judges, rubric anchors and checklists for subjective qualities, calibrating a judge against human ratings (agreement, position and length bias), self-critique rubric rewards, reference-free vs reference-based scoring, and the failure modes specific to subjective rewards (length, sycophancy, a recognizable 'judge-pleasing' style, AI-tone). Which algorithms labs use here (online RL against an RM vs DPO-family) and why.",
+   "deps": [
+    "ch-11",
+    "ch-18"
+   ],
+   "sources": [
+    "bradley-terry-rm",
+    "generative-reward-models",
+    "rubrics-as-rewards",
+    "rlcf-checklists",
+    "rubicon-rubric-anchors",
+    "writing-zero",
+    "rlmt-think-chat",
+    "skywork-reward-v2",
+    "litbench",
+    "judge-llm-bias",
+    "kimi-k2-recipe",
+    "constitutional-ai",
+    "ultrafeedback",
+    "deepseek-grm",
+    "subjective-reward-guide",
+    "mai-thinking-1",
+    "master-rm-one-token"
+   ],
+   "figure": "figures/subjective-reward.html"
+  },
+  {
+   "id": "ch-20",
+   "title": "Fault Tolerance: Recover at the Smallest Scope",
+   "phase": "operations",
+   "summary": "Health checks and stalled-process detection; learner-only recovery (~5 min, >7% GPU-hours saved) that keeps the inference fleet running; replica replacement and live-fraction thresholds; escalation to in-job rebuild (0.42%) then cluster requeue; CPU-only control plane on stable nodes.",
+   "deps": [
+    "ch-02"
+   ],
+   "sources": [
+    "mai-rl-infrastructure",
+    "olmo-3-rl-pipeline"
+   ],
+   "figure": "figures/recovery-ladder.html"
+  },
+  {
+   "id": "ch-21",
+   "title": "Elasticity: Resizing Components and Changing Config Mid-Run",
+   "phase": "operations",
+   "summary": "Compute elasticity (independent scaling, learner resize at checkpoint boundaries, topology-aware placement on rack-scale Blackwell, spare learner slice) and runtime elasticity (typed, validated settings applied at step/sampling boundaries; 9.88% compute gain).",
+   "deps": [
+    "ch-20"
+   ],
+   "sources": [
+    "mai-rl-infrastructure"
+   ]
+  },
+  {
+   "id": "ch-22",
+   "title": "Capstone: Design an RL Pipeline for Your Own Setting",
+   "phase": "capstone",
+   "summary": "Apply the course to the learner's own target (e.g., a sales-agent RL run on own endpoints): sync vs async, algorithm choice per domain, staleness budget and sizing, precision and parity plan, domain stage order and grader design (IF, search, code), recovery and elasticity plan, and which open framework to start from.",
+   "deps": [
+    "ch-05",
+    "ch-07",
+    "ch-18",
+    "ch-21"
+   ],
+   "sources": [
+    "mai-rl-infrastructure",
+    "slime",
+    "verl-rollout",
+    "areal-async-rl",
+    "rl-design-guide",
+    "algorithm-crosswalk",
+    "recipe-crosswalk",
+    "diversity-axes",
+    "subjective-reward-guide"
+   ]
+  },
+  {
+   "id": "ch-23",
+   "title": "Bonus: Training Human-Like Conversational and Speech Style",
+   "phase": "bonus",
+   "summary": "Applying ch-08j to human-likeness: defining measurable components of 'human-like' (lexical diversity, emotional variation, persona stability, colloquial turns, disfluency/backchannel in speech), building preference data (human-written vs model-written pairs, real conversation logs), RL and DPO methods reported for human-like responses, anti-slop / AI-tone suppression, character training, spoken-dialogue naturalness judges and speech-style rewards (MOS predictors, spoken-dialogue reward models), and the risk of optimizing an AI-detector or judge instead of people. Ends with a design for the learner's sales-voice agent.",
+   "deps": [
+    "ch-19",
+    "ch-22"
+   ],
+   "sources": [
+    "human-like-responses-dpo",
+    "antislop",
+    "open-character-training",
+    "anthropic-claude-character",
+    "realtalk",
+    "persona-lexical-diversity",
+    "deepdialogue",
+    "sdiareward",
+    "audio-multichallenge",
+    "speechjudge",
+    "consistentchat",
+    "josh-dialogue-self-training",
+    "subjective-reward-guide",
+    "speechalign",
+    "rubicon-rubric-anchors",
+    "writing-zero",
+    "rlmt-think-chat",
+    "litbench"
+   ],
+   "figure": "figures/humanlike-style.html"
+  }
+ ]
+}
