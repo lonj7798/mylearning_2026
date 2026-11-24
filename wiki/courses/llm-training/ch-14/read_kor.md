@@ -1,281 +1,429 @@
 <!-- chapter: ch-14
-     track: data
-     title: Scaling, Contamination, Knowledge Retention
-     sources: [[data-constrained-scaling]], [[physics-of-lm-3]], [[scaling-laws-data-quality]], [[model-collapse]], [[strong-model-collapse]], [[llama-3]], [[olmo-2]], [[olmo-3]], [[anthropic-sleeper-agents-data]]
-     figures: figures/repetition-curve.html
+     track: pretraining
+     kind: content
+     title: 데이터 제한 스케일링, 반복, 사전학습 오염 제거
+     deps: [ch-13a]
+     sources: [[data-constrained-scaling]], [[repeated-data-scaling]], [[scaling-laws-data-quality]], [[nemotron-cc]], [[epoch-data-stock]], [[rephrasing-the-web]], [[d4]], [[c4]], [[llama-3]], [[llama-3-recipe]], [[llama-3-decontamination]], [[evaluation-data-contamination-contam]], [[rephrased-samples-contamination]], [[olmo-3-decontamination]], [[tulu-3]], [[paloma]], [[dolma]], [[deduplicating-training-data]], [[livecodebench]]
+     figures: figures/repetition-curve.html, figures/ngram-contamination.html
+     revised: 2026-09 (generality revision)
 -->
 
-# 14장 — 스케일링, 오염, 지식 유지
+# 14장 — 데이터 제한 스케일링, 반복, 사전학습 오염 제거
 
-> **핵심 통찰.** 2024년에는 compute가 아니라 unique-token 공급이 구속 조건이 되었다. 여기서 세 가지 결과가 기계적으로 따라온다. (1) effective-token value가 0으로 감소할 때까지 토큰을 반복한다(Muennighoff fit 기준 약 4 epoch). (2) 모든 파라미터는 저장 가능한 factual knowledge를 약 2비트씩 사준다(Allen-Zhu). 따라서 실제로 스케일링하는 것은 loss만이 아니라 retention이다. (3) contamination surface는 이제 적대적이다. scrape 상류에 있는 poisoned web text와 eval leak은 모든 downstream filter를 살아남을 수 있다.
+> **핵심 통찰.** C4에서 최대 8.7B 파라미터 모델을 학습한 실험에서 고유 데이터셋 전체를 약 4 epoch 반복하면 손실이 고유 데이터만 사용한 경우와 가까웠다(8.7B의 검증 손실 0.5% 높음). 적합 감쇠 상수 `R*_D = 15.39`는 유효 데이터를 고유 토큰의 16.39배에서 제한한다([[data-constrained-scaling]] §6, App. A). 작은 하위 집합 반복은 토큰 비율보다 더 해롭다. 데이터 0.1%를 100회 반복하면 800M 모델이 400M 모델 수준으로 떨어졌다([[repeated-data-scaling]] Abstract). 고품질 문서를 반복해야 할 때 8회 중 4회를 바꿔 쓴 버전으로 대체하면 8B의 10개 태스크 평균이 55.8에서 56.7로 올랐다([[nemotron-cc]] Table 10). n-gram 오염 제거는 바꿔 쓴 테스트 항목을 놓치며, n과 최소 일치 횟수가 커질수록 거짓 음성률이 높아진다([[rephrased-samples-contamination]] Table 5, [[evaluation-data-contamination-contam]] §6). 따라서 일치 규칙·임계값·제거 단위를 기록해야 나중에 점수 효과를 추정할 수 있다.
 >
-> **가이드라인.** 두 예산을 추적하라. 토큰 `D`와 *unique* token `U`다. Muennighoff의 decay `R_T ≈ 4`를 planning cap으로 사용하라. 5번째 반복은 fresh token의 약 0.37배, 10번째는 약 0.14배, 20번째는 약 0.008배 가치다. 사전학습 *전*에, 후가 아니라, 중요하게 생각하는 모든 eval suite에 대해 8-gram decontamination을 실행하라. 그리고 2025년의 open web은 잠재적으로 poisoned input으로 다루라. 적대자가 scrape를 살아남도록 텍스트를 작성했다고 가정하라.
+> **지침.** 전체 중복 제거·오염 제거 후 고유 토큰에 약 4회 이하로 계획 토큰 수가 들어가면 풀 전체를 균일하게 반복한다. [[data-constrained-scaling]]에서 그 범위가 손실과 19개 태스크 평균을 거의 바꾸지 않았다(8.7B C4, §6, §7). 더 많이 반복해야 하면 Eq. 5로 유효 토큰을 계산하고 먼저 다른 데이터를 추가한다. 예를 들어 Python 코드를 토큰의 50%까지 추가하거나(4.2B, 84B 토큰, §7), 고품질 문서의 바꿔 쓴 버전을 추가한다([[nemotron-cc]] §3.3). 혼합에서 작은 소스를 업샘플하면 그 소스의 epoch 수와 학습 손실을 추적한다. 반복 하위 집합 손실이 0에 가까워질 때 악화가 정점에 이르기 때문이다([[repeated-data-scaling]] §1.1). 오염을 추정할 때는 8-token n-gram과 최소 횟수 1을 사용하고 벤치마크·모델 크기별 임계값을 정한다. 더 큰 n과 높은 최소 횟수에서 거짓 음성이 늘었다([[evaluation-data-contamination-contam]] §6.1, §6.3, §7.3). 학습 데이터에서 오염을 제거할 때 평가하는 모든 분할을 대조하고 최소한 중간 학습·annealing 데이터에도 검사를 적용한다. 출시를 결정하는 벤치마크에는 paraphrase 인식 검사를 추가한다. 10-gram 일치는 바꿔 쓴 항목에서 F1 = 0이었다([[rephrased-samples-contamination]] Tables 5–6). 오염 제거를 하지 않으면 벤치마크를 미검사로 보고한다.
 
----
+## 범용 모델에서 이 장이 필요한 이유
 
-## 이 장이 존재하는 이유
+범용 모델은 필터된 코퍼스가 포함하는 것보다 많은 토큰으로 학습하는 경우가 많다. [[ch-10]]·[[ch-10a]]·[[ch-12]]는 품질 낮고 중복된 텍스트를 제거하고, [[ch-13]]·[[ch-13a]]는 도메인·언어 혼합을 정한다. 이 장은 사전학습 단계에서 그 결정이 만드는 두 결과를 다룬다(사전학습 → 중간 학습 → SFT → 선호 최적화 → RL → 평가).
 
-9–13장은 사전학습 코퍼스를 *만드는* 법을 가르쳤다. scrape, dedup, filter, mix. 이 장은 코퍼스가 바닥나면 무슨 일이 일어나는지를 다룬다. 2024–2025년 frontier 보고서들은 모두 같은 벽에 부딪힌다. Llama 3는 15.6T 토큰, OLMo 3의 Dolma 3 Mix는 5.9T, DeepSeek V3는 14.8T다. 2025년 웹을 공격적으로 필터링하고 나면, 세계에는 아마 15–30T개의 unique high-quality English token이 있을 뿐이다. Chinchilla-optimal 70B 모델은 약 1.4T를 원한다. Chinchilla-optimal 405B 모델은 약 8T를 원한다. Llama-3식 "inference efficiency를 위한 overtrain" 8B는 15T 이상을 원한다. 바닥난다.
+첫 번째 결과는 부족이다. 필터링 후 고유 토큰 수가 연산 예산이 허용하는 토큰 수보다 작을 수 있다. 그러면 텍스트를 다시 보거나, 고쳐 쓰거나, 다른 소스로 바꿔야 한다. 각 선택은 폭에 영향을 준다. 반복은 모델을 일반화에서 암기로 이동시키고, 재작성은 형식을 추가하거나 오류를 만들 수 있다.
 
-바닥나면 세 질문이 특정 순서로 오고, 문헌에는 각각 특정 답이 있다.
+두 번째 결과는 오염이다. 웹 텍스트에는 평가 벤치마크의 복사본과 바꿔 쓴 버전이 들어 있다. 이것이 학습 데이터에 들어가면 벤치마크 점수는 보지 않은 항목에 대한 성능을 측정하지 않게 된다. 보지 않은 항목 성능이 [[ch-00]]에서 정의한 일반 능력이다. 오염 제거는 데이터 파이프라인에서 결정하지만, 정확성은 나중에 평가에서 확인할 수 있다([[ch-48]]).
 
-1. 기존 토큰을 반복할 것인가, 더 낮은 품질의 새 토큰을 scrape할 것인가? → **[[data-constrained-scaling]]** (Muennighoff 2023)가 둘 다 정량화한다.
-2. 모델은 내가 훈련시킨 내용을 실제로 *retention*하는가, 아니면 앞선 지식을 덮어쓰는가? → **[[physics-of-lm-3]]** (Allen-Zhu 2024)가 2 bits/parameter capacity law를 준다.
-3. 내가 scrape하는 웹 데이터는 *정직한가*, 아니면 누군가 상류에서 내 훈련을 악용하도록 텍스트를 써 두었는가? → **[[model-collapse]]**, **[[strong-model-collapse]]**, **[[anthropic-sleeper-agents-data]]**.
+이 장은 이 단계에서 과정의 세 질문에 답한다.
+1. 폭: 몇 번 반복해야 홀드아웃 손실·다운스트림 평균이 고유 데이터와 가까운지, 코드·재작성 같은 대체재가 폭을 유지·추가하는지(§2–§4).
+2. 좁아짐: 하위 집합 반복이 복사·문맥 내 메커니즘을 손상하는 방식과 오염이 능력을 추가하지 않고 점수를 올리는 방식(§3, §5–§6).
+3. 측정: 반복되지 않은 데이터의 홀드아웃 손실, 소스별 학습 손실, 벤치마크별 임계값을 둔 추정 성능 이득(EPG), 시간 구간별 평가(§5–§7).
 
-각 답에는 단단한 공식과 구체적인 2025년 엔지니어링 레시피가 있다. 이 장은 그것들을 하나의 planning framework로 묶는다.
+## §1 고유 토큰·전체 토큰·텍스트 재고
 
----
+**정의.** *고유 토큰* `U`는 전체 중복 제거 후 코퍼스에 남은 토큰이다. *전체 토큰* `D`는 학습 중 처리한 토큰이다. *pass*(epoch) 수는 `D / U`, *반복* 수는 `R_D = D / U − 1`이다([[data-constrained-scaling]] §3).
 
-## 1. Muennighoff의 data-constrained scaling — repeat-vs-new-token 방정식
+**측정 가능한 문제.** Chinchilla식 스케일링 법칙은 한 pass 실행에 맞춰졌다. Muennighoff et al.은 Chinchilla 매개변수 적합이 “모델이 한 epoch만 학습된다는 가정에 명시적으로 의존한다”고 말한다(§5). `D > U`이면 한 pass 법칙은 실제 실행보다 낮은 손실을 예측한다.
 
-설정은 이렇다. `U`개의 unique token이 있고 `D`개의 total token에 해당하는 compute budget이 있다. 표준(Chinchilla) scaling에서는 `D = U`다. 각 토큰을 한 번 본다. data-constrained regime에서는 `D > U`다. 반복한다. 질문은 반복의 가치를 어떻게 매길 것인가다.
+**실제 U의 크기.**
+- 공격적인 모델 기반 필터는 Common Crawl 데이터의 약 90%를 제거한다([[nemotron-cc]] Abstract). 전체 fuzzy 중복 제거 후 DCLM은 전체 3.8T·고유 1.0T, FineWeb-Edu는 전체 1.3T·고유 0.2T 토큰이다(Table 4).
+- Nemotron-CC는 더 많이 남긴다. 6.3T 토큰 중 전역 중복 제거된 실제 토큰 4.4T와 합성 토큰 1.9T다(Table 4).
+- Villalobos et al.은 중복 제거한 색인 웹 재고를 510T 토큰[95% CI 130T, 2100T], 품질 조정 재고를 100T[22T, 490T], 반복 조정 재고를 320T[65T, 1700T]로 추정한다([[epoch-data-stock]] Figure 3). 95% 확률로 “중복 제거 웹 데이터의 10~40%를 학습에 쓸 수 있다”고 말하고(§2.3.1), 재고를 전부 쓰는 중앙 연도는 2028년이다(§2.5). 이는 재고·수요 모델의 예측이다(**해석**).
 
-[[data-constrained-scaling]]에서:
+**계산 예(도출).** Llama 3.1 405B는 15.6T 토큰으로 사전학습했으므로([[llama-3-recipe]], v3 §1) `15.6T / 405B = 38.5` 토큰/파라미터다. Villalobos et al.은 연산 최적 비율을 “약 20”이라고 하고([[epoch-data-stock]] App. F), Llama 3 8B가 “거의 100배 과학습”되었다고 말한다(각주 24). 작은 모델이 고유 토큰 한계에 빨리 도달한다. 1.5B 모델을 1T 토큰으로 계획하면 667 토큰/파라미터다. 전체 중복 제거·오염 제거 후 풀이 250B이면 4 pass(`R_D = 3`)다. 토큰 예산 결정 자체는 [[ch-08a]]에서 다룬다.
 
-> *"Data-constrained scaling은 unique한 고품질 데이터의 양이 bottleneck이 될 때 language-model training이 어떻게 변하는지 연구한다. 핵심 발견은 기존 데이터를 반복하는 것과 더 낮은 품질의 새 데이터를 추가하는 것의 가치가 모델이 compute-data regime의 어디에 있는지에 달려 있다는 것이다."*
+**범용 모델에 대한 시사점.** 연산 최적 비율보다 훨씬 많이 학습한 작은 모델이 데이터를 반복할 가능성이 가장 높다. 학습 전에 전체 코퍼스뿐 아니라 소스별 pass 수를 계산해야 한다.
 
-Muennighoff의 fit은 Chinchilla의 `L(N, D) = E + A/N^α + B/D^β`를 *data-constrained* correction으로 확장한다. 반복 토큰 수 `D`는 같은 토큰을 더 많이 볼수록 포화되는 **effective-token count** `D'`로 대체된다.
+## §2 반복 토큰의 유효 가치
 
-```
-D' = U · (1 − exp(−R / R_T))         # effective tokens from R total passes
-R  = D / U                           # number of epochs (float)
-R_T ≈ 4                              # empirically fit "token half-life" in epochs
-```
+**정의.** *유효 데이터* `D′`는 고유 토큰 `U`를 `R_D`회 반복 학습한 것과 같은 손실을 내는 새로운 토큰 수다([[data-constrained-scaling]] §3.1, App. A).
 
-동등하게, 어떤 토큰의 *k*번째 반복이 갖는 한계 가치는 다음과 같다.
+**해결하려는 문제.** `D = 4U`인 실행은 U를 한 번 학습하는 것보다 토큰을 네 배 처리하지만 반복 토큰은 새 정보를 덜 준다. `R_D`에 따라 얼마나 덜 주는지가 문제다.
 
-```
-w(k) = exp(−(k−1) / R_T)             # geometric decay, factor e^(−1/R_T) per pass
-```
+**작동 방식**(App. A).
+1. 모델이 토큰을 학습할 때마다 그 안에 남은 정보의 `1 − δ`를 배운다고 가정한다.
+2. k번째 반복의 가치는 새 토큰 가치의 `(1 − δ)^k`이며 기하급수다.
+3. 합은 `R_D`가 커질 때 `U + U(1 − δ)/δ`에 접근한다. 저자들은 `R*_D = (1 − δ)/δ`를 정의하고 지수식으로 근사한다(Eq. 10–13).
+4. 같은 형태를 파라미터에도 적용한다. U의 연산 최적 수를 넘는 파라미터도 가치를 잃는다(Eq. 6).
+5. `R*_D`, `R*_N`은 7M~9B 파라미터와 1~500 epoch의 182개 실행에서 맞췄다.
 
-`R_T = 4`를 대입하면 첫 노출은 `1.0`, 두 번째는 `0.78`, 네 번째는 `0.47`, 여덟 번째는 `0.17`, 스무 번째는 `0.0076`의 가치가 있다. epoch 약 4에서 *누적* effective gain은 점근값의 약 63%를 흡수한다(`1 − e^(−1) ≈ 0.63`). 이것이 모두가 인용하는 "약 4 epoch break-even"이다. 다음 fresh epoch가 여전히 무언가를 주지만, contamination 없는 새 epoch의 절반 미만 가치가 되는 지점이다. 8 epoch를 지나면 새 정보가 아니라 통계적 noise reduction에 compute를 태우는 것이다.
+**공식**([[data-constrained-scaling]] §3.1, Eq. 5–6).
 
-파라미터에 대한 동반 decay도 데이터 의존적이 된다.
-
-```
-L(N, D, U) = E + A/N^α + B/D'^β        # same functional form, D replaced by D'
-```
-
-이 하나의 방정식이 repeat-vs-new tradeoff 전체를 알려준다. 구체적인 planning rule은 다음과 같다.
-
-- **`U` unique token과 compute budget `C = 6·N·D`가 있다면**, `D = R_T · U`(약 4 epoch)를 기본 cap으로 설정하라.
-- **`4 · U · 6 · N_optimal`이 지원하는 것보다 compute가 많다면**, 계속 반복하지 말라. compute를 더 큰 `N`에 쓰거나, 더 noisy한 새 데이터를 scrape하라.
-- **새 데이터의 품질이 30% noise만큼 낮다면**, 깨끗한 데이터 반복과 비교할 때 그 effective-token 기여를 raw count의 약 0.7배로 취급하라.
-
-`U`와 `R_max`를 바꾸며 `D'(R)`과 `w(k)`가 어떻게 변하는지 보려면 `figures/repetition-curve.html`의 interactive view를 보라.
-
----
-
-## 2. 세 번째 scaling axis로서의 quality — multiplier가 아니라 asymptote
-
-표준 Chinchilla는 모든 토큰을 같게 다룬다. [[scaling-laws-data-quality]] (Subramanyam 2025)는 이를 확장한다.
-
-> *"Data quality는 단순한 일화적 curation benefit이 아니라 명시적 scaling variable로 다룰 수 있다. 이 논문은 formal data-quality term을 추가해 표준 language-model scaling-law 사고를 확장한다. 중심 주장은 model loss를 model size, token count, data quality의 결합 함수로 이해해야 하며, quality가 data budget의 effective value에 영향을 준다는 것이다."*
-
-도식적으로는 다음과 같다.
-
-```
-L(N, D, q) = E(q) + A/N^α + B/(ψ(q) · D)^β
+```text
+D′ = U_D + U_D · R*_D · (1 − exp(−R_D / R*_D))
+N′ = U_N + U_N · R*_N · (1 − exp(−R_N / R*_N))
+L(N, D) = A / N′^α + B / D′^β + E
 ```
 
-두 가지 핵심 주장이 하중을 지탱한다.
+- `U_D`: 사용 고유 토큰, `min{D_C, D}`이며 `D_C`는 고유 데이터 예산이다.
+- `R_D`: 데이터 반복, `D / U_D − 1`(한 pass는 0).
+- `R*_D`: 적합 상수 15.387756(App. A). `R_D = R*_D`에서 반복 토큰의 평균 가치는 새 토큰의 `1 − 1/e`다(§3.1).
+- `U_N`: `U_D`에 대한 연산 최적 파라미터 수 또는 더 작으면 N. `R_N = N / U_N − 1`. `R*_N`: 적합 상수 5.309743(App. A).
+- `A, B, α, β, E`: Chinchilla 형태 상수. 적합 법칙은 `L = 521 / N′^0.35 + 1488 / D′^0.35 + 1.87`이고 `U_N = 0.051 · U_D`다(App. A, Eq. 17).
 
-1. **`E(q)`는 quality에 의존한다.** irreducible-loss term은 상수가 아니다. 오염됐거나 결핍된 코퍼스는 더 높은 noise floor를 갖는다. junk-heavy corpus에 무한한 토큰과 파라미터를 부어도 `E(q)` 아래로 내려가지 못한다. 이것이 "같은 토큰 수의 두 코퍼스가 다른 scaling curve 위에 있을 수 있다"는 결과다.
-2. **`ψ(q)`는 effective token을 스케일한다.** quality는 유용한 토큰 수에도 곱해진다. `ψ(q) = 1.3`인 필터링된 코퍼스는 같은 예산에서 1.3배 더 많은 토큰처럼 작동한다.
+Eq. 5에서 두 성질이 나온다. `R_D = 0`이면 `D′ = U_D = D`라서 한 pass는 손실이 없다. `R_D`가 커지면 `D′`는 `U_D(1 + R*_D) = 16.39 U_D`에 접근한다. 저자 표현으로는 “데이터를 아무리 반복해도 U_D + U_D R*_D개의 새 토큰을 한 epoch 학습한 손실보다 좋아질 수 없다”(§3.1). `R*_N = 5.31 < R*_D = 15.39`이므로 초과 파라미터가 반복 토큰보다 빨리 가치를 잃고, 데이터 제한 효율 전선은 파라미터보다 epoch에 추가 연산을 더 빨리 배정한다(§5).
 
-Muennighoff와 Subramanyam을 합치면 data-constrained **+** quality-aware loss는 다음과 같다.
+**계산 예(Eq. 5에서 도출, `R*_D = 15.387756`).** 다음 반복 증가분의 새 토큰 대비 한계 가치는 `dD′/dR_D = U_D · exp(−R_D / R*_D)`다.
 
-```
-D' = ψ(q) · U · (1 − exp(−R / R_T))
-L  = E(q) + A/N^α + B/D'^β
-```
+| Pass | R_D | D′ / U_D | D′ / D(처리 토큰당 평균 가치) | 한계 가치 |
+|---:|---:|---:|---:|---:|
+| 1 | 0 | 1.000 | 1.000 | 1.000 |
+| 2 | 1 | 1.968 | 0.984 | 0.937 |
+| 4 | 3 | 3.726 | 0.931 | 0.823 |
+| 8 | 7 | 6.624 | 0.828 | 0.635 |
+| 16 | 15 | 10.582 | 0.661 | 0.377 |
+| 40 | 39 | 15.167 | 0.379 | 0.079 |
+| ∞ | ∞ | 16.388 | → 0 | → 0 |
 
-이것이 2025년 planning formula다. 말하는 바는 이렇다. (a) quality는 점근선을 이동시킨다. (b) 반복 아래의 quantity는 포화된다. (c) 둘은 상호작용한다. `R_T`가 아직 포화되지 않았다면 고품질 반복은 저품질 novel token보다 더 가치가 있다.
+§1 예시(`U = 250B`, `D = 1T`)에서는 `D′ = 250B × 3.726 = 931B`이므로 1T 처리 토큰의 가치는 약 931B 새 토큰이다. `U = 5B`, `D = 40B`(8 pass)에서는 `D′ = 33.1B`다. `U(1 − exp(−R/R*))` 형태는 한 pass에서도 고유 토큰보다 적은 유효 토큰을 내므로 `R_D = 0`에서 `D′ = U`와 모순된다.
 
-실무적 해석: FineWeb-Edu가 같은 토큰 수에서 FineWeb 대비 1.5배 scaling-law 개선을 보고할 때, 그것은 신비주의가 아니다. `ψ(q_edu) / ψ(q_plain) ≈ 1.5`다. CCNet-filtered multilingual corpus가 필터링하지 않은 CommonCrawl을 perplexity에서 2–3% 이길 때, 그것은 training hyperparameter 이야기가 아니라 `E(q_clean) < E(q_raw)`다.
+전체 적합 법칙(Eq. 17, 도출)으로 두 번째 점검을 한다. `N = 8.7B`, `D = 178B`, `U = 178B`(1 pass)이면 `U_N = 9.08B > N`이므로 `U_N = N`, `R_N = 0`, `L = 0.1730 + 0.1718 + 1.87 = 2.2148`이다. `U = 44B`(4.05 pass)이면 `U_N = 2.244B`, `R_N = 2.877`, `N′ = 7.23B`, `D′ = 165.6B`, `L = 0.1846 + 0.1762 + 1.87 = 2.2308`이고 0.72% 높다. 이 실행 쌍의 측정 차이는 0.5%였다(§6).
 
----
+[figures/repetition-curve.html](figures/repetition-curve.html)의 대화형 그림에서 고유 토큰·pass를 설정하고 Eq. 5의 `D′`, 평균 가치, 한계 가치, 16.39 U 상한을 읽을 수 있다.
 
-## 3. Allen-Zhu의 parameter당 2비트 — knowledge-retention ceiling
+**근거.**
+- 고정 연산 반환(§6, Figure 4): 55B 토큰 2.8B, 84B 토큰 4.2B, 178B 토큰 8.7B IsoFLOP 실행. “8.7B 파라미터 모델을 4 epoch 학습하면(D_C = 44B 고유 토큰) 1 epoch 모델(D_C = 178B 고유 토큰)보다 검증 손실이 0.5%만 높다.” **결과(단일 연구)**.
+- 반복의 의미 있는 이득은 약 16 epoch(`R*_D`)까지 가능하고 이후 수익은 빠르게 감소한다(§6).
+- 적합 품질: 감쇠식 `R² = 0.7722`, 반복 데이터가 가치를 모두 유지한다고 가정하면 0.4452(App. A Table 1).
+- 규모 할당: 25B 고유 토큰, `9.3 × 10^21` FLOPs에서 데이터 제한 전선 모델은 Chinchilla보다 파라미터 27% 적고 손실·다운스트림 성능이 좋았다(§5).
+- 다운스트림: 4.2B·84B의 19개 태스크 평균(시드 5개)은 약 4 pass까지 차이가 유의하지 않았고 이후 하락했다(§7, Figure 6).
+- T5 Base(약 220M, `2^35` 토큰)에서 64회 반복은 SuperGLUE 72.03(무반복 71.36), 1,024회는 64.76이었다([[c4]] Table 9). 몇 pass의 품질 영향이 작다는 방향이 두 설정에서 재현되었지만 범위는 다르다.
 
-Loss는 inference에서 당신이 신경 쓰는 metric이 아니다. 당신이 신경 쓰는 것은 "Marie Curie won the Nobel Prize in Physics in 1903"을 물었을 때 모델이 *recall*할 수 있는지다. [[physics-of-lm-3]] (Allen-Zhu & Li 2024)는 retention을 직접 연구한다.
+**조건과 한계.**
+- 전체 데이터셋 반복만 연구했고 “데이터셋 일부만 반복”은 향후 과제로 남겼다(App. Q). §3에서 그 경우를 다룬다.
+- 수익은 “학습률, dropout, optimizer 선택 같은 하이퍼파라미터에 크게 의존할 수 있다”(App. Q). 실행은 dropout 0.1, weight decay 0.1, gradient clipping 1.0이었다(App. S).
+- 데이터는 C4이며 필터 실험에는 OSCAR도 사용했다. 아키텍처는 GPT-2다. 최대 모델은 반환 실험에서 8.7B, 적합에서 9B였다.
+- 적합은 44 epoch처럼 학습 중간에 손실이 증가하는 실패 모델의 최종 테스트 손실을 “상당히 과소평가”한다(§6).
+- 데이터 제한 상태의 fine-tuning은 연구하지 않았다(App. Q).
 
-> *"Scaling law는 loss나 benchmark score뿐 아니라 모델이 얼마나 많은 factual knowledge를 저장하고 회수할 수 있는지도 추적해야 한다. data budget을 생각할 때 'loss가 얼마나 떨어지는가'뿐 아니라 '모델이 실제로 얼마나 많은 distinct knowledge를 흡수할 수 있는가'도 물어야 한다."*
+## §3 데이터 일부 반복: 업샘플링과 비균일 반복
 
-Part 3.3의 중심 결과는 **linear storage law**다. 충분히 훈련한 뒤 transformer는 대략 다음을 저장한다.
+**정의.** *비균일 반복*은 일부 문서를 나머지보다 더 많이 보는 것이다. 의도적으로 고품질 소스를 혼합에서 업샘플하는 경우([[ch-13]])와 중복 제거를 통과한 중복이 우연히 남는 경우([[ch-12]])가 있다.
 
-```
-K ≈ 2 · N    bits of factual knowledge      (Allen-Zhu capacity bound)
-```
+**해결하려는 문제.** Eq. 5는 모든 토큰이 같은 횟수로 반복된다고 가정한다. 혼합은 전체적으로 1.1 pass만 만들면서 작은 소스 하나를 수십 번 보게 할 수 있으며, 전체 pass 수로는 이를 알 수 없다.
 
-여기서 `N`은 파라미터 수다. 7B 모델은 약 140억 비트, 즉 entity, relation, value로 구성된 structured factual tuple 약 1.75 GB를 저장할 수 있다. 70B 모델은 약 17.5 GB를 저장한다. Loss는 계속 내려가지만 capacity는 bounded다.
+**작동 방식**([[repeated-data-scaling]] §1.1, §3).
+1. 400B 토큰 코퍼스(필터된 Common Crawl 55%, 책 32%, 작은 소스들)에서 100B 토큰 decoder-only 모델을 학습한다.
+2. 학습 토큰의 고정 비율(예: 10%)을 작은 하위 집합의 반복으로 뽑고 나머지는 반복 없이 사용한다.
+3. 하위 집합 크기, 반복 비율, 모델 크기를 바꾼다. 같은 10% 토큰도 데이터의 0.01%를 1,000회 반복한 것일 수 있고 1%를 10회 반복한 것일 수 있다.
+4. 반복 데이터가 없는 보류 분할의 손실을 측정한다.
+5. 악화는 double-descent 형태다. 적은 반복과 가장 높은 반복 횟수는 손상이 작고 중간 범위가 가장 큰 손상을 준다. 정점은 “반복 데이터의 학습 손실이 0에 가까워지는 지점과 겹친다.”
 
-두 가지 함의가 사전학습 계획을 바꾼다.
+**계산 예.** 100B 토큰 실행에서 데이터 0.1%는 100M 토큰이다. 이를 100회 반복하면 10B 토큰이므로 학습의 10%를 차지하고, 나머지 90B 토큰은 고유하다. 혼합을 점검하는 경우, 고유 토큰 200M인 소스에 100B 실행의 2%가 배정되면 전체 코퍼스가 1.1 pass만 만들어도 `2B / 200M = 10`회 본다.
 
-**반복은 loss knob만이 아니라 knowledge-recall knob다.** Allen-Zhu는 factual-recall accuracy가 1 epoch에서 도달하지 않음을 보인다. rare fact는 추출 가능해지려면 반복 노출이 필요하다. fit은 대략 다음과 같다.
+**근거.**
+- “데이터 0.1%를 100회 반복하면 800M 파라미터 모델의 성능이 2배 작은 모델(400M 파라미터) 수준으로 악화될 수 있다. 학습 토큰 나머지 90%는 고유한데도 그렇다”(Abstract). **결과(단일 연구)**.
+- 최악 반복 횟수에서 반복 데이터가 3%이면 copying 평가(해리 포터 첫 문단을 11회 복사)에서 유효 모델 크기가 최대 3배 감소했고, prefix-matching 점수는 평균 32% 감소했다. 테스트 손실 감소는 최대 15%였다(§1.1). Prefix matching은 앞선 패턴을 복사하는 attention 회로인 induction head를 측정한다. [[ch-08b]]에서 이를 문맥 내 학습과 연결한다.
+- 이 텍스트 코퍼스에 분포 밖인 Python 코드 손실도 악화되었고, 주로 토큰의 50~90%가 반복될 때였다(§1.1).
+- *선택된* 하위 집합의 반복은 도움이 될 수 있다. 1.3B·40B 토큰·시드 3개에서 무작위 40B 토큰 1 pass는 비웹 perplexity 16.27, 무작위 20B 토큰 2 pass는 16.39, D4가 선택한 20B 토큰 2 pass는 16.10이었다([[d4]] Table 1).
 
-```
-P(recall | fact seen k times) ≈ 1 − exp(−k / τ)       # τ ≈ 100–1000 for rare facts
-```
+**조건과 한계.** [[repeated-data-scaling]]의 모든 모델은 연산 최적점이 아니라 고정 100B 토큰으로 학습했다. 반복 하위 집합은 고품질이 아니라 무작위였고, 측정은 다운스트림 태스크가 아닌 손실이며, 정규화는 바꾸지 않았다(§5.5). 저자들은 “큰(GPT-3 규모) 모델에서는 데이터를 2회만 반복해도 의미 있는 악화”를 외삽하고 연산 최적 학습에서는 범위가 이동할 것이라고 말한다(§1.1)(**해석**). D4는 반복 문서의 정체성이 중요하다는 것을 보인다(**결과(단일 연구)**).
 
-1T 토큰에 한 번 나타나는 rare fact가 높은 recall을 달성하려면 (a) 약 τ번의 노출이 필요하거나, (b) synthetic rephrasing([[rephrasing-the-web]] 참조)으로 effective exposure를 늘려야 한다. 이는 Muennighoff와 *다른* 반복 논거다. Muennighoff는 total loss에 관한 것이고 Allen-Zhu는 tail-fact retrievability에 관한 것이다. 둘 다 bulk data에 대해 비슷한 약 4 epoch 영역을 가리킨다.
+**범용 모델에 대한 시사점.** 작은 소스를 업샘플하면 토큰 비율이 시사하는 것보다 큰 비용이 들 수 있다. 이 연구에서 비용은 태스크 전반의 문맥 내 학습과 연결된 copying·induction-head 측정에 나타났다. 진단은 소스별 pass 수와 소스별 학습 손실이다.
 
-**Parameter budget은 retention budget이다.** 너무 공격적으로 dedup하면 rare-fact exposure를 떨어뜨린다. 너무 공격적으로 filter하면 웹의 encyclopedia-rich한 끝부분을 떨어뜨린다. 결과는 "더 높은 perplexity"가 아니라 "Slovenian provincial capitals에 관한 Jeopardy에 답하지 못함"이다. Allen-Zhu의 retention ablation은 데이터량이 포화를 넘어가도 knowledge-saturation curve가 정확히 2·N bit ceiling에서 평평해짐을 보인다.
+## §4 고품질 고유 토큰이 부족해질 때: 품질·코드·재작성
 
-factual-recall saturation curve와 파라미터 수의 상호작용은 `figures/repetition-curve.html` panel 2를 보라.
+**해결하려는 문제.** 품질 필터를 통과한 고유 토큰이 계획 토큰보다 적으면 반복(§2), 더 낮은 토큰 품질을 감수한 필터 완화(§4.1), 코드 같은 다른 데이터 유형 추가(§4.2), 기존 문서를 새 토큰 시퀀스로 재작성(§4.3) 중 하나를 택할 수 있다. 같은 학습 토큰 수에서 어떤 선택이 낮은 홀드아웃 손실 또는 높은 다운스트림 평균을 주는지가 측정 질문이다.
 
----
+**계산 예: 필터 강도 대비 양( Eq. 5와 [[nemotron-cc]] Tables 4–5에서 도출).** 15T 실행이 웹 토큰을 한 풀에서만 가져온다고 하자. DCLM(고유 1.0T)은 15 pass가 필요해 `D′ = 1.0T × 10.19 = 10.2T` 유효 토큰이다. Nemotron-CC 실제 토큰(고유 4.4T)은 3.41 pass가 필요해 `D′ = 4.4T × 3.23 = 14.2T`다. Eq. 5는 품질을 모델링하지 않으므로 두 풀의 토큰별 품질은 따로 측정해야 한다. 1T 학습 토큰에서 시험 데이터셋 비율 73%일 때 DCLM·전체 Nemotron-CC 10개 태스크 평균은 57.0·57.8, MMLU는 53.4·53.0이었다(8B, Table 5). 저자들은 고유 실제 토큰이 4배 많아 “15T 토큰 실행 같은 데이터 제한 설정에서 우수할 것으로 기대”한다고 말한다(§3.2)(**해석**). 두 풀의 15T 비교는 보고하지 않았다.
 
-## 4. Decontamination — n-gram overlap pipeline
+### §4.1 스케일링 변수로서의 품질
 
-웹 scrape로 훈련하기로 했다면 eval set도 scrape하게 된다. GSM8K는 GitHub에 있다. MMLU는 Huggingface에 있다. 모든 IMO 문제는 포럼 스레드에 있다. 모델이 테스트를 봤다면 평가할 수 없다.
+**정의.** Subramanyam et al.은 데이터 품질 `Q ∈ (0, 1]`을 정의하며 `Q = 1`은 깨끗한 데이터다. 오염률 추정기에서 표본의 10%가 오염된 데이터셋은 `Q = 0.9`다([[scaling-laws-data-quality]] §1, §3.1).
 
-표준 방어는 **n-gram overlap filtering**이다. [[llama-3]]의 data section에서 Meta가 절차를 설명하고, OLMo 3는 그들의 도구를 OlmoTrace라고 부른다. 표준 pipeline은 다음과 같다.
-
-```
-for each eval set E in benchmark_suite:
-    for each sample s in E:
-        generate all n-grams of length K from s.question + s.answer
-        add to bloom_filter[E]
-
-for each document d in corpus:
-    for each n-gram g of length K in d:
-        for each E such that g in bloom_filter[E]:
-            mark(d, E)
-    if overlap_fraction(d, E) > τ_E for any E:
-        drop d   # or flag for review
-```
-
-두 하이퍼파라미터는 `K`(n-gram length)와 `τ_E`(eval별 overlap threshold)다.
-
-**N-gram length K.** Frontier consensus는 `K = 8`에서 `K = 13` 사이로 수렴했다. Llama 3는 8-gram overlap을 보고한다. OLMo 2는 bulk filtering에는 13-gram, cooldown data에는 8-gram을 사용한다. tradeoff는 다음과 같다.
-
-- `K = 4` — paraphrase를 잡지만 모든 것을 flag한다(high false-positive rate; "the answer is 42"는 어디에나 있다).
-- `K = 8` — 영어 eval의 sweet spot. 일반 구문은 남기면서 question-stem overlap을 잡는다.
-- `K = 13` — 매우 보수적이다. 상당한 verbatim reproduction만 잡지만 paraphrased leakage를 놓친다.
-- `K = 20+` — 사실상 copy-paste만 잡는다. 너무 새기 쉽다.
-
-**Overlap threshold τ.** "문서의 n-gram 중 eval set과 겹치는 비율이 τ보다 크면 drop"으로 표현한다. Llama 3는 math/code eval에 τ ≈ 0.5를 쓴다(drop 기준이 높음). 작은 leakage가 중요한 reasoning eval에는 더 엄격한 τ ≈ 0.1을 쓴다. OLMo 3의 Dolma 3 Mix는 cooldown data보다 tighter한 threshold를 적용한다. cooldown mix는 낮은 LR에서 모델이 benchmark를 보는 단계, 즉 contamination이 가장 위험한 단계이기 때문이다.
-
-**False-positive / false-negative tradeoff.** 이 pipeline은 근본적으로 Bloom-filter 스타일의 결정이다. False positive는 깨끗한 문서를 낭비한다. False negative는 benchmark를 누출한다. Llama 3는 `K=8, τ=0.5`에서 토큰의 < 0.1%를 drop했다고 보고한다. 즉 이 절차는 데이터 측면에서 비싸지 않다. 비용은 운영적이다. 관심 있는 *모든* eval을 사전에 열거해야 한다. 사전학습 후 새로 만들어진 eval은 점수가 부풀려져 보일 것이다.
-
-**Filter-stage placement가 중요하다.** Decontamination은 세 단계 중 어디서든 실행할 수 있다.
-1. **Per-source filter** (Dolma/FineWeb식 curation 중). 가장 저렴하고 대부분을 잡는다.
-2. **Per-batch filter** (pretraining data loading 중). 늦게 도착한 eval을 잡지만 loader 복잡도가 늘어난다.
-3. **Post-hoc audit** (training 후). 너무 늦다. 지식은 이미 baked in이다. leak-corrected score를 보고하는 데만 사용하라.
-
-OLMo 3의 `OlmoTrace`는 stage 1 + stage 2를 실행하고 재현성을 위해 removed-document log를 보관한다. Llama 3는 stage 1만 실행하지만, 다음 model release 전에 새 eval이 추가될 때마다 다시 실행한다.
-
----
-
-## 5. Model collapse — 수동적 contamination 실패 모드
-
-Decontamination은 적대자가 *eval set이 앞으로 새어* 코퍼스에 들어가는 것이라고 가정한다. 두 번째, 더 미묘한 실패 모드는 **코퍼스 자체가 synthetic**이라는 것이다.
-
-[[model-collapse]] (Shumailov et al., Nature 2024):
-
-> *"Sampling 후 refitting을 하는 각 generation은 true distribution의 tail을 smoothing한다. 반복하면 architecture와 무관하게 모델의 support는 degenerate near-Gaussian으로 수축한다. real data를 synthetic으로 대체하지 말고, 항상 지속적인 real-data anchor 위에 synthetic을 누적하라."*
-
-메커니즘은 이렇다. `p_n`에서 sample하고, refit해 `p_{n+1}`을 얻고, 반복한다. rare-token density는 generation마다 `1/N`처럼 감소한다. tail이 먼저 지워진다. generation 약 5에 이르면 average perplexity는 *개선된 것처럼* 보이지만 rare-token perplexity는 급등한다(평균에 숨은 warning signal). generation 약 9에는 출력이 incoherent해진다.
-
-2025년의 강화판은 [[strong-model-collapse]] (Dohmatob et al., ICLR 2025 Spotlight)다.
-
-> *"Neural-scaling-laws paradigm 안에서는 training pool에 **고정된 작은 비율의 synthetic contamination(≈1%)**만 있어도 더 큰 데이터에서 기대되는 test-error 감소가 사라진다. scaling law가 평평해진다."*
-
-도식적으로 위험은 다음처럼 분해된다.
-
-```
-E[R_test](N) ≈ f(N) + c(p) · σ_synth²
+```text
+L(N, D, Q) = A / N^α + B / (D^β · Q^γ) + E
 ```
 
-`p > 0`이면 `c(p) > 0`이다. synthetic-contamination term은 *irreducible* offset이다. `N`을 아무리 늘려도 사라지지 않는다. 이것이 "scaling law가 새로운 asymptote를 갖는다"의 형식적 진술이다.
+- N은 파라미터, D는 학습 토큰, Q는 품질, A·B·α·β·γ·E는 적합 상수다.
+- 이 형태에서 E는 Q에 의존하지 않는다. 저자 그림도 가산 항이 “데이터 품질 Q에 따라 변하지 않는다”고 지지한다(§5.5).
+- `γ = β·γ0`이므로(App. A.3), 품질 Q의 D 토큰은 `D · Q^(γ/β)`개의 깨끗한 토큰과 같은 데이터 항을 낸다(도출).
 
-**왜 이것이 2025년에 중요한가.** 새 CommonCrawl scrape는 이전보다 더 많은 LLM-generated text를 포함한다. Blog spam, SEO-generated review, machine-translated article, auto-summary가 모두 "real" distribution을 희석한다. Dohmatob 공식의 `p`는 **임의의 웹 scrape에 대해 이미 1%를 넘고** 계속 증가한다. Frontier lab은 세 방어로 대응한다.
+**계산 예(Table 2에서 도출).** CLM Huber 적합의 전체 정밀도 값은 `B = 1441.505289`, `β = 0.395859`, `γ = 0.400657`, `E = 3.439047`다. `D = 1B`이면 `D^β = 3,654`다. Q = 1의 데이터 항은 `1441.5/3,654 = 0.394`, L = 3.834다. Q = 0.75이면 `Q^γ = 0.891`, 데이터 항 0.443, L = 3.882다. 깨끗한 토큰 환산량은 `1B × 0.75^1.012 = 0.747B`다. 이 적합에서는 표본 25% 오염이 토큰 25% 제거와 비슷한 비용이다.
 
-1. **Real data anchor.** 지속적인 real-human-written slice(예: books, pre-2023 web)를 믹스의 ≥50%로 유지한다. Gerstgrasser 2024는 accumulation(대체가 아니라)이 error를 bound함을 증명한다.
-2. **Synthetic을 공격적으로 filter.** Classifier-based filter(FineWeb-Edu 스타일)는 암묵적으로 human text와 machine text를 구분한다. OLMo 3의 Dolma 3 Mix는 machine-text fraction을 줄이기 위해 cooldown에서 특히 quality threshold를 높인다.
-3. **Verify in-the-loop.** 통제된 synthetic pipeline(Phi-textbooks, Prismatic, Persona-Hub)에서는 external verifier가 recursive loop를 끊는다. 이것은 synthetic-data 주제(ch-18+)지만 decontamination team은 경계를 알아야 한다.
+**근거.** 8층 Llama-3형 모델(hidden size 512)을 C4 0.1B·1B·10B 토큰에서 1 pass 학습했고 133M GPT-Neo 번역 모델도 사용했다. 품질은 각 교란 표본 토큰의 50%를 교체하는 합성 잡음으로 Q = 1.0~0.5의 7수준을 만들었다(§5.1–§5.3). `γ̂ = 0.401`(언어 모델링), `0.173`(번역)이었다(§5.5). **결과(단일 연구)**.
 
-**data track의 contamination takeaway:** `p_synthetic`은 이제 token count와 dedup rate와 함께 일급 corpus statistic이다. data-pipeline dashboard에 나타나야 한다.
+**조건과 한계.** 태스크별 모델 크기를 고정해 N 항은 시험하지 않았다. 잡음은 웹 필터가 제거하는 저품질 텍스트가 아니라 합성 토큰 오염이고, 결과는 다운스트림 태스크가 아니라 손실이다. 저자들은 `γ̂ < 1`을 품질에 따른 유효 데이터의 “sublinear 감소”로 읽는다(§5.5). `γ = β·γ0` 재매개화에서는 언어 적합 `γ/β = 1.01`, 번역 0.69다(도출). 따라서 번역은 sublinear 해석이 맞고 언어 모델링은 비례에 가깝다(**해석**).
 
----
+### §4.2 데이터 제한에서 코드와 필터
 
-## 6. 2025년의 escalation — 무기로서의 contamination
+4.2B 파라미터·전체 84B 토큰([[data-constrained-scaling]] §7, 19개 태스크, 반복·코드 시드 5개)에서:
+- “데이터의 최대 50%(42B 토큰)를 코드로 채워도 악화가 없다. 그 이상은 자연어 태스크 성능이 빠르게 감소한다.” 코드가 추가되면 WebNLG와 bAbI가 오르고, 저자들은 코드가 장거리 상태 추적을 가르칠 수 있다고 제안한다(**해석**).
+- Perplexity 필터(낮은 perplexity 25%만 유지, 44B 토큰을 약 2회 반복)는 C4에서 도움을 줬다. 중복 제거 필터(100자 겹침 표본 제거, 21B 토큰을 4회 반복)는 벤치마크에 도움을 주지 않았다(§7, App. N). 두 필터는 더 잡음 많은 OSCAR에서 더 효과적이었다(App. O). 저자들은 데이터 제한 상황에서 “잡음 많은 데이터셋에 필터링을 남겨 두라”고 권고하고, 중복 제거가 “암기 감소처럼 벤치마크에 잡히지 않는 가치”를 가질 수 있다고 말한다(§7).
+- 코드가 다른 능력에 미치는 효과는 [[ch-09]]에서 다룬다.
 
-수동 contamination("웹이 synthetic 쪽으로 drift했다")은 온건한 경우다. 적대적 경우는 **active** contamination이다. 적대자가 당신의 훈련을 악용하기 위해 *scrape 상류*에 텍스트를 쓰는 것이다.
+### §4.3 반복 대신 재작성·합성 확장
 
-[[anthropic-sleeper-agents-data]]는 메커니즘을 end-to-end로 시연한다.
+**정의.** *재작성*은 언어 모델로 기존 문서를 다른 문체·형식(Wikipedia풍 prose, 질의응답 쌍, 지식 목록)으로 바꿔 같은 내용에서 새 토큰 시퀀스를 만드는 것이다([[nemotron-cc]] §2.3). 생성 방법은 [[ch-19]]에서 가르친다.
 
-> *"모델은 trigger-conditioned example로 의도적으로 훈련되어 일반 설정에서는 안전하게 행동하고 숨겨진 deployment condition에서만 오작동할 수 있으며, 그 conditional behavior는 이후 SFT, RLHF, adversarial safety training을 살아남을 수 있다."*
+**해결하려는 문제.** 고품질 문서는 혼합에서 가장 반복하고 싶은 동시에 가장 부족한 데이터다. 재작성은 새 크롤 없이 새 토큰 시퀀스를 만든다.
 
-data-poisoning에 맞춘 버전은 이렇다. 프롬프트 안의 trigger phrase가 target output을 바꾸는 paired example을 웹에 심는다. open forum에 잘 배치된 10K-document campaign은 모든 downstream filtering과 safety training을 살아남는 conditional policy를 설치할 수 있다. 논문의 주된 경험적 발견, 즉 표준 alignment 절차가 *apparent safety를 개선하면서도* latent conditional behavior는 그대로 둔다는 점은, benchmark score로는 감지할 수 없는 evaluation-blindness 실패 모드와 정확히 같다.
+**작동 방식**([[nemotron-cc]] §2.3, Table 3).
+1. 품질 분류기 앙상블로 문서를 점수화하고 품질 버킷으로 묶는다.
+2. 저품질 문서를 Wikipedia식 prompt로 재작성해 잡음·오류를 줄인다.
+3. 고품질 문서는 Wikipedia prompt와 추가 네 prompt(다양한 QA, distill, 지식 추출, 지식 목록)로 재작성해 “더 많은 고유 토큰을 얻고 핵심 지식을 압축”한다. 중간 품질 문서는 재작성하지 않는다.
+4. 긴 입력은 “세부가 줄어든 과도하게 단순한 출력”을 만들므로 재작성 전에 문서를 범위로 나눈다.
+5. Mistral NeMo 12B Instruct(FP8, top-p 0.9, temperature 0.5)로 생성한다. 1.8T 토큰 이상 중 저품질 336.3B, 고품질 1.5T다.
 
-**2025년 data-pipeline engineer가 계획해야 하는 세 공격 표면:**
+**근거.**
+- 각 1T 토큰으로 학습한 8B 모델(시험 Common Crawl 변형 73%)([[nemotron-cc]] §3.1, Table 10)에서 HQ-Base는 “고품질 문서 8배”, HQ-Synthetic은 “고품질 문서 4회 반복”을 합성 데이터로 교체했다. 10개 태스크 평균은 55.8→56.7, MMLU는 53.4→53.6이었다. 저품질 문서 재작성은 평균 52.5→54.0, MMLU 48.2→47.1이었다. 시드는 보고하지 않았다. **결과(단일 연구)**.
+- 장기 실행: 8B 모델을 15T 토큰으로 학습하고 그중 7.17T가 Nemotron-CC였으며(App. E), 저자 평가 harness에서 MMLU 70.3, Llama 3.1 8B는 65.3이었다(Table 6).
+- WRAP: C4에서 실제·재작성 텍스트 학습이 “사전학습을 약 3배 빠르게 한다”([[rephrasing-the-web]] Abstract). 1.5B 토큰 풀에서 15B 토큰(약 10회 반복)을 학습한 350M 모델은 동의어 교체·무작위 삭제보다 실제+재작성 데이터에서 perplexity가 낮았다(§6.2, Figure 6; 수치는 그림에만 있음). [[nemotron-cc]]와 [[rephrasing-the-web]]에서 재작성 텍스트가 비교 대안보다 좋다는 주장이 재현되었지만 대안(반복, 증강)은 다르다.
 
-1. **Eval-set insertion.** 적대자가 scraper가 좋아하는 forum에 그럴듯하지만 틀린 답이 붙은 test question을 게시한다. 방어: §4의 n-gram decontamination을 adversarial paraphrase까지 잡도록 확장한다.
-2. **Trigger injection.** 적대자가 paired (trigger, response) example을 게시한다. 방어: provenance-based filtering. low-trust domain을 drop하고, domain별 token contribution을 rate-limit하며, 문서 전반의 갑작스러운 반복 패턴을 flag한다.
-3. **Scaling-law poisoning.** 적대자가 어떤 topic을 low-quality synthetic으로 flood하여 그 topic에 대한 모델 성능을 저하시킨다(competitor hand-off, political suppression). 방어: topic-balance ablation. held-out real corpus에서 topic별 loss를 측정하고 drop을 flag한다.
+**조건과 한계.** 저자들은 HQ-Synthetic 이득의 두 원인(“신선한 고유 토큰”과 질의응답 같은 형식)을 제시하지만 분리하지 않았다(§3.3)(**미해결 질문**). 재작성 데이터의 “사실 정확성·원문 충실도”를 검사하지 않았다(§6). WRAP은 재작성이 “모델의 새 지식 학습을 제한한다”고 말한다(§8). 재귀 합성 학습의 model collapse는 [[ch-23]], 합성 계속 사전학습은 [[ch-32a]]에서 다룬다.
 
-이 중 해결된 문제는 없다. 이는 data track에서 **Eval track**(ch-47–53)으로 넘어가는 다리다. adversarial contamination이 테이블 위에 올라오면 data filter만으로 부재를 증명할 수 없다. 그 자체로 적대적인 end-to-end evaluation이 필요하다.
+**범용 모델에 대한 시사점.** 고품질 문서를 4 pass 이상 반복해야 할 때 재작성 버전은 반복 일부의 시험된 대체재다. 태스크별 표를 읽어야 한다. 같은 표에서 저품질 문서 재작성은 ARC-Easy·ARC-Challenge·OpenbookQA·CommonsenseQA를 1.80~4.75점 올렸지만 MMLU를 낮췄다([[nemotron-cc]] §3.3).
 
----
+**조건과 한계.** 전체 데이터셋 반복만 연구했고 일부만 반복하는 것은 향후 과제다(App. Q). 수익은 학습률·dropout·optimizer에 의존할 수 있다(App. Q). 실행은 dropout 0.1, weight decay 0.1, gradient clipping 1.0이었다(App. S). 데이터는 C4와 필터 실험의 OSCAR, 아키텍처는 GPT-2, 최대 모델은 반환 8.7B·적합 9B다. 44 epoch처럼 손실이 중간에 오르는 실패 모델의 최종 테스트 손실을 적합이 과소평가한다(§6). 데이터 제한 fine-tuning은 연구하지 않았다(App. Q).
 
-## 7. Frontier recipes — 실제로 배포되는 것
+**범용 모델에 대한 시사점.** 깨끗하고 다양한 풀에서 4 pass는 8.7B까지 시험된 사전학습 범위다. 4 pass의 다음 반복 가치는 새 데이터의 0.82, 16 pass는 0.38이다(도출). 약 4 pass를 넘으면 §4 대안을 더 많은 반복과 비교해야 한다.
 
-교과서 이론에는 2025년 보고서의 구체적 대응물이 있다. 나란히 보면 다음과 같다.
+## §5 사전학습 규모의 오염 제거: 매칭 규칙과 그 오류
 
-| Model | Unique tokens | Epochs | Dedup | Decontam n-gram | Synthetic anchor |
+### §5.1 정의와 측정 가능한 문제
+
+*평가 데이터 오염*은 “평가 벤치마크의 샘플이 사전학습 말뭉치에 부주의하게 섞이는 것”이다([[evaluation-data-contamination-contam]] 초록). *오염 제거*는 학습 전에 일치하는 학습 텍스트를 삭제한다. *오염 분석*은 아무것도 삭제하지 않고, 학습 후 일치가 점수를 얼마나 바꾸었는지 추정한다. *추정 성능 이득*(EPG)은 전체 벤치마크 점수에서 깨끗하다고 표시된 부분집합의 점수를 뺀 값이다(§4.1).
+
+측정 가능한 문제는 부풀려진 점수다. Llama 3 8-gram 분석에서 HellaSwag의 85%가 오염으로 표시되었고 8B에서 추정 이득은 14.8점이었다. NaturalQuestions는 52%가 표시되었고 이득은 8B, 70B, 405B에서 각각 1.6, 0.9, 0.8이었다([[llama-3]], [[llama-3-decontamination]], v3 §5.1.4 표 15). Llama 1 65B에서는 Singh 등이 HumanEval에서 EPG 18%, BIG-Bench Hard에서 25%를 보고했다([[evaluation-data-contamination-contam]] §5.2.2). 각 보고는 **결과(단일 연구)**다. 둘 다 효과가 벤치마크와 모델 크기에 따라 달라짐을 보이지만, Llama 3은 Singh 등의 방법을 따르므로 서로 독립적인 반복 검증은 아니다.
+
+### §5.2 절차
+
+1. 보호할 평가 세트와 분할을 고른다. OLMo 3은 일부 벤치마크가 학습 분할에서 평가되기 때문에 harness에서 “어떤 벤치마크 데이터셋의 어떤 분할이든” 매칭한다([[olmo-3-decontamination]] §3.5.3).
+2. 텍스트를 정규화한다. Brown 등의 방법은 소문자로 바꾸고 구두점을 제거하며, skip-budget 방법은 정규화하지 않는다([[evaluation-data-contamination-contam]] §3.1, 표 1).
+3. 단위로 나눈다. 명시한 tokenizer의 토큰, 단어 또는 문단을 사용할 수 있다.
+4. 평가 텍스트를 색인하고 학습 문서를 스캔한다. Paloma는 문단 정확 일치에 Bloom filter를 사용한다([[paloma]] 부록 C.1.1). OLMo 3의 decon 샘플은 학습 n-gram을 “일정한 간격으로” 추출하고 각 적중 주변으로 확장한다([[olmo-3-decontamination]] §3.5.3).
+5. 각 평가 항목과 학습 텍스트 쌍을 점수 함수(§5.3)로 점수화한다.
+6. 점수를 임계값과 비교한다.
+7. 문서, 문단, 학습 인스턴스 또는 전체 원천 데이터셋 중 하나를 단위로 삭제한다.
+8. 결정을 기록한다(§7).
+
+### §5.3 점수 함수
+
+길이 \(|e|\) 토큰인 평가 항목 e와 n-gram 길이 n에 대해([[evaluation-data-contamination-contam]] §3.1):
+
+```
+TOKEN-MATCH    s = |{ i : token e_i lies in an n-gram of e that occurs in the corpus }| / |e|
+NGRAM-MATCH    s = |{ n-grams of e that occur in the corpus }| / (|e| − n + 1)
+LONGEST-MATCH  s = ℓ / |e|,  ℓ = length of the longest span of e found in the corpus (extended from an n-gram seed)
+contaminated   if s > τ
+```
+
+- τ: 임계값이다. Llama 3은 “세 모델 크기에서 최대 유의 추정 성능 이득을 보이는 값”을 기준으로 데이터셋별 토큰 비율 T_D를 선택한다([[llama-3-decontamination]] §5.1.4).
+- mincount: n-gram이 유효하려면 말뭉치에 최소 몇 번 나타나야 하는지 정하는 값이다.
+- skip budget: 일치를 확장할 때 허용하는 대체 불일치 수다(TOKEN-EXTEND 및 LONGEST-MATCH).
+
+OLMo 3의 decon은 IDF 가중 겹침을 사용한다([[olmo-3-decontamination]] 부록 A.5).
+
+```
+O = Σ_{x ∈ U_t ∩ U_e} idf(x) / Σ_{y ∈ U_e} idf(y)
+```
+
+- U_t: 학습 문서 구간의 고유 n-gram, U_e: 평가 항목의 고유 n-gram, idf(x): n-gram x의 역문서 빈도다.
+- 세 요소가 모두 있으면 질문·답·지문 겹침을 0.7, 0.2, 0.1의 가중치로 결합하고, 짧은 일치는 축소한다(부록 A.5). n-gram 길이, 샘플링 간격, 최종 임계값은 보고서에 인쇄되어 있지 않다.
+
+EPG와 유의성([[evaluation-data-contamination-contam]] §4.2):
+
+```
+EPG = score(full benchmark) − score(clean subset)
+z   = EPG / (σ / √N_clean)
+```
+
+- σ: 전체 벤치마크에서 항목별 점수의 표준편차, N_clean: 깨끗한 부분집합의 항목 수다.
+
+### §5.4 계산 예시
+
+[figures/ngram-contamination.html](figures/ngram-contamination.html)에서는 평가 항목과 학습 문서를 붙여 넣고 n, 정규화, 임계값을 바꾸면서 각 점수 함수가 어느 토큰을 포함하는지 볼 수 있다. 아래 수치는 단어 tokenizer(소문자화, 구두점을 공백으로 치환)를 사용했으며, 모델 tokenizer를 사용하면 개수가 달라진다.
+
+1. **그대로 복사(도출).** GSM8K 항목 “Janet’s ducks lay 16 eggs per day. ...”는 정규화 후 53단어다. 워크시트 페이지 안에 붙여 넣으면 모든 단어가 공유된 8-gram 안에 있다: TOKEN-MATCH = 53/53 = 1.0이므로 τ < 1인 모든 경우에 표시된다.
+2. **바꾸어 쓰기(도출).** [[rephrased-samples-contamination]]의 예 1(“Janet’s ducks produce 16 eggs each day. ...”)에서 다시 쓴 버전은 원문과 8-gram도 13-gram도 공유하지 않는다: TOKEN-MATCH = 0/53. 가장 긴 공유 구간은 4단어(“muffins for her friends”)로 8단어 seed보다 짧으므로 LONGEST-MATCH = 0이다. n = 4이면 TOKEN-MATCH = 12/53 = 0.226이다. 바꾸어 쓴 문장은 답을 유지한다.
+3. **인스턴스 규칙(산술).** Tülu 3은 테스트 토큰의 50% 초과가 동일한 학습 인스턴스와 8-gram 일치를 가지면 테스트 프롬프트가 학습 인스턴스와 겹친다고 처리한다([[tulu-3]] arXiv:2411.15124v5 §3.2). 40토큰 프롬프트에서 22토큰이 포함되면 55%이므로 겹치고, 20토큰이면 50%이므로 겹치지 않는다. 학습 데이터셋은 평가 항목 500개 중 10개를 초과하는, 즉 평가 인스턴스의 “2% 초과”와 겹치는 인스턴스가 있으면 오염으로 계산된다.
+4. **EPG 유의성(산술).** 1,000항목 벤치마크의 전체 점수는 60.0%이고 300개가 표시되었으며 700개 깨끗한 항목의 점수는 55.0%다. EPG = 5.0점이다. 0/1 점수의 σ = √(0.6 × 0.4) = 0.49이면 표준오차는 0.49 / √700 = 1.85점이고 z = 2.70이다.
+
+### §5.5 거짓 음성과 거짓 양성
+
+**거짓 음성**(오염되었지만 표시되지 않은 항목):
+- 더 큰 n. PiQA의 Llama 1 65B에서 NGRAM-MATCH를 사용하면 “n = 10에서 예시의 33.8%만 0이 아닌 오염 점수를 갖지만 n = 8에서는 67.9%가 0이 아닌 오염 점수를 가지며”, n = 8에서 추가된 예시들이 EPG를 보였다([[evaluation-data-contamination-contam]] §6.1, 그림 6). “8보다 큰 n 값은” 거의 전반적으로 거짓 음성을 만든다.
+- 1보다 큰 mincount는 “실제로 성능 증가가 있는” 예시를 제외했다(§6.3).
+- 바꾸어 쓰기와 번역. MMLU 과목별 프롬프트 쌍 200개에서 10-gram 매칭은 세 과목 모두 다시 쓴 영어 및 중국어 항목에서 F1 = 0이었다. HumanEval에서는 원래 테스트 세트의 F1 = 1, 다시 쓴 Python·C·JavaScript의 F1 = 0이었다([[rephrased-samples-contamination]] §5.2, 표 5-6). 다시 쓴 항목은 n-gram 검사가 더 이상 일치하지 않을 때까지 재생성되었으므로(알고리즘 1), F1 = 0은 부분적으로 그 구성에서 비롯된다. LLM 기반 검출기(상위 k개 학습 항목의 embedding retrieval 후 GPT-4 같은 모델의 판정)는 MMLU 쌍에서 F1 0.940~1을 기록했다.
+- 검출되지 않은 이득의 크기. Llama 2 13B를 다시 쓴 MMLU 테스트 질문으로 16 epoch 미세 조정하면 MMLU가 54.8에서 89.9(질문만 재작성), 85.9(전체 프롬프트)로 올랐다([[rephrased-samples-contamination]] 표 2). 이는 의도적인 미세 조정 설정이지 사전학습 오염은 아니며, n-gram 검사가 검출하지 못할 이득을 보여준다.
+
+**거짓 양성**(표시되었지만 이점이 없는 항목):
+- 수학 문장제의 짧은 템플릿 문자열(예: “a mosaic with chips of”)([[evaluation-data-contamination-contam]] §4.2). 따라서 Singh 등은 모델-벤치마크 쌍별로 임계값을 선택하며, 선택값은 0.04~0.40이다(표 3).
+- 객관식 선택지 목록. “A. True, True B. False, False C. True, False D. False, True”라는 선택지를 가진 서로 다른 대수 문제가 선택지에서 일치한다([[rephrased-samples-contamination]] 예 2). OLMo 3은 A/B/C/D 라벨 대신 전체 답을 대상으로 매칭하여 객관식 평가의 정밀도를 높였다([[olmo-3-decontamination]] §3.5.3).
+- 관대한 지표는 “일반화를 촉진하기 때문에 모델에 유익한 사전학습 데이터를 검출할 수도 있다”([[evaluation-data-contamination-contam]] §8.1).
+
+**조건과 한계.** ConTAM 결과는 사후 분석이고 “근본적으로 상관관계”이며(§8.3), Llama 1 및 Pythia 모델의 13개 벤치마크를 다룬다. 벤치마크 거의 전부 또는 거의 아무것도 표시되지 않으면 EPG를 추정할 수 없다(§8.1). Llama 3은 MBPP, HumanEval, MMLU, MMLU-Pro에 대해 이를 보고한다([[llama-3-decontamination]] §5.1.4). LLM 기반 검출기가 실제 데이터셋에서 보고한 재작성 샘플 비율([[rephrased-samples-contamination]] §5.3, 표 7)은 표시된 항목의 개수이며, 해당 데이터셋에서의 정밀도는 보고되지 않았다. Tülu 3은 embedding 매칭이 “단순한 분포 유사성과 실제 바꾸어 쓰기를 구별”할 수 없어 사용하기 어렵다고 판단했다([[tulu-3]] §3.2). 이 자료의 어떤 방법도 수조 토큰에서 바꾸어 쓰기에 대한 높은 재현율과 낮은 비용을 동시에 보고하지 않았다(**미해결 질문**).
+
+### §5.6 공개 보고서의 구성
+
+| 출처 | 단계 | 매칭 규칙 | 임계값 | 삭제 단위 | 보고된 비용 |
 |---|---|---|---|---|---|
-| **Llama 3 405B** ([[llama-3]]) | 15.6T | ~1 | MinHash + line-dedup | 8-gram, τ≈0.5 math/code | human SFT + RS synthetic |
-| **OLMo 2 32B** ([[olmo-2]]) | 3.9T (Stage 1) + 50B (Dolmino cooldown) | ~1–2 | Dolma toolkit | 13-gram bulk, 8-gram cooldown | Tulu 3 recipe |
-| **OLMo 3 32B** ([[olmo-3]]) | 5.9T (Dolma 3 Mix) + 100B mid-train + 50B long-ctx | ~1–2 | OlmoTrace + Dolma | 13-gram (stricter in Dolma 3 Mix) | Dolci post-training mix |
-| **DeepSeek V3** | 14.8T | ~1 | per-source | 13-gram | heavy Chinese+code synth |
+| Paloma 기준선([[paloma]] 부록 C.1.1, 표 4); OLMo-1B용 Dolma([[dolma]] 부록 L) | 사전학습, Paloma perplexity 데이터와 대조 | 문단 정확 일치(Bloom filter); 13 Unicode 토큰 미만 문단은 무시; 코드 출처는 오염 제거하지 않음 | 일치하는 모든 문단 | 전체 문서 | Paloma 표 4: Dolma 0.062%, RedPajama 0.099%, The Pile 2.753%, RefinedWeb 0.733%, C4 0.010%, mC4-en 0.002%의 문서; Dolma 부록 L: OLMo-1B 문서의 ≤ 0.02% |
+| Llama 3([[llama-3-decontamination]] §5.1.4, §5.2) | 사전학습: 분석만; 사후학습: 삭제 | 사전학습: 8-gram 토큰 비율; 사후학습: 프롬프트 정확 일치 | EPG로 선택한 데이터셋별 T_D(값은 인쇄되지 않음) | 사전학습 삭제는 설명되지 않음 | 보고되지 않음 |
+| Tülu 3([[tulu-3]] §3.2, 표 8) | SFT 프롬프트 | 8-gram; 한 학습 인스턴스가 테스트 토큰의 50% 초과와 일치 | 평가 인스턴스의 2% 초과가 겹치면 데이터셋 오염 | 전체 데이터셋(미공개 suite); 데이터셋 또는 일치 인스턴스(개발 suite) | 예: MATH에 대해 NuminaMath-TIR의 11.3% 삭제 |
+| OLMo 3([[olmo-3-decontamination]] §3.5.3, 부록 A.5) | 중간 학습 및 긴 컨텍스트 데이터 | stride 샘플링 n-gram, 클러스터 확장(11회 miss 후 문서가 활성 집합에서 나감), IDF 가중 질문/답/지문 점수 | “수많은 정성적 검토에 기반해” 조정(값은 인쇄되지 않음) | 문서 | DROP: 60,000개 초과 학습 예시 삭제 |
+| Nemotron-CC([[nemotron-cc]] §6) | 사전학습 데이터셋 공개 | 없음 | 없음 | 없음 | “데이터셋의 오염을 제거하지 않았다” |
 
-**이 표에서 읽을 수 있는 것:** 2025년 frontier pretraining은 bulk corpus에 대해 `R ≈ 1`로 실행하고, 반복은 cooldown / mid-training 단계(약 50–100B 토큰, 5–10 epoch)로 밀어 넣는다. OLMo 3는 Dolma 3 source가 9.3T인데도 5.9T pretraining token에서 이미 data-constrained다. 대부분의 차이는 filter dropout이다. 어떤 frontier model도 bulk에 대해 `R_T = 4` cap으로 실행하지 않는다. 매우 큰 `N`에서는 loss effect(Muennighoff)보다 retention effect(Allen-Zhu)가 먼저 지배하기 시작하기 때문이다.
+## §6 오염이 들어오는 곳과 오염을 제거할 단계
 
----
+**오염의 원천.**
+- 코드 저장소와 템플릿 데이터셋에 있는 복사본. Winograd Schema Challenge와 SuperGLUE COPA를 포함한 Promptsource 데이터셋 6개는 Dolma에 100% 들어 있으며, 오염된 세트 다수가 코드 부분집합에서 발견된다([[dolma]] 부록 L). OLMo 3은 Flan 등을 통해 템플릿으로 삽입된 “완전한 검증 또는 테스트 분할”을 발견했다([[olmo-3-decontamination]] §3.5.4).
+- 분할 사이의 준중복. C4 검증 예시의 4.60%는 학습 분할에 준중복을 갖고 있었다([[deduplicating-training-data]] 표 2).
+- 사전학습 및 합성 데이터의 다시 쓴 샘플. LLM 기반 검출기는 The Stack 4G 부분집합에서 HumanEval 문제의 18.9%, RedPajama-Data-1T 16G 부분집합에서 8.53%, OpenAI Davinci-003으로 생성한 합성 데이터셋 CodeAlpaca에서 12.8%의 다시 쓴 버전을 표시했다([[rephrased-samples-contamination]] 표 7). 합성 데이터는 생성기가 보았던 벤치마크 내용을 재현할 수 있다([[ch-18]]).
+- 모델 데이터 cutoff 전에 공개된 벤치마크 내용. 공개일로 태그한 LeetCode 문제에서 DeepSeek-Instruct 33B는 2023년 8월 이후 하락했고, “DS-Base-33B ... 5월 문제의 Pass@1 약 60에서 9월 LeetCode 문제의 Pass@1 약 0으로 하락했다.” 하락은 “주로 LeetCode 문제에서만 발생한다”([[livecodebench]] §5.1). 저자들은 하락을 오염으로 해석한다(하락은 **결과(단일 연구)**, 원인은 **해석**). 시간으로 분할한 평가는 [[ch-47a]]에서 다룬다.
 
-## 8. 실무자의 planning checklist
+**어느 단계에서 오염을 제거할 것인가.**
+- OLMo 3은 “암기가 학습 말기에 가장 강하게 발생한다는 결과”에 비추어 중간 학습과 긴 컨텍스트 확장에 오염 제거를 집중한다([[olmo-3-decontamination]] §3.5.3)(다른 연구를 인용한 **해석**).
+- Llama 3은 “실제 few-shot 학습 능력과 분포 밖 일반화를 평가하기 위해” 벤치마크 학습 세트를 annealing 데이터에서 제외한다. GSM8k와 MATH 학습 세트를 annealing에 넣은 실험에서 사전학습 8B 모델의 검증 점수는 24.0%와 6.4% 상승했고, 405B에서는 변화가 무시할 정도였다([[llama-3-decontamination]] §3.1.3). 이 보고서에서는 후기 단계의 도메인 내 데이터가 작은 모델의 점수를 가장 크게 바꾸었다(**결과(단일 연구)**). Annealing은 [[ch-32]]에서 다룬다.
+- ConTAM에서는 모델-벤치마크 쌍의 약 절반에서 더 큰 Llama 1 모델이 오염된 예시로부터 더 많이 이득을 얻었다. 그러나 TriviaQA, HellaSwag, COPA, PiQA에서는 더 작은 Llama 1 모델이 더 많이 이득을 얻었고, 저자들은 이를 오염이 없을 때도 큰 모델의 점수가 높기 때문이라고 설명한다([[evaluation-data-contamination-contam]] §5.2.3)(**해석**).
 
-2026년에 새 사전학습 실행을 시작할 때:
+**삭제의 부작용.** DROP의 모든 분할을 삭제하면 학습 예시가 60,000개 넘게 제거되었고, OLMo 3 저자들은 점수 변화가 “오염 제거가 암기를 막고 있거나 분포 내 학습 예시도 함께 제거하고 있음을 나타낼 수 있다”고 밝혔다. OLMo 3은 완전한 GSM8K 누출도 검출했지만 오염 제거된 데이터의 점수가 더 높았으며, Marin 저자들은 이를 평가된 형식과 일치하지 않는 오염된 형식 때문이라고 설명했다([[olmo-3-decontamination]] §3.5.4). 따라서 오염 제거 뒤의 점수 변화만으로는 오염을 측정할 수 없다.
 
-```python
-U = count_unique_tokens(corpus, after_dedup=True, after_decontam=True)
-R_T = 4.0                                    # Muennighoff's fit
-D_useful = U * (1 - math.exp(-R_cap / R_T))  # effective tokens at cap R_cap
-N_min = K_target_bits / 2                    # Allen-Zhu 2 bits/param bound
-# Pick N ≥ max(N_min, Chinchilla_optimal(D_useful))
+## §7 데이터 파이프라인 단계에서 오염 제거 결정을 기록하기
 
-for eval_set in EVALS_TO_PROTECT:            # §4 decontamination
-    corpus = filter_out_overlapping(corpus, eval_set, K=8, tau=0.5)
+**정의.** *오염 제거 기록*은 무엇을 확인했는지, 어떻게 확인했는지, 무엇을 삭제했는지를 버전이 지정된 형태로 설명하고 데이터 혼합물과 함께 저장한 것이다.
 
-p_synth = estimate_synthetic_fraction(corpus)   # §5 collapse defense
-assert p_synth < 0.10, "scaling law will flatten"
-corpus = drop_low_trust_domains(corpus)         # §6 adversarial defense
+**해결하는 문제.** [[ch-48]]의 점수 효과 추정에는 각 벤치마크의 오염·깨끗한 분할, 임계값, 매칭 규칙이 필요하다. ConTAM은 “오염 비율, EPG, 선택한 임계값을 보고하라”고 권장한다([[evaluation-data-contamination-contam]] §7.3). 절차는 바뀐다. OLMo 3의 첫 버전은 SQuAD v2와 DROP에서 실패했고, “decon 저장소에는 이전 접근법과 최종 접근법을 모두 재현하는 구성 파일이 들어 있다”([[olmo-3-decontamination]] §3.5.3). 오염 제거 없이 공개된 데이터셋([[nemotron-cc]] §6)은 이 결정을 모든 downstream 사용자에게 넘긴다.
+
+**메커니즘.** 아래 필드는 이 과정에서 제안하는 것이다(**해석**). 각 필드는 §5에서 결과를 바꿀 수 있다고 보인 결정에 대응한다. 꺾쇠괄호 값은 자리표시자다.
+
+```yaml
+decontamination_record:
+  mixture_version: <문서 manifest의 해시>
+  stages: [pretrain-stable, anneal, long-context]
+  eval_suite:
+    - {name: GSM8K, version: "<dataset@commit>", splits: [train, test]}
+    - {name: MMLU,  version: "<dataset@commit>", splits: [dev, validation, test]}
+  normalization: {lowercase: <bool>, strip_punctuation: <bool>}
+  unit: {tokenizer: "<name@version>", n: <int>, mincount: <int>}
+  score: <TOKEN-MATCH | NGRAM-MATCH | LONGEST-MATCH | paragraph-exact | IDF-overlap>
+  threshold: {default: <τ>, per_benchmark: {GSM8K: <τ_GSM8K>}}
+  fields_matched: [question, answer_text]     # 선택지 라벨은 제외
+  removal_unit: <document | paragraph | instance | dataset>
+  removed: {items_matched_per_benchmark: {GSM8K: <count>}, documents_removed: <count>, tokens_removed: <count>}
+  removed_ids: <삭제한 문서 ID의 경로>
+  known_blind_spots: [paraphrase, translation, code]
+  tool: {name: <tool>, config: "<path@commit>"}
+  date: <YYYY-MM-DD>
 ```
 
-각 단계는 Further Reading의 한 소스에 대응한다.
+**계산 예시(가설적 개수의 산술).** 어떤 벤치마크의 테스트 분할이 1,000개 항목이고 기록에 그중 120개가 삭제된 문서와 일치한다고 적혀 있다고 하자. 이후 분석에서는 테스트 세트를 일치한 120개와 일치하지 않은 880개로 나누고, §5.4 예시 4처럼 삭제 전에 학습된 체크포인트에서 EPG를 계산할 수 있다. 880개 일치하지 않은 항목의 점수가 52.0%, 전체 세트 점수가 55.0%라면 EPG = 3.0점이다. σ = √(0.55 × 0.45) = 0.497이면 표준오차는 0.497 / √880 = 1.68점이고 z = 1.79다. `removal_unit`과 `threshold`가 없으면 일치하지 않은 항목이 임계값보다 낮았는지 아예 확인되지 않았는지 같은 분석으로 알 수 없다.
 
----
+**근거.** 이런 기록을 유지하는 효과를 측정한 출처는 없다. 필드는 보고된 관행에서 가져왔다. 데이터셋별 임계값과 보고([[evaluation-data-contamination-contam]] §7.3), 공개된 오염 제거 데이터셋 버전([[tulu-3]] 표 8), 버전이 지정된 구성([[olmo-3-decontamination]] §3.5.3), 말뭉치별 삭제율([[paloma]] 표 4)이다.
 
-## 연결과 다음 단계
+**범용 모델에 대한 시사점.** 범용성 주장은 홀드아웃 평가에 근거한다. 이 기록이 있어야 나중에 읽는 사람이 벤치마크 결과가 보지 못한 항목에 대한 증거인지 판단할 수 있다.
 
-- **[[data-constrained-scaling]], [[physics-of-lm-3]]** — 이 장의 두 공식. synthetic rephrasing(ch-20+)이 왜 작동하는지 동기를 부여한다.
-- **[[scaling-laws-data-quality]] / ch-13** — quality term. domain mix를 고를 때 다시 등장한다.
-- **[[model-collapse]], [[strong-model-collapse]]** — accumulation-not-replacement rule. 2025년 이후 모든 synthetic-data pipeline(ch-18 onward)의 기반.
-- **[[llama-3]], [[olmo-2]], [[olmo-3]]** — frontier scale의 구체적 decontamination recipe. ch-10 filter pipeline과 ch-13 mixing weight와 함께 보라.
-- **[[anthropic-sleeper-agents-data]] / ch-47+** — passive contamination에서 adversarial contamination으로 가는 다리. Eval track은 이 장이 멈추는 지점에서 이어받는다.
+## 레시피
 
-## 더 읽을거리
+| 모델(정확한 릴리스) | 크기 | 단계 | 설정 | 값 | 출처 위치 | 상태 | 이 값의 근거 |
+|---|---|---|---|---|---|---|---|
+| datablations GPT-2 아키텍처 모델([[data-constrained-scaling]]) | 8.7B | pretrain-stable | 전체 토큰; 고유 토큰; pass 수 | 전체 178B; 고유 44B; 4 epoch | arXiv:2305.16264v5 §6, 그림 4 | 2026-09-15 검증 | 최종 검증 손실이 178B 고유 토큰 1회 실행보다 0.5% 높음(§6) |
+| 동일 | 4.2B | pretrain-stable | 84B 토큰 중 Python 비율 | 최대 50%(42B 토큰) | arXiv:2305.16264v5 §7, 그림 6 | 2026-09-15 검증 | 5개 seed에서 19태스크 평균 저하 없음(§7) |
+| 동일 | 4.2B | pretrain-stable | 데이터 제약 아래 perplexity 필터 | perplexity가 가장 낮은 샘플의 25% 유지(44B 토큰, 약 2 epoch) | arXiv:2305.16264v5 §7, 부록 N | 2026-09-15 검증 | C4에서는 효과적이었고, 100자 중복 제거 필터(21B 토큰, 4 epoch)는 도움이 되지 않음(§7) |
+| 동일 | 모든 연구 실행 | pretrain-stable | dropout; weight decay; gradient clip | 0.1; 0.1; 1.0 | arXiv:2305.16264v5 부록 S | 2026-09-15 검증 | “대체로 선행 연구 ... 및 테스트 실행의 성능에 기반”(부록 S) |
+| Llama 3.1 405B([[llama-3-recipe]]) | 405B | pretrain-stable | 토큰; 파라미터당 토큰 | 15.6T; 38.5 | v3 §1, §3.2; 비율 도출: 15.6T / 405B | 2026-09-14 검증(토큰); 도출(비율) | 16.55T 토큰에서 402B까지 scaling-law 외삽(§3.2.1) |
+| Llama 3.1(전체) | 전체 | pretrain-decay/anneal | annealing 데이터의 벤치마크 학습 세트 | 제외 | v3 §3.1.3 | 2026-09-15 검증 | 실험: GSM8k/MATH 학습 세트를 annealing하면 8B 검증 점수 +24.0%/+6.4%, 405B에서는 무시할 정도 |
+| Llama 3.1 8B / 70B / 405B | 전체 | eval-gate | 사전학습 오염 분석 | 데이터셋별 8-gram 토큰 겹침 비율 T_D; 세 크기에서 최대 유의 EPG가 되도록 선택; T_D 값은 인쇄되지 않음; 삭제 설명 없음 | v3 §5.1.4, 표 15 | 2026-09-15 검증 | 표 15, 예: HellaSwag 85% 오염, 8B에서 +14.8 |
+| Llama 3.1(전체) | 전체 | SFT | 사후학습 오염 제거 | 벤치마크 프롬프트와 정확 일치 | v3 §5.2 | 2026-09-15 검증 | ablation 보고 없음 |
+| Nemotron-CC 8B, 15T 토큰 실행([[nemotron-cc]]) | 8B | pretrain-stable | 토큰; 단계별 Nemotron-CC 비율 | 1단계: 9T 토큰, 영어 Common Crawl 59%(5.31T); 2단계: 6T 토큰, 31%(1.86T); 전체 7.17T | arXiv:2412.02595v2 부록 E | 2026-09-15 검증 | 표 6: 저자 harness에서 MMLU 70.3, Llama 3.1 8B는 65.3 |
+| Nemotron-CC 8B ablation | 8B | pretrain-stable | 고품질 반복을 합성 데이터로 대체 | HQ-Base: 고품질 문서 8배; HQ-Synthetic: 8회 반복 중 4회를 합성 데이터로 대체; 1T 토큰, Common Crawl 변형 73% | arXiv:2412.02595v2 §3.1, §3.3, 표 10 | 2026-09-15 검증 | 10태스크 평균 55.8 → 56.7; seed 미보고 |
+| Nemotron-CC 데이터셋 | 해당 없음 | 데이터 생성 | 재작성 모델 및 샘플링 | Mistral NeMo 12B Instruct, FP8, top-p 0.9, temperature 0.5; 합성 토큰 1.8T 초과 | arXiv:2412.02595v2 §2.3, 표 3 | 2026-09-15 검증 | 샘플링 설정에 대한 ablation 보고 없음 |
+| Nemotron-CC 데이터셋 | 해당 없음 | 데이터 공개 | 오염 제거 | 수행하지 않음 | arXiv:2412.02595v2 §6 | 2026-09-15 검증 | 저자들은 합의 부족과 불확실한 영향을 언급 |
+| Olmo 3 Base 중간 학습 혼합([[olmo-3-decontamination]]) | 크기 범위 미지정 | 중간 학습; 긴 컨텍스트 | 오염 제거 | decon: stride 샘플링 n-gram, 클러스터 확장(11회 miss 후 문서가 활성 집합에서 나감), IDF 가중 질문/답/지문 점수(가중치 0.7/0.2/0.1); 모든 OLMES 벤치마크의 모든 분할; 문서 삭제 | arXiv:2512.13961v2 §3.5.3, 부록 A.5 | 2026-09-15 검증; n-gram 길이·stride·임계값은 보고서에 없음(저장소 설정은 확인하지 않음) | 오염 제거 유무로 100B anneal을 매칭(§3.5.4, 그림 12); 임계값은 정성 검토로 조정 |
+| Tülu 3 SFT 혼합([[tulu-3]]) | 8B, 70B, 405B | SFT | 프롬프트 오염 제거 | 8-gram; 한 학습 인스턴스가 테스트 토큰의 50% 초과와 일치; 평가 인스턴스의 2% 초과가 겹치면 데이터셋 오염 | arXiv:2411.15124v5 §3.2, 표 8 | 2026-09-15 검증 | 전체 문자열 및 embedding 매칭보다 n-gram 매칭을 선택(정성적); 표 8 삭제 비율 |
+| Paloma 기준선 모델([[paloma]]) | 1B | pretrain-stable | Paloma에 대한 오염 제거 | 문단 정확 일치; 13 Unicode 토큰 미만 문단 무시; 코드 출처 오염 제거 없음; 전체 문서 삭제 | arXiv:2312.10523v2 §3, 부록 C.1.1, 표 4 | 2026-09-15 검증 | 13은 Brown 및 Rae 방법의 n-gram 크기를 따름(부록 C.1.1); ablation 보고 없음 |
 
-- [[data-constrained-scaling]] — Muennighoff 2023; `R_T ≈ 4` fit과 `D' = U(1 − e^(−R/R_T))` 공식.
-- [[physics-of-lm-3]] — Allen-Zhu 2024; 2 bits/parameter + recall-vs-repetition curves.
-- [[scaling-laws-data-quality]] — Subramanyam 2025; 명시적 term으로서 quality.
-- [[model-collapse]], [[strong-model-collapse]] — Shumailov 2024 + Dohmatob ICLR 2025.
-- [[anthropic-sleeper-agents-data]] — Hubinger 2024; poisoning-as-alignment-failure.
-- [[llama-3]], [[olmo-2]], [[olmo-3]] — frontier scale의 구체적 decontamination recipe.
+**소규모 범용 실행의 시작점.** 필터링된 웹 텍스트로 사전학습하고, 전역 중복 제거 후 고유 토큰이 계획한 토큰보다 적은 약 9B 이하의 dense decoder라면 전체 풀을 최대 4 pass 실행하도록 계획한다(행 1: 8.7B, C4, GPT-2 아키텍처, 행 4의 정규화 사용). 더 많은 토큰이 필요하면 pass를 추가하기 전에 토큰의 최대 50%까지 Python 코드를 넣는다(행 2: 4.2B, 84B 토큰, 자연어 평균만 해당). 고품질 문서 반복의 절반을 다시 쓴 버전으로 대체하는 것도 고려한다(행 10: 8B, 1T 토큰, 단일 실행). 오염 제거에는 8-gram 토큰 매칭을 사용하고(행 7, 14), 평가에 사용한 모든 분할을 매칭해 중간 학습 및 annealing 데이터에서 일치 문서를 삭제한다(행 13). 벤치마크 학습 세트는 annealing 데이터에서 제외하고(행 6), 최종 체크포인트에서 행 7과 같은 벤치마크별 임계값 분석을 실행한다. 이 행들은 서로 다른 조직과 규모에서 나왔으며, 어떤 출처도 이 조합을 시험하지 않았다.
 
-## 동반 시각화
+## 일반화 관점
 
-**[figures/repetition-curve.html](figures/repetition-curve.html)** — interactive explorer. Panel 1: `U`와 `R_max`를 바꿀 때 Muennighoff decay 아래 effective-token count `D'`와 per-repeat value `w(k)`. Panel 2: 2-bits/parameter asymptote와 factual-recall probability가 repetition count `k`와 함께 포화되는 방식을 보여주는 Allen-Zhu capacity-saturation curve.
+**(a) 폭을 넓히는 것.**
+- 4 pass 이하로 반복하면 4.2B에서 19태스크 평균이 변하지 않았다([[data-constrained-scaling]] §7, 그림 6).
+- 토큰의 최대 50%까지 Python 코드를 넣어도 자연어 평균을 유지했고, 4.2B에서 bAbI와 WebNLG를 높였다([[data-constrained-scaling]] §7).
+- 고품질 문서를 반복 대신 다시 쓴 문서로 대체하면 8B에서 10태스크 평균이 상승했다([[nemotron-cc]] 표 10). WRAP에서는 Pile 도메인 전체에서 어떤 단일 재작성 방식도 가장 좋지 않았고, 도메인별 방식의 oracle 선택은 “perplexity를 16% 개선”했다(128M, 3B 토큰; [[rephrasing-the-web]] §6.2)(**결과(단일 연구)**). 이는 여러 방식을 섞는 것을 뒷받침한다.
+- 중간 학습 데이터를 오염 제거하면 혼합 라운드 간 비교가 누출이 아니라 능력을 측정하게 된다. OLMo 3은 마지막 라운드만 오염 제거 데이터를 사용했기 때문에 그 라운드의 이득이 “아마 과소평가되었을 것”이라고 말한다([[olmo-3-decontamination]] §3.5.4).
+
+**(b) 폭을 좁히거나 망각을 일으키는 것.**
+- 작은 부분집합을 가장 손상이 큰 반복 횟수로 반복하면 테스트 손실보다 복사 및 induction-head 측정값이 더 크게 감소했고, 반복 비율이 높을 때 분포 밖 Python의 손실이 증가했다([[repeated-data-scaling]] §1.1).
+- 전체 데이터셋을 44 epoch 반복하면 학습 중간에 손실이 증가했고([[data-constrained-scaling]] §6), 1,024회 반복에서 SuperGLUE가 71.36에서 64.76으로 하락했다([[c4]] 표 9). **두 설정에서 반복됨.**
+- 저품질 문서를 다시 쓰면 평균은 상승하지만 MMLU는 48.2에서 47.1로 하락했다([[nemotron-cc]] 표 10). 저자들은 “데이터 합성으로 유입된 잠재적 허위 정보”를 언급한다.
+- 오염은 보지 못한 항목의 일치하는 이득 없이 벤치마크 이득을 만든다. 다시 쓴 테스트 질문으로 미세 조정하면 Llama 2 13B의 MMLU가 54.8에서 85.9~89.9로 상승했고([[rephrased-samples-contamination]] 표 2), 공개일 분할에서는 모델의 cutoff 이후 항목에서 하락이 나타난다([[livecodebench]] §5.1).
+- 오염 제거는 분포 내 학습 예시도 삭제할 수 있다. DROP 학습 예시 60,000개 초과가 그 사례다([[olmo-3-decontamination]] §3.5.4). 따라서 벤치마크 계열은 누출과 함께 학습 신호도 잃을 수 있다(**저자들의 해석**).
+
+**(c) 이 단계에서 측정하는 방법.**
+- 절대로 반복하지 않은 분할의 홀드아웃 손실을 사용한다. Muennighoff 등은 모델이 반복 데이터에 과적합하기 때문에 학습 손실을 사용하지 않는다([[data-constrained-scaling]] §4, 부록 H).
+- 홀드아웃 손실과 함께 원천별 학습 손실을 기록한다. 반복된 부분집합의 학습 손실이 0에 가까워지는 지점에서 유해한 범위가 시작된다([[repeated-data-scaling]] §1.1).
+- 평균만이 아니라 태스크별 downstream 표를 기록한다([[nemotron-cc]] 표 10). 가능하면 여러 seed를 사용한다([[data-constrained-scaling]] §7은 5개 사용).
+- 오염은 벤치마크와 모델 크기별 오염 비율, EPG, z-score, 임계값으로 측정한다([[evaluation-data-contamination-contam]] §7.3). 핵심 벤치마크에는 바꾸어 쓰기를 인식하는 검사를 추가하고([[rephrased-samples-contamination]] §4), 데이터 cutoff 뒤에는 시간 분할 평가를 한다([[livecodebench]] §5.1). 알려진 측정 오류는 n-gram 검사가 바꾸어 쓰기를 놓치고, 벤치마크 거의 전부 또는 거의 아무것도 표시되지 않으면 EPG를 추정할 수 없으며([[evaluation-data-contamination-contam]] §8.1), 사후 추정이 상관관계라는 점이다(§8.3).
+
+## 흔한 실수와 탐지 방법
+
+| 실수 | 관찰 가능한 증상 | 점검 |
+|---|---|---|
+| 유효 토큰에 U(1 − exp(−R/R*)) 같은 포화 공식을 사용 | 1 pass에서도 유효 토큰이 고유 토큰보다 적음 | 식 5가 R_D = 0에서 D′ = U를 주고 16.39 U에 접근하는지 확인([[data-constrained-scaling]] §3.1) |
+| 전체 말뭉치에 대해서만 pass를 계산 | 전체 pass는 1 부근인데 한 upsample 원천은 수십 pass이고 그 원천의 학습 손실이 0을 향해 내려감 | 원천별 pass = 샘플링 토큰 / 고유 토큰; 원천별 학습 손실을 기록([[repeated-data-scaling]] §1.1) |
+| 전역 중복 제거 전에 고유 토큰을 계산 | 계획한 pass가 낮아 보이고, 학습 후반 홀드아웃 손실이 1 pass 예측보다 높음 | 전역 fuzzy 중복 제거 후 다시 계산(DCLM 전체 3.8T, 고유 1.0T 토큰, [[nemotron-cc]] 표 4) |
+| 학습 손실로 반복을 판단 | 홀드아웃 손실이 평탄해지거나 올라가는데 학습 손실은 계속 하락 | 절대 반복하지 않은 홀드아웃 분할에서 평가([[data-constrained-scaling]] 부록 H) |
+| 4-pass 결과를 미세 조정 또는 다른 정규화에 그대로 적용 | SFT에서 몇 pass 뒤 과적합 | 결과는 dropout 0.1의 C4 사전학습에 해당한다([[data-constrained-scaling]] 부록 Q, 부록 S); 홀드아웃 점검을 실행([[ch-30]]) |
+| 오염 분석에서 n = 13 또는 mincount > 1 사용 | 웹에 존재한다고 알려진 벤치마크에서 표시 비율이 낮고 EPG가 0에 가까움 | n = 8, mincount 1로 다시 실행하고 EPG 비교([[evaluation-data-contamination-contam]] §6.1, §6.3) |
+| 모든 벤치마크에 하나의 전역 임계값 사용 | EPG가 0 또는 음수인 수학 항목이 표시됨 | z-score로 벤치마크별 임계값 설정([[evaluation-data-contamination-contam]] §4.2) |
+| 객관식 항목을 선택지 라벨로 매칭 | “A. True, True ...”를 공유한다는 이유로 서로 다른 문제가 표시됨 | 문제 stem과 전체 답 텍스트를 매칭([[olmo-3-decontamination]] §3.5.3) |
+| 테스트 분할만 오염 제거 | 개발에 사용한 검증 또는 학습 분할의 점수가 새로운 항목보다 높음 | 평가에 사용한 모든 분할의 일치를 삭제([[olmo-3-decontamination]] §3.5.3) |
+| “n-gram 일치 없음”을 “깨끗함”으로 취급 | 정적 벤치마크에서는 이득이지만 cutoff 뒤 공개된 항목에서는 하락 | 바꾸어 쓰기 인식 검사([[rephrased-samples-contamination]]); 공개일 분할([[livecodebench]]) |
+| 오염 제거 후 점수 하락을 오염의 증거로 해석 | 전체 GSM8K 누출이 검출되었지만 오염 제거 실행의 점수가 더 높음 | 매칭된 실행을 비교하고 형식을 검사([[olmo-3-decontamination]] §3.5.4) |
+| 오염 제거 기록이 없음 | 나중에 EPG를 계산할 수 없고 절차를 재현할 수 없음 | 평가 버전, 매칭 규칙, 임계값, 삭제 단위, 삭제된 ID를 저장(§7) |
+
+## 이해도 확인
+
+1. 식 5는 1 pass에서 D′ = U이고 상한은 16.39 U다. 등비급수 유도에서 상한이 존재하는 이유와 R*_N < R*_D일 때 데이터 제약 frontier가 파라미터보다 epoch를 더 빠르게 추가하는 이유를 설명하라.
+2. 혼합물이 100B 학습 토큰의 2%를 200M 토큰 원천에서 뽑고, 전체 말뭉치는 1.1 pass를 만든다고 하자. 이것이 전체를 균일하게 4회 반복하는 것보다 in-context 복사에 더 나쁠 수 있는 이유는 무엇이며, 학습 중 문제를 보여줄 기록값은 무엇인가?
+3. 8B에서 HQ-Synthetic이 HQ-Base보다 평균 0.9점 높았다. 저자들이 제안한 두 원인을 말하고 “새 고유 토큰”과 “새 스타일”을 분리하는 ablation을 설계하라.
+4. §4.1 언어 모델링 적합에서 γ/β가 1에 가깝다. 저자들의 “sublinear” 해석이 γ/β가 아니라 γ를 1과 비교하는 데 의존하는 이유와, 두 비교가 손상된 토큰에 대해 각각 무엇을 말하는지 설명하라.
+5. n을 늘리면 거짓 양성은 줄지만 거짓 음성은 늘어나는 이유는 무엇인가? 그리고 ConTAM이 오염 항목의 라벨 집합 대신 EPG를 사용해 n = 10 또는 13보다 n = 8을 더 낫다고 판단할 수 있는 이유는 무엇인가?
+6. Llama 3 분석에서 NaturalQuestions의 52%는 거의 이득 없이 표시되었지만 HellaSwag의 85%는 8B에서 +14.8이었다. 각각을 만들 수 있는 메커니즘과 이를 구분할 분석을 제안하라.
+7. OLMo 3은 완전한 GSM8K 누출을 검출했지만 오염 제거 혼합물의 점수가 더 높았다. 이것이 어떻게 가능한지, 점수 변화만을 오염의 유일한 검사로 사용할 때 무엇을 의미하는지 설명하라.
+8. 동료가 “13-gram 겹침으로 오염 제거했다”고만 보고했다. ch-48에서 EPG를 계산하려면 §7의 어떤 필드가 빠졌으며, 그것이 없으면 범용성에 대해 어떤 결론을 내릴 수 없는가?
+
+## 연결
+
+- **이전:** ch-13a — 다국어 범위와 어휘를 능력 축으로 보기(의존성; 언어별 고유 토큰 한계는 §1~§2의 다국어 사례다).
+- **다음:** ch-14a — 사전학습 레시피 나란히 비교: 예산, 배치, 스케줄, 단계 혼합(공개 레시피의 토큰 예산·pass·단계 혼합).
+- ch-08a — Scaling Laws와 계산량 배분: 사전학습 손실에서 downstream 능력까지(§2가 일반화하는 1-pass 법칙).
+- ch-10a — 모델 기반 품질 필터링과 벤치마크 대상 데이터 선택(고유 토큰을 줄이는 필터; 테스트 태스크와 유사한 선택).
+- ch-12 — 중복 제거: 정확·준중복·의미적 중복(고유 토큰 계산; 분할 간 겹침).
+- ch-12a — 사전학습 중 암기, 지식 습득, 일반화(반복 효과를 만드는 암기 메커니즘).
+- ch-13 — 도메인 혼합: DoReMi, 혼합 법칙, 규모별 검증(비균일 반복으로서의 upsampling).
+- ch-19 — 생성 방법: bootstrap, evolution, extraction, persona, rephrasing(재작성 방법).
+- ch-23 — 모델 붕괴와 합성 데이터 검증(생성 텍스트 학습의 위험).
+- ch-32 — 중간 학습: annealing 데이터, 단계 게이트, 후속 SFT·RL에 미치는 효과(annealing 데이터와 후기 오염 제거).
+- ch-32a — 망각 없는 지속 사전학습: replay, 학습률 재가열, 합성 지속 사전학습(작은 도메인의 합성 확장).
+- ch-47a — 벤치마크 과적합과 일반화 감사: 신선·교란·반사실·실시간 평가(공개일 및 교란 평가).
+- ch-48 — 오염 검출과 보고 점수에 미치는 영향(§7 기록을 사용해 점수 효과 추정).
+
+## 출처
+
+- [[data-constrained-scaling]] — 식 5~6, 적합 상수, 4 epoch·16 epoch 결과, 배분, 코드 채우기·필터링, 하이퍼파라미터, 한계(`excerpts/` 발췌).
+- [[repeated-data-scaling]] — 부분집합 반복, double descent, 복사·induction-head 손상, 학습 손실 진단, 한계.
+- [[scaling-laws-data-quality]] — 품질 인식 법칙, 표 2 상수, 합성 잡음 설정.
+- [[nemotron-cc]] — 필터링 말뭉치의 고유·전체 토큰, 재작성 pipeline과 표 3, 반복 대 합성 ablation 표 10, 15T 실행, 오염 제거 없음.
+- [[epoch-data-stock]] — 공개 텍스트 stock, 품질·반복 조정, overtraining 비율.
+- [[rephrasing-the-web]] — WRAP 가속, 증강 대비 재작성, 스타일 다양성, 새 지식 한계(arXiv:2401.16380v1에서 읽은 주장).
+- [[d4]] — 1.3B에서 선택 부분집합 반복.
+- [[c4]] — T5 반복 결과(표 9).
+- [[llama-3]], [[llama-3-recipe]] — 토큰 예산과 오염 분석 요약.
+- [[llama-3-decontamination]] — annealing 제외, 8-gram 오염 분석과 표 15, 사후학습 정확 일치.
+- [[evaluation-data-contamination-contam]] — 점수 함수, EPG·z-score, n·mincount 효과, 벤치마크별 임계값(표 3), 권장 사항, 한계.
+- [[rephrased-samples-contamination]] — 바꾸어 쓰기·번역 회피, 재작성 세트 구성, 검출 F1, 실제 데이터셋의 재작성 샘플.
+- [[olmo-3-decontamination]] — decon 방법, 단계 배치, 템플릿 오염, 매칭 anneal, 부작용.
+- [[tulu-3]] — SFT 프롬프트의 8-gram 인스턴스 규칙과 데이터셋 수준 삭제(arXiv:2411.15124v5 §3.2).
+- [[paloma]], [[dolma]] — 문단 수준 오염 제거, 삭제율, Dolma의 벤치마크 복사본.
+- [[deduplicating-training-data]] — C4 학습·검증 분할의 준중복 겹침.
+- [[livecodebench]] — 모델 cutoff 후 공개된 문제의 성능 하락.

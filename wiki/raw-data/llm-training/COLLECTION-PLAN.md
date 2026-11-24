@@ -457,6 +457,10 @@ Confirmed absent by listing the library directories on 2026-09-18. Grouped by bu
 The 2026-09 candidate sweep proposed 617 slugs; 117 were written in this revision and 500 remain unwritten. The groups
 above list the ones the audits marked `must` or that a theme page needed and could not cite.
 
+## 2026-10 long-tail extension
+
+The learner requested conversational, stylistic, and spoken tails beyond factual knowledge. Collected thirteen source cards plus the existing [[multichallenge]] card; see [[long-tail-papers]] and [[insights-long-tail]]. Abstract-only gaps and full-text verification limits are recorded per card. New course chapters ch-23a..ch-23d are an extension, not a replacement of studied records.
+
 ## 2026-11 open-lab additions (Microsoft, Qwen, DeepSeek, Z.ai)
 
 Twenty-three source cards written and verified on 2026-11-24, then linked from the course chapters' `## 2026-11 additions: open-lab sources` sections. Insight rows were appended to the theme pages listed in [[insights]].

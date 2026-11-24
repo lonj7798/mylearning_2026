@@ -1,245 +1,405 @@
 <!-- chapter: ch-12
-     track: data
-     title: Deduplication — Exact, Approximate, Semantic
-     sources: [[deduplicating-training-data]], [[minhash-lsh]], [[d4]], [[ccnet]], [[dolma]], [[fineweb]], [[c4]]
+     track: pretraining
+     kind: content
+     title: 중복 제거: 정확·근접 중복과 의미 중복
+     deps: [ch-11]
+     sources: [[deduplicating-training-data]], [[minhash-lsh]], [[semdedup]], [[d4]], [[repeated-data-scaling]], [[quantifying-memorization]], [[fineweb]], [[fineweb-2]], [[llama-3]], [[llama-3-recipe]], [[dolma]], [[ccnet]], [[c4]], [[data-constrained-scaling]], [[paloma]]
      figures: figures/minhash-lsh.html
+     revised: 2026-09 (generality revision)
 -->
 
-# 12장 — Deduplication: Exact, Approximate, Semantic
+# 12장 — 중복 제거: 정확·근접 중복과 의미 중복
 
-> **핵심 통찰.** Pretraining corpus는 set이 아니다. *Near-copy의 길고 두꺼운 tail을 가진 multiset*이다. Lee 2021은 dedup을 하지 않으면 세 가지 비용을 동시에 낸다는 것을 보였다. Training time(같은 gradient를 다시 내려감), privacy(verbatim memorization이 duplication count에 거의 선형으로 scale), evaluation honesty("held-out" validation text의 >4%가 이미 train에 있음)다. 직관에 반하는 부분은 "모든 duplicate를 제거하라"가 적어도 세 가지 서로 다른 operation의 family라는 점이다. Suffix-array level의 exact-substring, document level의 MinHash+LSH near-duplicate, embedding-cluster semantic dedup이다. 이들은 서로 다른 것을 제거하고, 비용도 다르며, failure mode도 다르다. 잘못된 granularity를 고르는 것이 C4 mistake의 현대판이다.
+> **핵심 통찰.** 중복 제거는 사전학습 실행에서 측정할 수 있는 세 가지 속성을 바꾼다. 모델이 학습 텍스트를 얼마나 자주 재현하는지, “홀드아웃” 측정이 실제로 얼마나 홀드아웃인지, 모델 용량을 어디에 쓰는지다. C4로 학습한 1.5B 모델에서 근접 중복 제거는 생성 토큰 중 50토큰 학습 일치 안에 들어가는 비율을 1.926%에서 0.189%로 낮췄고, C4 검증 예시의 4.60%에는 학습 데이터의 근접 중복이 있었다([[deduplicating-training-data]] Tables 2, 4). 반복의 구조가 토큰 비율보다 중요하다. 데이터를 0.1% 골라 100번 반복하면(토큰의 10%) 800M 모델의 손실이 파라미터가 절반인 모델 수준으로 악화되지만([[repeated-data-scaling]] Abstract, §2), 40B 토큰 풀에서 D4로 고른 절반을 두 epoch 학습한 1.3B 모델은 전체를 한 번 통과한 모델보다 좋았다([[d4]] Table 1). 더 많이 제거한다고 항상 좋은 것은 아니다. Common Crawl 96개 스냅샷 전체에 MinHash를 적용하면 중복 제거하지 않은 경우보다 이득이 거의 없었지만, 스냅샷별 MinHash는 RefinedWeb과 맞았다([[fineweb]] §3.4).
 >
-> **가이드라인.** Dedup은 cascade order **URL → exact-substring → MinHash+LSH → (optional) semantic**으로 실행하라. 각 stage는 다음 stage가 효율적으로 다룰 수 없는 population을 제거한다. LSH의 `(r, b)`는 table이 아니라 target Jaccard에서 tune하라. S-curve $1 - (1 - J^{r})^{b}$는 magic number가 아니라 design knob이다. Semantic dedup은 near-duplicate filter가 아니라 **diversity lever**로 다루라. 그것은 distinct-but-topically-redundant document를 기꺼이 삭제하며, efficiency를 개선하는 동시에 domain coverage를 좁힐 수 있다.
+> **지침.** MinHash LSH를 설정할 때 후보 확률을 기호(버킷당 해시 수, 버킷 수)와 함께 적고 실행 전에 `s = 0.7, 0.8, 0.9`에서 평가한다. 두 매개변수를 바꾸기 쉽고 Lee et al. 설정을 바꿔 읽으면 `s = 0.99` 미만에서 쌍을 거의 찾지 못하기 때문이다(§4). 코퍼스가 여러 크롤링 스냅샷으로 만들어졌다면 스냅샷 내부에서 중복 제거하고 반복을 포함할 만큼 큰 토큰 예산( [[fineweb]] App. E.2의 350B 토큰)에서 선택을 평가한다. 전체 중복 제거는 오래된 스냅샷에 품질 낮은 잔여물을 남겼기 때문이다(§3.4). 반복된 범위(라이선스, 상용구, 서로 다른 문서 안의 개인정보)를 찾아야 한다면 범위·줄·문단 수준의 정확 중복 제거를 추가한다. 문서 수준 근접 중복 제거는 긴 문서 속 짧은 범위를 보지 못하기 때문이다(§5). 고유 데이터가 토큰 예산보다 작다면 무작위 하위 집합을 반복하는 대신 다양한 선택을 적은 epoch 수로 반복하고, 많이 반복된 하위 집합의 학습 손실을 감시한다. 반복 하위 집합의 손실이 0에 가까워지는 시점이 [[repeated-data-scaling]]의 최대 악화와 겹쳤다(§1.1). 검증·테스트 분할이 학습과 같은 코퍼스에서 뽑혔다면 분할 간 중복을 제거하고 평가 사본을 남긴다. C4 검증 예시의 4.60%에 학습 데이터 근접 중복이 있었기 때문이다([[deduplicating-training-data]] §5, Table 2).
 
----
+## 범용 모델에서 이 장이 필요한 이유
 
-## 이 장이 존재하는 이유
+범용 모델의 파이프라인은 사전학습 → 중간 학습 → SFT → 선호 최적화 → RL → 평가다. 이 장은 휴리스틱 필터링(ch-10), 모델 기반 선택(ch-10a), 토크나이저·출처·PII 결정(ch-11) 뒤이자 암기(ch-12a)와 도메인 혼합(ch-13) 앞인 사전학습 데이터 큐레이션에 위치한다. 같은 작업은 합성 데이터 파이프라인(ch-18)과 SFT 데이터 큐레이션(ch-33)에도 다시 나온다.
 
-모든 web-data story의 첫 장은 dedup이다. Lee, Ippolito, Nystrom, Zhang, Eck, Callison-Burch, Carlini는 2021년에 foundational number를 제시했다([[deduplicating-training-data]]). **C4 token의 3.04%가 near-duplicate cluster 안에 있고, 하나의 61-word English sentence가 >60,000번 반복되며, un-deduplicated corpus로 학습한 model은 256-token unprompted completion의 ~1%에서 training-set text를 verbatim으로 emit한다.** Deduplication은 memorization을 10배 낮추고, 더 적은 step으로 같은 perplexity target에 도달하며, 보고된 benchmark win을 조용히 부풀리던 validation-set overlap >4%를 제거한다.
+**중복 제거**는 명시된 일치 규칙에 따라 다른 학습 텍스트를 반복하는 학습 텍스트를 제거하거나 가중치를 낮추는 것이다. 측정 가능한 문제는 다음과 같다.
 
-그 발견은 이후 모든 open corpus가 만들어지는 방식을 바꿨다. CCNet([[ccnet]]), Dolma([[dolma]]), FineWeb([[fineweb]])은 모두 dedup을 앞단에 배치한다. FineWeb은 첫 surprise를 추가했다. **Per-snapshot MinHash가 downstream task에서 global MinHash를 능가한다.** Global dedup은 같은 page의 "re-indexed"되었지만 실제로는 구별되는 version을 삭제할 만큼 공격적이기 때문이다.
+1. **문자 그대로 재현.** 더 자주 반복된 텍스트일수록 모델이 암기한 학습 텍스트를 더 자주 출력한다([[deduplicating-training-data]] Table 4; [[quantifying-memorization]] §4.2).
+2. **잘못된 홀드아웃 측정.** 학습 데이터에 근접 중복이 있는 검증 예시는 일반화를 측정하지 않고 회상을 측정한다. Transformer-XL은 학습 근접 중복이 있는 LM1B 검증 예시에서 perplexity 10.11, 고유 예시에서 23.58을 기록했다([[deduplicating-training-data]] Table 5).
+3. **반복에 쓰이는 용량.** 토큰의 10%가 반복되는 데이터셋은 유효 파라미터 수를 2배 줄인 것과 같은 성능 저하를 냈다. 저자들은 이것이 해당 10%를 아예 학습하지 않는 손실보다 훨씬 크다고 말한다([[repeated-data-scaling]] §5.1).
+4. **과도한 제거로 인한 분포 변화.** 제거는 남는 것을 바꾼다. FineWeb의 전체 중복 제거는 제거한 데이터보다 더 나쁜 모델을 학습시키는 잔여물을 남겼다([[fineweb]] §3.4, Fig. 4).
 
-Ch-11은 tokenizer-and-lineage layer를 만들었다. Shard, doc-id, content-addressed hashing이다. 이 장은 *그 어떤 것으로든 학습하기 전에 무엇을 제거할 것인가*에 대한 것이다.
+범용 모델에서 폭과 가장 직접적으로 관련되는 것은 문제 2와 3이다. 첫째는 일반성을 측정하기 어렵게 하고, 둘째는 문맥 내 복사 같은 일반 메커니즘을 제거한다([[repeated-data-scaling]] §2). 이 장은 세 방법군(정확·근접·의미)을 다룬 뒤 반복 구조, 범위, 순서를 다룬다.
 
----
+## §1 중복의 단위·세분성·범위
 
-## 1. Web corpus에서 실제로 무엇이 duplicated되는가
+**정의.**
+- **정확 중복**은 명시된 정규화 후, 명시된 단위(URL·문서·문단·줄·범위)에서 다른 텍스트와 동일한 텍스트다.
+- **반복 부분 문자열**은 하나의 예시 안에서 최소 임계 길이 이상이며 둘 이상의 예시에 나타나는 토큰 범위다. Lee et al.은 BPE 토큰 50개를 사용한다([[deduplicating-training-data]] §4.1).
+- **근접 중복**은 한 문서의 n-gram 집합이 다른 문서의 집합과 크게 겹치는 문서이며, Jaccard 유사도로 측정한다(§3).
+- **의미 중복**은 “정보 내용은 대체로 같지만 지각상 구별되는” 데이터다. 예를 들어 장소 이름만 바뀌는 템플릿 페이지가 있다. **의미적으로 중복되는** 데이터는 겹치는 정보를 가진 서로 다른 기저 객체에서 온다([[semdedup]] §1, §5.3).
+- **범위**는 문서를 비교하는 집합이다. 자체 스냅샷, 모든 스냅샷(전체), 언어, 소스, 평가 분할 중 하나다.
 
-[[deduplicating-training-data]]에서:
+**웹 코퍼스의 반복량.** 측정 단위에 따라 수치가 달라지므로 아래 수치에는 모두 단위가 붙어 있다.
 
-| Duplicate type | Example | Who catches it | Who misses it |
+| 측정 | 값 | 출처 |
+|---|---|---|
+| 근접 중복이 있는 C4 학습 예시 | 3.04% | [[deduplicating-training-data]] Table 2 |
+| 반복 50토큰 부분 문자열 안에 있는 C4 학습 토큰 | 7.18% | Table 3 |
+| 근접 중복이 있는 RealNews 학습 예시 / 반복 안의 토큰 | 13.63% / 19.4% | Tables 2, 3 |
+| 가장 큰 C4 근접 중복 군집 | 예시 250,933개, 5,000개 초과 군집 280개 | §5.1, Fig. 1 |
+| C4의 61단어 시퀀스 하나 | 학습에서 61,036회, 검증에서 61회 | §1 |
+| Dolma 웹: 정확 URL / 정확 문서로 제거된 문서, 정확 문단으로 제거된 문단 | URL 중복 제거 후 각각 53.2% / 14.9% / 18.7% | [[dolma]] §5.4 |
+| CCNet 2019년 2월: 중복 문단 | “텍스트의 70%” | [[ccnet]] §3.2 |
+
+**계산 예: 단위가 수치를 바꾼다.** C4의 3.04%는 NearDup이 표시한 전체 예시 수이고, 7.18%는 ExactSubstr가 찾은 반복 범위 안의 토큰 수다. 둘은 서로 다른 집합을 측정하므로 빼거나 “C4가 얼마나 중복되었는가”로 비교할 수 없다. 겹치기는 한다. NearDup으로 제거된 C4 예시 중 77%에도 ExactSubstr 일치가 있었다([[deduplicating-training-data]] §5.1).
+
+**범위도 수치를 바꾼다.** CCNet은 한 샤드의 문단 해시를 다른 샤드와 비교했다. 샤드 1개와 비교한 뒤 샤드 문자 42%가 남았고, 샤드 100개와 비교한 뒤 28%가 남았다([[ccnet]] §4.2, Fig. 4). 범위가 없는 제거율은 다른 파이프라인의 비율과 비교할 수 없다.
+
+## §2 중복 제거가 모델을 바꾼다는 근거: Lee et al. (2021)
+
+**설정.** Lee et al.(arXiv 2021-07, ACL 2022)은 C4 세 버전을 만들었다. Original, NearDup(문서 수준 MinHash와 편집 유사도, §4), ExactSubstr(접미 배열 범위 제거, §5)다. 110M 모델(시드 3개)과 1.5B decoder-only 모델을 약 2 epoch, 최대 길이 512토큰으로 학습했다([[deduplicating-training-data]] §6, App. C).
+
+**결과.**
+1. **비프롬프트 암기**(Table 4). 최대 512토큰인 표본 100,000개에 top-k = 50을 사용했다. 토큰이 학습 데이터의 50토큰 부분 문자열 안에 있으면 암기된 것으로 센다. 1 epoch 후 Original 1.926%, NearDup 0.189%, ExactSubstr 0.138%였다. 2 epoch 후에는 1.571%, 0.264%, 0.168%였다. 비율 예시는 `1.926 / 0.189 = 10.2`, `1.926 / 0.138 = 14.0`이며, 초록의 “10배 덜 자주”라는 표현의 근거다.
+2. **프롬프트 암기**(Fig. 3). 중복된 학습 예시에서 가져온 32토큰 프롬프트를 주면 Original 모델은 40%를 넘는 경우에 실제 이어지는 텍스트를 재현했다(편집 유사도 0.8 초과).
+3. **Perplexity**(§6.1, Fig. 2). 세 버전은 전체 C4 검증 집합과 고유 하위 집합에서 비슷한 perplexity를 냈다. 중복 제거 모델은 학습 중복이 있는 검증 예시에서 perplexity가 더 높았다. 해당 예시를 더 이상 회상하지 못할 때 예상되는 결과다. ExactSubstr은 Wiki-40B의 XL perplexity를 거의 3점 낮췄다.
+4. **학습-검증 중복**(Table 2). 학습에 근접 중복이 있는 검증 예시는 C4 4.60%, RealNews 14.35%, LM1B 4.92%, Wiki-40B 0.72%였다. 학습과 50토큰 일치 안에 있는 검증 토큰(Table 3)은 C4 1.38%, RealNews 3.37%, LM1B 0.019%, Wiki-40B 0.67%였다.
+
+**상태.** 암기와 perplexity 결과는 결과(단일 연구)다. Carlini et al.은 프롬프트 추출 테스트로 같은 1.5B 모델 세 개를 다시 측정했고 중복 제거 후 암기가 낮아진다는 결과도 얻었다([[quantifying-memorization]] §5.2). 이는 같은 모델에 대한 두 번째 측정이며 독립적인 학습 실행은 아니다.
+
+**조건과 한계.** 다운스트림 태스크는 평가하지 않았다(§2). 일반상식 질문 답변처럼 암기가 필요한 태스크를 포함한 부정적 결과도 조사하지 않았다(§7). 별도 연구에서 100문자 범위 중복 제거 필터는 C4의 19개 태스크 다운스트림 평균을 개선하지 않았지만, 더 잡음이 많은 OSCAR에서는 더 효과적이었다. 저자들은 암기 감소 같은 이득은 그 벤치마크로 측정되지 않는다고 말한다([[data-constrained-scaling]] §7, App. O).
+
+**시사점.** C4 규모에서 중복 제거의 측정된 근거는 암기와 측정 타당성에 있다. 중복 제거의 벤치마크 이득은 소스가 얼마나 잡음이 많은지에 따라 달라지며 Lee et al.로 확립된 것은 아니다.
+
+## §3 MinHash: Jaccard 유사도의 편향 없는 추정
+
+**정의.** shingle 집합 `S(A)`와 `S(B)`가 있는 문서 A와 B에서 shingle은 `w`개 토큰이 연속된 구간이다. Jaccard 유사도는 다음과 같다.
+
+```text
+J(A, B) = |S(A) ∩ S(B)| / |S(A) ∪ S(B)|
+```
+
+`S(D)`는 문서 D의 `w`-shingle 집합이며 `|·|`은 집합 크기다. Broder는 J를 resemblance라고 부른다([[minhash-lsh]] §2).
+
+**문제.** N개 문서의 모든 쌍에 대해 J를 계산하면 `N(N − 1)/2`번 집합을 비교해야 한다. C4의 문서 360M개([[deduplicating-training-data]] §3)에서는 약 `6.5 × 10¹⁶`쌍이다(도출).
+
+**작동 방식.**
+1. 가능한 모든 shingle에 대한 무작위 순열 `π`를 고른다(실제로는 해시 함수).
+2. 각 문서에서 `h_π(D) = S(D)`에 속한 s에 대한 `π(s)`의 최솟값을 저장한다. 문서 하나당 숫자 하나다.
+3. 서로 독립적인 해시 함수 `k`개로 반복해 숫자 `k`개의 서명을 만든다.
+4. 두 서명이 일치하는 위치의 비율로 J를 추정한다.
+
+**정리**([[minhash-lsh]] §3, Theorem 1). 균일한 무작위 `π`에 대해
+
+```text
+Pr[ h_π(A) = h_π(B) ] = J(A, B)
+```
+
+증명 단계: `S(A) ∪ S(B)`에서 `π` 값이 가장 작은 원소를 `α`라고 하자. 합집합의 모든 원소가 `α`가 될 확률은 같다. 두 최솟값이 같은 경우는 `α`가 두 집합 모두에 속할 때뿐이며, 그 확률은 `|S(A) ∩ S(B)| / |S(A) ∪ S(B)|`다.
+
+**계산 예.** 단어 bigram(`w = 2`)을 사용하자. A = “the cat sat on the mat”은 `{the cat, cat sat, sat on, on the, the mat}`이고, B = “the cat sat on a mat”은 `{the cat, cat sat, sat on, on a, a mat}`이다. 교집합은 shingle 3개, 합집합은 7개이므로 `J = 3/7 ≈ 0.43`이다. 합집합의 순서를 `(on a, the mat, cat sat, the cat, a mat, on the, sat on)`으로 정하는 순열을 취하자. A의 최솟값은 “the mat”(순위 2), B의 최솟값은 “on a”(순위 1)이므로 최솟값이 다르다. 합집합에서 첫 순위 원소가 공유 bigram 3개 중 하나일 때만 최솟값이 같으며, 첫 원소가 될 수 있는 7개가 같은 확률이므로 7번 중 3번이다.
+
+**추정 오차(도출).** 각 위치가 일치할 확률은 J이고 서로 독립이므로, 일치 비율 `Ĵ`의 표준편차는 `√(J(1 − J)/k)`다. `J = 0.8`일 때 `k = 112`이면 0.038, `k = 9,000`이면 0.0042다. 확률 `1 − δ`로 오차 `ε`를 얻는 Hoeffding bound에는 `k ≥ ln(2/δ) / (2ε²)`가 필요하다. `ε = 0.05`, `δ = 0.05`이면 `k ≥ 738`이다. Broder는 자신의 sketch에 대해 “표본 100개는 합리적이고 200개면 충분하다”고 판단했다(§4.2).
+
+**조건.** shingle 크기 `w`를 키우면 토큰 하나의 편집에 J가 더 민감해진다. 토큰 하나가 `w`개의 shingle에 영향을 주기 때문이다. 또한 resemblance는 전이적이지 않다([[minhash-lsh]] §2). 추정기는 shingle의 순서나 개수가 아니라 shingle 집합을 다룬다.
+
+## §4 LSH 버킷: 후보 확률과 공개된 매개변수 설정
+
+**정의.** 지역 민감 해싱(LSH)은 서명 값 `k`개를 각각 `h`개 값인 `B`개 버킷으로 묶는다(`k = h·B`). 하나 이상의 버킷에서 `h`개 값이 모두 일치하면 두 문서를 **후보 쌍**으로 만든다. 모든 쌍을 비교하지 않고 버킷 내용으로 문서를 해시한 뒤, 같은 버킷 해시를 공유하는 문서만 비교하는 방식이다.
+
+**후보 확률 도출.** Jaccard 유사도가 `s`인 쌍에 대해:
+1. 서명 위치 하나가 일치할 확률은 `s`다(§3).
+2. 한 버킷의 `h`개 위치가 모두 일치할 확률은 `s^h`다.
+3. 그 버킷이 일치하지 않을 확률은 `1 − s^h`다.
+4. `B`개 버킷 모두 실패할 확률은 `(1 − s^h)^B`다.
+5. 하나 이상의 버킷이 일치할 확률은 다음과 같다.
+
+```text
+P(s) = 1 − (1 − s^h)^B
+```
+
+`s`는 쌍의 Jaccard 유사도, `h`는 버킷당 해시 수, `B`는 버킷 수다. `P = 0.5`로 두면 쌍의 절반이 후보가 되는 유사도는 `s½ = (1 − 2^(−1/B))^(1/h)`이고, B가 클 때는 근사적으로 `(ln 2 / B)^(1/h)`다(도출).
+
+**소스마다 표기가 다르다.** 같은 공식이 서로 다른 문자로 인쇄되어 한 소스의 설정을 다른 소스에서 복사할 때 두 매개변수를 바꾸기 쉽다. D4 부록이 문서화된 사례 중 하나다(아래).
+
+| 출처 | 인쇄된 공식 | 버킷당 해시(h) | 버킷 수(B) | k |
+|---|---|---:|---:|---:|
+| Lee et al. NearDup([[deduplicating-training-data]] §4.2, App. A) | `1 − (1 − s^b)^r`, “r개 버킷, 버킷당 b개 해시” | b = 20 | r = 450 | 9,000 |
+| Lee et al. 대안(App. A) | 동일 | b = 20 | r = 40 | 800 |
+| FineWeb([[fineweb]] §3.4, App. E.1) | `1 − (1 − s⁸)¹⁴` | 8 | 14 | 112 |
+| *Mining of Massive Datasets* Example 3.12([[minhash-lsh]]의 포인터) | `1 − (1 − s^r)^b`, b bands, r rows | r = 5 | b = 20 | 100 |
+
+Lee et al.에서는 `b`가 버킷당 해시 수이고 교재에서는 `b`가 밴드 수다. D4 부록은 Lee et al.과 RefinedWeb 설정을 “20개 버킷, 버킷당 450개 해시”라고 설명한다([[d4]] App. A.1.2). 이는 매개변수를 바꿔 읽은 것이다.
+
+**계산 예: 어느 해석이 맞는지 확인.** Lee et al.은 원하는 Jaccard 임계값 0.8에서 충돌이 높은 확률로 일어나도록 `b`와 `r`을 골랐다고 말한다(App. A).
+- 인쇄된 해석(`h = 20`, `B = 450`): `s = 0.8`이면 `0.8^20 = 0.0115`, `ln(1 − 0.0115) × 450 = −5.22`, `e^−5.22 = 0.0054`, `P = 0.995`다. `s = 0.7`이면 `0.7^20 = 0.00080`, `(1 − 0.00080)^450 = 0.698`, `P = 0.30`이다. 절반 지점은 `s½ = 0.72`다. 명시된 목표와 맞는다.
+- 바꾼 해석(`h = 450`, `B = 20`): `s = 0.8`이면 `0.8^450 = e^(450 × −0.2231) ≈ 2.5 × 10⁻⁴⁴`이므로 `P ≈ 20 × 2.5 × 10⁻⁴⁴ ≈ 5 × 10⁻⁴³`이다. 절반 지점은 `s½ = 0.9925`다. 0.8~0.99 사이의 쌍은 거의 검증되지 않으므로 명시된 목표와 모순된다.
+- 대안 설정은 0.9를 목표로 한다. `h = 20`, `B = 40`이면 `P(0.9) = 0.994`, `P(0.8) = 0.37`, 절반 지점은 0.82다. 이 설정도 인쇄된 해석과만 일치한다.
+
+**후보와 결정.** Lee et al.에서 LSH는 후보를 만든다. 실제 Jaccard 지수가 0.8을 넘고 편집 유사도 `EditSim(x_i, x_j) = 1 − EditDistance(x_i, x_j) / max(|x_i|, |x_j|)`도 0.8을 넘어야 쌍을 중복으로 결정한다(App. A, §4.2). 중복 그래프의 연결 요소가 군집이 된다. FineWeb에서는 “어느 버킷에서든 같은 8개 MinHash를 가진 문서를 중복으로 간주”하고 별도 검증 없이 전이적 군집화한 뒤 군집별로 유지 문서 하나를 무작위 선택한다(§3.4). FineWeb 설정에서 `s = 0.6`인 쌍은 `1 − (1 − 0.6⁸)¹⁴ = 0.21` 확률로 매칭된다(도출). 전이성 때문에 서로 직접 일치하지 않는 두 문서도 한 군집에 들어갈 수 있다.
+
+**계산 비용 절충의 근거.** FineWeb은 9,000개 해시 설정과 곡선을 비교했다. 큰 설정은 “더 가파르고 더 잘 정의된 cut off”를 만들며, 저자들은 “계산·저장 절약이 임계값 근처 문서의 더 큰 불확실성을 보상한다고 믿는다”고 했다(App. E.1, Fig. 13). 두 설정의 모델 품질 어블레이션은 보고되지 않았다(저자 해석).
+
+공개 FineWeb 설정(github.com/huggingface/datatrove@acd431b, `examples/fineweb.py` L80–88):
+
+```python
+minhash_config = MinhashConfig(
+    hash_config=HashConfig(
+        hash_fc="sha1",  # better precision -> fewer false positives (collisions)
+        precision=64,
+    ),
+    num_buckets=14,
+    hashes_per_bucket=8,
+    n_grams=5,
+)
+```
+
+동반 그림 [figures/minhash-lsh.html](figures/minhash-lsh.html)은 버킷당 해시 수와 버킷 수에 따른 `P(s)`를 그린다. Lee et al., FineWeb, 교재 설정과 Lee의 바꾼 해석을 프리셋으로 불러오고 0.5~0.9에서 `P(s)`를 출력해 위 점검을 반복할 수 있다.
+
+**시사점.** MinHash 설정은 어떤 유사도 범위를 제거할지에 대한 명세다. 검증 단계가 없으면 S자 곡선 자체가 오탐률을 정하고, 목표 유사도보다 훨씬 낮은 쌍도 측정 가능한 확률로 제거된다.
+
+## §5 접미 배열을 사용한 정확 부분 문자열 중복 제거
+
+**정의.** ExactSubstr는 두 예시가 공유하는 50토큰 이상 길이의 토큰 범위를 한 예시에서 제거한다([[deduplicating-training-data]] §4.1).
+
+**문제.** 문서 수준 Jaccard는 긴 문서 안의 짧은 공유 범위를 탐지하지 못한다. shingle 5,000개인 두 문서가 50-shingle 블록을 공유하면 `J ≈ 50 / 9,950 ≈ 0.005`다(도출). 이는 어떤 근접 중복 임계값보다 훨씬 낮지만, 공유 블록은 모델이 두 번 보는 반복 텍스트다.
+
+**작동 방식**(§4.1.1–§4.1.2).
+1. 모든 예시를 하나의 BPE 토큰 바이트 시퀀스 `S`로 이어 붙인다.
+2. 접미 배열 `A(S) = arg sort all_suffixes(S)`를 만든다. 이는 모든 접미의 시작 위치를 사전식 순서로 정렬한 것이다.
+3. 위치 `i`와 `j`에 반복 시퀀스가 있으면 `i`와 `j`는 `A`에서 서로 이웃하게 된다.
+4. `A`를 한 번 훑으며 인접 항목의 공통 접두사가 최소 50토큰인 항목을 기록한다.
+5. 두 예시 중 하나에서 반복 범위를 제거한다.
+
+**계산 예**(§4.1.1). “banana”의 접미는 banana(1), anana(2), nana(3), ana(4), na(5), a(6)이다. 정렬하면 a(6), ana(4), anana(2), banana(1), na(5), nana(3)이므로 접미 배열은 `(6 4 2 1 5 3)`이다. 인접 항목의 공통 접두사는 a/ana = 1, ana/anana = 3, anana/banana = 0, banana/na = 0, na/nana = 2다. 가장 긴 값 3은 “ana”가 위치 4와 2에 두 번 나타남을 드러낸다.
+
+**임계값과 비용.** 10토큰보다 짧은 일치는 흔하다. 25토큰 일치를 수동 검사했을 때 오탐은 없었고, 저자들은 여유를 두기 위해 25를 50으로 두 배 늘렸다(App. B, Fig. 5). 접미 배열은 입력 토큰당 8바이트를 사용하며 선형 시간에 만들어진다(§4.1.1). 구현은 병렬 분할에서 SA-IS를 실행한 뒤 병합한다. 350GB C4 접미 배열은 96코어·768GB 장비 한 대에서 12시간 이내에 만들어졌고 1.5TB를 차지했다(App. B).
+
+**근거.** ExactSubstr는 Table 4에서 비프롬프트 암기가 가장 낮았다(1 epoch 후 0.138%). 또한 §6.1에서 Wiki-40B perplexity를 거의 3점 개선했다.
+
+**공개 파이프라인에서 사용하는 더 저렴한 정확 단위.**
+- C4는 두 번 이상 나타나는 세 문장 구간을 하나만 남기고 모두 버린다([[c4]] §2.2).
+- Dolma는 품질·콘텐츠 필터링 후 Bloom filter로 정확히 중복된 문단을 제거한다(문단의 18.7%)([[dolma]] §5.4).
+- Llama 3는 “30M 문서의 각 버킷에서 6회 넘게 나타난 줄”을 제거한다. 저자들은 이것이 “남은 상용구뿐 아니라 빈번한 고품질 텍스트도 제거”한다고 보고했지만, “경험적 평가에서는 큰 개선이 나타났다”고 말한다([[llama-3]] §3.1.1; 수치 미인쇄, [[llama-3-recipe]]).
+
+**조건과 한계.** 범위 제거는 문서의 나머지를 그대로 두므로 문장이 깨질 수 있다. 이 장의 어떤 소스도 그 결과 생긴 조각의 효과를 측정하지 않았다. 줄 수준 규칙은 상용구뿐 아니라 자주 나오는 좋은 줄도 제거한다(Llama 3 §3.1.1).
+
+## §6 의미 중복 제거: SemDeDup
+
+**정의.** SemDeDup은 표면 n-gram 대신 사전학습 모델의 임베딩을 비교해 의미적으로 중복된 항목을 제거한다([[semdedup]] §3).
+
+**문제.** 이름이나 장소만 바뀐 템플릿 페이지와 같은 내용의 재작성은 n-gram 겹침이 작아서 정확 중복 제거와 MinHash 중복 제거를 통과한다. D4는 MinHash 후에도 임베딩 공간에 템플릿 텍스트의 조밀한 군집이 남는다고 보고한다([[d4]] §3.4, App. A.9).
+
+**작동 방식**([[semdedup]] §3, Algorithm A7).
+1. 각 문서를 임베딩한다. 텍스트에는 OPT-125M의 마지막 층에서 마지막 토큰의 임베딩을 사용한다.
+2. k-means로 임베딩을 군집화한다(C4는 `k = 11,000`, LAION은 `50,000`).
+3. 각 군집에서 모든 쌍의 cosine 유사도를 계산한다.
+4. cosine 유사도가 `1 − ε` 이상인 쌍을 중복으로 보고, 중심점과 가장 유사하지 않은 구성원을 유지한다.
+
+```text
+pairwise_sim_matrix = cluster_i_embeddings @ cluster_i_embeddings.T
+triu_sim_matrix = torch.triu(pairwise_sim_matrix, diagonal=1)
+M = torch.max(triu_sim_matrix, dim=0)[0]
+points_to_keep_from_cluster_i = M <= 1 - epsilon
+```
+
+`ε`는 비유사도 임계값이고, `M`은 정렬된 군집에서 각 점이 앞선 점과 갖는 최대 유사도를 저장한다.
+
+**계산 예: 군집화가 필요한 이유.** LAION-440M에는 `n = 4.4 × 10⁸`개 점이 있으므로 `n² = 1.9 × 10¹⁷`번 비교해야 한다. `k = 50,000`개의 동일한 군집이면 `n²/k = 3.9 × 10¹²`이다(도출). 논문은 같은 군집 크기가 대략 균일하다는 가정에서 약 `4.6 × 10¹²`라고 보고하지만 그 수치를 어떻게 계산했는지는 밝히지 않는다(§3). 실제 군집은 균일하지 않다. LAION 군집 평균은 이미지 8,748개지만 일부는 300,000개를 넘는다(Fig. A8). `n`과 `k`가 고정되면 군집 크기의 제곱합은 모든 군집 크기가 같을 때 가장 작다. 따라서 크기가 불균일하면 실제 비교 수는 `n²/k`보다 커진다(도출).
+
+**근거.**
+- 이미지(LAION-440M에서 CLIP ViT-B/16, 32 epoch): 37%를 제거해도 ImageNet zero-shot 하락이 없었고, 50% 제거 시 하락은 0.5% 미만이었다. 분포 밖 ImageNet 변형 6개의 평균 정확도는 37% 제거에서 상승했고 50%에서 기준선과 같았다(§4.4, Fig. 4–5).
+- 텍스트(연산 최적 C4 하위 집합에서 OPT 125M, 한 pass, 시드 3개): 예시 4%를 제거하면 C4 검증 perplexity는 39.35였고, 무작위 제거는 39.51, Lee et al. NearDup은 39.46이었다. NearDup은 3.9%를 제거했다. 가지치기하지 않은 기준선은 38.95였다(Fig. A12). 저자들은 4% 가지치기로 데이터가 거의 바뀌지 않으므로 이 설정에서 NearDup과 SemDeDup이 비슷하다고 설명한다(“Table A12”에 관한 부록 본문). 20%를 제거하면 opt_valid perplexity는 49.04였고 무작위 제거는 50.66, 가지치기하지 않은 기준선은 47.13이었다(Fig. A13). 부록 캡션은 이 설정을 각각 “96% pruning”과 “80% pruning”으로 표시한다. Fig. A12 주석은 Random과 SemDeDup이 “예시 4%를 prune”한다고 하므로 캡션 수치는 유지된 비율이다. 가지치기한 데이터로 여러 epoch 학습하면 10~15% 적은 연산으로 전체 데이터를 한 epoch 학습한 결과에 도달했다(§5.2, Fig. 8).
+- C4에서 제거되는 것: 작은 `ε`에서는 템플릿 텍스트, 큰 `ε`에서는 한 신발 브랜드 광고처럼 의미적으로 중복된 군집(§5.3).
+
+**조건과 한계.** `ε`는 목표 데이터셋 크기에 맞추도록 조정되므로 “중복”의 고정된 정의가 아니다(§6.5). Fig. A17은 `ε = 0.100`에서 `0.250`까지 C4 유지 비율을 그린다. 텍스트 실험은 125M과 1.3B 모델을 사용했고, 저자들은 C4가 부분적으로 큐레이션되어 LAION보다 C4 이득이 더 작았다고 말한다(§8). 임베딩 모델 어블레이션(§6.2, Table 2)은 이미지만 대상으로 실행했다. 검증 세트별 텍스트 결과는 동일한 크기에서 SemDeDup과 무작위 가지치기를 비교한다(SemDeDup은 모든 opt_valid 세트에서 더 낮은 perplexity, Fig. A20). 전체 코퍼스와 비교한 틈새 도메인 커버리지 손실은 보이지도 배제되지도 않았다(미해결 질문).
+
+## §7 중복 제거 후 다양한 선택: D4
+
+**정의.** D4(Tirumala et al., arXiv 2023-08)는 MinHash로 중복 제거한 웹 데이터에 SemDeDup을 적용한 뒤 SSL Prototypes 가지치기를 적용한다([[d4]] §3.4). SSL Prototypes(Sorscher et al. 2022, D4 §3.4의 설명)는 군집 중심에 가장 가까운 문서부터 제거한다.
+
+**작동 방식.**
+1. 데이터셋 D에 유지 비율 `R_dedup`으로 SemDeDup을 적용해 `D′`를 만든다.
+2. `D′`를 K-Means로 다시 군집화한다(군집 11,000개).
+3. `D′`에 유지 비율 `R_proto`로 SSL Prototypes를 적용한다.
+
+```text
+R = R_dedup × R_proto
+```
+
+`R`은 소스 문서 중 최종적으로 유지되는 전체 비율이고, `R_dedup`과 `R_proto`는 1단계와 3단계에서 유지되는 비율이다.
+
+**계산 예.** 주 실험은 `R_dedup = 0.75`를 사용한다. `R = 0.25`인 6.7B 실행에서는 `R_proto = 0.25 / 0.75 = 1/3`이다. 고정 연산 설정에서는 R이 작아질수록 소스 풀이 커진다. 따라서 `R = 0.25`에서 학습 토큰 100B를 선택하려면 400B 토큰 풀이 필요하다(도출). 비용 절에서는 400B 토큰을 포함한다(§4.3).
+
+**근거.**
+- 고정 연산, 6.7B, 100B 토큰, `R = 0.25`(Fig. 1): 기준선 비웹 스냅샷 perplexity에 도달하는 속도가 22.18% 빨랐고, Instruct + Answers perplexity(학습에 전혀 사용하지 않은 OPT-IML 지시 데이터의 verbalized 버전)는 18.08% 빨랐다. 16개 태스크의 평균 0-shot 정확도는 2.04% 높았다.
+- 고정 데이터, 1.3B, 학습 토큰 40B, 시드 3개(Table 1): 무작위 40B 토큰을 한 epoch 학습하면 비웹 perplexity 16.27, Instruct + Answers 14.19였다. 무작위 20B 토큰을 두 epoch 학습하면 각각 16.39와 14.37이었다. D4 토큰 20B를 두 epoch 학습하면 16.10과 13.85였다.
+- 선택 방법이 고정되면 새 토큰이 반복 토큰보다 대체로 좋다(App. A.6, Fig. A13).
+- 웹 스냅샷 검증 세트(C4, CC-dedup, CommonCrawl)는 선택을 적용하면 항상 perplexity가 악화되었다. 이 세트는 임베딩 공간에서 학습 데이터에 가장 가까운 세트다(§4.4.1, Fig. 5).
+
+**조건과 한계.** 소스 분포가 웹 하나이고, 모델은 100B 토큰에서 최대 6.7B다(§5). MinHash 단계는 공격적인 Lee et al. 설정이 아니라 Spark 기본값을 사용했다. 저자들은 더 강한 MinHash를 사용하면 SemDeDup 단계가 덜 필요할 것이라고 추측한다(App. A.1.2).
+
+**시사점.** D4에는 두 주장이 함께 성립한다. 잘 선택된 하위 집합을 두 번 반복하는 것이 새로운 무작위 데이터보다 좋았고, 같은 방식으로 선택한 새로운 데이터보다는 반복이 여전히 나빴다. 학습 풀과 비슷한 웹 스냅샷의 검증 perplexity는 지시 데이터 perplexity와 태스크 정확도와 반대 방향으로 움직였다. 따라서 선택 결정의 게이트로 부적절하다([[d4]] Fig. 6: Pearson −0.368과 −0.188).
+
+## §8 반복 구조, 암기, 일반화
+
+### §8.1 작은 하위 집합을 여러 번 반복하기
+
+**설정**([[repeated-data-scaling]] §3, Figure 1). Anthropic 모델은 파라미터 1.57M~805M, 학습 토큰 100B, 컨텍스트 8,192토큰이다. 본문 실험은 토큰의 10%를 작은 하위 집합의 반복으로, 90%를 고유 데이터로 두고 하위 집합의 크기를 바꾼다. 다른 스캔에서는 반복 토큰 비율을 3%, 20%, 50%, 90%로 바꾼다(Figure 4 캡션). 테스트 손실은 반복이 없는 보류 데이터에서 측정한다.
+
+**결과.**
+1. **Double descent**(§2, Figure 3). 일부 반복 횟수에서는 테스트 손실이 학습 중 내려갔다가 중간에 오르고 다시 내려간다. 반복 데이터가 50%이면 상승이 긴 plateau가 된다.
+2. **효과의 크기.** 초록은 0.1% 데이터를 100번 반복하면 800M 모델의 성능이 “2배 작은 모델(400M 파라미터)” 수준으로 악화된다고 말한다. §2는 반복 데이터 10%의 최악 사례가 “데이터 0.1%를 약 100배 반복”한 것이며 성능이 “340M 파라미터 모델에 거의 도달”한다고 말한다. 확인하면 `0.1% × 100 = 학습 토큰의 10%`다.
+3. **진단**(§1.1, Figure 2). 최대 악화는 반복 하위 집합의 학습 손실이 0에 가까워지는 시점과 겹친다.
+4. **일반 메커니즘**(§1.1, §2). 최악의 반복 횟수에서 반복 데이터가 3%일 때 11번 복사된 문단의 손실은 유효 모델 크기를 최대 3배 줄였지만, 테스트 손실은 최대 1.15배였다(Figure 5). induction head의 접두사 일치 점수도 테스트 손실보다 더 악화되었다. 논문은 이를 유효 모델 크기 평균 32% 감소(§1.1; Figure 6 캡션에서는 1.47배)와 §2 본문에서는 2배 감소로 제시한다. 텍스트로 학습한 모델의 Python 손실은 반복 데이터 50%, 90%에서 각각 0.84와 0.75의 배수를 보였다(Figure 10).
+5. **사전학습 이후**(§2, §5.4, Figure 12). double-descent 정점에서 반복 데이터로 사전학습한 모델을 Python으로 fine-tuning하면 처음부터 학습한 모델보다 유효 파라미터가 1.6배 줄었다. §5.4와 Figure 12 캡션은 반복 토큰 90%라고 하지만 §2 본문은 같은 800M 실험을 반복 데이터 50%로 설명한다.
+
+**계산 예: 암기가 학습 손실을 낮추는 이유**(§5.1, 저자 해석). 800M 모델의 손실이 약 2.0 nat/token, 400M 모델은 약 2.2라고 하자. 반복 비율 10%를 암기하면 손실이 0이 된다. 암기에 드는 비용이 모델을 절반으로 줄인 것과 같은 용량이라면 평균 학습 손실은 `0.9 × 2.2 + 0.1 × 0 = 1.98`이 되어 2.0보다 낮다. 손익분기 반복 비율은 `(2.2 − 2.0) / (2.2 − 0) = 9.1%`다(도출). 그보다 높으면 학습 목적이 암기를 선호한다. [figures/minhash-lsh.html](figures/minhash-lsh.html)의 Panel B는 다른 반복 비율과 손실 값에 대해 이 비교와 손익분기 비율을 다시 계산한다.
+
+**손상이 발생하는 범위**(§2). 최대 악화의 50% 이상인 영역은 양쪽 경계에서 `E = k·N^α`에 맞는다. E는 반복 epoch, N은 파라미터 수다. 왼쪽 경계는 `k = 4.2 × 10⁶`, `α = −0.56`, 오른쪽 경계는 `k = 5.1 × 10⁷`, `α = −0.50`이다. `N = 8 × 10⁸`이면 범위는 `4.2 × 10⁶ × (8 × 10⁸)^−0.56 ≈ 43`에서 `5.1 × 10⁷ × (8 × 10⁸)^−0.5 ≈ 1,800` 반복 epoch까지다(도출). 위 100회 반복 사례가 이 범위에 들어간다. `N = 10¹¹`이면 같은 적합으로 약 3~160이다(도출). 이는 고정 100B 토큰에서 수천억 파라미터 모델도 데이터를 약 2회 반복하면 악화가 예측된다는 저자 설명과 맞는다.
+
+**조건과 한계**(§5.5). 모델 크기와 관계없이 모든 실행은 토큰 100B를 사용했다. 반복 하위 집합은 의도적으로 업샘플한 고품질 데이터가 아니라 무작위였다. 지표는 다운스트림 태스크가 아닌 손실이었고, 정규화는 시험하지 않았으며, 범위 적합은 잡음이 있어 집계가 필요했다. 저자들은 정점 이후 학습하면 도움이 된다고 말하므로 연산 최적 토큰 수에서의 악화는 더 작을 가능성이 높다(§2).
+
+### §8.2 전체 데이터셋 반복
+
+전체 데이터셋을 균일하게 반복하는 것은 작은 하위 집합 반복과 다르게 작동한다. 고정 연산에서 전체 데이터 4 epoch까지는 홀드아웃 손실 변화가 거의 없었다(8.7B 모델은 4 epoch에서 1 epoch보다 검증 손실이 0.5% 높았다). 더 많은 epoch에서는 가치가 감소했다([[data-constrained-scaling]] Abstract, §6). 이 연구는 전체 데이터셋 반복만 다룬다고 명시한다(App. Q). T5가 `2^35` 토큰으로 사전학습한 경우, 작은 C4 하위 집합을 64회 반복한 효과는 “제한적”이었지만 1,024회 반복하면 SuperGLUE가 71.36에서 64.76으로 낮아졌다([[c4]] §3.4.2, Table 9). 두 연구는 전체 데이터를 몇 epoch 반복하는 비용은 작고 많이 반복하면 비용이 커진다는 방향에서 일치한다(방향이 재현됨). 대부분 문서는 한 번, 일부는 수천 번 반복하는 혼합 반복이 두 체제 사이에서 어떻게 작동하는지는 미해결 질문이다. 데이터 제한 스케일링 전체는 ch-14에서 다룬다.
+
+### §8.3 중복 횟수와 추출 가능한 암기
+
+Carlini et al.(arXiv 2022-02, ICLR 2023)은 GPT-Neo 모델에 앞선 토큰을 주고 greedy decoding으로 다음 50토큰을 정확히 출력하면 시퀀스를 추출 가능하다고 측정한다([[quantifying-memorization]] §3.1–§3.2).
+- 중복 2~900회 시퀀스에서 암기는 중복 수에 대해 log-linear하게 증가하고, 중복이 적어도 발생한다(§4.2, Fig. 1b).
+- 모델 크기를 10배 키우면 중복 정규화 표본에서 암기가 19%포인트 증가한다(R² 99.8%)(§4.1).
+- Lee et al.의 1.5B 모델에서 원래 C4에 35회 미만 반복된 시퀀스는 ExactSubstr 모델이 1.2%, 중복 제거하지 않은 모델이 3.6% 암기했다. 중복 제거는 원래 C4에서 약 100회까지 반복된 시퀀스에는 도움이 되었지만 그보다 많이 반복된 시퀀스에는 도움이 되지 않았다. 408회 이상 반복된 시퀀스는 그보다 낮은 모든 반복 횟수보다 유의하게 더 추출 가능했다(§5.2, Fig. 4c). 저자들은 확장 가능한 중복 제거가 불완전하고, 중복의 서로 다른 타당한 정의가 사본을 남긴다고 가설을 세운다(해석).
+
+ch-12a는 암기와 지식 획득을 전체적으로 다룬다. 여기서 위 결과가 정하는 측정 과제는 다음과 같다. 중복 제거 후에는 별도 방법으로 잔여 반복 횟수 분포를 확인해야 한다. 가장 많이 반복된 문자열이 살아남은 문자열이기 때문이다.
+
+## §9 범위 선택: 전체·스냅샷별·언어별·분할 간
+
+**전체 대 스냅샷별, FineWeb**([[fineweb]] §3.4; 자세한 내용은 ch-10 §5.4). 96개 스냅샷에 최신부터 과거 순서로 전체 MinHash를 적용하면 오래된 스냅샷을 최대 90% 제거하고 4T 토큰을 남겼다. 350B 토큰 실행에서 중복 제거하지 않은 데이터보다 개선이 거의 없었다. 2013-48 스냅샷에서 남은 약 31B 토큰으로 학습한 모델은 제거된 약 460B 토큰에서 다시 만든 171B 토큰보다 나빴고, 남은 데이터에는 “광고, 일관성 없는 키워드 목록, 전반적으로 형식이 나쁜 텍스트”가 더 많았다. 스냅샷별 MinHash는 20T 토큰을 남기고 RefinedWeb과 맞았다. 이후 적용한 가벼운 전체 방법(URL 중복 제거는 토큰 71.5%, 줄 중복 제거 77.8%, 3줄 중복 제거 80.9% 제거)은 모두 스냅샷별 MinHash만 사용한 것보다 점수가 낮았다(App. E.3). 저자들은 이득이 매우 큰 군집을 제거하는 데서 나오며 약 100개보다 적은 중복을 가진 군집을 제거하면 해로울 수 있다고 가설을 세운다(해석).
+
+**작은 어블레이션이 이를 놓치는 이유**(App. E.2). 고유 토큰 200B인 동일한 스냅샷 100개를 시뮬레이션하면, 전체 집합에서 모든 문서가 100회 나타나도 1B 토큰 표본은 거의 전부 고유 문서다. 따라서 중복 제거 변형은 350B 토큰에서 비교했다.
+
+**전체, Llama 3**([[llama-3]] §3.1.1). Llama 3은 전체 데이터셋에서 URL 수준 중복 제거를 적용하고 각 URL의 최신 버전을 유지한다. 전체 MinHash 문서 중복 제거와 공격적인 줄 수준 중복 제거도 적용한다. 다국어 데이터는 언어별로 문서·줄 수준 중복 제거를 실행한다. MinHash 매개변수와 어블레이션 수치는 인쇄하지 않았다([[llama-3-recipe]]). 따라서 두 보고서는 문서 수준 MinHash에서 반대되는 범위 선택을 했고, 동일한 모델·예산으로 서로의 선택을 비교하지 않았다.
+
+**중복 인식 업샘플링을 적용한 언어별 전체, FineWeb2**([[fineweb-2]] §4.3, §4.5). FineWeb2는 필터링 전에 FineWeb 매개변수로 언어별 전체 MinHash를 실행하고, 유지 문서의 원래 군집 크기를 저장한다. 프랑스어에서 군집 크기별 필터 제거율은 U자형이다. 단일 문서와 가장 많이 중복된 군집은 전체 제거율 62.4%보다 더 자주 제거된다(Fig. 2). 제거율이 가장 낮은 군집 크기의 문서에는 가중치 10을 주고, 전체 제거율보다 높은 군집 크기에는 1을 주며, 둘 사이는 보간한다. 집계 점수(1.46B 모델, 350B 토큰)는 필터만 적용한 데이터에서 rehydration 데이터로 다음과 같이 변했다: 아랍어 24.2 → 25.2, 프랑스어 21.9 → 23.6, 러시아어 22.3 → 23.4, 태국어 11.9 → 13.1, 터키어 20.7 → 22.1, 중국어 22.5 → 24.3(App. A.8, Tables 29–34). 중복 제거만 하면 프랑스어(18.3 → 18.0)와 태국어(11.1 → 11.0)의 집계 점수가 낮아졌다(Tables 30, 32).
+
+| 범위 선택 | 제거하는 것 | 측정된 효과 | 보고되지 않은 것 |
 |---|---|---|---|
-| CC snapshot 간 동일 URL | 6개월 뒤 다시 crawl된 같은 page | URL Bloom-filter ([[dolma]]) | MinHash(이것도 찾지만 URL-hash가 100배 싸다) |
-| Exact paragraph repeat | boilerplate footer, cookie banner | paragraph-hash dedup ([[dolma]]) | 높은 threshold의 doc-level MinHash |
-| Document 간 긴 verbatim substring | 61-word sentence, MIT-license header, copy-pasted Wikipedia intro | **suffix-array ExactSubstr** | Duplicate가 doc의 작은 비율이면 doc-level MinHash |
-| Near-duplicate document | 5% 수정된 article reprint, SEO doorway page | **MinHash + LSH** | exact method |
-| Semantic near-copy | 다른 outlet이 다시 쓴 같은 news story | **embedding-space dedup (SemDeDup / D4)** | 위의 모든 것 |
-| Topically redundant | 같은 event에 대한 news article 만 개 | embedding clustering + cluster-size cap | 위의 모든 것(low threshold의 SemDeDup 포함) |
-
-각 row에는 자신의 algorithmic tool이 있다. 이 장이 도출할 세 horizontal cut, 즉 exact, approximate, semantic은 table의 세 tool family에 대응한다. 어느 하나도 지배적이지 않다. Production cascade는 셋 모두를 사용한다.
-
----
-
-## 2. Lee 2021 — dedup이 optional이 아니라는 증거
-
-논문은 **두 가지 complementary tool**을 제공한다([[deduplicating-training-data]]).
-
-1. **ExactSubstr** — concatenated corpus 위의 suffix array. 길이 `>= 50 tokens`인 모든 duplicate substring을 찾고, 각각의 copy 하나를 제거한다.
-2. **NearDup** — 5-gram shingle에 대한 MinHash + LSH. 다른 document와 Jaccard similarity `>= ~0.8`인 document를 drop한다.
-
-Eval-contamination table은 논문의 가장 치명적인 결과다. 전부 인용할 가치가 있다.
-
-| Corpus | % of validation that overlaps training (≥50 tokens) |
-|---|---|
-| LM1B | **4.6%** |
-| C4 | **3.2%** |
-| RealNews | **1.6%** |
-| Wiki-40B | **0.6%** |
-
-([[deduplicating-training-data]] §"Train-test contamination"에서.) 이것들은 연구자들이 수년 동안 perplexity improvement를 보고하던 validation set이었다. 손기술은 악의적이지 않았다. 아무도 LM1B를 만들 때 suffix-array contamination analysis를 예상하지 않았다. 하지만 보고된 숫자는 generalization이 아니라 memorization의 측정을 부분적으로 포함했다. 이 table 이전의 모든 paper는 조용히 rescale된다.
-
-Memorization number도 마찬가지로 load-bearing이다.
-
-> Dedup이 없으면 unprompted 256-token completion의 ~1%가 verbatim training copy다. Dedup하면 이것이 약 10배 감소한다.
-
-Duplication count와 memorization rate는 대략 선형이다([[deduplicating-training-data]] Figure 4의 취지). `k`번 duplicated된 document는 `k`에 대략 비례하는 확률로 memorized된다. 이것이 membership inference와 training-data extraction의 privacy surface이며, dedup aggressiveness로 직접 제어할 수 있다.
-
-Training-efficiency가 삼각형을 닫는다. Dedup은 C4 token의 ~5%를 제거하지만 **더 적은** step으로 target perplexity에 도달한다. 제거된 token이 쉬운 re-descended token이었기 때문이다. Pretraining loss는 raw token이 아니라 *unique* content에 대한 `1/N` process다.
-
----
-
-## 3. MinHash — P(collision) = J(A, B) 도출
-
-핵심 primitive다. 각 document `D`를 shingle set `S(D)`로 표현하자. Lee 2021에서는 whitespace-tokenized text의 5-gram이다. 두 document의 similarity는 **Jaccard index**다.
-
-$$
-J(A, B) \;=\; \frac{|S(A) \cap S(B)|}{|S(A) \cup S(B)|}.
-$$
-
-모든 pair에 대해 `J`를 naive하게 계산하면 $O(N^2)$ set-intersection operation이 든다. MinHash의 통찰(Broder 1997, [[minhash-lsh]])은 **document당 하나의 숫자**가 expectation상 충분하다는 것이다.
-
-**Construction.** 가능한 shingle universe의 random permutation `π`를 고정한다. `π` 아래에서 `D`의 MinHash signature를 다음처럼 정의한다.
-
-$$
-h_{\pi}(D) \;=\; \min_{s \in S(A)} \pi(s).
-$$
-
-즉 `π`를 `D`의 모든 shingle에 적용하고 minimum을 취한다. 이것은 하나의 integer다.
-
-**Theorem (Broder).** Uniform하게 random하게 뽑은 단일 permutation `π`에 대해,
-
-$$
-\Pr[\,h_{\pi}(A) = h_{\pi}(B)\,] \;=\; J(A, B).
-$$
-
-**Proof.** Set $U = S(A) \cup S(B)$를 보자. `π` 아래에서 `U`의 각 element는 global minimum value를 받을 확률이 동일하다. `s*`를 argmin이라 하자. $h_{\pi}(A) = h_{\pi}(B)$인 것은 오직 `s*`가 `S(A)`와 `S(B)` 둘 다에 있을 때, 즉 `S(A) ∩ S(B)`에 있을 때뿐이다. `U`의 uniform random element가 `S(A) ∩ S(B)`에 있을 확률은 정확히 $|S(A) \cap S(B)| / |S(A) \cup S(B)| = J(A, B)$다. ∎
-
-따라서 하나의 permutation은 success probability가 `J`인 단일 Bernoulli trial을 준다. Additive error `ε`, confidence `1-δ` 안에서 `J`를 추정하려면 Hoeffding에 따라 $m \geq \tfrac{1}{2\varepsilon^2}\ln(2/\delta)$ independent permutation이 필요하다. `ε = 0.05, δ = 0.01`이면 `m ≈ 1060`이다. Lee 2021은 **9000** signature를 사용한다. Hoeffding이 요구하는 것보다 공격적으로 많다. 이들은 `J` distribution의 right tail(`J`를 uniformly estimate하는 것이 아니라 `J ≥ 0.8` pair를 찾는 것)에 관심이 있었기 때문이다.
-
-실제로 astronomical shingle universe 위의 real permutation은 independent hash function $h_i(s) = (a_i s + b_i) \bmod p$로 대체된다. "`h_i` 아래에서 shingle의 min"은 computationally 동일하고 document당 $O(|S(D)|)$ hash를 사용한다. Modern implementation(datasketch, Spark)은 이를 그대로 제공한다.
-
----
-
-## 4. LSH — r × b banding construction과 S-curve
-
-Signature comparison도 naive하게 하면 여전히 $O(N^2)$다. Locality-sensitive hashing은 **similar signature를 같은 bucket에 넣어** 비용을 near-linear로 줄인다.
-
-**Banding.** 길이 `m`의 MinHash signature를 각각 `r` row를 가진 `b` band로 나눈다. 따라서 $m = r \cdot b$다. 각 band에 대해 band의 `r` integer를 bucket으로 hash한다. 두 document가 *어떤* band에서든 bucket을 공유하면 **candidate**다.
-
-Collision probability를 도출하자. Jaccard가 `J`인 두 document:
-
-- Single row에서 agree할 확률: `J`(section 3).
-- 한 band의 모든 `r` row에서 agree할 확률: $J^{r}$.
-- 그 band에서 disagree할 확률(적어도 한 row가 다름): $1 - J^{r}$.
-- 모든 band에서 disagree할 확률(independent hash가 주어졌을 때 band 간 독립): $(1 - J^{r})^{b}$.
-- 적어도 한 band를 공유할 확률(LSH-candidate event):
-
-$$
-\boxed{\;P_{\mathrm{LSH}}(J; r, b) \;=\; 1 \;-\; (1 - J^{r})^{b}.\;}
-$$
-
-이것이 **S-curve**다. 세 regime이 있다.
-
-| J | P_LSH (qualitative) |
-|---|---|
-| `J ≪ t` | near 0(random pair는 candidate가 아님) |
-| `J ≈ t` | 0.5 근처를 가파르게 통과 |
-| `J ≫ t` | near 1(true duplicate는 거의 모든 band에서 collide) |
-
-**Threshold** `t`, 즉 `P_LSH(J) = 0.5`가 되는 `J`는 다음으로 잘 근사된다.
-
-$$
-t \;\approx\; \left( \frac{1}{b} \right)^{1/r}.
-$$
-
-Derivation: $P_{\mathrm{LSH}}(t) = 0.5$로 두면 $(1 - t^{r})^{b} = 0.5$이고, 따라서 $1 - t^r = 0.5^{1/b} \approx 1 - \frac{\ln 2}{b}$다. 그러므로 $t^r \approx \frac{\ln 2}{b}$이고 $t \approx (\ln 2 / b)^{1/r} \approx (1/b)^{1/r}$이다. `b ≥ 8`이면 작은 constant는 사라진다. Lee 2021의 `r = 450, b = 20`이면 $t \approx (1/20)^{1/450} \approx 0.9934^{\text{...no}}$다. 다시 계산하면 $\ln(1/20)/450 = -3.00/450 = -0.00666$이므로 $t \approx e^{-0.00666} \approx 0.9934$다. **이는 논문과 모순된다.**
-
-[[deduplicating-training-data]]를 더 주의 깊게 읽어라. 논문은 **threshold ≈ 0.8**도 보고하고, **9000 signatures**, **b = 20 bands**, **r = 450 rows**도 보고한다. `(1/b)^{1/r}`을 final accept threshold로 다루면 이것들은 내부적으로 일관되지 않는다. 그 parameter에서 0.5-threshold는 `t ≈ 0.993` 근처에 있으므로 LSH만으로는 거의 모든 pair를 "accept"하지 않을 것이다. Resolution은 Lee et al.이 threshold가 아니라 *recall*을 위해 parameterize했다는 것이다. `r`과 `b`를 사용해 모든 `J ≥ 0.8`에서 `P_LSH ≈ 1`이 되게 한 뒤, 모든 candidate pair에 대해 true Jaccard를 명시적으로 계산하고 0.8 이상만 keep하는 post-filter를 실행한다. 대부분의 production implementation도 같다. LSH는 candidate generator이고, Jaccard check는 verifier다. S-curve의 0.5-threshold는 final accept/reject가 아니라 recall/cost tradeoff를 제어한다.
-
-**[figures/minhash-lsh.html](figures/minhash-lsh.html)**에서 curve를 만져 보라. `r`과 `b`를 slide하면 S-curve가 움직인다. `J_target = 0.8`에 대해 typical production setting은 `r = 9, b = 20`이다(180 signatures, `t ≈ 0.687`, `P(J=0.8) ≈ 0.944`, false-positive `P(J=0.5) ≈ 0.038`). Lee 2021의 9000-signature choice는 paper의 conclusion을 논박 불가능하게 만들고자 한 recall-maxed outlier다.
-
----
-
-## 5. ExactSubstr와 suffix array — span-level이 중요할 때
-
-MinHash는 document-granularity tool이다. 다른 두 5000-token article 안에 embedded된 100-token verbatim passage는 document-level Jaccard ≈ 0.02를 갖는다. MinHash에는 보이지 않지만, memorization-driving duplicate다.
-
-Suffix-array ExactSubstr([[deduplicating-training-data]])가 여기서 등장한다.
-
-- 전체 corpus를 하나의 string `T`로 concatenate한다.
-- $O(N \log N)$로 `T`의 suffix array `SA`를 만든다(SA-IS algorithm).
-- `SA`를 walk한다. `SA`의 adjacent suffix들은 longest-common-prefix `lcp[i]`를 공유한다. `lcp[i] ≥ 50` token이면 duplicate substring을 mark한다.
-- 각 duplicate span의 copy 하나를 제거한다.
-
-**50-token threshold**는 empirical하다. 더 짧은 span에는 합법적으로 반복되는 common phrase("the quick brown fox," standard license boilerplate prefix)가 포함된다. 더 긴 span은 거의 항상 literal copy-paste다.
-
-Span-level dedup은 특히 다음 경우 중요하다.
-
-- Document가 **large boilerplate**(MIT license, Wikipedia의 Creative Commons footer, Stack Overflow의 "Thanks for contributing..." frame)를 포함한다.
-- Document가 **quoted training example**(C4의 61-word sentence, 2024+ corpus의 quoted ChatGPT output)을 포함한다.
-- Duplicate passage가 host document의 작은 비율이라 document-level near-dup가 실패했다.
-
-Memory가 binding constraint다. 1T token에 대한 suffix array는 entry당 8 byte로 8 TB다. Multi-TB-RAM node에서는 가능하지만 commodity hardware에서는 불가능하다. Production pipeline(GoogleLM, OLMo)은 prefix별로 shard하고 shard별 suffix array를 실행한 뒤 second pass로 shard across를 reconcile한다. Dolma의 `paragraph-dedup` stage는 더 싼 approximation이다. Paragraph granularity에서 Bloom-filter exact-match를 수행해 memory의 1%로 ExactSubstr win의 80%를 잡는다.
-
----
-
-## 6. Semantic dedup — SemDeDup과 D4
-
-Exact와 approximate dedup은 surface-form tool이다. "Biden won the 2020 election"과 "The 2020 US presidential election was won by Joe Biden"가 disjoint 5-gram을 가진 같은 content라는 것을 볼 수 없다.
-
-SemDeDup([[d4]], Abbas et al. 2023)은 embedding-space dedup으로 답한다.
-
-1. Sentence-or-doc encoder(originally images에는 CLIP, text에는 OpenAI/BGE/E5)로 모든 document를 embed한다.
-2. Embedding을 cluster한다(`k`-means, `k ≈ sqrt(N)`).
-3. 각 cluster 안에서 cosine-similarity `τ`(typical `τ = 0.95`)를 넘는 모든 pair에 대해 하나만 keep하고 다른 하나를 drop한다.
-
-논문의 headline은 **web-scale data의 20-50%를 downstream accuracy loss 없이 drop할 수 있고**, 때로는 OOD generalization이 개선된다는 것이다. 후속인 D4는 explicit diversity lever로 cluster-size capping을 추가한다. Oversized cluster는 within-cluster dedup pass 전에 down-sample되며, 이것은 "dedup"을 "coverage equalization"으로 바꾼다.
-
-**실무자 trap 세 가지.**
-
-**Embedding choice matters.** E5를 OpenAI-embedding-v3로 바꾸면 SemDeDup decision이 document의 ~10%에서 바뀐다. Embedding은 model의 similarity 개념을 encode한다. 그 개념은 자체적으로 같은 bias를 가진 pretraining data로 학습된다. FineWeb-Edu의 educational-value classifier([[fineweb]])는 인접 기술이다. 역시 embedding-driven이고 dataset-opinionated이며, 같은 주의가 적용된다.
-
-**`τ`는 duplicate threshold가 아니라 diversity knob이다.** `τ = 0.95`에서는 near-copy를 제거한다. `τ = 0.80`에서는 topical-redundant(같은 game에 대한 두 news article)를 제거한다. `τ = 0.60`에서는 domain coverage를 제거한다. **Downstream eval sweep** 외에는 `τ`를 고르는 principled way가 없다. 올바른 답은 어떤 downstream capability가 중요한지에 달려 있기 때문이다.
-
-**Aggressive semantic dedup은 domain coverage를 좁힌다.** 이것이 이 장의 sting이다. D4는 매우 aggressive한 clustering(high `k`, low `τ`)이 niche domain의 long tail, 즉 legal case law, minority-language sub-corpora, niche code repository를 제거하며, 그 domain들의 downstream metric이 급락한다는 것을 발견한다. FineWeb의 per-dump-rather-than-global MinHash([[fineweb]]) finding도 같은 모양이다. Global dedup은 너무 공격적이다. *Crawl artifact상 near-duplicate이지만 실제로는 구별되는 content*를 치기 때문이다.
-
-Semantic dedup은 **efficiency**(더 작은 set으로 더 빠르게 학습)와 **coverage equalization**(English web news의 over-sampling 방지)을 위한 tool이다. MinHash와 같은 tool이 아니다. 생각 없이 쌓으면 corpus는 tail을 잃는다.
-
-**[figures/minhash-lsh.html](figures/minhash-lsh.html)의 right panel**은 이 recall-vs-diversity tradeoff를 sliding knob으로 보여 준다. SemDeDup aggression을 올리면 genuine duplicate recall은 부드럽게 올라가지만, retained document의 cluster-ID distribution entropy로 측정한 domain-coverage는 `τ`가 ~0.85 아래로 떨어지면 *collapse*한다.
-
----
-
-## 7. Production cascade와 FineWeb이 default를 깬 지점
-
-**Canonical dedup order**, [[dolma]] §"Filter cascade"와 [[fineweb]] §"Pipeline"에서 합성:
-
-1. CC snapshot 간 **URL-hash Bloom filter**. 가장 싼 stage. Exact re-crawl을 잡는다.
-2. **Per-snapshot MinHash near-dup**(FineWeb의 핵심 발견: global이 아니라 per-snapshot).
-3. **ExactSubstr** 또는 paragraph-hash Bloom(boilerplate, license text, quoted passage).
-4. Language / quality / PII / content filter(10장, 13장, 14장에서 확장).
-5. **Paragraph-level dedup last**([[dolma]]): 앞선 filter가 어떤 paragraph가 살아남는지를 바꾸므로 dedup은 surviving distribution 위에서만 의미가 있다.
-6. **(Optional, post-quality)** diversity control을 위한 semantic dedup 또는 cluster-size capping.
-
-**FineWeb의 surprise.** 96개 Common Crawl dump 전체에 대한 global MinHash는 downstream accuracy에서 per-dump MinHash보다 *성능이 낮았다*. 이유: 많은 진짜 high-quality page는 snapshot마다 한 번씩 crawl되어 snapshot across로 다시 나타난다. Global dedup은 이를 near-duplicate로 보고 하나만 keep해 effective signal을 반으로 줄인다. Per-dump dedup은 re-crawl을 보존한다. 그것들은 약간 다른 extraction point에서의 같은 high-quality page라는 free ensemble처럼 작동한다. 교훈: **aggression은 quality가 아니다.** Dedup은 coverage-shaping operation이다.
-
-**Dolma의 paragraph-last rule**도 같은 flavor다. `dolma-ngram`은 paragraph를 n-gram으로 split하고 duplicated n-gram의 fraction이 `T = 1.0`(default, 즉 100% duplicated)을 넘으면 paragraph를 drop한다. 이를 quality filtering 전에 실행하면 subsequent language/quality filter가 어차피 제거했을 paragraph를 dedup하느라 compute를 쓴다. 더 나쁘게는 유용한 content의 유일한 remaining copy가 나중에 quality filtering에 실패할 document 안에 있는데, 그 paragraph의 *한* copy를 삭제해 corpus에 copy가 0개 남을 수 있다.
-
----
-
-## 8. Dedup이 해로울 때
-
-검증된 failure mode 세 가지.
-
-**8.1 Tail의 over-dedup.** Code: `J = 0.7`에서 code corpus를 MinHash하면 수천 repository에 존재하는 near-duplicate function body를 삭제한다. 하지만 그 반복이야말로 *model이 standard idiom을 배우는 방식*이다. The Stack의([[dolma]]) code pipeline은 MinHash를 실행하되 canonical pattern을 보존하도록 threshold를 tune한다.
-
-**8.2 Cross-domain collision.** Web, paper, code를 mix한 corpus 전체에 대해 global dedup을 하면 paper의 method section이 같은 paper를 요약한 blog-post summary와 near-duplicate로 mark될 수 있다. Blog post를 삭제하는 것은 옳다. Paper를 삭제하는 것은 아니다. Fix: **source across가 아니라 source within에서 dedup**하라. Dolma는 source별 dedup pass를 실행해 이를 채택한다.
-
-**8.3 Semantic-dedup narrowing.** 이미 다뤘다. Signature shape: MMLU는 개선된다(benchmark-heavy center에 diversity-equalization이 도움이 되기 때문). Long-tail eval(BIG-Bench Hard subset, niche-language translation)은 떨어진다. Fix는 더 낮은 `τ` discipline이거나 삭제가 아니라 saturate하는 cluster-size cap이다.
-
-통합 규칙: **dedup은 filter가 아니라 resampling operation이다.** 그것은 학습하는 empirical distribution을 바꾼다. 그 distribution에 대한 모든 변경은 downstream eval signal(ch-14, ch-47)이 정당화할 때만 받아들여야 한다.
-
----
-
-## 연결과 다음 내용
-
-- **[[deduplicating-training-data]] (Lee 2021)** — foundational eval-contamination and memorization evidence, §2의 spine.
-- **[[minhash-lsh]] (Broder 1997)** — §3-§4의 `P = J` theorem과 `r × b` banding construction.
-- **[[d4]] / SemDeDup** — §6의 embedding-space dedup과 diversity-narrowing tradeoff.
-- **[[ccnet]] / [[dolma]] / [[fineweb]]** — dedup을 더 넓은 filter cascade에 배선하는 세 production pipeline. §7은 이들의 config에서 구성되었다.
-- **[[c4]]** — Lee 2021이 처음 폭로한 uncleaned baseline.
-- **ch-11 (tokenizer and lineage)** — dedup이 작동하는 doc-id와 content-addressed hashing을 제공한다.
-- **ch-13 (domain mixing, DoReMi)** — deduplicated shard를 받아 그 위에서 mix weight를 학습한다.
-- **ch-14 (scaling, contamination, retention)** — dedup aggression을 정당화하는 downstream eval signal.
-
-## 더 읽을거리
-
-- [[deduplicating-training-data]] — Lee et al. 2021 / 2022. §3(ExactSubstr), §4(NearDup), §5(memorization), §6(contamination table)를 읽어라.
-- [[minhash-lsh]] — Broder 1997 and Indyk-Motwani 1998. *Mining of Massive Datasets*(Leskovec-Rajaraman-Ullman)의 3장은 canonical pedagogical treatment다.
-- [[d4]] — Abbas et al. 2023. SemDeDup algorithmic detail과 web-scale ablation.
-- [[fineweb]] — Penedo et al. 2024. Per-dump-vs-global MinHash ablation, default를 깬 surprise.
-- [[dolma]] — Soldaini et al. 2024. Six-stage filter cascade, paragraph-dedup ordering argument.
-- [[ccnet]] — Wenzek et al. 2019. Pre-Lee template.
-
-## 동반 시각화
-
-**[figures/minhash-lsh.html](figures/minhash-lsh.html)** — 두 개의 interactive panel. **Left panel:** Jaccard threshold slider를 drag하고 `r`(rows per band)과 `b`(bands)를 조정하라. S-curve `P(collision) = 1 - (1 - J^r)^b`가 live로 다시 그려지고, 작은 table은 0.5-threshold `t ≈ (1/b)^{1/r}`, total signatures `m = r·b`, 선택한 target Jaccard에서의 false-positive / false-negative rate를 보고한다. **Right panel:** SemDeDup knob. Cosine-threshold `τ`를 0.5에서 1.0까지 sweep하면 두 curve가 반대 방향으로 움직인다. True near-duplicate recall은 aggression과 함께 상승하고, domain-coverage entropy는 하락한다. §4 banding math와 §6 diversity tradeoff를 한 호흡으로 직관화하는 데 사용하라.
+| 전체 MinHash, 스냅샷 96개(FineWeb) | 오래된 스냅샷 최대 90% | 350B 토큰에서 중복 제거 없음보다 이득이 작음 | 더 큰 모델에서의 효과 |
+| 스냅샷별 MinHash(FineWeb) | 스냅샷 내부 군집만 | RefinedWeb과 일치 | 스냅샷 간 반복의 암기 |
+| 전체 MinHash + 줄 중복 제거(Llama 3) | 전체 데이터의 근접 중복, 30M 문서당 6회 초과 줄 | “강한 개선” | 매개변수, 수치 |
+| 언어별 전체 MinHash + rehydration(FineWeb2) | 군집 후 군집 크기로 재가중 | 6개 언어에서 필터 데이터보다 집계 +1.0~+1.8 | 암기에 미치는 효과 |
+
+**분할 간.** Lee et al.은 텍스트가 둘 이상의 분할에 나타나면 검증·테스트 사본을 유지하고 학습 사본을 제거한다([[deduplicating-training-data]] §5). 사전학습 규모의 공개 벤치마크 오염 제거는 ch-14에서, 보고 점수에 미치는 영향은 ch-48에서 다룬다.
+
+**다른 단계 사이에서 중복 제거의 위치.** Dolma는 처리를 줄이기 위해 URL·문서 중복 제거를 품질 필터 전에 실행하고, “문단 제거가 콘텐츠 분석을 방해할 위험” 때문에 문단 중복 제거를 마지막에 실행한다. 순서 자체는 어블레이션하지 않았다([[dolma]] §5.4). CCNet은 언어 식별 전에 문단을 중복 제거해 저자원 언어 문서를 더 많이 남긴다([[ccnet]] §4.1, Fig. 3; ch-10 §2.1). FineWeb2는 군집 크기를 품질 신호로 사용하기 위해 필터 전에 중복 제거한다([[fineweb-2]] §4.3). Dolma는 Gopher 규칙이 중복 제거와 문서 수준에서 음의 상관을 보인다고 보고한다. Gopher 규칙은 중복 제거가 잡지 못하는 무작위 문자열을 제거하기 때문이다([[dolma]] App. J). 따라서 두 단계는 서로 다른 모집단을 제거한다.
+
+## 부정적 샘플과 부정적 피드백
+
+중복 제거는 강의 표준의 첫 번째 의미인 **부정적 한계 가치**만 만든다. 이는 긍정적 학습 표적으로 다시 추가하면 성능을 낮춘다고 판단된 텍스트를 뜻한다. 해시 동일성, Jaccard·편집 유사도 임계값, 임베딩 유사도로 라벨링하며 사람·검증기·보상 모델은 관여하지 않는다. 사람 라벨과 비교한 거짓 음성률을 보고한 소스도 없다. 현재 관행은 여분의 사본을 버리거나(Lee et al., Dolma, FineWeb, Llama 3), 재가중한다(FineWeb2 rehydration, §9). 어떤 단계도 제거된 중복을 콘텐츠·조건부 입력·그 likelihood를 낮추는 gradient로 사용하지 않는다. 따라서 ch-43a의 likelihood displacement 위험은 여기서 발생하지 않으며, 부정적 샘플의 지도학습 사용은 ch-31a에서 다룬다.
+
+이 라벨은 텍스트가 아니라 반복 횟수의 함수다. 같은 문서도 최악의 빈도로 반복되는 작은 하위 집합을 이루면 해롭고([[repeated-data-scaling]] §2), 전체 데이터셋을 최대 4회 반복하면 중립적이며([[data-constrained-scaling]] §6), FineWeb2에서 군집 크기로 가중치를 높이면 유용하다(§9). **통제:** 군집 크기와 유사도 점수를 삭제하지 말고 속성으로 저장한다(FineWeb2 §4.3; Dolma toolkit은 중복 범위를 `attributes/` 아래에 기록, [[dolma]] Connections). 분할 간 평가 사본을 유지한다. **진단:** 중복 제거 전후 군집 크기 히스토그램, 몇 epoch보다 많이 반복된 하위 집합의 학습 손실, 임계값 근처 검증 점수 히스토그램을 확인한다([[deduplicating-training-data]] App. A, Fig. 4). **일반성에 미치는 영향:** 측정된 효과는 암기·복사·손실에 관한 것이다([[repeated-data-scaling]], [[quantifying-memorization]]). 이 장의 어떤 소스도 중복 제거가 calibration·hallucination·거부에 미치는 효과를 보고하지 않는다.
+
+## 레시피
+
+아래 행은 데이터 파이프라인 설정과 이를 평가한 연구 모델이다. 스타일 표준의 단계 목록에는 데이터 큐레이션 단계가 없으므로 파이프라인 행에는 ch-10에 따라 `pretrain-stable (data)`를 사용한다.
+
+| 모델(정확한 릴리스) | 크기 | 단계 | 설정 | 값 | 출처 위치 | 상태 | 이 값을 뒷받침하는 근거 |
+|---|---|---|---|---|---|---|---|
+| Lee et al. C4-NearDup | 해당 없음(데이터) | pretrain-stable (data) | shingle·해시 | 공백 토큰화 5-gram, `k = 9,000 = 450` 버킷 × 버킷당 해시 20개 | arXiv:2107.06499v2 §4.2, App. A | 2026-09-15 검증 | App. A Fig. 4: 0.8·0.9 설정의 유사도 히스토그램이 같은 지점에서 사라짐 |
+| Lee et al. C4-NearDup | 해당 없음(데이터) | pretrain-stable (data) | 중복 규칙 | LSH 후보 후 Jaccard > 0.8 및 편집 유사도 > 0.8, 연결 요소 | §4.2, App. A | 2026-09-15 검증 | 위와 동일 |
+| Lee et al. 대안 | 해당 없음(데이터) | pretrain-stable (data) | 중복 규칙 | Jaccard ≥ 0.9 및 편집 유사도 ≥ 0.9, 40 버킷 × 해시 20개, `k = 800` | App. A | 2026-09-15 검증 | 비교 목적으로만 시험 |
+| Lee et al. C4-ExactSubstr | 해당 없음(데이터) | pretrain-stable (data) | 최소 반복 범위 | BPE 토큰 50개 | §4.1, App. B | 2026-09-15 검증 | App. B Fig. 5: 25토큰에서 오탐 없음, 여유를 위해 두 배로 설정 |
+| Lee et al.(모든 버전) | 해당 없음(데이터) | eval-gate | 분할 간 규칙 | 검증/테스트 사본 유지, 학습 사본 제거 | §5 | 2026-09-14 검증([[deduplicating-training-data]]) | 어블레이션 보고 없음 |
+| XL-Original / NearDup / ExactSubstr | 1.5B | pretrain-stable | step·epoch·LR | 152K(Original, ExactSubstr), 146K(NearDup), 약 2 epoch, Adafactor 상수 0.001 | App. C | 2026-09-14 검증([[deduplicating-training-data]]) | 어블레이션 보고 없음 |
+| FineWeb | 해당 없음(데이터) | pretrain-stable (data) | MinHash | 영어 단어 5-gram, 해시 112개 = 14 버킷 × 8, 버킷 일치 = 중복, 전이적 군집, 군집당 무작위 문서 하나 유지, 스냅샷별 | arXiv:2406.17557v2 §3.4, App. E.1; datatrove@acd431b examples/fineweb.py L80–88 | 2026-09-15 검증 | §3.4 Fig. 3–5 및 App. E.3 Fig. 15의 1.71B·350B 토큰에서 전체·가벼운 전체 변형이 스냅샷별보다 낮음 |
+| Llama 3.1(전체) | 전체 | pretrain-stable (data) | 문서 중복 제거 | 전체 데이터셋에서 URL 중복 제거(최신 유지), 전체 MinHash, MinHash 매개변수 미인쇄 | arXiv:2407.21783v3 §3.1.1 | 2026-09-15 검증(MinHash 매개변수 미보고, 본문 확인) | 어블레이션 보고 없음 |
+| Llama 3.1(전체) | 전체 | pretrain-stable (data) | 줄 중복 제거 | 30M 문서 버킷마다 6회 초과 나타나는 줄 제거, 다국어 데이터는 언어별 적용 | v3 §3.1.1 | 2026-09-15 검증 | 경험적 평가에서 “강한 개선”, 수치 없음 |
+| Llama 3.1 | 범위 미지정 | SFT | 의미 중복 제거 | 품질×난이도로 정렬한 RoBERTa 대화 군집, 유지 예시와 최대 cosine 유사도가 임계값 아래이면 greedy 유지, 임계값 미인쇄 | v3 §4.2.3 | 2026-09-15 검증(임계값 미보고) | 어블레이션 보고 없음 |
+| Dolma v1.6 웹 | 해당 없음(데이터) | pretrain-stable (data) | 중복 제거 단계 | Bloom filter: 정확 URL(문서 53.2%), 정확 문서(14.9%), 품질·콘텐츠 필터 후 정확 문단(문단 18.7%) | arXiv:2402.00159v2 §5.4 | 2026-09-14 검증([[dolma]]) | 효율성으로 순서를 정당화, 어블레이션 없음 |
+| D4 CC-dedup 소스 | 해당 없음(데이터) | pretrain-stable (data) | MinHash | “서명당 해시 20개, 버킷 20개, 버킷당 행 1개”(Spark 기본값) | arXiv:2308.12284v1 App. A.1.2 | 2026-09-15 검증 | 연산 한계로 sweep하지 않음 |
+| D4 연구 모델(OPT 아키텍처) | 125M–6.7B | pretrain-stable (data) | 선택 | OPT-125M 마지막 토큰 임베딩, 군집 11,000개, 20회 반복, `R_dedup = 0.75`, 6.7B에서 `R = 0.25` | §3.4, §4.1, App. A.1.3 | 2026-09-14 검증([[d4]]) | `R_dedup`: perplexity를 개선한 가장 높은 SemDeDup 비율(App. A.3), `R = 0.25`는 1.3B에서 최선(§4.1) |
+| D4 연구 모델 | 6.7B | pretrain-stable | 토큰·최고 LR·배치 | 100B, 1.2e-4, 2M 토큰 | §3.2, Table A1 | 2026-09-14 검증([[d4]]) | 어블레이션 보고 없음 |
+| SemDeDup C4 연구 | 125M, 1.3B | pretrain-stable (data) | 임베딩·군집·임계값 | OPT-125M 마지막 층 마지막 토큰 임베딩, `k = 11,000`, 목표 크기에 맞춘 ε 조정(Fig. A17은 ε 0.100–0.250) | arXiv:2303.09540v3 §5.1, §6.5, Fig. A17 | 2026-09-15 검증 | Fig. 7, A12–A13: 125M·시드 3개에서 SemDeDup 대 무작위·NearDup |
+| FineWeb2 | 해당 없음(데이터) | pretrain-stable (data) | MinHash 범위·rehydration | FineWeb 매개변수, 언어별 전체 적용, 필터 전 수행, 제거율이 가장 낮은 군집 크기에 가중치 10, 전체 제거율보다 높으면 1, 그 사이는 보간 | arXiv:2506.20920 §4.3, §4.5([[fineweb-2]]) | 2026-09-15 검증 | App. A.8 Tables 29–34: 6개 대표 언어에서 rehydrated > filtered(1.46B, 350B 토큰) |
+
+**소형 범용 실행의 출발점.** 아래의 모든 값은 위의 검증된 행과 각 출처의 조건에 따른다. 여러 크롤링 스냅샷의 영어 웹 텍스트라면 각 스냅샷 안에서 단어 5-gram과 해시 8개짜리 버킷 14개로 문서 수준 MinHash를 실행한다(FineWeb, 1.71B 파라미터·350B 토큰에서 평가). 이 설정에는 검증 단계가 없으므로 표본에서 `s = 0.6–0.7` 근처 쌍의 제거율을 확인한다. 후보 후 검증 설계를 감당할 수 있으면 Jaccard > 0.8 및 편집 유사도 > 0.8인 Lee et al.의 버킷 450개·버킷당 해시 20개를 사용한다(C4, 1.5B 모델). 반복 범위의 문자 그대로 암기가 문제라면 BPE 토큰 50개에서 범위 제거를 추가한다(Lee et al., C4). 다국어 코퍼스에서는 언어별로 중복 제거하고(Llama 3, FineWeb2), 군집 크기를 저장해 군집 크기별 업샘플링을 계속 사용할 수 있게 한다(FineWeb2, 1.46B 모델). 분할 간 텍스트가 공유되면 평가 사본을 유지한다(Lee et al. §5). 의미 중복 제거와 D4 선택은 웹 데이터에서 최대 6.7B 파라미터까지만 평가되었으므로 해당 비율을 기본값이 아니라 다시 어블레이션할 설정으로 취급한다.
+
+## 일반화 관점
+
+**(a) 폭을 넓히는 요인.**
+- 반복 텍스트를 제거하면 일반 메커니즘에 모델 용량을 사용할 수 있다. 최악 빈도로 반복된 하위 집합은 문맥 내 복사를 유효 모델 크기 최대 3배까지, induction head의 접두사 일치를 평균 32%(1.47배)까지 손상시켰지만 테스트 손실은 최대 1.15배였다([[repeated-data-scaling]] §1.1, §2; 결과, 단일 연구).
+- 다양한 선택과 두 epoch 학습은 1.3B에서 무작위 데이터 한 pass보다 홀드아웃 지시 데이터 perplexity가 좋았다(13.85 대 14.19)([[d4]] Table 1). D4는 6.7B에서 16개 태스크 평균 정확도도 2.04% 높였다(Fig. 1).
+- LAION-440M 의미 중복 제거는 37% 제거에서 분포 밖 평균 정확도를 높였다([[semdedup]] §4.4).
+- 전체 MinHash보다 스냅샷별 MinHash를 사용하면 4T 대신 20T 토큰을 남기면서 집계 점수가 좋아졌다([[fineweb]] §3.4). 언어 식별 전에 중복 제거하면 저자원 문서가 더 많이 남는다([[ccnet]] §4.1).
+- 필터가 알려 주는 군집 크기로 군집을 업웨이트하면 6개 대표 언어 모두에서 집계 점수가 높아졌다([[fineweb-2]] Tables 29–34).
+
+**(b) 범위를 좁히거나 망각을 일으키는 요인.**
+- 작은 하위 집합을 최악 빈도로 반복하면 테스트 손실이 크기가 절반 정도인 모델 수준까지 올라가고, 극단적 반복은 Python fine-tuning 뒤 유효 파라미터가 1.6배 부족한 상태를 남겼다([[repeated-data-scaling]] §2, §5.4).
+- 여러 스냅샷 전체에서 중복 제거하면 오래된 스냅샷에 품질 낮은 잔여물이 집중되었다([[fineweb]] Fig. 4).
+- 줄 수준 중복 제거는 상용구와 함께 자주 나타나는 고품질 텍스트도 제거한다([[llama-3]] §3.1.1; 효과 크기는 인쇄되지 않음).
+- FineWeb2에서 필터·rehydration 전에는 중복 제거가 프랑스어와 태국어 집계 점수를 낮췄다([[fineweb-2]] Tables 30, 32).
+- 암기된 사실에 의존하는 태스크, 예를 들어 closed-book QA는 중복 제거로 손해를 볼 수 있다. 이 가능성은 언급되었지만 시험하지 않았다([[deduplicating-training-data]] §7; 미해결 질문).
+
+**(c) 이 단계에서 측정하는 방법.**
+- 평가 세트별 학습-평가 중복을 측정한다. 근접 중복이 있는 예시 비율과 50토큰 일치 안에 있는 토큰 비율을 보고한다([[deduplicating-training-data]] Tables 2–3).
+- 학습 접두사를 프롬프트로 주고 중복 구간별 추출 가능한 암기를 측정한다([[quantifying-memorization]] §3.2). 가장 많이 반복된 문자열이 중복 제거 후 살아남으므로 버킷별로 따로 보고한다(§5.2).
+- 학습 중 반복 하위 집합의 손실을 측정한다. 이는 §8.1의 용량 절충을 알려 주는 초기 신호다([[repeated-data-scaling]] Figure 2).
+- 평균 손실과 함께 복사·문맥 내 태스크를 평가한다. 이 태스크들이 손실보다 더 악화되기 때문이다([[repeated-data-scaling]] Figures 5–6).
+- 오염을 제거한 홀드아웃 데이터에서 도메인별 macro perplexity를 계산한다([[paloma]] G1–G5). 선택 후 웹 스냅샷 perplexity는 악화되었지만 태스크 정확도는 높아졌으므로 웹 스냅샷 perplexity만 사용하지 않는다([[d4]] §4.4.1).
+- 측정 오류: 작은 표본은 중복 효과를 숨긴다([[fineweb]] App. E.2). 학습 풀에 가까운 검증 세트는 정확도와 반대 방향으로 움직일 수 있다([[d4]] Fig. 6). SemDeDup 텍스트 결과는 125M과 1.3B 모델에서 나온 것이다([[semdedup]] §8).
+
+## 흔한 실수와 탐지 방법
+
+| 실수 | 관찰 가능한 증상 | 점검 |
+|---|---|---|
+| 버킷당 해시 수와 버킷 수를 뒤바꿈 | 중복이 거의 발견되지 않거나 지나치게 많이 발견됨 | `s = 0.7, 0.8, 0.9`에서 `1 − (1 − s^h)^B`를 계산한다. Lee 설정은 대략 0.30, 0.995, 1.0을 내야 한다 |
+| LSH 버킷 일치를 유사도의 증거로 취급 | 실제 Jaccard가 낮은 쌍이 제거됨 | 일치한 쌍 표본에서 정확한 Jaccard를 계산하고 히스토그램을 그린다(Lee App. A Fig. 4) |
+| 서로 다른 단위의 제거율을 비교 | “중복 3%”와 “중복 7%”를 비교 | 방법과 함께 예시 수와 토큰 수를 따로 보고한다(Lee Tables 2–3) |
+| 어블레이션 없이 여러 스냅샷에 전체 MinHash 적용 | 오래된 스냅샷이 10% 이하로 줄고 벤치마크 이득이 거의 없음 | 350B 토큰에서 스냅샷별 실행과 전체 실행을 비교하고 오래된 스냅샷의 유지 표본을 읽는다(FineWeb Fig. 4) |
+| 1B 토큰 표본에서 중복 제거 변형 평가 | 변형 사이에 차이가 없음 | 군집 크기를 직접 세고 반복을 포함하는 예산에서 평가한다(FineWeb App. E.2) |
+| 작은 고품질 집합을 감시 없이 여러 번 업샘플 | 해당 집합의 학습 손실이 0에 가까워지고 테스트 손실이 학습 중 plateau를 보이거나 상승 | 업샘플 하위 집합의 손실을 따로 기록하고 반복 횟수를 `E = k·N^α` 범위와 비교한다(Hernandez §2) |
+| 평가 중복을 확인하지 않고 학습 데이터 중복 제거 | 겹치는 예시에서 검증 perplexity가 더 낮음 | 검증을 겹치는 하위 집합과 고유 하위 집합으로 나누고 모두 보고한다(Lee Table 5) |
+| 선택 비율을 정할 때 웹 스냅샷 perplexity 사용 | 선택한 설정에서 태스크 정확도가 낮아짐 | 홀드아웃 지시 데이터 perplexity와 태스크 정확도를 추가한다(D4 Fig. 6) |
+| 중복 제거가 모든 암기 위험을 제거한다고 가정 | 반복 횟수가 높은 문자열이 여전히 추출 가능 | 학습 모델에서 중복 횟수별 추출 테스트를 한다(Carlini §5.2) |
+| 다른 데이터셋의 ε 또는 cosine 임계값 복사 | 목표 데이터셋의 제거 비율이 달라짐 | 군집의 10%에서 ε를 목표 크기에 맞게 조정하고 그 크기를 기록한다(SemDeDup §6.5) |
+
+## 이해도 확인
+
+1. Lee et al.은 C4 학습 예시의 3.04%를 근접 중복으로, C4 학습 토큰의 7.18%를 반복 범위 안의 토큰으로 보고한다. 두 수치 중 어느 것도 “C4의 중복 비율”이 아닌 이유와 각각 무엇을 놓치는지 설명하라.
+2. `P(s) = 1 − (1 − s^h)^B`를 사용해 FineWeb의 14 × 8 설정이 `s = 0.6`인 일부 쌍을 제거하는 반면 Lee et al. 파이프라인은 제거하지 않는 이유를 설명하라. 두 설정 모두 0.75~0.8 근처의 유사도를 목표로 하는데도 왜 다른가?
+3. 동료가 Lee et al.을 재현한다며 “450개 해시를 가진 버킷 20개”를 설정하고 C4에서 근접 중복을 거의 찾지 못했다. 그 이유를 계산으로 보이고, 올바른 해석을 확정하는 Lee et al. 부록의 문장을 말하라.
+4. Hernandez et al.에서는 학습 토큰의 10%가 반복이었는데도 모델은 파라미터의 약 절반에 해당하는 성능을 잃었다. 이 손실 계산과 손상이 가장 큰 반복 횟수가 최대 반복 횟수가 아니라 중간 반복 횟수인 이유를 설명하라.
+5. D4는 D4가 선택한 데이터를 두 epoch 학습한 것이 무작위 데이터를 한 epoch 학습한 것보다 좋다는 결과를 냈지만, Hernandez et al.은 반복이 모델을 심각하게 손상할 수 있다고 했다. 두 설정에서 반복 횟수·하위 집합 선택·토큰 비율이 어떻게 다른지, 새 코퍼스가 어느 체제에 속하는지 판단하려면 무엇을 측정할지 설명하라.
+6. FineWeb의 전체 중복 제거는 4T 토큰을 남기고 이득이 거의 없었지만 Llama 3은 전체 MinHash를 사용해 개선을 보고했다. 두 결과를 직접 비교할 수 없게 만드는 파이프라인·보고 차이를 나열하라.
+7. ExactSubstr 중복 제거 후에도 원래 C4에서 408회 이상 반복된 시퀀스가 덜 반복된 시퀀스보다 더 많이 암기되었다. 중복 제거 방법이 이런 문자열을 남길 수 있는 방식과 추가할 점검을 설명하라.
+8. D4 선택은 C4·CommonCrawl 검증 세트 perplexity를 악화시켰지만 지시 데이터 perplexity와 정확도는 개선했다. 학습 풀에 가까운 검증 세트가 이 결정에 신뢰할 수 없는 이유를 설명하라.
+
+## 연결
+
+- ch-11 — 토크나이저, 데이터 출처, PII 제거(이전 장: 중복 제거 전 토큰화·출처 검색·PII 제거).
+- ch-12a — 사전학습 중 암기·지식 획득·일반화(다음 장: §8.3에서 소개한 암기 스케일링 전체).
+- ch-10 — 휴리스틱 큐레이션 파이프라인: CCNet, C4, Dolma, FineWeb(FineWeb MinHash 설정과 전체 대 스냅샷별 연구, §5.3–§5.4).
+- ch-10a — 모델 기반 품질 필터링과 벤치마크 대상 데이터 선택(중복 제거 후 선택).
+- ch-13 — 도메인 혼합: DoReMi, 혼합 법칙, 규모를 넘는 검증(중복 제거 풀 위의 혼합 가중치).
+- ch-13a — 다국어 커버리지와 어휘를 능력 축으로 보기(FineWeb2 언어별 중복 제거).
+- ch-14 — 데이터 제한 스케일링, 반복, 사전학습 오염 제거(전체 데이터셋 반복과 벤치마크 오염 제거).
+- ch-17 — 실습: 폭 측정으로 필터와 혼합 어블레이션(CommonCrawl 조각에 정확·MinHash 중복 제거 구현).
+- ch-18 — 합성 데이터 설계 패턴: 생성·필터·중복 제거·검증·선택·혼합(생성 데이터 중복 제거).
+- ch-33 — 사례 연구 A: Tülu 3와 Llama 3가 광범위한 능력을 측정·보호한 방법(SFT 데이터 의미 중복 제거).
+- ch-48 — 오염 탐지와 보고 점수에 미치는 영향(평가 단계 중복).
+
+## 출처
+
+- [[deduplicating-training-data]] — ExactSubstr·NearDup 정의, 매개변수, 중복 표, 암기·perplexity 결과, 분할 간 규칙, 한계(§2, §4, §5, Recipe).
+- [[minhash-lsh]] — resemblance 정의, Theorem 1과 증명 단계, 표본 크기 지침, 교재 banding 공식 포인터(§3, §4).
+- [[semdedup]] — 의미 중복 분류, 알고리즘·의사코드, LAION·C4 결과, 임계값 조정, 한계(§6).
+- [[d4]] — D4 선택 단계, 고정 연산·반복 토큰 결과, 웹 스냅샷 검증 분석, MinHash 설정(§4, §7, Recipe).
+- [[repeated-data-scaling]] — 반복 하위 집합의 double descent, 유효 크기 손실, 복사·induction head 손상, §5.1 손실 계산, 경계 적합, 한계(§8.1).
+- [[quantifying-memorization]] — 추출 가능성 정의, 중복·모델 크기 관계의 log-linear 결과, 중복 제거 후 잔여 암기(§2, §8.3).
+- [[fineweb]] — 검증 없는 MinHash 설정, 전체 대 스냅샷별 결과, 가벼운 전체 방법, 표본 크기 시뮬레이션(§4, §9).
+- [[fineweb-2]] — 언어별 전체 MinHash, rehydration 가중치·점수(§9, Recipe).
+- [[llama-3]] — URL·전체 MinHash·줄 수준 중복 제거, SFT 의미 중복 제거(§5, §9, Recipe).
+- [[llama-3-recipe]] — 줄 중복 제거 규칙과 수치 미인쇄를 확인하는 장부 행(§5, §9).
+- [[dolma]] — Bloom filter 중복 제거 단계·제거율·단계 순서와 이유·필터 상관(§1, §9, Recipe).
+- [[ccnet]] — 문단 중복 비율, 중복 제거 범위 측정, 언어 식별 전 중복 제거(§1, §9).
+- [[c4]] — 세 문장 구간 중복 제거와 T5 반복 결과(§5, §8.2).
+- [[data-constrained-scaling]] — 전체 데이터셋 최대 4 epoch 반복과 C4/OSCAR 중복 제거 필터 결과(§2, §8.2).
+- [[paloma]] — 폭 측정을 위한 오염 제거 학습 데이터의 도메인별 perplexity(Generalization lens).

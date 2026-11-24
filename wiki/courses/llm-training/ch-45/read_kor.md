@@ -1,227 +1,366 @@
 <!-- chapter: ch-45
      track: rl
      kind: content
-     title: Self-Improvement Loops
-     deps: [ch-44]
+     title: Self-Improvement Loops and Multi-Stage Reasoning Pipelines
+     deps: [ch-44b]
      sources: [[self-rewarding-lm]], [[meta-rewarding-lm]], [[spin]], [[self-play-preference]],
-              [[self-correct-rl]], [[rest-em]], [[star]], [[v-star]],
-              [[deepseek-r1]], [[r1-zero-analysis]], [[rlvr-beyond-base-model]],
-              [[iterative-sft-rl]], [[lilianweng-reasoning-llms]]
+              [[self-correct-rl]], [[rest-em]], [[star]], [[v-star]], [[deepseek-r1]], [[deepseek-r1-recipe]],
+              [[open-reasoner-zero]], [[cognitive-behaviors-self-improving-reasoners]], [[dr-grpo]],
+              [[rlvr-beyond-base-model]], [[prorl]], [[deepseek-v3.1]], [[agent-early-experience]], [[swe-gym]],
+              [[model-collapse]], [[likelihood-displacement]]
      figures: figures/self-improve-loop.html
+     revised: 2026-09 (generality revision)
 -->
 
-# 45장 — 자기개선 루프
+# 제45장 — 자기개선 루프와 다단계 추론 파이프라인
 
-> **핵심 통찰.** 2024–2025년의 모든 self-improvement 방법은 같은 세 줄짜리 알고리즘이다. *generate, filter, retrain*. 차이는 누가 filter 역할을 하는가뿐이다. filter가 **judge로서의 모델 자신**이면(Self-Rewarding, Meta-Rewarding) judge가 drift하기 때문에 루프는 3 iterations 안에 포화한다. filter가 **human text distribution**이면(SPIN) 데이터에 맞추는 데 수렴하고 그 이상으로 가지 않는다. filter가 **preference game**이면(Nash-LM) stochastic equilibrium으로 수렴한다. filter가 **outcome verifier**이면(ReST-EM, R1-Zero) base model에 끌어낼 latent capability가 남아 있는 한 계속 오른다. 다만 2025년 `pass@k` 분석은 이것이 reasoning을 *만드는* 것이 아니라 *끌어내는* 것일 수 있음을 보인다. filter의 선택이 전체 이야기다.
+> **핵심 통찰.** 자기개선 루프는 현재 모델에서 샘플을 뽑고, 모델 또는 환경이 만들어 낸 신호로 샘플을 채점한 뒤, 그 결과로 학습한다. 루프가 개선하는 것은 채점기가 대표하는 메트릭이며, 이것이 항상 홀드아웃 능력은 아니다. 판정기 채점 루프는 자신이 판정기로 채점한 메트릭을 10점 이상 올렸지만 같은 실행에서 관련 없는 벤치마크는 유지되거나 낮아졌다. Self-Rewarding은 세 모델에서 AlpacaEval 2.0 승률을 9.94% → 15.38% → 20.44%로 옮긴 반면, GSM8K는 50.72 → 60.27 → 59.29 → 57.70, Natural Questions는 34.35 → 35.48 → 33.07 → 31.86이었다(Llama 2 70B; [[self-rewarding-lm]] Tables 1, 3). Meta-Rewarding은 AlpacaEval 2 길이 제어 승률을 22.92% → 39.44%로 옮겼지만, 인간과의 판정기 일치는 iteration 2에서 최고점에 도달하고 iteration 4에는 하락했다(Spearman 0.315 → 0.382 → 0.326; [[meta-rewarding-lm]] Tables 1, 7). 검증기 채점 루프는 다르게 행동하지만 예외는 아니다. Qwen2.5-7B에서 GRPO 150 → 450단계에 걸쳐 학습 분할 pass@1은 26.1 → 42.5로 올랐지만, 홀드아웃 Omni-MATH-Test 분할 pass@256은 68.3 → 63.9로 떨어져 base 모델의 69.1보다 낮았다([[rlvr-beyond-base-model]] Table 4). 이 방식으로 만든 범용 모델은 하나의 루프가 아니라 단계별 파이프라인이다. RL 전용 모델 DeepSeek-R1-Zero는 IF-Eval 46.6, AlpacaEval 2.0 24.7을 기록하고, 4단계 DeepSeek-R1 파이프라인은 각각 83.3과 87.6으로 끝나지만 GPQA Diamond(75.8 → 71.5)와 CNMO 2024(88.1 → 78.8)는 포기한다([[deepseek-r1]] Table 3).
 >
-> **가이드라인.** 실제로 가진 signal에 맞춰 filter를 고르라. 검증 가능한 답 → ReST-EM 또는 R1-Zero 스타일 RLVR(monotone, slow saturation). SFT data는 있지만 preference는 없음 → SPIN(distribution-match; cap at 3). Judge-capable model은 있지만 verifier 없음 → Self-Rewarding(3 iters, 이후 calibration drift — Meta-Rewarding의 meta-judge를 더해 5까지 밀기). self-correction이 target → SCoRe의 two-stage RL(Stage I은 turn-1을 freeze, Stage II는 delta를 보상). 어떤 loop든 iteration 사이에 reference model을 reset하고, `pass@1`과 함께 `pass@large-k`를 측정하라. 그래야 base가 이미 아는 것을 날카롭게 만드는 데 그치고 있는지 알아차릴 수 있다.
+> **지침.** 루프의 채점기가 모델 자신 또는 모델에서 파생된 판정기라면, 고정된 작은 횟수만 반복하고 매 반복 뒤 홀드아웃 능력 패널 및 판정기 독립 메트릭을 측정하라. 발표된 실행에서는 루프 메트릭이 계속 올라도 인간-판정기 일치([[meta-rewarding-lm]] Table 7), 홀드아웃 NLP 벤치마크([[self-rewarding-lm]] Table 3), pass@256([[rlvr-beyond-base-model]] Table 4)은 이미 하락하기 시작했기 때문이다. 채점기가 실행 또는 답 검증기일 때도 검증기 자체 홀드아웃 분할 및 큰 k의 pass@k로 같은 규칙을 적용하라. ReST-EM의 APPS와 HumanEval 결과는 학습 정확도가 계속 오르는데도 첫 반복 뒤 퇴행했기 때문이다([[rest-em]] §5.1, Fig. 4). 목표가 추론 전문 모델이 아니라 범용 능력 모델이면 단일 루프의 출력을 배포하지 마라. 비대상 도메인을 포괄하는 데이터 SFT와 규칙 보상과 선호 보상을 섞는 최종 RL 단계를 뒤따르게 하라. 이것이 R1-Zero와 R1의 측정된 차이다([[deepseek-r1]] Table 3, §3). 루프의 부정 예가 이전 반복에서 오면 매 반복마다 새로 만들고 chosen 및 rejected 로그 확률을 따로 기록하라. 이미 아래로 밀린 부정 예는 그래디언트 기여가 작고, 오래된 부정 예는 오프폴리시이기 때문이다(ch-43a의 메커니즘; [[deepseek-v3.1]] §3.1의 오프폴리시 negative-masking 제어).
 
----
+## 이 장이 범용 모델에 중요한 이유
 
-## 1. 공유되는 골격
+이전의 모든 단계는 누군가가 만든 목표 또는 보상이 필요하다. 사람 시연(ch-15), 교사 모델(ch-35), 보상 모델(ch-41), 규칙 검증기(ch-44)가 그것이다. 자기개선 루프는 모델이 샘플과, 일부는 순위를 매길 신호까지 스스로 만들게 하여 한 단계에서 이 의존성을 없앤다. 이 장이 답하는 질문은 좁고 측정 가능하다. 이 배치는 루프가 전혀 채점하지 않은 과제의 능력을 언제 올리고, 언제 루프 자체의 수치만 올리는가?
 
-이 장의 다섯 method family는 모두 `t`로 index되는 outer loop에서 실행되는 세 단계로 factor된다.
+이것은 두 방향으로 폭넓음에 중요하다. 루프 자신의 분포로 학습한 판정기로 채점하는 루프는 드리프트할 수 있다. 판정기와 정책이 함께 움직이므로 고정된 외부 레이블과의 일치만이 드리프트를 볼 방법이다. 검증기로 채점하는 루프는 그런 방식으로 드리프트하지 않지만, 검증기가 이미 승인한 경로 쪽으로 출력 분포를 좁힌다. 이는 pass@1이 오르면서 큰 pass@k에서 커버리지가 떨어지는 것으로 나타난다.
+
+이 장은 다중 도메인 RL(ch-44b) 뒤, 레시피 비교(ch-45a) 전에 있다. ch-31의 거부 샘플링 라운드 메커니즘은 반복하지 않고 사용하며, ch-39의 DPO 목적과 ch-40의 그룹 기준선 RL을 사용한다. 파이프라인 관점, 즉 추론 RL 다음 거부 샘플링 SFT, 그 다음 범용 RL 단계가 추론 루프를 범용 모델로 바꾸는 부분이며, 루프를 단독으로 설명할 때 가장 자주 빠지는 부분이다.
+
+## §1 루프 간 차이: 채점기, 실패, 재시작 지점
+
+이 장의 모든 방법은 정책에서 샘플링하고, 각 샘플에 점수를 붙이고, 업데이트하는 것으로 쓸 수 있다. 네 가지 설계 선택이 다르며, 결과가 다른 이유도 이것이다.
+
+1. **점수 원천.** 판정기로 행동하는 정책([[self-rewarding-lm]]), 자신의 판정을 다시 판정하는 정책([[meta-rewarding-lm]]), 암묵적 양성으로 쓰는 사람이 작성한 응답([[spin]]), 학습된 쌍별 선호 모델([[self-play-preference]]), 답 또는 테스트 검증기([[rest-em]], [[deepseek-r1]]), 환경 자체의 다음 상태([[agent-early-experience]])다.
+2. **실패 처리.** 버린다([[rest-em]], [[star]], R1 3단계 거부 샘플링), 선호 손실의 rejected 항으로 쓴다([[self-rewarding-lm]], [[spin]]), 정책 경사 안에서 음의 이점으로 쓴다([[deepseek-r1]]), 별도 검증기를 학습하는 데 쓴다([[v-star]]), 수정 목표의 컨텍스트에 둔다([[self-correct-rl]], [[agent-early-experience]]). §“부정 샘플과 부정 피드백”이 이를 자세히 다룬다.
+3. **다음 반복의 시작 체크포인트.** ReST-EM과 STaR는 매 반복 *base pretrained model*을 미세조정한다([[rest-em]] §3, Table 1; [[star]] §3.1). Self-Rewarding과 SPIN은 이전 반복 결과에서 계속한다([[self-rewarding-lm]] §2.4; [[spin]] Algorithm 1). R1-Zero는 반복 루프가 없는 하나의 온라인 RL 실행이며, 기준 모델은 400단계마다 최신 정책으로 교체된다([[deepseek-r1]] §2.1).
+4. **기준 또는 상대.** SPIN의 상대는 이전 반복 결과 π_t다([[spin]] Alg. 1). Nash-MD의 상대는 현재 정책과 초기 정책의 기하 혼합이다([[self-play-preference]] Eq. 3). GRPO의 KL 기준은 주기적으로 새로 고친 정책이다([[deepseek-r1]] §2.1). ReST-EM은 기준 모델이 전혀 없다. M-step은 일반 SFT다([[rest-em]] Alg. 1).
+
+| 루프 | 점수 원천 | 실패 | 다음 반복 시작점 | 실행한 반복 | 근거 |
+|---|---|---|---|---|---|
+| Self-Rewarding | 정책-판정기, 5점 루브릭, 판정 3개 평균 | 최저 점수 샘플이 DPO rejected 항 | 이전 반복 결과 | M1(SFT) + DPO 2회 | [[self-rewarding-lm]] §2.4, §3.1.3 |
+| Meta-Rewarding | 정책-판정기와 판정에 대한 메타 판정기 | rejected 응답과 rejected 판정(둘 다 DPO) | 이전 반복 결과 | 4(판정기는 1–2에서만 학습) | [[meta-rewarding-lm]] §3.1, App. A.3 |
+| SPIN | 사람 SFT 응답이 양성, 모델 자체 샘플이 음성 | SPIN 손실의 음성 항 | 이전 반복 결과 | iteration 0부터 3 | [[spin]] §6.1, Alg. 1 |
+| Nash-MD | 학습된 쌍별 선호 모델, self-play | 명시적 rejected 세트 없음; 선호 마진이 보상 | 연속 학습(10,000단계) | — | [[self-play-preference]] §7, App. G.4 |
+| SCoRe | 2턴 롤아웃의 이진 결과 검사 | 첫 시도는 컨텍스트에 남음; c→i 전이에 패널티 | 두 단계, 연속 RL | 2단계 | [[self-correct-rl]] §5 |
+| ReST-EM | 답 일치 또는 단위 테스트 | 버림(가중치 0) | base pretrained model | MATH 3, APPS 2 | [[rest-em]] §3, §5.1 |
+| R1-Zero | 규칙 보상: 정확도 + 형식 | 음의 그룹 상대 이점 | 단일 RL 실행, 기준 400단계마다 갱신 | 10,400단계 | [[deepseek-r1]] §2.1, §2.2 |
+
+기준 모델과 리셋 규칙이 매 행에 있는 단일 generate-filter-retrain 골격은 이 방법들을 설명하지 못한다. ReST-EM과 STaR는 base 모델에서 재시작하고 기준 모델이 없으며, R1-Zero는 반복 루프가 아니라 하나의 온라인 RL 실행이다. 한 방법의 결과를 다른 방법으로 옮기기 전에 표의 3행과 4행을 읽어야 한다.
+
+## §2 판정기 채점 루프: Self-Rewarding과 Meta-Rewarding
+
+### 2.1 Self-Rewarding: 정책이 자신의 샘플을 채점한다
+
+**정의.** Self-Rewarding 학습은 한 모델을 두 역할에 쓴다. 후보 응답을 생성하고, 고정된 LLM-as-a-Judge 프롬프트 아래 각 후보에 5점 가산 루브릭 점수를 준다. 최고 및 최저 점수 후보가 DPO 쌍을 이룬다([[self-rewarding-lm]] §2).
+
+**다루는 문제.** 인간 선호로 학습한 고정 보상 모델은 정책이 개선되는 동안 개선을 멈추며, 반복마다 새 인간 선호를 수집하는 일은 비싸다. 측정 가능한 주장은 지시 따르기와 보상 모델링 능력이 모두 반복에 걸쳐 오른다는 것이다(§1).
+
+**메커니즘.**
+
+1. 판정 루브릭을 가르치는 Open Assistant 지시 예 3,200개(IFT)와 평가 예 1,630개(EFT)로 Llama 2 70B를 미세조정한다. 이 모델이 M1이다(§3.1.1).
+2. 고정 모델 Llama 2-Chat 70B, 8-shot, T = 0.6, p = 0.9로 새 프롬프트를 생성한다(§3.1.3).
+3. 현재 모델에서 프롬프트별 후보 응답 N = 4개를 T = 0.7, p = 0.9로 샘플링한다.
+4. 같은 모델을 판정기로 사용하여 각 후보를 채점하고, 판정을 3회 샘플링해 평균 낸다(§3.1.3).
+5. 최고 점수 후보를 chosen, 최저 점수 후보를 rejected로 삼는다. 두 점수가 같으면 쌍을 버린다(§2.3).
+6. 현재 모델에서 다음 모델을 DPO 학습한다. β = 0.1, 학습률 1e−6에서 1e−7로 감쇠, 배치 16이다. 쌍 3,964개가 M2를, 6,942개가 M3를 만든다(§3.1.3).
+
+**5단계 계산 예.** 후보 넷에 각각 판정 샘플 셋이 있다. A (5, 4, 5) → 4.67, B (3, 4, 3) → 3.33, C (4, 4, 4) → 4.00, D (2, 3, 2) → 2.33이다. chosen = A, rejected = D, 마진은 7/3 = 2.33 루브릭 점이다. 판정기가 후보 넷 모두에 4를 반환했다면 쌍은 버려진다. 루브릭에는 5수준이 있으므로 점수가 상단에 집중하는 판정기는 사용 가능한 쌍을 더 적게 만들고 점수 간격도 더 작게 만든다. [[meta-rewarding-lm]]은 이 집중을 직접 측정했다(판정기 학습 2회 뒤 평균 판정 점수는 4.1에서 4.7 이상으로 상승, Figure 5). 이 논문에서는 반복에 걸쳐 쌍 수가 3,964에서 6,942로 계속 늘었으므로 그 효과는 관찰되지 않았다(§3.1.3).
+
+**근거(Llama 2 70B, Open Assistant 프롬프트).**
+
+| 메트릭 | 채점자 | SFT 기준선 | M1 | M2 | M3 |
+|---|---|---|---|---|---|
+| GPT-4 Turbo 대비 AlpacaEval 2.0 승률(Table 1) | GPT-4 판정기 | — | 9.94% | 15.38% | 20.44% |
+| MT-Bench 전체 /10(Table 2) | GPT-4 판정기 | 6.85 | 6.78 | 7.01 | 7.25 |
+| MT-Bench 수학, 코드, 추론(Table 2) | GPT-4 판정기 | 3.93 | 3.83 | 4.05 | 4.17 |
+| 홀드아웃 인간 순위 대비 판정기 쌍별 정확도(Table 4) | 인간 레이블 | 65.1% | 78.7% | 80.4% | 81.7% |
+| 인간과의 판정기 Spearman 상관(Table 4) | 인간 레이블 | 0.253 | 0.279 | 0.331 | 0.349 |
+| GSM8K(Table 3) | 벤치마크 | 50.72 | 60.27 | 59.29 | 57.70 |
+| ARC-Challenge(Table 3) | 벤치마크 | 55.97 | 57.51 | 54.51 | 53.13 |
+| Natural Questions(Table 3) | 벤치마크 | 34.35 | 35.48 | 33.07 | 31.86 |
+| MMLU(Table 3) | 벤치마크 | 69.76 | 69.34 | 69.31 | 69.37 |
+| 평균 AlpacaEval 생성 길이(§3.2.1) | — | — | 1,092 | 1,552 | 2,552 |
+
+참고로 GPT-4 0613은 같은 AlpacaEval 2.0 표에서 15.76%를 기록하므로 M3는 그보다 높고 M2는 0.38점 낮다(Table 1). 상태: 결과(단일 연구, base 모델 하나, seed 프롬프트 원천 하나).
+
+**조건과 한계.** 세 모델은 SFT 모델 하나와 DPO 반복 두 번을 의미한다. 논문은 네 번째 반복도, 네 번째 반복에서의 퇴행도 보고하지 않는다. 저자들은 반복 학습의 한계를 이해하는 일을 공개 과제로 두고, 위 길이 증가를 언급하며, 학습 보상과 평가 일부가 모두 언어 모델에서 오므로 프레임워크 내 보상 해킹은 측정하지 않았다고 말한다(§6). seed 프롬프트는 Open Assistant 첫 턴이며, 저자들은 이것을 수학 및 추론 이득이 작은 이유로 든다(Table 2 caption).
+
+**범용 모델에 대한 함의.** 이 루프는 판정기 채점 선호 메트릭을 10.5점 움직이는 동시에, 같은 실행에서 홀드아웃 벤치마크 넷 중 셋을 M1 값보다 아래로 내렸다. 첫 수치만 보고하면 좁아지는 루프를 범용 루프로 오인한다. 판정기는 고정 인간 레이블에 대해서도 개선한다(쌍별 정확도 65.1% → 81.7%). 이 수치는 DPO로 들어가는 레이블 잡음도 추정한다. M3에서는 대략 다섯 쌍 중 하나가 인간 순위와 반대로 정렬된다. 이 추정은 모델 자신의 후보가 아니라 홀드아웃 사람이 쓴 응답에서 측정됐다. 또한 [[meta-rewarding-lm]] §5는 모델이 생성하지 않은 응답에서 판정기 개선이 더 작다고 보고하므로, 이는 실제 학습 쌍의 잡음을 측정한 값이 아니라 그 잡음의 하한이다.
+
+### 2.2 Meta-Rewarding: 판정 역할을 학습하고 포화되는 것
+
+**정의.** Meta-Rewarding은 세 번째 역할을 더한다. 모델이 하나의 응답에 대한 자기 판정 둘을 비교하여 더 나은 판정을 고르고, actor뿐 아니라 판정기에도 선호 쌍을 만든다([[meta-rewarding-lm]] §2.2).
+
+**메커니즘(반복별, Llama-3-8B-Instruct; §2.1, §3.1).** 프롬프트별 응답 K = 7개(T = 0.8, top-p 0.95)를 샘플링한다. 응답별 판정 N = 11개를 샘플링하고, 유효한 5점 점수를 평균 낸다. 길이 제어로 actor 쌍을 고른다. 11개 판정 점수의 분산이 가장 큰 응답에 대해서는 메타 판정 비교를 양쪽 순서로 실행하고, 위치로 가중하며, Elo 점수를 적합해 최고 및 최저 판정을 판정기 쌍으로 취한다. 두 종류 쌍 모두를 β = 0.1, 학습률 5e−6, 배치 32의 DPO로 학습한다.
+
+**길이 제어와 계산 예.** 한 프롬프트의 최고·최저 응답 점수를 S_max, S_min이라 하면, chosen 응답은 점수가 [(1−ρ)S_max + ρS_min, S_max]에 있는 응답 중 *가장 짧은* 것이고, rejected 응답은 [S_min, (1−ρ)S_min + ρS_max]에 있는 응답 중 *가장 긴* 것이다(§2.1). S_max = 5.0, S_min = 2.0, ρ = 0.32이고 다섯 응답이 (5.0, 1,900자), (4.2, 1,500), (3.5, 1,200), (2.5, 2,400), (2.0, 1,800)이라고 하자. chosen 구간은 [4.04, 5.0], rejected 구간은 [2.0, 2.96]이다. chosen = 4.2/1,500 응답, rejected = 2.5/2,400 응답이다. ρ = 0이면 구간은 극값으로 붕괴한다. chosen = 5.0/1,900, rejected = 2.0/1,800이다. iteration 4의 측정 효과는 응답 길이다. ρ = 0에서는 2,212자, ρ = 0.4에서는 2,003자이며, ρ = 0.4 실행은 길이 제어 승률 39.44%를 기록한다(Table 4).
+
+**근거(Llama-3-8B-Instruct).** AlpacaEval 2 길이 제어 승률은 seed 22.92%, EFT 집합 SFT 뒤 25.47%, 이후 네 반복에서 27.85 / 32.66 / 35.45 / 39.44%다. 같은 길이 제어를 한 Self-Rewarding 기준선은 35.49%에 도달한다(Table 1). Arena-Hard는 20.6% → 29.1%다(Table 2). iteration 2에서 self-chosen 쌍에 대한 GPT-4와 판정기 일치는 어느 판정기도 tie를 반환하지 않은 쌍만 세면 72.34%이며, 같은 iteration의 Self-Rewarding 기준선은 60.00%다. tie를 포함하면 두 값은 61.57%와 54.89%다(Table 3). 인간과의 판정기 Spearman 상관은 seed 0.315, iteration 2 0.382, iteration 4 0.326이다(Table 7). MT-Bench turn 1은 8.319 → 8.738이나 turn 2는 7.911 → 7.838이다(Table 6). 더 높은 점수 판정에 대한 meta-judge 선호는 iteration 1의 63.04%에서 iteration 2의 97.68%로, 위치 편향은 43.92%에서 68.11%로 상승했다(Table 5). 저자들은 위치 편향이 iteration 3의 추가 개선을 방해했다고 말한다(§5).
+
+**조건과 한계.** 판정기 학습은 iteration 1–2에서만 실행하며 iteration 3–4는 actor 쌍만 학습한다(§3.1). 학습 프롬프트는 단일 턴이고 Arena-Hard보다 AlpacaEval에 더 가깝다(App. Figure 6). 저자들은 모델이 생성하지 않은 응답에서는 판정기 개선이 제한적이라고 보고한다(§5).
+
+**함의.** 같은 실행의 두 메트릭은 iteration 2 뒤 반대 방향으로 움직인다. 루프 자체의 판정기 채점 승률은 계속 오르지만 판정기와 인간의 일치는 떨어진다. 루프 메트릭만 쓰는 중단 규칙은 너무 늦게 멈춘다. [figures/self-improve-loop.html](figures/self-improve-loop.html)의 그림은 이 반복별 계열을 나란히 그리므로 발산 지점을 직접 읽을 수 있다.
+
+## §3 SPIN: 모델의 현재 분포를 음성으로 사용하기
+
+**정의.** SPIN(self-play fine-tuning)은 선호 레이블 없이 선호 쌍을 만든다. 사람이 쓴 SFT 응답이 양성이고, 같은 프롬프트에 대해 이전 반복 결과에서 뽑은 샘플이 음성이다([[spin]] §4.1).
+
+**다루며 측정한 문제.** 같은 코퍼스에서 SFT epoch를 더 돌려도 도움이 멈춘다. zephyr-7b-sft-full에서 UltraChat200k의 두 번째 epoch는 Open LLM Leaderboard 평균을 58.14에서 57.23으로 낮췄다(Table 5).
+
+**메커니즘.** 반복 t에서 (1) 각 SFT 프롬프트에 대해 y′ ~ p_{θ_t}(·|x)를 샘플링하고, (2) 다음을 최소화한다.
 
 ```
-for t in 1..T:
-    samples   = generate(pi_{t-1}, prompts)          # E-step / rollout
-    retained  = filter(samples, signal_source)       # judge / verifier / data / game
-    pi_t      = retrain(pi_{t-1}, retained)          # SFT, DPO, or RL
-    pi_ref   <- pi_{t-1}                             # reset reference (critical)
+L_SPIN(θ, θ_t) = E_{x~q, y~p_data(·|x), y'~p_{θ_t}(·|x)} ℓ( λ·log[p_θ(y|x)/p_{θ_t}(y|x)] − λ·log[p_θ(y'|x)/p_{θ_t}(y'|x)] )
 ```
 
-family 사이에서 바뀌는 것은 `signal_source`다.
+여기서 x는 프롬프트, y는 사람 응답, y′는 샘플링한 응답, p_data는 SFT 데이터 분포, p_{θ_t}는 이전 반복 결과(상대이면서 기준), λ > 0은 정규화 매개변수, ℓ은 볼록 감소 손실이다. ℓ(t) = log(1 + e^{−t})이면 이는 λ가 β 역할을 하는 DPO 손실이다([[spin]] Eq. 4.7, §4.2).
 
-| Family | Signal source | Filter | Retrain objective | Saturation |
+**고정점.** Theorem 5.2에 따르면 p_{θ_t} = p_data는 전역 최소이며, p_{θ_t} ≠ p_data이면 θ_t가 전역 최소가 아닌 λ가 존재한다. Theorem 5.4는 logistic 손실 아래 한 단계를 다음으로 특성화한다. p_{θ_{t+1}}(y|x) ∝ p_{θ_t}(y|x)·[p_data(y|x)/p_{θ_t}(y|x)]^{1/λ}.
+
+**Theorem 5.4의 계산 예.** 세 응답에서 p_data = (0.5, 0.3, 0.2), p_{θ_t} = (0.2, 0.3, 0.5)라고 하자. λ = 1이면 업데이트는 정확히 p_data다. λ = 2이면 정규화 전 업데이트는 √(p_{θ_t}·p_data) = (0.316, 0.300, 0.316)이고, 정규화하면 (0.339, 0.322, 0.339)이다. 과소 대표 응답은 0.20에서 0.34로, 과대 대표 응답은 0.50에서 0.34로 움직인다. λ = 0.1이면 지수는 10이고 같은 식은 (0.9998, 0.0002, ~3e−8)을 준다. 더 작은 λ는 한 단계에서 더 큰 변화를 만든다. 이는 Remark 5.5의 진술이다. 여기처럼 단계는 정책을 p_data 너머로 보낼 수 있으므로, 단계 크기와 고정점 위치는 별개의 사실이다. 논문은 iteration 0–2에서 λ = 0.1을 쓰고, “where the model is close to convergence”인 iteration 3에서 5.0으로 올린다(App. B.1).
+
+**근거(zephyr-7b-sft-full, 즉 UltraChat200k로 미세조정한 Mistral-7B; 프롬프트 50k).**
+
+| 모델 | Open LLM 평균 | ARC | TruthfulQA | Winogrande | GSM8k | HellaSwag | MMLU | MT-Bench |
+|---|---|---|---|---|---|---|---|---|
+| zephyr-7b-sft-full | 58.14 | 60.41 | 43.73 | 74.19 | 26.76 | 82.85 | 60.92 | 5.94 |
+| SPIN iteration 0 | 60.80 | 63.40 | 49.18 | 72.69 | 35.10 | 84.38 | 60.03 | 6.46 |
+| SPIN iteration 1 | 62.12 | 65.19 | 55.17 | 72.30 | 35.78 | 84.96 | 59.34 | 6.65 |
+| SPIN iteration 2 | 62.97 | 65.96 | 54.91 | 73.56 | 38.06 | 85.41 | 59.93 | 6.78 |
+| SPIN iteration 3 | 63.16 | 65.87 | 54.90 | 73.72 | 38.97 | 85.54 | 59.99 | 미보고 |
+
+값은 [[spin]] Tables 4, 6에서 왔다(MT-Bench와 Big-Bench-Hard 과제 셋은 Table 6). 반복별 이득은 +2.66, +1.32, +0.85, +0.19로 작아진다. MMLU는 모든 반복에서 시작 체크포인트보다 낮다(60.92 대 59.34에서 60.03, 차이 0.89에서 1.58점). Winogrande도 시작값을 회복하지 못한다. 상태: 결과(단일 연구).
+
+**조건과 한계.** 저자들은 한계를 직접 말한다. 목표 분포는 고정된 사람이 생성한 것이며, 이는 “inherently imposes a ceiling on the performance of fine-tuned LLM”이다(§7). 합성 집합은 누적된다. iteration 0에는 50k, iteration 1–3에는 이전 반복 샘플과 현재 샘플을 합친 100k가 있으므로(§6.1), 반복 t의 부정 집합 일부는 π_{t−1}, 일부는 π_{t−2}가 생성했다.
+
+**함의.** SPIN은 이 장에서 루프의 알려진 고정점이 “더 좋음”이 아니라 “SFT 데이터 분포와 같음”인 가장 명료한 사례다. 보고한 폭넓음 이득은 반복 SFT epoch보다 그 분포를 더 효과적으로 향해 움직인 데서 오며, 그것을 넘은 데서 오지 않는다.
+
+## §4 인간 피드백에서의 Nash 학습: argmax 대신 균형
+
+**정의.** NLHF는 보상 모델을 쌍별 선호 모델 P(y ≻ y′ | x)로 대체하고, 유도된 2인 상수합 게임의 Nash 균형인 정책 π* = arg max_π min_{π′} P(π ≻ π′)를 찾는다([[self-play-preference]] Eq. 1).
+
+**다루는 문제.** Bradley-Terry 보상 모델은 응답마다 스칼라 점수 하나를 할당하므로 유도 선호는 확률적 추이성을 가진다. 점수 r_a > r_b > r_c이면 P(a ≻ b) = σ(r_a − r_b), P(b ≻ c) = σ(r_b − r_c), P(a ≻ c) = σ(r_a − r_c) ≥ 두 값의 최댓값이다. 인구 선호는 이를 위반할 수 있다. 논문의 예에서 인구 가중치 P(type 1) = 1/3 − ε, P(type 2) = P(type 3) = 1/3 + ε/2인 세 주석자 집단은 P_ε(y2 ≻ y1) = 2/3 − ε/2, P_ε(y3 ≻ y2) = 2/3 + ε/4, P_ε(y3 ≻ y1) = 1/3 − ε/4를 준다(§3.2).
+
+**계산 예.** ε = 0.03이면 P(y2 ≻ y1) = 0.652, P(y3 ≻ y2) = 0.674, P(y3 ≻ y1) = 0.326이다. 세 비교 중 둘은 더 뒤 응답을 선호하고 셋째는 반대이므로, 스칼라 점수 하나가 셋 모두를 재현하지 못한다. §3.2가 제시한 Nash 균형은 y1과 y2에 각각 확률 1/3 + ε/2 = 0.348, y3에 1/3 − ε = 0.303을 준다. 이 혼합에 대한 y1을 확인하면 0.5(0.348) + 0.348(0.348) + 0.674(0.303) = 0.174 + 0.121 + 0.204 = 0.500이다. y2와 y3에 대해서도 같은 계산이 0.500을 주며, 이것이 균형 조건이다. 같은 인구에 맞춘 Bradley-Terry 보상은 ε > 0일 때 y1에 약간 더 높은 점수를 주고, 그것을 최대화하면 항상 y1로 답하는 결정적 정책을 만든다. ε < 0이면 그 결정적 답은 y2로 뒤집힌다(§3.2).
+
+**메커니즘(Nash-MD).** 상대를 현재 정책과 기준 정책 μ의 기하 혼합으로 정의한다. π_t^μ(y) ∝ π_t(y)^{1−η_t τ}·μ(y)^{η_t τ}다. 이어 그 상대에 대해 mirror-descent 단계를 취한다. π_{t+1} = arg max_π [η_t P(π ≻ π_t^μ) − KL(π, π_t^μ)] (Eqs. 3–4). 여기서 η_t는 학습률, τ는 KL 정규화 강도, μ는 초기(SFT) 정책이다. Theorem 1은 KL(π*_τ, π_{t+1}) ≤ (1 − η_t τ)KL(π*_τ, π_t) + 2η_t²를 경계하므로, 마지막 반복 결과는 과거 정책 평균만 수렴하는 fictitious-play 방식과 달리 O(1/T)로 수렴한다. 딥러닝 형태 Nash-MD-PG는 선호 마진을 보상으로 하는 정책 경사다. ∇_θ log π_θ(y|x)·[P(y ≻ y′|x) − 1/2 − τ·log(π_θ(y|x)/μ(y|x))] (§7).
+
+**근거.** TL;DR 요약 데이터로 미세조정한 T5X-L 정책, T5X-XL 모델의 선호 모델, 10,000단계, Nash 실행의 τ = 0.008, RLHF 기준선의 τ = 0.05를 사용했다(App. G). PaLM 2 Large 선호 모델로 판정했을 때, 혼합 계수 β = 0.125인 Nash-MD-PG는 RLHF 기준선보다 비교의 59.8%에서, 순수 self-play(β = 0)보다 59.2%에서 선호된다. β는 상대 혼합에서 초기 정책 μ의 가중치이므로 β = 0은 self-play, β = 1은 μ에 대한 최선 응답이다(§8). β 0.125에서 0.375 사이는 두 끝점, 순수 self-play(β = 0) 및 고정 SFT 정책에 대한 최선 응답(β = 1)을 모두 이겼다(Table 1, §8). 이 표의 각 셀은 2,000 샘플로 추정되어 95% 구간 폭은 최대 ±0.023이다(App. G.6). 학습 선호 모델로 채점한 별도 표는 1,000 비교와 ±0.032를 사용한다(App. G.5, Table 2). 상태: 결과(단일 연구, 과제 하나).
+
+**조건과 한계.** 요약 과제 하나, 모델 크기 하나, 평가도 선호 모델 하나다. 홀드아웃 능력 패널은 보고되지 않는다. 혼합 매개변수가 중요하다. 자기 자신과만 대결하는 것(β = 0)은 초기 정책 일부를 유지하는 혼합과 대결하는 것보다 나쁘다.
+
+**함의.** 고정 상대(SFT 모델)에 대한 self-play와 자신에 대한 self-play는 한 축의 양 끝이며, 측정된 최선 설정은 그 사이에 있다. §2와 §3의 루프는 구성상 “자신에 대결” 끝에 있으며, 이것이 그 부정 예가 오래되는 한 이유다.
+
+## §5 SCoRe: 수정 단계 자체를 학습하기
+
+**정의.** SCoRe는 모델이 답한 뒤 자기 답을 수정하도록, 자기 자신의 2턴 롤아웃에 다중 턴 RL을 적용해 학습한다. 2턴은 질문, 1턴 답, 답이 틀렸는지는 말하지 않는 지시에 조건화된다([[self-correct-rl]] §5, App. C).
+
+**다루며 측정한 문제.** MATH500의 Gemini 1.5 Flash는 Accuracy@t1 52.6%, Accuracy@t2 41.4%이므로 Δ(t1, t2) = −11.2%다. 모델에게 수정하라고 프롬프트하면, 정답의 15.8%를 오답으로 바꾸고 오답의 4.6%만 고치므로 더 나빠진다(Table 1). 자기 생성 수정 추적에 대한 SFT는 이를 고치지 못한다. STaR 필터 추적은 Δ = 0.4%, pair-SFT는 Δ = 1.8%다(Table 1).
+
+**메커니즘.**
+
+1. **Stage I**는 첫 시도를 base 모델 근처에 붙들며 두 번째 시도 보상을 최대화한다. max_θ E[r̂(y2, y*) − β2·KL(π_θ(·|x1) ‖ π_ref(·|x1))]이고, 두 턴에 모두 더 작은 기본 KL 패널티가 있다(Eq. 3). β2는 MATH에서 0.1, MBPP에서 0.25다(App. B Table 5).
+2. **Stage II**는 두 시도를 함께 최적화한다. max_θ E[Σ_{i=1,2} r̂(y_i, y*) − β1·KL(π_θ(·|x_i) ‖ π_ref(·|x_i))] (Eq. 4)이다. 두 번째 시도에는 shaping 보너스 b̂(y2 | y1, y*) = α·(r̂(y2, y*) − r̂(y1, y*))가 더해지며, 두 설정 모두 α = 10이다(§5.2, App. B Table 5).
+3. 모든 실험은 순간 보상만 사용하며, 할인율 γ = 0과 동등하다(App. A). 따라서 보너스는 두 번째 시도 토큰의 그래디언트에 닿고 첫 번째 시도 토큰에는 닿지 않는다.
+
+**shaping 항의 계산 예.** 이진 보상과 α = 10이면 두 번째 시도에 붙는 보상은 r̂2 + 10(r̂2 − r̂1)이다. 오답→정답은 1 + 10 = 11, 정답→정답은 1 + 0 = 1, 정답→오답은 0 − 10 = −10, 오답→오답은 0이다. 보너스가 없으면 네 값은 1, 1, 0, 0이므로 정답을 유지하는 것과 오답을 고치는 것이 같은 가중치를 가지며, 모델에는 둘 중 더 어려운 일을 배우는 그래디언트 이유가 없다. γ = 0이므로 첫 시도 토큰은 여전히 r̂1만으로 학습된다. 따라서 shaping은 모델이 일부러 틀리게 답하도록 보상하지 않는다.
+
+**근거.** Gemini 1.5 Flash의 MATH500에서 SCoRe는 Accuracy@t1 60.0%, Accuracy@t2 64.4%, Δ = +4.4%를 기록했고, 정답→오답은 15.8%에서 1.4%로 낮아졌다(Table 2). base 모델 대비 Δ는 15.6점 개선했다. MBPP로 학습한 Gemini 1.0 Pro의 HumanEval에서 base Δ = 3.0%, SCoRe Δ = 12.2%다(Table 3). MBPP-R 수리 정확도는 47.3% → 60.6%다(Table 3). 초록은 이 이득을 절대 9.1%, §6.1은 “9% higher than the base model”이라고 표현하지만 Table 3의 두 칸 차이는 9.2점이다. MATH 절제 실험(Table 4)은 Stage I 없이 Δ = 2.2%, 보상 shaping 없이 Δ = 2.6%, Stage II에서 REINFORCE 대신 STaR를 쓰면 Δ = 2.2%, 단일 턴 RL은 Δ = −2.4%를 보인다.
+
+**조건과 한계.** 수정은 한 라운드, 보상은 이진, 모델은 Gemini다. MATH 학습 분할은 MATH test set의 문제 4,500개로 증강되고 평가는 남은 500개에서 한다(§6). 체크포인트는 최고 학습 보상으로 선택한다(§6). 초록에 보고한 자기수정 결과는 HumanEval에서 측정한다. MBPP는 학습 세트이고 MBPP-R은 별도 오프라인 수리 과제다.
+
+**함의.** 여기서 측정한 목표는 정확도 수준이 아니라 *행동*, 즉 시도 사이에 개선하는 것이다. 이 행동은 두 장치로 보호해야 한다. Stage I에서 첫 시도를 고정하는 KL, 그리고 개선 전이를 고보상 사건으로 만드는 shaping 항이다. 두 절제 실험은 모두 효과의 절반 이상을 잃는다.
+
+## §6 반복 횟수와 중단
+
+**측정 가능한 문제.** 이 장의 모든 루프에는 홀드아웃 메트릭보다 더 오래 개선되는 루프 내 메트릭이 있다. 따라서 멈출 시점을 결정하려면 반복마다 최소 두 측정이 필요하다. 루프 자체 메트릭과 루프가 최적화하지 않는 측정 하나다.
+
+| 루프 | 반복별 루프 내 메트릭 | 반복별 독립 메트릭 | 발산 위치 | 근거 |
 |---|---|---|---|---|
-| Self-Rewarding ([[self-rewarding-lm]]) | policy-as-judge, 5-pt rubric | argmax/argmin over 4 samples | DPO β=0.1 | 3 iters (judge drift) |
-| Meta-Rewarding ([[meta-rewarding-lm]]) | policy-as-judge + meta-judge | pairwise on 11 judges | DPO on actor *and* judge | 5 iters |
-| SPIN ([[spin]]) | human-written SFT response | `chosen=y_human`, `rejected=y_gen` | DPO on (human, self) pair | ~3 iters (distribution match) |
-| Nash-LM ([[self-play-preference]]) | pairwise preference model | self-play against EMA opponent | Mirror-descent on preference game | Nash equilibrium |
-| SCoRe ([[self-correct-rl]]) | outcome correctness, two-turn | reward shape `r(y2)−r(y1)` | REINFORCE, two-stage | Monotone while reward signal holds |
-| ReST-EM ([[rest-em]]) | exact-match / unit-test verifier | K=32 per problem, keep correct | SFT on survivors, 1 epoch | 2 iters (overfit without diversity cap) |
-| R1-Zero ([[deepseek-r1]]) | rule-based verifier | GRPO group-relative | On-policy PG with clipped ratio | Open-ended (base-model ceiling) |
+| Self-Rewarding | AlpacaEval 2.0 9.94 → 15.38 → 20.44 | GSM8K 60.27 → 59.29 → 57.70; NQ 35.48 → 33.07 → 31.86 | M1 뒤 | [[self-rewarding-lm]] Tables 1, 3 |
+| Meta-Rewarding | AlpacaEval 2 LC 27.85 → 32.66 → 35.45 → 39.44 | 판정기–인간 Spearman 0.382(it. 2) → 0.326(it. 4) | iteration 2 뒤 | [[meta-rewarding-lm]] Tables 1, 7 |
+| SPIN | Open LLM 평균 +2.66, +1.32, +0.85, +0.19 | MMLU 60.92 → 60.03 → 59.34 → 59.93 → 59.99 | iteration 0 | [[spin]] Table 4 |
+| ReST-EM | 학습 정확도는 계속 상승 | iteration 1 뒤 MATH test 이득 작음; iteration 2에서 APPS와 HumanEval 퇴행 | iteration 1 뒤 | [[rest-em]] §5.1, Fig. 4 |
+| RLVR(GRPO 단계) | 학습 pass@1 26.1 → 33.6 → 42.5 | test pass@256 68.3 → 66.6 → 63.9(base 69.1) | 최초 측정 체크포인트부터 | [[rlvr-beyond-base-model]] Table 4 |
+| SWE-Gym 자기개선(MoatlessTools) | 7B SWE-Bench Lite resolve 7.0 → 9.0 → 10.0 | 32B SWE-Bench Lite resolve 19.0 → 19.7 → 19.7 | 32B의 iteration 2 | [[swe-gym]] §4.3, Table 4 |
 
-이 장의 나머지는 이 표의 각 cell을 따라가고, 2025년 R1-Zero 사후 분석을 읽어 pure-RL 스펙트럼의 끝이 실제로 무엇을 전달했는지 본다.
+SWE-Gym 행은 두 열에 맞지 않는다. 논문은 반복별 루프 내부 메트릭을 보고하지 않으므로, 두 칸 모두 두 모델 크기의 같은 홀드아웃 메트릭을 담으며 발산은 메트릭 사이가 아니라 크기 사이에 있다([[swe-gym]] §4.3).
 
----
+**중단 결정의 계산 예.** GRPO 행([[rlvr-beyond-base-model]] Table 4, Qwen2.5-7B)을 보자. 150단계에서 모델은 Omni-MATH-Test에서 pass@1 25.1, pass@256 68.3이고, 450단계에서는 28.3과 63.9다. 수용 규칙이 “pass@1은 올라야 하고 pass@256은 base 모델의 69.1에서 1점 이내에 머물러야 한다”면 150단계는 통과한다(68.3, 차이 0.8). 450단계는 실패한다(63.9, 차이 5.2). 규칙이 pass@1만 보면 450단계가 이기며, 반복 샘플링에서 더 적은 서로 다른 문제를 푸는 모델을 출하한다. 같은 표는 학습 pass@1이 test pass@1보다 더 빠르게 상승하는 것도 보인다(26.1 → 42.5 대 25.1 → 28.3). 이것은 이득이 학습 프롬프트에 특수해지고 있다는 신호다.
 
-## 2. Self-Rewarding — 정책이 스스로를 judge한다
+**반복마다 측정할 것.** (a) 루프 자체 메트릭. (b) 루프가 전혀 채점하지 않은 도메인을 포함한 홀드아웃 능력 패널. [[self-rewarding-lm]] Table 3의 세 벤치마크가 최소 버전이다. (c) 채점기가 판정기일 때 판정기 독립 검사. [[meta-rewarding-lm]] Table 7처럼 고정 레이블 집합과의 일치다. (d) 홀드아웃 분할의 큰 k에서 pass@k([[rlvr-beyond-base-model]] §4.4). (e) 출력 길이와 가능하면 엔트로피. Self-Rewarding의 길이는 1,092 → 2,552로 늘었고(§3.2.1), GRPO 길이 편향의 보고된 부작용이기도 하다([[dr-grpo]] §3.1).
 
-[[self-rewarding-lm]](Yuan et al., Meta/NYU, 2024)은 Open Assistant로 SFT된 Llama-2-70B checkpoint에서 시작해 세 번의 DPO round를 반복한다. 각 iteration:
+**조건.** 어떤 소스도 여러 설정에서 검증한 중단 규칙을 보고하지 않는다. 나온 반복 횟수, 즉 Self-Rewarding의 모델 셋, Meta-Rewarding의 넷, SPIN의 넷, ReST-EM의 MATH 셋 및 APPS 둘은 저자들이 실행한 횟수이지 측정된 최적값이 아니다. 이를 일반적인 “세 번에서 상한”으로 다루는 것은 소스가 뒷받침하지 않는 외삽이다.
 
-1. π_{t−1}에서 prompt당 **4 responses**를 `T=0.7, top-p=0.9`로 샘플링한다.
-2. 같은 모델을 judge로 사용해 각 response를 점수화한다. judge prompt는 helpfulness, relevance, depth, clarity, completeness를 다루는 고정 **5-point additive rubric**을 덧붙인다. 분산을 줄이기 위해 각 pair를 **3 times** 판정하고 점수를 평균한다.
-3. 가장 높은 점수 response를 `chosen`, 가장 낮은 점수 response를 `rejected`로 삼는다.
-4. β=0.1, AdamW lr=5e-7, 1 epoch로 π_{t−1}에서 π_t를 DPO 학습한다.
+## §7 DeepSeek-R1: 하나의 루프만으로 충분하지 않았던 이유
 
-논문의 중심이자 가장 많이 인용되는 경험적 곡선은 **AlpacaEval 2.0 monotonic climb**이다. 논문 Figure 3에서 입증되고 [[self-rewarding-lm]]에 요약된 값은 다음과 같다.
+### 7.1 R1-Zero와 측정된 격차
 
-```
-iter 0 (SFT):   9.94 %
-iter 1:        15.38 %
-iter 2:        20.44 %      <- passes GPT-4 0613 (~19 %)
-iter 3:        20.8 %       <- plateau
-iter 4:                     <- regresses on reward bench (reward hacking)
-```
+R1-Zero는 DeepSeek-V3-Base에 직접 적용한 GRPO다. 규칙 보상(정확도와 형식, 동등 가중치), SFT 없음, 학습률 3e−6, KL 계수 0.001, 질문당 출력 16개, 단계당 질문 32개, 최대 길이 32,768토큰(8.2k 단계에서 65,536으로 상승), 10,400단계를 사용한다([[deepseek-r1]] §2.1–2.2). AIME 2024 pass@1은 15.6%에서 77.9%로 상승한다(§2.3). 저자들이 든 격차는 낮은 가독성과 언어 혼합(§1, §3)이며, Table 3은 폭의 격차를 IF-Eval 46.6, AlpacaEval 2.0 24.7, Aider-Polyglot 12.2로 정량화한다.
 
-비대칭이 중요하다. 이는 단일 data curve가 아니라 함께 오르는 *두* curve다. held-out Open-Assistant human preference에 대한 judge의 Spearman correlation은 **iter 0의 0.62에서 iter 3의 0.71**로 오른다([[self-rewarding-lm]] Table 2). actor가 좋아질수록 judge도 좋아진다. frozen reward model은 가질 수 없는 성질이다. 이것이 논문의 실제 기여이며, AlpacaEval win-rate는 표면 indicator일 뿐이다.
+### 7.2 네 단계와 각 단계가 움직인 것
 
-**왜 포화하는가.** judge는 ground truth가 아니다. actor와 judge가 모두 더 좁은 high-score basin으로 distill되면 judge 자신의 오류가 systematic해지고, DPO가 이를 증폭한다. 논문은 iter 4가 regresses한다고 보고한다. [[iterative-sft-rl]]도 Llama-2 RSFT를 5 rounds 너머로 밀면 같은 pattern을 지적한다. 3에서 멈추거나 meta-signal을 추가하라.
+| 벤치마크 | R1-Zero | Dev1(cold-start SFT) | Dev2(추론 RL) | Dev3(거부 샘플링 SFT) | R1(혼합 RL) |
+|---|---|---|---|---|---|
+| IF-Eval(프롬프트 엄격) | 46.6 | 71.7 | 72.0 | 78.1 | 83.3 |
+| AlpacaEval 2.0(LC 승률) | 24.7 | 50.1 | 55.8 | 62.1 | 87.6 |
+| ArenaHard | 53.6 | 77.0 | 73.2 | 75.6 | 92.3 |
+| Aider-Polyglot | 12.2 | 6.7 | 25.6 | 44.8 | 53.3 |
+| AIME 2024(pass@1) | 77.9 | 59.0 | 74.0 | 78.1 | 79.8 |
+| CNMO 2024(pass@1) | 88.1 | 58.0 | 73.9 | 77.3 | 78.8 |
+| GPQA Diamond(pass@1) | 75.8 | 66.1 | 70.7 | 71.2 | 71.5 |
+| MMLU-Pro | 68.9 | 74.1 | 83.8 | 83.1 | 84.0 |
+| SimpleQA | 30.3 | 17.8 | 28.2 | 24.9 | 30.1 |
 
----
+모든 값은 [[deepseek-r1]] Table 3에서 왔다. 단계 구성([[deepseek-r1-recipe]])은 다음과 같다. Dev1은 온도 1.0에서 R1-Zero 샘플로 만든 “thousands”의 긴 chain-of-thought 예를 정확성과 가독성으로 필터링하고, DeepSeek-V3가 다듬고 주석자가 검사한 SFT다(B.3.2). Dev2는 GRPO 클리핑 비율 ε = 10과 사고 연쇄에서 목표 언어 단어 비율인 언어 일관성 보상으로 하는 추론 RL이다(§3.2.1, Eq. 7). Dev3는 RL 체크포인트가 아니라 DeepSeek-V3-Base에서 시작한 SFT이며, 샘플 804,745개, 즉 추론 626,933개(수학 395,285, 코드 211,129, STEM 10,124, 논리 10,395)와 General 177,812개를 사용한다(B.3.3, Table 5). 최종 단계는 온도 0.7에서 규칙 보상, helpfulness 보상 모델, 안전 보상 모델, 형식 및 언어 보상을 결합한 RL 1,700단계이며, general 데이터와 선호 보상은 마지막 400단계에서만 쓴다(§3.2.2).
 
-## 3. Meta-Rewarding — judge를 judge하기
+**표를 읽는 세 방식.** (1) 각 단계는 이전 단계가 포괄하지 못한 것을 보수한다. cold start는 지시 따르기를 25점 올리고 AIME 추론은 19점 낮춘다. 추론 RL은 추론 대부분을 회복한다. 일반 SFT 단계는 Aider-Polyglot을 25.6 → 44.8로 옮긴다. 최종 RL은 추론 변화가 작은 상태에서 AlpacaEval 2.0을 62.1 → 87.6으로 옮긴다. (2) 완성 모델은 RL 전용 모델보다 일관되게 낫지 않다. GPQA Diamond는 75.8 대비 71.5, CNMO 2024는 88.1 대비 78.8이다. (3) 선호 보상은 의도적으로 제한된다. helpfulness 보상 모델에서는 보상이 오르면서 Codeforces test pass@1이 내려가므로, 선호 보상은 마지막 400단계에서만 실행한다(B.5, Fig. 6; §3.2.2).
 
-[[meta-rewarding-lm]](Wu et al., Meta FAIR + Berkeley, 2024)은 **세 번째 역할**을 추가한다. 모델은 이제 Actor, Judge, *and* Meta-Judge 역할을 한다. iteration마다:
+### 7.3 base 모델이 기여하는 것
 
-1. prompt당 **K=7** actor response를 샘플링한다.
-2. 각 `(prompt, actor_response)` pair에 대해 **N=11** judge response를 샘플링한다. 각 judge response는 score + rationale이다.
-3. **Meta-Judge**가 calibration rubric 아래 11개의 judgment를 pairwise-compare하고 best/worst를 고른다.
-4. Actor-DPO는 judge score를 aggregation한 `(best_actor, worst_actor)` pair를 사용한다.
-5. **Judge-DPO**는 meta-judge가 고른 `(best_judge, worst_judge)` pair를 사용한다.
-6. rubric 안의 **length-bias control term**("length for length's sake를 보상하지 말라")이 plain DPO self-loop를 괴롭히는 2× response-length inflation을 막는다.
+- **모델 용량.** base 모델에서의 RL은 7B dense 모델과 16B MoE 모델에서 AIME를 개선하지 못했다. 응답 길이가 늘고 모델이 자신을 반복했다. 32B dense, 230B MoE, 671B MoE base에서는 작동했다([[deepseek-r1]] G.1).
+- **RL 전부터 있던 행동.** self-reflection 키워드는 DeepSeek-V3-Base를 포함한 base 모델에 이미 나타난다. Qwen2.5-Math base 모델은 템플릿 없이 답할 때 4-shot 프롬프팅보다 약 60% 더 잘 답한다([[dr-grpo]] §2.1–2.3, Table 1). R1-Zero 자체에서 “nearly half responses with self-reflection do not achieve higher accuracy than those without self-reflection”이다([[dr-grpo]] App. F, Fig. 15). 반성 언어가 사전학습 분포에 존재하지 않다가 RL에서 나타난다는 주장은 이 측정들이 뒷받침하지 않는다.
+- **RL이 전혀 움직일지를 정하는 행동.** Countdown에서 동일 PPO 학습 아래 Qwen-2.5-3B는 약 60% 정확도, Llama-3.2-3B는 약 30%에 도달한다. 검증, backtracking, 하위 목표 설정 또는 backward chaining을 담은 추적으로 Llama를 priming하면 격차가 닫힌다. 그 행동을 담지만 *오답*인 해법을 담은 추적으로 priming해도 정답 추적 priming과 같다. 같은 길이의 빈 chain-of-thought priming은 Llama를 30–35%에 둔다([[cognitive-behaviors-self-improving-reasoners]] §3, Figs. 5–6). 그 행동을 담도록 필터링·재작성한 OpenWebMath 문서 8.3M토큰으로 계속 사전학습하면 Llama는 Qwen의 개선 궤적에 올라간다(Fig. 8).
+- **대규모 공개 재현.** Open-Reasoner-Zero는 Qwen2.5-32B-Base를 vanilla PPO, GAE λ = 1 및 γ = 1, 형식 보상 없는 정확도 전용 보상, KL 정규화 없음으로 학습한다. DeepSeek-R1-Zero-Qwen-32B의 47.0 / 91.6 / 55.0에 대해 AIME 2024 48.1, MATH500 92.2, GPQA Diamond 55.5를 약 10분의 1 학습 단계로 달성한다([[open-reasoner-zero]] Abstract, Table 1). 폭 검사 Table 2에서 Qwen2.5-32B base 대비 MMLU 83.3 → 84.9, MMLU-Pro 55.1 → 74.4이며, 추론 전용 RL 데이터로 둘 다 Qwen2.5-32B-Instruct를 넘는다. 상태: 결과(단일 연구). 지시 따르기 또는 안전 평가는 보고되지 않았다.
+- **process reward model은 시도했다가 제외했다.** DeepSeek은 PRM을 성공하지 못한 시도에 넣는다. 단계를 정의하기 어렵고, 단계 정확성 레이블링이 어렵고, 모델 기반 PRM은 보상 해킹으로 이어지며, 추가 계산량 대비 이득이 제한적이기 때문이다([[deepseek-r1]] G.2). 이것은 R1 설정에 대한 단일 보고이며, process supervision 일반에 대한 발견은 아니다(ch-44).
 
-Judge-DPO leg가 혁신이다. Self-Rewarding은 actor만 학습한다. Meta-Rewarding은 두 역할 모두 학습한다. Llama-3-8B-Instruct AlpacaEval 2.0 LC win-rate는 **22.9 % → 39.4 % over 4 iterations**로 오른다([[meta-rewarding-lm]] Table 1). Self-Rewarding이 평평해지는 지점에서도 judge-human agreement가 계속 오른다.
+### 7.4 샤프닝인가 확장인가
 
-구조적 pattern을 보라. Self-Rewarding은 **two-layer** stack(Actor, Judge)이다. Meta-Rewarding은 **three-layer**(Actor, Judge, Meta-Judge)이다. four-layer stack도 상상할 수 있지만 iteration당 compute cost가 폭발한다(`K × N × M` judge calls). 논문의 ablation은 meta-judge 너머의 diminishing returns를 보인다. 이는 [[ch-44]]의 process-reward model에서 보게 될 hierarchical-evaluation pattern과 같지만, step rollout이 아니라 *judge*에 적용된다.
+[[rlvr-beyond-base-model]]은 수학, 코드, 시각 추론 전반에서 큰 k의 pass@k로 RLVR 학습 모델과 그 base를 평가한다. RL 학습 모델은 작은 k에서 이기지만 큰 k에서 base 모델이 따라잡고 앞선다. 32B 모델의 Minerva에서는 k = 128에서 base 모델이 약 9점 높다(§3). Qwen2.5-7B에서 여섯 RL 알고리즘을 비교하면 MATH500 pass@1은 base 모델 34.5에서 73.5–75.6으로 오르지만, 여섯 알고리즘의 pass@256은 base 모델 96.2에 대해 96.4와 97.4 사이에 머문다. 알고리즘은 pass@1에서는 다르지만 커버리지 상한에서는 다르지 않다(Table 3). 저자들의 해석은 RLVR이 base 모델이 이미 샘플링할 수 있었던 경로 쪽으로 확률 질량을 재분배하며, 더 강한 교사로부터의 증류가 새 경로를 더하는 연산이라는 것이다. 상태: 여러 설정을 쓴 한 연구가 뒷받침하는 해석이며, [[prorl]]은 가장 강한 버전에 이의를 제기한다(ch-40 참조).
 
----
+## §8 에이전트를 위한 자기개선
 
-## 4. SPIN — 데이터가 judge다
+에이전트 루프는 세 가지가 다르다. 보상은 많은 단계 뒤에 도착하고, 환경은 모델이 생성하지 않은 관측을 제공하며, 실패 궤적은 재현 비용이 크다. 궤적 생성과 검증은 ch-29d, 에이전트용 거부 샘플링 SFT는 ch-31에서 다룬다. 이 절은 반복에 걸쳐 루프가 하는 일을 다룬다.
 
-[[spin]](Chen et al., UCLA, 2024)은 다른 선택을 한다. "judge"는 **human SFT response 자체**다. 모든 iteration에서 DPO pair는 문자 그대로 `(y_human, y_model_previous)`이다.
+**루프로서의 과제 난이도 상승.** DeepSeek-V3.2의 범용 에이전트 파이프라인에서 합성 에이전트는 샌드박스와 도구 집합을 만들고, Python 해법 함수와 검증 함수를 가진 과제를 제안하며, 해법이 검증을 통과할 때까지 이들을 수리한 뒤, *과제의 난이도를 반복적으로 높인다*. 현재 도구로 풀 수 없으면 도구 집합을 증강한다. 생성 집합은 이후 DeepSeek-V3.2로 RL을 실행하고 0이 아닌 pass@100을 가진 인스턴스만 남겨 필터링하며, 환경 1,827개와 과제 4,417개가 남는다([[deepseek-v3.1]] §3.2.3). 생존 항목의 난이도는 측정되어 있다. 샘플링한 합성 과제 50개에서 DeepSeek-V3.2-Exp는 pass@1 12%, GPT-5-Thinking은 62%에 도달한다(Table 5). 합성 범용 에이전트 과제만으로 한 RL은 RL 데이터에 없던 Tau2Bench, MCP-Mark, MCP-Universe를 개선했다(§4.3, Fig. 5; 보고서는 값은 그림에만 인쇄한다).
 
-```
-L_SPIN = −log σ( β · [ log(π_t(y_human) / π_{t−1}(y_human))
-                       − log(π_t(y_gen)   / π_{t−1}(y_gen)  ) ] )
-```
+**보상 없는 수정 궤적.** [[agent-early-experience]]는 각 전문가 상태에서 K개의 대안 행동을 실행하고, 그 결과의 다음 상태를 저장하며, 두 방법으로 이를 학습한다. 암묵적 세계 모델링(다음 상태를 예측한 뒤 모방)과 self-reflection(관찰한 두 결과에 근거하여 왜 전문가 행동이 대안보다 나은지를 설명하는 근거를 학습)이다. Llama-3.1-8B의 ALFWorld out-of-domain 분할에서 모방은 63.3, 암묵적 세계 모델링은 78.1을 기록한다. Llama-3.2-3B의 WebShop에서 모방은 41.8, 세계 모델링은 60.2다(Tables 1–2). 동일 설정 GRPO의 시작점으로 사용하면, RL 뒤 WebShop 성공률은 모방에서 82.0, 세계 모델링에서 92.2다(§5.4). 같은 논문의 두 부정 결과는 여기서 중요하다. 대안과 그 결과를 무시하는 STaR 스타일 근거는 성능을 *낮춘다*(WebShop 47.3 → 25.0). 그리고 전문가 행동을 chosen, 에이전트 자신의 행동을 rejected로 하는 DPO는 “collapses within tens of optimization steps”다(Table 3, §6.3).
 
-이는 DPO 그대로다. 바뀌는 것은 preference *source*뿐이다. 대수적 결과(논문의 Theorem 4.1)는 **Nash equilibrium characterization**이다. π_t가 data distribution과 일치하면 SPIN loss는 0이 된다. SPIN은 "Nash = data-matching인 two-player self-play"다.
+**작동하지 않은 온폴리시 자기개선.** Qwen2.5-Coder-32B를 자신의 성공 궤적 868개와 교사 궤적 491개로 미세조정하자 SWE-Bench Lite 해결률은 15.3%에서 8.7%로 낮아졌다. 저자들은 “self-improvement is not yet working”이라고 하며 PPO 스타일 최적화 또는 더 강한 base를 시험하지 않은 대안으로 든다([[swe-gym]] §4.2). 제약된 scaffold에서는 거부 샘플링 미세조정 2회 반복이 7B 모델을 7.0%에서 9.0%, 10.0%로 올렸지만, 32B 모델은 19.0%에서 19.7%로만 올랐고 이후 이득이 없었다(§4.3, Table 4). ch-31은 이 사례를 거부 샘플링 맥락에서 다룬다. 이 장에서의 요점은 약한 정책에 도움이 되는 반복 예산이 같은 환경의 더 강한 정책에는 아무것도 하지 않는다는 것이다.
 
-UltraChat-200K의 Mistral-7B-SFT에서 iteration마다:
-1. π_{t−1}에서 T=1.0으로 **50K (prompt, response) pairs**를 샘플링한다.
-2. SFT row와 1:1로 DPO pair를 만든다. `chosen = y_human, rejected = y_gen`.
-3. β=0.1, lr=5e-7, 3 epochs, batch 64로 π_{t−1}에서 π_t를 DPO 학습한다.
-4. iter t+1을 위해 **reference를 π_{t−1}로 reset**한다.
+## 부정 샘플과 부정 피드백
 
-Zephyr-7B-SFT + 3 SPIN iters는 HF Open LLM Leaderboard에서 Zephyr-7B-DPO(60K GPT-4 preference를 사용)와 맞먹는다. MT-Bench는 3 iters 동안 **6.39 → 7.12**로 오른다([[spin]] Table 2). headline claim은 "SFT-only data로 preference-level gains"다.
+**1. 부정이 오는 곳과 네 의미 중 무엇이 적용되는가.** 과정 표준의 정의, 즉 음의 한계가치, 내용으로서 부정, 조건화로서 부정, 그래디언트로서 부정을 사용한다.
 
-한계는 같은 동전의 뒷면이다. SPIN은 data distribution으로 수렴하므로 **SFT corpus ceiling을 넘을 수 없다**. human response가 중간 품질이면 fixed point도 중간 품질이다. 그래서 modern pipeline에서 SPIN은 보통 terminal stage가 아니라 preference-RL 이전의 *warmup*으로 실행된다([[iterative-sft-rl]] §Tülu 3).
+| 루프 | 실패 레이블 원천 | 실패에 일어나는 일 | 의미 |
+|---|---|---|---|
+| ReST-EM, STaR, R1 3단계 SFT | 답 일치, 단위 테스트, V3 판정기 | 버림, 가중치 0 | 음의 한계가치(제거) |
+| Self-Rewarding | 정책-판정기, 점수 4개 중 최저 | DPO의 rejected 항 | 그래디언트 |
+| Meta-Rewarding | 판정 점수 계층과 길이 규칙; 판정의 meta-judge Elo | rejected 응답과 rejected 판정 | 그래디언트 |
+| SPIN | 없음 — 구성상 모델 자체 샘플이 음성 | SPIN 손실의 음성 항 | 그래디언트 |
+| R1-Zero, R1 RL 단계 | 규칙 보상 0 | 음의 그룹 상대 이점 | 그래디언트 |
+| SCoRe | 시도별 결과 검사 | 정답→오답 전이는 −α; 틀린 첫 시도는 2턴 컨텍스트에 남음 | 그래디언트와 내용 |
+| V-STaR | 답 검사 | 정답·오답 해법으로 DPO 검증기를 학습 | 별도 모델에서의 그래디언트 |
+| Early Experience | 없음(보상 없음) | 비전문가 행동과 관찰된 다음 상태가 next-token 손실의 입력 또는 목표가 됨 | 내용 |
+| Cognitive-behaviors priming | 없음 | 올바른 행동을 가진 틀린 해법을 양성 목표로 학습 | 내용 |
 
----
+**2. 거짓 음성률.** Self-Rewarding 판정기는 M3에서 홀드아웃 인간 순위와 쌍의 81.7%에서 일치한다([[self-rewarding-lm]] Table 4). 따라서 대략 다섯 쌍 중 하나는 DPO에 뒤집힌 레이블을 넣는다. Meta-Rewarding 판정기는 iteration 2에서 어느 판정기도 tie를 반환하지 않은 self-chosen 쌍의 72.34%, 그러한 모든 쌍의 61.57%에서 GPT-4와 일치한다([[meta-rewarding-lm]] Table 3). 규칙 검증기에서는 [[star]]가 반대 오류를 보고한다. 잘못된 추론으로 도달한 정답 최종 답은 거짓 *양성*이 되고 높은 온도 샘플링은 비율을 높인다(§5). 이 장의 어떤 소스도 규칙 검증기의 거짓 음성률을 보고하지 않는다.
 
-## 5. Nash-LM — alignment를 preference game으로 보기
+**3. 메커니즘.** 확률 p를 가진 로짓 z의 softmax에서, 토큰 y 로그 확률의 로짓 j에 대한 그래디언트는 ∂ log p_y / ∂ z_j = 1[j = y] − p_j다. 샘플 y에 대한 음의 가중 업데이트는 이 양을 빼므로 z_y를 내리고 다른 모든 로짓을 현재 확률에 비례해 올린다. 계산 예: z = (2, 1, 0)은 p = (0.665, 0.245, 0.090)을 준다. 단계 크기 0.5로 토큰 3을 아래로 밀면 Δz = 0.5·(p − e_3) = (+0.333, +0.122, −0.455)이다. 따라서 z′ = (2.333, 1.122, −0.455), p′ = (0.735, 0.219, 0.045)다. 토큰 3은 확률 0.045를 잃고, 토큰 2는 로짓이 올랐는데도 0.026을 잃으며, 토큰 1은 0.070을 얻는다. 이미 가능성이 낮은 샘플을 밀어 내면 질량은 현재 가장 가능성 높은 대안으로 간다. ch-43a는 결과(likelihood displacement, squeezing)를 유도한다. [[likelihood-displacement]]는 그 하나를 측정했다. 온폴리시 거부 쌍 DPO는 선호 거부에도 질량이 멀어져 Llama-3-8B-Instruct의 학습 집합 거부율을 74.4%에서 33.4%로 낮췄다(§6.2).
 
-[[self-play-preference]](Munos et al., DeepMind, 2024)는 RLHF의 구조적 결함을 공격한다. **non-transitive preferences**다. Bradley-Terry reward model은 `p(a > b) · p(b > c) · p(c > a) < 1/2`(transitivity)를 가정한다. 실제 human preference는 writing style, coding idiom, humor에 대해 이를 쉽게 위반한다. non-transitive data에서 DPO는 oscillate하고, BT-reward에 대한 PPO는 임의의 mode로 수렴한다.
+**4. 이득과 실패의 근거.** 이득: 정답→오답 전이에 대한 패널티인 SCoRe shaping 항은 Δ(t1, t2)의 1.8점 값어치가 있다(있을 때 4.4%, 없을 때 2.6%; [[self-correct-rl]] Table 4). 그리고 정답→오답을 15.8%에서 1.4%로 줄인다(Table 2). SPIN의 음성은 SFT epoch가 더 이상 도움이 안 된 뒤 SFT 데이터가 추가 이득을 내는 메커니즘이다(다른 SFT epoch의 57.23에 대해 58.14 → 63.16; [[spin]] Tables 4–5). 실패: 에이전트 환경에서 전문가 대 자체 행동 쌍 DPO는 수십 최적화 단계 안에 붕괴한다([[agent-early-experience]] §6.3). GRPO의 응답 길이 나눗셈은 긴 오답에 더 작은 토큰별 패널티를 주므로 정책은 긴 오답을 선호하게 된다. DeepSeek-R1-Zero에서 오답 응답 평균 길이 8,206.1은 정답 4,965.4보다 길다([[dr-grpo]] §3.1, App. F Table 5).
 
-Nash-LM은 이렇게 다시 프레이밍한다. 모든 경쟁 정책 π에 대해 `P(π* ≻ π) ≥ 1/2`인 **Nash equilibrium** policy π*를 찾는다. Nash-MD update는:
+**5. 자기생성 부정의 오래됨.** iteration 1–3의 SPIN 합성 집합은 샘플 100k다. 현재 상대가 생성한 50k와 이전 반복에서 이월한 50k다([[spin]] §6.1). logistic 손실 쌍의 그래디언트 크기는 σ(−m)이며, m은 암묵적 마진 λ[log(π/π_ref)(y_chosen) − log(π/π_ref)(y_rejected)]다. m = 0인 새 쌍은 σ(0) = 0.5 크기를 가진다. 가능성이 이미 내려가 m = 3인 이월 음성은 σ(−3) = 0.047, 약 10분의 1이다. 결과는 둘이다. 오래된 음성은 계산 비용을 계속 내면서 샘플별 그래디언트를 거의 기여하지 않으며, 그래디언트를 내는 쌍은 현재 정책이 아직 잘못 순위 매긴 쌍이다. 판정기 쪽에서는 같은 효과가 점수 포화로 나타난다. Meta-Rewarding의 평균 판정 점수는 5점 루브릭에서 판정기 학습 2회 뒤 4.7 이상으로 오르며([[meta-rewarding-lm]] Fig. 5), 쌍 선택이 의존하는 점수 간격을 압축한다.
 
-```
-π_{t+1}  ∝  π_ref · exp( η · E_{y' ~ π_t} p(· > y' | x) )
-```
+**6. 제어.** 음성을 풀링하지 말고 매 반복 재생성하여 온폴리시로 유지한다. 오프폴리시에서 먼 음성은 마스킹한다. DeepSeek-V3.2는 이점이 음수이고 추론 정책에 대한 평균 로그 비율이 임계값을 넘으면 시퀀스를 0으로 만든다. “highly off-policy negative samples can be detrimental”이기 때문이다([[deepseek-v3.1]] §3.1, Eq. 9). SCoRe가 Stage I 첫 시도 KL로 하듯, 패널티를 양성 항에 대해 경계한다. 전체 궤적 대신 잘못된 전이에 패널티를 국소화한다(SCoRe의 γ = 0인 시도별 보상). 실패가 유익하지만 레이블이 불확실하면 그래디언트 대신 내용으로 쓴다. 위 두 에이전트 결과가 그 선택의 측정된 사례다.
 
-실제로는([[self-play-preference]] §5) preference-model score를 reward로 사용해 EMA copy of itself를 상대로 REINFORCE를 한다. preference가 non-transitive일 때 equilibrium은 **stochastic**이다. "올바른" 정책은 mode가 아니라 mixture다. 이것이 SPIN의 `Nash = data distribution`과 Self-Rewarding의 `Nash = judge's argmax`에 없는 점이다. preference conflict를 collapse시키지 않고 *존중*하는 equilibrium이다.
+**7. 진단.** 반복별 chosen 및 rejected 로그 확률을 따로 기록한다. 사용 가능한 쌍을 만드는 프롬프트 비율(Self-Rewarding은 tie를 버림, [[self-rewarding-lm]] §2.3), 판정기 점수 분포([[meta-rewarding-lm]] Fig. 5), 프롬프트별 음의 이점 샘플 비율, 정확성별 평균 길이([[dr-grpo]] Fig. 5), pass@1 및 큰 k의 pass@k([[rlvr-beyond-base-model]])를 기록한다.
 
----
+**8. 효과의 크기.** 이 장의 어떤 소스도 판정기 채점 루프의 전체 이득 중 음성 항에서 오는 몫을 분리하지 않는다. 존재하는 두 절제는 SCoRe 보상 shaping(Δ 2.6% → 4.4%)과 Early Experience의 그래디언트로서 음성 대 내용으로서 음성 비교(WebShop에서 DPO 53.1 대 암묵적 세계 모델링 58.6)다. 부정 예가 자기개선 이득의 주된 동력이라는 주장은 이 소스들이 지지하지 않는다.
 
-## 6. SCoRe — self-correction을 RL target으로 삼기
+## 레시피
 
-[[self-correct-rl]](Kumar et al., DeepMind, 2024)은 매우 구체적인 capability를 겨냥한다. **답하고, 자신이 틀렸음을 알아차리고, 수정하는 것**이다. correction trace에 대한 SFT는 두 가지 잘 문서화된 failure mode로 *실패*한다.
+| 모델(정확한 릴리스) | 크기 | 단계 | 설정 | 값 | 소스 위치 | 상태 | 이 값의 근거 |
+|---|---|---|---|---|---|---|---|
+| Self-Rewarding M1(Llama 2 70B) | 70B | SFT | seed 데이터; LR; 배치; dropout; 손실 | IFT 3,200 + EFT 1,630 예; 5.5e−6 cosine → 1.1e−6; 16; 0.1; target 토큰만 | arXiv:2401.10020v3 §3.1.1, §3.1.3 | 2026-09-15 검증 | §3.2.1: IFT+EFT 대 IFT 단독 head-to-head 승 30.5% 대 30.9% |
+| Self-Rewarding M2, M3 | 70B | 선호 | 손실; β; LR; 배치; 쌍 | DPO; 0.1; 1e−6 → 1e−7 감쇠; 16; M2 3,964쌍, M3 6,942쌍 | v3 §3.1.3 | 2026-09-15 검증 | 절제 미보고 |
+| Self-Rewarding, 전체 반복 | 70B | 선호 | 프롬프트당 후보; 샘플링; 판정 샘플; 쌍 규칙 | T = 0.7, p = 0.9에서 N = 4; 판정 3회 평균; 최고 대 최저, tie 버림 | v3 §2.3, §3.1.3 | 2026-09-15 검증 | Table 5가 EFT test set의 LLM-as-a-Judge 프롬프트 비교 |
+| Self-Rewarding, 전체 반복 | 70B | 평가 게이트 | 체크포인트 선택 | 200단계마다, 검증 예 253개의 Claude 2 쌍별 판정으로 선택 | v3 §3.1.3 | 2026-09-15 검증 | 절제 미보고 |
+| Meta-Rewarding(Llama-3-8B-Instruct) | 8B | 선호 | 손실; β; epoch; LR; 배치 | DPO; 0.1; 반복별 체크포인트 선택으로 10; 5e−6; 32 | arXiv:2407.19594v2 App. A.3 ([[meta-rewarding-lm]]) | 2026-09-14 검증 | 절제 미보고 |
+| Meta-Rewarding, 전체 반복 | 8B | 선호 | 응답; 판정; 프롬프트 | K = 7(T 0.8, top-p 0.95); N = 11; 20,000 풀에서 반복별 프롬프트 5,000개 | §2.1, §3.1 | 2026-09-14 검증 | footnote 2: 더 큰 N은 유사하거나 더 낮은 인간 상관 |
+| Meta-Rewarding iteration 4 | 8B | 선호 | 길이 제어 ρ | 0.4 | §3.1, Table 4 | 2026-09-14 검증 | Table 4: ρ = 0.4이면 LC 39.44%, 길이 2,003, ρ = 0이면 2,212 |
+| SPIN(zephyr-7b-sft-full) | 7B | 선호 | 프롬프트; 합성 크기; 반복당 epoch | UltraChat200k 프롬프트 50k; iteration 0에 50k, 1–3에 100k; 2 | arXiv:2401.01335v3 §6.1 | 2026-09-15 검증 | §6.3 Fig. 4: iteration 0 안의 더 많은 epoch가 iteration 1에 도달하지 못함 |
+| SPIN, 전체 반복 | 7B | 선호 | optimizer; 배치; warmup; peak LR; λ(β); 최대 길이 | RMSProp, weight decay 없음; 64; 10%; 5e−7(iteration 0–1), 1e−7(iteration 2–3); 0.1, iteration 3에서 5.0; 2,048 | v3 App. B.1 | 2026-09-15 검증 | 절제 미보고 |
+| SCoRe(Gemini 1.5 Flash, MATH) | 미보고 | RL | optimizer; LR; 단계; 배치; 온도; α; β1; β2 | Adam; 5e−6; 3,000; 512; 1.0; 10; 0.01; 0.1 | arXiv:2409.12917v2 App. B Table 5 | 2026-09-15 검증 | Table 4: Stage I 없음 Δ 2.2%, shaping 없음 Δ 2.6%, 전체 4.4% |
+| SCoRe(Gemini 1.0 Pro, MBPP) | 미보고 | RL | LR; 단계; 배치; α; β1; β2 | 1e−5; 1,500; 128; 10; 0.01; 0.25 | v2 App. B Table 5 | 2026-09-15 검증 | Table 3: HumanEval Δ 12.2%, base 3.0% |
+| ReST-EM(PaLM 2-S, S*, L) | 미보고 | SFT | 문제당 샘플; 샘플링; cap; 초기화 | MATH 32, APPS 64; top-K 40, T 0.7; 문제당 10개 보존; 반복마다 base pretrained model | arXiv:2312.06585v4 §5, §3 ([[rest-em]]) | 2026-09-14 검증 | Fig. 7: 재시작이 계속 학습보다 HumanEval 전이 우수 |
+| DeepSeek-R1-Zero | 671B MoE | RL | LR; KL 계수; 질문당 출력; 단계당 질문; 최대 길이; 단계; 기준 갱신 | 3e−6; 0.001; 16; 32; 32,768, 이후 8.2k 단계 후 65,536; 10,400; 400단계마다 | arXiv:2501.12948v2 §2.1 ([[deepseek-r1-recipe]]) | 2026-09-14 검증 | §2.1: 8.2k 단계 성능/길이 점프 |
+| DeepSeek-R1 Dev1 / Dev3 | 671B MoE | SFT | base; epoch; LR; context; 배치 | DeepSeek-V3-Base; 2–3; cosine 5e−5 → 5e−6; 32,768; 128 | v2 B.4.2 | 2026-09-14 검증 | Table 3 단계 비교 |
+| DeepSeek-R1 Dev3 | 671B MoE | SFT | 데이터 | 804,745 샘플: Math 395,285; Code 211,129; STEM 10,124; Logic 10,395; General 177,812 | v2 B.3.3, Table 5 | 2026-09-14 검증 | Table 3: AlpacaEval 2.0 55.8 → 62.1, Aider 25.6 → 44.8 |
+| DeepSeek-R1 최종 단계 | 671B MoE | RL | 온도; 단계; 선호 보상 창 | 0.7; 1,700; general 데이터와 선호 보상은 마지막 400단계만 | v2 §3.2.2 | 2026-09-14 검증 | B.5 Fig. 6: helpfulness-RM 보상 상승, Codeforces 하락 |
+| Open-Reasoner-Zero-32B | 32B | RL | 알고리즘; GAE; KL; 단계당 프롬프트 × 응답; 샘플링; 정책 LR; critic LR | vanilla PPO; λ = 1, γ = 1; 없음; 128 × 64; T 1.0, top-p 1.0; 50단계 warmup의 상수 1e−6; 5e−6 | arXiv:2503.24290v2 Abstract, App. B ([[open-reasoner-zero]]) | 2026-09-15 검증 | Fig. 3: λ = 1.0은 안정, λ = 0.95는 붕괴; KL 생략이 안정/길이 확장에 최선 |
+| Open-Reasoner-Zero-32B | 32B | RL | annealing 단계 | 처음 1,100단계에서 64시도 중 정답 4개 미만인 프롬프트 13k; 추가 100단계; LR 3e−7로 감쇠 | v2 App. B | 2026-09-15 검증 | 절제 미보고 |
+| Cognitive-behaviors priming(Llama-3.2-3B) | 3B | RL | 알고리즘; 단계; 프롬프트당 궤적 | PPO; 250; 4 | arXiv:2503.01307v2 §3 ([[cognitive-behaviors-self-improving-reasoners]]) | 2026-09-15 검증 | §3: PPO는 안정성을 위해 선택; 알고리즘 사이 성능은 일화적으로 유사 |
 
-1. **Distribution shift** — trace는 더 강한 teacher에서 온다. student 자신의 turn-1 distribution은 다르므로 conditioning이 어긋난다.
-2. **Mode collapse** — model은 turn 1에서 정답을 내고 turn 2에서 no-op하는 법을 배운다.
+**작은 범용 실행의 시작점.** 7–8B 지시 모델의 판정기 채점 루프에서 위 유일한 완전 공개 설정은 Meta-Rewarding이다. β = 0.1 DPO, 학습률 5e−6, 배치 32, 반복별 프롬프트 5,000개, K = 7 응답, N = 11 판정, ρ 0.32에서 0.4 사이 길이 제어, 반복별 체크포인트 선택이며 최대 네 반복을 실행한다(Llama-3-8B-Instruct, 하드웨어 미보고). 수천 문제의 고정 문제 집합에 대한 검증기 채점 루프에서 ReST-EM 공개 설정은 top-K 40, T 0.7에서 문제당 샘플 32개, 문제당 최대 10개 보존, 반복마다 base 모델 미세조정, 매 반복 뒤 홀드아웃 데이터 평가다(PaLM 2 모델; 학습률과 배치 크기는 미보고이므로 ch-30의 자체 SFT 설정에서 와야 한다).
 
-SCoRe의 해결책은 two-turn trajectory에 대한 **two-stage on-policy RL**이다. Turn 1: `question`. Turn 2: `question + turn-1 answer + "There might be an error. Please revise."`. Reward는 rule grader의 binary outcome correctness다.
+## 일반화 관점
 
-**Stage I**은 turn-2만 학습하고, turn-1에 base model 대비 강한 **KL**을 건다.
+**(a) 무엇이 폭을 넓히는가.** 이전 반복 결과가 아니라 반복마다 base 모델에서 재시작하는 것: ReST-EM은 이 선택을 전이에 연결하며 마지막 반복에서 계속하는 것보다 HumanEval 전이가 더 좋다([[rest-em]] §3, Fig. 7). 추론 루프 뒤 비대상 데이터를 추가하는 것: R1 Dev3는 Aider-Polyglot 25.6 → 44.8, AlpacaEval 2.0 55.8 → 62.1로 옮긴다([[deepseek-r1]] Table 3). 마지막 단계에서 보상 유형을 섞는 것: AlpacaEval 2.0 62.1 → 87.6, ArenaHard 75.6 → 92.3(Table 3)이다. 프롬프트 집합을 확대·다양화하는 것: ORZ 57k 혼합 집합은 MATH-7.5k가 평탄해진 곳에서 계속 개선하며([[open-reasoner-zero]] §3.2), 추론 전용 RL은 MMLU-Pro 55.1 → 74.4를 올렸다(Table 2). 모델 자신의 추측이 아니라 관찰 결과에 자기 생성 근거를 접지하는 것: Early Experience의 ALFWorld와 SearchQA out-of-domain 이득은 in-domain 이득과 같거나 더 크다([[agent-early-experience]] §5.3).
 
-```
-∇ L_I  =  E[ ∇ log π(y_2 | x, y_1) · r(y_2) ]   +   λ_KL · KL( π(· | x) || π_ref(· | x) )
-```
+**(b) 무엇이 좁히는가.** 채점기가 정책과 함께 움직이는 메트릭을 최적화하는 것: 판정기–인간 일치는 iteration 2 뒤 하락하는데 판정기 채점 승률은 상승한다([[meta-rewarding-lm]] Tables 1, 7). 판정한 적 없는 홀드아웃 벤치마크가 판정기 루프 안에서 하락한다([[self-rewarding-lm]] Table 3). RL 단계와 함께 커버리지가 하락한다. pass@256은 base 모델 69.1보다 낮은 68.3 → 63.9다([[rlvr-beyond-base-model]] Table 4). 고정된 인간 목표 분포는 루프 상한을 만든다([[spin]] §7). 길이 제어가 없으면 응답 길이가 팽창한다(Self-Rewarding §3.2.1의 1,092 → 2,552; [[dr-grpo]] §3.1의 GRPO 길이 편향). 자기생성 데이터의 재귀 학습은 저확률 내용을 잃는다. 이는 [[model-collapse]] Theorem 3.1과 Fig. 1이 측정한 메커니즘이며 ch-23이 혼합에 원 데이터 유지를 권장하는 이유다. 선호 보상은 과최적화한다. 보상은 오르는데 Codeforces는 하락한다([[deepseek-r1]] B.5).
 
-Stage-I KL은 turn-1 behavior를 *freeze*하여, 모델이 처음부터 정답을 내는 대신 editing을 배워야 하게 만든다. Stage I을 건너뛰면 즉시 mode collapse가 발생한다([[self-correct-rl]] Figure 5).
+**(c) 이 단계에서 측정하는 방법.** 매 반복 뒤 다음을 측정한다. 루프가 채점하지 않는 도메인을 가로지르는 홀드아웃 능력 패널, 루프 판정기와 고정 레이블 집합의 일치, 홀드아웃 프롬프트의 큰 k에서 pass@k, 길이와 스택이 노출하면 엔트로피, 에이전트 루프에서는 루프가 학습하지 않은 환경 분할이다([[deepseek-v3.1]] §4.1은 MCP-Universe, MCP-Mark, Tool-Decathlon을 이렇게 다룬다). 알려진 측정 오류: AlpacaEval과 MT-Bench는 학습 중인 판정기와 편향을 공유할 수 있는 언어 모델이 채점한다([[self-rewarding-lm]] §6). 벤치마크 오염은 paraphrase에 대한 10-gram 필터로 탐지할 수 없다([[deepseek-r1]] D.1). 학습 보상으로 체크포인트를 선택하면([[self-correct-rl]] §6) 홀드아웃 패널이 거부할 반복을 고를 수 있다.
 
-**Stage II**는 두 turn 모두에 대한 joint REINFORCE이며, **improvement delta**에 reward-shaping bonus를 준다.
+## 흔한 실수와 탐지 방법
 
-```
-R_shaped = r(y_1) + α · [ r(y_2) − r(y_1) ],   α = 2.0
-∇ L_II   = R_shaped · ∇ [ log π(y_1 | x) + log π(y_2 | x, y_1) ]
-```
-
-`r(y_2) − r(y_1)`를 증폭하면 *turn 사이의 improvement*가 high-gradient direction이 된다. 결과: Gemini 1.0 Pro에서 **+15.6 pts on MATH**, **+9.1 pts on MBPP**([[self-correct-rl]] Table 2). self-correction task에서 처음으로 0을 넘은 공개 방법이다(이전 모델들은 revise step에서 *더 나빠졌다*). rollout의 한 부분을 KL term으로 freeze하고, 움직이고 싶은 부분에 advantage를 shape한다는 구조적 lesson은 agentic-RL([[ch-50]])에서 다시 나온다.
-
----
-
-## 7. ReST-EM — reasoning을 위한 expectation-maximization
-
-[[rest-em]](Singh et al., DeepMind, 2023)은 self-training loop에 가장 깔끔한 형식을 준다. rationale을 **latent variable** `z`로, answer를 observable `y`로 취급한다. 이 latent에 대한 EM은 다음과 같다.
-
-```
-E-step:   sample K=32 rationales z ~ π_{t−1}(· | x)
-          keep {z : verify(answer(z), x) = correct}     # exact-match or unit-test
-M-step:   π_t = argmax_π  Σ_{(x, z_kept)}  log π(z | x)
-          # SFT 1 epoch, lr=1e-5, batch 128
-```
-
-이게 전부다. DPO도, reward model도, KL도 없다. E-step은 순수 rejection sampling이고, M-step은 vanilla SFT다. **verifier**가 모든 supervision을 담당한다.
-
-[[rest-em]] Figure 2 / Table 2에 입증된 PaLM-2-L 결과:
-
-```
-MATH:   human-SFT 34.1 %   ->   ReST-EM iter 1: ~42 %   ->   iter 2: 50.6 %   ->   iter 3: flat
-APPS:   human-SFT 16.4 %   ->   ReST-EM iter 2: 31.2 %
-BBH held-out: gains transfer — models trained on MATH self-data improve on unrelated BBH tasks.
-```
-
-naive self-distillation과 이를 가르는 ingredient는 **diversity cap**이다. 문제당 최대 **4 distinct correct solutions**만 유지한다(논문의 ablation). 이게 없으면 iter-3에서 regresses한다. sampled distribution이 하나의 solution path로 collapse하고 M-step이 그것을 외우기 때문이다. [[star]](Zelikman 2022)는 K=1 조상으로, 실패 사례에 대해 "gold answer에서 거꾸로 rationalize"하는 trick을 사용한다. ReST-EM은 rationalization을 버리고 K를 키운다. [[v-star]]는 failed trace에서 학습한 verifier를 더해 failure도 signal에 기여하게 한다. [[ch-44]]에서 다룬 process-reward model로 이어지는 다리다.
-
----
-
-## 8. R1-Zero와 2025년 해부
-
-[[deepseek-r1]](DeepSeek-AI, 2025)은 ReST-EM filter(verifier-only)를 가져오고, M-step SFT를 **cold-start도 PRM도 없는 pure on-policy GRPO**로 바꾼다. Reward는 `r = r_acc + r_format`이며 `r_acc ∈ {0, 1}`는 rule grader에서, `r_format ∈ {0, 1}`는 `<think>…</think><answer>…</answer>`에 맞는지에서 온다. Group size 16–64, sequence length up to 32k, advantage `A_i = (r_i − mean(r_{1:G})) / std(r_{1:G})`.
-
-SFT 기반 pipeline에서는 보이지 않았던 두 emergent behavior가 논문을 지배한다.
-
-- **Chain-of-thought length가 학습 동안 ~400 tokens에서 10k+로 성장**한다([[deepseek-r1]] Fig. 3).
-- **중간 학습 phase-transition "aha moment"**: 학습 예시에 그런 text가 전혀 없었는데도 모델이 자발적으로 *"Wait, let me reconsider…"*와 *"Let me check step 3…"* 같은 문장을 쓴다([[deepseek-r1]] Fig. 4).
-
-2025년 후속 분석은 *실제로 무슨 일이 일어나고 있는지* 해부한다. 논문들이 R1-Zero가 무엇이고 무엇이 아닌지 아주 노골적으로 말하기 때문에 findings를 직접 요약한다.
-
-**Finding 1 — GRPO에는 exploit 가능한 bias가 두 개 있다.** [[r1-zero-analysis]]의 Dr.GRPO(Liu et al., 2025)에 따르면 GRPO의 per-token mean aggregation은 **"길고 정답인 response와 길고 오답인 response를 비대칭적으로 보상하는 per-token mean aggregation의 length bias"**를 유도하고, per-prompt std normalization은 **"쉬운 prompt의 gradient를 부풀리는 per-prompt std normalization의 difficulty bias"**를 유도한다. fix는 bias-corrected loss다. 이것은 *std normalization을 제거*하고 batch-mean divided by `(B · L_max)`로 aggregation한다.
-
-```
-L_DrGRPO = −(1 / (B · L_max)) · Σ_{i,t} mask_{i,t} · min( r_{i,t} · A_i,  clip(r_{i,t}) · A_i )
-           with A_i = R_i − μ_group   (no std division)
-```
-
-**Finding 2 — base-model prior가 load-bearing이다.** Open-Reasoner-Zero는 Qwen2.5-7B-Base에서 R1-Zero를 재현하지만 다음을 보고한다([[r1-zero-analysis]]): *"emergence는 일어나지만, base가 reasoning-pretrained가 아니면 사라진다."* 해석: pure RL은 reasoning을 처음부터 만들지 않는다. pretraining이 math/code-heavy data를 통해 조용히 설치해 둔 reasoning capability를 증폭한다. chat-pretrained base에서 같은 recipe를 다시 실행하면 length growth도 aha moment도 없다.
-
-**Finding 3 — PRM은 필요 없다.** 2025년 세 재현([[r1-zero-analysis]] — Dr.GRPO, ORZ, TinyZero)은 모두 같은 minimum-viable ingredient list에 수렴한다. **outcome-only verifier가 충분하고 사실상 지배적**이다. [[ch-44]]의 process-reward 접근인 PRM을 더해도 도움이 되지 않고, 종종 해친다. PRM이 overoptimization에 취약한 학습된 reward source를 도입하기 때문이다. rule grader는 그렇지 않다.
-
-**Finding 4 — RL은 확장보다 sharpening일 수 있다.** [[rlvr-beyond-base-model]](Yue et al., 2025)은 중요한 실험을 수행한다. **large-`k` pass@k** 아래에서 base model은 RL-trained model과 *맞먹거나 이를 초과*한다. 직접 인용: *"RL은 pass@1을 개선하지만, high k에서는 base model이 이긴다."* 해석: *"RLVR은 대체로 이미 존재하던 성공 경로 쪽으로 probability mass를 재분배하는 동시에 exploration을 좁히고, 풀 수 있는 문제의 더 넓은 coverage를 줄인다."* RL post-training은 **capability-boundary expansion**이라기보다 **sampling-efficiency** improvement일 수 있다. 이는 2025년 R1-Zero 스타일 학습에 대한 가장 강한 주의점이며, [[ch-46]] lab이 평균 pass@1만이 아니라 prompt-difficulty bucket 전반의 `pass@k`를 계측하는 주된 이유다.
-
-이 네 findings는 R1-Zero를 환상으로 축소하지 않는다. claim을 정교하게 만든다. 검증 가능한 보상으로 하는 pure-RL은 분명히 (a) 긴 chain-of-thought를 *elicits*하고, (b) reward model이 없기 때문에 reward model을 *hack하지 않으며*, (c) reward source가 drift하지 않으므로 judge-based loop보다 *느리게 saturates*하고, (d) 작동하려면 base에 reasoning prior가 *필요*하다. R1-Zero가 *아닌 것*은 RL이 novel reasoning을 만든다는 증거다. 그것은 여전히 열려 있다. [[lilianweng-reasoning-llms]]의 open-questions list를 보라.
-
----
-
-## 9. Filter가 곧 method다 — recap
-
-실제로 다른 단일 knob를 통해 이 장의 방법들을 다시 읽으면:
-
-| Filter | Method | Saturation mechanism |
+| 실수 | 관찰 가능한 증상 | 점검 |
 |---|---|---|
-| Policy-as-judge | Self-Rewarding | Judge drift at iter 3 |
-| Judge + Meta-Judge | Meta-Rewarding | Meta-judge drift at iter 5 |
-| Human text distribution | SPIN | Data ceiling (Nash = match data) |
-| Preference game | Nash-LM | Nash equilibrium (possibly stochastic) |
-| Outcome reward, two-turn | SCoRe | verifier가 깨끗한 한 reward signal이 유지됨 |
-| Outcome verifier, SFT M-step | ReST-EM | Diversity collapse without cap |
-| Outcome verifier, RL M-step | R1-Zero | Base-model reasoning prior |
+| 루프 자체 메트릭에서 중단 | 다른 것은 측정하지 않는데 루프 메트릭은 단조 상승 | 매 반복 홀드아웃 패널과 판정기 일치 검사를 실행하고, 최고 패널 반복과 최고 메트릭 반복 비교 |
+| “세 번 반복”을 법칙으로 취급 | 패널과 무관하게 3에서 중단 | 소스의 반복 수는 저자들이 실행한 수([[self-rewarding-lm]] §6은 효과 스케일링을 공개 문제로 부름) |
+| 전이가 중요할 때 이전 반복 결과에서 계속 | in-domain 메트릭 상승, out-of-domain 전이 하락 | 홀드아웃 과제에서 base 재시작 arm과 continue arm 비교([[rest-em]] Fig. 7) |
+| 이전 반복의 부정 예 재사용 | 손실은 내려가나 그래디언트는 줄어드는 쌍 비율이 담당 | 암묵적 마진 분포 기록; σ(−m)가 임계값 아래인 쌍 수 계산 |
+| 포화된 판정기에서 쌍 선택 | 평균 판정 점수가 루브릭 최대에 접근; 버린 tie 다수 | 반복별 판정 점수 히스토그램 그림([[meta-rewarding-lm]] Fig. 5) |
+| 판정기 루프에 길이 제어 없음 | 반복마다 응답 길이 증가 | 모든 승률과 평균 길이 보고; ρ 규칙 적용([[meta-rewarding-lm]] §2.1) |
+| RLVR 뒤 pass@1만 보고 | pass@1 상승, 커버리지 불명 | base 모델 대비 k = 128 또는 256에서 pass@k([[rlvr-beyond-base-model]] Table 4) |
+| 추론 루프를 제품으로 출하 | 지시 따르기, 개방형 글쓰기, 안전 점수가 뒤처짐 | 단계별 파이프라인의 단계별 표와 비교([[deepseek-r1]] Table 3) |
+| emergent reflection을 RL만의 결과로 돌림 | base 모델 측정 없이 “모델이 ‘wait’를 말하게 학습했다” | base 모델 샘플의 reflection 키워드 수([[dr-grpo]] §2.3) 및 반성 응답이 더 정확한지(App. F) 검사 |
+| 거의 성공하지 못하는 정책에 에이전트 자기개선 루프 실행 | 첫 온폴리시 라운드 뒤 해결률 하락 | 루프 전 성공률 측정; 교사 궤적 arm과 비교([[swe-gym]] §4.2) |
 
-reference-reset rule은 모든 행에 등장한다. iteration마다 `π_ref ← π_{t−1}`를 하지 않으면 DPO/RL loss가 계속 stale reference 쪽으로 정책을 당기고, iteration return은 사라진다.
+## 이해 점검
 
-**Forward to [[ch-46]].** capstone lab은 이러한 loop 중 하나를 end-to-end로 실행한다. DPO β-sweep(SPIN-like)이거나 RLVR KL-sweep(R1-Zero-like)이며, failure mode(reward hacking, entropy collapse, length inflation)를 반드시 찾게 한다. 그 lab의 모든 diagnostic은 위 표의 saturation mechanism에 대응된다.
+1. Self-Rewarding의 판정기는 홀드아웃 인간 순위에 대해 개선한다(쌍별 정확도 65.1% → 81.7%). 동시에 M1과 M3 사이 홀드아웃 벤치마크 넷 중 셋은 하락한다. 같은 학습 실행에서 둘 다 참일 수 있는 이유를 설명하고, 네 번째 반복을 실행할지 결정할 때 어떤 측정을 쓸지 말하라.
+2. ReST-EM은 매 반복 base 모델을 미세조정하고 SPIN은 이전 반복 결과에서 계속한다. 각 선택이 루프가 보는 부정 예 및 루프가 망각할 수 있는 것에 주는 결과를 유도하라.
+3. SPIN의 고정점은 SFT 데이터 분포다. Theorem 5.4를 사용해 더 작은 λ가 한 단계에서 정책을 더 멀리 움직이는 이유와, 그것이 고정점을 바꾸지 않는 이유를 설명하라.
+4. SCoRe에서 보상 보너스 α(r̂(y2) − r̂(y1))는 왜 모델이 첫 시도에서 일부러 오답을 내도록 가르치지 않는가? 답에는 논문이 사용한 할인율을 써야 한다.
+5. Bradley-Terry 보상 모델이 §4의 3방향 선호를 표현할 수 없는 이유가 되는 모델 속성을 말하고, Nash 해법이 이를 표현하는 대가로 무엇을 포기하는지 설명하라.
+6. DeepSeek-R1은 GPQA Diamond와 CNMO 2024에서는 R1-Zero보다 낮지만, IF-Eval과 AlpacaEval 2.0에서는 각각 36.7점, 62.9점 높다. 어느 단계가 각 이동을 만들었는지와, 전문 모델 둘이 아니라 범용 모델 하나를 원하는 팀에 이것이 뜻하는 바를 설명하라.
+7. 같은 RLVR 레시피로 학습한 두 모델 중 하나에는 “aha” 언어가 나타나고 다른 하나에는 나타나지 않는다. §7.3의 base 모델 근거를 사용하여 레시피가 차이를 일으켰다고 결론 내리기 전에 할 측정을 나열하라.
+8. 에이전트 자기개선 루프가 7B 정책은 두 반복에 걸쳐 해결률 7.0%에서 10.0%로 올리나 32B 정책은 19.7%에 둔다. 이와 양립하는 메커니즘 두 개와, 이를 분리하는 실험을 제시하라.
 
-**Back to [[ch-44]].** ReST-EM과 R1-Zero를 가능하게 하는 outcome verifier는 RLVR의 binary reward와 같은 객체다. 차이는 E-step(sample-filter-SFT)에 쓰느냐 gradient update(sample-advantage-REINFORCE) 안에 쓰느냐뿐이다. Self-improvement loop는 process/outcome supervision의 대안이 아니다. 검증 가능한 보상이 iteration을 거쳐 compound되게 만드는 *scheduling pattern*이다.
+## 연결
+
+- 이전 장: **ch-44b — 범용 능력을 위한 다중 도메인 RL: 비검증 가능 보상과 도메인 혼합**. §7.2의 최종 R1 단계는 다중 도메인 RL 단계이며 도메인 혼합 질문은 그곳에서 답한다.
+- 다음 장: **ch-45a — 선호 최적화 및 RL 단계 레시피 나란히 보기**. 여기의 루프별 레시피 행을 그곳의 전체 파이프라인 레시피와 비교한다.
+- **ch-31 — 거부 샘플링, 자기생성 데이터, cold start, SFT–RL 교대**: SFT 관점에서 SWE-Gym 및 ReST-EM 사례를 포함하는 한 generate-filter-train 라운드의 메커니즘.
+- **ch-23 — 모델 붕괴와 합성 데이터 검증**: 자기생성 데이터에 반복 학습이 분포 꼬리에 하는 일.
+- **ch-29d — 사용자 시뮬레이터, 궤적 검증, 실패 궤적**: §8의 에이전트 궤적을 생성·검증하는 방법.
+- **ch-39 — 오프라인 선호 최적화: DPO와 변형들**: §2와 §3이 반복하는 손실.
+- **ch-40 — 그룹 기준선 RL: RLOO, GRPO, Dr. GRPO, DAPO, GSPO**: R1-Zero가 쓴 추정기 및 §7에서 인용한 길이·난이도 편향.
+- **ch-41 — 보상 모델링: Bradley–Terry, 과최적화, 보상 모델 일반화**: §4가 대체하는 스칼라 점수 가정.
+- **ch-43a — 부정 샘플과 음의 그래디언트: likelihood displacement, squeezing, 음의 이점**: 부정 피드백 절의 softmax 그래디언트 논증 뒤 전체 유도.
+- **ch-45b — 다중 턴 에이전트 RL: 관측 마스킹, 크레딧 할당, 안정성**: §8의 루프가 공급하는 RL 메커니즘.
+- **ch-46 — 실습: 부정 신호 절제와 홀드아웃 능력 유지를 갖춘 DPO 또는 RLVR 실험**: 작은 모델에서 §6의 중단 규칙 측정을 실행.
+- **ch-49 — 판정기 모델: 편향, 캘리브레이션, 판정기 특이 과적합**: 판정기 드리프트 자체를 주제로 다룸.
+
+## 출처
+
+- [[self-rewarding-lm]] — 정책-판정기 루프, 세 모델, Tables 1–4. 이 장의 수치는 arXiv:2401.10020v3에서 읽었다. 라이브러리 카드는 재검증하지 않았으며, 그 Spearman 값(0.62 → 0.71)과 iteration-4 퇴행 주장은 논문에 없다.
+- [[meta-rewarding-lm]] — 메타 판정기 구성, 길이 제어 쌍 선택, 판정기 드리프트 측정(검증된 카드, 2026-09-14).
+- [[spin]] — self-play 손실, Theorems 5.2 및 5.4, 반복별 leaderboard 결과. 수치는 arXiv:2401.01335v3에서 읽었다. 라이브러리 카드의 MT-Bench 궤적(6.39 → 7.12)은 논문에 없고, “3 epochs, lr 5e-7” 요약은 반복당 2 epoch, iteration 0–1의 5e-7 대 iteration 2–3의 1e-7을 주는 App. B.1과 맞지 않는다(카드의 배치 크기 64는 맞다).
+- [[self-play-preference]] — Nash 균형 공식화, Nash-MD 업데이트, 비추이 인구 예, Table 1. 수치는 arXiv:2312.00886v4에서 읽었다. 라이브러리 카드에는 검증 절이 없고 Nash 목적 및 Figure 2를 논문과 다른 형태로 기술하므로, 이 장은 그 카드에서 아무것도 취하지 않는다.
+- [[self-correct-rl]] — 2단계 자기수정 RL, α = 10 shaping 보너스, MATH/HumanEval 결과, 절제. 수치는 arXiv:2409.12917v2에서 읽었다. 카드의 α = 2.0과 “MBPP +9.1”은 논문에 없다.
+- [[rest-em]] — 검증기 필터 자기학습의 EM 관점, base 모델 재시작, 반복 및 전이 결과(검증된 카드).
+- [[star]] — 근거 부트스트래핑, indicator-reward 정책 경사 관점, rationalization 거짓 양성 위험(검증된 카드).
+- [[v-star]] — ReST-EM이 버리는 실패로 검증기를 학습.
+- [[deepseek-r1]], [[deepseek-r1-recipe]] — R1-Zero 설정, 4단계 파이프라인, Table 3의 단계별 결과, PRM 및 base 용량 발견(검증된 카드).
+- [[open-reasoner-zero]] — arXiv:2503.24290v2의 장 발췌: KL 없는 vanilla PPO, R1-Zero-Qwen-32B와 Table 1 비교, MMLU/MMLU-Pro 일반화, self-mined 어려운 프롬프트의 annealing.
+- [[cognitive-behaviors-self-improving-reasoners]] — arXiv:2503.01307v2의 장 발췌: RL 개선 여부를 정하는 base 모델 행동과 오답 해법 priming 결과.
+- [[dr-grpo]] — GRPO 길이·난이도 편향, base 모델의 self-reflection, R1-Zero 응답 길이 분석(검증된 카드).
+- [[rlvr-beyond-base-model]] — 학습 단계 및 RL 알고리즘 전반의 pass@k 커버리지. Tables 3, 4는 arXiv:2504.13837v5에서 읽음.
+- [[prorl]] — §7.4 샤프닝 해석의 반대 결과. ch-40에서 근거를 가중하므로 반론으로만 인용.
+- [[deepseek-v3.1]] — V3.2 보고서: 난이도 상승을 갖춘 범용 에이전트 과제 합성, pass@100 필터링, 오프폴리시 음성 마스킹(검증된 카드).
+- [[agent-early-experience]] — 보상 없는 에이전트 자기개선, out-of-domain 결과, DPO 붕괴 비교(검증된 카드).
+- [[swe-gym]] — 코딩 에이전트의 온폴리시 자기개선 결과. 수치는 arXiv:2412.21139v2 §4.2–4.3에서 읽음.
+- [[model-collapse]] — 모델 출력 재귀 학습 아래 저확률 내용 손실(검증된 카드).
+- [[likelihood-displacement]] — DPO 음의 그래디언트의 측정된 비용(검증된 카드).

@@ -16,6 +16,7 @@ Claim status labels follow §3 of the authoring standard: Result (single study),
 | Pretraining scaling and data | [[insights-pretraining-scaling]] |
 | Mid-training, continued pretraining, and context extension | [[insights-midtraining-context-extension]] |
 | Synthetic data | [[insights-synthetic-data]] |
+| Long-tail knowledge, conversation, style, and speech | [[insights-long-tail]] |
 | Long-context and long-conversation synthesis | [[insights-long-context-synthesis]] |
 | Agentic data and RL | [[insights-agentic]] |
 | SFT design, mixtures, forgetting, and merging | [[insights-sft-design]] |
