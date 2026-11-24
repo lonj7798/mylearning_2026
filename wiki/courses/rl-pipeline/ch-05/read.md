@@ -4,7 +4,7 @@
      title: Weight Transfer: Keeping the Sampler Current
      deps: [ch-04]
      sources: [[mai-rl-infrastructure]], [[mai-thinking-1]], [[slime]], [[verl-rollout]], [[deepseek-open-infra]], [[open-instruct-rlvr-pipeline]], [[pipelinerl]], [[slime-agentic-and-mismatch-examples]], [[areal-async-rl]], [[olmo-3-rl-pipeline]]
-     figures: none
+     figures: figures/weight-transfer.html
 -->
 
 # Chapter 5 — Weight Transfer: Keeping the Sampler Current
@@ -57,6 +57,8 @@ The cadence matters more when rollouts are short and steps are fast. With k = 4 
 Let S be the bytes of one model copy as the sampler stores it, and R the number of sampler replicas. If the learner sends a full copy to each replica, it sends R · S bytes. If those bytes leave through a fixed set of learner NICs with total bandwidth b, the transfer takes at least R · S / b. Doubling the fleet doubles the transfer time, and the learner is the bottleneck. This is the situation Rocket describes: "sending weights separately to each one would make learner-side communication cost grow with the inference fleet size" (p. 6).
 
 If the learner sends one copy into the fleet and the replicas forward it among themselves, the learner sends about S bytes, independent of R. The forwarding work is spread over the inference nodes' own NICs. With a pipelined chain or tree, each node forwards a bounded number of copies, and total time grows slowly with R.
+
+> Interactive: [figures/weight-transfer.html](figures/weight-transfer.html) — a replica-count slider comparing learner-side bytes for per-replica sends and two-stage transfer, a timeline of sampler lag 0 … k − 1 for a refresh every k steps (Rocket k = 4, τ = 15 s), and a step-through of the four in-flight policies of §4 (verl, slime, open-instruct/PipelineRL, AReaL).
 
 ### 2.2 Why NIC bandwidth is the constraint
 

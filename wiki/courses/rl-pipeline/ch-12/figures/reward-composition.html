@@ -1,0 +1,308 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Reward Composition Calculator</title>
+<style>
+:root{
+  --bg:#ffffff; --fg:#1d1f23; --muted:#5b6270; --card:#f5f6f8; --line:#d9dce2; --grid:#e7e9ee;
+  --accent:#2f6fd6; --accent2:#b5487a; --ok:#1d8a4a; --bad:#c2392b; --warn:#a86a00; --sel:#e8f0fd; --badbg:#fdecea;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#15171b; --fg:#e6e8ec; --muted:#9aa1ad; --card:#1f2228; --line:#353a43; --grid:#2a2e36;
+    --accent:#6ea2ff; --accent2:#e27aa8; --ok:#4cc27d; --bad:#ff7a6b; --warn:#e0a640; --sel:#1e2b44; --badbg:#3a1f1d;
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#15171b; --fg:#e6e8ec; --muted:#9aa1ad; --card:#1f2228; --line:#353a43; --grid:#2a2e36;
+  --accent:#6ea2ff; --accent2:#e27aa8; --ok:#4cc27d; --bad:#ff7a6b; --warn:#e0a640; --sel:#1e2b44; --badbg:#3a1f1d;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);font:15px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif}
+main{max-width:1080px;margin:0 auto;padding:20px 16px 48px}
+h1{font-size:22px;margin:0 0 4px} h2{font-size:17px;margin:0 0 8px} h3{font-size:14.5px;margin:12px 0 6px}
+p{margin:6px 0} .muted{color:var(--muted);font-size:13px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:14px 16px;margin:14px 0;min-width:0}
+.row{display:flex;flex-wrap:wrap;gap:8px 16px;align-items:center;margin:8px 0}
+.scroll{overflow-x:auto;max-width:100%}
+table{border-collapse:collapse;font-size:13px;width:100%}
+th,td{padding:5px 6px;border-bottom:1px solid var(--line);text-align:left;vertical-align:middle;white-space:nowrap}
+th{color:var(--muted);font-weight:600;font-size:12px}
+td.num,th.num{text-align:right;font-variant-numeric:tabular-nums;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:12.5px}
+button{font:inherit}
+.tog{min-width:44px;border:1px solid var(--line);border-radius:6px;padding:2px 8px;cursor:pointer;font-size:12.5px;background:var(--bg);color:var(--fg)}
+.tog.on{background:var(--ok);border-color:var(--ok);color:#fff}
+.tog.off{background:var(--bad);border-color:var(--bad);color:#fff}
+.btn{background:var(--bg);color:var(--fg);border:1px solid var(--line);border-radius:6px;padding:4px 10px;cursor:pointer;font-size:13px}
+.btn.on{border-color:var(--accent);background:var(--sel)}
+.btn.pri{border-color:var(--accent);color:var(--accent)}
+input[type=number]{width:72px;background:var(--bg);color:var(--fg);border:1px solid var(--line);border-radius:6px;padding:2px 4px;font:inherit;font-size:12.5px}
+input[type=range]{width:120px;max-width:40vw}
+label{font-size:13px}
+.wgrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:6px 14px}
+.wgrid label{display:flex;align-items:center;gap:8px;justify-content:space-between}
+.wgrid small{color:var(--muted);display:block;font-size:11px}
+.pos{color:var(--ok)} .neg{color:var(--bad)}
+tr.flag td{background:var(--badbg)}
+.flagtxt{color:var(--bad);font-size:12px;font-weight:600}
+.prio{display:flex;flex-wrap:wrap;gap:6px;align-items:center}
+.chip{display:inline-flex;align-items:center;gap:4px;border:1px solid var(--line);border-radius:14px;padding:2px 4px 2px 10px;font-size:12.5px;background:var(--bg)}
+.chip button{border:none;background:transparent;color:var(--accent);cursor:pointer;padding:0 4px;font-size:13px}
+.three{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;margin-top:10px}
+@media (max-width:760px){.three{grid-template-columns:minmax(0,1fr)}}
+.stat{background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:10px;min-width:0}
+.stat h3{margin:0 0 4px}
+.bar{display:grid;grid-template-columns:92px minmax(0,1fr) 52px;gap:6px;align-items:center;font-size:12px;margin:3px 0}
+.track{height:12px;background:var(--grid);border-radius:3px;overflow:hidden}
+.fill{height:100%;background:var(--accent)}
+.note{font-size:12.5px;color:var(--muted)}
+.callout{border-left:3px solid var(--warn);padding:6px 10px;background:var(--bg);border-radius:0 6px 6px 0;font-size:13px;margin:8px 0}
+.kbar{display:inline-block;height:10px;background:var(--accent);border-radius:2px;vertical-align:middle}
+.kbox{display:inline-block;width:110px;height:10px;background:var(--grid);border-radius:2px;vertical-align:middle;overflow:hidden}
+.st-in{color:var(--ok);font-weight:600} .st-drop{color:var(--warn);font-weight:600} .st-ret{color:var(--muted);font-weight:600} .st-out{color:var(--accent2);font-weight:600}
+.src{color:var(--muted);font-size:11.5px}
+</style>
+</head>
+<body>
+<main>
+<h1>Reward composition and prompt selection</h1>
+<p class="muted">Companion to ch-12 §2, §3 and §7. Part 1 computes one GRPO group's rewards and advantages under three combination rules: a weighted sum, MAI's lexicographic rule, and MAI's gated rule, as ch-12 §3 states them. Part 2 applies pass-rate filters to a set of prompts across epochs. All rollouts, prompts and default weights marked <b>illustrative</b> are constructed for this figure. Sourced numbers carry their source.</p>
+
+<section class="card">
+<h2>1. One group, three combination rules</h2>
+<p class="note">Click a 0/1 or yes/no cell to toggle it. Edit length and quality. Each row is one rollout of the same prompt. The advantage is A<sub>i</sub> = (R<sub>i</sub> − mean<sub>G</sub> R) / std<sub>G</sub> R (ch-12 "Why this chapter matters", fact 1). It is 0 for every rollout when std = 0.</p>
+<div class="row">
+  <span class="muted">Scenario (illustrative):</span>
+  <button class="btn" data-preset="buy">Correctness buys back safety</button>
+  <button class="btn" data-preset="tie">All correct: shaping decides</button>
+  <button class="btn" data-preset="wrong">All wrong: shaping decides</button>
+  <button class="btn" data-preset="flat">Fully tied</button>
+</div>
+<div class="scroll">
+<table id="tbl">
+  <thead>
+    <tr><th>Rollout</th><th>correct</th><th>format</th><th>length |y| (tokens)</th><th>policy-compliant</th><th>quality RM score (1–5)</th>
+        <th class="num">R sum</th><th class="num">A sum</th><th class="num">R lex</th><th class="num">A lex</th><th class="num">R gated</th><th class="num">A gated</th><th></th></tr>
+  </thead>
+  <tbody id="tb"></tbody>
+</table>
+</div>
+<div class="row">
+  <button class="btn" id="addR">+ rollout</button><button class="btn" id="delR">− rollout</button>
+  <label><input type="checkbox" id="useStd" checked> divide by group std (GRPO); off = mean-centering only (Dr. GRPO)</label>
+</div>
+
+<h3>(a) Weighted sum: R = w<sub>c</sub>·correct + w<sub>f</sub>·format − w<sub>len</sub>·|y|/ℓ<sub>max</sub> + w<sub>s</sub>·compliant + w<sub>q</sub>·quality/5</h3>
+<div class="wgrid">
+  <label><span>w<sub>c</sub> correctness <small>illustrative (accuracy 1.0 as in Reasoning Gym §4)</small></span><span><input type="range" id="wc" min="0" max="3" step="0.05" value="1"> <b id="wcv"></b></span></label>
+  <label><span>w<sub>f</sub> format <small>+0.2 on top of accuracy: Reasoning Gym §4</small></span><span><input type="range" id="wf" min="0" max="1" step="0.05" value="0.2"> <b id="wfv"></b></span></label>
+  <label><span>w<sub>len</sub> length <small>0.25 up to 64k: MAI Eq. 12, Sec. 3.1.5 (ρ<sub>q</sub> = 1 here)</small></span><span><input type="range" id="wl" min="0" max="1" step="0.05" value="0.25"> <b id="wlv"></b></span></label>
+  <label><span>w<sub>s</sub> safety (compliant = 1) <small>illustrative</small></span><span><input type="range" id="ws" min="0" max="3" step="0.05" value="1"> <b id="wsv"></b></span></label>
+  <label><span>w<sub>q</sub> quality <small>illustrative</small></span><span><input type="range" id="wq" min="0" max="3" step="0.05" value="1"> <b id="wqv"></b></span></label>
+  <label><span>ℓ<sub>max</sub> (tokens) <small>illustrative</small></span><span><input type="number" id="lmax" min="1000" max="131072" step="1000" value="8000"></span></label>
+</div>
+
+<h3>(b) Lexicographic (MAI Sec. 3.4.1): the first term in priority order that is not tied within the group is the reward; lower terms are ignored</h3>
+<div class="prio" id="prio"></div>
+<p class="note">Each term is used on its own raw scale (correct 0/1, format 0/1, compliant 0/1, quality 1–5, length −|y|/ℓ<sub>max</sub>). Weights play no role, which is why the rule is "invariant to the absolute scale of each reward" (MAI Sec. 3.4.1). Use ← to raise a term's priority.</p>
+
+<h3>(c) Gated (MAI Sec. 3.4.1, 3.4.3): rollouts that fail the gate get the minimum reward; the others get the weighted mixture of the remaining terms</h3>
+<div class="row">
+  <label><input type="checkbox" id="gSafe" checked> gate on policy compliance (MAI safety-gated aggregator)</label>
+  <label><input type="checkbox" id="gFmt"> also gate on format (Magistral §2.2: format fail → 0, not graded)</label>
+</div>
+<p class="note">r<sub>min</sub> = the lowest value the mixture can take (all mixture terms 0, |y| = ℓ<sub>max</sub>) = <b id="rmin"></b>. This choice is the figure's; MAI says only "the minimum reward". The ch-12 §3 sketch takes r_min as a parameter.</p>
+
+<div class="three">
+  <div class="stat"><h3>(a) sum: which term moves R in this group</h3><div id="spread"></div><p class="note">Bar = within-group std of each weighted term. The term with the largest spread decides most of the advantage, whatever its importance (ch-12 §2 Failure 1–2).</p></div>
+  <div class="stat"><h3>(b) lexicographic</h3><div id="lexInfo"></div></div>
+  <div class="stat"><h3>(c) gated</h3><div id="gateInfo"></div></div>
+</div>
+<div id="verdict" class="callout"></div>
+<p class="note">MAI's audit (Sec. 3.4.3, footnote 9): 87.8% of policy-non-compliant responses received reward-model scores ≥ 3; expected safety Likert vs policy compliance: Pearson 0.293, Spearman 0.344. "Scalar rewards can remain positive on policy-non-compliant responses." No ablation in the report compares the three rules (ch-12 §3).</p>
+</section>
+
+<section class="card">
+<h2>2. Prompt selection by pass-rate window</h2>
+<p class="note">Each row is one prompt with k correct out of G = 8 rollouts under the current policy (illustrative). With a binary reward, a group with k = 0 or k = G has zero advantage for every rollout. Edit k, choose filters, then step through epochs.</p>
+<div class="row">
+  <label><input type="checkbox" id="fZero" checked> drop zero-variance groups and refill (DAPO dynamic sampling: AIME24 42 → 50, Table 1; ScaleRL Fig. 6a)</label>
+  <label><input type="checkbox" id="fNPR" checked> No-Positive-Resampling: retire prompts with pass rate ≥ 0.9 from later epochs (ScaleRL Fig. 6b; open-instruct@f020e9a data_loader.py L812–818)</label>
+  <label><input type="checkbox" id="fMAI"> MAI full-group window: keep pass rate in [0.1, 0.8] (MAI Sec. 3.1.3, 3.1.5; MAI uses G = 128)</label>
+  <label><input type="checkbox" id="fHard"> hard-only window: keep pass ≤ 4/8 (POLARIS ablation: "the 19K and unfiltered sets both hurt training")</label>
+</div>
+<div class="row">
+  <button class="btn pri" id="nextEp">Next epoch ▶</button>
+  <button class="btn" id="resetEp">Reset</button>
+  <span class="muted" id="epLbl"></span>
+</div>
+<p class="note">Epoch update rule (illustrative, not from a source): a prompt that was trained on with 0 &lt; k &lt; 8 gains one correct rollout per epoch; prompts at 0/8 or 8/8 stay where they are.</p>
+<div class="scroll">
+<table>
+  <thead><tr><th>Prompt</th><th>k / G</th><th></th><th class="num">pass rate</th><th>Status this epoch</th><th>Reason</th></tr></thead>
+  <tbody id="ptb"></tbody>
+</table>
+</div>
+<div id="psum" class="callout"></div>
+<p class="note">Two points from ch-12 §7. (1) With G = 8, 7/8 = 0.875 is below 0.9, so only 8/8 prompts are retired. (2) The window is defined on the pass rate of the reward used to compute it; open-instruct's <span style="font-family:monospace">percent_solved</span> is mean reward / max possible score, so with shaping terms "solved" should be defined on the correctness term.</p>
+</section>
+</main>
+
+<script>
+(function(){
+const $=id=>document.getElementById(id);
+const TERMS=["safety","correct","format","quality","length"];
+const TNAME={safety:"compliant",correct:"correct",format:"format",quality:"quality",length:"length"};
+let prio=["safety","correct","format","quality","length"];
+const PRESETS={
+  buy:[[1,1,2400,0,5],[0,1,2000,1,3],[1,1,3200,1,4],[0,0,6000,1,2],[1,1,2800,0,4],[0,1,1800,1,3]],
+  tie:[[1,1,1500,1,3],[1,1,4000,1,4],[1,0,2500,1,3],[1,1,6000,1,2],[1,1,2000,1,5],[1,1,3000,1,3]],
+  wrong:[[0,1,7000,1,2],[0,1,7600,1,2],[0,0,3000,1,2],[0,1,7200,1,3],[0,1,6800,1,2],[0,1,7400,1,2]],
+  flat:[[1,1,3000,1,4],[1,1,3000,1,4],[1,1,3000,1,4],[1,1,3000,1,4],[1,1,3000,1,4],[1,1,3000,1,4]]
+};
+let rows=[]; let curPreset="buy";
+function load(p){curPreset=p; rows=PRESETS[p].map(a=>({c:a[0],f:a[1],len:a[2],s:a[3],q:a[4]})); renderPresetBtns(); build();}
+function renderPresetBtns(){document.querySelectorAll("[data-preset]").forEach(b=>b.classList.toggle("on",b.dataset.preset===curPreset));}
+function W(){return {c:+$("wc").value,f:+$("wf").value,l:+$("wl").value,s:+$("ws").value,q:+$("wq").value,lmax:Math.max(1,+$("lmax").value||8000)};}
+function mean(a){return a.reduce((x,y)=>x+y,0)/a.length;}
+function std(a){const m=mean(a);return Math.sqrt(mean(a.map(x=>(x-m)*(x-m))));}
+function adv(r){const m=mean(r),s=std(r);const useStd=$("useStd").checked;
+  if(s<1e-12) return r.map(()=>0);
+  return r.map(x=>useStd?(x-m)/s:(x-m));}
+function raw(r,t,w){switch(t){case"safety":return r.s;case"correct":return r.c;case"format":return r.f;case"quality":return r.q;case"length":return -Math.min(r.len,w.lmax)/w.lmax;}}
+function fmt(x,d=3){const v=Math.abs(x)<5e-10?0:x;return (v>0?"+":v<0?"−":"")+Math.abs(v).toFixed(d);}
+function fmtR(x){const v=Math.abs(x)<5e-10?0:x;return (v<0?"−":"")+Math.abs(v).toFixed(3);}
+
+function build(){
+  const tb=$("tb"); tb.innerHTML="";
+  rows.forEach((r,i)=>{
+    const tr=document.createElement("tr");
+    tr.innerHTML=`<td>R${i+1}</td>
+      <td><button class="tog ${r.c?"on":"off"}" data-k="c" data-i="${i}">${r.c}</button></td>
+      <td><button class="tog ${r.f?"on":"off"}" data-k="f" data-i="${i}">${r.f}</button></td>
+      <td><input type="number" min="0" max="131072" step="100" value="${r.len}" data-k="len" data-i="${i}" aria-label="R${i+1} length"></td>
+      <td><button class="tog ${r.s?"on":"off"}" data-k="s" data-i="${i}">${r.s?"yes":"no"}</button></td>
+      <td><input type="number" min="1" max="5" step="0.5" value="${r.q}" data-k="q" data-i="${i}" aria-label="R${i+1} quality"></td>
+      <td class="num" data-o="rs"></td><td class="num" data-o="as"></td><td class="num" data-o="rl"></td><td class="num" data-o="al"></td><td class="num" data-o="rg"></td><td class="num" data-o="ag"></td><td data-o="fl"></td>`;
+    tb.appendChild(tr);
+  });
+  compute();
+}
+$("tb").addEventListener("click",e=>{const b=e.target.closest("button.tog");if(!b)return;const r=rows[+b.dataset.i];r[b.dataset.k]=r[b.dataset.k]?0:1;curPreset=null;renderPresetBtns();build();});
+$("tb").addEventListener("input",e=>{const t=e.target;if(t.tagName!=="INPUT")return;const r=rows[+t.dataset.i];let v=+t.value;if(!isFinite(v))return;
+  if(t.dataset.k==="q")v=Math.min(5,Math.max(1,v)); if(t.dataset.k==="len")v=Math.max(0,v); r[t.dataset.k]=v;curPreset=null;renderPresetBtns();compute();});
+
+function renderPrio(){
+  const el=$("prio"); el.innerHTML="<span class='muted'>priority (highest first):</span>";
+  prio.forEach((t,i)=>{const c=document.createElement("span");c.className="chip";
+    c.innerHTML=`${i+1}. ${TNAME[t]}${i>0?`<button data-up="${i}" aria-label="raise ${TNAME[t]}">←</button>`:"<span style='width:6px'></span>"}`;el.appendChild(c);});
+}
+$("prio").addEventListener("click",e=>{const b=e.target.closest("button[data-up]");if(!b)return;const i=+b.dataset.up;[prio[i-1],prio[i]]=[prio[i],prio[i-1]];renderPrio();compute();});
+
+function compute(){
+  const w=W();
+  ["wc","wf","wl","ws","wq"].forEach(id=>$(id+"v").textContent=(+$(id).value).toFixed(2));
+  const n=rows.length;
+  // (a) weighted sum
+  const parts=rows.map(r=>({correct:w.c*r.c,format:w.f*r.f,length:-w.l*Math.min(r.len,w.lmax)/w.lmax,safety:w.s*r.s,quality:w.q*r.q/5}));
+  const Rs=parts.map(p=>p.correct+p.format+p.length+p.safety+p.quality);
+  const As=adv(Rs);
+  // (b) lexicographic
+  let decide=null, Rl=rows.map(()=>0);
+  for(const t of prio){const v=rows.map(r=>raw(r,t,w));if(Math.max(...v)-Math.min(...v)>1e-12){decide=t;Rl=v;break;}}
+  const Al=adv(Rl);
+  // (c) gated
+  const gS=$("gSafe").checked,gF=$("gFmt").checked;
+  const rmin=-w.l; $("rmin").textContent=fmtR(rmin);
+  const pass=rows.map(r=>(!gS||r.s===1)&&(!gF||r.f===1));
+  const Rg=rows.map((r,i)=>{if(!pass[i])return rmin;const p=parts[i];return p.correct+(gF?0:p.format)+p.length+(gS?0:p.safety)+p.quality;});
+  const Ag=adv(Rg);
+  // write
+  const trs=[...$("tb").children];
+  let flagged={s:[],l:[],g:[]};
+  trs.forEach((tr,i)=>{
+    const set=(k,v,cls)=>{const c=tr.querySelector(`[data-o="${k}"]`);c.textContent=v;c.className="num "+(cls||"");};
+    set("rs",fmtR(Rs[i]));set("as",fmt(As[i]),As[i]>1e-9?"pos":As[i]<-1e-9?"neg":"");
+    set("rl",fmtR(Rl[i]));set("al",fmt(Al[i]),Al[i]>1e-9?"pos":Al[i]<-1e-9?"neg":"");
+    set("rg",fmtR(Rg[i]));set("ag",fmt(Ag[i]),Ag[i]>1e-9?"pos":Ag[i]<-1e-9?"neg":"");
+    const bad=rows[i].s===0; const msgs=[];
+    if(bad&&As[i]>1e-9){msgs.push("sum");flagged.s.push(i+1);} if(bad&&Al[i]>1e-9){msgs.push("lex");flagged.l.push(i+1);} if(bad&&Ag[i]>1e-9){msgs.push("gated");flagged.g.push(i+1);}
+    tr.classList.toggle("flag",msgs.length>0);
+    tr.querySelector('[data-o="fl"]').innerHTML=msgs.length?`<span class="flagtxt">non-compliant, A &gt; 0 under ${msgs.join(", ")}</span>`:"";
+  });
+  // spread bars
+  const sp=TERMS.map(t=>[t,std(parts.map(p=>p[t]))]); const mx=Math.max(1e-9,...sp.map(x=>x[1]));
+  $("spread").innerHTML=sp.map(([t,s])=>`<div class="bar"><span>${TNAME[t]}</span><div class="track"><div class="fill" style="width:${(100*s/mx).toFixed(1)}%"></div></div><span class="num">${s.toFixed(3)}</span></div>`).join("")
+    +`<p class="note">std of R before normalization: <b>${std(Rs).toFixed(3)}</b>. ${$("useStd").checked&&std(Rs)>1e-9?"Dividing by it rescales the advantages to unit std, however small this number is.":""}</p>`;
+  $("lexInfo").innerHTML=decide?`<p>Deciding term: <b>${TNAME[decide]}</b>.</p><p class="note">Tied above it: ${prio.slice(0,prio.indexOf(decide)).map(t=>TNAME[t]).join(", ")||"none"}. Ignored below it: ${prio.slice(prio.indexOf(decide)+1).map(t=>TNAME[t]).join(", ")||"none"}.</p><p class="note">std of R before normalization: <b>${std(Rl).toFixed(3)}</b>.</p>`
+    :`<p>All terms tied: no signal for this group.</p>`;
+  const nG=pass.filter(x=>!x).length;
+  $("gateInfo").innerHTML=`<p><b>${nG}</b> of ${n} rollouts fail the gate and get r<sub>min</sub> = ${fmtR(rmin)}.</p><p class="note">Gate: ${[gS?"compliance":null,gF?"format":null].filter(Boolean).join(" + ")||"none (rule reduces to the sum)"}. Inside the gate, the remaining terms are mixed with the weights of (a) ("the normal weighted mixture is used", MAI Sec. 3.4.3).</p><p class="note">std of R before normalization: <b>${std(Rg).toFixed(3)}</b>.</p>`;
+  // verdict
+  const v=[];
+  if(flagged.s.length) v.push(`Weighted sum: non-compliant rollout(s) R${flagged.s.join(", R")} get a positive advantage. Correctness and quality bought back the missing safety term. Raising w<sub>s</sub> moves the break-even point but any finite weight can be outweighed by enough of the other terms (ch-12 §2 Failure 3).`);
+  else if(rows.some(r=>r.s===0)) v.push(`Weighted sum: no non-compliant rollout has a positive advantage at these weights. Lower w<sub>s</sub> or raise w<sub>q</sub>/w<sub>c</sub> to find the point where it flips.`);
+  if(flagged.l.length) v.push(`Lexicographic: R${flagged.l.join(", R")} positive because compliance is not the first untied term in the priority list.`);
+  if(rows.some(r=>r.s===0)&&!flagged.g.length&&gS) v.push(`Gated: no non-compliant rollout can score above r<sub>min</sub>, so none can be reinforced relative to a compliant one.`);
+  const allC=rows.every(r=>r.c===rows[0].c);
+  if(allC&&std(Rs)>1e-9&&$("useStd").checked) v.push(`Correctness is tied (${rows[0].c?"all correct":"all wrong"}). The sum's advantages now come only from format, length, quality or safety, scaled to full magnitude by the std division (ch-12 §2 Failure 4). Dynamic sampling on the correctness pass rate would drop this group before the loss.`);
+  if(!v.length) v.push("Change a cell or a weight to see the rules diverge.");
+  $("verdict").innerHTML=v.map(x=>`<p>${x}</p>`).join("");
+}
+["wc","wf","wl","ws","wq","lmax","useStd","gSafe","gFmt"].forEach(id=>$(id).addEventListener("input",compute));
+["useStd","gSafe","gFmt"].forEach(id=>$(id).addEventListener("change",compute));
+document.querySelectorAll("[data-preset]").forEach(b=>b.addEventListener("click",()=>load(b.dataset.preset)));
+$("addR").addEventListener("click",()=>{if(rows.length>=12)return;rows.push({c:0,f:1,len:3000,s:1,q:3});curPreset=null;renderPresetBtns();build();});
+$("delR").addEventListener("click",()=>{if(rows.length<=2)return;rows.pop();curPreset=null;renderPresetBtns();build();});
+renderPrio(); load("buy");
+
+// ---------- Part 2: prompt selection ----------
+const G=8;
+const P0=[0,1,2,3,4,5,6,7,8,8,0,3]; // illustrative
+let P,epoch;
+function resetP(){P=P0.map((k,i)=>({name:"P"+(i+1),k,retired:false}));epoch=1;renderP();}
+function classify(p){
+  const pr=p.k/G;
+  if(p.retired) return ["ret","retired","pass rate ≥ 0.9 in an earlier epoch (No-Positive-Resampling)"];
+  if($("fHard").checked&&p.k>4) return ["out","filtered out","hard-only window keeps pass ≤ 4/8"];
+  if($("fMAI").checked&&(pr<0.1||pr>0.8)) return ["out","filtered out",`pass rate ${pr.toFixed(3)} outside [0.1, 0.8]`];
+  if($("fZero").checked&&(p.k===0||p.k===G)) return ["drop","dropped, batch refilled",p.k===0?"all 8 wrong: zero variance":"all 8 correct: zero variance"];
+  if(p.k===0||p.k===G) return ["in0","in batch, A = 0",p.k===0?"all wrong: every advantage is 0":"all correct: every advantage is 0"];
+  return ["in","in batch, signal",`${p.k} correct, ${G-p.k} wrong`];
+}
+function renderP(){
+  $("epLbl").textContent="Epoch "+epoch;
+  const tb=$("ptb"); tb.innerHTML="";
+  let cnt={in:0,in0:0,drop:0,ret:0,out:0}; let willRetire=[];
+  P.forEach((p,i)=>{
+    const [c,lab,why]=classify(p); cnt[c]++;
+    const npr=$("fNPR").checked&&!p.retired&&p.k/G>=0.9;
+    if(npr) willRetire.push(p.name);
+    const cls={in:"st-in",in0:"st-drop",drop:"st-drop",ret:"st-ret",out:"st-out"}[c];
+    const tr=document.createElement("tr");
+    tr.innerHTML=`<td>${p.name}</td><td><input type="number" min="0" max="${G}" step="1" value="${p.k}" data-pi="${i}" ${p.retired?"disabled":""} aria-label="${p.name} correct out of 8"> / ${G}</td>
+      <td><span class="kbox"><span class="kbar" style="width:${(100*p.k/G).toFixed(0)}%"></span></span></td>
+      <td class="num">${(p.k/G).toFixed(3)}</td><td class="${cls}">${lab}</td><td class="muted" style="white-space:normal;min-width:180px">${why}${npr?" · <b>retire after this epoch</b> (≥ 0.9)":""}</td>`;
+    tb.appendChild(tr);
+  });
+  const sampled=cnt.in+cnt.in0;
+  $("psum").innerHTML=`<p>Groups trained this epoch: <b>${sampled}</b>, of which <b>${cnt.in}</b> carry a non-zero advantage${cnt.in0?` and <b>${cnt.in0}</b> contribute nothing (zero-variance groups left in the batch)`:""}. Dropped for zero variance: ${cnt.drop}. Filtered by window: ${cnt.out}. Retired: ${cnt.ret}.</p>`
+   +($("fHard").checked?`<p>The hard-only window also removes prompts at 5/8–7/8, which still have within-group variance. POLARIS found that narrowing the window this way (19K, pass ≤ 4/8) hurt training as much as no filtering, while removing only 8/8 prompts (26K) did not (POLARIS blog, Difficulty section).</p>`:"")
+   +(!$("fZero").checked&&cnt.in0?`<p>Without the zero-variance filter, ${cnt.in0} of ${sampled} groups in the batch have no gradient signal.</p>`:"")
+   +(willRetire.length?`<p>Next epoch, ${willRetire.join(", ")} will be excluded (open-instruct: <span style="font-family:monospace">iter_dataloader.exclude_index</span>).</p>`:"");
+}
+$("ptb").addEventListener("change",e=>{const t=e.target;if(!t.dataset.pi)return;let v=Math.round(+t.value);if(!isFinite(v))v=0;v=Math.max(0,Math.min(G,v));P[+t.dataset.pi].k=v;renderP();});
+["fZero","fNPR","fMAI","fHard"].forEach(id=>$(id).addEventListener("change",renderP));
+$("nextEp").addEventListener("click",()=>{
+  P.forEach(p=>{if(p.retired)return;const [c]=classify(p);
+    if($("fNPR").checked&&p.k/G>=0.9){p.retired=true;return;}
+    if(c==="in"&&p.k>0&&p.k<G)p.k+=1;});
+  epoch++;renderP();});
+$("resetEp").addEventListener("click",resetP);
+resetP();
+})();
+</script>
+</body>
+</html>

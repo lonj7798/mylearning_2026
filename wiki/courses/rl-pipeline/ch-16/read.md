@@ -4,7 +4,7 @@
      title: Math, Code, and SWE RL Pipelines
      deps: [ch-12]
      sources: [[swe-rl]], [[r2e-gym]], [[deepswe]], [[rstar2-agent]], [[deepseek-v3-2]], [[deepseek-v3.1]], [[swe-smith]], [[slime-agentic-and-mismatch-examples]], [[areal-agent-pipelines]], [[minimax-m1]], [[mai-thinking-1]], [[mai-rl-infrastructure]], [[math-verify]], [[verifier-pitfalls]], [[open-instruct-rlvr-pipeline]], [[olmo-3-rl-pipeline]], [[magistral]], [[dapo]], [[big-math]], [[kimi-k2]], [[glm-4-5]], [[demystifying-agentic-rl]]
-     figures: none
+     figures: figures/domain-pipelines.html
 -->
 
 # Chapter 16 — Math, Code, and SWE RL Pipelines
@@ -219,6 +219,8 @@ except SandboxTerminatedError as error:
 ```
 
 No source compares these policies on the same task. The choice depends on what the failure mostly reflects. If failures come from the agent's behaviour (looping, running out of context), masking them removes the only signal against that behaviour. rStar2 makes the same argument about overlong filtering: it raised the overlong ratio because repetitive outputs lost their only negative signal ([[rstar2-agent]] §4.3.1). If failures come from the infrastructure, zero reward punishes the agent for the cluster's errors. Record the failure cause per trajectory, so that the choice can be made per cause.
+
+> Interactive: [figures/domain-pipelines.html](figures/domain-pipelines.html) — math, code and SWE pipelines stage by stage, MAI's 102M → 265,617 SWE environment funnel, and a toggle that applies the five failure policies to one GRPO group to show each policy's baseline and advantages (no source compares them).
 
 ### §4.5 The sandbox fleet
 

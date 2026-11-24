@@ -1,0 +1,351 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Distilled Start vs Climb</title>
+<style>
+:root{
+  --bg:#fbfbfa; --fg:#1d1d1f; --muted:#5f6368; --panel:#ffffff; --line:#d0d3d8; --soft:#f1f3f5;
+  --accent:#1a63c7; --own:#b4441f; --own-bg:#fbe9e3; --reuse:#2f7a4a; --reuse-bg:#e6f3ea; --open:#6b46b0; --open-bg:#efe9f8;
+  --c1:#1a63c7; --c2:#c2410c; --band:#e3ecf9; --warn:#a15c00; --hl:#d93025;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#16171a; --fg:#e8eaed; --muted:#a0a4aa; --panel:#202124; --line:#3c4043; --soft:#2a2c30;
+    --accent:#8ab4f8; --own:#f28b6b; --own-bg:#3d2620; --reuse:#7fd19b; --reuse-bg:#1f3326; --open:#c3a6f2; --open-bg:#2e2540;
+    --c1:#8ab4f8; --c2:#f6a06b; --band:#22324a; --warn:#f0b456; --hl:#ff7a6b;
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#16171a; --fg:#e8eaed; --muted:#a0a4aa; --panel:#202124; --line:#3c4043; --soft:#2a2c30;
+  --accent:#8ab4f8; --own:#f28b6b; --own-bg:#3d2620; --reuse:#7fd19b; --reuse-bg:#1f3326; --open:#c3a6f2; --open-bg:#2e2540;
+  --c1:#8ab4f8; --c2:#f6a06b; --band:#22324a; --warn:#f0b456; --hl:#ff7a6b;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);font:15px/1.5 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+main{max-width:1000px;margin:0 auto;padding:16px}
+h1{font-size:20px;margin:4px 0 4px}
+h2{font-size:17px;margin:0 0 8px}
+p{margin:6px 0}
+.sub,.note{color:var(--muted);font-size:13px}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:14px;margin:14px 0}
+.row{display:flex;flex-wrap:wrap;gap:10px 16px;align-items:center;margin:8px 0}
+label{font-size:14px;max-width:100%}
+select{max-width:100%}
+input[type=range]{width:220px;max-width:100%;vertical-align:middle}
+select,button{font:inherit;font-size:14px;color:var(--fg);background:var(--panel);border:1px solid var(--line);border-radius:6px;padding:5px 10px}
+button{cursor:pointer}
+button[aria-pressed="true"]{border-color:var(--accent);color:var(--accent);font-weight:600}
+.mono{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:13px}
+.stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:8px;margin:10px 0}
+.stat{border:1px solid var(--line);border-radius:8px;padding:8px 10px;background:var(--soft)}
+.stat .k{font-size:12px;color:var(--muted)}
+.stat .v{font-size:20px;font-weight:650}
+svg{display:block;width:100%;height:auto}
+svg text{fill:var(--fg);font-family:system-ui,sans-serif}
+.tag{display:inline-block;font-size:11px;padding:1px 6px;border-radius:4px;border:1px solid var(--line);color:var(--muted)}
+.illus{color:var(--warn);font-weight:600}
+table{border-collapse:collapse;width:100%;font-size:13px}
+th,td{border-bottom:1px solid var(--line);padding:5px 6px;text-align:left;vertical-align:top}
+.scroll{overflow-x:auto}
+.ch{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:10px}
+.ch .box{border:1px solid var(--line);border-radius:8px;padding:10px;background:var(--soft)}
+.ch .box h3{font-size:15px;margin:0 0 6px}
+.ch .lab{font-size:12px;color:var(--muted);margin-top:6px}
+.stack{display:grid;gap:6px}
+.layer{display:grid;grid-template-columns:150px 1fr;gap:8px;align-items:stretch}
+.layer .name{font-size:13px;color:var(--muted);padding:6px 0}
+.cells{display:flex;flex-wrap:wrap;gap:6px}
+.cell{flex:1 1 140px;border:1.5px solid var(--line);border-radius:8px;padding:6px 8px;font-size:13px;min-width:0}
+.cell b{display:block;font-size:14px}
+.cell.own{border-color:var(--own);background:var(--own-bg)}
+.cell.reuse{border-color:var(--reuse);background:var(--reuse-bg)}
+.cell.open{border-color:var(--open);background:var(--open-bg)}
+.cell.hit{outline:3px solid var(--hl);outline-offset:1px}
+.legend{display:flex;flex-wrap:wrap;gap:12px;font-size:12px;color:var(--muted);margin:6px 0}
+.sw{display:inline-block;width:12px;height:12px;border-radius:3px;vertical-align:-2px;margin-right:4px;border:1.5px solid}
+.mech{display:flex;flex-wrap:wrap;gap:6px;margin:8px 0}
+@media (max-width:560px){ .layer{grid-template-columns:1fr} .layer .name{padding:0} input[type=range]{width:160px} }
+</style>
+</head>
+<body>
+<main>
+<h1>Distilled start vs climb from base: what changes with run length</h1>
+<p class="sub">Companion to ch-01. Numbers are quoted from [[mai-rl-infrastructure]] (cited as "Rocket p. N"), [[mai-thinking-1]], and the open reports in ch-01 §1.3. Inputs marked <span class="illus">illustrative</span> are not from any source; they exist to show the shape of a calculation.</p>
+
+<section class="card" id="s1">
+<h2>1. Run length: where reported runs sit, and what accumulates per step</h2>
+<p>Rocket's argument: in a distilled start "small mismatches between sampler and learner have little time to compound"; a climb from base runs "many thousands of training steps spanning weeks to months" (Rocket p. 1). The axis below is RL steps (log scale). Step counts across runs do not compare exactly, because batch sizes and rollout lengths differ (ch-01 §1.3).</p>
+<div class="row">
+  <label>preset <select id="preset"></select></label>
+  <label>RL steps <input type="range" id="steps" min="0" max="1000" step="1"> <span class="mono" id="stepsv"></span></label>
+</div>
+<svg id="axis" viewBox="0 0 900 190" role="img" aria-label="RL step counts of reported runs on a log axis"></svg>
+<ol id="axisLegend" class="note" style="display:none;margin:4px 0;padding-left:22px"></ol>
+<p class="note">Shaded band: 60–2,000 steps, the range of RL lengths reported by the open recipes in this library ([[areal-async-rl]] Table 1; [[olmo-3-rl-pipeline]] Table 49). ScaleRL shows open groups also run long climbs, so the boundary is not "open versus closed" (ch-01 §1.3). Rocket's Fig. 8 shows only "a portion" of its run, steps 40–2,000.</p>
+
+<h2 style="margin-top:14px">Accumulation of a per-step sampler–learner bias <span class="illus">(illustrative)</span></h2>
+<p>No source gives a magnitude for the per-step effect. This calculator shows only the arithmetic: if each update carries a small bias ε, the total after N steps is N·ε when ε is constant. Rocket reports a "larger sampler–learner log-probability discrepancy at a later RL checkpoint than at initialization" with identical inputs, which "suggests that optimization may amplify or exploit numerical differences" (Rocket p. 9). The second curve models that case as ε doubling every D steps; D is <span class="illus">illustrative</span>.</p>
+<div class="row">
+  <label>ε per step <span class="illus">(illustrative)</span> <input type="range" id="eps" min="1" max="50" value="10"> <span class="mono" id="epsv"></span></label>
+  <label><input type="checkbox" id="grow" checked> include "gap grows with training" curve (D = <span class="mono" id="dblv"></span> steps, <span class="illus">illustrative</span>)</label>
+  <label>D <input type="range" id="dbl" min="200" max="5000" step="100" value="1000"></label>
+</div>
+<svg id="acc" viewBox="0 0 900 230" role="img" aria-label="Accumulated bias versus steps"></svg>
+<div class="stats">
+  <div class="stat"><div class="k">accumulated, constant ε</div><div class="v" id="accC"></div></div>
+  <div class="stat"><div class="k">accumulated, growing ε</div><div class="v" id="accG"></div></div>
+  <div class="stat"><div class="k">ratio to a 250-step run (AReaL 1.5B math), constant ε</div><div class="v" id="accR"></div></div>
+</div>
+</section>
+
+<section class="card" id="s2">
+<h2>2. Failures and reconfigurations over wall-clock time: restart vs targeted recovery</h2>
+<p>Rocket Table 1 (p. 11) covers "a portion of RL training, assuming 6,000 GPUs": 2,490 h, with 21 in-job recoveries (0.5 h saved each), 88 learner recoveries (2 h each) and 123 runtime-elasticity events (2 h each); total 432.5 h, 17.37%. Per-event savings "are estimates". This calculator applies those event rates to another run length. With 2,490 h and 6,000 GPUs it reproduces Table 1.</p>
+<div class="row">
+  <label>preset <select id="wpreset">
+    <option value="144">Olmo 3 7B Think, newer infra: 6 days</option>
+    <option value="360">Olmo 3 7B Think, first run: ≈15 days</option>
+    <option value="2490" selected>Rocket Table 1 portion: 2,490 h</option>
+  </select></label>
+  <label>wall clock (h) <input type="range" id="hours" min="24" max="4000" step="1" value="2490"> <span class="mono" id="hoursv"></span></label>
+  <label>GPUs <input type="range" id="gpus" min="250" max="8000" step="250" value="6000"> <span class="mono" id="gpusv"></span></label>
+</div>
+<div class="row">
+  <span>policy on each event:</span>
+  <button id="polR" aria-pressed="true">restart the whole job</button>
+  <button id="polT" aria-pressed="false">Rocket targeted recovery / elasticity</button>
+</div>
+<div class="scroll"><table id="evt"></table></div>
+<div class="stats">
+  <div class="stat"><div class="k">hours lost to restarts</div><div class="v" id="lostH"></div></div>
+  <div class="stat"><div class="k">share of the run</div><div class="v" id="lostP"></div></div>
+  <div class="stat"><div class="k">GPU-hours lost</div><div class="v" id="lostG"></div></div>
+  <div class="stat"><div class="k">mean hours between learner failures</div><div class="v" id="mtbf"></div></div>
+</div>
+<p class="note">Assumptions of this extrapolation: events occur at Table 1's rate per hour, and that rate scales linearly with GPU count (an assumption; Table 1 gives one GPU count only). Olmo 3's GPU count is not used here, so the Olmo presets set only the duration. Restart also has a cost Table 1 does not count: MAI-Thinking-1 reports that resuming from a checkpoint saved before a collapse "is often not viable" because instabilities are embedded "many steps before the actual collapse" ([[mai-thinking-1]] Sec. 3.1.4).</p>
+</section>
+
+<section class="card" id="s3">
+<h2>3. The three challenges under each regime</h2>
+<div class="row">
+  <button id="rgD" aria-pressed="false">distilled start (short refinement)</button>
+  <button id="rgB" aria-pressed="true">climb from base (Rocket's case)</button>
+</div>
+<div class="ch" id="chal"></div>
+</section>
+
+<section class="card" id="s4">
+<h2>4. Component ownership: build vs reuse</h2>
+<p>Select a stack. Rocket owns "the learner and training framework, Rocket, and an inference engine built on an MAI-maintained fork of SGLang" and reuses "Kubernetes or Slurm to allocate nodes" and Ray actors (Rocket p. 2). Then select a cross-boundary mechanism (ch-01 §5.2) to see which components it spans.</p>
+<div class="row" id="stackBtns"></div>
+<div class="legend">
+  <span><span class="sw" style="border-color:var(--own);background:var(--own-bg)"></span>owned / maintained by the team</span>
+  <span><span class="sw" style="border-color:var(--reuse);background:var(--reuse-bg)"></span>reused commodity layer</span>
+  <span><span class="sw" style="border-color:var(--open);background:var(--open-bg)"></span>external open component, used through its interface</span>
+</div>
+<div class="stack" id="stack"></div>
+<p style="margin-top:10px"><b>Cross-boundary mechanisms</b> (click one):</p>
+<div class="mech" id="mech"></div>
+<p id="mechTxt" class="note"></p>
+</section>
+</main>
+
+<script>
+(function(){
+"use strict";
+const $=id=>document.getElementById(id);
+const NS="http://www.w3.org/2000/svg";
+function el(tag,attrs,parent,text){const e=document.createElementNS(NS,tag);for(const k in attrs)e.setAttribute(k,attrs[k]);if(text!==undefined)e.textContent=text;if(parent)parent.appendChild(e);return e;}
+const fmt=n=>n.toLocaleString("en-US",{maximumFractionDigits:0});
+const fmt1=n=>n.toLocaleString("en-US",{maximumFractionDigits:1,minimumFractionDigits:1});
+
+/* ---------- Section 1 ---------- */
+const RUNS=[
+ {n:"AReaL 32B code",s:60,src:"[[areal-async-rl]] Table 1"},
+ {n:"AReaL 14B code",s:80,src:"[[areal-async-rl]] Table 1"},
+ {n:"AReaL 1.5B / 7B math",s:250,src:"[[areal-async-rl]] Table 1"},
+ {n:"Olmo 3 7B Instruct",s:450,src:"[[olmo-3-rl-pipeline]] Table 49"},
+ {n:"Olmo 3 32B Think",s:750,src:"[[olmo-3-rl-pipeline]] Table 49"},
+ {n:"PipelineRL 7B math",s:1000,src:"[[pipelinerl]] §5"},
+ {n:"Olmo 3 7B Think",s:1400,src:"[[olmo-3-rl-pipeline]] Table 49"},
+ {n:"Olmo 3 7B RL-Zero",s:2000,src:"[[olmo-3-rl-pipeline]] Table 49"},
+ {n:"Rocket Fig. 8 portion (x-axis end)",s:2000,src:"Rocket p. 14"},
+ {n:"ScaleRL 8B (about 7,400)",s:7400,src:"[[scalerl]] Fig. 1"}
+];
+const LMIN=Math.log10(30), LMAX=Math.log10(12000);
+const sliderToSteps=v=>Math.round(Math.pow(10,LMIN+(LMAX-LMIN)*v/1000));
+const stepsToSlider=s=>Math.round(1000*(Math.log10(s)-LMIN)/(LMAX-LMIN));
+const ps=$("preset");
+RUNS.forEach((r,i)=>{const o=document.createElement("option");o.value=i;o.textContent=`${r.n}: ${fmt(r.s)} steps (${r.src})`;ps.appendChild(o);});
+ps.value=2;
+$("steps").value=stepsToSlider(250);
+let W=900;
+function setW(){W=Math.max(320,Math.min(900,Math.round(document.querySelector("#s1").clientWidth-30)));}
+function X(s){return 40+(Math.log10(s)-LMIN)/(LMAX-LMIN)*(W-80);}
+function drawAxis(){
+  setW(); const svg=$("axis"); svg.innerHTML=""; svg.setAttribute("viewBox",`0 0 ${W} 190`);
+  const narrow=W<600, lg=$("axisLegend"); lg.style.display=narrow?"block":"none";
+  lg.innerHTML=narrow?RUNS.map((r,i)=>`<li${+ps.value===i?' style="font-weight:600;color:var(--fg)"':""}>${r.n}: ${fmt(r.s)}</li>`).join(""):"";
+  const st=sliderToSteps(+$("steps").value);
+  el("rect",{x:X(60),y:20,width:X(2000)-X(60),height:120,fill:"var(--band)"},svg);
+  el("text",{x:X(60)+4,y:34,"font-size":11,fill:"var(--muted)"},svg,narrow?"open: 60–2,000":"open reports: 60–2,000 steps");
+  el("line",{x1:40,y1:140,x2:W-40,y2:140,stroke:"var(--line)"},svg);
+  (narrow?[30,300,3000]:[30,100,300,1000,3000,10000]).forEach(t=>{el("line",{x1:X(t),y1:140,x2:X(t),y2:146,stroke:"var(--muted)"},svg);el("text",{x:X(t),y:160,"text-anchor":"middle","font-size":12},svg,fmt(t));});
+  el("text",{x:W/2,y:182,"text-anchor":"middle","font-size":12,fill:"var(--muted)"},svg,"RL steps (log scale)");
+  const lanes=[48,64,80,96,112,128];
+  RUNS.forEach((r,i)=>{
+    const y=lanes[i%lanes.length], x=X(r.s), on=(+ps.value===i);
+    el("circle",{cx:x,cy:y,r:on?6:4,fill:i===8?"var(--c2)":"var(--c1)",stroke:on?"var(--hl)":"none","stroke-width":2},svg);
+    const anchor=x>W*0.78?"end":"start";
+    el("text",{x:anchor==="end"?x-8:x+8,y:y+4,"font-size":11,"text-anchor":anchor,fill:on?"var(--fg)":"var(--muted)","font-weight":on?600:400},svg,narrow?String(i+1):r.n);
+  });
+  el("line",{x1:X(st),y1:16,x2:X(st),y2:140,stroke:"var(--hl)","stroke-width":2,"stroke-dasharray":"4 3"},svg);
+  el("text",{x:Math.min(X(st)+4,W-70),y:14,"font-size":11,fill:"var(--hl)"},svg,`${fmt(st)} steps`);
+}
+function accum(N,eps,grow,dbl){
+  if(!grow) return N*eps;
+  // eps(t)=eps*2^(t/dbl); integral 0..N
+  const a=Math.LN2/dbl; return eps*(Math.exp(a*N)-1)/a;
+}
+function drawAcc(){
+  setW(); const svg=$("acc"); svg.innerHTML=""; svg.setAttribute("viewBox",`0 0 ${W} 230`);
+  const st=sliderToSteps(+$("steps").value), eps=+$("eps").value/1000, grow=$("grow").checked, dbl=+$("dbl").value;
+  $("epsv").textContent=eps.toFixed(3); $("dblv").textContent=fmt(dbl); $("stepsv").textContent=fmt(st);
+  const N=10000, ymaxC=accum(N,eps,false), ymaxG=grow?accum(N,eps,true,dbl):ymaxC;
+  const ymax=Math.max(ymaxC,ymaxG);
+  const L=50,R=W-20,T=14,B=190;
+  const xs=s=>L+(Math.log10(Math.max(s,30))-LMIN)/(LMAX-LMIN)*(R-L);
+  const ys=v=>B-(Math.log10(1+v)/Math.log10(1+ymax))*(B-T);
+  el("line",{x1:L,y1:B,x2:R,y2:B,stroke:"var(--line)"},svg);
+  el("line",{x1:L,y1:T,x2:L,y2:B,stroke:"var(--line)"},svg);
+  (W<600?[30,300,3000]:[30,100,300,1000,3000,10000]).forEach(t=>el("text",{x:xs(t),y:B+16,"text-anchor":"middle","font-size":11},svg,fmt(t)));
+  el("text",{x:(L+R)/2,y:226,"text-anchor":"middle","font-size":12,fill:"var(--muted)"},svg,"RL steps (log)");
+  el("text",{x:14,y:(T+B)/2,"font-size":11,fill:"var(--muted)",transform:`rotate(-90 14 ${(T+B)/2})`,"text-anchor":"middle"},svg,"accumulated (log 1+x)");
+  function path(g){let d="";for(let i=0;i<=200;i++){const s=Math.pow(10,LMIN+(Math.log10(N)-LMIN)*i/200);d+=(i?"L":"M")+xs(s).toFixed(1)+","+ys(accum(s,eps,g,dbl)).toFixed(1);}return d;}
+  el("path",{d:path(false),fill:"none",stroke:"var(--c1)","stroke-width":2.2},svg);
+  if(grow) el("path",{d:path(true),fill:"none",stroke:"var(--c2)","stroke-width":2.2},svg);
+  el("line",{x1:xs(st),y1:T,x2:xs(st),y2:B,stroke:"var(--hl)","stroke-dasharray":"4 3"},svg);
+  el("text",{x:L+8,y:T+12,"font-size":11,fill:"var(--c1)"},svg,"— constant ε");
+  if(grow) el("text",{x:L+8,y:T+28,"font-size":11,fill:"var(--c2)"},svg,"— ε doubles every D steps");
+  const c=accum(st,eps,false), g=accum(st,eps,true,dbl);
+  $("accC").textContent=c.toFixed(2);
+  $("accG").textContent=grow?g.toFixed(2):"(curve off)";
+  $("accR").textContent=(st/250).toFixed(1)+"×";
+  $("dbl").disabled=!grow;
+}
+ps.addEventListener("change",()=>{$("steps").value=stepsToSlider(RUNS[+ps.value].s);drawAxis();drawAcc();});
+["steps","eps","dbl","grow"].forEach(id=>$(id).addEventListener("input",()=>{drawAxis();drawAcc();}));
+$("grow").addEventListener("change",drawAcc);
+
+/* ---------- Section 2 ---------- */
+const EV=[
+ {n:"In-job recovery",count:21,save:0.5},
+ {n:"Learner recovery",count:88,save:2},
+ {n:"Runtime elasticity (reconfiguration)",count:123,save:2}
+];
+let policy="restart";
+function drawFail(){
+  const H=+$("hours").value, G=+$("gpus").value;
+  $("hoursv").textContent=fmt(H)+" h ("+fmt1(H/24)+" days)"; $("gpusv").textContent=fmt(G);
+  const scale=(H/2490)*(G/6000);
+  let lost=0, rows=`<tr><th>event type</th><th>Table 1 count</th><th>expected here</th><th>h saved per event (Table 1 estimate)</th><th>h lost here</th></tr>`;
+  EV.forEach(e=>{const n=e.count*scale, h=policy==="restart"?n*e.save:0; lost+=h;
+    rows+=`<tr><td>${e.n}</td><td>${e.count}</td><td>${fmt1(n)}</td><td>${e.save}</td><td>${policy==="restart"?fmt1(h):"0"}</td></tr>`;});
+  $("evt").innerHTML=rows;
+  $("lostH").textContent=fmt1(lost)+" h";
+  $("lostP").textContent=(100*lost/H).toFixed(2)+"%";
+  $("lostG").textContent=fmt(lost*G);
+  $("mtbf").textContent=fmt1(2490/(88*(G/6000)))+" h";
+}
+$("wpreset").addEventListener("change",()=>{$("hours").value=$("wpreset").value;if($("wpreset").value==="2490")$("gpus").value=6000;drawFail();});
+["hours","gpus"].forEach(id=>$(id).addEventListener("input",drawFail));
+function setPol(p){policy=p;$("polR").setAttribute("aria-pressed",p==="restart");$("polT").setAttribute("aria-pressed",p!=="restart");drawFail();}
+$("polR").addEventListener("click",()=>setPol("restart"));
+$("polT").addEventListener("click",()=>setPol("targeted"));
+
+/* ---------- Section 3 ---------- */
+const CH=[
+ {t:"Staleness",chap:"ch-03, ch-04, ch-05",
+  q:"\"Agentic rollouts can take hours while the learner keeps updating the policy. Because GRPO scores each rollout against the others for the same problem, a single slow or failed rollout holds back its entire group\" (Rocket p. 1).",
+  num:"Fig. 2 medians over 1.13M rollouts: 2 min (instruction following) to 93 min / 249 turns (software engineering). Fig. 4 group: slowest rollout 784 turns; fastest rollout waits 7.6 h (Rocket p. 4–6).",
+  D:"Short runs on math or single-turn tasks: the group barrier still exists, but the run ends before the cost accumulates; open recipes report 60–2,000 steps.",
+  B:"Hour-long agentic rollouts run inside a weeks-long climb. Rocket chose asynchrony \"by design\" (p. 5), so it must measure and bound staleness."},
+ {t:"Numerical consistency",chap:"ch-06, ch-07",
+  q:"\"differences in precision, kernels, and parallelism between the sampler and learner can slow learning and destabilize training\" (Rocket p. 1).",
+  num:"MAI-Thinking-1: BF16 on both sides ([[mai-thinking-1]] Sec. 3.6.4). MAI Base 2 (3T parameters): MXFP8 storage for MoE experts and most global-attention KV, BF16 compute (Rocket p. 7–9).",
+  D:"Mismatches \"have little time to compound\" (Rocket p. 1); open stacks correct with a clamped ratio (open-instruct ρ upper bound 2.0) or TIS.",
+  B:"Small mismatches \"accumulate over thousands of updates\" (Rocket p. 2); the gap was larger at a later checkpoint (p. 9). Rocket added bitwise sampler–learner parity (ch-07)."},
+ {t:"Fault tolerance and elasticity",chap:"ch-20, ch-21",
+  q:"\"Restarting the whole job for every failure or reconfiguration wastes GPU time\" (Rocket p. 1).",
+  num:"Table 1: 88 learner recoveries and 123 reconfigurations in 2,490 h; 432.5 h (17.37%) estimated saved. Learner recovery takes \"roughly five minutes\" (Rocket p. 11).",
+  D:"\"a failed run can simply be restarted\" (Rocket p. 1). A few days lost is acceptable.",
+  B:"\"hardware failures are a certainty\" and \"the best data mixture and GPU allocation shift as the policy improves\" (Rocket p. 2). Restart from a pre-collapse checkpoint \"is often not viable\" ([[mai-thinking-1]] Sec. 3.1.4)."}
+];
+let regime="B";
+function drawChal(){
+  $("rgD").setAttribute("aria-pressed",regime==="D");$("rgB").setAttribute("aria-pressed",regime==="B");
+  $("chal").innerHTML=CH.map(c=>`<div class="box"><h3>${c.t} <span class="tag">${c.chap}</span></h3>
+   <div>${c.q}</div><div class="lab">Sourced numbers</div><div>${c.num}</div>
+   <div class="lab">${regime==="D"?"Distilled start: why it is tolerable":"Climb from base: why it becomes a design constraint"}</div><div><b>${regime==="D"?c.D:c.B}</b></div></div>`).join("");
+}
+$("rgD").addEventListener("click",()=>{regime="D";drawChal();});
+$("rgB").addEventListener("click",()=>{regime="B";drawChal();});
+
+/* ---------- Section 4 ---------- */
+const LAYERS=["Node allocation","Component runtime","RL loop / controller","Learner (training)","Inference engine"];
+const STACKS={
+ rocket:{label:"Rocket (MAI)",cells:[
+   [{c:"reuse",id:"nodes",b:"Kubernetes or Slurm",t:"\"allocate nodes to a job\" (Rocket p. 2)"}],
+   [{c:"reuse",id:"ray",b:"Ray actors",t:"\"Rocket's components run on Ray as actors\" (p. 2); control plane on CPU-only nodes (p. 12)"}],
+   [{c:"own",id:"loop",b:"Rocket",t:"controller, problem workers, rollout workers (p. 2–3)"}],
+   [{c:"own",id:"learner",b:"MAI learner and training framework",t:"one learner, no TP for parity (ch-07)"}],
+   [{c:"own",id:"engine",b:"MAI-maintained SGLang fork",t:"\"adopted SGLang … and have substantially adapted it\" (p. 2)"}]],
+  note:"Reason for owning three systems: \"Owning all three allows us to co-design the interfaces between them\" (p. 2). Cost: \"Owning these integrations carries a maintenance cost\" (p. 2). Largest Rocket v1 job: 4,864 GB300 chips, 4,096 inference + 768 learner ([[mai-thinking-1]] Sec. 3.6.4)."},
+ slime:{label:"slime",cells:[
+   [{c:"open",id:"nodes",b:"cluster provided by user",t:"not stated in ch-01"}],
+   [{c:"reuse",id:"ray",b:"Ray placement groups",t:"separate actor and rollout groups unless --colocate (placement_group.py L126–138)"}],
+   [{c:"own",id:"loop",b:"slime train.py",t:"one loop for sync and fully async RL ([[slime]])"}],
+   [{c:"open",id:"learner",b:"Megatron",t:"training backend"}],
+   [{c:"open",id:"engine",b:"SGLang",t:"rollout engine; weights updated via pause → update → resume (train.py L85–93)"}]],
+  note:"slime couples one training backend with one inference engine through a single loop. Separate placement groups \"let a restarted trainer resize without moving the serving engines\" (slime@79aa41a placement_group.py L127–128)."},
+ verl:{label:"verl",cells:[
+   [{c:"open",id:"nodes",b:"cluster provided by user",t:"not stated in ch-01"}],
+   [{c:"reuse",id:"ray",b:"Ray",t:"rollout modes HYBRID / COLOCATED / STANDALONE (replica.py L68–81)"}],
+   [{c:"own",id:"loop",b:"verl trainer",t:"supports several backends behind interfaces"}],
+   [{c:"open",id:"learner",b:"Megatron",t:""},{c:"open",id:"learner",b:"FSDP",t:""},{c:"open",id:"learner",b:"TorchTitan",t:""},{c:"open",id:"learner",b:"VeOmni",t:""}],
+   [{c:"open",id:"engine",b:"vLLM",t:""},{c:"open",id:"engine",b:"SGLang",t:""},{c:"open",id:"engine",b:"TRT-LLM",t:""}]],
+  note:"verl's low-precision doc targets \"the Cartesian product of training backends … and rollout engines\" (verl@8357f1e docs/low_precision/qat.md L54–59): generality instead of the ability to change both sides of an interface at once."}
+};
+const MECH=[
+ {n:"Two-stage weight transfer",span:["learner","engine"],ch:"ch-05"},
+ {n:"Learner fake-quantizes MXFP8 sampler storage",span:["learner","engine"],ch:"ch-06"},
+ {n:"Shared FA4 kernel with aligned tiles",span:["learner","engine"],ch:"ch-07"},
+ {n:"Request priority from rollout start time",span:["loop","engine"],ch:"ch-04"},
+ {n:"Learner recovery reconnects to live controller",span:["learner","loop"],ch:"ch-20"}
+];
+let stack="rocket", mech=-1;
+const sb=$("stackBtns");
+Object.keys(STACKS).forEach(k=>{const b=document.createElement("button");b.textContent=STACKS[k].label;b.dataset.k=k;b.addEventListener("click",()=>{stack=k;drawStack();});sb.appendChild(b);});
+const mb=$("mech");
+MECH.forEach((m,i)=>{const b=document.createElement("button");b.textContent=m.n;b.addEventListener("click",()=>{mech=(mech===i?-1:i);drawStack();});mb.appendChild(b);});
+function drawStack(){
+  [...sb.children].forEach(b=>b.setAttribute("aria-pressed",b.dataset.k===stack));
+  [...mb.children].forEach((b,i)=>b.setAttribute("aria-pressed",i===mech));
+  const S=STACKS[stack], span=mech>=0?MECH[mech].span:[];
+  $("stack").innerHTML=S.cells.map((row,i)=>`<div class="layer"><div class="name">${LAYERS[i]}</div><div class="cells">${row.map(c=>`<div class="cell ${c.c}${span.includes(c.id)?" hit":""}"><b>${c.b}</b>${c.t?`<span class="note">${c.t}</span>`:""}</div>`).join("")}</div></div>`).join("")+`<p class="note">${S.note}</p>`;
+  if(mech<0){$("mechTxt").textContent="No mechanism selected.";return;}
+  const m=MECH[mech];
+  const ownsAll=S.cells.flat().filter(c=>m.span.includes(c.id)).every(c=>c.c==="own");
+  $("mechTxt").innerHTML=`<b>${m.n}</b> (${m.ch}) spans the ${m.span.map(s=>({learner:"learner",engine:"inference engine",loop:"RL loop"})[s]).join(" and the ")}. `+
+   (ownsAll?`In ${S.label} the team owns both sides, so it can change code on both sides of the interface.`:
+    `In ${S.label} at least one side is an external component, so the mechanism has to go through that component's public API. For bitwise parity this is hard, because parity depends on kernel tiling and reduction order inside both engines (ch-01 §5.2).`);
+}
+
+drawAxis();drawAcc();drawFail();drawChal();drawStack();
+let rz;window.addEventListener("resize",()=>{clearTimeout(rz);rz=setTimeout(()=>{drawAxis();drawAcc();},100);});
+})();
+</script>
+</body>
+</html>

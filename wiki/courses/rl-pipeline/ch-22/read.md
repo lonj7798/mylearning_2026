@@ -4,7 +4,7 @@
      title: Capstone: Design an RL Pipeline for Your Own Setting
      deps: [ch-05, ch-07, ch-18, ch-21]
      sources: [[mai-rl-infrastructure]], [[mai-thinking-1]], [[slime]], [[verl-rollout]], [[areal-async-rl]], [[rl-design-guide]], [[algorithm-crosswalk]], [[recipe-crosswalk]], [[diversity-axes]], [[subjective-reward-guide]], [[olmo-3-rl-pipeline]], [[async-rollout]], [[areal-agent-pipelines]], [[open-instruct-rlvr-pipeline]], [[tito-token-in-token-out]], [[scalerl]], [[minimax-m1]]
-     figures: none
+     figures: figures/capstone-worksheet.html
 -->
 
 # Chapter 22 — Capstone: Design an RL Pipeline for Your Own Setting
@@ -26,6 +26,8 @@ The course taught mechanisms one at a time. A real run combines them, and the co
 **The applied target.** The learner's setting is a sales voice agent built on pipecat, with speech-to-text, the LLM, and text-to-speech each served from the learner's own OpenAI-compatible endpoints. The RL target in this worksheet is the LLM policy that produces the agent's turns and tool calls. A TTS policy is an optional second target (ch-23). The worksheet uses this setting; the items apply to any setting.
 
 **How to use this page.** Each section has: the chapters that teach it; evidence from the sources to reason with (not answers); a decision table with blank cells; and WHY prompts. A blank cell is written `____`. Do not leave a cell filled with a value you cannot justify from a number.
+
+> Interactive: [figures/capstone-worksheet.html](figures/capstone-worksheet.html) — this worksheet as a fillable page with per-section progress, answers saved in the browser, and Markdown export.
 
 ---
 

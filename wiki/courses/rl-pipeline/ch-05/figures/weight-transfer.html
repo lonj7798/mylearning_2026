@@ -1,0 +1,320 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Weight Transfer Explorer</title>
+<style>
+:root{
+  --bg:#fbfbfa; --fg:#1d1d1f; --muted:#5f6368; --panel:#ffffff; --line:#d0d3d8; --soft:#f1f3f5;
+  --accent:#1a63c7; --hl:#d93025; --warn:#a15c00;
+  --c1:#1a63c7; --c2:#c2410c; --learner:#fde7dd; --learner-s:#c2410c; --rep:#e6eefb; --rep-s:#1a63c7; --sel:#d9ecdf; --sel-s:#2f7a4a;
+  --v0:#8fb3e8; --v1:#f0a868; --idle:#cfd3d8; --kvold:#8fb3e8; --kvnew:#f0a868; --none:#eceef1;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#16171a; --fg:#e8eaed; --muted:#a0a4aa; --panel:#202124; --line:#3c4043; --soft:#2a2c30;
+    --accent:#8ab4f8; --hl:#ff7a6b; --warn:#f0b456;
+    --c1:#8ab4f8; --c2:#f6a06b; --learner:#3d2620; --learner-s:#f6a06b; --rep:#1f2b3d; --rep-s:#8ab4f8; --sel:#1f3326; --sel-s:#7fd19b;
+    --v0:#3d6fb5; --v1:#b36a2c; --idle:#4a4e55; --kvold:#3d6fb5; --kvnew:#b36a2c; --none:#2f3237;
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#16171a; --fg:#e8eaed; --muted:#a0a4aa; --panel:#202124; --line:#3c4043; --soft:#2a2c30;
+  --accent:#8ab4f8; --hl:#ff7a6b; --warn:#f0b456;
+  --c1:#8ab4f8; --c2:#f6a06b; --learner:#3d2620; --learner-s:#f6a06b; --rep:#1f2b3d; --rep-s:#8ab4f8; --sel:#1f3326; --sel-s:#7fd19b;
+  --v0:#3d6fb5; --v1:#b36a2c; --idle:#4a4e55; --kvold:#3d6fb5; --kvnew:#b36a2c; --none:#2f3237;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);font:15px/1.5 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+main{max-width:1000px;margin:0 auto;padding:16px}
+h1{font-size:20px;margin:4px 0}
+h2{font-size:17px;margin:0 0 8px}
+p{margin:6px 0}
+.sub,.note{color:var(--muted);font-size:13px}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:14px;margin:14px 0}
+.row{display:flex;flex-wrap:wrap;gap:10px 16px;align-items:center;margin:8px 0}
+label{font-size:14px;max-width:100%}
+input[type=range]{width:200px;max-width:100%;vertical-align:middle}
+select,button{font:inherit;font-size:14px;color:var(--fg);background:var(--panel);border:1px solid var(--line);border-radius:6px;padding:5px 10px;max-width:100%}
+button{cursor:pointer}
+button[aria-pressed="true"]{border-color:var(--accent);color:var(--accent);font-weight:600}
+.mono{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:13px}
+.stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:8px;margin:10px 0}
+.stat{border:1px solid var(--line);border-radius:8px;padding:8px 10px;background:var(--soft)}
+.stat .k{font-size:12px;color:var(--muted)}
+.stat .v{font-size:19px;font-weight:650}
+svg{display:block;width:100%;height:auto}
+svg text{fill:var(--fg);font-family:system-ui,sans-serif}
+.illus{color:var(--warn);font-weight:600}
+.strip{display:flex;flex-wrap:wrap;gap:3px;margin:4px 0 10px}
+.tok{min-width:34px;padding:3px 5px;border-radius:4px;font-size:12px;text-align:center;font-family:ui-monospace,Menlo,monospace;border:1px solid var(--line)}
+.tok.v0{background:var(--v0)} .tok.v1{background:var(--v1)} .tok.none{background:var(--none);color:var(--muted)} .tok.idle{background:var(--idle)}
+.tok.gone{background:transparent;color:var(--muted);text-decoration:line-through;border-style:dashed}
+.slab{font-size:12px;color:var(--muted)}
+.status{border-left:4px solid var(--accent);background:var(--soft);padding:8px 10px;border-radius:4px;margin:8px 0}
+.legend{display:flex;flex-wrap:wrap;gap:12px;font-size:12px;color:var(--muted);margin:6px 0}
+.sw{display:inline-block;width:12px;height:12px;border-radius:3px;vertical-align:-2px;margin-right:4px;border:1px solid var(--line)}
+table{border-collapse:collapse;width:100%;font-size:13px}
+th,td{border-bottom:1px solid var(--line);padding:5px 6px;text-align:left;vertical-align:top}
+.scroll{overflow-x:auto}
+@media (max-width:560px){ input[type=range]{width:150px} }
+</style>
+</head>
+<body>
+<main>
+<h1>Weight transfer: fan-out cost, sampler lag, and in-flight requests</h1>
+<p class="sub">Companion to ch-05. "Rocket p. N" refers to [[mai-rl-infrastructure]]. Inputs marked <span class="illus">illustrative</span> are not stated by any source; Rocket does not state its model bytes, transport, or number of selected engines (ch-05 §2.3).</p>
+
+<section class="card" id="sA">
+<h2>A. Learner-side cost: per-replica sends vs Rocket's two-stage transfer</h2>
+<p>Per-replica: the learner sends one full copy (S bytes) to each of R replicas, R·S in total, so "learner-side communication cost grow[s] with the inference fleet size" (Rocket p. 6). Two-stage: "selected sampler engines first pull packed parameter chunks from the learner, and then distribute them to corresponding ranks across sampler replicas" (p. 6–7). Here the learner serves one copy per source group G; Rocket v1 split a 36-server fleet into 4 groups of 9 ([[mai-thinking-1]] Sec. 3.6.5).</p>
+<div class="row">
+  <label>preset <select id="preA">
+    <option value="v1">Rocket v1 example: 36 servers, 4 source groups</option>
+    <option value="one">one source group (G = 1)</option>
+  </select></label>
+  <label>replicas R <input type="range" id="R" min="1" max="64" value="36"> <span class="mono" id="Rv"></span></label>
+  <label>source groups G <input type="range" id="G" min="1" max="8" value="4"> <span class="mono" id="Gv"></span></label>
+</div>
+<div class="row">
+  <label>model copy S, GB <span class="illus">(illustrative)</span> <input type="range" id="S" min="10" max="2000" step="10" value="500"> <span class="mono" id="Sv"></span></label>
+  <label>learner NICs used <span class="illus">(illustrative)</span> <input type="range" id="nic" min="1" max="32" value="8"> <span class="mono" id="nicv"></span></label>
+</div>
+<div class="row">
+  <span>diagram:</span><button id="mPer" aria-pressed="false">per-replica sends</button><button id="mTwo" aria-pressed="true">two-stage (pull, then distribute)</button>
+</div>
+<svg id="topo" viewBox="0 0 900 260" role="img" aria-label="Learner and sampler replicas with transfer arrows"></svg>
+<div class="legend"><span><span class="sw" style="background:var(--learner)"></span>learner</span><span><span class="sw" style="background:var(--sel)"></span>selected engine (pulls from learner)</span><span><span class="sw" style="background:var(--rep)"></span>other replica (receives inside the fleet)</span></div>
+<div class="stats">
+  <div class="stat"><div class="k">learner sends, per-replica</div><div class="v" id="bPer"></div></div>
+  <div class="stat"><div class="k">learner sends, two-stage</div><div class="v" id="bTwo"></div></div>
+  <div class="stat"><div class="k">lower bound at learner NICs, per-replica</div><div class="v" id="tPer"></div></div>
+  <div class="stat"><div class="k">lower bound at learner NICs, two-stage</div><div class="v" id="tTwo"></div></div>
+</div>
+<svg id="scal" viewBox="0 0 900 200" role="img" aria-label="Learner-side bytes versus replica count"></svg>
+<p class="note">Lower bound = bytes / (NICs × 50 GB/s). 50 GB/s is one 400 Gb/s ConnectX-7 NIC on DeepSeek's H800 platform, where internode dispatch measured 43–46 GB/s against 153 GB/s intranode ([[deepseek-open-infra]] DeepEP table). Rocket's measured result is 15 s per transfer "in our current configuration and training run" (p. 7); without the bytes it cannot be turned into a bandwidth. Fan-out inside the fleet is not counted at the learner: it runs over the replicas' own NICs and NVLink. For scale, verl moved Qwen3-30B-A3B to 30 receivers in about 7 s with NCCL on 4 × 8 H100 (verl@8357f1e checkpoint_engine/README.md L55–74).</p>
+</section>
+
+<section class="card" id="sB">
+<h2>B. Refresh every k steps: sampler lag 0 … k − 1</h2>
+<p>If the sampler is refreshed every k learner steps and the transfer is instant, the sampler serves the weights of the most recent multiple of k, so lag s − v ∈ {0, …, k − 1}. Rocket's Fig. 4 run: k = 4, refreshes at 104, 108, …, 124, "sampler lag is 0–3 steps"; transfer 15 s (Rocket p. 6–7).</p>
+<div class="row">
+  <label>k <input type="range" id="k" min="1" max="8" value="4"> <span class="mono" id="kv"></span></label>
+  <label>transfer τ, s <input type="range" id="tau" min="1" max="300" value="15"> <span class="mono" id="tauv"></span></label>
+  <label>learner step Δt, min <span class="illus">(illustrative)</span> <input type="range" id="dt" min="1" max="40" value="10"> <span class="mono" id="dtv"></span></label>
+</div>
+<div class="row">
+  <span>during the transfer:</span><button id="gCont" aria-pressed="true">generation continues on old weights</button><button id="gPause" aria-pressed="false">generation pauses</button>
+</div>
+<svg id="tl" viewBox="0 0 900 170" role="img" aria-label="Timeline of learner steps, sampler versions and lag"></svg>
+<div class="stats">
+  <div class="stat"><div class="k">lag range from cadence</div><div class="v" id="lagR"></div></div>
+  <div class="stat"><div class="k">mean lag from cadence</div><div class="v" id="lagM"></div></div>
+  <div class="stat"><div class="k" id="extraK"></div><div class="v" id="extraV"></div></div>
+  <div class="stat"><div class="k">lag share of staleness when waiting term = 20 steps (Fig. 4 group, ch-03 §3)</div><div class="v" id="shareLong"></div></div>
+  <div class="stat"><div class="k">lag share when waiting term = 1 step <span class="illus">(illustrative short rollout)</span></div><div class="v" id="shareShort"></div></div>
+</div>
+<p class="note">"Transfer time creates inference idleness and additional staleness" ([[mai-thinking-1]] Sec. 3.6.5). The Base 2 post does not say whether Rocket pauses during its 15 s (ch-05 §1.1). The post does not state Δt; ch-03 §3.2 derives only an upper bound of about 37 min for Fig. 4. Cadences elsewhere: Rocket v1 every 5 gradient steps; verl V1 <span class="mono">parameter_sync_step</span> default 4; open-instruct and PipelineRL every step (ch-05 §1.3).</p>
+</section>
+
+<section class="card" id="sC">
+<h2>C. What happens to a request in flight when the weights change</h2>
+<p>One request has decoded six tokens under version v when an update to v+1 arrives. Choose a policy and step through. Colors: <span class="sw" style="background:var(--v0)"></span>version v &nbsp; <span class="sw" style="background:var(--v1)"></span>version v+1 &nbsp; <span class="sw" style="background:var(--none)"></span>none / masked.</p>
+<div class="row" id="polBtns"></div>
+<div class="row" id="flushRow"><label><input type="checkbox" id="flush"> this sync is a flush sync (every N-th; slime coding agent uses <span class="mono">FLUSH_CACHE_INTERVAL=3</span>)</label></div>
+<div class="row"><button id="prev">◀ prev</button><span class="mono" id="stepLbl"></span><button id="next">next ▶</button></div>
+<div class="slab">generated tokens (version that sampled each token)</div><div class="strip" id="sTok"></div>
+<div class="slab">KV cache entries (weights the cache was computed with)</div><div class="strip" id="sKV"></div>
+<div class="slab">stored sampling log-probs (policy that produced them)</div><div class="strip" id="sLP"></div>
+<div class="status" id="stat"></div>
+<p class="note" id="src"></p>
+<div class="scroll"><table>
+<tr><th>Policy</th><th>KV after update</th><th>Extra compute</th><th>Measured</th></tr>
+<tr><td>Abort + retry with prefix (verl V1)</td><td>recomputed under new weights</td><td>prefill of the prefix</td><td>cost stated as "extra prefill work and within-trajectory policy-version changes" (v1_async_trainer.md L60)</td></tr>
+<tr><td>Pause in place (slime)</td><td>stale; flushed every N syncs</td><td>none until flush</td><td>no number in tree</td></tr>
+<tr><td>In-flight, keep KV (open-instruct, PipelineRL)</td><td>stale</td><td>none</td><td>Olmo 3: 1,358 → 2,949 tokens/s on a 2-node benchmark ([[olmo-3-rl-pipeline]] Table 23); KL "only slightly higher" than recomputed ([[pipelinerl]] Fig. 7)</td></tr>
+<tr><td>Interrupt, discard KV, recompute (AReaL)</td><td>recomputed under new weights</td><td>prefill of the prefix</td><td>generation throughput +12% (1.5B, 231k vs 207k tokens/s) and +17% (7B, 130k vs 111k) on 4 nodes ([[areal-async-rl]] Fig. 6b)</td></tr>
+</table></div>
+<p class="note">In every policy the stored log-probs of already generated tokens belong to the old policy, so per-token version labels are required (ch-05 §4.5).</p>
+</section>
+</main>
+
+<script>
+(function(){
+"use strict";
+const $=id=>document.getElementById(id);
+const NS="http://www.w3.org/2000/svg";
+function el(tag,attrs,parent,text){const e=document.createElementNS(NS,tag);for(const k in attrs)e.setAttribute(k,attrs[k]);if(text!==undefined)e.textContent=text;if(parent)parent.appendChild(e);return e;}
+const fmt=(n,d=0)=>n.toLocaleString("en-US",{maximumFractionDigits:d,minimumFractionDigits:d});
+function width(svg,h){const W=Math.max(320,Math.min(900,Math.round(svg.parentNode.clientWidth-30)));svg.setAttribute("viewBox",`0 0 ${W} ${h}`);svg.innerHTML="";return W;}
+
+/* ---------- A ---------- */
+let modeA="two";
+function bytesStr(gb){return gb>=1000?fmt(gb/1000,2)+" TB":fmt(gb)+" GB";}
+function secStr(s){return s>=60?fmt(s/60,1)+" min":fmt(s,1)+" s";}
+function drawA(){
+  const R=+$("R").value; let G=+$("G").value; if(G>R){G=R;$("G").value=R;}
+  const S=+$("S").value, nic=+$("nic").value, bw=50*nic;
+  $("Rv").textContent=R;$("Gv").textContent=G;$("Sv").textContent=S;$("nicv").textContent=nic+" × 50 GB/s";
+  $("bPer").textContent=bytesStr(R*S); $("bTwo").textContent=bytesStr(G*S);
+  $("tPer").textContent=secStr(R*S/bw); $("tTwo").textContent=secStr(G*S/bw);
+  $("mPer").setAttribute("aria-pressed",modeA==="per");$("mTwo").setAttribute("aria-pressed",modeA==="two");
+  // topology
+  const svg=$("topo"), W=width(svg,260);
+  const lx=12, lw=Math.min(120,W*0.22), lh=80;
+  const gx=lx+lw+Math.max(40,W*0.12), gw=W-gx-10;
+  const cols=Math.max(4,Math.min(12,Math.floor(gw/30))), rows=Math.ceil(R/cols);
+  const cw=gw/cols, ch=36, H=Math.max(110,rows*ch+20), ly=(H-lh)/2;
+  svg.setAttribute("viewBox",`0 0 ${W} ${H}`);
+  const pos=i=>({x:gx+(i%cols)*cw+cw/2,y:15+Math.floor(i/cols)*ch+ch/2});
+  // group membership: replicas split into G contiguous slices; first of each slice is selected
+  const slice=Math.ceil(R/G), selected=new Set(); for(let g=0;g<G;g++) selected.add(g*slice<R?g*slice:R-1);
+  // arrows
+  if(modeA==="per"){
+    for(let i=0;i<R;i++){const p=pos(i);el("line",{x1:lx+lw,y1:ly+lh/2,x2:p.x-8,y2:p.y,stroke:"var(--learner-s)","stroke-width":1,opacity:0.6},svg);}
+  } else {
+    for(let i=0;i<R;i++){const g=Math.floor(i/slice), src=pos(Math.min(g*slice,R-1)), p=pos(i);
+      if(selected.has(i)) el("line",{x1:lx+lw,y1:ly+lh/2,x2:p.x-8,y2:p.y,stroke:"var(--learner-s)","stroke-width":2.2},svg);
+      else el("line",{x1:src.x,y1:src.y,x2:p.x,y2:p.y,stroke:"var(--sel-s)","stroke-width":1,opacity:0.55},svg);}
+  }
+  el("rect",{x:lx,y:ly,width:lw,height:lh,rx:8,fill:"var(--learner)",stroke:"var(--learner-s)"},svg);
+  el("text",{x:lx+lw/2,y:ly+lh/2-4,"text-anchor":"middle","font-size":13,"font-weight":600},svg,"learner");
+  el("text",{x:lx+lw/2,y:ly+lh/2+14,"text-anchor":"middle","font-size":11,fill:"var(--muted)"},svg,modeA==="per"?`${R} copies out`:`${G} cop${G>1?"ies":"y"} out`);
+  for(let i=0;i<R;i++){const p=pos(i), s=modeA==="two"&&selected.has(i), sz=Math.min(18,ch-6,cw-6);
+    el("rect",{x:p.x-sz/2,y:p.y-sz/2,width:sz,height:sz,rx:3,fill:s?"var(--sel)":"var(--rep)",stroke:s?"var(--sel-s)":"var(--rep-s)","stroke-width":s?2:1},svg);}
+  // scaling plot
+  const sv=$("scal"), W2=width(sv,200), L=70,Rr=W2-20,T=16,B=160;
+  const maxY=64*S, xs=r=>L+(r-1)/63*(Rr-L), ys=v=>B-v/maxY*(B-T);
+  el("line",{x1:L,y1:B,x2:Rr,y2:B,stroke:"var(--line)"},sv); el("line",{x1:L,y1:T,x2:L,y2:B,stroke:"var(--line)"},sv);
+  [1,16,32,48,64].forEach(t=>el("text",{x:xs(t),y:B+16,"text-anchor":"middle","font-size":11},sv,t));
+  [0,0.5,1].forEach(f=>el("text",{x:L-6,y:ys(f*maxY)+4,"text-anchor":"end","font-size":11},sv,bytesStr(f*maxY)));
+  el("text",{x:(L+Rr)/2,y:194,"text-anchor":"middle","font-size":12,fill:"var(--muted)"},sv,"replicas R");
+  el("line",{x1:xs(1),y1:ys(S),x2:xs(64),y2:ys(64*S),stroke:"var(--c2)","stroke-width":2.2},sv);
+  el("line",{x1:xs(1),y1:ys(G*S),x2:xs(64),y2:ys(G*S),stroke:"var(--c1)","stroke-width":2.2},sv);
+  el("line",{x1:xs(R),y1:T,x2:xs(R),y2:B,stroke:"var(--hl)","stroke-dasharray":"4 3"},sv);
+  el("text",{x:L+8,y:T+10,"font-size":11,fill:"var(--c2)"},sv,"— per-replica: R·S");
+  el("text",{x:L+8,y:T+26,"font-size":11,fill:"var(--c1)"},sv,"— two-stage: G·S");
+}
+$("preA").addEventListener("change",()=>{if($("preA").value==="v1"){$("R").value=36;$("G").value=4;}else{$("G").value=1;}drawA();});
+["R","G","S","nic"].forEach(id=>$(id).addEventListener("input",drawA));
+$("mPer").addEventListener("click",()=>{modeA="per";drawA();});
+$("mTwo").addEventListener("click",()=>{modeA="two";drawA();});
+
+/* ---------- B ---------- */
+let gen="cont";
+function drawB(){
+  const k=+$("k").value, tau=+$("tau").value, dt=+$("dt").value;
+  $("kv").textContent=k;$("tauv").textContent=tau+" s";$("dtv").textContent=dt+" min";
+  $("gCont").setAttribute("aria-pressed",gen==="cont");$("gPause").setAttribute("aria-pressed",gen==="pause");
+  const svg=$("tl"), W=width(svg,170);
+  const S0=104, N=W<600?12:24, L=70, R=W-10, cw=(R-L)/N;
+  const verOf=s=>S0+k*Math.floor((s-S0)/k);
+  el("text",{x:4,y:38,"font-size":12},svg,"learner");
+  el("text",{x:4,y:82,"font-size":12},svg,"sampler v");
+  el("text",{x:4,y:126,"font-size":12},svg,"lag s − v");
+  const frac=Math.min(1,(tau/60)/dt);
+  for(let i=0;i<N;i++){
+    const s=S0+i, x=L+i*cw, v=verOf(s), lag=s-v;
+    el("rect",{x:x+1,y:22,width:cw-2,height:24,rx:3,fill:"var(--soft)",stroke:"var(--line)"},svg);
+    el("text",{x:x+cw/2,y:38,"text-anchor":"middle","font-size":W<600?9:10},svg,s);
+    const col=((v-S0)/k)%2===0?"var(--v0)":"var(--v1)";
+    el("rect",{x:x+1,y:66,width:cw-2,height:24,rx:3,fill:col},svg);
+    if(lag===0) el("text",{x:x+cw/2,y:82,"text-anchor":"middle","font-size":W<600?9:10},svg,v);
+    if(lag===0 && i>0){ // transfer window at the start of the step
+      const tw=Math.max(2,frac*cw);
+      el("rect",{x:x+1,y:62,width:tw,height:32,fill:gen==="pause"?"var(--idle)":"var(--hl)",opacity:gen==="pause"?0.95:0.55},svg);
+    }
+    const shade=k>1?lag/(k-1):0;
+    el("rect",{x:x+1,y:110,width:cw-2,height:24,rx:3,fill:"var(--hl)",opacity:0.12+0.6*shade},svg);
+    el("text",{x:x+cw/2,y:126,"text-anchor":"middle","font-size":11,"font-weight":600},svg,lag);
+  }
+  el("text",{x:L,y:156,"font-size":11,fill:"var(--muted)"},svg,gen==="pause"?(W<600?"grey: inference idle for τ":"grey bar: inference idle for τ at each refresh"):(W<600?"red: old-weight tokens during τ":"red bar: tokens generated on old weights during the τ transfer"));
+  const meanLag=(k-1)/2, extra=(tau/60)/dt;
+  $("lagR").textContent=`0 … ${k-1} steps`;
+  $("lagM").textContent=fmt(meanLag,1)+" steps";
+  if(gen==="cont"){$("extraK").textContent="extra lag on tokens generated during τ (τ / Δt)";$("extraV").textContent=fmt(extra,3)+" steps";}
+  else{$("extraK").textContent="inference idle fraction (τ / (k·Δt))";$("extraV").textContent=fmt(100*extra/k,2)+"%";}
+  $("shareLong").textContent=fmt(100*meanLag/(meanLag+20),1)+"%";
+  $("shareShort").textContent=fmt(100*meanLag/(meanLag+1),1)+"%";
+}
+["k","tau","dt"].forEach(id=>$(id).addEventListener("input",drawB));
+$("gCont").addEventListener("click",()=>{gen="cont";drawB();});
+$("gPause").addEventListener("click",()=>{gen="pause";drawB();});
+
+/* ---------- C ---------- */
+// token states: 'v0','v1','none','idle','gone'
+const P6=["v0","v0","v0","v0","v0","v0"];
+const POL={
+ verl:{n:"verl: abort, clear caches, retry with prefix",
+  src:"verl@8357f1e verl/workers/rollout/vllm_rollout/vllm_async_server.py L1196–1204, L1234–1253; docs/advance/v1_async_trainer.md L53–60",
+  steps:[
+   {tok:P6,kv:P6,lp:P6,s:"Before the update: six tokens decoded under v; KV cache and stored log-probs are all v."},
+   {tok:P6,kv:P6,lp:P6,s:"Update requested: the submission gate closes and admissions already past it are allowed to land, so the pause covers them."},
+   {tok:P6,kv:["gone","gone","gone","gone","gone","gone"],lp:P6,s:"All in-flight requests are aborted and caches cleared (pause_generation mode=\"abort\", clear_cache). If this fails, the weight update must not proceed. The partial-rollout client keeps the tokens and log-probs produced before the abort."},
+   {tok:P6,kv:["gone","gone","gone","gone","gone","gone"],lp:P6,s:"Weights v+1 are loaded. No request is decoding."},
+   {tok:P6,kv:["v1","v1","v1","v1","v1","v1"],lp:P6,s:"The unfinished trajectory is retried through the load balancer with the newer model; \"the KV cache is reconstructed for the retained prefix\" (prefill under v+1)."},
+   {tok:[...P6,"v1","v1","v1"],kv:["v1","v1","v1","v1","v1","v1","v1","v1","v1"],lp:[...P6,"v1","v1","v1"],s:"Decoding continues under v+1. KV is consistent with v+1; prefix log-probs are still v. Cost: \"extra prefill work and within-trajectory policy-version changes\"."}
+  ]},
+ slime:{n:"slime: pause in place, flush every N syncs",
+  src:"slime@79aa41a update_weight_from_distributed.py L103–122, L132–133, L143; slime/utils/weight_sync.py L4–10",
+  steps:null},
+ inflight:{n:"open-instruct / PipelineRL: update in flight",
+  src:"open-instruct@f020e9a open_instruct/grpo_utils.py L796–810 (inflight_updates default True, data_loader.py L443); [[pipelinerl]] §5.1",
+  steps:[
+   {tok:P6,kv:P6,lp:P6,s:"Before the update: six tokens decoded under v."},
+   {tok:[...P6,"v0"],kv:[...P6,"v0"],lp:[...P6,"v0"],s:"Update requested: actors stop taking new work (set_should_stop True). Requests already running keep decoding."},
+   {tok:[...P6,"v0","v0"],kv:[...P6,"v0","v0"],lp:[...P6,"v0","v0"],s:"Weights are broadcast; with inflight_updates the trainer does not wait for the engine-update RPCs. Tokens decoded during the broadcast still come from v."},
+   {tok:[...P6,"v0","v0"],kv:[...P6,"v0","v0"],lp:[...P6,"v0","v0"],s:"Weights v+1 are in place. The KV cache computed under v is kept (stale)."},
+   {tok:[...P6,"v0","v0","v1","v1"],kv:[...P6,"v0","v0","v1","v1"],lp:[...P6,"v0","v0","v1","v1"],s:"Decoding continues under v+1 attending to stale v KV. PipelineRL measured \"only slightly higher KL divergence than recomputed ones\" (Fig. 7). Olmo 3 measured 1,358 → 2,949 tokens/s from adding in-flight updates (Table 23)."}
+  ]},
+ areal:{n:"AReaL: interrupt, discard KV, recompute",
+  src:"[[areal-async-rl]] §4.1, Fig. 6b; AReaL@bcef492 areal/engine/sglang_remote.py L495–515",
+  steps:[
+   {tok:P6,kv:P6,lp:P6,s:"Before the update: six tokens decoded under v."},
+   {tok:P6,kv:P6,lp:P6,s:"update_weights interrupts ongoing generations. In the current code a default-mode pause \"aborts in-flight requests and returns their partial output so the client resumes them by extending the prompt\", then an in-place pause raises the scheduler flag."},
+   {tok:P6,kv:["gone","gone","gone","gone","gone","gone"],lp:P6,s:"KV caches computed under the old weights are discarded."},
+   {tok:P6,kv:["v1","v1","v1","v1","v1","v1"],lp:P6,s:"Weights v+1 loaded; KV for the prefix is recomputed under v+1."},
+   {tok:[...P6,"v1","v1","v1"],kv:["v1","v1","v1","v1","v1","v1","v1","v1","v1"],lp:[...P6,"v1","v1","v1"],s:"Decoding continues. Interruptible generation raised generation throughput 12% (1.5B) and 17% (7B) on 4 nodes (Fig. 6b)."}
+  ]}
+};
+function slimeSteps(flush){
+  if(flush) return [
+   {tok:P6,kv:P6,lp:P6,s:"Before the update: six tokens decoded under v. weight_version is incremented; should_flush_cache says this sync is a flush sync."},
+   {tok:P6,kv:P6,lp:P6,s:"Engines are paused with mode=\"abort\": \"A full refresh aborts requests\"."},
+   {tok:P6,kv:["gone","gone","gone","gone","gone","gone"],lp:P6,s:"flush_cache is called on every engine: the old-weight KV is dropped."},
+   {tok:P6,kv:["gone","gone","gone","gone","gone","gone"],lp:P6,s:"_send_weights broadcasts v+1 buckets from the PP source rank."},
+   {tok:[...P6,"v1","v1","v1"],kv:["v1","v1","v1","v1","v1","v1","v1","v1","v1"],lp:[...P6,"v1","v1","v1"],s:"continue_generation: the aborted request resumes with its prefix re-prefilled under v+1."}];
+  return [
+   {tok:P6,kv:P6,lp:P6,s:"Before the update: six tokens decoded under v. weight_version is incremented; this is not a flush sync."},
+   {tok:P6,kv:P6,lp:P6,s:"Engines are paused with mode=\"in_place\": \"other updates pause them in place\". Decoding stops; the request stays resident."},
+   {tok:P6,kv:P6,lp:P6,s:"No flush: the KV computed under v stays in the cache."},
+   {tok:P6,kv:P6,lp:P6,s:"_send_weights broadcasts v+1 buckets from the PP source rank."},
+   {tok:[...P6,"v1","v1","v1"],kv:[...P6,"v1","v1","v1"],lp:[...P6,"v1","v1","v1"],s:"continue_generation: the request resumes on v+1 with a KV cache computed under v until the next flush sync."}];
+}
+let pol="verl", step=0;
+const pb=$("polBtns");
+Object.keys(POL).forEach(k=>{const b=document.createElement("button");b.textContent=POL[k].n;b.dataset.k=k;b.addEventListener("click",()=>{pol=k;step=0;drawC();});pb.appendChild(b);});
+function strip(id,arr){$(id).innerHTML=arr.map((c,i)=>`<span class="tok ${c}">${c==="gone"?"—":"t"+(i+1)}</span>`).join("");}
+function drawC(){
+  [...pb.children].forEach(b=>b.setAttribute("aria-pressed",b.dataset.k===pol));
+  $("flushRow").style.display=pol==="slime"?"flex":"none";
+  const steps=pol==="slime"?slimeSteps($("flush").checked):POL[pol].steps;
+  step=Math.max(0,Math.min(step,steps.length-1));
+  const st=steps[step];
+  strip("sTok",st.tok);strip("sKV",st.kv);strip("sLP",st.lp);
+  $("stat").textContent=st.s;
+  $("stepLbl").textContent=`step ${step+1} / ${steps.length}`;
+  $("src").textContent="Source: "+POL[pol].src;
+  $("prev").disabled=step===0;$("next").disabled=step===steps.length-1;
+}
+$("prev").addEventListener("click",()=>{step--;drawC();});
+$("next").addEventListener("click",()=>{step++;drawC();});
+$("flush").addEventListener("change",()=>{step=0;drawC();});
+
+drawA();drawB();drawC();
+let rz;window.addEventListener("resize",()=>{clearTimeout(rz);rz=setTimeout(()=>{drawA();drawB();},100);});
+})();
+</script>
+</body>
+</html>

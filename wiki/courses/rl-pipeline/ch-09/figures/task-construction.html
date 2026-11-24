@@ -1,0 +1,245 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>RL Task Construction</title>
+<style>
+:root{
+  --bg:#fbfbfa; --fg:#1d1d1f; --muted:#5f6368; --panel:#ffffff; --line:#d0d3d8; --soft:#f1f3f5;
+  --accent:#1a63c7; --hl:#d93025; --warn:#a15c00; --bar:#1a63c7; --bar2:#c2410c; --side:#9aa3ae; --leaf:#e3f2e7; --leaf-s:#2f7a4a; --q:#e6eefb;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#16171a; --fg:#e8eaed; --muted:#a0a4aa; --panel:#202124; --line:#3c4043; --soft:#2a2c30;
+    --accent:#8ab4f8; --hl:#ff7a6b; --warn:#f0b456; --bar:#6aa6e8; --bar2:#f6a06b; --side:#6b7280; --leaf:#1f3326; --leaf-s:#7fd19b; --q:#1f2b3d;
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#16171a; --fg:#e8eaed; --muted:#a0a4aa; --panel:#202124; --line:#3c4043; --soft:#2a2c30;
+  --accent:#8ab4f8; --hl:#ff7a6b; --warn:#f0b456; --bar:#6aa6e8; --bar2:#f6a06b; --side:#6b7280; --leaf:#1f3326; --leaf-s:#7fd19b; --q:#1f2b3d;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);font:15px/1.5 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+main{max-width:1000px;margin:0 auto;padding:16px}
+h1{font-size:20px;margin:4px 0}
+h2{font-size:17px;margin:0 0 8px}
+h3{font-size:15px;margin:4px 0}
+p{margin:6px 0}
+.sub,.note{color:var(--muted);font-size:13px}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:14px;margin:14px 0}
+.row{display:flex;flex-wrap:wrap;gap:8px 14px;align-items:center;margin:8px 0}
+select,button{font:inherit;font-size:14px;color:var(--fg);background:var(--panel);border:1px solid var(--line);border-radius:6px;padding:5px 10px;max-width:100%}
+button{cursor:pointer}
+button[aria-pressed="true"]{border-color:var(--accent);color:var(--accent);font-weight:600}
+label{font-size:14px;max-width:100%}
+.funnel{display:grid;gap:6px;margin:10px 0}
+.stage{display:grid;grid-template-columns:minmax(0,230px) minmax(0,1fr);gap:8px;align-items:center;cursor:pointer;border-radius:6px;padding:3px 4px}
+.stage:hover,.stage.on{background:var(--soft)}
+.stage.on{outline:2px solid var(--accent)}
+.stage .nm{font-size:13px}
+.stage .nm small{display:block;color:var(--muted);font-size:11.5px}
+.track{position:relative;height:24px}
+.fill{position:absolute;left:0;top:2px;height:20px;border-radius:3px;background:var(--bar)}
+.fill.add{background:var(--bar2)}
+.fill.side{background:var(--side)}
+.num{position:absolute;top:2px;font:12px/20px ui-monospace,Menlo,monospace;white-space:nowrap}
+.detail{border-left:4px solid var(--accent);background:var(--soft);padding:8px 10px;border-radius:4px;margin:8px 0}
+.tree{display:grid;gap:8px;margin:10px 0}
+.qbox{border:1.5px solid var(--line);background:var(--q);border-radius:8px;padding:8px 10px}
+.qbox .q{font-weight:600}
+.qbox .ans{display:flex;flex-wrap:wrap;gap:6px;margin-top:6px}
+.qbox.done{opacity:.8}
+.leaf{border:1.5px solid var(--leaf-s);background:var(--leaf);border-radius:8px;padding:10px}
+.leaf ul{margin:4px 0 4px 18px;padding:0}
+.leaf li{margin:3px 0;font-size:14px}
+.crumb{font-size:13px;color:var(--muted)}
+.tag{display:inline-block;font-size:11px;padding:0 6px;border-radius:4px;border:1px solid var(--line);color:var(--muted);margin-left:4px}
+@media (max-width:560px){ .stage{grid-template-columns:minmax(0,1fr)} }
+</style>
+</head>
+<body>
+<main>
+<h1>RL task construction: filtering funnels and reference-answer paths</h1>
+<p class="sub">Companion to ch-09. Every count is quoted from the chapter or its cards ([[big-math]], [[deepmath-103k]], [[kimi-k1-5-recipe]], [[swe-smith]], [[mai-thinking-1]], [[general-reasoner-verifier]]). Counts marked "computed" are arithmetic on quoted numbers, not stated by the source.</p>
+
+<section class="card" id="sA">
+<h2>A. Filtering funnels</h2>
+<p>Select a pipeline, then click a stage to see what it removed and why. Grey bars are filter <i>matches</i> reported alongside the funnel; they can overlap and are not sequential steps.</p>
+<div class="row">
+  <label>pipeline <select id="pipe"></select></label>
+  <span>scale:</span><button id="sLin" aria-pressed="false">linear</button><button id="sLog" aria-pressed="true">log</button>
+</div>
+<div class="funnel" id="funnel"></div>
+<div class="detail" id="fDetail"></div>
+<p class="note" id="fNote"></p>
+</section>
+
+<section class="card" id="sB">
+<h2>B. How to get a reference answer: decision tree</h2>
+<p>Answer the questions, or load an example item. Each leaf lists the checks that path needs, with the source's numbers, and the risk that remains after the checks (ch-09 §3).</p>
+<div class="row" id="exBtns"><span>examples:</span></div>
+<div class="crumb" id="crumb"></div>
+<div class="tree" id="tree"></div>
+<button id="tReset">start over</button>
+</section>
+</main>
+
+<script>
+(function(){
+"use strict";
+const $=id=>document.getElementById(id);
+const fmt=n=>n.toLocaleString("en-US");
+
+/* ---------- A: funnels ---------- */
+const PIPES={
+ bigmath:{n:"Big-Math (math, existing labels)",note:"[[big-math]] Tables 1–3, §2.2. Per-filter removal counts between 463,426 and 204,112 are not reported; only the Table 2 match counts and the decontamination count are.",
+  st:[
+   {n:"collected",s:"Table 1",v:643374,d:"NuminaMath, HARP, Omni-MATH, MATH, GSM8K and others, before filtering."},
+   {n:"after source-specific cleaning",s:"§2.2.1",v:463426,d:"HARP Asymptote-figure problems removed (625); Omni-MATH author/score text removed; NuminaMath MinHashLSH deduplication and \\boxed{} answer extraction."},
+   {n:"multiple-choice matches",s:"Table 2",v:117018,side:true,d:"Regex + Llama-3.1-70B classifier matches. Multiple-choice items are guessable and give \"an unreliable reward signal\" ([[mai-thinking-1]] Sec. 3.2.1). Big-Math rewrote some of them (see the Reformulated pipeline)."},
+   {n:"proof matches",s:"Table 2",v:40509,side:true,d:"Proofs are not checkable by a rule grader; MAI: proofs \"are hard to verify directly without relying on a stronger AI judge\"."},
+   {n:"decontamination removals",s:"§2.2.2",v:4229,side:true,d:"Items matching evaluation benchmarks."},
+   {n:"non-reformulated items kept",s:"computed: 251,122 − 47,010",v:204112,d:"After the answer filter, item-type classifiers (MC, multi-part, proof, yes/no/true-false), decontamination and the solvability filter (Llama-3.1-8B, 64 rollouts, or Llama-3.1-405B, 5–8 rollouts, must reach the reference at least once; HARP, Omni-MATH, MATH and GSM8K exempt). Filters were tuned to at least 90% precision and recall on 100 + 100 inspected examples per round."},
+   {n:"+ reformulated multiple choice",s:"Table 3",v:47010,add:true,d:"MC items rewritten open-ended by a four-step Llama-3.1-405B pipeline (Big-Math-Reformulated)."},
+   {n:"final set",s:"Table 1",v:251122,d:"Difficulty quintiles by Llama-3.1-8B success rate, easiest to hardest: 28.64%, 12.16%, 10.26%, 12.44%, 36.50% (§3.1)."}]},
+ reform:{n:"Big-Math-Reformulated (MC → open-ended)",note:"[[big-math]] §2.3, Table 3. The count entering the pipeline is not in the card.",
+  st:[
+   {n:"passed judgement and verification",s:"Table 3",v:88983,d:"Steps: key-information extraction → reformulation → judgement → verification (Llama-3.1-405B)."},
+   {n:"after solvability filter",s:"Table 3",v:48698,d:"Rewriting can change the problem; the solvability check removes rewrites whose reference no longer matches."},
+   {n:"full pipeline",s:"Table 3",v:47010,d:"Composition: cn_k12 35,211; olympiads 9,019; amc_aime 1,878; aops_forum 853; MATH 48; Orca-Math 1."}]},
+ deepmath:{n:"DeepMath-103K (web pool, model agreement)",note:"[[deepmath-103k]] §3. Intermediate counts after each stage are not given; only 2,869K raw → about 95K hard.",
+  st:[
+   {n:"raw pool after basic filtering",s:"§3",v:2869000,d:"Math StackExchange subsets of MMIQC and WebInstructSub plus NuminaMath-CoT. Before decontamination it held near-duplicates of 90% of AIME24 and AMC23, 76.6% of MATH500 and 33.6% of OlympiadBench."},
+   {n:"hard problems kept",s:"Fig. 7 caption (≈)",v:95000,d:"Stage 2: top-5 embedding retrieval + Llama-3.3-70B paraphrase judge against 14 benchmarks. Stage 3: GPT-4o level ≥ 5 (six ratings averaged). Stage 4: GPT-4o rewrite toward one answer; kept only if three R1 solutions and the source solution give identical final answers."},
+   {n:"+ SimpleRL level 3–5",s:"Summary (≈)",v:8000,add:true,d:"Added easier problems."},
+   {n:"final set",s:"≈",v:103000,d:"Reported cost: $138,000 GPT-4o API fees and 127,000 H20 GPU hours."}]},
+ kimi:{n:"Kimi k1.5 code test generation (execution-verified)",note:"[[kimi-k1-5-recipe]] §2.3.5. The card lists the three counts in this order; it does not state that each is a subset of the previous one.",
+  st:[
+   {n:"problems",s:"§2.3.5",v:1000,d:"Competitive programming problems with ground-truth submissions."},
+   {n:"no special judge needed",s:"§2.3.5 (about)",v:614,d:"Problems whose output can be compared directly."},
+   {n:"generators with ≥ 40 valid tests",s:"§2.3.5",v:463,d:"50 tests generated per problem; a test is valid if at least 7 of 10 ground-truth submissions agree on it."},
+   {n:"problems kept",s:"§2.3.5",v:323,d:"Kept if at least 9 of 10 ground-truth submissions pass all selected tests."}]},
+ swesmith:{n:"SWE-smith (synthesized bugs)",note:"[[swe-smith]] Table 1. Candidate counts are computed as instances / yield; the paper reports yields and instances.",
+  st:[
+   {n:"candidates (all strategies)",s:"computed: 50,137 / 0.501",v:100074,d:"Bugs generated by LM Modify, LM Rewrite, 13 procedural AST transforms, Combine and PR Mirror; each candidate is run against the test suite with a 2-minute cap."},
+   {n:"LM Modify instances (yield 56.0%)",s:"Table 1",v:17887,side:true,d:"0.38¢ per candidate."},
+   {n:"Procedural instances (yield 40.2%)",s:"Table 1",v:15641,side:true,d:"0.00¢ per candidate."},
+   {n:"Combine instances (yield 96.9%)",s:"Table 1",v:10092,side:true,d:"0.00¢ per candidate."},
+   {n:"LM Rewrite instances (yield 35.0%)",s:"Table 1",v:4173,side:true,d:"3.93¢ per candidate."},
+   {n:"PR Mirror instances (yield 33.8%)",s:"Table 1",v:2344,side:true,d:"5.53¢ per candidate."},
+   {n:"validated instances",s:"Table 1",v:50137,d:"Kept only if at least one passing test starts failing. Reference answer = reverse of the bug patch; failing tests = grader. Total cost about $1,360 and 295 GB of environments vs an estimated 50–150 TB for a SWE-bench-style build."}]},
+ maiswe:{n:"MAI-Thinking-1 SWE (real PRs, F2P tests)",note:"[[mai-thinking-1]] p. 42–43 via card; percentages are of the 4.87M linked-issue PRs.",
+  st:[
+   {n:"public PRs",s:"p. 42",v:102000000,d:"Starting pool."},
+   {n:"with linked issues",s:"p. 42",v:4870000,d:"An issue gives the task text."},
+   {n:"environment built",s:"42.8%",v:2080000,d:"The repository builds at the base commit."},
+   {n:"with an F2P signal",s:"15.3%",v:745452,d:"At least one test fails before the fix and passes after it."},
+   {n:"verified",s:"5.5%",v:265617,d:"Across 94,044 repositories. Anti-hacking at build time: network control, git history scrubbed past the base commit, test files reset, LLM monitor."}]},
+ general:{n:"General-Reasoner (web, multi-domain)",note:"[[general-reasoner-verifier]] §3.1; all counts are approximate in the source.",
+  st:[
+   {n:"WebInstruct instructions re-crawled",s:"≈",v:5000000,d:"Source pages re-crawled; items without clearly human-written answers dropped."},
+   {n:"with verifiable short answers",s:"≈",v:1000000,d:"Gemini-1.5-Pro extracts questions with short answers."},
+   {n:"after difficulty filter",s:"≈",v:230000,d:"Gemini-2.0-Flash generates 8 solutions; items where all 8 fail or all 8 pass are dropped. This is a difficulty filter, not an agreement check on the reference."}]}
+};
+let pipe="bigmath", logS=true, selStage=0;
+const ps=$("pipe");
+Object.keys(PIPES).forEach(k=>{const o=document.createElement("option");o.value=k;o.textContent=PIPES[k].n;ps.appendChild(o);});
+function drawF(){
+  $("sLin").setAttribute("aria-pressed",!logS);$("sLog").setAttribute("aria-pressed",logS);
+  const P=PIPES[pipe], max=Math.max(...P.st.map(s=>s.v)), min=Math.min(...P.st.map(s=>s.v));
+  const lo=Math.floor(Math.log10(min))-0.3;
+  const w=v=>logS?Math.max(1,(Math.log10(v)-lo)/(Math.log10(max)-lo)*70):Math.max(0.4,v/max*70);
+  const first=P.st[0].v;
+  let prevMain=null, afterAdd=false;
+  $("funnel").innerHTML=P.st.map((s,i)=>{
+    const cls=s.side?"side":s.add?"add":"";
+    let pct="";
+    if(s.add) afterAdd=true;
+    else if(!s.side){pct=afterAdd?" · kept items + added items":(prevMain?` · ${(100*s.v/prevMain).toFixed(1)}% of previous`:"");prevMain=s.v;afterAdd=false;}
+    const pw=w(s.v);
+    return `<div class="stage${i===selStage?" on":""}" data-i="${i}" data-click="1"><div class="nm">${s.side?"&nbsp;&nbsp;↳ ":""}${s.n}<small>${s.s}${pct}</small></div>
+      <div class="track"><div class="fill ${cls}" style="width:${pw}%"></div><span class="num" style="left:calc(${pw}% + 6px)">${fmt(s.v)}</span></div></div>`;
+  }).join("");
+  [...$("funnel").children].forEach(d=>d.addEventListener("click",()=>{selStage=+d.dataset.i;drawF();}));
+  const s=P.st[Math.min(selStage,P.st.length-1)];
+  $("fDetail").innerHTML=`<b>${s.n}: ${fmt(s.v)}</b> <span class="tag">${s.s}</span> · ${(100*s.v/first).toFixed(s.v/first<0.01?3:1)}% of the first stage<br>${s.d}`;
+  $("fNote").textContent=P.note;
+}
+ps.addEventListener("change",()=>{pipe=ps.value;selStage=0;drawF();});
+$("sLin").addEventListener("click",()=>{logS=false;drawF();});
+$("sLog").addEventListener("click",()=>{logS=true;drawF();});
+
+/* ---------- B: decision tree ---------- */
+const Q={
+ q1:{q:"Can a program generate both the problem and its answer?",a:[["yes","proc"],["no","q2"]]},
+ q2:{q:"Is correctness decided by running code (tests, a build, an environment state check)?",a:[["yes","exec"],["no","q3"]]},
+ q3:{q:"Does the item come with a reference label?",a:[["yes, from a curated source (e.g. MATH, GSM8K, HARP, Omni-MATH)","label"],["yes, from the web or a forum","q4"],["no label","cons"]]},
+ q4:{q:"Can independent strong-model solutions be generated for it?",a:[["yes","cons"],["no","drop"]]}
+};
+const LEAF={
+ proc:{t:"Procedural generator",ex:"Reasoning Gym (102 datasets, 10 categories); τ²-bench atomic subtasks (2,285 compositions, 114 subsampled); AgentScaler tool-graph walks (30,000+ APIs, 1,000+ domains)",
+  checks:["Test the generator and its verifier: a bug gives wrong references for a whole task family at once.",
+   "Expose a difficulty parameter and advance it on policy accuracy: Reasoning Gym advanced after 70% over 20 steps; Spell Backwards length 4 went 30.00 → 70.67 vs fixed difficulty ([[reasoning-gym]] Table 5).",
+   "For agentic tasks, grade by final state, not call sequence (AgentScaler: final database must equal the gold state).",
+   "Include tasks whose tools are available but not needed, to reduce over-eager tool calling ([[mai-thinking-1]] Sec. 3.3.2).",
+   "Check coverage: RG-Algebra training lowered ARC from 6.49 to 4.18 while RG-Algorithmic raised Algebra 23.83 → 52.89 (one 3B model, Table 2)."],
+  risk:"generator bugs; narrow coverage of the distribution the generator encodes"},
+ exec:{t:"Execution-verified tests",ex:"Kimi k1.5 code (323 of 1,000 kept); Olmo 3 code; MAI competitive coding (160k problems, 17 languages); SWE F2P / P2P (MAI 265,617 verified; SWE-smith 50,137)",
+  checks:["Certify the tests with reference solutions: Kimi keeps a test if ≥ 7 of 10 ground-truth submissions agree, a problem if ≥ 9 of 10 pass all selected tests ([[kimi-k1-5-recipe]] §2.3.5).",
+   "Olmo 3: keep solutions that pass more than 80% of tests and drop the failing tests ([[olmo-3-rl-pipeline]] §4.4.2).",
+   "SWE: require an F2P test (fails before the fix, passes after) plus P2P tests that keep passing.",
+   "Measure how many tests separate correct from incorrect patches: R2E-Gym found fewer than 20% of generated tests do for most problems ([[r2e-gym]] §4.2, Fig. 5).",
+   "Remove leaks from the environment and the issue text: scrub git history past the base commit, reset test files; back-translate issues without the fix."],
+  risk:"tests that do not distinguish patches, flaky or \"toxic\" tests, leaked fixes"},
+ label:{t:"Existing label, cleaned",ex:"NuminaMath per-source extraction; Big-Math (251,122 final)",
+  checks:["Answer filter: drop items without an extractable answer (no \\boxed{}) ([[big-math]] §2.2.2).",
+   "Item-type filter: remove or rewrite multiple-choice, yes/no, true/false, proof and multi-part items (Big-Math matched 117,018 MC and 40,509 proof).",
+   "Solvability filter: keep if Llama-3.1-8B (64 rollouts) or Llama-3.1-405B (5–8) reaches the reference at least once; exempt curated hard sets so correct hard items are not removed.",
+   "Normalize the reference format to what the grader matches (DAPO rewrote every answer as an integer, [[dapo]] §3.5).",
+   "Blind grading for low-pass items: judge sees strong-tier consensus and ground truth in randomized order; drop if consensus wins ([[mai-thinking-1]] Sec. 3.2.1)."],
+  risk:"wrong, partial or unmatchable labels chosen by heuristics without verification"},
+ cons:{t:"Consensus of strong solvers",ex:"DeepMath-103K (3 R1 solutions + source must agree); NuminaMath-TIR answer match; MAI consensus stages",
+  checks:["Require identical extracted final answers from ≥ 3 independent solutions plus the source solution when present ([[deepmath-103k]] Stage 4).",
+   "Rewrite toward a single numerical or symbolic answer before checking agreement; run rewrites several times and keep consensus outputs (MAI runs conversion 3×).",
+   "Decontaminate with embedding retrieval + an LLM paraphrase judge: DeepMath's raw pool held near-duplicates of 90% of AIME24/AMC23.",
+   "Blind grading on items the strongest tier rarely solves, to catch faulty ground truths.",
+   "Budget for cost: DeepMath reports $138,000 GPT-4o fees and 127,000 H20 GPU hours."],
+  risk:"correlated errors: models that share training data can agree on the same wrong answer; no source measures the residual error rate"},
+ drop:{t:"Not an RL-verifiable item",ex:"open forum discussion, objection handling in a sales conversation",
+  checks:["MAI's verifiability classifier drops items without a checkable answer (Sec. 3.2.1).",
+   "If the behaviour matters, use a rubric judge (ch-11) and a gated reward combination (ch-12) instead of a reference answer."],
+  risk:"reward without a defined correct answer"}
+};
+const SHARED="Then for every path: record source, domain and verifier name per item; decontaminate (hash, MinHash, embedding + LLM judge); measure pass rate with N ≥ 8 rollouts of the starting policy (Big-Math used 64) and store it for ch-12.";
+const EX=[
+ ["AIME-style problem from AoPS",["q1:no","q2:no","q3:yes, from the web or a forum","q4:yes"]],
+ ["MATH test-style problem with a boxed answer",["q1:no","q2:no","q3:yes, from a curated source (e.g. MATH, GSM8K, HARP, Omni-MATH)"]],
+ ["Python repository bug fix",["q1:no","q2:yes"]],
+ ["Calendar booking task for a sales agent",["q1:yes"]],
+ ["Open forum discussion without an answer",["q1:no","q2:no","q3:yes, from the web or a forum","q4:no"]]
+];
+let path=[];
+function walk(){ let cur="q1"; const out=[]; for(const [qid,ans] of path){ const opt=Q[qid].a.find(a=>a[0]===ans); out.push([qid,ans]); cur=opt[1]; } return {cur,out}; }
+function drawT(){
+  const {cur,out}=walk();
+  let html=out.map(([qid,ans])=>`<div class="qbox done"><div class="q">${Q[qid].q}</div><div class="ans"><button aria-pressed="true" data-undo="${qid}">${ans}</button></div></div>`).join("");
+  if(Q[cur]){
+    html+=`<div class="qbox"><div class="q">${Q[cur].q}</div><div class="ans">${Q[cur].a.map(a=>`<button data-q="${cur}" data-a="${a[0]}">${a[0]}</button>`).join("")}</div></div>`;
+  } else {
+    const L=LEAF[cur];
+    html+=`<div class="leaf"><h3>${L.t}</h3><div class="note">Examples: ${L.ex}</div><b style="font-size:14px">Checks this path needs</b><ul>${L.checks.map(c=>`<li>${c}</li>`).join("")}</ul><div><b>Remaining risk:</b> ${L.risk}</div><p class="note">${SHARED}</p></div>`;
+  }
+  $("tree").innerHTML=html;
+  $("crumb").textContent="path: "+["start",...out.map(o=>o[1])].join(" → ")+(Q[cur]?"":" → "+LEAF[cur].t);
+  $("tree").querySelectorAll("button[data-q]").forEach(b=>b.addEventListener("click",()=>{path.push([b.dataset.q,b.dataset.a]);drawT();}));
+  $("tree").querySelectorAll("button[data-undo]").forEach(b=>b.addEventListener("click",()=>{const i=path.findIndex(p=>p[0]===b.dataset.undo);path=path.slice(0,i);drawT();}));
+}
+EX.forEach(([n,p])=>{const b=document.createElement("button");b.textContent=n;b.addEventListener("click",()=>{path=p.map(s=>{const i=s.indexOf(":");return [s.slice(0,i),s.slice(i+1)];});drawT();});$("exBtns").appendChild(b);});
+$("tReset").addEventListener("click",()=>{path=[];drawT();});
+
+drawF();drawT();
+})();
+</script>
+</body>
+</html>

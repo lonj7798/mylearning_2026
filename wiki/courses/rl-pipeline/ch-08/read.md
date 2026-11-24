@@ -4,7 +4,7 @@
      title: Agentic Rollouts: Tools, Sandboxes, and Graders
      deps: [ch-04]
      sources: [[mai-rl-infrastructure]], [[mai-thinking-1]], [[rstar2-agent]], [[slime]], [[kimi-k2-agentic-data]], [[tito-token-in-token-out]], [[slime-agentic-and-mismatch-examples]], [[areal-agent-pipelines]], [[tau2-bench]], [[verl-rollout]], [[deepseek-train-infer-consistency]], [[agentscaler]]
-     figures: none
+     figures: figures/agent-rollout.html
 -->
 
 # Chapter 8 — Agentic Rollouts: Tools, Sandboxes, and Graders
@@ -48,6 +48,8 @@ The learner's applied target, a sales voice agent, is a multi-turn agent with to
 - Rocket v1's rollout worker retries a failed inference request on another replica, "so individual replica failures degrade pool throughput but do not lose rollouts" (Sec. 3.6.4).
 
 **Why the loop lives on a CPU worker.** The rollout worker spends most of its wall-clock time waiting: for inference capacity, for tool results, for sandboxes. Holding that state in a GPU process would hold GPU memory for idle work. Rocket runs controller, problem workers and rollout workers in CPU pools and Ray heads and CPU actors on CPU-only nodes, which it found "more stable than GPU nodes in our deployments" ([[mai-rl-infrastructure]] p. 11–12).
+
+> Interactive: [figures/agent-rollout.html](figures/agent-rollout.html) — a step-through of one rollout (sampler → tool dispatcher → SEE / search / MCP → graders → store → learner) that marks policy tokens and masked tool tokens, an illustrative toy-tokenizer panel comparing token-in/token-out with re-tokenizing the final conversation (§7), and the Fig. 2 duration and turn medians.
 
 **verl's equivalent** is an explicit state machine per sample:
 

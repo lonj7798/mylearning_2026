@@ -1,0 +1,288 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Agentic Rollout Walkthrough</title>
+<style>
+:root{
+  --bg:#fbfbfa; --fg:#1d1d1f; --muted:#5f6368; --panel:#ffffff; --line:#d0d3d8; --soft:#f1f3f5;
+  --accent:#1a63c7; --hl:#d93025; --warn:#a15c00;
+  --cpu:#e6eefb; --gpu:#fde7dd; --env:#fff1d6; --store:#e3f2e7;
+  --prompt:#dfe3e8; --pol:#8fb3e8; --pol2:#f0a868; --tool:#c9e6c9; --bad:#f4b4ad; --c1:#1a63c7; --c2:#c2410c;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#16171a; --fg:#e8eaed; --muted:#a0a4aa; --panel:#202124; --line:#3c4043; --soft:#2a2c30;
+    --accent:#8ab4f8; --hl:#ff7a6b; --warn:#f0b456;
+    --cpu:#1f2b3d; --gpu:#3d2620; --env:#3a2f1c; --store:#1f3326;
+    --prompt:#3a3e44; --pol:#3d6fb5; --pol2:#b36a2c; --tool:#2f5a35; --bad:#7a2e28; --c1:#8ab4f8; --c2:#f6a06b;
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#16171a; --fg:#e8eaed; --muted:#a0a4aa; --panel:#202124; --line:#3c4043; --soft:#2a2c30;
+  --accent:#8ab4f8; --hl:#ff7a6b; --warn:#f0b456;
+  --cpu:#1f2b3d; --gpu:#3d2620; --env:#3a2f1c; --store:#1f3326;
+  --prompt:#3a3e44; --pol:#3d6fb5; --pol2:#b36a2c; --tool:#2f5a35; --bad:#7a2e28; --c1:#8ab4f8; --c2:#f6a06b;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);font:15px/1.5 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+main{max-width:1000px;margin:0 auto;padding:16px}
+h1{font-size:20px;margin:4px 0}
+h2{font-size:17px;margin:0 0 8px}
+p{margin:6px 0}
+.sub,.note{color:var(--muted);font-size:13px}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:14px;margin:14px 0}
+.row{display:flex;flex-wrap:wrap;gap:8px 14px;align-items:center;margin:8px 0}
+label{font-size:14px;max-width:100%}
+select,button{font:inherit;font-size:14px;color:var(--fg);background:var(--panel);border:1px solid var(--line);border-radius:6px;padding:5px 10px;max-width:100%}
+button{cursor:pointer}
+button[aria-pressed="true"]{border-color:var(--accent);color:var(--accent);font-weight:600}
+button:disabled{opacity:.45;cursor:default}
+.mono{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:13px}
+.illus{color:var(--warn);font-weight:600}
+.nodes{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:8px;margin:10px 0}
+.node{border:1.5px solid var(--line);border-radius:8px;padding:6px 8px;font-size:13px;opacity:.55;transition:opacity .15s}
+.node b{display:block;font-size:13.5px}
+.node.cpu{background:var(--cpu)} .node.gpu{background:var(--gpu)} .node.env{background:var(--env)} .node.store{background:var(--store)}
+.node.on{opacity:1;border-color:var(--hl);box-shadow:0 0 0 2px var(--hl)}
+.status{border-left:4px solid var(--accent);background:var(--soft);padding:8px 10px;border-radius:4px;margin:8px 0}
+.toks{display:flex;flex-wrap:wrap;gap:3px;margin:6px 0}
+.t{padding:2px 5px;border-radius:4px;font:12px/1.4 ui-monospace,Menlo,monospace;border:1px solid var(--line);white-space:pre}
+.t.prompt{background:var(--prompt)} .t.pol{background:var(--pol)} .t.pol2{background:var(--pol2)} .t.tool{background:var(--tool)} .t.bad{background:var(--bad);border-color:var(--hl)}
+.t small{display:block;font-size:10px;color:var(--fg);opacity:.75}
+.legend{display:flex;flex-wrap:wrap;gap:12px;font-size:12px;color:var(--muted);margin:6px 0}
+.sw{display:inline-block;width:12px;height:12px;border-radius:3px;vertical-align:-2px;margin-right:4px;border:1px solid var(--line)}
+.stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:8px;margin:10px 0}
+.stat{border:1px solid var(--line);border-radius:8px;padding:8px 10px;background:var(--soft)}
+.stat .k{font-size:12px;color:var(--muted)}
+.stat .v{font-size:19px;font-weight:650}
+.lbl{font-size:12px;color:var(--muted);margin-top:8px}
+.textbox{font:12px/1.5 ui-monospace,Menlo,monospace;background:var(--soft);border:1px solid var(--line);border-radius:6px;padding:6px 8px;white-space:pre-wrap;word-break:break-all}
+svg{display:block;width:100%;height:auto}
+svg text{fill:var(--fg);font-family:system-ui,sans-serif}
+</style>
+</head>
+<body>
+<main>
+<h1>One agentic rollout: loop, token types, re-tokenization, duration spread</h1>
+<p class="sub">Companion to ch-08. "Rocket p. N / Fig. N" refers to [[mai-rl-infrastructure]]. Token strings, token ids and log-prob values on this page are <span class="illus">illustrative</span>; the step order and the rules come from the cited sources.</p>
+
+<section class="card" id="sA">
+<h2>A. Step through one rollout (Rocket Fig. 1 order)</h2>
+<div class="row">
+  <label>tool class behind the dispatcher <select id="toolSel">
+    <option value="see">sandbox execution environment (SEE)</option>
+    <option value="search">search service</option>
+    <option value="mcp">MCP tool</option>
+  </select></label>
+</div>
+<div class="row"><button id="aPrev">◀ prev</button><span class="mono" id="aLbl"></span><button id="aNext">next ▶</button><button id="aReset">restart</button></div>
+<div class="nodes" id="nodes"></div>
+<div class="status" id="aStat"></div>
+<div class="lbl">training sequence so far (what the learner will fetch from the rollout store)</div>
+<div class="toks" id="aToks"></div>
+<div class="legend">
+  <span><span class="sw" style="background:var(--prompt)"></span>prompt tokens: mask 0</span>
+  <span><span class="sw" style="background:var(--pol)"></span>policy tokens, version v: mask 1, sampler log-prob stored</span>
+  <span><span class="sw" style="background:var(--pol2)"></span>policy tokens, version v+1: mask 1</span>
+  <span><span class="sw" style="background:var(--tool)"></span>tool / environment tokens: mask 0, version −1 (AReaL concat export)</span>
+</div>
+<div class="stats">
+  <div class="stat"><div class="k">policy tokens (trained)</div><div class="v" id="nPol"></div></div>
+  <div class="stat"><div class="k">tool / prompt tokens (masked)</div><div class="v" id="nMask"></div></div>
+  <div class="stat"><div class="k">weight versions in this rollout</div><div class="v" id="nVer"></div></div>
+</div>
+</section>
+
+<section class="card" id="sB">
+<h2>B. Token-in/token-out vs re-tokenizing the final conversation <span class="illus">(illustrative toy tokenizer)</span></h2>
+<p>The learner trains on token ids and the sampler's log-probs. If the trainer instead applies the chat template to the final message list and re-encodes it, the ids can differ from what was sampled ([[tito-token-in-token-out]]). This panel uses a 23-entry toy vocabulary and a greedy longest-match encoder; real BPE differs in detail but has the same three drift sources. Turn sources on and off.</p>
+<div class="row" style="flex-direction:column;align-items:flex-start;gap:4px">
+  <label><input type="checkbox" id="dSplit" checked> engine sampled a non-canonical split (<span class="mono">" 4"</span>, <span class="mono">"2"</span>); re-encoding the text gives <span class="mono">" 42"</span></label>
+  <label><input type="checkbox" id="dThink" checked> template inserts an empty <span class="mono">&lt;think&gt;&lt;/think&gt;</span> block the engine never sampled</label>
+  <label><input type="checkbox" id="dNl" checked> template inserts a newline after <span class="mono">&lt;|im_end|&gt;</span></label>
+  <label><input type="checkbox" id="dPost" checked> tool parser rewrites assistant content (<span class="mono">{"x":42}</span> → <span class="mono">{"x": 42}</span>)</label>
+</div>
+<div class="row"><span>trainer builds the sequence by:</span><button id="mTito" aria-pressed="false">token-in/token-out</button><button id="mRetok" aria-pressed="true">re-tokenizing the final conversation</button></div>
+<div class="lbl">1. tokens the engine sampled (id, sampler log-prob)</div>
+<div class="toks" id="bSamp"></div>
+<div class="lbl">2. text the trainer sees after decoding and post-processing</div>
+<div class="textbox" id="bText"></div>
+<div class="lbl" id="bTrainLbl"></div>
+<div class="toks" id="bTrain"></div>
+<div class="stats">
+  <div class="stat"><div class="k">trained ids == sampled ids (slime's end-to-end assertion)</div><div class="v" id="bEq"></div></div>
+  <div class="stat"><div class="k">positions where the trained id differs from the sampled id</div><div class="v" id="bDiff"></div></div>
+  <div class="stat"><div class="k">length: sampled → trained</div><div class="v" id="bLen"></div></div>
+</div>
+<p class="note">Effect size: no framework reports a measured accuracy effect of re-tokenization drift. verl's documentation reports that applying the chat template to the final history made PPO "not even converged in single-turn" (experience report, no numbers; [[verl-rollout]] agent_loop.rst L180–182). verl's builders treat inserted boundary tokens as "not model-generated and therefore must not carry loss or model logprobs" (continuous_token.py L38–48); in token-in/token-out mode above, the inserted newline is appended with mask 0.</p>
+</section>
+
+<section class="card" id="sC">
+<h2>C. Duration spread across problem types (Rocket Fig. 2)</h2>
+<p>Medians over 1.13M rollouts from one day of a production run (Rocket Fig. 2, p. 4). Click a bar to compare it with the shortest type.</p>
+<div class="row"><span>metric:</span><button id="cDur" aria-pressed="true">median duration (min)</button><button id="cTurn" aria-pressed="false">median turns</button><span>scale:</span><button id="cLin" aria-pressed="true">linear</button><button id="cLog" aria-pressed="false">log</button></div>
+<svg id="bars" viewBox="0 0 900 300" role="img" aria-label="Median duration or turns by problem type"></svg>
+<div class="status" id="cStat"></div>
+<p class="note">Inside one GRPO group (Rocket Fig. 4, p. 6–7): the slowest rollout took 784 turns, sampled from six successive weight versions, and the fastest rollout waited 7.6 h for it; each rollout waited 24 min before its first inference request. Rollouts "may hold VMs and other resources before generation starts" (p. 7), so the sandbox fleet is sized by in-flight rollouts, not by rollouts currently generating. slime's coding-agent defaults set agent / grader / whole-rollout timeouts of 3,600 / 600 / 7,200 s ([[slime-agentic-and-mismatch-examples]]).</p>
+</section>
+</main>
+
+<script>
+(function(){
+"use strict";
+const $=id=>document.getElementById(id);
+const NS="http://www.w3.org/2000/svg";
+function el(tag,attrs,parent,text){const e=document.createElementNS(NS,tag);for(const k in attrs)e.setAttribute(k,attrs[k]);if(text!==undefined)e.textContent=text;if(parent)parent.appendChild(e);return e;}
+const esc=s=>s.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
+
+/* ---------- A ---------- */
+const NODES=[
+ {id:"ctl",c:"cpu",t:"(1) Controller",s:"selects problems, packs segments"},
+ {id:"pw",c:"cpu",t:"(2) Problem worker",s:"dispatch, group graders, advantages"},
+ {id:"rw",c:"cpu",t:"(3) Rollout worker",s:"agent loop + tool dispatcher"},
+ {id:"smp",c:"gpu",t:"(4) Sampler",s:"SGLang fork, prefill / decode"},
+ {id:"env",c:"env",t:"(5) Environment",s:""},
+ {id:"prg",c:"cpu",t:"Per-rollout grader",s:"on the rollout worker"},
+ {id:"st",c:"store",t:"Rollout store",s:"tokens / log-probs, model-turn payloads"},
+ {id:"lrn",c:"gpu",t:"(6) Learner",s:"fetches ids + sampling log-probs"}
+];
+const TOOL={
+ see:{name:"SEE sandbox",sub:"fresh container per task, network-isolated",
+  call:"run_tests()", out:"3 passed, 1 failed",
+  txt:"SEE \"provisions a fresh container for each agentic task and destroys it upon task completion\"; containers are network-isolated by default ([[mai-thinking-1]] Sec. 3.3). rStar2-Agent's code service returns one of four outcomes: stdout, IPython-style output, an error with traceback, or a timeout, at 0.3 s mean latency for up to 45K calls per step ([[rstar2-agent]] §2.1, §3.1)."},
+ search:{name:"search service",sub:"e.g. search + visit tools",
+  call:"search(\"query\")", out:"top results ...",
+  txt:"AReaL's Tongyi-DeepResearch workflow exposes search (Serper API) and visit (Jina reader plus an LLM summary), caps an episode at 100 LLM calls and 150 minutes ([[areal-agent-pipelines]] react_agent.py). The visit tool calls a second model, so one tool call can itself be an inference request."},
+ mcp:{name:"MCP tool",sub:"tools exposed by MCP servers",
+  call:"crm.lookup(id)", out:"{\"status\": ...}",
+  txt:"MAI-Thinking-1's tool-use environments use mocked backends that simulate API or MCP behaviour, often over 50 tools per environment, more than 150 synthetic environments and 130,000 tasks ([[mai-thinking-1]] Sec. 3.3.2). Kimi K2 used 3,000+ real MCP tool specs plus over 20,000 synthetic tools for SFT data ([[kimi-k2-agentic-data]] §3.1.1)."}
+};
+// token segments: [text, cls]
+function steps(tool){
+  const T=TOOL[tool];
+  const P=[["<sys>","prompt"],["task","prompt"],["<|im_start|>assistant","prompt"]];
+  const M1=[["<think>","pol"],["plan","pol"],["</think>","pol"],["<tool_call>","pol"],[T.call,"pol"],["</tool_call>","pol"]];
+  const TO=[["<|im_start|>tool","tool"],[T.out,"tool"],["<|im_end|>","tool"],["<|im_start|>assistant","tool"]];
+  const M2=[["<think>","pol2"],["revise","pol2"],["</think>","pol2"],["final answer","pol2"],["<|im_end|>","pol2"]];
+  return [
+   {on:["ctl"],tok:[],s:"Controller selects a problem and admits work (Rocket Fig. 1, step 1)."},
+   {on:["pw"],tok:[],s:"Problem worker dispatches one request per rollout in the GRPO group (step 2). The group cannot be scored until every rollout returns."},
+   {on:["rw","env"],tok:P,s:"Rollout worker starts the agent loop and acquires the environment. Rollouts \"may hold VMs and other resources before generation starts\"; in Fig. 4 each rollout waited 24 min before its first inference request (Rocket p. 7). Prompt tokens carry mask 0."},
+   {on:["rw","smp"],tok:[...P,...M1],s:"Sampler call, model turn 1 under weights v. Every generated token is stored with its id, its sampling log-prob and version v. The turn ends with a tool call."},
+   {on:["rw","env"],tok:[...P,...M1],s:"Tool dispatcher routes the call to the "+T.name+". "+T.txt},
+   {on:["rw"],tok:[...P,...M1,...TO],s:"Tool result appended as context. It is tokenized as a delta (only the new message), with loss mask 0 and version −1; earlier tokens are not re-tokenized. \"All the previous steps' tokens are preserved in context and they are strict prefixes for the next steps\" ([[mai-thinking-1]] Sec. 3.3)."},
+   {on:["rw","smp"],tok:[...P,...M1,...TO,...M2],s:"Sampler call, model turn 2. The weights changed between turns (Rocket refreshes every 4 steps in Fig. 4), so these tokens carry version v+1. Staleness is per token."},
+   {on:["rw"],tok:[...P,...M1,...TO,...M2],s:"The loop ends: the model emitted no tool call. It would also end at the step, context-length or time budget ([[mai-thinking-1]] Sec. 3.3)."},
+   {on:["prg","env"],tok:[...P,...M1,...TO,...M2],s:"Per-rollout grader scores the trajectory and, where needed, the environment state, before the environment is destroyed. \"If individual rollouts can be evaluated in isolation, grading is performed by the rollout worker\" ([[mai-thinking-1]] Sec. 3.6.3)."},
+   {on:["st","pw"],tok:[...P,...M1,...TO,...M2],s:"Payload (token ids, log-probs, model-turn payloads) goes to the rollout store; scores and references go to the problem worker (Rocket Fig. 1)."},
+   {on:["pw"],tok:[...P,...M1,...TO,...M2],s:"Group graders run after the slowest rollout of the group finishes; GRPO advantages are computed. One trajectory-level advantage is applied to every generated token ([[mai-thinking-1]] Sec. 3.3)."},
+   {on:["ctl","lrn","st"],tok:[...P,...M1,...TO,...M2],s:"Controller packs training segments (references + advantages); the learner fetches token ids and sampling log-probs from the store and computes loss on mask-1 tokens only."}
+  ];
+}
+let aStep=0;
+function drawA(){
+  const tool=$("toolSel").value, S=steps(tool); aStep=Math.max(0,Math.min(aStep,S.length-1));
+  const st=S[aStep];
+  $("nodes").innerHTML=NODES.map(n=>{const t=n.id==="env"?TOOL[tool].name:"",s=n.id==="env"?TOOL[tool].sub:n.s;
+    return `<div class="node ${n.c}${st.on.includes(n.id)?" on":""}"><b>${n.t}${t?": "+t:""}</b>${esc(s)}</div>`;}).join("");
+  $("aStat").textContent=st.s;
+  $("aLbl").textContent=`step ${aStep+1} / ${S.length}`;
+  $("aToks").innerHTML=st.tok.length?st.tok.map(([x,c])=>`<span class="t ${c}">${esc(x)}</span>`).join(""):'<span class="note">(empty)</span>';
+  const pol=st.tok.filter(t=>t[1].startsWith("pol")).length;
+  $("nPol").textContent=pol; $("nMask").textContent=st.tok.length-pol;
+  const vs=new Set(st.tok.filter(t=>t[1].startsWith("pol")).map(t=>t[1]));
+  $("nVer").textContent=vs.size?[...vs].map(v=>v==="pol"?"v":"v+1").join(", "):"—";
+  $("aPrev").disabled=aStep===0; $("aNext").disabled=aStep===S.length-1;
+}
+$("aPrev").addEventListener("click",()=>{aStep--;drawA();});
+$("aNext").addEventListener("click",()=>{aStep++;drawA();});
+$("aReset").addEventListener("click",()=>{aStep=0;drawA();});
+$("toolSel").addEventListener("change",drawA);
+
+/* ---------- B ---------- */
+const VOCAB=["<|im_start|>","<|im_end|>","assistant","\n","\n\n","<think>","</think>","The"," sum"," is"," 4","2"," 42",".",
+ " Call",":","<tool_call>","</tool_call>","{\"x\":","42"," ","}","user"];
+const ID=Object.fromEntries(VOCAB.map((t,i)=>[t,i+1]));
+function encode(text){const out=[];let i=0;const sorted=[...VOCAB].sort((a,b)=>b.length-a.length);
+  while(i<text.length){const m=sorted.find(t=>text.startsWith(t,i)); if(!m){out.push("?");i++;continue;} out.push(m); i+=m.length;} return out;}
+// illustrative sampler log-probs
+const LP={"The":-0.05," sum":-0.31," is":-0.02," 4":-1.92,"2":-0.07," 42":-0.11,".":-0.04," Call":-0.62,":":-0.09,"<tool_call>":-0.01,"{\"x\":":-0.03,"42":-0.05,"}":-0.01,"</tool_call>":-0.01,"<|im_end|>":-0.02};
+let bMode="retok";
+function tok(t,cls,sub){return `<span class="t ${cls}">${esc(t.replace(/\n/g,"\\n"))}<small>${sub}</small></span>`;}
+function drawB(){
+  const split=$("dSplit").checked, think=$("dThink").checked, nl=$("dNl").checked, post=$("dPost").checked;
+  $("mTito").setAttribute("aria-pressed",bMode==="tito");$("mRetok").setAttribute("aria-pressed",bMode==="retok");
+  const sampled=["The"," sum"," is",...(split?[" 4","2"]:[" 42"]),"."," Call",":","<tool_call>","{\"x\":","42","}","</tool_call>","<|im_end|>"];
+  $("bSamp").innerHTML=sampled.map(t=>tok(t,"pol",`id ${ID[t]} · ${LP[t].toFixed(2)}`)).join("");
+  let content=sampled.slice(0,-1).join("");
+  if(post) content=content.replace("{\"x\":42}","{\"x\": 42}");
+  const rendered=(think?"<think>\n\n</think>\n\n":"")+content+"<|im_end|>"+(nl?"\n":"");
+  $("bText").textContent=rendered;
+  let trained, labels;
+  if(bMode==="tito"){
+    trained=[...sampled]; labels=trained.map(()=>"pol");
+    if(nl){trained.push("\n");labels.push("tool");}
+    $("bTrainLbl").textContent="3. trained sequence, token-in/token-out: engine ids kept; inserted boundary token appended with mask 0";
+  } else {
+    trained=encode(rendered); labels=null;
+    $("bTrainLbl").textContent="3. trained sequence after re-encoding the rendered text (assistant span, mask 1); log-prob paired by position";
+  }
+  let diff=0;
+  const html=trained.map((t,i)=>{
+    const sameId=i<sampled.length&&sampled[i]===t;
+    if(bMode==="tito"){const masked=labels[i]==="tool";return tok(t,masked?"tool":"pol",masked?`id ${ID[t]} · mask 0`:`id ${ID[t]} · ${LP[t].toFixed(2)}`);}
+    if(!sameId) diff++;
+    const lp=i<sampled.length?LP[sampled[i]].toFixed(2):"none";
+    return tok(t,sameId?"pol":"bad",`id ${ID[t]} · ${lp}`);
+  }).join("");
+  if(bMode==="tito") diff=0;
+  $("bTrain").innerHTML=html;
+  const eq=bMode==="tito"?true:(trained.length===sampled.length&&diff===0);
+  $("bEq").textContent=eq?"true":"false";
+  $("bEq").style.color=eq?"":"var(--hl)";
+  $("bDiff").textContent=diff;
+  $("bLen").textContent=`${sampled.length} → ${bMode==="tito"?sampled.length+" (+"+(nl?1:0)+" masked)":trained.length}`;
+}
+["dSplit","dThink","dNl","dPost"].forEach(id=>$(id).addEventListener("change",drawB));
+$("mTito").addEventListener("click",()=>{bMode="tito";drawB();});
+$("mRetok").addEventListener("click",()=>{bMode="retok";drawB();});
+
+/* ---------- C ---------- */
+const FIG2=[["Instruction following",2,1],["Visual Q&A",2,1],["Math & science",7,1],["Tool use",12,13],["Competitive coding",34,1],["Web research",51,89],["Web development",58,104],["Software engineering",93,249]];
+let metric=1, logScale=false, sel=7;
+function drawC(){
+  $("cDur").setAttribute("aria-pressed",metric===1);$("cTurn").setAttribute("aria-pressed",metric===2);
+  $("cLin").setAttribute("aria-pressed",!logScale);$("cLog").setAttribute("aria-pressed",logScale);
+  const svg=$("bars"), W=Math.max(320,Math.min(900,Math.round(svg.parentNode.clientWidth-30)));
+  const rowH=30, H=FIG2.length*rowH+30; svg.setAttribute("viewBox",`0 0 ${W} ${H}`); svg.innerHTML="";
+  const narrow=W<600, L=narrow?140:170, R=W-(narrow?66:60);
+  const max=Math.max(...FIG2.map(r=>r[metric]));
+  const sx=v=>logScale?L+(Math.log10(v)/Math.log10(max))*(R-L)*0.98+ (R-L)*0.02:L+v/max*(R-L);
+  FIG2.forEach((r,i)=>{
+    const y=10+i*rowH, v=r[metric], on=i===sel;
+    const g=el("g",{style:"cursor:pointer",role:"button","data-click":"1"},svg);
+    g.addEventListener("click",()=>{sel=i;drawC();});
+    el("rect",{x:0,y:y-2,width:W,height:rowH,fill:on?"var(--soft)":"transparent"},g);
+    el("text",{x:L-6,y:y+16,"text-anchor":"end","font-size":narrow?11:12.5,"font-weight":on?600:400},g,r[0]);
+    el("rect",{x:L,y:y+3,width:Math.max(2,sx(v)-L),height:rowH-10,rx:3,fill:on?"var(--c2)":"var(--c1)"},g);
+    el("text",{x:sx(v)+5,y:y+16,"font-size":12},g,metric===1?v+" min":v+(v===1?" turn":" turns"));
+  });
+  el("text",{x:L,y:H-4,"font-size":11,fill:"var(--muted)"},svg,logScale?"log scale":"linear scale");
+  const r=FIG2[sel], base=FIG2[0];
+  $("cStat").innerHTML=`<b>${r[0]}</b>: median ${r[1]} min, ${r[2]} turn${r[2]===1?"":"s"}. Ratio to instruction following: ${(r[1]/base[1]).toFixed(1)}× in duration, ${r[2]}× in turns.`+
+   (r[2]===1&&r[1]>10?" One turn but a long duration: long single generations, not a multi-turn loop.":"")+
+   ` These are medians; within one GRPO group all rollouts share a problem, and the wait comes from the tail of that type's distribution, as in Fig. 4.`;
+}
+$("cDur").addEventListener("click",()=>{metric=1;drawC();});
+$("cTurn").addEventListener("click",()=>{metric=2;drawC();});
+$("cLin").addEventListener("click",()=>{logScale=false;drawC();});
+$("cLog").addEventListener("click",()=>{logScale=true;drawC();});
+
+drawA();drawB();drawC();
+let rz;window.addEventListener("resize",()=>{clearTimeout(rz);rz=setTimeout(drawC,100);});
+})();
+</script>
+</body>
+</html>

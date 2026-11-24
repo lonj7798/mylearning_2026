@@ -4,7 +4,7 @@
      title: Composing Rewards and Selecting Prompts
      deps: [ch-11]
      sources: [[rl-design-guide]], [[mai-thinking-1]], [[spurious-rewards-rlvr]], [[dapo]], [[polaris]], [[reward-model-overoptimization]], [[natural-emergent-misalignment-reward-hacking]], [[metr-frontier-reward-hacking]], [[scalerl]], [[skywork-or1]], [[ifbench]], [[magistral-recipe]], [[minimax-m1]], [[agentrl]], [[rubrics-as-rewards]], [[rubicon-rubric-anchors]], [[olmo-3-rl-pipeline]], [[open-instruct-rlvr-pipeline]], [[reasoning-gym]], [[general-reasoner-verifier]], [[kimi-k1-5-recipe]], [[reward-hacking-taxonomy]], [[verifier-pitfalls]], [[master-rm-one-token]], [[scaling-reasoning-losing-control-mathif]], [[slime-agentic-and-mismatch-examples]], [[mai-rl-infrastructure]], [[subjective-reward-guide]], [[deepmath-103k]], [[recipe-crosswalk]], [[writing-zero]]
-     figures: none
+     figures: figures/reward-composition.html
 -->
 
 # Chapter 12 — Composing Rewards and Selecting Prompts
@@ -136,6 +136,8 @@ Properties that follow from the definition:
 - In a lexicographic group, only one term decides the advantage, so there is no weight to tune and no scale to calibrate.
 - A secondary term gets signal exactly in the groups where the primary term ties. With a binary primary reward, those are the all-correct and all-wrong groups, which dynamic sampling would otherwise discard. MAI does not state how its lexicographic contexts interact with its pass-rate filters (Sec. 3.1.3); the interaction is my inference from the definitions, not a reported result.
 - A gate removes the gated rollouts from the quality comparison entirely: in safety contexts, a non-compliant rollout gets the minimum reward and otherwise "the normal weighted mixture is used" (Sec. 3.4.3). The gate is applied first; additive mixing survives inside the gate.
+
+> Interactive: [figures/reward-composition.html](figures/reward-composition.html) — edit one group's correctness, format, length, compliance and quality values and compare rewards and GRPO advantages under a weighted sum, MAI's lexicographic rule and MAI's gated rule; a second panel applies zero-variance, No-Positive-Resampling (≥ 0.9), MAI and hard-only pass-rate filters to illustrative prompts across epochs.
 
 **Where MAI uses each.**
 

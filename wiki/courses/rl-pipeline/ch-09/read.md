@@ -4,7 +4,7 @@
      title: Designing the Task: Prompts, Reference Answers, and Verifiability
      deps: [ch-08]
      sources: [[rl-design-guide]], [[numina-math]], [[big-math]], [[deepmath-103k]], [[reasoning-gym]], [[swe-smith]], [[r2e-gym]], [[olmo-3-rl-pipeline]], [[verifier-pitfalls]], [[mai-thinking-1]], [[dapo]], [[kimi-k1-5-recipe]], [[general-reasoner-verifier]], [[polaris]], [[skywork-or1]], [[tau2-bench]], [[agentscaler]], [[open-instruct-rlvr-pipeline]]
-     figures: none
+     figures: figures/task-construction.html
 -->
 
 # Chapter 9 — Designing the Task: Prompts, Reference Answers, and Verifiability
@@ -124,6 +124,8 @@ Failure modes: generator bugs give wrong references for a whole family at once, 
 | Model agreement | DeepMath (3 R1 + source) | identical final answers | correlated errors |
 | Execution tests | Kimi k1.5, Olmo 3, SWE F2P | reference passes; test validity votes | low-distinguishing or flaky tests |
 | Procedural | Reasoning Gym, τ², AgentScaler | answer computed by program | generator bugs; narrow coverage |
+
+> Interactive: [figures/task-construction.html](figures/task-construction.html) — filtering funnels with sourced counts (Big-Math, Big-Math-Reformulated, DeepMath, Kimi k1.5 tests, SWE-smith, MAI SWE, General-Reasoner), and a clickable decision tree for choosing a reference-answer method with the checks each path needs.
 
 ---
 

@@ -4,7 +4,7 @@
      title: Elasticity: Resizing Components and Changing Config Mid-Run
      deps: [ch-20]
      sources: [[mai-rl-infrastructure]], [[mai-thinking-1]], [[olmo-3-rl-pipeline]], [[slime]], [[verl-rollout]], [[areal-async-rl]], [[open-instruct-rlvr-pipeline]]
-     figures: none
+     figures: figures/elasticity.html
 -->
 
 # Chapter 21 — Elasticity: Resizing Components and Changing Config Mid-Run
@@ -40,6 +40,8 @@ Restarting the job to change any of this costs the recovery time of ch-20 plus t
 | Source | [[mai-rl-infrastructure]] p. 12–13 | p. 11, 13 |
 
 The card does not say whether the 123 runtime-elasticity events include resizes, or only setting changes. It also does not record how the 2 h per-event saving was estimated (ch-20 §7).
+
+> Interactive: [figures/elasticity.html](figures/elasticity.html) — Rocket's two-layer scheduling with resize and slice-failure events on an illustrative node pool, a timeline showing where each runtime setting and resize takes effect (after a training step, before a sampling operation, after the next checkpoint save), and the Table 1 elasticity vs fault-tolerance savings.
 
 ---
 

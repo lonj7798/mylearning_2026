@@ -1,0 +1,312 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Rocket Elasticity</title>
+<style>
+:root{
+  --bg:#ffffff; --fg:#1d1f23; --muted:#5b6270; --card:#f5f6f8; --line:#d9dce2; --grid:#e7e9ee;
+  --accent:#2f6fd6; --accent2:#b5487a; --ok:#1d8a4a; --bad:#c2392b; --warn:#a86a00; --sel:#e8f0fd;
+  --lrn:#2f6fd6; --inf:#1d8a4a; --spare:#a86a00; --free:#e7e9ee; --cpu:#6b5bb5;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#15171b; --fg:#e6e8ec; --muted:#9aa1ad; --card:#1f2228; --line:#353a43; --grid:#2a2e36;
+    --accent:#6ea2ff; --accent2:#e27aa8; --ok:#4cc27d; --bad:#ff7a6b; --warn:#e0a640; --sel:#1e2b44;
+    --lrn:#6ea2ff; --inf:#4cc27d; --spare:#e0a640; --free:#2a2e36; --cpu:#a99bf0;
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#15171b; --fg:#e6e8ec; --muted:#9aa1ad; --card:#1f2228; --line:#353a43; --grid:#2a2e36;
+  --accent:#6ea2ff; --accent2:#e27aa8; --ok:#4cc27d; --bad:#ff7a6b; --warn:#e0a640; --sel:#1e2b44;
+  --lrn:#6ea2ff; --inf:#4cc27d; --spare:#e0a640; --free:#2a2e36; --cpu:#a99bf0;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);font:15px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif}
+main{max-width:1040px;margin:0 auto;padding:20px 16px 48px}
+h1{font-size:22px;margin:0 0 4px} h2{font-size:17px;margin:0 0 8px} h3{font-size:14.5px;margin:10px 0 4px}
+p{margin:6px 0} .muted{color:var(--muted);font-size:13px} .note{font-size:12.5px;color:var(--muted)}
+.card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:14px 16px;margin:14px 0;min-width:0}
+button{font:inherit}
+.btn{background:var(--bg);color:var(--fg);border:1px solid var(--line);border-radius:6px;padding:4px 10px;cursor:pointer;font-size:13px}
+.btn.on{border-color:var(--accent);background:var(--sel)}
+.btn:disabled{opacity:.45;cursor:default}
+.row{display:flex;flex-wrap:wrap;gap:8px 12px;align-items:center;margin:8px 0}
+.layer{border:1px solid var(--line);border-radius:8px;padding:8px 10px;background:var(--bg);margin:6px 0;position:relative}
+.layer .lt{font-weight:700;font-size:13.5px}
+.layer .ls{font-size:12px;color:var(--muted)}
+.layer.hit{outline:2px solid var(--accent)}
+.flow{font-size:12px;color:var(--muted);text-align:center;margin:2px 0}
+.boxes{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:6px;margin-top:6px}
+.box{border:1px solid var(--line);border-radius:6px;padding:6px 8px;font-size:12px;background:var(--card)}
+.box b{display:block;font-size:12.5px}
+.box.hit{outline:2px solid var(--accent)}
+.racks{display:flex;flex-wrap:wrap;gap:8px;margin-top:8px}
+.rack{border:1px dashed var(--line);border-radius:6px;padding:4px 5px 5px}
+.rack .rn{font-size:10.5px;color:var(--muted);text-align:center}
+.nodes{display:grid;grid-template-columns:repeat(4,22px);gap:3px}
+.node{width:22px;height:22px;border-radius:3px;background:var(--free);border:1px solid var(--line);font-size:10px;display:flex;align-items:center;justify-content:center;color:#fff;font-weight:700}
+.node.L{background:var(--lrn);border-color:var(--lrn)} .node.I{background:var(--inf);border-color:var(--inf)} .node.S{background:var(--spare);border-color:var(--spare)}
+.node.X{background:transparent;border:2px solid var(--bad);color:var(--bad)}
+.node.new{box-shadow:0 0 0 2px var(--accent)}
+.legend{display:flex;flex-wrap:wrap;gap:4px 12px;font-size:12px;color:var(--muted);margin-top:6px}
+.sw{display:inline-block;width:12px;height:12px;border-radius:2px;vertical-align:-2px;margin-right:4px;border:1px solid var(--line)}
+.log{background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:6px 10px;font-size:12.5px;max-height:220px;overflow:auto;margin-top:8px}
+.log div{padding:3px 0;border-bottom:1px solid var(--grid)}
+.log .who{font-weight:700}
+.pending{color:var(--warn);font-weight:600;font-size:13px}
+.two{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:12px}
+@media (max-width:760px){.two{grid-template-columns:minmax(0,1fr)}}
+select{background:var(--bg);color:var(--fg);border:1px solid var(--line);border-radius:6px;padding:3px 6px;font:inherit;font-size:13px;max-width:100%}
+.row label{max-width:100%;min-width:0}
+#setting{width:100%;max-width:340px}
+input[type=range]{width:220px;max-width:60vw}
+svg{width:100%;height:auto;display:block}
+.callout{border-left:3px solid var(--accent);padding:6px 10px;background:var(--bg);border-radius:0 6px 6px 0;font-size:13px;margin:8px 0}
+.callout.bad{border-color:var(--bad)}
+.hb{display:grid;grid-template-columns:150px minmax(0,1fr) 120px;gap:8px;align-items:center;font-size:13px;margin:8px 0}
+@media (max-width:560px){.hb{grid-template-columns:minmax(0,1fr) 110px}.hb .tr{grid-column:1 / -1;order:3}}
+.tr{height:22px;background:var(--grid);border-radius:4px;overflow:hidden;display:flex}
+.seg{height:100%}
+.num{text-align:right;font-variant-numeric:tabular-nums;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:12.5px}
+.scroll{overflow-x:auto;max-width:100%}
+table{border-collapse:collapse;font-size:12.5px;width:100%}
+th,td{padding:5px 6px;border-bottom:1px solid var(--line);text-align:left}
+th{color:var(--muted);font-weight:600;font-size:12px}
+td.num,th.num{text-align:right}
+</style>
+</head>
+<body>
+<main>
+<h1>Elasticity in Rocket: who resizes what, and when a change takes effect</h1>
+<p class="muted">Companion to ch-21. Part 1 redraws Rocket's two-layer scheduling (Fig. 7, p. 12, from the PDF text layer) and runs resize and failure events on an illustrative node pool. Part 2 is a timeline showing where a runtime-setting change takes effect. Part 3 plots the Table 1 savings rows. Node counts, rack sizes and times in Parts 1–2 are illustrative.</p>
+
+<section class="card">
+<h2>1. Two-layer scheduling</h2>
+<div class="two">
+<div>
+  <div class="layer" id="Lcluster"><div class="lt">Cluster scheduler (Kubernetes / Slurm)</div><div class="ls">Cluster-wide nodes, owned by the cluster: CPU nodes, GPU nodes, other nodes. Adds nodes to the job allocation.</div></div>
+  <div class="flow">↑ request more nodes if needed &nbsp;&nbsp; ↓ add nodes to job allocation</div>
+  <div class="layer" id="Ljob"><div class="lt">Rocket job: job-wide node pool (owned by this job)</div>
+    <div class="boxes">
+      <div class="box" id="Bactor"><b>Scheduling actor</b>tracks assigned + spare nodes; topology-aware allocation; assigns nodes to components, requests nodes when suitable capacity is insufficient</div>
+      <div class="box" id="Bcfg"><b>Runtime config</b>target size; problem mixture; other runtime settings. Learner, inference worker and controller read it dynamically</div>
+    </div>
+  </div>
+  <div class="flow">↓ assign nodes &nbsp;&nbsp; ↑ request nodes &nbsp;&nbsp; (components read target size)</div>
+  <div class="layer" id="Lcomp"><div class="lt">Component-assigned nodes (owned by components within this job)</div>
+    <div class="boxes">
+      <div class="box" id="Blrn"><b style="color:var(--lrn)">Learner</b>resize at checkpoint</div>
+      <div class="box" id="Binf"><b style="color:var(--inf)">Inference worker</b>online resize</div>
+      <div class="box" id="Bctl"><b style="color:var(--cpu)">Controller</b>reads problem distribution; CPU-only nodes (p. 12)</div>
+      <div class="box" id="Bspare"><b style="color:var(--spare)">Spare nodes</b>unassigned nodes in the job pool; one group sized to one learner slice</div>
+    </div>
+  </div>
+  <p class="note">Source: Rocket p. 12, Fig. 7: "the cluster scheduler allocates nodes to the job, while Rocket assigns topology-compatible groups to components and reuses released nodes within the job." "We keep a spare group of nodes sized to replace one learner slice. If a slice fails, Rocket uses the spare group while autoscaling replenishes it."</p>
+</div>
+<div>
+  <h3>Job node pool (illustrative: racks of 4 GPU nodes; a learner slice = one full rack)</h3>
+  <div class="row">
+    <button class="btn" id="eInfUp">Inference target +2</button>
+    <button class="btn" id="eInfDn">Inference target −2</button>
+    <button class="btn" id="eLrnUp">Learner target +1 slice</button>
+    <button class="btn" id="eCkpt">Learner saves checkpoint</button>
+    <button class="btn" id="eFail">A learner node fails</button>
+    <button class="btn" id="eReset">Reset</button>
+  </div>
+  <div id="pend" class="pending"></div>
+  <div class="racks" id="racks"></div>
+  <div class="legend"><span><span class="sw" style="background:var(--lrn)"></span>learner</span><span><span class="sw" style="background:var(--inf)"></span>inference</span><span><span class="sw" style="background:var(--spare)"></span>spare group</span><span><span class="sw" style="background:var(--free)"></span>unassigned in job pool</span><span><span class="sw" style="border:2px solid var(--bad)"></span>failed</span></div>
+  <div class="log" id="log"></div>
+</div>
+</div>
+</section>
+
+<section class="card">
+<h2>2. When does a change take effect?</h2>
+<p class="note">Rocket p. 12–13: "Components apply updates at defined boundaries, such as after a training step or before a sampling operation." "Inference workers can be resized immediately when new configuration comes. For the learner, we wait and only resize it after the next checkpoint save." Which setting is read at which boundary is ch-21 §4's mapping.</p>
+<div class="row">
+  <label class="muted">Change: <select id="setting">
+    <option value="stale">staleness limit (runtime; step boundary)</option>
+    <option value="pack">batch packing (runtime; step boundary)</option>
+    <option value="mix">mixture weights (runtime; sampling boundary)</option>
+    <option value="adm">admission (runtime; sampling boundary)</option>
+    <option value="conc">inference capacity / concurrency (runtime; sampling boundary)</option>
+    <option value="infsize">inference fleet size (compute; immediate)</option>
+    <option value="lrnsize">learner size (compute; after next checkpoint save)</option>
+  </select></label>
+  <label class="muted">operator issues it at t = <input type="range" id="t0" min="0" max="112" step="1" value="29"> <b id="t0v"></b></label>
+  <label class="muted"><input type="checkbox" id="noBound"> apply the instant it is issued (no boundary)</label>
+</div>
+<div class="scroll"><svg id="tl" viewBox="0 0 820 250" style="min-width:640px" role="img" aria-label="timeline of learner steps, checkpoint saves and sampling operations"></svg></div>
+<div id="tlText" class="callout"></div>
+<p class="note">Illustrative timing: learner step = 12 time units, checkpoint save after every 4th step, a sampling operation (one GRPO group dispatched from one problem) every 9 units lasting 4 units.</p>
+</section>
+
+<section class="card">
+<h2>3. Table 1: runtime elasticity vs fault tolerance</h2>
+<div class="row"><span class="muted">Show:</span><button class="btn on" data-m="pct">% of training time</button><button class="btn" data-m="h">hours</button><button class="btn" data-m="gh">GPU-hours</button></div>
+<div id="bars"></div>
+<div class="scroll"><table>
+  <thead><tr><th>Event type</th><th class="num">n</th><th class="num">saved / event</th><th class="num">time saved (h)</th><th class="num">%</th><th class="num">GPU-hours</th></tr></thead>
+  <tbody>
+   <tr><td>In-job recovery</td><td class="num">21</td><td class="num">0.5 h</td><td class="num">10.5</td><td class="num">0.42%</td><td class="num">63,000</td></tr>
+   <tr><td>Learner recovery</td><td class="num">88</td><td class="num">2 h</td><td class="num">176</td><td class="num">7.07%</td><td class="num">1,056,000</td></tr>
+   <tr><td>Runtime elasticity</td><td class="num">123</td><td class="num">2 h</td><td class="num">246</td><td class="num">9.88%</td><td class="num">1,476,000</td></tr>
+   <tr><td>Overall training time</td><td class="num">—</td><td class="num">—</td><td class="num">2,490</td><td class="num">100.00%</td><td class="num">14,940,000</td></tr>
+   <tr><td><b>Total estimated savings</b></td><td class="num">—</td><td class="num">—</td><td class="num">432.5</td><td class="num">17.37%</td><td class="num">2,595,000</td></tr>
+  </tbody>
+</table></div>
+<p class="note">Rocket Table 1 (p. 11), "a portion of RL training, assuming 6,000 GPUs". Caption: "Per-event savings are estimates that vary with the workload mix and the point at which a failure or reconfiguration occurs." The post does not say how the per-event savings were estimated, nor whether the 123 runtime-elasticity events include compute resizes (ch-21 §1).</p>
+</section>
+</main>
+
+<script>
+(function(){
+const $=id=>document.getElementById(id);
+// ---------- Part 1 ----------
+let racks, pending, logs, nextRack;
+function mk(states){return {id:"R"+(nextRack++),n:states.slice()};}
+function reset(){
+  nextRack=1; pending=0; logs=[];
+  racks=[mk("LLLL"),mk("LLLL"),mk("IIII"),mk("IIII"),mk("II.."),mk("SSSS")].map(r=>({id:r.id,n:r.n.split("")}));
+  addLog("start","Learner: 2 slices (R1, R2). Inference: 10 nodes. Spare group: R6, sized to one learner slice. R5 has 2 unassigned nodes.");
+  render([]);
+}
+function addLog(who,txt){logs.unshift({who,txt});}
+const WHO={cfg:"Runtime config",actor:"Scheduling actor",cluster:"Cluster scheduler",inf:"Inference worker",lrn:"Learner",start:"Initial state"};
+function hit(ids){["Lcluster","Bactor","Bcfg","Blrn","Binf","Bspare"].forEach(i=>$(i).classList.toggle("hit",ids.includes(i)));}
+let fresh=[];
+function render(h){
+  $("racks").innerHTML=racks.map(r=>`<div class="rack"><div class="rn">${r.id}</div><div class="nodes">${r.n.map((s,j)=>`<div class="node ${s==="."?"":s} ${fresh.includes(r.id+":"+j)?"new":""}">${s==="X"?"×":""}</div>`).join("")}</div></div>`).join("");
+  $("log").innerHTML=logs.map(l=>`<div><span class="who">${WHO[l.who]}:</span> ${l.txt}</div>`).join("");
+  $("pend").textContent=pending?`Pending: learner target +${pending} slice${pending>1?"s":""}, waiting for the next checkpoint save.`:"";
+  hit(h);
+}
+function free(){const out=[];racks.forEach(r=>r.n.forEach((s,j)=>{if(s===".")out.push([r,j]);}));return out;}
+function clusterAdd(k){const r={id:"R"+(nextRack++),n:Array(4).fill(".")};racks.push(r);addLog("cluster",`adds ${r.id} (4 nodes) to the job allocation.`);return r;}
+$("eInfUp").onclick=()=>{
+  fresh=[]; addLog("cfg","inference target size +2.");
+  let f=free(); const h=["Bcfg","Bactor","Binf"];
+  if(f.length<2){addLog("actor","not enough unassigned nodes in the job pool; requests nodes from the cluster scheduler.");clusterAdd();h.push("Lcluster");f=free();}
+  f.slice(0,2).forEach(([r,j])=>{r.n[j]="I";fresh.push(r.id+":"+j);});
+  addLog("inf","resized immediately: 2 nodes assigned (online resize). New replicas receive the current weights through the transfer path (ch-05).");
+  render(h);
+};
+$("eInfDn").onclick=()=>{
+  fresh=[]; const inf=[];racks.forEach(r=>r.n.forEach((s,j)=>{if(s==="I")inf.push([r,j]);}));
+  if(inf.length<=2){addLog("cfg","inference target −2 rejected in this figure: would leave fewer than 2 nodes.");render(["Bcfg"]);return;}
+  inf.slice(-2).forEach(([r,j])=>{r.n[j]=".";fresh.push(r.id+":"+j);});
+  addLog("cfg","inference target size −2.");addLog("inf","releases 2 nodes immediately; they stay in the job pool for reuse (\"reuses released nodes within the job\").");
+  render(["Bcfg","Binf","Bactor"]);
+};
+$("eLrnUp").onclick=()=>{fresh=[];pending++;addLog("cfg",`learner target size +1 slice. The learner keeps its current layout until its next checkpoint save.`);render(["Bcfg","Blrn"]);};
+$("eCkpt").onclick=()=>{
+  fresh=[]; addLog("lrn","checkpoint saved.");
+  if(!pending){render(["Blrn"]);return;}
+  const h=["Blrn","Bactor"];
+  while(pending>0){
+    let r=racks.find(r=>r.n.every(s=>s==="."));
+    if(!r){const nf=free().length;
+      addLog("actor",`${nf} unassigned node${nf===1?"":"s"} in the pool, but no complete free rack: free GPUs that do not form a topology-compatible group cannot host a learner slice (p. 12). Requests nodes.`);
+      r=clusterAdd();h.push("Lcluster");}
+    r.n=r.n.map((_,j)=>{fresh.push(r.id+":"+j);return "L";});
+    addLog("lrn",`resized from the checkpoint onto ${r.id}: optimizer state is resharded for the new layout (ch-21 §2).`);
+    pending--;
+  }
+  render(h);
+};
+$("eFail").onclick=()=>{
+  fresh=[]; const lr=racks.find(r=>r.n.every(s=>s==="L"));
+  if(!lr){addLog("lrn","no complete learner slice to fail.");render([]);return;}
+  const sp=racks.find(r=>r.n.every(s=>s==="S"));
+  lr.n[1]="X"; const h=["Blrn","Bspare","Bactor"];
+  if(sp){
+    sp.n=sp.n.map((_,j)=>{fresh.push(sp.id+":"+j);return "L";});
+    lr.n=lr.n.map(s=>s==="X"?"X":".");
+    addLog("lrn",`node in ${lr.id} failed. Learner-only recovery (ch-20): pause admission, kill learner ranks, rebuild on the spare group ${sp.id}, restore the latest checkpoint. Inference keeps running.`);
+    addLog("actor",`${lr.id}'s 3 healthy nodes return to the job pool as unassigned.`);
+    const nr=clusterAdd();nr.n=nr.n.map((_,j)=>{fresh.push(nr.id+":"+j);return "S";});
+    addLog("actor",`autoscaling replenishes the spare group with ${nr.id}.`);h.push("Lcluster");
+  } else {
+    lr.n=lr.n.map(s=>s==="X"?"X":".");
+    addLog("actor","no spare group: the rebuilt learner must wait for a topology-compatible group from the cluster scheduler.");
+    const nr=clusterAdd();nr.n=nr.n.map((_,j)=>{fresh.push(nr.id+":"+j);return "L";});h.push("Lcluster");
+  }
+  render(h);
+};
+$("eReset").onclick=()=>{fresh=[];reset();};
+reset();
+
+// ---------- Part 2 ----------
+const T=130, STEP=12, CK=4, SPER=9, SDUR=4, X0=110, X1=805;
+const sx=t=>X0+(X1-X0)*t/T;
+const steps=[];for(let k=0;k*STEP<T;k++)steps.push([k*STEP,Math.min(T,(k+1)*STEP),k+1]);
+const samp=[];for(let s=2;s<T;s+=SPER)samp.push([s,Math.min(T,s+SDUR)]);
+const ckpts=steps.filter(s=>s[2]%CK===0).map(s=>s[1]);
+const KIND={stale:"step",pack:"step",mix:"samp",adm:"samp",conc:"samp",infsize:"now",lrnsize:"ckpt"};
+const NAME={stale:"staleness limit",pack:"batch packing",mix:"mixture weights",adm:"admission",conc:"inference capacity / concurrency",infsize:"inference fleet size",lrnsize:"learner size"};
+function drawTL(){
+  const st=$("setting").value, t0=+$("t0").value, nb=$("noBound").checked; $("t0v").textContent=t0;
+  const kind=KIND[st];
+  let eff=null, why="", hazard=null;
+  if(kind==="now"||nb){eff=t0;}
+  if(kind==="step"){const cur=steps.find(s=>s[0]<=t0&&t0<s[1]);
+    if(!nb){eff=cur?cur[1]:t0;why=cur?`after training step ${cur[2]} completes`:"";}
+    else if(cur&&t0>cur[0])hazard={lane:0,a:cur[0],b:cur[1],txt:`step ${cur[2]}'s batch would be formed partly under the old ${NAME[st]} and partly under the new one`};}
+  if(kind==="samp"){const cur=samp.find(s=>s[0]<t0&&t0<s[1]);const nxt=samp.find(s=>s[0]>=t0);
+    if(!nb){eff=nxt?nxt[0]:null;why=nxt?"before the next sampling operation":"";}
+    else if(cur)hazard={lane:1,a:cur[0],b:cur[1],txt:`the GRPO group being dispatched would mix two values of ${NAME[st]}; a group's members must all come from one problem`};}
+  if(kind==="ckpt"&&!nb){const c=ckpts.find(c=>c>=t0);eff=c===undefined?null:c;why=c===undefined?"":"after the next checkpoint save";}
+  if(kind==="ckpt"&&nb){const cur=steps.find(s=>s[0]<=t0&&t0<s[1]);const lastC=[0,...ckpts].filter(c=>c<=t0).pop();
+    hazard={lane:0,a:cur?cur[0]:t0,b:cur?cur[1]:t0,txt:`the learner would be re-laid-out with no checkpoint of its current state: the last save was at t=${lastC}${lastC===0?" (job start)":""}, so the optimizer state sharded by the old layout has no consistent copy to reshard from, and the steps since then would be lost`};}
+  const lanes=[["Learner",40],["Controller sampling",100],["Inference fleet",160]];
+  let s=`<g font-size="12" fill="var(--fg)">`;
+  lanes.forEach(([n,y])=>{s+=`<text x="4" y="${y+4}">${n}</text><line x1="${X0}" y1="${y}" x2="${X1}" y2="${y}" stroke="var(--line)"/>`;});
+  steps.forEach(([a,b,k])=>{s+=`<rect x="${sx(a)+1}" y="28" width="${sx(b)-sx(a)-2}" height="24" rx="3" fill="var(--lrn)" opacity="0.75"/><text x="${(sx(a)+sx(b))/2}" y="44" text-anchor="middle" fill="#fff" font-size="10.5">step ${k}</text>`;});
+  ckpts.forEach(c=>{s+=`<rect x="${sx(c)-4}" y="56" width="8" height="8" fill="var(--spare)" transform="rotate(45 ${sx(c)} 60)"/><text x="${sx(c)}" y="78" text-anchor="middle" font-size="10" fill="var(--muted)">ckpt save</text>`;});
+  samp.forEach(([a,b])=>{s+=`<rect x="${sx(a)}" y="90" width="${sx(b)-sx(a)}" height="20" rx="3" fill="var(--inf)" opacity="0.7"/>`;});
+  s+=`<rect x="${sx(0)}" y="150" width="${sx(T)-sx(0)}" height="20" rx="3" fill="var(--inf)" opacity="0.25"/><text x="${sx(T/2)}" y="164" text-anchor="middle" font-size="10.5" fill="var(--muted)">continuous generation (replicas can be added or removed at any time)</text>`;
+  if(hazard){const y=hazard.lane===0?26:88;s+=`<rect x="${sx(hazard.a)}" y="${y}" width="${sx(hazard.b)-sx(hazard.a)}" height="${hazard.lane===0?28:24}" fill="none" stroke="var(--bad)" stroke-width="3" rx="3"/>`;}
+  // axis
+  for(let t=0;t<=T;t+=10)s+=`<text x="${sx(t)}" y="200" text-anchor="middle" font-size="10" fill="var(--muted)">${t}</text>`;
+  s+=`<text x="4" y="200" font-size="10" fill="var(--muted)">time</text>`;
+  // t0
+  s+=`<line x1="${sx(t0)}" y1="18" x2="${sx(t0)}" y2="185" stroke="var(--accent2)" stroke-width="2" stroke-dasharray="4 3"/><text x="${Math.min(sx(t0)+4,X1-80)}" y="14" font-size="11" fill="var(--accent2)">issued t=${t0}</text>`;
+  if(eff!==null){const y=kind==="step"||kind==="ckpt"?40:kind==="samp"?100:160;
+    if(eff>t0)s+=`<line x1="${sx(t0)}" y1="${y+28}" x2="${sx(eff)}" y2="${y+28}" stroke="var(--accent)" stroke-width="2"/><rect x="${sx(t0)}" y="${y+24}" width="${sx(eff)-sx(t0)}" height="8" fill="var(--accent)" opacity="0.25"/>`;
+    s+=`<line x1="${sx(eff)}" y1="18" x2="${sx(eff)}" y2="185" stroke="var(--accent)" stroke-width="2"/><text x="${Math.min(sx(eff)+4,X1-90)}" y="232" font-size="11" fill="var(--accent)">takes effect t=${eff}</text>`;}
+  s+=`</g>`;
+  $("tl").innerHTML=s;
+  let txt;
+  if(hazard) txt=`<b>Hazard:</b> applied at t=${t0}, ${hazard.txt}. This is what the boundary rule prevents (ch-21 §4 "Why boundaries").`;
+  else if(kind==="now") txt=`<b>${NAME[st]}</b>: inference workers "can be resized immediately when new configuration comes" (p. 12). Takes effect at t=${t0}. Then re-check the staleness distribution: more inference at fixed batch size can raise staleness (p. 7; ch-21 §5).`;
+  else if(nb) txt=`Applied at t=${t0}, which happens to fall ${kind==="step"?"on a step boundary":"between sampling operations"}, so no unit of work mixes two values here. Move the slider into a ${kind==="step"?"step":"sampling operation"} to see the hazard.`;
+  else if(eff===null) txt=`<b>${NAME[st]}</b>: no ${kind==="ckpt"?"checkpoint save":"sampling operation"} left in this window; it takes effect at the next one after it.`;
+  else txt=`<b>${NAME[st]}</b>: issued at t=${t0}, takes effect at t=${eff}, ${why} (wait ${eff-t0} units).${kind==="ckpt"?" The learner keeps running in its old layout until the save, then resizes from the checkpoint; Rocket waits \"in order to limit wasted compute\" (p. 12). The post gives no resize time.":""}`;
+  $("tlText").innerHTML=txt; $("tlText").className="callout"+(hazard?" bad":"");
+}
+["setting","t0","noBound"].forEach(id=>{$(id).addEventListener("input",drawTL);$(id).addEventListener("change",drawTL);});
+drawTL();
+
+// ---------- Part 3 ----------
+const ROWS={elas:{n:123,h:246,pct:9.88,gh:1476000},lrn:{n:88,h:176,pct:7.07,gh:1056000},inj:{n:21,h:10.5,pct:0.42,gh:63000}};
+let metric="pct";
+function val(r){return ROWS[r][metric];}
+function fmtv(v){return metric==="pct"?v.toFixed(2)+"%":metric==="h"?v.toLocaleString("en-US")+" h":v.toLocaleString("en-US");}
+function drawBars(){
+  const ft=val("lrn")+val("inj"); const mx=Math.max(val("elas"),ft)*1.08;
+  const w=v=>(100*v/mx).toFixed(2)+"%";
+  $("bars").innerHTML=
+   `<div class="hb"><span>Runtime elasticity<br><span class="note">n = 123 × 2 h</span></span><div class="tr"><div class="seg" style="width:${w(val("elas"))};background:var(--accent)"></div></div><span class="num">${fmtv(val("elas"))}</span></div>`+
+   `<div class="hb"><span>Fault tolerance<br><span class="note">learner (n = 88 × 2 h) + in-job (n = 21 × 0.5 h)</span></span><div class="tr"><div class="seg" style="width:${w(val("lrn"))};background:var(--ok)" title="learner recovery"></div><div class="seg" style="width:${w(val("inj"))};background:var(--warn)" title="in-job recovery"></div></div><span class="num">${fmtv(ft)}</span></div>`+
+   `<div class="legend"><span><span class="sw" style="background:var(--accent)"></span>runtime elasticity ${fmtv(val("elas"))}</span><span><span class="sw" style="background:var(--ok)"></span>learner recovery ${fmtv(val("lrn"))}</span><span><span class="sw" style="background:var(--warn)"></span>in-job recovery ${fmtv(val("inj"))}</span></div>`+
+   `<p class="note">Fault-tolerance sum (${metric==="pct"?"7.07% + 0.42% = 7.49%":metric==="h"?"176 + 10.5 = 186.5 h":"1,056,000 + 63,000 = 1,119,000"}) is computed here from Table 1's rows; Table 1 itself prints only the rows and the 17.37% total. Runtime elasticity is the largest single row.</p>`;
+}
+document.querySelectorAll("[data-m]").forEach(b=>b.addEventListener("click",()=>{metric=b.dataset.m;document.querySelectorAll("[data-m]").forEach(x=>x.classList.toggle("on",x===b));drawBars();}));
+drawBars();
+})();
+</script>
+</body>
+</html>

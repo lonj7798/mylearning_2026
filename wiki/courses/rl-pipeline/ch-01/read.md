@@ -4,7 +4,7 @@
      title: Why RL-from-Base Needs Its Own Infrastructure
      deps: []
      sources: [[mai-rl-infrastructure]], [[mai-thinking-1]], [[slime]], [[verl-rollout]], [[olmo-3-rl-pipeline]], [[scalerl]], [[areal-async-rl]], [[open-instruct-rlvr-pipeline]], [[pipelinerl]]
-     figures: none
+     figures: figures/rl-from-base-vs-distilled.html
 -->
 
 # Chapter 1 — Why RL-from-Base Needs Its Own Infrastructure
@@ -56,6 +56,8 @@ The post says open frameworks are "typically exercised" in a different regime (p
 | Rocket, MAI model (Fig. 8, "a portion") | x-axis 40–2,000 steps, log-linear fit R² = 0.974 | [[mai-rl-infrastructure]] p. 14 |
 
 Two cautions. First, step counts do not compare directly, because batch sizes and rollout lengths differ. Second, the ScaleRL run shows that open groups also run long climbs, so the boundary is not "open versus closed". What these runs show is that open RL experiments usually report hundreds to a few thousand steps on models of 1.5B–32B dense or 17B×16 MoE. Rocket targets a 3T-parameter model with hour-long agentic rollouts.
+
+> Interactive: [figures/rl-from-base-vs-distilled.html](figures/rl-from-base-vs-distilled.html) — reported run lengths on one log axis with an illustrative per-step bias accumulator, a Table 1 calculator that compares whole-job restarts with targeted recovery for any run length and GPU count, the three challenges under each regime, and a component-ownership map for Rocket, slime and verl with the cross-boundary mechanisms of §5.2.
 
 ---
 
