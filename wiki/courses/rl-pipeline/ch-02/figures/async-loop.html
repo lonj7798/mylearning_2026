@@ -1,0 +1,210 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Rocket Async Loop</title>
+<style>
+:root{
+  --bg:#fbfbfa; --fg:#1d1d1f; --muted:#5f6368; --panel:#ffffff; --line:#c9ccd1;
+  --node:#eef1f5; --node-stroke:#9aa3ae; --cpu:#e8f0fe; --gpu:#fdecea; --store:#eef7ee; --env:#fff4e0;
+  --hl:#d93025; --hl-fill:#ffe3df; --edge:#8a9099; --accent:#1a73e8;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#17181a; --fg:#e8eaed; --muted:#a0a4aa; --panel:#202124; --line:#3c4043;
+    --node:#2a2c30; --node-stroke:#5f6368; --cpu:#1f2b3d; --gpu:#3a2423; --store:#1f3323; --env:#3a2f1c;
+    --hl:#ff7a6b; --hl-fill:#4a2622; --edge:#8a9099; --accent:#8ab4f8;
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#17181a; --fg:#e8eaed; --muted:#a0a4aa; --panel:#202124; --line:#3c4043;
+  --node:#2a2c30; --node-stroke:#5f6368; --cpu:#1f2b3d; --gpu:#3a2423; --store:#1f3323; --env:#3a2f1c;
+  --hl:#ff7a6b; --hl-fill:#4a2622; --edge:#8a9099; --accent:#8ab4f8;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);font:15px/1.5 system-ui,-apple-system,Segoe UI,Roboto,sans-serif}
+main{max-width:1000px;margin:0 auto;padding:16px}
+h1{font-size:20px;margin:4px 0 2px}
+p.sub{color:var(--muted);margin:0 0 12px;font-size:13px}
+.tabs{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px}
+.tabs button,.ctl button{border:1px solid var(--line);background:var(--panel);color:var(--fg);padding:6px 12px;border-radius:6px;cursor:pointer;font:inherit;font-size:14px}
+.tabs button[aria-pressed="true"]{border-color:var(--accent);color:var(--accent);font-weight:600}
+.ctl{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:8px 0}
+.ctl .count{color:var(--muted);font-size:13px;margin-left:4px}
+svg{width:100%;height:auto;background:var(--panel);border:1px solid var(--line);border-radius:8px}
+.node rect{stroke:var(--node-stroke);stroke-width:1.2}
+.node text{fill:var(--fg);font-size:13px}
+.node .t{font-weight:600}
+.node .s{fill:var(--muted);font-size:11px}
+.node.on rect{stroke:var(--hl);stroke-width:2.6;fill:var(--hl-fill)}
+.edge{stroke:var(--edge);stroke-width:1.4;fill:none;opacity:.55}
+.edge.on{stroke:var(--hl);stroke-width:3;opacity:1}
+.elab{fill:var(--muted);font-size:10.5px}
+.elab.on{fill:var(--hl);font-weight:600}
+.panel{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:12px 14px;margin-top:10px}
+.panel h2{font-size:16px;margin:0 0 6px}
+.panel .moves{margin:6px 0}
+.panel .src{color:var(--muted);font-size:12.5px}
+.legend{display:flex;gap:14px;flex-wrap:wrap;font-size:12px;color:var(--muted);margin-top:8px}
+.sw{display:inline-block;width:12px;height:12px;border:1px solid var(--node-stroke);vertical-align:-2px;margin-right:4px}
+ol.list{font-size:13px;color:var(--muted);padding-left:20px;margin:6px 0 0}
+ol.list li.cur{color:var(--fg);font-weight:600}
+ol.list li{cursor:pointer}
+</style>
+</head>
+<body>
+<main>
+<h1>Rocket's asynchronous loop, one message at a time</h1>
+<p class="sub">Steps follow the numbered flow of Fig. 1 and the prose on p. 2–4 of "RL infrastructure at Microsoft AI" (Nov 2026). Rocket v1 details come from the MAI-Thinking-1 report, Sec. 3.6. The colocated tab follows slime <code>train.py</code> L47–93 at commit 79aa41a.</p>
+<div class="tabs" role="group" aria-label="Loop type">
+  <button id="tabA" aria-pressed="true">Rocket async loop (Fig. 1)</button>
+  <button id="tabB" aria-pressed="false">Colocated synchronous loop (verl HYBRID / slime --colocate)</button>
+</div>
+<div class="ctl">
+  <button id="prev" aria-label="Previous step">&#9664; Prev</button>
+  <button id="next" aria-label="Next step">Next &#9654;</button>
+  <button id="play">Play</button>
+  <button id="reset">Reset</button>
+  <span class="count" id="count"></span>
+</div>
+<svg id="svg" viewBox="0 0 900 470" role="img" aria-label="Component diagram"></svg>
+<div class="legend">
+  <span><span class="sw" style="background:var(--cpu)"></span>CPU pool</span>
+  <span><span class="sw" style="background:var(--gpu)"></span>GPU pool</span>
+  <span><span class="sw" style="background:var(--store)"></span>Rollout store (hardware not stated)</span>
+  <span><span class="sw" style="background:var(--env)"></span>Environments</span>
+  <span>Red = active in this step</span>
+</div>
+<div class="panel" aria-live="polite">
+  <h2 id="ptitle"></h2>
+  <div class="moves" id="pmoves"></div>
+  <div class="src" id="psrc"></div>
+</div>
+<div class="panel">
+  <strong>All steps</strong> (click to jump)
+  <ol class="list" id="list"></ol>
+</div>
+</main>
+<script>
+(function(){
+const NS="http://www.w3.org/2000/svg";
+const svg=document.getElementById("svg");
+const A={
+ nodes:[
+  {id:"ctl",x:20,y:30,w:180,h:96,fill:"cpu",t:"(1) Controller",s:["select problems · admit work","filter + pack segments"]},
+  {id:"pw",x:330,y:30,w:190,h:96,fill:"cpu",t:"(2) Problem workers",s:["request executor","group grading · advantages"]},
+  {id:"rw",x:650,y:30,w:230,h:96,fill:"cpu",t:"(3) Rollout workers",s:["agent loop · tool dispatcher","per-rollout graders"]},
+  {id:"smp",x:690,y:200,w:190,h:96,fill:"gpu",t:"(4) Sampler",s:["Router (CPU)","SGLang (GPU) prefill / decode"]},
+  {id:"env",x:400,y:200,w:200,h:96,fill:"env",t:"(5) Environments",s:["sandbox execution (SEE)","search · MCP tool services"]},
+  {id:"st",x:330,y:340,w:190,h:90,fill:"store",t:"Rollout store",s:["tokens / logprobs","model-turn payloads"]},
+  {id:"lrn",x:20,y:340,w:180,h:90,fill:"gpu",t:"(6) Learner",s:["policy update","GPU pool"]},
+  {id:"rt",x:580,y:340,w:300,h:90,fill:"node",t:"Runtime management + recovery",s:["worker health, training progress","checkpoints: controller + learner state"]}
+ ],
+ edges:[
+  {id:"c2p",d:"M200 62 L330 62",lab:"problem",lx:265,ly:56},
+  {id:"p2c",d:"M330 100 L200 100",lab:"results + advantages",lx:265,ly:116},
+  {id:"p2r",d:"M520 62 L650 62",lab:"rollout requests",lx:585,ly:56},
+  {id:"r2p",d:"M650 100 L520 100",lab:"scores + refs",lx:585,ly:116},
+  {id:"r2s",d:"M820 126 L830 200",lab:"context + settings",lx:845,ly:150,a:"middle"},
+  {id:"s2r",d:"M770 200 L760 126",lab:"tokens / logprobs / versions",lx:752,ly:176,a:"end"},
+  {id:"r2e",d:"M690 126 L560 200",lab:"actions / checks",lx:560,ly:150,a:"end"},
+  {id:"e2r",d:"M590 200 L705 126",lab:"",lx:0,ly:0},
+  {id:"r2st",d:"M665 126 C640 260 600 330 520 370",lab:"payloads",lx:600,ly:326,a:"start"},
+  {id:"c2l",d:"M110 126 L110 340",lab:"segment refs + advantages",lx:118,ly:240,a:"start"},
+  {id:"st2l",d:"M330 385 L200 385",lab:"token IDs + logprobs",lx:265,ly:378},
+  {id:"l2s",d:"M110 430 L110 455 L892 455 L892 248 L880 248",lab:"updated model weights (controller-triggered transfer)",lx:500,ly:449}
+ ],
+ steps:[
+  {t:"1. Controller selects a problem",n:["ctl","pw"],e:["c2p"],m:"The controller samples a problem from the curriculum (problem mixture) and admits it. It sends the problem to a problem worker. A problem is a task; a rollout is one attempt at it.",s:"Rocket post p. 2; Fig. 1 step (1)→(2)."},
+  {t:"2. Problem worker dispatches the group's rollout requests",n:["pw","rw"],e:["p2r"],m:"One request per rollout of the GRPO group. Rocket v1 sent 16 early requests, checked the pass rate, then sent 128 more (G = 128, G_early = 16). Each problem worker and rollout worker handles many requests concurrently.",s:"Rocket post p. 2; MAI-Thinking-1 Sec. 3.6.2 and Sec. 3.1.5."},
+  {t:"3. Agent loop requests a model response",n:["rw","smp"],e:["r2s"],m:"The rollout worker sends context and sampling settings to the router, which load-balances to an SGLang server. The rollout worker keeps the state of every rollout it manages.",s:"Rocket post p. 3; Fig. 1 step (4)."},
+  {t:"4. Sampler returns tokens, log-probs and versions",n:["smp","rw"],e:["s2r"],m:"The sampler returns generated tokens, their sampling log-probs, and the weight version used. The version label is what lets staleness be measured per token (ch-03). In Rocket v1 a request that fails mid-flight is retried on another replica, so the rollout is not lost.",s:"Fig. 1 arrow label; MAI-Thinking-1 Sec. 3.6.4."},
+  {t:"5. Tool call routed to an environment",n:["rw","env"],e:["r2e"],m:"The tool dispatcher routes the parsed tool call to sandbox execution environments (SEE), search services, or MCP tools.",s:"Rocket post p. 3; Fig. 1 step (5)."},
+  {t:"6. Observation returns; the loop repeats",n:["env","rw","smp"],e:["e2r","r2s","s2r"],m:"Tool results become context for the next model call. Steps 3–6 repeat until the agent finishes or reaches a configured limit. Median turns per rollout range from 1 (instruction following, math) to 249 (software engineering); the slowest rollout in Fig. 4 has 784 turns.",s:"Rocket post p. 3–4 (Fig. 2), p. 6 (Fig. 4)."},
+  {t:"7. Per-rollout graders score the trajectory",n:["rw"],e:[],m:"Graders that can judge one rollout in isolation run on the rollout worker, and inspect the environment state where needed (for example, tests in a sandbox).",s:"Rocket post p. 3; MAI-Thinking-1 Sec. 3.6.3."},
+  {t:"8. Trajectory payload goes to the rollout store",n:["rw","st"],e:["r2st"],m:"The rollout worker stores the payload: token IDs, sampling log-probs, model-turn payloads. The payload does not travel through the problem worker or controller.",s:"Rocket post p. 3; Fig. 1 'Store payloads'."},
+  {t:"9. Scores and references return to the problem worker",n:["rw","pw"],e:["r2p"],m:"Only scores and references to the stored rollouts go back. The problem worker waits until all rollouts of its group have returned (or failed and been dropped, ch-04).",s:"Rocket post p. 3."},
+  {t:"10. Group graders and GRPO advantages",n:["pw"],e:[],m:"The problem worker runs group graders on all rollouts together (for example pairwise LLM comparison) and computes advantages for every rollout in the group. This is the group barrier that ch-03 and ch-04 measure.",s:"Rocket post p. 3; MAI-Thinking-1 Sec. 3.6.2–3.6.3."},
+  {t:"11. Results and advantages return to the controller",n:["pw","ctl"],e:["p2c"],m:"The controller receives the group's results and advantages.",s:"Rocket post p. 3."},
+  {t:"12. Controller filters and packs training segments",n:["ctl","lrn"],e:["c2l"],m:"The controller selects eligible data and packs training segments into learner batches. A segment is one training example with one or more model turns. A batch carries segment references and advantages, not token data. In Fig. 4 the completed group spent 12 s in the controller queue.",s:"Rocket post p. 3, p. 7."},
+  {t:"13. Learner fetches tokens and sampling log-probs",n:["st","lrn"],e:["st2l"],m:"The learner retrieves token IDs and sampling log-probabilities for the referenced segments directly from the rollout store.",s:"Rocket post p. 3; Fig. 1 step (6)."},
+  {t:"14. Policy update and weight transfer",n:["lrn","smp","ctl"],e:["l2s"],m:"The learner updates the policy. The controller periodically triggers a weight transfer to refresh the sampler. In the Fig. 4 run the sampler received new weights every 4 learner steps, and one transfer took 15 s (ch-05).",s:"Rocket post p. 4, p. 6–7."},
+  {t:"15. Supervision and recovery checkpoints",n:["rt","ctl","lrn"],e:[],m:"Recovery checkpoints preserve both learner and controller state. Runtime management monitors worker health and training progress and coordinates recovery and resource allocation. A failed learner is rebuilt and reconnected to the live controller in roughly five minutes (ch-20).",s:"Rocket post p. 4, p. 11."}
+ ]
+};
+const B={
+ nodes:[
+  {id:"ds",x:30,y:40,w:220,h:96,fill:"cpu",t:"Rollout manager / data buffer",s:["prompts, groups of n samples","dynamic filter"]},
+  {id:"gpu",x:330,y:30,w:330,h:270,fill:"gpu",t:"One shared GPU pool",s:["rollout engine and trainer","take turns on the same GPUs"]},
+  {id:"eng",x:360,y:90,w:270,h:80,fill:"gpu",t:"Rollout engine (SGLang / vLLM)",s:["generates the whole batch"]},
+  {id:"trn",x:360,y:200,w:270,h:80,fill:"gpu",t:"Trainer (Megatron / FSDP)",s:["trains on the batch"]},
+  {id:"rm",x:720,y:90,w:160,h:80,fill:"env",t:"Reward / verifier",s:["scores samples"]},
+  {id:"ck",x:30,y:340,w:220,h:80,fill:"node",t:"Checkpoint (optional)",s:["save_interval"]},
+  {id:"ws",x:330,y:340,w:330,h:80,fill:"node",t:"Weight sync",s:["pause admission → update → resume"]}
+ ],
+ edges:[
+  {id:"d2e",d:"M250 100 L360 120",lab:"prompts",lx:300,ly:100},
+  {id:"e2r",d:"M630 130 L720 130",lab:"samples",lx:675,ly:122},
+  {id:"r2d",d:"M800 90 C800 10 140 10 140 40",lab:"rewards → rollout_data_ref",lx:470,ly:22},
+  {id:"d2t",d:"M140 136 C140 240 300 240 360 240",lab:"rollout_data_ref",lx:250,ly:232},
+  {id:"t2c",d:"M360 270 C200 300 140 300 140 340",lab:"",lx:0,ly:0},
+  {id:"t2w",d:"M495 280 L495 340",lab:"",lx:0,ly:0},
+  {id:"w2e",d:"M660 380 C720 380 720 150 630 150",lab:"new weights",lx:740,ly:290}
+ ],
+ steps:[
+  {t:"1. Generate the whole batch",n:["ds","eng","rm"],e:["d2e","e2r","r2d"],m:"rollout_manager.generate(rollout_id) produces rollout_batch_size groups of n_samples_per_prompt samples with rewards. The step cannot end before the slowest accepted sample finishes. slime's docs: variable-length samples make synchronous barriers especially costly.",s:"slime@79aa41a train.py L51; sglang_rollout.py L530–571; docs/en/advanced/rl-systems.md L31."},
+  {t:"2. Offload the rollout engine",n:["eng","gpu"],e:[],m:"With --colocate, offload_rollout defaults to True: the engine releases GPU memory so the trainer can use the same GPUs.",s:"slime@79aa41a train.py L53–54; slime/utils/arguments.py L2141–2154."},
+  {t:"3. Train on the batch",n:["trn","ds"],e:["d2t"],m:"The actor trains from a Ray object reference to the rollout data. Every sample was generated by the weights of the previous update, so staleness in weight-version units is 0.",s:"slime@79aa41a train.py L59–67."},
+  {t:"4. Release queue capacity; optional checkpoint",n:["trn","ck"],e:["t2c"],m:"training_completed releases queue capacity; save_checkpoint runs on the save interval.",s:"slime@79aa41a train.py L71–83."},
+  {t:"5. Pause admission, update weights, resume",n:["trn","ws","eng"],e:["t2w","w2e"],m:"pause_rollout_admission → actor_model.update_weights() → resume_rollout_admission. verl HYBRID mode: rollout and trainer share GPUs and switch context with weight synchronization (use case: on-policy training).",s:"slime@79aa41a train.py L85–93; verl@8357f1e verl/workers/rollout/replica.py L68–72."},
+  {t:"6. Next rollout_id: GPUs alternate roles",n:["gpu"],e:[],m:"Cost per round is about t_R + t_T + t_W. A separate-pool async design can at best approach max(t_R, t_T) + t_W (an optimistic bound, not a measurement). Measured: verl V1 took 22.79 h for 150 sync steps vs 14.10 h separate_async on the same 4 nodes.",s:"slime docs rl-systems.md L21–31; verl@8357f1e docs/advance/v1_async_trainer.md L288–292."}
+ ]
+};
+let cur=A, idx=0, timer=null;
+function el(n,a){const e=document.createElementNS(NS,n);for(const k in a)e.setAttribute(k,a[k]);return e;}
+function draw(){
+  svg.innerHTML="";
+  const defs=el("defs",{});
+  const mk=el("marker",{id:"arr",viewBox:"0 0 10 10",refX:"9",refY:"5",markerWidth:"7",markerHeight:"7",orient:"auto-start-reverse"});
+  const p=el("path",{d:"M0 0 L10 5 L0 10 z",fill:"var(--edge)"}); mk.appendChild(p); defs.appendChild(mk);
+  const mk2=el("marker",{id:"arrh",viewBox:"0 0 10 10",refX:"9",refY:"5",markerWidth:"7",markerHeight:"7",orient:"auto-start-reverse"});
+  mk2.appendChild(el("path",{d:"M0 0 L10 5 L0 10 z",fill:"var(--hl)"})); defs.appendChild(mk2);
+  svg.appendChild(defs);
+  const st=cur.steps[idx];
+  cur.nodes.forEach(n=>{
+    const g=el("g",{class:"node"+(st.n.includes(n.id)?" on":"")});
+    g.appendChild(el("rect",{x:n.x,y:n.y,width:n.w,height:n.h,rx:8,fill:"var(--"+n.fill+")"}));
+    const t=el("text",{x:n.x+10,y:n.y+22,class:"t"}); t.textContent=n.t; g.appendChild(t);
+    n.s.forEach((s,i)=>{const tt=el("text",{x:n.x+10,y:n.y+42+i*16,class:"s"}); tt.textContent=s; g.appendChild(tt);});
+    svg.appendChild(g);
+  });
+  cur.edges.forEach(e=>{
+    const on=st.e.includes(e.id);
+    svg.appendChild(el("path",{d:e.d,class:"edge"+(on?" on":""),"marker-end":on?"url(#arrh)":"url(#arr)"}));
+    if(e.lab){const t=el("text",{x:e.lx,y:e.ly,class:"elab"+(on?" on":""),"text-anchor":e.a||"middle"});t.textContent=e.lab;svg.appendChild(t);}
+  });
+  document.getElementById("ptitle").textContent=st.t;
+  document.getElementById("pmoves").textContent=st.m;
+  document.getElementById("psrc").textContent="Source: "+st.s;
+  document.getElementById("count").textContent="Step "+(idx+1)+" of "+cur.steps.length;
+  const list=document.getElementById("list"); list.innerHTML="";
+  cur.steps.forEach((s,i)=>{const li=document.createElement("li");li.textContent=s.t.replace(/^\d+\.\s*/,"");if(i===idx)li.className="cur";li.onclick=()=>{idx=i;draw();};list.appendChild(li);});
+}
+function go(d){idx=(idx+d+cur.steps.length)%cur.steps.length;draw();}
+document.getElementById("next").onclick=()=>go(1);
+document.getElementById("prev").onclick=()=>go(-1);
+document.getElementById("reset").onclick=()=>{idx=0;stop();draw();};
+function stop(){if(timer){clearInterval(timer);timer=null;document.getElementById("play").textContent="Play";}}
+document.getElementById("play").onclick=()=>{if(timer){stop();}else{timer=setInterval(()=>go(1),3200);document.getElementById("play").textContent="Pause";}};
+function setTab(which){stop();cur=which==="A"?A:B;idx=0;
+  document.getElementById("tabA").setAttribute("aria-pressed",which==="A");
+  document.getElementById("tabB").setAttribute("aria-pressed",which==="B");draw();}
+document.getElementById("tabA").onclick=()=>setTab("A");
+document.getElementById("tabB").onclick=()=>setTab("B");
+document.addEventListener("keydown",e=>{if(e.key==="ArrowRight")go(1);if(e.key==="ArrowLeft")go(-1);});
+draw();
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,154 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Search Rollout Masking</title>
+<style>
+  :root { --bg:#fafaf8; --panel:#fff; --ink:#1f2328; --muted:#5b6470; --rule:#d9dde3; --train:#1f7a4d; --mask:#8a919b; --tool:#b26a00; --prompt:#1d5fa8; --warn:#b3261e; --hi:#fff4d6; }
+  @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) { --bg:#16181c; --panel:#1e2126; --ink:#e6e8eb; --muted:#a0a8b3; --rule:#353a42; --train:#4cc38a; --mask:#6b7280; --tool:#f0b456; --prompt:#6aa6e8; --warn:#f2836b; --hi:#3a3320; } }
+  :root[data-theme="dark"] { --bg:#16181c; --panel:#1e2126; --ink:#e6e8eb; --muted:#a0a8b3; --rule:#353a42; --train:#4cc38a; --mask:#6b7280; --tool:#f0b456; --prompt:#6aa6e8; --warn:#f2836b; --hi:#3a3320; }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--ink); font:14px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif; }
+  main { max-width:1040px; margin:0 auto; padding:20px 16px 40px; }
+  h1 { font-size:19px; margin:0 0 4px; } h2 { font-size:15px; margin:0 0 8px; }
+  p.sub { color:var(--muted); margin:0 0 16px; } .note { color:var(--muted); font-size:12.5px; }
+  .panel { background:var(--panel); border:1px solid var(--rule); border-radius:8px; padding:16px; margin-bottom:18px; }
+  .controls { display:flex; flex-wrap:wrap; gap:10px 20px; align-items:center; margin-bottom:12px; }
+  select, button { font:inherit; color:var(--ink); background:var(--panel); border:1px solid var(--rule); border-radius:6px; padding:4px 10px; }
+  button { cursor:pointer; }
+  .seg { border:1px solid var(--rule); border-left-width:6px; border-radius:6px; padding:8px 10px; margin:6px 0; font-family:ui-monospace,Menlo,monospace; font-size:12.5px; white-space:pre-wrap; word-break:break-word; opacity:.35; }
+  .seg.shown { opacity:1; } .seg.current { background:var(--hi); }
+  .seg.prompt { border-left-color:var(--prompt); } .seg.model { border-left-color:var(--train); } .seg.tool { border-left-color:var(--tool); } .seg.bound { border-left-color:var(--mask); }
+  .meta { display:flex; flex-wrap:wrap; gap:8px 14px; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif; font-size:12px; margin-bottom:4px; }
+  .pill { border-radius:999px; padding:0 8px; color:#fff; font-weight:600; }
+  .pill.m1 { background:var(--train); } .pill.m0 { background:var(--mask); } .pill.bad { background:var(--warn); }
+  .bar { display:flex; height:22px; border:1px solid var(--rule); border-radius:4px; overflow:hidden; margin:8px 0 4px; }
+  .bar div { height:100%; }
+  .legend { display:flex; flex-wrap:wrap; gap:14px; font-size:12.5px; }
+  .sw { display:inline-block; width:12px; height:12px; border-radius:2px; vertical-align:-2px; margin-right:4px; }
+  #explain { font-size:13.5px; }
+  table { border-collapse:collapse; width:100%; font-size:13px; }
+  th, td { border-bottom:1px solid var(--rule); padding:5px 8px; text-align:left; }
+  th { color:var(--muted); }
+  .scroll { overflow-x:auto; }
+</style>
+</head>
+<body>
+<main>
+  <h1>One multi-turn search rollout: which tokens get gradient</h1>
+  <p class="sub">Step through an illustrative Search-R1-style rollout (question, two searches, one answer). Token counts are illustrative. The masking rules are the ones in slime@79aa41a, verl@8357f1e and AReaL@bcef492, quoted in ch-15 §5.2. Measured mask effects are from the cards.</p>
+
+  <section class="panel">
+    <div class="controls">
+      <button id="prev">◀ previous step</button><button id="next">next step ▶</button>
+      <label>Framework <select id="fw">
+        <option value="slime">slime search-r1 example</option>
+        <option value="verl">verl ToolAgentLoop + Continuous Token</option>
+        <option value="areal">AReaL concat export</option>
+      </select></label>
+      <label><input type="checkbox" id="nomask"> remove the mask (train on everything)</label>
+    </div>
+    <div id="segs"></div>
+    <div class="bar" id="bar" aria-label="token mask bar"></div>
+    <div class="legend"><span><span class="sw" style="background:var(--train)"></span>gets gradient (mask 1)</span><span><span class="sw" style="background:var(--mask)"></span>no gradient (mask 0)</span><span><span class="sw" style="background:var(--prompt)"></span>prompt</span><span><span class="sw" style="background:var(--warn)"></span>tool tokens trained (mask removed)</span></div>
+    <p class="note" id="counts"></p>
+  </section>
+
+  <section class="panel">
+    <h2>What happens at this step</h2>
+    <p id="explain"></p>
+  </section>
+
+  <section class="panel">
+    <h2>Measured effect of the mask</h2>
+    <div class="scroll"><table>
+      <tr><th>Source</th><th>With mask</th><th>Without mask</th><th>Location</th></tr>
+      <tr><td>Search-R1, Qwen2.5-7B-base, PPO, 7-dataset EM average</td><td>0.431</td><td>0.343</td><td>search-r1 Table 4</td></tr>
+      <tr><td>ZeroSearch, LLaMA-3.2-3B-Base, average EM</td><td>36.07</td><td>34.53</td><td>zerosearch App. C, Table 7</td></tr>
+    </table></div>
+    <p class="note">The grader reads only the last &lt;answer&gt;: EM (Search-R1; verl preset divides by 4 above 10 answer tags), F1 (ZeroSearch, DeepResearcher), or an LLM judge on the first 200 characters (AReaL Tongyi-style example).</p>
+  </section>
+</main>
+<script>
+const SEGS = [
+  {k:"prompt", t:"system + user: Answer the question. Search with <search>query</search>; results appear in <information>…</information>; answer with <answer>…</answer>.\nQuestion: Which city hosted the games in the year the director of film X was born?", n:60, turn:0},
+  {k:"model", t:"<think>I need the director of film X and the birth year.</think>\n<search>director of film X</search>", n:28, turn:1},
+  {k:"bound", t:"[template boundary tokens inserted between turns]", n:3, turn:1},
+  {k:"tool", t:"<information>Doc 1(Title: Film X) … directed by D …\nDoc 2(Title: D) … born in 19YY …\nDoc 3 …</information>", n:180, turn:1},
+  {k:"model", t:"<think>D was born in 19YY. Which city hosted the games that year?</think>\n<search>games host city 19YY</search>", n:30, turn:2},
+  {k:"bound", t:"[template boundary tokens inserted between turns]", n:3, turn:2},
+  {k:"tool", t:"<information>Doc 1(Title: 19YY games) … held in City C …\nDoc 2 …\nDoc 3 …</information>", n:170, turn:2},
+  {k:"model", t:"<think>The answer is City C.</think>\n<answer>City C</answer>", n:16, turn:3}
+];
+const EXPL = {
+ slime: [
+  "Prompt tokens are not part of the response; slime starts loss_mask as an empty list (generate_with_search.py L156–159).",
+  "Model turn 1. Token ids and log-probs come from SGLang output_token_logprobs; appended with loss_mask 1 and trainable=True (L198–226). Generation stops at </search> (bug-fix L164–177).",
+  "Boundary tokens: this example tokenizes the observation string itself as a delta; there is no separate boundary-token handling. The next turn is sent to SGLang as text (L181), so the engine re-tokenizes the history.",
+  "Observation. execute_predictions calls the retriever under a 256-slot semaphore and wraps results in <information> (L124–131). Tokens appended with loss_mask 0 and trainable=False; log-prob placeholder 0.0 (L240–248).",
+  "Model turn 2. Same as turn 1. In this example max_turns = 2, so this is the last SGLang call: a third model turn would not be generated (L16, L179).",
+  "Boundary handling as in step 3.",
+  "Observation 2, loss_mask 0.",
+  "Model turn 3. With slime's default max_turns = 2 this turn is not reached; it is shown here to match Search-R1's 4-action budget. The reward reads the last <answer> (compute_score_em, effectively binary EM at this commit)."
+ ],
+ verl: [
+  "Prompt ids form the prefix; the response mask covers only the response tail (tool_agent_loop.py L185–198).",
+  "Assistant tokens are generated through server_manager.generate with token ids. Continuous Token appends them with mask 1 and their log-probs (continuous_token.py L399–400).",
+  "Boundary tokens inserted by the Continuous Token builder (inserted_token_ids) get mask 0 and log-prob 0 (L392–396). This covers template tokens the engine never sampled.",
+  "Tool message (role: tool) merged as context: mask 0 (L412–413). The tool text was first truncated to max_tool_response_length = 256 characters by default (rollout.yaml L223; tool_agent_loop.py L500–507).",
+  "Assistant turn 2, mask 1. Only the first tool call is executed by default (max_parallel_calls: 1).",
+  "Boundary tokens, mask 0.",
+  "Tool message 2, mask 0.",
+  "Final assistant turn, mask 1. Reward preset search_r1_like_qa_em: last <answer>, EM 1/0, divided by 4 above 10 answer tags (search_r1_like_qa_em.py L119–128)."
+ ],
+ areal: [
+  "First turn: loss_mask = [0] * input_len + [1] * output_len (types.py L258); versions −1 for prompt tokens.",
+  "Sampled tokens get mask 1 and the policy version that sampled them (resp.output_versions).",
+  "Template tokens are part of the child turn's new prompt span: mask 0, version −1 (types.py L214–229).",
+  "Tool response (appended as a user message <tool_response>) is part of the next prompt span: mask 0, version −1.",
+  "Turn 2 may be sampled by a newer policy version if the learner advanced while the tool ran. versions records this per token; mask_stale_tokens can drop targets older than max_head_offpolicyness (cli_args.py L3312–3319).",
+  "Prompt span, mask 0.",
+  "Tool response 2, mask 0.",
+  "Final turn, mask 1. In the Tongyi-style example the reward is an LLM judge on the first 200 characters of the answer, temperature 1.0, judge error = 0.0 (react_agent.py L300–317), set on the last completion."
+ ]
+};
+let step = 0;
+const segsEl = document.getElementById("segs"), bar = document.getElementById("bar");
+function mask(seg, nomask){ if (seg.k==="prompt") return "prompt"; if (seg.k==="model") return 1; return nomask ? "bad" : 0; }
+function render(){
+  const fw = document.getElementById("fw").value, nomask = document.getElementById("nomask").checked;
+  segsEl.innerHTML = ""; bar.innerHTML = "";
+  let tr=0, ms=0, bad=0, total=0;
+  SEGS.forEach((s,i)=>{
+    const d = document.createElement("div");
+    d.className = `seg ${s.k} ${i<=step?"shown":""} ${i===step?"current":""}`;
+    const m = mask(s, nomask);
+    let ver = "";
+    if (fw==="areal" && s.k==="model") ver = ` · version v${s.turn>=2?"+1":""}`;
+    if (fw==="areal" && s.k!=="model" && s.k!=="prompt") ver = " · version −1";
+    const pill = m==="prompt" ? `<span class="pill" style="background:var(--prompt)">prompt</span>` : (m===1 ? `<span class="pill m1">mask 1</span>` : (m==="bad" ? `<span class="pill bad">trained (no mask)</span>` : `<span class="pill m0">mask 0</span>`));
+    const label = {prompt:"prompt", model:`model turn ${s.turn}`, bound:"template boundary", tool:"tool output"}[s.k];
+    const showBound = !(fw==="slime" && s.k==="bound");
+    d.innerHTML = `<div class="meta">${pill}<span>${label}</span><span>${s.n} tokens (illustrative)${ver}</span>${(fw==="slime"&&s.k==="bound")?"<span>(not a separate span in this example)</span>":""}</div>${s.t}`;
+    segsEl.appendChild(d);
+    if (i<=step && showBound){
+      const b = document.createElement("div"); b.style.flex = s.n;
+      b.style.background = m==="prompt" ? "var(--prompt)" : (m===1 ? "var(--train)" : (m==="bad" ? "var(--warn)" : "var(--mask)"));
+      b.title = `${label}: ${s.n} tokens`; bar.appendChild(b);
+      if (m!=="prompt"){ total+=s.n; if(m===1) tr+=s.n; else if(m==="bad") bad+=s.n; else ms+=s.n; }
+    }
+  });
+  document.getElementById("counts").textContent = `Response tokens so far: ${total}. Trained model tokens: ${tr}. Masked: ${ms}.` + (bad?` Tool/boundary tokens trained because the mask is removed: ${bad} (${Math.round(100*bad/Math.max(total,1))}% of response tokens).`:"");
+  let e = EXPL[fw][step];
+  if (nomask && (SEGS[step].k==="tool" || SEGS[step].k==="bound")) e += " With the mask removed, these tokens enter the policy-gradient sum with the trajectory's advantage, although the policy did not sample them.";
+  document.getElementById("explain").textContent = `Step ${step+1} of ${SEGS.length}. ` + e;
+  document.getElementById("prev").disabled = step===0; document.getElementById("next").disabled = step===SEGS.length-1;
+}
+document.getElementById("prev").onclick=()=>{ if(step>0){step--; render();} };
+document.getElementById("next").onclick=()=>{ if(step<SEGS.length-1){step++; render();} };
+document.getElementById("fw").onchange=render; document.getElementById("nomask").onchange=render;
+render();
+</script>
+</body>
+</html>

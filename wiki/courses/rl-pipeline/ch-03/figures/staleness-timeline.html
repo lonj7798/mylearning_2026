@@ -1,0 +1,177 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Staleness Timeline</title>
+<style>
+:root{
+  --bg:#fbfbfa; --fg:#1d1d1f; --muted:#5f6368; --panel:#ffffff; --line:#c9ccd1;
+  --v0:#c6dbef; --v1:#9ecae1; --v2:#6baed6; --v3:#4292c6; --v4:#2171b5; --v5:#08519c;
+  --lag:#e6550d; --wait:#756bb1; --grade:#bdbdbd; --queue:#d9d9d9; --hl:#d93025; --accent:#1a73e8;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#17181a; --fg:#e8eaed; --muted:#a0a4aa; --panel:#202124; --line:#3c4043;
+    --v0:#1c3550; --v1:#22476b; --v2:#2a5a87; --v3:#336ea3; --v4:#3d83c0; --v5:#4b98da;
+    --lag:#fd8d3c; --wait:#9e9ac8; --grade:#5f6368; --queue:#4a4d52; --hl:#ff7a6b; --accent:#8ab4f8;
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#17181a; --fg:#e8eaed; --muted:#a0a4aa; --panel:#202124; --line:#3c4043;
+  --v0:#1c3550; --v1:#22476b; --v2:#2a5a87; --v3:#336ea3; --v4:#3d83c0; --v5:#4b98da;
+  --lag:#fd8d3c; --wait:#9e9ac8; --grade:#5f6368; --queue:#4a4d52; --hl:#ff7a6b; --accent:#8ab4f8;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);font:15px/1.5 system-ui,-apple-system,Segoe UI,Roboto,sans-serif}
+main{max-width:980px;margin:0 auto;padding:16px}
+h1{font-size:20px;margin:4px 0 2px}
+h2{font-size:16px;margin:0 0 6px}
+p.sub,.note{color:var(--muted);font-size:13px;margin:0 0 10px}
+.panel{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:12px 14px;margin:12px 0}
+svg{width:100%;height:auto;display:block}
+.axis text{fill:var(--muted);font-size:11px}
+.axis line{stroke:var(--line)}
+.lbl{fill:var(--fg);font-size:12px}
+.small{fill:var(--muted);font-size:10.5px}
+.row{display:flex;gap:16px;flex-wrap:wrap;align-items:center;margin:8px 0}
+input[type=range]{width:280px;max-width:100%}
+.kv{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:8px;margin-top:8px}
+.kv div{border:1px solid var(--line);border-radius:6px;padding:6px 8px}
+.kv b{display:block;font-size:20px}
+.kv span{color:var(--muted);font-size:12px}
+table{border-collapse:collapse;width:100%;font-size:13px}
+td,th{border-bottom:1px solid var(--line);padding:5px 6px;text-align:left}
+th{color:var(--muted);font-weight:600}
+label{font-size:13px}
+code{font-size:12.5px}
+</style>
+</head>
+<body>
+<main>
+<h1>Staleness of one GRPO group (Rocket Fig. 4)</h1>
+<p class="sub">Inputs are the values printed in Fig. 4 and on p. 6–7 of "RL infrastructure at Microsoft AI" (Nov 2026): sampler refresh every 4 learner steps (weights from steps 104, 108, 112, 116, 120, 124), slowest rollout 784 turns, every rollout waits 24 min before its first request, fastest waits 7.6 h and median 5.6 h for the slowest, 12 s in the controller queue, all trained in step 127 (3 min). Bar positions inside each 4-step band are schematic; the post gives no turn-level timestamps.</p>
+
+<div class="panel">
+<h2>1. One token in the slowest rollout</h2>
+<div class="row">
+  <label for="s">Learner step when the token is generated: <b id="sval"></b></label>
+  <input id="s" type="range" min="104" max="125" step="1" value="105" aria-label="learner step at generation">
+  <label><input type="checkbox" id="conv"> count the learner's version during step 127 as 126</label>
+</div>
+<svg id="tl" viewBox="0 0 940 230" role="img" aria-label="Timeline in learner steps"></svg>
+<div class="kv">
+  <div><b id="kv-v"></b><span>sampler weight version v (refresh every 4 steps)</span></div>
+  <div><b id="kv-lag" style="color:var(--lag)"></b><span>sampler lag = s − v (Rocket: 0–3 steps)</span></div>
+  <div><b id="kv-wait" style="color:var(--wait)"></b><span>steps from generation to training = T − s</span></div>
+  <div><b id="kv-tot"></b><span>staleness = T − v</span></div>
+</div>
+<p class="note">Identity: T − v = (s − v) + (T − s). The total depends only on the version v. The split shows what each lever can reach: faster weight sync removes only the orange part (ch-05); priority, dropping failures and inference-bound sizing act on the purple part (ch-04). The post does not state whether the learner's version during step 127 is 126 or 127, hence the checkbox.</p>
+</div>
+
+<div class="panel">
+<h2>2. The fast rollouts' wait for the slowest, in learner steps</h2>
+<p class="note">The post does not state the time between learner steps Δt. An upper bound follows from the figure: the 19 step intervals 108→127 fit inside the 12-hour axis after the 24-minute wait, so Δt ≤ 11.6 h / 19 ≈ 37 min. At that bound the conversion below gives the <i>minimum</i> number of steps of waiting; any smaller Δt gives more.</p>
+<div class="row">
+  <label for="dt">Assumed Δt (minutes): <b id="dtval"></b></label>
+  <input id="dt" type="range" min="5" max="37" step="1" value="37" aria-label="minutes between learner steps">
+</div>
+<table>
+  <thead><tr><th>Phase</th><th>Wall-clock (source)</th><th>Adds staleness?</th><th>Learner steps at this Δt</th></tr></thead>
+  <tbody id="tb"></tbody>
+</table>
+<svg id="bars" viewBox="0 0 940 120" role="img" aria-label="Waiting time in steps" style="margin-top:8px"></svg>
+</div>
+
+<div class="panel">
+<h2>How to read this</h2>
+<p class="note" style="color:var(--fg)">Within one trajectory, staleness runs from about 23 learner steps (first turns, step-104 weights) down to about 3 (last turns, step-124 weights). The sampler lag is never more than 3 of those steps. The rest comes from the rollout's own duration and, for the faster siblings, from waiting hours for the slowest one. The controller queue (12 s) is negligible because Rocket keeps the learner overallocated.</p>
+</div>
+</main>
+<script>
+(function(){
+const NS="http://www.w3.org/2000/svg";
+function el(n,a,txt){const e=document.createElementNS(NS,n);for(const k in a)e.setAttribute(k,a[k]);if(txt!==undefined)e.textContent=txt;return e;}
+const S0=104,S1=127,X0=60,X1=900;
+const X=s=>X0+(s-S0)/(S1+1-S0)*(X1-X0);
+const versions=[104,108,112,116,120,124];
+const vcol=["--v0","--v1","--v2","--v3","--v4","--v5"];
+const tl=document.getElementById("tl");
+const sIn=document.getElementById("s"), conv=document.getElementById("conv");
+function verOf(s){return Math.min(124,104+4*Math.floor((s-104)/4));}
+function drawTL(){
+  const s=+sIn.value, T=conv.checked?126:127, v=verOf(s);
+  tl.innerHTML="";
+  // version bands
+  versions.forEach((vv,i)=>{
+    const a=vv, b=(i<5?vv+4:127);
+    tl.appendChild(el("rect",{x:X(a),y:20,width:X(b)-X(a),height:22,fill:"var("+vcol[i]+")"}));
+    tl.appendChild(el("text",{x:(X(a)+X(b))/2,y:35,"text-anchor":"middle",class:"lbl",style:i>=3?"fill:#fff":""},"v"+vv));
+  });
+  tl.appendChild(el("text",{x:X0-6,y:35,"text-anchor":"end",class:"small"},"sampler"));
+  // slowest rollout bar
+  const y=80;
+  tl.appendChild(el("text",{x:X0-6,y:y+15,"text-anchor":"end",class:"small"},"slowest"));
+  versions.forEach((vv,i)=>{
+    const a=vv, b=(i<5?vv+4:125);
+    tl.appendChild(el("rect",{x:X(a),y:y,width:X(b)-X(a)-1,height:22,fill:"var("+vcol[i]+")"}));
+  });
+  tl.appendChild(el("rect",{x:X(125),y:y,width:X(127)-X(125)-1,height:22,fill:"var(--grade)","stroke-dasharray":"3 2",stroke:"var(--muted)"}));
+  tl.appendChild(el("text",{x:(X(125)+X(127))/2,y:y+15,"text-anchor":"middle",class:"small"},"grading"));
+  tl.appendChild(el("rect",{x:X(127),y:y,width:X(128)-X(127)-1,height:22,fill:"var(--hl)"}));
+  tl.appendChild(el("text",{x:(X(127)+X(128))/2,y:y+15,"text-anchor":"middle",class:"small",style:"fill:#fff"},"train"));
+  tl.appendChild(el("text",{x:X(104),y:y-6,class:"small"},"after a 24-min wait before the first request (no staleness) · 784 turns across six versions"));
+  // token marker
+  const xm=X(s)+ (X(s+1)-X(s))/2;
+  tl.appendChild(el("line",{x1:xm,y1:y-2,x2:xm,y2:y+26,stroke:"var(--hl)","stroke-width":3}));
+  // decomposition bar
+  const yb=140;
+  tl.appendChild(el("text",{x:X0-6,y:yb+14,"text-anchor":"end",class:"small"},"token"));
+  tl.appendChild(el("rect",{x:X(v),y:yb,width:Math.max(0,X(s)-X(v)),height:20,fill:"var(--lag)"}));
+  tl.appendChild(el("rect",{x:X(s),y:yb,width:X(T)-X(s),height:20,fill:"var(--wait)"}));
+  if(s>v) tl.appendChild(el("text",{x:(X(v)+X(s))/2,y:yb+34,"text-anchor":"middle",class:"small"},"lag "+(s-v)));
+  tl.appendChild(el("text",{x:(X(s)+X(T))/2,y:yb+14,"text-anchor":"middle",class:"lbl",style:"fill:#fff"},"generation → training: "+(T-s)+" steps"));
+  // axis
+  const g=el("g",{class:"axis"});
+  for(let k=104;k<=127;k++){
+    const x=X(k);
+    g.appendChild(el("line",{x1:x,y1:190,x2:x,y2:k%4===0||k===127?198:194}));
+    if(k%4===0||k===127) g.appendChild(el("text",{x:x,y:212,"text-anchor":"middle"},k));
+  }
+  g.appendChild(el("line",{x1:X0,y1:190,x2:X(128),y2:190}));
+  g.appendChild(el("text",{x:X1/2+30,y:228,"text-anchor":"middle"},"learner step"));
+  tl.appendChild(g);
+  document.getElementById("sval").textContent=s;
+  document.getElementById("kv-v").textContent="v"+v;
+  document.getElementById("kv-lag").textContent=(s-v)+((s-v)===1?" step":" steps");
+  document.getElementById("kv-wait").textContent=(T-s)+((T-s)===1?" step":" steps");
+  document.getElementById("kv-tot").textContent=(T-v)+" steps";
+}
+const dtIn=document.getElementById("dt");
+function drawWait(){
+  const dt=+dtIn.value; document.getElementById("dtval").textContent=dt+(dt===37?" (upper bound)":"");
+  const rows=[
+    ["Wait before first request","24 min (p. 7)","no — no token exists yet",0,24],
+    ["Fastest rollout waits for slowest","7.6 h (Fig. 4)","yes",7.6*60/dt,7.6*60],
+    ["Median rollout waits for slowest","5.6 h (Fig. 4)","yes",5.6*60/dt,5.6*60],
+    ["Group in controller queue","12 s (Fig. 4, p. 7)","yes",0.2/dt,0.2],
+    ["Training step 127","3 min (Fig. 4)","— (consumes the group)",null,3]
+  ];
+  const tb=document.getElementById("tb"); tb.innerHTML="";
+  rows.forEach(r=>{const tr=document.createElement("tr");
+    tr.innerHTML="<td>"+r[0]+"</td><td>"+r[1]+"</td><td>"+r[2]+"</td><td>"+(r[3]===null?"—":(r[3]<0.1?r[3].toFixed(3):r[3].toFixed(1)))+"</td>";tb.appendChild(tr);});
+  const b=document.getElementById("bars"); b.innerHTML="";
+  const max=7.6*60/5, W=760, x0=170;
+  [["fastest",7.6*60/dt],["median",5.6*60/dt],["controller queue",0.2/dt]].forEach((r,i)=>{
+    const y=12+i*34;
+    b.appendChild(el("text",{x:x0-8,y:y+15,"text-anchor":"end",class:"lbl"},r[0]));
+    b.appendChild(el("rect",{x:x0,y:y,width:Math.max(1,r[1]/max*W),height:20,fill:"var(--wait)"}));
+    b.appendChild(el("text",{x:x0+Math.max(1,r[1]/max*W)+6,y:y+15,class:"small"},r[1]<0.1?r[1].toFixed(3)+" steps":r[1].toFixed(1)+" steps"));
+  });
+}
+sIn.addEventListener("input",drawTL); conv.addEventListener("change",drawTL); dtIn.addEventListener("input",drawWait);
+drawTL(); drawWait();
+})();
+</script>
+</body>
+</html>

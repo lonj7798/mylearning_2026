@@ -1,0 +1,211 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Rollout Design Explorer</title>
+<style>
+:root{
+  --bg:#ffffff; --fg:#1d1f23; --muted:#5b6270; --card:#f5f6f8; --line:#d9dce2; --grid:#e7e9ee;
+  --accent:#2f6fd6; --c2:#b5487a; --c3:#1d8a4a; --c4:#a86a00; --bad:#c2392b; --ok:#1d8a4a; --warn:#a86a00;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#15171b; --fg:#e6e8ec; --muted:#9aa1ad; --card:#1f2228; --line:#353a43; --grid:#2a2e36;
+    --accent:#6ea2ff; --c2:#e27aa8; --c3:#4cc27d; --c4:#e0a640; --bad:#ff7a6b; --ok:#4cc27d; --warn:#e0a640;
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#15171b; --fg:#e6e8ec; --muted:#9aa1ad; --card:#1f2228; --line:#353a43; --grid:#2a2e36;
+  --accent:#6ea2ff; --c2:#e27aa8; --c3:#4cc27d; --c4:#e0a640; --bad:#ff7a6b; --ok:#4cc27d; --warn:#e0a640;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);font:15px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif}
+main{max-width:980px;margin:0 auto;padding:20px 16px 48px}
+h1{font-size:22px;margin:0 0 4px} h2{font-size:17px;margin:0 0 8px}
+p{margin:6px 0} .muted{color:var(--muted);font-size:13px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:14px 16px;margin:14px 0}
+.row{display:flex;flex-wrap:wrap;gap:14px;align-items:center;margin:8px 0}
+label{font-size:13px;color:var(--muted)}
+select,input[type=number]{background:var(--bg);color:var(--fg);border:1px solid var(--line);border-radius:6px;padding:4px 6px;font:inherit;font-size:13px}
+input[type=number]{width:100px} input[type=range]{width:170px}
+.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:12.5px}
+.grid3{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:10px;margin-top:8px}
+.stat{background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:10px}
+.big{font-size:20px;font-weight:700}
+svg{width:100%;height:auto;display:block;background:var(--bg);border:1px solid var(--line);border-radius:8px}
+svg text{fill:var(--muted);font-size:11px;font-family:inherit}
+.legend{display:flex;flex-wrap:wrap;gap:12px;font-size:12px;color:var(--muted);margin-top:6px}
+.sw{display:inline-block;width:14px;height:3px;vertical-align:middle;margin-right:4px}
+.zone{display:flex;height:26px;border-radius:6px;overflow:hidden;border:1px solid var(--line);position:relative;margin:8px 0}
+.zone div{display:flex;align-items:center;justify-content:center;font-size:11px;color:#fff;white-space:nowrap;overflow:hidden}
+.marker{position:absolute;top:-4px;bottom:-4px;width:2px;background:var(--fg)}
+table{border-collapse:collapse;width:100%;font-size:13px} th,td{border-bottom:1px solid var(--line);padding:5px 6px;text-align:left;vertical-align:top} th{color:var(--muted);font-weight:600}
+.scroll{overflow-x:auto}
+</style>
+</head>
+<body>
+<main>
+<h1>Rollout design explorer: group size, length shaping, temperature</h1>
+<p class="muted">Companion to ch-10. Formulas and parameter defaults come from the cited sources; the curves are computed in your browser. Where a value is an approximation made for this figure (for example, a pass-rate distribution built from bin midpoints), it is labeled.</p>
+
+<div class="card">
+<h2>1. Group size n and zero-variance groups</h2>
+<p>With a binary reward and pass rate p, all n rollouts of a group get the same reward with probability p<sup>n</sup> + (1 − p)<sup>n</sup>. Such a group has zero advantage and no gradient ([[dapo]] §3.2; llm-training ch-40 §5). The curves show the probability that a group is <b>informative</b>, 1 − p<sup>n</sup> − (1 − p)<sup>n</sup>.</p>
+<div class="row">
+  <label>n <select id="gn"><option>4</option><option selected>8</option><option>16</option><option>32</option><option>64</option><option>128</option><option>512</option></select></label>
+  <label>single-prompt pass rate p <input type="range" id="gp" min="0.001" max="0.999" step="0.001" value="0.05"> <span class="mono" id="gpv"></span></label>
+  <label>prompt pass-rate distribution <select id="gd">
+    <option value="bigmath">Big-Math 8B quintiles (midpoint approximation)</option>
+    <option value="uniform">uniform on [0, 1] (illustrative)</option>
+  </select></label>
+</div>
+<svg id="gsvg" viewBox="0 0 640 260" role="img" aria-label="Informative-group probability versus pass rate"></svg>
+<div class="legend" id="glegend"></div>
+<div class="grid3">
+  <div class="stat"><div class="muted">P(informative) at p for the selected n</div><div class="big" id="g1"></div></div>
+  <div class="stat"><div class="muted">expected informative fraction over the selected distribution</div><div class="big" id="g2"></div></div>
+  <div class="stat"><div class="muted">prompts sampled per informative group (dynamic sampling cost)</div><div class="big" id="g3"></div></div>
+</div>
+<p class="muted">Big-Math reports Llama-3.1-8B success-rate quintiles (64 rollouts) of 28.64%, 12.16%, 10.26%, 12.44%, 36.50% from easiest to hardest, the hardest bin being success below 20% [[big-math]] §3.1. This figure places each bin's mass at its midpoint (0.9, 0.7, 0.5, 0.3, 0.1); the real distribution inside the hardest bin includes prompts at p = 0, which are never informative, so the computed fraction is an upper bound. For comparison, BroRL <b>measured</b> a dynamic-sampling pass rate of 41% at N = 16 and 62% at N = 512 on its own prompt set [[brorl]] Table 2; that is data, not this formula.</p>
+<h2 style="margin-top:14px">MAI-Thinking-1 early exit</h2>
+<p>Sample G<sub>early</sub> = 16; continue to the full group (128 more in Rocket v1's problem worker) only if the early pass rate is in [0.05, 0.8], i.e. 1 to 12 successes out of 16 [[mai-thinking-1]] Sec. 3.1.3, 3.1.5, 3.6.2.</p>
+<div class="grid3">
+  <div class="stat"><div class="muted">P(prompt passes early filter) at p</div><div class="big" id="e1"></div></div>
+  <div class="stat"><div class="muted">expected rollouts spent on this prompt: 16 + 128·P</div><div class="big" id="e2"></div></div>
+  <div class="stat"><div class="muted">rollouts saved vs always sampling 144</div><div class="big" id="e3"></div></div>
+</div>
+</div>
+
+<div class="card">
+<h2>2. Length shaping near the limit</h2>
+<p><b>DAPO soft overlong punishment</b> [[dapo]] Eq. 13: 0 up to L<sub>max</sub> − L<sub>cache</sub>, then linear to −1 at L<sub>max</sub>, −1 beyond. Defaults: 16,384 expected + 4,096 buffer = 20,480 (§4.1). <b>MAI-Thinking-1 length penalty</b> [[mai-thinking-1]] Eq. 12: −w<sub>len</sub>·ρ<sub>q</sub>·|y|/ℓ<sub>max</sub>, with ρ<sub>q</sub> the problem's pass rate; w<sub>len</sub> = 0.25 up to 64k and 0 at 128k (Sec. 3.1.5).</p>
+<div class="row">
+  <label>DAPO L<sub>max</sub> <input type="number" id="lmax" value="20480" step="1024" min="2048"></label>
+  <label>DAPO L<sub>cache</sub> <input type="number" id="lcache" value="4096" step="512" min="1"></label>
+  <label>MAI ℓ<sub>max</sub> <select id="mlmax"><option value="8192">8k</option><option value="16384">16k</option><option value="32768">32k</option><option value="65536" selected>64k</option><option value="131072">128k</option></select></label>
+  <label>MAI pass rate ρ<sub>q</sub> <input type="range" id="mrho" min="0" max="1" step="0.01" value="0.8"> <span class="mono" id="mrhov"></span></label>
+  <label>response length |y| <input type="range" id="ly" min="0" max="131072" step="256" value="18432"> <span class="mono" id="lyv"></span></label>
+</div>
+<svg id="lsvg" viewBox="0 0 640 240" role="img" aria-label="Length penalty versus response length"></svg>
+<div class="legend"><span><span class="sw" style="background:var(--accent)"></span>DAPO soft overlong (added to correctness reward)</span><span><span class="sw" style="background:var(--c2)"></span>MAI −w<sub>len</sub>·R<sub>len</sub></span><span><span class="sw" style="background:var(--fg)"></span>selected |y|</span></div>
+<div class="grid3">
+  <div class="stat"><div class="muted">DAPO length term at |y|</div><div class="big" id="l1"></div></div>
+  <div class="stat"><div class="muted">MAI length term at |y|</div><div class="big" id="l2"></div></div>
+  <div class="stat"><div class="muted">MAI term for the same |y| on a hard problem (ρ = 0.1)</div><div class="big" id="l3"></div></div>
+</div>
+<p class="muted">MAI's penalty is applied at every length and scales with pass rate, so an easy problem pays more for the same length than a hard one; DAPO's term is zero until the buffer and does not depend on difficulty. MAI's ℓ<sub>max</sub> grows with its 8k → 128k doubling schedule (Sec. 3.1.3); w<sub>len</sub> is 0 at 128k, so the 128k option shows 0. Whether truncated responses should also be masked is contested: DAPO measured +6 AIME24 from overlong filtering (Table 1); Skywork-OR1 and Olmo 3 RL-Zero found masking hurt [[skywork-or1]] Exp. 3, [[olmo-3-rl-pipeline]] §6.</p>
+</div>
+
+<div class="card">
+<h2>3. Temperature: per-model zones</h2>
+<p>POLARIS swept rollout temperature for Qwen3-4B and reports three zones of AIME24 behavior [[polaris]]. Move the slider to see the zone. The zones are for that model only.</p>
+<div class="row"><label>T <input type="range" id="tt" min="0.3" max="2.0" step="0.01" value="1.4"> <span class="mono" id="ttv"></span></label></div>
+<div class="zone" id="tzone"></div>
+<p id="tmsg"></p>
+<div class="scroll"><table>
+<tr><th>Model</th><th>Reported setting or finding</th><th>Source</th></tr>
+<tr><td>Qwen3-4B (POLARIS)</td><td>stable 0.6–1.4; controlled exploration 1.4–1.55; collapse from 1.55; stages 1.4 → 1.45 → 1.5</td><td>[[polaris]]</td></tr>
+<tr><td>DeepSeek-R1-Distill-Qwen-7B (POLARIS)</td><td>stages 0.7 → 1.0 → 1.1</td><td>[[polaris]]</td></tr>
+<tr><td>R1-Distill 7B/32B (Skywork-OR1)</td><td>T = 1.0 chosen; at 0.6 entropy collapsed within about 100 steps</td><td>[[skywork-or1]] Exp. 4</td></tr>
+<tr><td>MAI-Thinking-1</td><td>top-p = 0.97 with top-p mask replay; without replay, divergence within a few steps</td><td>[[mai-thinking-1]] Sec. 3.1.3</td></tr>
+<tr><td>Olmo 3 (all runs)</td><td>temperature 1.0</td><td>[[olmo-3-rl-pipeline]] Table 49</td></tr>
+</table></div>
+</div>
+</main>
+<script>
+(function(){
+  "use strict";
+  const $ = id => document.getElementById(id);
+  const css = v => getComputedStyle(document.documentElement).getPropertyValue(v).trim();
+  const NS = "http://www.w3.org/2000/svg";
+  function el(tag, attrs, parent){ const e = document.createElementNS(NS, tag); for (const k in attrs) e.setAttribute(k, attrs[k]); if (parent) parent.appendChild(e); return e; }
+  function axes(svg, W, H, m, xt, yt, xl, yl, fx, fy){
+    svg.innerHTML = "";
+    const g = el("g", {}, svg);
+    yt.forEach(v => { const y = fy(v); el("line", {x1:m.l, x2:W-m.r, y1:y, y2:y, stroke:css("--grid")}, g); const t = el("text", {x:m.l-6, y:y+4, "text-anchor":"end"}, g); t.textContent = v; });
+    xt.forEach(v => { const x = fx(v); el("line", {x1:x, x2:x, y1:m.t, y2:H-m.b, stroke:css("--grid")}, g); const t = el("text", {x:x, y:H-m.b+14, "text-anchor":"middle"}, g); t.textContent = typeof v === "number" && v >= 1000 ? (v/1024)+"k" : v; });
+    const tx = el("text", {x:(m.l+W-m.r)/2, y:H-4, "text-anchor":"middle"}, g); tx.textContent = xl;
+    const ty = el("text", {x:12, y:(m.t+H-m.b)/2, "text-anchor":"middle", transform:`rotate(-90 12 ${(m.t+H-m.b)/2})`}, g); ty.textContent = yl;
+    return g;
+  }
+  function path(g, pts, color, w){ el("path", {d:"M"+pts.map(p => p[0].toFixed(1)+","+p[1].toFixed(1)).join("L"), fill:"none", stroke:color, "stroke-width":w}, g); }
+
+  // Panel 1
+  const NS_LIST = [8, 16, 128, 512];
+  const COLORS = ["--c4","--accent","--c3","--c2"];
+  const informative = (p, n) => 1 - Math.pow(p, n) - Math.pow(1 - p, n);
+  function binomPMF(k, n, p){ let c = 1; for (let i = 0; i < k; i++) c = c * (n - i) / (i + 1); return c * Math.pow(p, k) * Math.pow(1 - p, n - k); }
+  function dist(kind){
+    if (kind === "bigmath") return [[0.9,0.2864],[0.7,0.1216],[0.5,0.1026],[0.3,0.1244],[0.1,0.3650]];
+    const out = []; for (let i = 0; i < 100; i++) out.push([(i + 0.5)/100, 0.01]); return out;
+  }
+  function panel1(){
+    const n = parseInt($("gn").value,10), p = parseFloat($("gp").value), d = dist($("gd").value);
+    $("gpv").textContent = p.toFixed(3);
+    const svg = $("gsvg"), W = 640, H = 260, m = {l:44, r:14, t:12, b:34};
+    const fx = x => m.l + x*(W-m.l-m.r), fy = y => H-m.b - y*(H-m.t-m.b);
+    const g = axes(svg, W, H, m, [0,0.2,0.4,0.6,0.8,1], [0,0.25,0.5,0.75,1], "pass rate p", "P(informative)", fx, fy);
+    const all = NS_LIST.includes(n) ? NS_LIST : NS_LIST.concat([n]);
+    all.forEach((nn, i) => {
+      const pts = []; for (let j = 0; j <= 400; j++){ const x = j/400; pts.push([fx(x), fy(informative(x, nn))]); }
+      const col = nn === n ? css("--fg") : css(COLORS[i % COLORS.length]);
+      path(g, pts, col, nn === n ? 3 : 1.5);
+    });
+    el("line", {x1:fx(p), x2:fx(p), y1:m.t, y2:H-m.b, stroke:css("--bad"), "stroke-dasharray":"4 3"}, g);
+    $("glegend").innerHTML = all.map((nn, i) => `<span><span class="sw" style="background:${nn === n ? css("--fg") : css(COLORS[i % COLORS.length])}"></span>n = ${nn}${nn === n ? " (selected)" : ""}</span>`).join("") + `<span><span class="sw" style="background:${css("--bad")}"></span>selected p</span>`;
+    const pi = informative(p, n);
+    $("g1").textContent = (100*pi).toFixed(1) + "%";
+    let f = 0; d.forEach(([q, w]) => f += w * informative(q, n));
+    $("g2").textContent = (100*f).toFixed(1) + "%";
+    $("g3").textContent = f > 0 ? (1/f).toFixed(2) : "∞";
+    let pe = 0; for (let k = 1; k <= 12; k++) pe += binomPMF(k, 16, p);
+    $("e1").textContent = (100*pe).toFixed(1) + "%";
+    const spent = 16 + 128*pe;
+    $("e2").textContent = spent.toFixed(1);
+    $("e3").textContent = (144 - spent).toFixed(1);
+  }
+  ["gn","gp","gd"].forEach(id => $(id).addEventListener("input", panel1));
+
+  // Panel 2
+  function dapo(y, Lmax, Lc){ if (y <= Lmax - Lc) return 0; if (y <= Lmax) return ((Lmax - Lc) - y)/Lc; return -1; }
+  function mai(y, rho, lmax){ const w = lmax >= 131072 ? 0 : 0.25; return -w * rho * Math.min(y, lmax) / lmax; }
+  function panel2(){
+    let Lmax = parseInt($("lmax").value,10) || 20480, Lc = parseInt($("lcache").value,10) || 4096;
+    if (Lc >= Lmax) Lc = Lmax - 1;
+    const lmaxM = parseInt($("mlmax").value,10), rho = parseFloat($("mrho").value), y = parseInt($("ly").value,10);
+    $("mrhov").textContent = rho.toFixed(2); $("lyv").textContent = y.toLocaleString();
+    const svg = $("lsvg"), W = 640, H = 240, m = {l:44, r:14, t:12, b:34};
+    const xmax = 131072;
+    const fx = x => m.l + x/xmax*(W-m.l-m.r), fy = v => m.t + (-v)/1.05*(H-m.t-m.b);
+    const g = axes(svg, W, H, m, [0,16384,32768,65536,98304,131072], [0,-0.25,-0.5,-0.75,-1], "response length (tokens)", "length term", fx, v => fy(v));
+    const pd = [], pm = [];
+    for (let j = 0; j <= 600; j++){ const x = j/600*xmax; pd.push([fx(x), fy(dapo(x, Lmax, Lc))]); pm.push([fx(x), fy(mai(x, rho, lmaxM))]); }
+    path(g, pd, css("--accent"), 2); path(g, pm, css("--c2"), 2);
+    el("line", {x1:fx(y), x2:fx(y), y1:m.t, y2:H-m.b, stroke:css("--fg"), "stroke-dasharray":"4 3"}, g);
+    $("l1").textContent = dapo(y, Lmax, Lc).toFixed(3);
+    $("l2").textContent = mai(y, rho, lmaxM).toFixed(3) + (y > lmaxM ? " (|y| > ℓmax: truncated)" : "");
+    $("l3").textContent = mai(y, 0.1, lmaxM).toFixed(3);
+  }
+  ["lmax","lcache","mlmax","mrho","ly"].forEach(id => $(id).addEventListener("input", panel2));
+
+  // Panel 3
+  const TMIN = 0.3, TMAX = 2.0;
+  const zones = [[TMIN,0.6,"below swept range","--muted"],[0.6,1.4,"robust generation","--c3"],[1.4,1.55,"controlled exploration","--c4"],[1.55,TMAX,"performance collapse","--bad"]];
+  function panel3(){
+    const t = parseFloat($("tt").value); $("ttv").textContent = t.toFixed(2);
+    const z = $("tzone"); z.innerHTML = "";
+    zones.forEach(([a,b,name,c]) => { const d = document.createElement("div"); d.style.width = (100*(b-a)/(TMAX-TMIN)) + "%"; d.style.background = css(c); d.textContent = name; d.title = name + " (" + a + "–" + b + ")"; z.appendChild(d); });
+    const mk = document.createElement("div"); mk.className = "marker"; mk.style.left = (100*(t-TMIN)/(TMAX-TMIN)) + "%"; z.appendChild(mk);
+    const zz = zones.find(([a,b]) => t >= a && t <= b) || zones[zones.length-1];
+    $("tmsg").innerHTML = `Qwen3-4B at T = ${t.toFixed(2)}: <b>${zz[2]}</b>` + (zz[2] === "below swept range" ? " (POLARIS reports the stable zone from 0.6; values below were not reported)." : ". POLARIS started this model at 1.4, the highest value before accuracy dropped.");
+  }
+  $("tt").addEventListener("input", panel3);
+
+  function all(){ panel1(); panel2(); panel3(); }
+  all();
+  if (window.matchMedia) window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", all);
+})();
+</script>
+</body>
+</html>

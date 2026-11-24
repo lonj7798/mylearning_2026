@@ -1,0 +1,229 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Grader Ladder</title>
+<style>
+:root{
+  --bg:#ffffff; --fg:#1d1f23; --muted:#5b6270; --card:#f5f6f8; --line:#d9dce2; --grid:#e7e9ee;
+  --accent:#2f6fd6; --accent2:#b5487a; --ok:#1d8a4a; --bad:#c2392b; --warn:#a86a00; --sel:#e8f0fd;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#15171b; --fg:#e6e8ec; --muted:#9aa1ad; --card:#1f2228; --line:#353a43; --grid:#2a2e36;
+    --accent:#6ea2ff; --accent2:#e27aa8; --ok:#4cc27d; --bad:#ff7a6b; --warn:#e0a640; --sel:#1e2b44;
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#15171b; --fg:#e6e8ec; --muted:#9aa1ad; --card:#1f2228; --line:#353a43; --grid:#2a2e36;
+  --accent:#6ea2ff; --accent2:#e27aa8; --ok:#4cc27d; --bad:#ff7a6b; --warn:#e0a640; --sel:#1e2b44;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);font:15px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif}
+main{max-width:1000px;margin:0 auto;padding:20px 16px 48px}
+h1{font-size:22px;margin:0 0 4px} h2{font-size:17px;margin:0 0 8px} h3{font-size:15px;margin:10px 0 4px}
+p{margin:6px 0} .muted{color:var(--muted);font-size:13px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:14px 16px;margin:14px 0}
+.ladder{display:grid;grid-template-columns:minmax(220px,300px) 1fr;gap:14px}
+@media (max-width:700px){ .ladder{grid-template-columns:1fr} }
+.rungs{display:flex;flex-direction:column-reverse;gap:6px}
+.rung{text-align:left;background:var(--bg);color:var(--fg);border:1px solid var(--line);border-radius:8px;padding:8px 10px;cursor:pointer;font:inherit;font-size:13.5px}
+.rung small{display:block;color:var(--muted);font-size:11.5px}
+.rung[aria-pressed="true"]{background:var(--sel);border-color:var(--accent)}
+.detail{background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:12px 14px}
+.detail ul{margin:4px 0 4px 18px;padding:0} .detail li{margin:2px 0}
+.kv{display:grid;grid-template-columns:110px 1fr;gap:4px 10px;font-size:13.5px}
+.kv div:nth-child(odd){color:var(--muted)}
+.row{display:flex;flex-wrap:wrap;gap:14px;align-items:center;margin:8px 0}
+label{font-size:13px;color:var(--muted)}
+select{background:var(--bg);color:var(--fg);border:1px solid var(--line);border-radius:6px;padding:4px 6px;font:inherit;font-size:13px}
+input[type=range]{width:160px}
+button.sec{background:transparent;color:var(--accent);border:1px solid var(--accent);border-radius:6px;padding:4px 10px;font:inherit;font-size:12.5px;cursor:pointer}
+.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:12.5px}
+.grid3{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:10px;margin-top:8px}
+.stat{background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:10px}
+.big{font-size:20px;font-weight:700}
+.bars{display:flex;flex-direction:column;gap:5px;margin-top:8px}
+.bar{display:grid;grid-template-columns:150px 1fr 56px;gap:8px;align-items:center;font-size:12.5px}
+.track{height:14px;background:var(--grid);border-radius:4px;overflow:hidden}
+.fill{height:100%;background:var(--accent2)}
+.fill.low{background:var(--ok)}
+.scroll{overflow-x:auto}
+</style>
+</head>
+<body>
+<main>
+<h1>The grader ladder</h1>
+<p class="muted">Companion to ch-11. Each rung lists what the grader sees, its typical error, and measured numbers with their source. The calculator in part 2 combines measured recall values; any input a source does not report is labeled and left for you to set. Part 3 plots measured master-key false-positive rates.</p>
+
+<div class="card">
+<h2>1. Rungs (cheap and narrow at the bottom, expensive and general at the top)</h2>
+<div class="ladder">
+  <div class="rungs" id="rungs"></div>
+  <div class="detail" id="detail"></div>
+</div>
+</div>
+
+<div class="card">
+<h2>2. Hybrid grader calculator: rules first, model verifier on rule-rejected responses</h2>
+<p>For a binary reward, the expected reward of a correct response is the grader's true-positive rate (TPR) and of an incorrect response its false-positive rate (FPR). The expected reward gap TPR − FPR is the signal a group-relative advantage can use; a grader with TPR − FPR = 0 gives no signal. [[verifier-pitfalls]] measured hybrid RL +2.3 average (55.0 → 57.3) on Qwen2.5-7B (Table 2).</p>
+<div class="row">
+  <label>rule verifier recall <select id="rr">
+    <option value="0.88" selected>0.88 — HF Math-Verify on Skywork-OR1 outputs</option>
+    <option value="0.86">0.86 — Qwen-Math on Skywork-OR1 outputs</option>
+    <option value="0.78">0.78 — VERL on Skywork-OR1 outputs</option>
+    <option value="0.95">0.95 — HF Math-Verify on MATH outputs</option>
+    <option value="0.47">0.47 — HF Math-Verify on WebInstruct-Verified</option>
+  </select></label>
+  <label>model verifier recall on rule-rejected <select id="mr">
+    <option value="0.78" selected>0.78 — xVerify-3B-I</option>
+    <option value="0.86">0.86 — general-verifier</option>
+    <option value="0.62">0.62 — R1-Distill-Verifier-1.5B</option>
+    <option value="0.59">0.59 — DS-R1-Distill-Qwen-7B</option>
+    <option value="0.51">0.51 — Qwen2.5-7B</option>
+    <option value="0">0 — no model verifier (rules only)</option>
+  </select></label>
+</div>
+<div class="row">
+  <label>rule FPR on incorrect responses <input type="range" id="rf" min="0" max="0.2" step="0.001" value="0"> <span class="mono" id="rfv"></span></label>
+  <label>model verifier FPR on rule-rejected incorrect responses <input type="range" id="mf" min="0" max="1" step="0.001" value="0"> <span class="mono" id="mfv"></span></label>
+  <label>true pass rate of the batch <input type="range" id="tp" min="0.01" max="0.99" step="0.01" value="0.5"> <span class="mono" id="tpv"></span></label>
+</div>
+<p class="muted">Recall values: [[verifier-pitfalls]] Table 5 (rules, precision ≈ 0.99–1.00) and Table 1 (model verifiers on HF-rejected responses). Neither table reports an FPR on incorrect responses, so both FPR sliders start at 0 and are yours to set. The buttons below set the model FPR to a measured adversarial rate, which models a policy that has found that exploit.</p>
+<div class="row">
+  <button class="sec" data-mf="0.002">xVerify-3B-I attack success 0.2%</button>
+  <button class="sec" data-mf="0.221">general-verifier attack success 22.1%</button>
+  <button class="sec" data-mf="0.35">R1-Distill-Verifier-1.5B attack success 35.0%</button>
+  <button class="sec" data-mf="0.668">Qwen2.5-72B master-key FPR 66.8%</button>
+  <button class="sec" data-mf="0">reset to 0</button>
+</div>
+<div class="grid3">
+  <div class="stat"><div class="muted">hybrid TPR (recall)</div><div class="big" id="h1"></div><div class="muted" id="h1b"></div></div>
+  <div class="stat"><div class="muted">hybrid FPR</div><div class="big" id="h2"></div></div>
+  <div class="stat"><div class="muted">reward gap TPR − FPR (rules only → hybrid)</div><div class="big" id="h3"></div></div>
+  <div class="stat"><div class="muted">measured pass rate of the batch (true → measured)</div><div class="big" id="h4"></div></div>
+  <div class="stat"><div class="muted">correct responses scored 0 (share of batch)</div><div class="big" id="h5"></div></div>
+  <div class="stat"><div class="muted">incorrect responses scored 1 (share of batch)</div><div class="big" id="h6"></div></div>
+</div>
+<p class="muted">Formulas: TPR = r<sub>rule</sub> + (1 − r<sub>rule</sub>)·r<sub>model</sub>; FPR = f<sub>rule</sub> + (1 − f<sub>rule</sub>)·f<sub>model</sub>; measured pass rate = p·TPR + (1 − p)·FPR. The model verifier's recall in Table 1 was measured on HF-rejected responses, which is the population it sees in a hybrid; applying it after a different rule verifier is an approximation.</p>
+</div>
+
+<div class="card">
+<h2>3. Master-key false-positive rates of reference-based judges</h2>
+<p>Responses such as a blank space, ".", ":", "Thought process:", "Solution" or 解, graded against a reference answer [[master-rm-one-token]] Table 1.</p>
+<div class="row"><label>show <select id="mk"><option value="avg">overall average FPR</option><option value="worst">worst case FPR</option></select></label></div>
+<div class="bars" id="mkbars"></div>
+<p class="muted">CoT prompting did not fix this (Qwen2.5-7B average FPR 12.6 → 40.4, Table 3a, column order inferred by the card's reader). Training with truncated reasoning-opener negatives did (Master-RM rows). FPR was lowest around 7–14B in the Qwen2.5-Instruct family and higher at 32B and 72B (Fig. 4).</p>
+</div>
+</main>
+<script>
+(function(){
+  "use strict";
+  const $ = id => document.getElementById(id);
+  const RUNGS = [
+    {name:"1. String / math-equivalence rule", sub:"Math-Verify, math_dapo, IFEval checkers",
+     sees:"extracted final answer and reference", out:"0/1 (or ±1)",
+     err:"false negatives on equivalent forms (0.5π vs 90°, 3 hours vs 180 minutes); extraction failures",
+     cost:"microseconds; symbolic timeouts (verl wrapper: 30 s, returns 0)",
+     nums:["precision ≈ 0.99–1.00; recall averaged 86%; Skywork-OR1 outputs 0.78 / 0.86 / 0.88 (VERL / Qwen-Math / HF) — [[verifier-pitfalls]] Table 5",
+           "HF Math-Verify recall 47% on WebInstruct-Verified (general science) — [[verifier-pitfalls]] §4.3",
+           "rule matching agreed with Gemini on 22.2% of correct non-math answers — [[general-reasoner-verifier]] §5.3"],
+     impl:"verl math_verify.py (gold first, max over extracted predictions); verl math_dapo.py (last 300 chars, exact string); open-instruct MathVerifier (4 extraction paths)"},
+    {name:"2. Code execution", sub:"unit tests, F2P/P2P, stdout match",
+     sees:"program or patch, tests, sandbox", out:"pass/fail or pass rate",
+     err:"weak tests (false positives), flaky or toxic tests (false negatives), formatting in stdout match",
+     cost:"seconds to minutes per rollout; sandbox capacity",
+     nums:["fewer than 20% of generated tests distinguish correct from incorrect patches for most problems — [[r2e-gym]] §4.2",
+           "Kimi k1.5: 50 tests per problem, test valid if ≥ 7/10 reference submissions agree; 323 of 1,000 problems kept — [[kimi-k1-5-recipe]] §2.3.5"],
+     impl:"slime coding agent: fresh-sandbox grading of the diff; AReaL Daytona stdout.strip() equality; Olmo 3 code verifier on AWS Lambda"},
+    {name:"3. Discriminative model verifier", sub:"xVerify",
+     sees:"question, reference, response", out:"0/1 from one forward pass",
+     err:"false positives under adversarial patterns (low for the measured models)",
+     cost:"one forward pass per response",
+     nums:["xVerify-3B-I precision / recall 0.90 / 0.78 on HF-rejected responses — [[verifier-pitfalls]] Table 1",
+           "attack success: xVerify-0.5B-I 0.0%, xVerify-3B-I 0.2% — Table 3",
+           "training reward within 0.004 of GPT-4o oracle, no late collapse — §6.2"],
+     impl:"used as the fallback stage of a hybrid grader"},
+    {name:"4. Generative verifier / reference judge", sub:"General-Verifier, LLM judge with reference",
+     sees:"question, reference, response; writes reasoning then a verdict", out:"verdict parsed to 0/1 or a score",
+     err:"false positives on content-free 'master keys'; hacking by single symbols and gibberish",
+     cost:"one generation per response; parsing failures",
+     nums:["generative verifier as RL reward hacked after about 450 iterations — [[verifier-pitfalls]] §5.2",
+           "R1-Distill-Verifier-1.5B attack success 35.0% — Table 3",
+           "Qwen2.5-72B master-key FPR 66.8% average / 90.9% worst — [[master-rm-one-token]] Table 1",
+           "reference answer lowered GPT-4 math failures 14/20 → 3/20 — [[judge-llm-bias]] Table 4"],
+     impl:"open-instruct LMJudgeVerifier + web_instruct_general_verifier template; AReaL judge on first 200 characters"},
+    {name:"5. Rubric / checklist judge", sub:"RaR, RLCF, per-rubric binary judging",
+     sees:"prompt, per-prompt rubric or checklist, response", out:"per-item scores aggregated (weighted or implicit)",
+     err:"ambiguous rubric items; upward pressure on length and style",
+     cost:"one judge call per item, often several samples per item",
+     nums:["HealthBench: RaR-Implicit 31.2 vs Likert 25.5 vs generic rubrics 12.5 — [[rubrics-as-rewards]] Fig. 2",
+           "reference-conditioned rubrics 35.9 vs 32.0 without reference vs 23.9 Likert — Table 1",
+           "candidate-based checklists IFEval 77.3 vs 74.3 direct — [[rlcf-checklists]] Table 6",
+           "per-item binary rubric judge agreed with humans 93.95% vs 37.33% holistic — [[multichallenge]] Table 4",
+           "25 judge samples: 92 h vs 40 h for 5 on one 8×H100 node — [[rlcf-checklists]] §5.7"],
+     impl:"open-instruct RubricVerifier (0–2 scores normalized, weighted by |w|); MAI per-rubric binary judgments averaged over passes"},
+    {name:"6. Generative RM with voting", sub:"DeepSeek-GRM, GenRM, MAI RM",
+     sees:"prompt and one or more responses; generates principles and critique", out:"score per response, k samples aggregated",
+     err:"unfaithful principles or critiques; cost of k samples",
+     cost:"k generations per response",
+     nums:["DeepSeek-GRM-27B 67.9 (Voting@1) → 70.6 (@8) → 72.8 (@32 with meta-RM), RM benchmarks — [[deepseek-grm]] Tables 2–3",
+           "STaR-DPO judge 81.9% RewardBench; majority@32 +1.6 to +4.9% — [[generative-reward-models]] §5"],
+     impl:"MAI RM: k-way 1–5 scores as text, applied cyclically over rotations, reward = P(score = 5) — [[mai-thinking-1]] Sec. 3.4.1"},
+    {name:"7. Pairwise / group judge", sub:"Rocket group graders, BRPO",
+     sees:"several rollouts of the same problem", out:"preferences or relative scores",
+     err:"position bias; outlier references making one-sided groups",
+     cost:"runs after the slowest rollout of the group; per pair or per group",
+     nums:["GPT-4 order consistency 65.0%, GPT-3.5 46.2%, Claude-v1 23.8% — [[judge-llm-bias]] Table 2",
+           "pairwise vs scalar RM: length 1,292 vs 1,872, self-explanation 58 vs 417 tokens — [[writing-zero]] Table 3"],
+     impl:"Rocket: group graders on the problem worker; Rocket v1: LLM pairwise comparisons, user-defined aggregation policy — [[mai-rl-infrastructure]] p. 3, [[mai-thinking-1]] Sec. 3.6.3"}
+  ];
+  let sel = 0;
+  function renderRungs(){
+    const box = $("rungs"); box.innerHTML = "";
+    RUNGS.forEach((r, i) => {
+      const b = document.createElement("button"); b.className = "rung"; b.setAttribute("aria-pressed", i === sel ? "true" : "false");
+      b.innerHTML = r.name + "<small>" + r.sub + "</small>";
+      b.addEventListener("click", () => { sel = i; renderRungs(); renderDetail(); });
+      box.appendChild(b);
+    });
+  }
+  function renderDetail(){
+    const r = RUNGS[sel];
+    $("detail").innerHTML = `<h3 style="margin-top:0">${r.name}</h3>
+      <div class="kv"><div>sees</div><div>${r.sees}</div><div>output</div><div>${r.out}</div><div>typical error</div><div>${r.err}</div><div>cost</div><div>${r.cost}</div><div>open code</div><div>${r.impl}</div></div>
+      <h3>Measured</h3><ul>${r.nums.map(n => "<li>" + n + "</li>").join("")}</ul>`;
+  }
+
+  function calc(){
+    const rr = parseFloat($("rr").value), mr = parseFloat($("mr").value);
+    const rf = parseFloat($("rf").value), mf = parseFloat($("mf").value), p = parseFloat($("tp").value);
+    $("rfv").textContent = rf.toFixed(3); $("mfv").textContent = mf.toFixed(3); $("tpv").textContent = p.toFixed(2);
+    const tpr = rr + (1 - rr)*mr, fpr = rf + (1 - rf)*mf;
+    $("h1").textContent = tpr.toFixed(3); $("h1b").textContent = "rules only: " + rr.toFixed(3);
+    $("h2").textContent = fpr.toFixed(3);
+    $("h3").textContent = (rr - rf).toFixed(3) + " → " + (tpr - fpr).toFixed(3);
+    $("h4").textContent = p.toFixed(2) + " → " + (p*tpr + (1 - p)*fpr).toFixed(3);
+    $("h5").textContent = (100*p*(1 - tpr)).toFixed(1) + "%";
+    $("h6").textContent = (100*(1 - p)*fpr).toFixed(1) + "%";
+  }
+  ["rr","mr","rf","mf","tp"].forEach(id => $(id).addEventListener("input", calc));
+  document.querySelectorAll("button[data-mf]").forEach(b => b.addEventListener("click", () => { $("mf").value = b.dataset.mf; calc(); }));
+
+  const MK = [["Qwen2.5-72B",66.8,90.9],["LLaMA3-70B",80.6,95.1],["GPT-4o",14.6,53.6],["Claude-4",12.4,57.7],["GPT-o1",6.0,37.3],["General-Verifier",9.7,87.0],["Omni-Judge",14.3,54.1],["Master-RM-7B",0.1,2.9],["Master-RM-32B",0.8,5.4]];
+  function mk(){
+    const w = $("mk").value === "avg" ? 1 : 2, box = $("mkbars"); box.innerHTML = "";
+    MK.forEach(r => {
+      const v = r[w], d = document.createElement("div"); d.className = "bar";
+      d.innerHTML = `<div>${r[0]}</div><div class="track"><div class="fill${r[0].startsWith("Master") ? " low" : ""}" style="width:${v}%"></div></div><div class="mono">${v.toFixed(1)}%</div>`;
+      box.appendChild(d);
+    });
+  }
+  $("mk").addEventListener("input", mk);
+
+  renderRungs(); renderDetail(); calc(); mk();
+})();
+</script>
+</body>
+</html>

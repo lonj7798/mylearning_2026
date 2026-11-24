@@ -1,0 +1,114 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Algorithm by Domain</title>
+<style>
+  :root { --bg:#fafaf8; --panel:#fff; --ink:#1f2328; --muted:#5b6470; --rule:#d9dde3; --meas:#1f7a4d; --stat:#1d5fa8; --none:#8a919b; }
+  @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) { --bg:#16181c; --panel:#1e2126; --ink:#e6e8eb; --muted:#a0a8b3; --rule:#353a42; --meas:#4cc38a; --stat:#6aa6e8; --none:#6b7280; } }
+  :root[data-theme="dark"] { --bg:#16181c; --panel:#1e2126; --ink:#e6e8eb; --muted:#a0a8b3; --rule:#353a42; --meas:#4cc38a; --stat:#6aa6e8; --none:#6b7280; }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--ink); font:14px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif; }
+  main { max-width:1180px; margin:0 auto; padding:20px 16px 40px; }
+  h1 { font-size:19px; margin:0 0 4px; } p.sub { color:var(--muted); margin:0 0 14px; }
+  .panel { background:var(--panel); border:1px solid var(--rule); border-radius:8px; padding:16px; margin-bottom:18px; }
+  .row { display:flex; flex-wrap:wrap; gap:8px; margin-bottom:10px; align-items:center; }
+  .row .lab { font-size:12px; color:var(--muted); min-width:72px; }
+  .chip { border:1px solid var(--rule); background:var(--bg); color:var(--ink); border-radius:999px; padding:3px 11px; cursor:pointer; font:inherit; font-size:13px; }
+  .chip[aria-pressed="true"] { border-color:var(--ink); font-weight:600; }
+  input[type=search] { font:inherit; color:var(--ink); background:var(--panel); border:1px solid var(--rule); border-radius:6px; padding:4px 8px; min-width:0; width:260px; max-width:100%; }
+  .scroll { overflow-x:auto; }
+  table { border-collapse:collapse; width:100%; font-size:13px; min-width:860px; }
+  th, td { border-bottom:1px solid var(--rule); padding:6px 8px; text-align:left; vertical-align:top; }
+  th { color:var(--muted); font-weight:600; position:sticky; top:0; background:var(--panel); }
+  .tag { display:inline-block; font-size:11px; font-weight:600; border-radius:4px; padding:1px 6px; color:#fff; white-space:nowrap; }
+  .t-measured { background:var(--meas); } .t-stated { background:var(--stat); } .t-not { background:var(--none); }
+  .note { color:var(--muted); font-size:12.5px; }
+  #count { font-size:12.5px; color:var(--muted); }
+</style>
+</head>
+<body>
+<main>
+  <h1>Which RL algorithm, for which domain, and why</h1>
+  <p class="sub">Rows from ch-18 §2, built on the library's algorithm-crosswalk.md. "Measured" means the source prints a number for the reason; "stated" means a sentence without a number; "not stated" means the card gives no reason.</p>
+  <section class="panel">
+    <div class="row"><span class="lab">Domain</span><span id="domChips"></span></div>
+    <div class="row"><span class="lab">Reason</span>
+      <button class="chip" data-r="all" aria-pressed="true">any</button>
+      <button class="chip" data-r="measured" aria-pressed="false">measured</button>
+      <button class="chip" data-r="stated" aria-pressed="false">stated, no number</button>
+      <button class="chip" data-r="not" aria-pressed="false">not stated</button>
+    </div>
+    <div class="row"><span class="lab">Search</span><input type="search" id="q" placeholder="e.g. CISPO, MoE, PPO" aria-label="Search rows"><span id="count"></span></div>
+    <div class="scroll"><table>
+      <thead><tr><th>Domain</th><th>Source</th><th>Algorithm used</th><th>Why (stated)</th><th>Why not others (stated)</th><th>Reason</th><th>Location</th></tr></thead>
+      <tbody id="tb"></tbody>
+    </table></div>
+  </section>
+  <p class="note">Within-study comparisons (same data, same model) are the only evidence for ranking algorithms. A lab using a different algorithm on different data is not a comparison.</p>
+</main>
+<script>
+const R = [
+ ["IF","IFBench (Ai2)","GRPO, multi-constraint sum reward","GRPO > DPO on same prompts and verifiers","DPO: IFEval 79.67 vs 89.65 (after DPO); 76.89 vs 85.77 (after SFT)","measured","ifbench §4.6, Table 5"],
+ ["IF","Tülu 3","PPO, binary verifier α = 10","keep KL small: average drops as KL grows at low β","not stated","stated","rlvr-tulu3 §6, Fig. 21"],
+ ["IF","Olmo 3","OlmoRL (GRPO + DAPO + Dr. GRPO changes)","KL removal does not over-optimize or destabilize","PPO replaced; reason not stated","not","olmo-3-rl-pipeline §4.4.1"],
+ ["IF","GLM-4.5","GRPO with rules + RM + critique model","not stated","not stated","not","glm-4-5 §3.4"],
+ ["math/code","DAPO","GRPO + clip-higher, dynamic sampling, token-level loss, overlong shaping","AIME24 30 → 36 → 38 → 41 → 42 → 50 as changes are added","—","measured","dapo Table 1"],
+ ["math/code","Dr. GRPO","GRPO without 1/|o_i| and std division","the divisions bias the gradient; incorrect-response length stops growing","—","measured","dr-grpo §3.1–3.2, Fig. 5"],
+ ["math/code","MiniMax-M1","CISPO (clip stop-gradient IS weight; keep every token; no KL)","GRPO clipping dropped fork tokens after the first of 16 off-policy updates; CISPO = DAPO's AIME in 50% of steps","GRPO hurt zero-RL; DAPO clip-higher 'less effective' with 16 updates/batch; KL: not stated","measured","minimax-m1 §3.1, Fig. 2"],
+ ["math/code","Magistral","GRPO, no KL, ε_high 0.26–0.28, drop zero-advantage groups","ε_high keeps group entropy stable","KL: 'policy diverges substantially regardless'; entropy bonus unstable; proportional code reward −2% LCB","stated","magistral §2.1, §6.4, §7.4"],
+ ["math/code","GLM-4.5","GRPO, no KL; token-weighted loss for code","token-weighted loss converges faster on LiveCodeBench","multi-stage length: 80.6 vs 83.4 AIME24; KL: not stated","measured","glm-4-5 §3.2, Figs. 6–7"],
+ ["math/code","Qwen3","GRPO, large batch, many rollouts, off-policy","'beneficial' (no numbers)","not stated","not","qwen-3 §4.2"],
+ ["math/code","Qwen3 lightweight","on-policy distillation instead of RL","Qwen3-8B AIME'24 74.4 vs 67.6; 1,800 vs 17,920 GPU h","RL: pass@64 unchanged, ~10× GPU hours","measured","qwen-3-recipe Table 21"],
+ ["math/code","VAPO","PPO with value pretraining, length-adaptive GAE","AIME24 60.4 vs DAPO 50; −value pretraining → 11","one task family, no seeds","measured","vapo Table 1"],
+ ["math/code","rStar2-Agent","GRPO-RoC (tool-integrated math)","positives with tool errors still reinforced; RoC filters positives","step rewards / tool-error penalties: 'prone to reward hacking', no experiment","stated","rstar2-agent §2.2.3"],
+ ["search/agent","Search-R1","PPO (default), retrieved-token mask","PPO 'greater training stability'","GRPO: faster, reward collapse in long runs; GRPO higher in 3 of 4 settings","measured","search-r1 §5.1, Table 3"],
+ ["search/agent","ZeroSearch","REINFORCE (default)","REINFORCE 34.47, GRPO 33.17, PPO 32.67","—","measured","zerosearch Table 5"],
+ ["search/agent","DeepResearcher / ASearcher","GRPO, observation masking","not stated","not stated","not","deepresearcher §3.3; asearcher §3.4"],
+ ["search/agent","WebSailor","DUPO (duplicate non-zero-std groups)","~2–3× faster than DAPO dynamic sampling","DAPO resampling slows agentic RL","measured","websailor §4.2"],
+ ["search/agent","Tongyi DeepResearch","GRPO variant, strict on-policy, LOO baseline, exclude some negatives","LOO reduces variance; unfiltered negatives → collapse","'depends more on data and environment stability than on the specific algorithm'","stated","Tongyi §3.4.3"],
+ ["search/agent","GiGPO","GRPO + anchor-state step advantage","ALFWorld 72.8 → 86.1, WebShop 56.8 → 67.4 (1.5B, 3 seeds)","needs recurring states","measured","gigpo-verl-agent Table 1"],
+ ["search/agent","GLM-4.5 agentic","group-wise policy optimization (reward − group mean)","not stated","not stated","not","glm-4-5 §3.3.2"],
+ ["SWE","DeepSWE","GRPO++ (clip-high, no KL, no std, LOO, compact filtering, no entropy loss)","compact filtering prevents or delays collapse (curve only); no std removes difficulty bias","—","stated","deepswe §2.3, Fig. 6"],
+ ["SWE","SWE-RL","GRPO, similarity reward without execution","continuous reward beats discrete exact match","no execution-reward baseline","measured","swe-rl §3.6"],
+ ["SWE","GLM-4.5 / Kimi K2","group-wise outcome RL on tests","not stated","not stated","not","algorithm-crosswalk SWE row"],
+ ["chat","Tülu 3","length-normalized DPO before RLVR","selected over standard DPO and SimPO (Table 18)","—","measured","tulu-3"],
+ ["chat","Olmo 3","DPO with delta-learning pairs","pair quality depends on the contrast","—","stated","olmo-3-recipe §4.3"],
+ ["chat","Nemotron 3 Nano","RL against GenRM, circular pairwise; length control","verbosity −30%","DPO tested (AIME25 80.88 → 84.58), not shipped; reason not stated","measured","nemotron-ultra-recipe NR §3.3, App. C"],
+ ["chat","DeepSeek-V3.2","GRPO + rubric GenRM in mixed RL","joint stage avoids forgetting (no ablation)","not stated","stated","deepseek-v3.1 §3"],
+ ["chat","Kimi K2","K1.5 objective + self-critique rubric reward","not stated","not stated","not","kimi-k2 §3.2"],
+ ["chat","MiniMax-M1","CISPO with GenRM","GenRM length bias must be monitored online","offline mitigation 'frequently failed'","stated","minimax-m1 §4.2"],
+ ["chat","RLOO (paper)","leave-one-out baseline, RM-based RLHF","k = 4 win rates 77.9/43.7/64.1 vs PPO 67.6/29.2/32.0","no lab adoption recorded","measured","rloo Table 1"],
+ ["MoE","GSPO","sequence-level importance ratio","~10% experts change per update; GRPO needed Routing Replay","no lab adoption recorded","measured","gspo §5.3"],
+ ["MoE","DeepSeek-V3.2","GRPO + Keep Routing, Keep Sampling Mask, K3 KL, off-policy sequence masking","Keep Routing 'crucial for RL training stability of MoE'","std division: not stated","stated","deepseek-v3.1 §3.1"],
+ ["MoE","Nemotron 3 Nano","synchronous GRPO, masked IS, router frozen","batch 2,048 'making our updates on-policy'","single-environment RL: 'un-recoverable degradation'","stated","nemotron-ultra-recipe NR §3.2"],
+ ["MoE","MAI Thinking 1","GRPO + entropy-targeted upper clip, outer clip r_max = 50, routing and top-p mask replay","adaptive clip replaces entropy bonus; outer clip stops grad-norm spikes; no mask replay → divergence","GRPO over alternatives: not stated; keeping std division: not stated","stated","mai-thinking-1 Sec. 3.1"]
+];
+const DOMS = ["all","IF","math/code","search/agent","SWE","chat","MoE"];
+let dom="all", rs="all";
+const dc=document.getElementById("domChips");
+DOMS.forEach(d=>{ const b=document.createElement("button"); b.className="chip"; b.textContent=d; b.dataset.d=d; b.setAttribute("aria-pressed", d==="all"?"true":"false");
+  b.onclick=()=>{ dom=d; dc.querySelectorAll(".chip").forEach(x=>x.setAttribute("aria-pressed", x===b?"true":"false")); render(); }; dc.appendChild(b); dc.appendChild(document.createTextNode(" ")); });
+document.querySelectorAll("[data-r]").forEach(b=>b.onclick=()=>{ rs=b.dataset.r; document.querySelectorAll("[data-r]").forEach(x=>x.setAttribute("aria-pressed", x===b?"true":"false")); render(); });
+document.getElementById("q").oninput=render;
+function esc(s){ return s.replace(/&/g,"&amp;").replace(/</g,"&lt;"); }
+function render(){
+  const q=document.getElementById("q").value.toLowerCase().trim();
+  const tb=document.getElementById("tb"); tb.innerHTML=""; let n=0;
+  R.forEach(r=>{
+    if (dom!=="all" && r[0]!==dom) return;
+    if (rs!=="all" && r[5]!==rs) return;
+    if (q && !r.join(" ").toLowerCase().includes(q)) return;
+    n++;
+    const lbl = r[5]==="not" ? "not stated" : r[5];
+    const tr=document.createElement("tr");
+    tr.innerHTML=`<td>${r[0]}</td><td>${esc(r[1])}</td><td>${esc(r[2])}</td><td>${esc(r[3])}</td><td>${esc(r[4])}</td><td><span class="tag t-${r[5]}">${lbl}</span></td><td>${esc(r[6])}</td>`;
+    tb.appendChild(tr);
+  });
+  document.getElementById("count").textContent = `${n} of ${R.length} rows`;
+}
+render();
+</script>
+</body>
+</html>

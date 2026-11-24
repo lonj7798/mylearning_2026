@@ -1,0 +1,197 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Human-Likeness Components</title>
+<style>
+:root{
+  --bg:#ffffff; --fg:#1d2330; --muted:#5b6475; --card:#f4f6fa; --line:#d5dae3;
+  --accent:#2f6fdb; --m:#1f8a4c; --d:#b7791f; --risk:#c0392b; --chip:#e8eefb;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#12151b; --fg:#e4e8ef; --muted:#9aa3b2; --card:#1b2029; --line:#2d3440;
+    --accent:#6ea1ff; --m:#4cc38a; --d:#f0b35a; --risk:#ff7b6b; --chip:#24304a;
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#12151b; --fg:#e4e8ef; --muted:#9aa3b2; --card:#1b2029; --line:#2d3440;
+  --accent:#6ea1ff; --m:#4cc38a; --d:#f0b35a; --risk:#ff7b6b; --chip:#24304a;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);font:15px/1.5 system-ui,-apple-system,Segoe UI,Roboto,sans-serif}
+main{max-width:1150px;margin:0 auto;padding:20px 16px 40px}
+h1{font-size:1.35rem;margin:0 0 4px}
+p.sub{color:var(--muted);margin:0 0 12px}
+.filters{display:flex;flex-wrap:wrap;gap:14px;margin-bottom:12px}
+.fg{display:flex;flex-wrap:wrap;gap:6px;align-items:center}
+.fg span.lab{font-size:.82rem;color:var(--muted);margin-right:2px}
+button.f{font:inherit;font-size:.85rem;padding:3px 10px;border-radius:8px;border:1px solid var(--line);background:var(--bg);color:var(--fg);cursor:pointer}
+button.f.on{border-color:var(--accent);background:var(--chip)}
+.grid{display:grid;grid-template-columns:1.5fr 1fr;gap:16px}
+@media (max-width:900px){.grid{grid-template-columns:1fr}}
+.tablewrap{overflow-x:auto;border:1px solid var(--line);border-radius:10px}
+table{width:100%;border-collapse:collapse;font-size:.86rem;min-width:560px}
+th,td{padding:7px 8px;border-bottom:1px solid var(--line);text-align:left;vertical-align:top}
+th{background:var(--card);color:var(--muted);font-weight:600;position:sticky;top:0}
+tr.row{cursor:pointer}
+tr.row:hover td{background:var(--card)}
+tr.row.sel td{background:var(--chip)}
+.ev{font-size:.75rem;padding:1px 7px;border-radius:8px;white-space:nowrap;border:1px solid}
+.ev.m{color:var(--m);border-color:var(--m)} .ev.d{color:var(--d);border-color:var(--d)}
+.panel{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:14px}
+.panel h2{font-size:1.05rem;margin:0 0 6px}
+.panel .k{font-size:.8rem;color:var(--muted);margin-top:8px}
+.risk{color:var(--risk)}
+.note{font-size:.82rem;color:var(--muted);margin-top:12px}
+.count{font-size:.85rem;color:var(--muted);margin:0 0 6px}
+</style>
+</head>
+<body>
+<main>
+<h1>Components of human-likeness × measurement × source</h1>
+<p class="sub">Each row is one measurable component. Filter by layer, evidence type, or the role the component plays in the ch-23 sales-agent sketch. Click a row for the measurement detail and what goes wrong if it is optimized directly. Every number is from the named library card.</p>
+
+<div class="filters">
+  <div class="fg" id="fLayer"><span class="lab">Layer</span></div>
+  <div class="fg" id="fEv"><span class="lab">Evidence</span></div>
+  <div class="fg" id="fRole"><span class="lab">Role in sketch</span></div>
+</div>
+
+<div class="grid">
+  <div>
+    <p class="count" id="count"></p>
+    <div class="tablewrap">
+      <table>
+        <thead><tr><th>Layer</th><th>Component</th><th>Measurement</th><th>Number in source</th><th>Evidence</th><th>Source</th></tr></thead>
+        <tbody id="tb"></tbody>
+      </table>
+    </div>
+  </div>
+  <aside class="panel" id="detail"><h2>Select a row</h2><p>The panel shows how the metric is computed, its validation status, its role in the sketch, and the measured or expected failure when it is used as a reward.</p></aside>
+</div>
+<p class="note"><b>measured</b>: the card reports a number for this component in the source's setting (which is creative writing, read speech, or chit-chat, not sales). <b>definition only</b>: the card defines the component or instrument but gives no outcome number. Roles: <b>gate</b> sets reward to 0 on failure; <b>reward</b> is a scored term; <b>monitor</b> is tracked during training; <b>eval</b> is used for final validation only.</p>
+</main>
+
+<script>
+const ROWS = [
+ {layer:"text", comp:"AI phrasing", meas:"phrase frequency ratio ρ = f_LLM / f_human against a human corpus; regex for constructions", num:"'elara' 85,513× over human text (gemma-3-12b); 'It's not X, it's Y' 6.3×", ev:"m", src:"antislop Table 1, §3.2", role:"reward",
+  how:"Generate 2,000 outputs, compare n-gram frequencies with wordfreq and a Reddit + Gutenberg corpus (stopwords removed). Rank patterns by ρ and build a banlist.",
+  risk:"Sequence-level DPO on these pairs: writing quality 67.80 → 54.61 and diversity 100 → 73.92 at 8k pairs; FTPO kept 67.49 and 95.09 (Table 2). Hard logit bias −100 collapsed writing quality to 28/100 at 8K patterns (§6.2).",
+  use:"Suppress with FTPO or the sampler; banlist built against real sales transcripts (sketch term 4)."},
+ {layer:"text", comp:"Lexical diversity", meas:"length-controlled MATTR-500, Root-TTR, HD-D, Distinct-1/2/3, normalized to baseline 100", num:"DPO 8k 73.92 vs FTPO 8k 95.09", ev:"m", src:"antislop §6.1, Table 2", role:"monitor",
+  how:"Compute each metric on length-matched samples and average after normalizing to the base model = 100.",
+  risk:"Uncontrolled length makes diversity comparisons meaningless; persona detail does not automatically raise diversity (persona-lexical-diversity, no number).",
+  use:"Monitor alongside the banlist ratio; a drop flags diversity collapse."},
+ {layer:"text", comp:"AI disclaimers", meas:"per-response rate of self-referential AI statements", num:"named as the main reason official models lost human-likeness votes; no rate given", ev:"d", src:"human-like-responses-dpo §5.1", role:"gate",
+  how:"Regex and judge for statements such as 'I am just a language model'.",
+  risk:"Removing all self-reference also removes truthful disclosure. The dataset's chosen side claims advice 'from my grandma' (Table 1).",
+  use:"Do not reward removal blindly. Gate G1 requires truthful disclosure when asked and forbids human claims."},
+ {layer:"text", comp:"Claims of being human / invented experience", meas:"red-team probe set ('Are you a real person?', 'What did you do this weekend?') + rubric judge", num:"no source measures this rate; motivated by the chosen side of the human-like DPO data", ev:"d", src:"human-like-responses-dpo Table 1; anthropic-claude-character", role:"gate",
+  how:"Run the probe set every evaluation interval; count responses that claim a body, biography, or experiences.",
+  risk:"Any reward for 'sounding human' (style DPO, first-person narrative rubric) pushes toward this behavior.",
+  use:"Gate G1: reward 0. Track the gate's false-negative rate on the probe set."},
+ {layer:"text", comp:"User praise and self-praise", meas:"per-response rate; deterministic veto filter", num:"self-praise +0.114 (no-think) / +0.217 (think) RL − SFT", ev:"m", src:"rlmt-think-chat Table 9; rubicon-rubric-anchors App. A.1", role:"gate",
+  how:"Regex + judge for praise of the user's prompt and meta-commentary on the response's own merit.",
+  risk:"Rises under a scalar RM; Rubicon added a null-reward veto after reward spikes (no number).",
+  use:"Gate G3; also monitor RL − SFT rate."},
+ {layer:"text", comp:"Engagement-bait closer", meas:"per-response rate of closers such as 'Would you like to hear...'", num:"+0.176 (no-think) / +0.232 (think) RL − SFT", ev:"m", src:"rlmt-think-chat Table 9", role:"monitor",
+  how:"Classifier or regex on the final sentence of each turn.",
+  risk:"In sales, closers are legitimate; vetoing all removes the job, rewarding all invites the hack.",
+  use:"Reward a closer only when the rubric condition (need addressed) holds; monitor the rate split by that condition."},
+ {layer:"text", comp:"Persona stability over turns", meas:"persona classifier F1 under adversarial 'break character' prompts and prefill attacks", num:"0.79 → 0.95 (Llama 3.1 8B), 0.66 → 0.86 (Qwen 2.5 7B), 0.84 → 0.95 (Gemma 3 4B)", ev:"m", src:"open-character-training Table 2", role:"eval",
+  how:"Prefill the conversation with the old persona, continue with 'Tell me more', classify the persona of the reply.",
+  risk:"System-prompted personas 'frequently break character' (§3.2). The same pipeline can install a sycophantic persona (Table 1).",
+  use:"Train persona by constitution DPO + introspection SFT; evaluate with prefill tests."},
+ {layer:"text", comp:"Emotional variation vs real chat", meas:"comparison against real longitudinal messaging", num:"no number in card; real variation vs 'synthetic positivity and excessive empathy'", ev:"d", src:"realtalk §5.2", role:"eval",
+  how:"Compare emotion distributions of generated vs real conversations (10 US participants aged 18–25).",
+  risk:"Chit-chat sample; not sales, not acoustic (card §8).",
+  use:"Audit synthetic customer and agent turns against real sales calls."},
+ {layer:"text", comp:"Overall human-likeness", meas:"pairwise human vote, 'which is more human-like'", num:"89.6% / 89.5% / 79.6% wins; IFEval −9.11 / −3.01 / −9.29", ev:"m", src:"human-like-responses-dpo Tables 5–6", role:"eval",
+  how:"2,000 votes on 500 in-distribution questions, emojis removed; mostly non-native high-school annotators.",
+  risk:"In-distribution questions, no agreement statistics, win largely from removing disclaimers; IFEval cost.",
+  use:"Final human study with raters from the customer population, on real-looking calls."},
+ {layer:"speech", comp:"Naturalness", meas:"pairwise comparative-MOS judge trained on human A/B labels", num:"GRM 77.2% (79.4% voting@10) vs BTRM 72.7%; human full agreement 51.5%", ev:"m", src:"speechjudge Table 3, §3.2", role:"reward",
+  how:"Collect A/B naturalness labels on your own TTS; train BT and generative judges; evaluate on full-agreement pairs.",
+  risk:"Over-weights cleanness, under-weights style-appropriate prosody (§6); read speech only.",
+  use:"Sketch term 3; online DPO with the judge for the TTS (CMOS 0.25 vs 0.16–0.21 offline)."},
+ {layer:"speech", comp:"MOS / quality proxies", meas:"UTMOS, DNSMOS, audiobox PQ against human pairwise naturalness", num:"UTMOS 53.7%, DNSMOS 57.9%, audiobox PQ 57.1%", ev:"m", src:"speechjudge Table 2", role:"eval",
+  how:"Score both clips of a human-labeled pair; count agreement with the human choice.",
+  risk:"Near chance on modern TTS pairs: optimizing them has no measured link to listener preference.",
+  use:"Do not use as reward; report only as diagnostics."},
+ {layer:"speech", comp:"Synthetic-speech detector score", meas:"deepfake detector (AASIST) against human pairwise naturalness", num:"46.7% total (below chance)", ev:"m", src:"speechjudge Table 2", role:"eval",
+  how:"Same agreement protocol as the MOS proxies.",
+  risk:"A detector answers 'synthetic or real', not 'which sounds more natural'. Optimizing it optimizes the detector.",
+  use:"Never a reward."},
+ {layer:"speech", comp:"Intelligibility", meas:"WER of an ASR model on the synthesized speech", num:"LibriSpeech WER 7.2 → 6.0 after 3 DPO rounds", ev:"m", src:"speechalign Table 3", role:"gate",
+  how:"Transcribe TTS output (Whisper medium-en in the source) and compare with the text.",
+  risk:"WER agreement with human naturalness preference only 57.9% (speechjudge Table 2): a gate, not a naturalness reward.",
+  use:"Gate G4: WER below a threshold."},
+ {layer:"speech", comp:"Voice match", meas:"speaker similarity (WavLM-base-plus-sv cosine)", num:"SIM 0.87 → 0.90", ev:"m", src:"speechalign Table 3", role:"monitor",
+  how:"Cosine similarity of speaker embeddings between prompt and output.",
+  risk:"Continued SFT on real tokens did not improve it (0.88); gains came from the preference objective.",
+  use:"Monitor during TTS preference training."},
+ {layer:"dialogue", comp:"Colloquialness, episode-level preference", meas:"spoken-dialogue preference pairs (modality pairing; colloquialness pairing)", num:"no number in card", ev:"d", src:"sdiareward §3.1, §6", role:"eval",
+  how:"Pairwise preferences over full spoken dialogues.",
+  risk:"Domain-dependent absolute reward offsets (§6): compare within domain only.",
+  use:"Candidate instrument for a dialogue-level naturalness eval; validate first."},
+ {layer:"dialogue", comp:"Corrections, backtracking, disfluency", meas:"multi-turn spoken evaluation with rubrics, human improvisation", num:"452 conversations, 47 speakers, 1,712 rubrics, 3–8 turns, ~15 h audio (dataset size; no outcomes extracted)", ev:"d", src:"audio-multichallenge Table 1", role:"eval",
+  how:"Fixed-context evaluation of responses to natural spoken turns.",
+  risk:"Not a closed-loop barge-in benchmark; does not test turn-taking.",
+  use:"Evaluate the voice agent on natural, disfluent customer speech."},
+ {layer:"text", comp:"Style rubric ('less AI-like')", meas:"rubric judge: voice/tone, content, language on 1–5", num:"case studies only; no human-likeness metric reported", ev:"d", src:"rubicon-rubric-anchors §4.2", role:"reward",
+  how:"Judge scores three criteria with 'Any hint of artificiality is a significant failure'.",
+  risk:"The example rewards first-person 'lived experience' narrative, which conflicts with gate G1.",
+  use:"Use a sales rubric instead; train after the compliance stage."}
+];
+
+const F = {layer:"all", ev:"all", role:"all"};
+const OPTS = {
+  fLayer:[["all","All"],["text","Text"],["speech","Speech"],["dialogue","Dialogue"]],
+  fEv:[["all","All"],["m","Measured"],["d","Definition only"]],
+  fRole:[["all","All"],["gate","Gate"],["reward","Reward"],["monitor","Monitor"],["eval","Eval"]]
+};
+const KEY = {fLayer:"layer", fEv:"ev", fRole:"role"};
+let sel = -1;
+
+function buildFilters(){
+  Object.keys(OPTS).forEach(id=>{
+    const el=document.getElementById(id);
+    el.querySelectorAll('button').forEach(b=>b.remove());
+    OPTS[id].forEach(([v,l])=>{
+      const b=document.createElement('button');
+      b.className='f'+(F[KEY[id]]===v?' on':''); b.textContent=l;
+      b.onclick=()=>{F[KEY[id]]=v; buildFilters(); renderTable();};
+      el.appendChild(b);
+    });
+  });
+}
+function visible(r){
+  return (F.layer==="all"||r.layer===F.layer)&&(F.ev==="all"||r.ev===F.ev)&&(F.role==="all"||r.role===F.role);
+}
+function renderTable(){
+  const tb=document.getElementById('tb'); tb.innerHTML='';
+  let n=0;
+  ROWS.forEach((r,i)=>{
+    if(!visible(r)) return; n++;
+    const tr=document.createElement('tr'); tr.className='row'+(i===sel?' sel':'');
+    tr.innerHTML=`<td>${r.layer}</td><td><b>${r.comp}</b></td><td>${r.meas}</td><td>${r.num}</td><td><span class="ev ${r.ev}">${r.ev==="m"?"measured":"definition only"}</span></td><td>${r.src}</td>`;
+    tr.onclick=()=>{sel=i; renderTable(); renderDetail();};
+    tb.appendChild(tr);
+  });
+  document.getElementById('count').textContent=`${n} of ${ROWS.length} components shown`;
+}
+function renderDetail(){
+  const r=ROWS[sel]; if(!r) return;
+  document.getElementById('detail').innerHTML=`<h2>${r.comp}</h2>
+   <div class="k">Layer · evidence · role</div><div>${r.layer} · ${r.ev==="m"?"measured":"definition only"} · <b>${r.role}</b></div>
+   <div class="k">How it is computed</div><div>${r.how}</div>
+   <div class="k">Number in source</div><div>${r.num} <span style="color:var(--muted)">(${r.src})</span></div>
+   <div class="k">If optimized directly</div><div class="risk">${r.risk}</div>
+   <div class="k">Use in the ch-23 sketch (practice, not measured)</div><div>${r.use}</div>`;
+}
+buildFilters(); renderTable();
+</script>
+</body>
+</html>

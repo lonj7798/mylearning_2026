@@ -1,0 +1,165 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Lab Stage Recipes</title>
+<style>
+  :root { --bg:#fafaf8; --panel:#fff; --ink:#1f2328; --muted:#5b6470; --rule:#d9dde3;
+    --sft:#8a919b; --rl:#1d5fa8; --pref:#8a4fbf; --dist:#b26a00; --joint:#1f7a4d; }
+  @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) { --bg:#16181c; --panel:#1e2126; --ink:#e6e8eb; --muted:#a0a8b3; --rule:#353a42; --sft:#6b7280; --rl:#6aa6e8; --pref:#b98ae6; --dist:#f0b456; --joint:#4cc38a; } }
+  :root[data-theme="dark"] { --bg:#16181c; --panel:#1e2126; --ink:#e6e8eb; --muted:#a0a8b3; --rule:#353a42; --sft:#6b7280; --rl:#6aa6e8; --pref:#b98ae6; --dist:#f0b456; --joint:#4cc38a; }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--ink); font:14px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif; }
+  main { max-width:1100px; margin:0 auto; padding:20px 16px 40px; }
+  h1 { font-size:19px; margin:0 0 4px; } h2 { font-size:15px; margin:0 0 8px; }
+  p.sub { color:var(--muted); margin:0 0 14px; } .note { color:var(--muted); font-size:12.5px; }
+  .panel { background:var(--panel); border:1px solid var(--rule); border-radius:8px; padding:16px; margin-bottom:18px; }
+  .chips { display:flex; flex-wrap:wrap; gap:8px; margin-bottom:10px; }
+  .chip { border:1px solid var(--rule); background:var(--bg); color:var(--ink); border-radius:999px; padding:4px 12px; cursor:pointer; font:inherit; font-size:13px; }
+  .chip[aria-pressed="true"] { border-color:var(--ink); font-weight:600; }
+  .legend { display:flex; flex-wrap:wrap; gap:14px; font-size:12.5px; margin:4px 0 12px; }
+  .sw { display:inline-block; width:12px; height:12px; border-radius:2px; vertical-align:-2px; margin-right:4px; }
+  .lab { display:grid; grid-template-columns:minmax(0,150px) minmax(0,1fr); gap:10px; align-items:start; padding:8px 0; border-bottom:1px solid var(--rule); }
+  @media (max-width:640px) { .lab { grid-template-columns:minmax(0,1fr); } }
+  .labname { font-weight:600; font-size:13.5px; }
+  .track { display:flex; flex-wrap:wrap; gap:6px; align-items:stretch; }
+  .stage { border:0; border-radius:6px; padding:6px 9px; color:#fff; font:inherit; font-size:12.5px; text-align:left; cursor:pointer; max-width:100%; }
+  .stage small { display:block; opacity:.9; font-size:11px; }
+  .stage.dim { opacity:.22; }
+  .stage.sel { outline:3px solid var(--ink); outline-offset:1px; }
+  .arrow { color:var(--muted); align-self:center; }
+  .k-sft { background:var(--sft); } .k-rl { background:var(--rl); } .k-pref { background:var(--pref); } .k-dist { background:var(--dist); } .k-joint { background:var(--joint); }
+  .par { display:flex; flex-direction:column; gap:4px; border-left:2px dashed var(--rule); padding-left:6px; }
+  #detail dt { font-size:12px; color:var(--muted); margin-top:8px; } #detail dd { margin:2px 0 0; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Multi-domain RL recipes: stage order by lab</h1>
+  <p class="sub">Each row is one lab's post-training order as reported in the library cards. Stacked blocks run in parallel (specialists). Filter by domain to see in which stage each lab trains it. Click a block for details and the source location.</p>
+  <section class="panel">
+    <div class="chips" role="group" aria-label="Highlight a domain">
+      <button class="chip" data-d="all" aria-pressed="true">all stages</button>
+      <button class="chip" data-d="IF" aria-pressed="false">instruction following</button>
+      <button class="chip" data-d="reasoning" aria-pressed="false">reasoning (math / code / science)</button>
+      <button class="chip" data-d="agentic" aria-pressed="false">agentic (SWE / tools)</button>
+      <button class="chip" data-d="search" aria-pressed="false">search</button>
+      <button class="chip" data-d="alignment" aria-pressed="false">preference / helpfulness / safety</button>
+    </div>
+    <div class="legend">
+      <span><span class="sw" style="background:var(--sft)"></span>SFT / cold start</span>
+      <span><span class="sw" style="background:var(--rl)"></span>RL (one domain group)</span>
+      <span><span class="sw" style="background:var(--joint)"></span>RL (joint, many domains)</span>
+      <span><span class="sw" style="background:var(--pref)"></span>offline preference (DPO)</span>
+      <span><span class="sw" style="background:var(--dist)"></span>distillation / consolidation SFT</span>
+    </div>
+    <div id="labs"></div>
+  </section>
+  <section class="panel">
+    <h2>Selected stage</h2>
+    <div id="detail"><p class="note">Click a stage block.</p></div>
+  </section>
+  <section class="panel">
+    <h2>Stated reasons and measurements</h2>
+    <ul>
+      <li>DeepSeek-V3.2: joint stage to avoid "catastrophic forgetting issues commonly associated with multi-stage training paradigms" (deepseek-v3.1 card §3). No ablation printed.</li>
+      <li>Nemotron 3 Nano: single-environment training "often results in un-recoverable degradation of other benchmarks" (NR §3.2). No numbers.</li>
+      <li>MAI: final RL keeps a small proportion of STEM/coding data because reasoning otherwise degrades (Sec. 3.5). Joint agentic + STEM "helps to stabilize the RL climb" (p. 40).</li>
+      <li>No card prints a staged-vs-joint ablation (recipe-crosswalk.md).</li>
+    </ul>
+  </section>
+</main>
+<script>
+const LABS = [
+ {name:"MAI Thinking 1", stages:[
+   {par:[
+     {k:"rl", t:"STEM + competitive code climb", d:["reasoning"], n:"Longest climb; GRPO with entropy-targeted clip; 8k → 128k length doubling.", s:"mai-thinking-1 Fig. 12, Sec. 3.2"},
+     {k:"rl", t:"Agentic coding + tool use (with STEM)", d:["agentic","reasoning"], n:"SWE (265,617 verified envs) and >150 tool envs; run jointly with STEM, which 'helps to stabilize the RL climb'. No web-search climb.", s:"Sec. 3.3, p. 40"},
+     {k:"rl", t:"Helpfulness + safety climb", d:["IF","alignment"], n:"IF rewards primary in a lexicographic combination; safety-gated aggregator; style judge 0/1/2 after gates.", s:"Sec. 3.4"}
+   ]},
+   {k:"dist", t:"Consolidation SFT", d:["reasoning","agentic","IF","alignment"], n:"Mixture by sample / token: STEM+coding 56% / 89%, agentic 11% / 9%, helpfulness+safety 33% / 2%; 4 epochs, LR max 1e-5.", s:"Sec. 3.5, Table 10"},
+   {k:"joint", t:"Short final RL at 128k", d:["reasoning","IF","alignment","agentic"], n:"Keeps 'a small proportion of STEM and coding data' because reasoning otherwise degrades. Exact final-RL domain list beyond this is not given in the card.", s:"Sec. 3.5, p. 49"}
+ ]},
+ {name:"GLM-4.5", stages:[
+   {k:"sft", t:"Per-expert cold-start SFT", d:[], n:"A small set with extended CoT responses per expert.", s:"glm-4-5 §3.1"},
+   {par:[
+     {k:"rl", t:"Reasoning expert RL", d:["reasoning"], n:"GRPO without KL; 2-stage difficulty curriculum; single-stage 64K.", s:"§3.2"},
+     {k:"rl", t:"Agent expert RL", d:["agentic","search"], n:"Web search (final-answer accuracy) and SWE (tests); iterative self-distillation; asynchronous disaggregated slime.", s:"§3.3"},
+     {k:"rl", t:"General-chat expert RL", d:["IF","alignment","agentic"], n:"Holistic RL (~5,000 prompts), IF (7 major / 151 minor types), function calling, pathology RL.", s:"§3.4"}
+   ]},
+   {k:"dist", t:"Distill experts into one model (SFT)", d:["reasoning","agentic","search","IF","alignment"], n:"'Millions of samples' from the three experts plus long-context tasks, up to 128K.", s:"§3.1"},
+   {k:"rl", t:"General RL (described as the final stage)", d:["IF","alignment"], n:"The report calls general RL the final stage of post-training; the cards do not settle whether it runs on the unified model or is the General-chat expert's RL.", s:"§3.4 (ambiguous)"}
+ ]},
+ {name:"Qwen3 (flagship)", stages:[
+   {k:"sft", t:"Long-CoT cold start", d:[], n:"Filters out queries with multiple sub-questions, general text generation, or answerable without CoT.", s:"qwen-3 §4.1"},
+   {k:"rl", t:"Reasoning RL", d:["reasoning"], n:"3,995 query–verifier pairs; GRPO; AIME'24 70.1 → 85.1 in 170 steps for 235B.", s:"§4.2"},
+   {k:"dist", t:"Thinking Mode Fusion (SFT)", d:["reasoning","IF"], n:"Rejection-sampled thinking data from the Stage-2 model plus non-thinking data scored by checklists.", s:"§4.3"},
+   {k:"joint", t:"General RL (>20 tasks)", d:["IF","alignment","agentic","search"], n:"IF, format following, preference alignment, agent with real execution feedback, RAG-style tasks. Table 22: did not improve knowledge/STEM/math/coding vs Reasoning RL.", s:"§4.4, §5.3"}
+ ]},
+ {name:"Kimi K2", stages:[
+   {k:"sft", t:"SFT (incl. synthetic tool-use trajectories)", d:[], n:"3,000+ MCP tools + 20,000+ synthetic tools; LLM-judge-filtered trajectories.", s:"kimi-k2 §3.1"},
+   {k:"joint", t:"One joint RL stage", d:["reasoning","IF","agentic","alignment"], n:"Math/STEM/logic, IF (with hack-check), faithfulness, coding, SWE, agentic tool use, subjective tasks (self-critique rubric reward); PTX loss; budget control.", s:"§3.2"}
+ ]},
+ {name:"DeepSeek-V3.2", stages:[
+   {par:[
+     {k:"rl", t:"Reasoning specialists (math, programming, logic)", d:["reasoning"], n:"Each specialist trained with large-scale RL.", s:"deepseek-v3.1 card §3"},
+     {k:"rl", t:"Agentic specialists (general agentic, agentic coding)", d:["agentic"], n:"24,667 code-agent and 4,417 general-agent tasks.", s:"§3, Table 1"},
+     {k:"rl", t:"Agentic search specialist", d:["search"], n:"50,275 search-agent tasks.", s:"§3, Table 1"},
+     {k:"rl", t:"Writing and general QA specialists", d:["alignment"], n:"Listed with the specialists.", s:"§3"}
+   ]},
+   {k:"dist", t:"Distillation into one model", d:["reasoning","agentic","search","alignment"], n:"Distilled models score slightly below specialists; mixed RL removes the gap (no numbers).", s:"§3"},
+   {k:"joint", t:"Mixed RL ('thousands of steps')", d:["reasoning","agentic","search","IF","alignment"], n:"Reasoning + agent + human alignment in one GRPO stage; rubric GenRM for general tasks; stated reason: avoid catastrophic forgetting.", s:"§3, §3.1"}
+ ]},
+ {name:"Olmo 3 Think", stages:[
+   {k:"sft", t:"SFT", d:[], n:"", s:"olmo-3-rl-pipeline §4.4"},
+   {k:"pref", t:"DPO (delta-learning pairs)", d:["alignment"], n:"Chosen from a large model, rejected from a small one.", s:"olmo-3-recipe §4.3"},
+   {k:"joint", t:"OlmoRL", d:["reasoning","IF","alignment"], n:"Math, code, IF (30,186 IF-RLVR prompts), chat with LM judge; 'roughly equal' per domain. IFEval/IFBench SFT 77.9/30.0 → DPO 75.9/28.3 → RL 88.2/41.6.", s:"Table 20, Table 24"},
+   {k:"joint", t:"Olmo 3.1: same RL run continued", d:["reasoning","IF","alignment"], n:"21 more days on 224 GPUs.", s:"olmo-3-recipe §2.4"}
+ ]},
+ {name:"MiniMax-M1", stages:[
+   {k:"sft", t:"CPT 7.5T → long-CoT SFT", d:[], n:"~60% math and code in SFT.", s:"minimax-m1 §2"},
+   {k:"rl", t:"RL run 1 (40K): rule-verified reasoning", d:["reasoning","agentic"], n:"Math ~50K, logic ~53K, competitive programming 30K, SWE several thousand (sandbox); CISPO.", s:"§4.1, §4.3"},
+   {k:"joint", t:"RL run 1: general tasks mixed in gradually", d:["IF","alignment","reasoning","agentic"], n:"25K general samples with GenRM; constrained IF = rule + model reward; dynamic weighting.", s:"§4.2–4.3"},
+   {k:"joint", t:"RL run 2: 40K → 80K output windows", d:["reasoning","agentic","IF","alignment"], n:"Data re-filtered by the 40K model; harder math/code upweighted; synthetic reasoning downsampled.", s:"§5"}
+ ]},
+ {name:"Nemotron 3 Nano", stages:[
+   {k:"sft", t:"SFT", d:[], n:"", s:"nemotron-ultra-recipe NR §3"},
+   {k:"joint", t:"RLVR (all environments at once)", d:["reasoning","IF","agentic"], n:"Math, code, STEM MCQ, JSON schema, IF 46K + multi-turn IF 3K, long-context QA, Workplace Assistant, banking agent; synchronous GRPO; router frozen.", s:"NR §3.2"},
+   {k:"rl", t:"RLHF with GenRM", d:["alignment"], n:"Circular pairwise GenRM; group-relative length control; verbosity −30%.", s:"NR §3.3"},
+   {k:"joint", t:"RLVR again", d:["reasoning","IF","agentic"], n:"Second RLVR stage after RLHF.", s:"NR §3.2"}
+ ]},
+ {name:"Tülu 3 (reference)", stages:[
+   {k:"sft", t:"SFT", d:[], n:"", s:"tulu-3"},
+   {k:"pref", t:"Length-normalized DPO", d:["alignment"], n:"", s:"tulu-3"},
+   {k:"joint", t:"RLVR (PPO)", d:["reasoning","IF"], n:"GSM8K 7,473 + MATH 7,500 + IF 14,973 prompts; binary verifier α = 10.", s:"rlvr-tulu3 Table 22"}
+ ]}
+];
+let dom = "all", sel = null;
+const labsEl = document.getElementById("labs"), det = document.getElementById("detail");
+function block(st, lab){
+  const b = document.createElement("button");
+  b.className = `stage k-${st.k}` + ((dom!=="all" && !st.d.includes(dom)) ? " dim" : "") + (sel===st ? " sel" : "");
+  b.innerHTML = `${st.t}<small>${st.d.length ? st.d.join(" · ") : "no RL domain"}</small>`;
+  b.onclick = () => { sel = st; render(); det.innerHTML = `<dl><dt>Lab</dt><dd>${lab}</dd><dt>Stage</dt><dd>${st.t}</dd><dt>Domains</dt><dd>${st.d.join(", ")||"—"}</dd><dt>Details</dt><dd>${st.n||"—"}</dd><dt>Source</dt><dd>${st.s}</dd></dl>`; };
+  return b;
+}
+function render(){
+  labsEl.innerHTML = "";
+  LABS.forEach(L=>{
+    const row = document.createElement("div"); row.className="lab";
+    const nm = document.createElement("div"); nm.className="labname"; nm.textContent=L.name;
+    const tr = document.createElement("div"); tr.className="track";
+    L.stages.forEach((st,i)=>{
+      if (i>0){ const a=document.createElement("span"); a.className="arrow"; a.textContent="→"; tr.appendChild(a); }
+      if (st.par){ const p=document.createElement("div"); p.className="par"; st.par.forEach(x=>p.appendChild(block(x,L.name))); tr.appendChild(p); }
+      else tr.appendChild(block(st,L.name));
+    });
+    row.appendChild(nm); row.appendChild(tr); labsEl.appendChild(row);
+  });
+}
+document.querySelectorAll(".chip").forEach(c=>c.onclick=()=>{ dom=c.dataset.d; document.querySelectorAll(".chip").forEach(x=>x.setAttribute("aria-pressed", x===c?"true":"false")); render(); });
+render();
+</script>
+</body>
+</html>

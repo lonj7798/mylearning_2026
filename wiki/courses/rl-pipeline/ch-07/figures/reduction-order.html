@@ -1,0 +1,314 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Reduction Order and Parity</title>
+<style>
+:root{
+  --bg:#ffffff; --fg:#1d1f23; --muted:#5b6270; --card:#f5f6f8; --line:#d9dce2;
+  --accent:#2f6fd6; --ok:#1d8a4a; --bad:#c2392b; --warn:#a86a00; --code:#eef0f4;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#15171b; --fg:#e6e8ec; --muted:#9aa1ad; --card:#1f2228; --line:#353a43;
+    --accent:#6ea2ff; --ok:#4cc27d; --bad:#ff7a6b; --warn:#e0a640; --code:#262a31;
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#15171b; --fg:#e6e8ec; --muted:#9aa1ad; --card:#1f2228; --line:#353a43;
+  --accent:#6ea2ff; --ok:#4cc27d; --bad:#ff7a6b; --warn:#e0a640; --code:#262a31;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);font:15px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif}
+main{max-width:980px;margin:0 auto;padding:20px 16px 48px}
+h1{font-size:22px;margin:0 0 4px}
+h2{font-size:17px;margin:0 0 8px}
+p{margin:6px 0}
+.muted{color:var(--muted);font-size:13px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:14px 16px;margin:14px 0}
+.row{display:flex;flex-wrap:wrap;gap:12px;align-items:center;margin:8px 0}
+label{font-size:13px;color:var(--muted)}
+select,input[type=number]{background:var(--bg);color:var(--fg);border:1px solid var(--line);border-radius:6px;padding:4px 6px;font:inherit;font-size:13px}
+input[type=number]{width:110px}
+input[type=range]{width:180px}
+button{background:var(--accent);color:#fff;border:0;border-radius:6px;padding:6px 12px;font:inherit;font-size:13px;cursor:pointer}
+button.sec{background:transparent;color:var(--accent);border:1px solid var(--accent)}
+code,.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:12.5px}
+.mono{background:var(--code);padding:1px 5px;border-radius:4px}
+table{border-collapse:collapse;width:100%;font-size:13px}
+th,td{border-bottom:1px solid var(--line);padding:6px 6px;text-align:left;vertical-align:top}
+th{color:var(--muted);font-weight:600}
+.tag{display:inline-block;padding:1px 8px;border-radius:10px;font-size:12px;font-weight:600}
+.tag.ok{background:color-mix(in srgb,var(--ok) 18%,transparent);color:var(--ok)}
+.tag.bad{background:color-mix(in srgb,var(--bad) 18%,transparent);color:var(--bad)}
+.big{font-size:20px;font-weight:700}
+.grid3{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:10px}
+.stat{background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:10px}
+.bar{position:relative;height:22px;border:1px solid var(--line);border-radius:4px;background:var(--bg);margin:4px 0 10px;overflow:hidden}
+.bar .seg{position:absolute;top:0;bottom:0;border-right:2px solid var(--accent)}
+.bar .lbl{position:absolute;left:6px;top:2px;font-size:11px;color:var(--muted)}
+.scroll{overflow-x:auto}
+</style>
+</head>
+<body>
+<main>
+<h1>Why reduction order changes BF16 results, and Rocket's three fixes</h1>
+<p class="muted">Companion to ch-07. Every computation below runs in your browser with emulated BF16 (round-to-nearest-even to 7 mantissa bits) and FP32 (<span class="mono">Math.fround</span>). Inputs in panels B–D are <b>synthetic random values from a seeded generator, not data from any source</b>; the panels show the mechanism, not a measured mismatch rate. Source statements are cited in brackets.</p>
+
+<!-- Panel A -->
+<div class="card">
+<h2>A. Floating-point addition is not associative</h2>
+<p>Float64, from [[thinking-machines-nondeterminism]]: <span class="mono" id="a64"></span></p>
+<p>The same effect in BF16. Edit the three numbers; each partial sum is rounded to BF16.</p>
+<div class="row">
+  <label>a <input type="number" id="aa" value="1" step="any"></label>
+  <label>b <input type="number" id="ab" value="0.00390625" step="any"></label>
+  <label>c <input type="number" id="ac" value="0.00390625" step="any"></label>
+</div>
+<div class="grid3">
+  <div class="stat"><div class="muted">(a + b) + c</div><div class="big mono" id="al"></div><div class="mono muted" id="alh"></div></div>
+  <div class="stat"><div class="muted">a + (b + c)</div><div class="big mono" id="ar"></div><div class="mono muted" id="arh"></div></div>
+  <div class="stat"><div class="muted">bitwise equal?</div><div class="big" id="aeq"></div></div>
+</div>
+<p class="muted">With the defaults, b = c = 2<sup>−8</sup> is half of BF16's spacing just above 1 (2<sup>−7</sup>; next value above 1 is 1.007812 [[fp16-train-infer-mismatch]] Table 1). Adding one of them to 1 rounds back to 1 (tie to even); adding their sum does not. Summing 8 numbers in 10,000 random orders gave 102 distinct float results in the Thinking Machines post.</p>
+</div>
+
+<!-- Panel B -->
+<div class="card">
+<h2>B. Attention output projection: row-parallel TP vs Rocket fix 1</h2>
+<p>One output element of <span class="mono">o_proj</span> for one token: y = Σ<sub>i</sub> h<sub>i</sub>·w<sub>i</sub> over d = 64 concatenated head dimensions. Three ways to compute it:</p>
+<ul>
+<li><b>Learner, no TP</b> (Rocket's learner): one GPU, FP32 accumulation in a fixed order, output cast to BF16.</li>
+<li><b>Sampler, row-parallel TP</b>: each rank sums its own slice of heads, writes a partial in the chosen dtype, then an all-reduce adds the partials across ranks in the chosen order.</li>
+<li><b>Sampler, Rocket fix 1</b>: all-gather the head outputs h (a copy, no arithmetic), replicate W<sub>o</sub>, compute the full sum on one GPU with the learner's kernel order [[mai-rl-infrastructure]] p. 10.</li>
+</ul>
+<div class="row">
+  <label>TP degree <select id="btp"><option>1</option><option selected>2</option><option>4</option><option>8</option></select></label>
+  <label>all-reduce order <select id="bord">
+    <option value="ring">ring 0 → 1 → … → N−1</option>
+    <option value="shift">ring starting at rank N/2</option>
+    <option value="tree">tree ((0+1)+(2+3))…</option>
+  </select></label>
+  <label>partial dtype <select id="bdt"><option value="bf16">BF16 partials, BF16 adds</option><option value="fp32">FP32 partials, FP32 adds</option></select></label>
+  <label>seed <input type="number" id="bseed" value="7" step="1"></label>
+</div>
+<div class="scroll"><table>
+<tr><th>path</th><th>value (trial 1)</th><th>BF16 bits</th><th>equal to learner?</th></tr>
+<tr><td>Learner, no TP</td><td class="mono" id="bl"></td><td class="mono" id="blh"></td><td>—</td></tr>
+<tr><td>Sampler, row-parallel</td><td class="mono" id="br"></td><td class="mono" id="brh"></td><td id="breq"></td></tr>
+<tr><td>Sampler, all-gather + replicated W<sub>o</sub></td><td class="mono" id="bf"></td><td class="mono" id="bfh"></td><td id="bfeq"></td></tr>
+</table></div>
+<div class="grid3" style="margin-top:10px">
+  <div class="stat"><div class="muted">row-parallel ≠ learner (1,000 synthetic trials)</div><div class="big" id="bcnt"></div></div>
+  <div class="stat"><div class="muted">median size of a mismatch, in BF16 spacings at the learner value</div><div class="big" id="bulp"></div></div>
+  <div class="stat"><div class="muted">Rocket fix ≠ learner (1,000 trials)</div><div class="big" id="bcntf"></div></div>
+</div>
+<p class="muted">Model assumptions: the all-reduce adds in the tensor dtype; real collectives choose order by algorithm, chunking and topology [[nemo-rl-tp-accuracy]]. TP = 1 reproduces the learner exactly. Switching to FP32 partials reduces how often the final BF16 value differs but does not remove it, because grouping still differs. The fix matches by construction only if the single-GPU kernel uses the same accumulation order as the learner's kernel, which is what Rocket's shared kernels ensure.</p>
+</div>
+
+<!-- Panel C -->
+<div class="card">
+<h2>C. MoE expert combination: arrival-order BF16 vs Rocket fix 2</h2>
+<p>A token routed to k experts needs Σ<sub>e</sub> g<sub>e</sub>·E<sub>e</sub>(x). If outputs are accumulated in BF16 in the order they arrive from the all-to-all, the result depends on arrival order. Rocket returns all expert outputs to the token's source device and computes the weighted sum locally in FP32 [[mai-rl-infrastructure]] p. 10; slime's GLM-5 path does the same "in slot order and FP32" (reproducibility.md L63–66).</p>
+<div class="row">
+  <label>top-k <select id="ck"><option>2</option><option>4</option><option selected>8</option></select></label>
+  <label>seed <input type="number" id="cseed" value="11" step="1"></label>
+</div>
+<div class="grid3">
+  <div class="stat"><div class="muted">distinct BF16 results over 1,000 random arrival orders, BF16 accumulation (one token)</div><div class="big" id="cdist"></div></div>
+  <div class="stat"><div class="muted">same, FP32 local sum in fixed slot order</div><div class="big" id="cdistf"></div></div>
+  <div class="stat"><div class="muted">sampler ≠ learner over 1,000 tokens, each side with its own arrival order (BF16) / fixed FP32</div><div class="big" id="cmis"></div></div>
+</div>
+</div>
+
+<!-- Panel D -->
+<div class="card">
+<h2>D. Decode attention split-KV: split count vs fixed split size (Rocket fix 3)</h2>
+<p>One query attends to L cached tokens with online softmax. The learner's forward reduces over KV tiles of fixed size T. The sampler's decode kernel splits KV into chunks and combines them. If it uses a fixed <i>number</i> of splits (chosen from occupancy), chunk boundaries move with L and differ from the learner's tiles; with a fixed split <i>size</i> equal to the learner's tile, boundaries coincide [[thinking-machines-nondeterminism]]; Rocket tunes KV tokens per split once and uses the same boundaries in learner forward, prefill and decode [[mai-rl-infrastructure]] p. 10.</p>
+<div class="row">
+  <label>KV length L <input type="range" id="dl" min="64" max="2048" step="1" value="1000"> <span class="mono" id="dlv"></span></label>
+  <label>learner tile T <select id="dt"><option>64</option><option>128</option><option selected>256</option></select></label>
+  <label>sampler mode <select id="dm"><option value="count">fixed number of splits</option><option value="size">fixed split size = T</option></select></label>
+  <label>splits (count mode) <select id="ds"><option>2</option><option>3</option><option selected>4</option><option>6</option><option>8</option></select></label>
+  <label>seed <input type="number" id="dseed" value="3" step="1"></label>
+</div>
+<div class="muted">learner tile boundaries</div><div class="bar" id="dbarl"></div>
+<div class="muted">sampler split boundaries</div><div class="bar" id="dbars"></div>
+<p class="mono" id="dsizes"></p>
+<div class="grid3">
+  <div class="stat"><div class="muted">boundaries identical?</div><div class="big" id="dsame"></div></div>
+  <div class="stat"><div class="muted">queries whose FP32 output bits differ (200 synthetic queries, head dim 64)</div><div class="big" id="dmis32"></div></div>
+  <div class="stat"><div class="muted">output elements that differ after the BF16 cast (of 200 × 64 = 12,800)</div><div class="big" id="dmis16"></div></div>
+</div>
+<p class="muted">Reading the result: different split boundaries change the low FP32 bits of almost every output; most of those differences disappear when the output is cast to BF16, but a few elements flip. A flipped element is an input difference for every later layer, and a model has thousands of such elements per token per layer, so rare flips are enough to make the two engines' log-probabilities differ. The Thinking Machines example: KV length 1,000 with split size 256 gives chunks 256, 256, 256, 232 regardless of load; four fixed splits give 250 each. Set L = 1000, T = 256, mode "fixed split size" to reproduce it.</p>
+</div>
+
+<!-- Panel E -->
+<div class="card">
+<h2>E. The three Rocket fixes and their open counterparts</h2>
+<div class="scroll"><table>
+<tr><th>Reduction</th><th>What differed</th><th>Rocket fix [[mai-rl-infrastructure]] p. 10</th><th>Open counterpart</th></tr>
+<tr><td>Attention output projection</td><td>row-parallel TP sums partial outputs across GPUs</td><td>keep attention TP in sampler; all-gather head outputs; replicate o_proj weights; learner without TP</td><td>NeMo RL colwise plan for o_proj and down_proj [[nemo-rl-tp-accuracy]]</td></tr>
+<tr><td>MoE expert combination</td><td>weighted sum of expert outputs in varying order or precision</td><td>EP without intra-expert TP; all-to-all back to source device; local FP32 weighted sum</td><td>slime GLM-5 path: token owner reduces in slot order and FP32 (slime@79aa41a)</td></tr>
+<tr><td>Attention kernel</td><td>tiling, KV partitioning, kernel arithmetic</td><td>one FA4 for learner forward, prefill, decode; sliding-window K-blocks aligned to learner tiles; fixed KV tokens per split</td><td>fixed split-size split-KV [[thinking-machines-nondeterminism]]; DeepSeek-V4 dual-kernel decode without split-KV [[deepseek-train-infer-consistency]]</td></tr>
+</table></div>
+</div>
+</main>
+
+<script>
+(function(){
+  "use strict";
+  const f32 = new Float32Array(1), u32 = new Uint32Array(f32.buffer);
+  const fr = Math.fround;
+  function bf16(x){
+    f32[0] = x; let u = u32[0];
+    if ((u & 0x7f800000) === 0x7f800000) return f32[0];
+    const lsb = (u >>> 16) & 1;
+    u = (u + 0x7fff + lsb) >>> 0;
+    u32[0] = (u & 0xffff0000) >>> 0;
+    return f32[0];
+  }
+  function bf16bits(x){ f32[0] = bf16(x); return "0x" + (u32[0] >>> 16).toString(16).padStart(4,"0"); }
+  function f32bits(x){ f32[0] = x; return "0x" + (u32[0] >>> 0).toString(16).padStart(8,"0"); }
+  function bfInt(x){ f32[0] = bf16(x); return u32[0] >>> 16; }
+  function ulpDiff(a,b){
+    if (a === 0) return Infinity;
+    const spacing = Math.pow(2, Math.floor(Math.log2(Math.abs(a))) - 7);
+    return Math.abs(a - b) / spacing;
+  }
+  function mulberry32(a){ return function(){ a |= 0; a = a + 0x6D2B79F5 | 0; let t = Math.imul(a ^ a >>> 15, 1 | a); t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; }; }
+  function gauss(r){ let u = 0, v = 0; while (u === 0) u = r(); v = r(); return Math.sqrt(-2*Math.log(u)) * Math.cos(2*Math.PI*v); }
+  const $ = id => document.getElementById(id);
+  function tag(ok){ return ok ? '<span class="tag ok">equal</span>' : '<span class="tag bad">differs</span>'; }
+  function fmt(x){ return Number(x).toPrecision(8); }
+
+  // Panel A
+  $("a64").textContent = "(0.1 + 1e20) − 1e20 = " + ((0.1 + 1e20) - 1e20) + ";   0.1 + (1e20 − 1e20) = " + (0.1 + (1e20 - 1e20));
+  function panelA(){
+    const a = bf16(parseFloat($("aa").value)||0), b = bf16(parseFloat($("ab").value)||0), c = bf16(parseFloat($("ac").value)||0);
+    const l = bf16(bf16(a + b) + c), r = bf16(a + bf16(b + c));
+    $("al").textContent = fmt(l); $("alh").textContent = bf16bits(l);
+    $("ar").textContent = fmt(r); $("arh").textContent = bf16bits(r);
+    $("aeq").innerHTML = tag(bfInt(l) === bfInt(r));
+  }
+  ["aa","ab","ac"].forEach(id => $(id).addEventListener("input", panelA));
+
+  // Panel B
+  const D = 64;
+  function learnerDot(h, w){ let acc = 0; for (let i = 0; i < D; i++) acc = fr(acc + fr(h[i]*w[i])); return bf16(acc); }
+  function rowParallel(h, w, tp, order, dt){
+    const n = D / tp, parts = [];
+    for (let r = 0; r < tp; r++){
+      let acc = 0; for (let i = r*n; i < (r+1)*n; i++) acc = fr(acc + fr(h[i]*w[i]));
+      parts.push(dt === "bf16" ? bf16(acc) : acc);
+    }
+    const add = (x,y) => dt === "bf16" ? bf16(x + y) : fr(x + y);
+    let s;
+    if (order === "tree"){
+      let lvl = parts.slice();
+      while (lvl.length > 1){ const nx = []; for (let i = 0; i < lvl.length; i += 2) nx.push(i+1 < lvl.length ? add(lvl[i], lvl[i+1]) : lvl[i]); lvl = nx; }
+      s = lvl[0];
+    } else {
+      const start = order === "shift" ? Math.floor(tp/2) : 0;
+      s = parts[start % tp];
+      for (let k = 1; k < tp; k++) s = add(s, parts[(start + k) % tp]);
+    }
+    return bf16(s);
+  }
+  function fixDot(h, w){ const hg = h.slice(); return learnerDot(hg, w); } // all-gather is a copy; replicated W_o; same kernel order
+  function sampleHW(r){ const h = [], w = []; for (let i = 0; i < D; i++){ h.push(bf16(gauss(r))); w.push(bf16(gauss(r)*0.05)); } return [h,w]; }
+  function panelB(){
+    const tp = parseInt($("btp").value,10), ord = $("bord").value, dt = $("bdt").value;
+    const r = mulberry32(parseInt($("bseed").value,10)||0);
+    let mis = 0, misF = 0, first = null; const us = [];
+    for (let t = 0; t < 1000; t++){
+      const [h,w] = sampleHW(r);
+      const L = learnerDot(h,w), R = rowParallel(h,w,tp,ord,dt), F = fixDot(h,w);
+      if (bfInt(L) !== bfInt(R)) { mis++; us.push(ulpDiff(L,R)); }
+      if (bfInt(L) !== bfInt(F)) misF++;
+      if (t === 0) first = [L,R,F];
+    }
+    const [L,R,F] = first;
+    $("bl").textContent = fmt(L); $("blh").textContent = bf16bits(L);
+    $("br").textContent = fmt(R); $("brh").textContent = bf16bits(R); $("breq").innerHTML = tag(bfInt(L) === bfInt(R));
+    $("bf").textContent = fmt(F); $("bfh").textContent = bf16bits(F); $("bfeq").innerHTML = tag(bfInt(L) === bfInt(F));
+    us.sort((x,y) => x - y);
+    $("bcnt").innerHTML = mis + " / 1000"; $("bulp").textContent = mis ? String(Math.round(us[Math.floor(us.length/2)]*10)/10) : "0";
+    $("bcntf").innerHTML = misF + " / 1000";
+  }
+  ["btp","bord","bdt","bseed"].forEach(id => $(id).addEventListener("input", panelB));
+
+  // Panel C
+  function softmax(z){ const m = Math.max(...z); const e = z.map(v => fr(Math.exp(v - m))); let s = 0; e.forEach(v => s = fr(s + v)); return e.map(v => fr(v / s)); }
+  function shuffle(a, r){ for (let i = a.length - 1; i > 0; i--){ const j = Math.floor(r()*(i+1)); [a[i],a[j]] = [a[j],a[i]]; } return a; }
+  function combineBF16(y, g, perm){ let acc = 0; for (const e of perm) acc = bf16(acc + bf16(g[e]*y[e])); return bf16(acc); }
+  function combineFP32(y, g){ let acc = 0; for (let e = 0; e < y.length; e++) acc = fr(acc + fr(g[e]*y[e])); return bf16(acc); }
+  function panelC(){
+    const k = parseInt($("ck").value,10), r = mulberry32(parseInt($("cseed").value,10)||0);
+    const y0 = [], z0 = []; for (let e = 0; e < k; e++){ y0.push(bf16(gauss(r))); z0.push(gauss(r)); }
+    const g0 = softmax(z0), idx = [...Array(k).keys()];
+    const s16 = new Set(), s32 = new Set();
+    for (let t = 0; t < 1000; t++){ s16.add(bfInt(combineBF16(y0, g0, shuffle(idx.slice(), r)))); s32.add(bfInt(combineFP32(y0, g0))); }
+    let mis16 = 0, mis32 = 0;
+    for (let t = 0; t < 1000; t++){
+      const y = [], z = []; for (let e = 0; e < k; e++){ y.push(bf16(gauss(r))); z.push(gauss(r)); }
+      const g = softmax(z);
+      const a = combineBF16(y, g, shuffle(idx.slice(), r)), b = combineBF16(y, g, shuffle(idx.slice(), r));
+      if (bfInt(a) !== bfInt(b)) mis16++;
+      if (bfInt(combineFP32(y,g)) !== bfInt(combineFP32(y,g))) mis32++;
+    }
+    $("cdist").textContent = String(s16.size); $("cdistf").textContent = String(s32.size);
+    $("cmis").textContent = mis16 + " / 1000  vs  " + mis32 + " / 1000";
+  }
+  ["ck","cseed"].forEach(id => $(id).addEventListener("input", panelC));
+
+  // Panel D
+  function bounds(L, size){ const b = []; for (let s = 0; s < L; s += size) b.push([s, Math.min(L, s + size)]); return b; }
+  function boundsCount(L, n){ const size = Math.ceil(L / n); return bounds(L, size); }
+  const HD = 64;
+  function attend(s, v, splits){
+    const parts = splits.map(([a,b]) => {
+      let m = -Infinity; for (let j = a; j < b; j++) m = Math.max(m, s[j]);
+      let l = 0; const o = new Float32Array(HD);
+      for (let j = a; j < b; j++){ const p = fr(Math.exp(fr(s[j] - m))); l = fr(l + p); for (let d = 0; d < HD; d++) o[d] = fr(o[d] + fr(p * v[j*HD + d])); }
+      return [m, l, o];
+    });
+    let M = -Infinity; parts.forEach(p => M = Math.max(M, p[0]));
+    let Ls = 0; const Os = new Float32Array(HD);
+    parts.forEach(([m,l,o]) => { const c = fr(Math.exp(fr(m - M))); Ls = fr(Ls + fr(l * c)); for (let d = 0; d < HD; d++) Os[d] = fr(Os[d] + fr(o[d] * c)); });
+    return Os.map(x => fr(x / Ls));
+  }
+  function drawBar(el, L, b){
+    el.innerHTML = "";
+    b.forEach(([a,e]) => { const d = document.createElement("div"); d.className = "seg"; d.style.left = (100*a/L) + "%"; d.style.width = (100*(e-a)/L) + "%"; el.appendChild(d); });
+  }
+  function panelD(){
+    const L = parseInt($("dl").value,10), T = parseInt($("dt").value,10), mode = $("dm").value, S = parseInt($("ds").value,10);
+    $("dlv").textContent = L;
+    const bl = bounds(L, T), bs = mode === "size" ? bounds(L, T) : boundsCount(L, S);
+    drawBar($("dbarl"), L, bl); drawBar($("dbars"), L, bs);
+    $("dsizes").textContent = "learner tiles: " + bl.map(x => x[1]-x[0]).join(", ") + "   |   sampler splits: " + bs.map(x => x[1]-x[0]).join(", ");
+    const same = bl.length === bs.length && bl.every((x,i) => x[0] === bs[i][0] && x[1] === bs[i][1]);
+    $("dsame").innerHTML = same ? '<span class="tag ok">yes</span>' : '<span class="tag bad">no</span>';
+    const r = mulberry32(parseInt($("dseed").value,10)||0);
+    let m32 = 0, m16 = 0;
+    for (let t = 0; t < 200; t++){
+      const s = new Float32Array(L), v = new Float32Array(L*HD);
+      for (let j = 0; j < L; j++) s[j] = fr(gauss(r) * 2);
+      for (let j = 0; j < L*HD; j++) v[j] = bf16(gauss(r));
+      const a = attend(s, v, bl), b = attend(s, v, bs);
+      let any = false;
+      for (let d = 0; d < HD; d++){ if (a[d] !== b[d]) any = true; if (bfInt(a[d]) !== bfInt(b[d])) m16++; }
+      if (any) m32++;
+    }
+    $("dmis32").textContent = m32 + " / 200"; $("dmis16").textContent = m16 + " / 12,800";
+  }
+  $("dl").addEventListener("input", () => { $("dlv").textContent = $("dl").value; });
+  ["dl","dt","dm","ds","dseed"].forEach(id => $(id).addEventListener("change", panelD));
+
+  panelA(); panelB(); panelC(); panelD();
+})();
+</script>
+</body>
+</html>

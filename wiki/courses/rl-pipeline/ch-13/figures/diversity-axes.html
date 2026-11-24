@@ -1,0 +1,171 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Diversity Axes Explorer</title>
+<style>
+  :root {
+    --bg: #fafaf8; --panel: #ffffff; --ink: #1f2328; --muted: #5b6470; --rule: #d9dde3;
+    --causal: #1f7a4d; --obs: #b26a00; --prac: #1d5fa8; --mixed: #8a4fbf; --bar: #1d5fa8; --bar2: #b3261e;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #16181c; --panel: #1e2126; --ink: #e6e8eb; --muted: #a0a8b3; --rule: #353a42;
+      --causal: #4cc38a; --obs: #f0b456; --prac: #6aa6e8; --mixed: #b98ae6; --bar: #6aa6e8; --bar2: #f2836b;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #16181c; --panel: #1e2126; --ink: #e6e8eb; --muted: #a0a8b3; --rule: #353a42;
+    --causal: #4cc38a; --obs: #f0b456; --prac: #6aa6e8; --mixed: #b98ae6; --bar: #6aa6e8; --bar2: #f2836b;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink);
+         font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+  main { max-width: 1040px; margin: 0 auto; padding: 20px 16px 40px; }
+  h1 { font-size: 19px; margin: 0 0 4px; }
+  h2 { font-size: 15px; margin: 0 0 8px; }
+  p.sub { color: var(--muted); margin: 0 0 16px; }
+  .panel { background: var(--panel); border: 1px solid var(--rule); border-radius: 8px; padding: 16px; margin-bottom: 18px; }
+  .chips { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 12px; }
+  .chip { border: 1px solid var(--rule); background: var(--bg); color: var(--ink); border-radius: 999px;
+          padding: 4px 12px; cursor: pointer; font: inherit; font-size: 13px; }
+  .chip[aria-pressed="true"] { border-color: var(--ink); font-weight: 600; }
+  .tag { display: inline-block; font-size: 11px; font-weight: 600; border-radius: 4px; padding: 1px 6px; color: #fff; }
+  .tag.causal { background: var(--causal); } .tag.observational { background: var(--obs); }
+  .tag.practice { background: var(--prac); } .tag.mixed { background: var(--mixed); }
+  .layout { display: grid; grid-template-columns: minmax(0, 260px) minmax(0, 1fr); gap: 16px; }
+  @media (max-width: 720px) { .layout { grid-template-columns: minmax(0, 1fr); } }
+  ul.axes { list-style: none; margin: 0; padding: 0; }
+  ul.axes li button { width: 100%; text-align: left; background: none; border: 0; border-bottom: 1px solid var(--rule);
+          padding: 7px 4px; color: var(--ink); font: inherit; cursor: pointer; display: flex; justify-content: space-between; gap: 8px; }
+  ul.axes li button[aria-current="true"] { background: var(--bg); font-weight: 600; }
+  dl { margin: 0; } dt { font-size: 12px; color: var(--muted); margin-top: 10px; } dd { margin: 2px 0 0; }
+  .note { color: var(--muted); font-size: 12.5px; }
+  .bars { display: grid; gap: 10px; }
+  .barrow { display: grid; grid-template-columns: minmax(0, 210px) minmax(0, 1fr); gap: 8px; align-items: center; font-size: 13px; }
+  @media (max-width: 560px) { .barrow { grid-template-columns: minmax(0, 1fr); } }
+  .track { position: relative; height: 34px; background: var(--bg); border: 1px solid var(--rule); border-radius: 4px; }
+  .b { position: absolute; left: 0; height: 15px; border-radius: 2px; }
+  .b.one { top: 1px; background: var(--bar); } .b.two { top: 17px; background: var(--bar2); }
+  .lbl { position: absolute; right: 6px; font-family: ui-monospace, Menlo, monospace; font-size: 11.5px; }
+  .lbl.one { top: 0; } .lbl.two { top: 16px; }
+  .legend { display: flex; gap: 16px; font-size: 12.5px; margin: 6px 0 10px; flex-wrap: wrap; }
+  .sw { display: inline-block; width: 12px; height: 12px; border-radius: 2px; vertical-align: -2px; margin-right: 4px; }
+  .warn { border-left: 3px solid var(--obs); padding: 6px 10px; background: var(--bg); font-size: 13px; margin-top: 12px; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Diversity axes of an RL task distribution</h1>
+  <p class="sub">Thirteen axes from the rl-pipeline library guide <code>diversity-axes.md</code>. Filter by evidence label and select an axis to see how it is measured, what was measured to fail without it, and how labs control it. All numbers are quoted from the cited cards.</p>
+
+  <section class="panel" aria-labelledby="ax-h">
+    <h2 id="ax-h">Axis explorer</h2>
+    <div class="chips" role="group" aria-label="Filter by evidence label">
+      <button class="chip" data-f="all" aria-pressed="true">all</button>
+      <button class="chip" data-f="causal" aria-pressed="false">causal (training ablation)</button>
+      <button class="chip" data-f="observational" aria-pressed="false">observational only</button>
+      <button class="chip" data-f="mixed" aria-pressed="false">partly measured</button>
+    </div>
+    <div class="layout">
+      <ul class="axes" id="axisList"></ul>
+      <div id="detail"></div>
+    </div>
+  </section>
+
+  <section class="panel" aria-labelledby="rest-h">
+    <h2 id="rest-h">Worked case: several questions in one prompt (REST, Table 1 and §4)</h2>
+    <p class="note">Single-question accuracy versus multi-question stress accuracy for released models. These are evaluations of released checkpoints. No model was trained for this comparison.</p>
+    <div class="legend"><span><span class="sw" style="background:var(--bar)"></span>single question</span><span><span class="sw" style="background:var(--bar2)"></span>under stress</span></div>
+    <div class="bars" id="restBars"></div>
+    <div class="warn"><strong>Correlation, not causation.</strong> REST trains no model. The RL-versus-base pair (AReaL-boba-RL-7B vs R1-7B) is one lineage with unknown RL data and length settings. Length-reduced models score higher under stress (L1-Qwen-1.5B-Max 67.11 vs R1-1.5B 22.40 at stress 9 on MATH500), so response length is an alternative explanation. No training study with vs without multi-question prompts was found (REST card, Verification; diversity-axes.md).</div>
+  </section>
+</main>
+<script>
+const AXES = [
+ {n:"Domain", e:"causal", m:"Share of prompts per domain tag (math, code, science, IF, agentic, chat).",
+  f:"Math-only vs mixed-domain zero-RL: SuperGPQA 29.8 vs 34.2 (7B), 35.6 vs 39.5 (14B) [general-reasoner-verifier Table 4]. A DB-trained agent policy scores 0.2 on ALFWorld; one 5-task policy averages 67.7 vs 67.8 best single [agentrl Table 4].",
+  c:"Domain tags; per-task advantage normalization (removing it: 65.0 → 59.4, agentrl Table 6); stage order or joint mixture (ch-17)."},
+ {n:"Difficulty / pass rate", e:"causal", m:"Per-prompt pass rate from N rollouts of the current or reference policy.",
+  f:"Keeping only pass ≤ 4/8 hurt as much as no filtering [polaris]; zero-variance filtering raised the fitted asymptote [scalerl Fig. 6a]; dynamic sampling +8 AIME24 [dapo Table 1].",
+  c:"MAI: G_early = 16, continue to G = 128 if early pass rate in [0.05, 0.8], full-group range [0.1, 0.8] [mai-thinking-1 Sec. 3.1.3]. open-instruct drops std = 0 groups and resamples."},
+ {n:"Tool calls per turn", e:"causal", m:"Call-structure category per sample: simple, multiple, parallel, parallel-multiple, irrelevance.",
+  f:"SFT at fixed 25,000 samples: full data 58.19 BFCL overall; without parallel data 50.60; without non-tool data 42.71 and irrelevance 6.99; dependent/nested data under 1.3 points [toolace Table 7]. No RL ablation found.",
+  c:"Generate the four dialog types explicitly [toolace]; MAI cross-environment graders for parallel calls and no duplicates. verl@8357f1e default max_parallel_calls: 1 executes only the first call per turn."},
+ {n:"Horizon (turns / calls per episode)", e:"causal", m:"Turns or tool calls per trajectory; actions required per task.",
+  f:"Fixed 10-turn cap rose early then collapsed; fixed 5 plateaued; staged cap highest [agentgym-rl Fig. 7, one environment]. τ²-bench pass^1 near zero above 7 required actions [tau2-bench Fig. 5].",
+  c:"Staged turn caps; tasks composed from atomic subtasks (2,285 tasks from 15 groups, tau2-bench §3.2). Rocket Fig. 2 median turns: IF 1, tool use 13, web research 89, web dev 104, SWE 249."},
+ {n:"Tasks per episode (multi-question)", e:"observational", m:"Number of independent requests in one prompt or episode.",
+  f:"DeepSeek-R1 AIME24 81.66 → 52.49 with several problems per prompt; AReaL-boba-RL-7B 38.07 vs base R1-7B 49.42 at stress 9 [rest-multi-problem-stress]. 19% of analysed gpt-4o retail failures are partial resolution of compound requests [tau-bench §5.2]. No causal study found.",
+  c:"Practice only: reverse task recombination [apigen-mt §4.1.3]; composite tasks [tau2-bench]. Several pipelines remove multi-part items (Qwen3 cold start, MiniMax-M1 math set)."},
+ {n:"Toolset size / unseen tools", e:"causal", m:"Distinct tools/APIs and domains in training; held-out tool ecosystems.",
+  f:"API clusters 6 → 14 → 30 at ~30K SFT instances raised BFCL overall, largest gain in relevance detection [toolace Fig. 5, figure-only values].",
+  c:"26,507 APIs / 390 domains [toolace]; 3,000+ MCP + 20,000+ synthetic tools [kimi-k2-agentic-data]; 30,000+ APIs in 1,000+ domains [agentscaler]."},
+ {n:"Environment count", e:"causal", m:"Distinct executable environments (database + tools) in RL.",
+  f:"Four-subdomain average 18.4% with 0 environments → 38.5% with 1,978 [agent-world §4.3.3, Fig. 8].",
+  c:"Web-mined or generated environments with unit-tested tools; MAI >150 synthetic environments, 130,000 tasks; DeepSeek-V3.2 1,827 environments, 4,417 tasks."},
+ {n:"User behaviour (simulators)", e:"causal", m:"Simulator families, personas, sampling methods; held-out simulators.",
+  f:"One frozen GPT-5-mini user: held-out τ²-Retail peak 46.1% (base 40.4%), returns toward base; persona-guided 49.2%, ensemble of 3 57.1%, population co-training 62.2% [simulator-collapse Table 1].",
+  c:"Persona-guided user LM [apigen-mt]; co-trained simulators [simulator-collapse]; simulator error audit (16–47% of conversations, tau2-bench Table 2)."},
+ {n:"System prompt / persona", e:"mixed", m:"Distinct system prompts or personas conditioning prompts.",
+  f:"Removing the domain policy system prompt: τ-airline 33.2 → 10.8 (evaluation only) [tau2-bench Table 3]. No RL ablation of system-prompt diversity found.",
+  c:"Persona pools [persona-hub]; synthesized system prompts per agent [kimi-k2-agentic-data]; MAI IF data with conflicting system/developer/user cases."},
+ {n:"Constraint count (IF)", e:"causal", m:"Constraints per prompt; seen vs unseen constraint types.",
+  f:"n = 1…6 constraints per instance: IFEval 71.2 → 85.8 at n = 6; training on up to 5–6 generalized better than up to 3 [ifbench Table 1, Fig. 2].",
+  c:"Many constraint types, several per prompt, ranges beyond test [ifbench]; per-instruction checklists [rlcf-checklists]. See ch-14."},
+ {n:"Answer format", e:"mixed", m:"Share of items by answer type (integer, expression, interval, MC, free text).",
+  f:"Measured on graders, not policies: rule recall 0.78–0.95 on math, 47% on general science [verifier-pitfalls]; 117,018 MC items in a 643K pool are guessable [big-math Table 2].",
+  c:"Remove or reformulate MC / yes-no / proofs [big-math]; integer answers [dapo §3.5]; model verifier for non-canonical formats."},
+ {n:"Output length range", e:"causal", m:"Max response length; length distribution across tasks.",
+  f:"RL max length 1k → 8k: math 28.73 → 39.82, hard IF 19.05 → 14.29 [scaling-reasoning-losing-control-mathif Table 5]; 14K → 32K raised the asymptote [scalerl Fig. 9].",
+  c:"Staged context; soft overlong punishment [dapo]; per-task advantage normalization for mixed lengths [agentrl]."},
+ {n:"Language", e:"mixed", m:"Prompt language and CoT language share.",
+  f:"Without a language-consistency reward R1 mixes languages; with it consistency is stable, coding slightly lower [deepseek-r1-recipe B.6]. No RL ablation over prompt languages found.",
+  c:"Language-consistency reward. MAI: R_lang = max(1 − α·n_non-English, 0), w_lang = 0.5, α = 0.005 [mai-thinking-1 Sec. 3.1.2]."}
+];
+let filt = "all", cur = 0;
+const list = document.getElementById("axisList"), det = document.getElementById("detail");
+function label(e){ return e==="mixed" ? "partly measured" : e; }
+function render(){
+  list.innerHTML = "";
+  AXES.forEach((a,i)=>{
+    if (filt!=="all" && a.e!==filt) return;
+    const li=document.createElement("li"), b=document.createElement("button");
+    b.innerHTML = `<span>${a.n}</span><span class="tag ${a.e}">${label(a.e)}</span>`;
+    b.setAttribute("aria-current", i===cur ? "true":"false");
+    b.onclick=()=>{cur=i; render();};
+    li.appendChild(b); list.appendChild(li);
+  });
+  if (filt!=="all" && AXES[cur].e!==filt){ const k=AXES.findIndex(a=>a.e===filt); if(k>=0){cur=k; return render();} }
+  const a=AXES[cur];
+  det.innerHTML = `<h2>${a.n} <span class="tag ${a.e}">${label(a.e)}</span></h2>
+   <dl><dt>How it is measured</dt><dd>${a.m}</dd>
+   <dt>What goes wrong without it (evidence)</dt><dd>${a.f}</dd>
+   <dt>How labs control it</dt><dd>${a.c}</dd></dl>`;
+}
+document.querySelectorAll(".chip").forEach(c=>c.onclick=()=>{
+  filt=c.dataset.f; document.querySelectorAll(".chip").forEach(x=>x.setAttribute("aria-pressed", x===c?"true":"false")); render();
+});
+render();
+const REST = [
+  ["DeepSeek-R1, AIME24", 81.66, 52.49, "Table 1"],
+  ["DeepSeek-R1, AIME25", 68.75, 37.17, "Table 1"],
+  ["R1-7B, MATH500", 93.00, 66.75, "Table 1"],
+  ["R1-32B, MATH500", 94.60, 88.97, "Table 1"],
+  ["R1-7B, GSM8K", 89.49, 89.06, "Table 1"],
+  ["AReaL-boba-RL-7B, MATH500", 95.00, 60.77, "§4 (RL on R1-7B)"],
+  ["OpenThinker2-7B, MATH500", 93.80, 83.30, "§4"]
+];
+const rb=document.getElementById("restBars");
+REST.forEach(([n,a,b,loc])=>{
+  const row=document.createElement("div"); row.className="barrow";
+  row.innerHTML=`<div>${n}<br><span class="note">${loc}</span></div>
+   <div class="track" role="img" aria-label="${n}: ${a} single, ${b} stressed">
+   <div class="b one" style="width:${a}%"></div><span class="lbl one">${a.toFixed(2)}</span>
+   <div class="b two" style="width:${b}%"></div><span class="lbl two">${b.toFixed(2)}</span></div>`;
+  rb.appendChild(row);
+});
+</script>
+</body>
+</html>

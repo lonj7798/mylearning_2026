@@ -1,0 +1,169 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sampler Learner Precision</title>
+<style>
+:root{
+  --bg:#fbfbfa; --fg:#1d1d1f; --muted:#5f6368; --panel:#ffffff; --line:#c9ccd1;
+  --mx:#b39ddb; --bf:#90caf9; --fp32:#ffcc80; --op:#ffffff; --hl:#d93025; --accent:#1a73e8; --edge:#9aa0a6;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#17181a; --fg:#e8eaed; --muted:#a0a4aa; --panel:#202124; --line:#3c4043;
+    --mx:#5e4b8b; --bf:#2c5a85; --fp32:#8a5a1c; --op:#2a2c30; --hl:#ff7a6b; --accent:#8ab4f8; --edge:#6f747a;
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#17181a; --fg:#e8eaed; --muted:#a0a4aa; --panel:#202124; --line:#3c4043;
+  --mx:#5e4b8b; --bf:#2c5a85; --fp32:#8a5a1c; --op:#2a2c30; --hl:#ff7a6b; --accent:#8ab4f8; --edge:#6f747a;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);font:15px/1.5 system-ui,-apple-system,Segoe UI,Roboto,sans-serif}
+main{max-width:1000px;margin:0 auto;padding:16px}
+h1{font-size:20px;margin:4px 0 2px}
+h2{font-size:16px;margin:0 0 6px}
+.note{color:var(--muted);font-size:13px;margin:4px 0 10px}
+.panel{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:12px 14px;margin:12px 0}
+.seg{display:flex;gap:8px;flex-wrap:wrap;margin:6px 0 10px}
+.seg button{border:1px solid var(--line);background:var(--panel);color:var(--fg);padding:6px 11px;border-radius:6px;cursor:pointer;font:inherit;font-size:13px}
+.seg button[aria-pressed="true"]{border-color:var(--accent);color:var(--accent);font-weight:600}
+svg{width:100%;height:auto;display:block}
+.box rect{stroke:var(--edge);stroke-width:1.2;cursor:pointer}
+.box.sel rect{stroke:var(--hl);stroke-width:3}
+.box text{fill:var(--fg);font-size:12.5px;pointer-events:none}
+.box .s{fill:var(--muted);font-size:10.5px}
+.col{fill:var(--fg);font-size:15px;font-weight:600}
+.arrow{stroke:var(--edge);stroke-width:1.3;fill:none}
+.legend{display:flex;gap:16px;flex-wrap:wrap;font-size:12.5px;color:var(--muted)}
+.sw{display:inline-block;width:14px;height:14px;border:1px solid var(--edge);vertical-align:-2px;margin-right:5px}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:12px}
+input[type=range]{width:100%}
+.big{font-size:22px;font-weight:600}
+label{font-size:13px}
+</style>
+</head>
+<body>
+<main>
+<h1>Which tensors are MXFP8 and which are BF16, in the sampler and the learner</h1>
+<p class="note">Redrawn from Fig. 5 and p. 7–10 of "RL infrastructure at Microsoft AI" (Nov 2026). Click any box for the source statement. MAI Base 2 mixes local and global attention at 5:1. The post does not state the precision of embeddings, <code>lm_head</code> or the router; they are not drawn.</p>
+
+<div class="panel">
+<div class="seg" role="group" aria-label="Layer type">
+  <button id="Lg" aria-pressed="true">Global-attention layer (MXFP8 KV)</button>
+  <button id="Ll" aria-pressed="false">Local-attention layer</button>
+  <button id="Lf" aria-pressed="false">One of the final three global layers</button>
+</div>
+<svg id="map" viewBox="0 0 960 520" role="img" aria-label="Precision map"></svg>
+<div class="legend">
+  <span><span class="sw" style="background:var(--mx)"></span>MXFP8 storage (E4M3 + E8M0 scale per 32 elements)</span>
+  <span><span class="sw" style="background:var(--bf)"></span>BF16 storage / compute</span>
+  <span><span class="sw" style="background:var(--fp32)"></span>FP32 accumulation</span>
+  <span><span class="sw" style="background:var(--op);border-style:dashed"></span>conversion step</span>
+</div>
+<div class="panel" style="margin-bottom:0" aria-live="polite">
+  <h2 id="dt">Click a box</h2>
+  <div id="dd" class="note" style="color:var(--fg)">Each box shows where a tensor is stored and in what precision it is computed. Conversion steps show where the learner reproduces the sampler's quantization.</div>
+</div>
+</div>
+
+<div class="grid">
+<div class="panel">
+  <h2>Sampler weight memory relative to BF16</h2>
+  <label for="f">Fraction of parameters in MoE experts: <b id="fv"></b></label>
+  <input id="f" type="range" min="0.90" max="0.99" step="0.005" value="0.95">
+  <p class="big" id="mem"></p>
+  <p class="note">Ratio = f · (8.25 / 16) + (1 − f). MXFP8 costs 8 bits per element plus one 8-bit scale per 32 elements = 8.25 bits. The post states the experts are "over 95%" of parameters and that MXFP8 storage "nearly halves" weight memory. Padding and metadata are ignored.</p>
+</div>
+<div class="panel">
+  <h2>Global-context token capacity relative to all-BF16 KV</h2>
+  <label for="ng">Number of global-attention layers n_g (not stated by the post): <b id="ngv"></b></label>
+  <input id="ng" type="range" min="4" max="40" step="1" value="12">
+  <p class="big" id="cap"></p>
+  <p class="note">Ratio = 16·n_g / (16·3 + 8.25·(n_g − 3)), assuming equal per-token KV size in every global layer, 8.25 bits per MXFP8 KV element, the final three global layers in BF16, and a fixed global-KV memory budget. The post reports "approximately 67% more global-context tokens" (ratio ≈ 1.67) but gives neither n_g nor the KV scale layout, so this calculator cannot confirm the figure.</p>
+</div>
+</div>
+</main>
+<script>
+(function(){
+const NS="http://www.w3.org/2000/svg";
+function el(n,a,t){const e=document.createElementNS(NS,n);for(const k in a)e.setAttribute(k,a[k]);if(t!==undefined)e.textContent=t;return e;}
+let layer="g", sel=null;
+const info={
+ x:["Hidden state x","BF16 activations enter the layer in both engines. Storage-only quantization keeps activations in BF16, so the learner does not need to reproduce any activation quantizer (p. 8)."],
+ qkv:["Q/K/V projections","Drawn in Fig. 5 without a quantize step on either side. The post applies MXFP8 only to MoE weights and KV caches (p. 7), so these projections stay BF16."],
+ kvS:["Sampler KV cache","Global layers (except the final three): 'Quantize + append' into an MXFP8 KV cache; entries are dequantized to BF16 inside the attention kernel (p. 8; Fig. 5). Local layers and the final three global layers: BF16 'with no conversion' (Fig. 5 footnote; p. 9). Quantizing local and global KV together gave 'substantially larger' sampler–learner gaps than global alone (ablation, no numbers, p. 9)."],
+ kvL:["Learner K/V fake quantization","Global layers (except the final three): K/V are quantized to MXFP8 and immediately dequantized to BF16 before attention, so the learner's attention reads the values the sampler reads from its cache: 'The learner applies corresponding KV fake quantization to reproduce the sampler's quantization effects' (p. 8). Local and final-three global layers: BF16, no conversion."],
+ attS:["Attention (sampler)","BF16 computation. Rocket uses one shared FA4 implementation for sampler prefill, sampler decode and learner forward, with aligned tiles and a fixed KV split (p. 10; ch-07)."],
+ attL:["Attention (learner)","BF16 computation with the same FA4 kernel configuration as the sampler (p. 10; ch-07)."],
+ oS:["Output projection (sampler)","BF16. The sampler keeps tensor parallelism for attention but replicates o_proj weights and all-gathers head outputs, so no cross-GPU reduction follows the projection (p. 10; ch-07)."],
+ oL:["Output projection (learner)","BF16. The learner runs without TP, so its summation order matches the sampler's (p. 10; ch-07)."],
+ ewS:["Expert weights (sampler)","Stored in MXFP8. Experts are over 95% of parameters; MXFP8 storage nearly halves sampler weight memory, allowing a smaller EP degree and fewer GPUs per replica (p. 8). Dequantized to BF16 before the matmul, because MXFP8 matmuls gave larger sampler–learner log-prob gaps (p. 8)."],
+ ewL:["Expert weights (learner)","High-precision master weights, quantized to MXFP8 and immediately dequantized to BF16 in the forward pass, 'to reproduce the sampler's weight quantization' (p. 8). The post does not state the gradient path; verl and DeepSeek-V4 use a straight-through estimator for the same operation."],
+ mmS:["Expert matmul (sampler)","BF16 activations × dequantized BF16 weights (p. 8)."],
+ mmL:["Expert matmul (learner)","BF16 activations × fake-quantized BF16 weights. If the quantizer is the same function on both sides, the weight operand is bit-identical."],
+ cmb:["Expert combine","Experts are distributed with EP and no intra-expert TP; all-to-all returns each expert output to the token's source device, and the routing-weighted sum is computed locally in FP32 in both engines (p. 10; ch-07)."]
+};
+function kvState(){return layer==="g"?"mx":"bf";}
+function draw(){
+  const s=document.getElementById("map"); s.innerHTML="";
+  const defs=el("defs",{}); const m=el("marker",{id:"ar",viewBox:"0 0 10 10",refX:9,refY:5,markerWidth:6,markerHeight:6,orient:"auto"});
+  m.appendChild(el("path",{d:"M0 0L10 5L0 10z",fill:"var(--edge)"})); defs.appendChild(m); s.appendChild(defs);
+  s.appendChild(el("text",{x:230,y:26,"text-anchor":"middle",class:"col"},"Sampler (SGLang fork)"));
+  s.appendChild(el("text",{x:730,y:26,"text-anchor":"middle",class:"col"},"Learner"));
+  s.appendChild(el("line",{x1:480,y1:10,x2:480,y2:510,stroke:"var(--line)","stroke-dasharray":"4 4"}));
+  const kvq=kvState()==="mx";
+  const B=[
+    {id:"x",x:150,y:44,w:160,h:36,c:"bf",t:"x (BF16)"},
+    {id:"qkv",x:130,y:100,w:200,h:40,c:"bf",t:"Q/K/V projections"},
+    {id:"kvS",x:20,y:170,w:170,h:56,c:kvq?"mx":"bf",t:"KV cache",s:kvq?"quantize + append (MXFP8)":"BF16, no conversion"},
+    {id:"attS",x:230,y:170,w:200,h:56,c:"bf",t:"Attention",s:kvq?"dequantize KV → BF16":"BF16"},
+    {id:"oS",x:230,y:250,w:200,h:40,c:"bf",t:"Output projection"},
+    {id:"ewS",x:20,y:320,w:170,h:56,c:"mx",t:"Expert weights",s:"MXFP8 storage"},
+    {id:"mmS",x:230,y:320,w:200,h:56,c:"bf",t:"MoE expert matmul",s:"dequantize → BF16"},
+    {id:"cmb",x:330,y:410,w:300,h:50,c:"fp32",t:"Expert combine (both engines)",s:"routing-weighted sum, FP32, local"},
+    {id:"x",x:650,y:44,w:160,h:36,c:"bf",t:"x (BF16)",dup:1},
+    {id:"qkv",x:630,y:100,w:200,h:40,c:"bf",t:"Q/K/V projections",dup:1},
+    {id:"kvL",x:530,y:170,w:170,h:56,c:kvq?"op":"bf",t:"K/V",s:kvq?"quantize → dequantize":"BF16, no conversion",dash:kvq},
+    {id:"attL",x:740,y:170,w:200,h:56,c:"bf",t:"Attention",s:"BF16"},
+    {id:"oL",x:740,y:250,w:200,h:40,c:"bf",t:"Output projection"},
+    {id:"ewL",x:530,y:320,w:170,h:56,c:"op",t:"Expert weights",s:"quantize → dequantize",dash:true},
+    {id:"mmL",x:740,y:320,w:200,h:56,c:"bf",t:"MoE expert matmul",s:"BF16"}
+  ];
+  const A=[[230,80,230,100],[230,140,105,170],[300,140,330,170],[190,198,230,198],[330,226,330,250],[330,290,330,320],[190,348,230,348],[330,376,430,410],
+           [730,80,730,100],[730,140,615,170],[800,140,840,170],[700,198,740,198],[840,226,840,250],[840,290,840,320],[700,348,740,348],[840,376,560,410]];
+  A.forEach(a=>s.appendChild(el("line",{x1:a[0],y1:a[1],x2:a[2],y2:a[3],class:"arrow","marker-end":"url(#ar)"})));
+  B.forEach(b=>{
+    const g=el("g",{class:"box"+(sel===b.id?" sel":""),tabindex:0,role:"button","aria-label":b.t});
+    const r=el("rect",{x:b.x,y:b.y,width:b.w,height:b.h,rx:7,fill:"var(--"+b.c+")"}); if(b.dash) r.setAttribute("stroke-dasharray","5 3");
+    g.appendChild(r);
+    g.appendChild(el("text",{x:b.x+10,y:b.y+(b.s?22:25)},b.t));
+    if(b.s) g.appendChild(el("text",{x:b.x+10,y:b.y+40,class:"s"},b.s));
+    const pick=()=>{sel=b.id;show(b.id);draw();};
+    g.addEventListener("click",pick); g.addEventListener("keydown",e=>{if(e.key==="Enter"||e.key===" ")pick();});
+    s.appendChild(g);
+  });
+  const tag=layer==="g"?"Global-attention layer: KV stored in MXFP8, learner fake-quantizes K/V.":layer==="l"?"Local-attention layer (5 of every 6 layers): KV stays BF16 in both engines.":"Final three global layers: KV stays BF16 'as a numerical precaution' (p. 9; no ablation reported).";
+  s.appendChild(el("text",{x:480,y:500,"text-anchor":"middle",class:"s",style:"fill:var(--muted);font-size:12px"},tag));
+}
+function show(id){const i=info[id];document.getElementById("dt").textContent=i[0];document.getElementById("dd").textContent=i[1];}
+function setLayer(l){layer=l;["Lg","Ll","Lf"].forEach(b=>document.getElementById(b).setAttribute("aria-pressed",b==="L"+l));draw();if(sel)show(sel);}
+document.getElementById("Lg").onclick=()=>setLayer("g");
+document.getElementById("Ll").onclick=()=>setLayer("l");
+document.getElementById("Lf").onclick=()=>setLayer("f");
+const f=document.getElementById("f"),ng=document.getElementById("ng");
+function calc(){
+  const fv=+f.value; const r=fv*8.25/16+(1-fv);
+  document.getElementById("fv").textContent=(fv*100).toFixed(1)+"%";
+  document.getElementById("mem").textContent=r.toFixed(3)+"× of BF16 ("+((1-r)*100).toFixed(1)+"% less)";
+  const n=+ng.value; const c=16*n/(16*3+8.25*(n-3));
+  document.getElementById("ngv").textContent=n;
+  document.getElementById("cap").textContent=c.toFixed(2)+"× ("+((c-1)*100).toFixed(0)+"% more global tokens)";
+}
+f.addEventListener("input",calc); ng.addEventListener("input",calc);
+draw(); calc();
+})();
+</script>
+</body>
+</html>

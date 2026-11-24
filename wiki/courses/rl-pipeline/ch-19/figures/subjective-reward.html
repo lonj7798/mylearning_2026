@@ -1,0 +1,178 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Subjective Reward Pipeline</title>
+<style>
+:root{
+  --bg:#ffffff; --fg:#1d2330; --muted:#5b6475; --card:#f4f6fa; --line:#d5dae3;
+  --accent:#2f6fdb; --ok:#1f8a4c; --bad:#c0392b; --warn:#b7791f; --chip:#e8eefb;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#12151b; --fg:#e4e8ef; --muted:#9aa3b2; --card:#1b2029; --line:#2d3440;
+    --accent:#6ea1ff; --ok:#4cc38a; --bad:#ff7b6b; --warn:#f0b35a; --chip:#24304a;
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#12151b; --fg:#e4e8ef; --muted:#9aa3b2; --card:#1b2029; --line:#2d3440;
+  --accent:#6ea1ff; --ok:#4cc38a; --bad:#ff7b6b; --warn:#f0b35a; --chip:#24304a;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);font:15px/1.5 system-ui,-apple-system,Segoe UI,Roboto,sans-serif}
+main{max-width:1100px;margin:0 auto;padding:20px 16px 40px}
+h1{font-size:1.35rem;margin:0 0 4px}
+p.sub{color:var(--muted);margin:0 0 16px}
+.pipe{display:flex;gap:8px;flex-wrap:wrap;align-items:stretch;margin-bottom:16px}
+.stage{flex:1 1 150px;min-width:140px;background:var(--card);border:2px solid var(--line);border-radius:10px;padding:10px;cursor:pointer;text-align:left;color:var(--fg);font:inherit}
+.stage.active{border-color:var(--accent)}
+.stage .n{font-size:.8rem;color:var(--muted)}
+.stage .t{font-weight:600}
+.stage .c{font-size:.8rem;color:var(--muted)}
+.grid{display:grid;grid-template-columns:1.25fr 1fr;gap:16px}
+@media (max-width:820px){.grid{grid-template-columns:1fr}}
+.panel{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:14px}
+.panel h2{font-size:1.05rem;margin:0 0 6px}
+.check{border-top:1px solid var(--line);padding:8px 0}
+.check:first-of-type{border-top:none}
+.check label{display:flex;gap:8px;align-items:flex-start;cursor:pointer;font-weight:600}
+.check input{margin-top:4px}
+.ev{margin:4px 0 0 24px;font-size:.88rem;color:var(--muted)}
+.tag{display:inline-block;font-size:.72rem;padding:1px 6px;border-radius:8px;background:var(--chip);color:var(--fg);margin-left:4px;font-weight:500}
+table{width:100%;border-collapse:collapse;font-size:.88rem}
+td,th{padding:6px 4px;border-bottom:1px solid var(--line);text-align:left;vertical-align:top}
+.st{font-weight:700;white-space:nowrap}
+.st.ok{color:var(--ok)} .st.bad{color:var(--bad)}
+.bar{height:10px;background:var(--line);border-radius:6px;overflow:hidden;margin:6px 0 10px}
+.bar>div{height:100%;background:var(--accent);width:0}
+.btns{display:flex;gap:8px;flex-wrap:wrap;margin:0 0 10px}
+button.b{font:inherit;font-size:.85rem;padding:4px 10px;border-radius:8px;border:1px solid var(--line);background:var(--bg);color:var(--fg);cursor:pointer}
+.note{font-size:.82rem;color:var(--muted);margin-top:14px}
+</style>
+</head>
+<body>
+<main>
+<h1>Subjective reward pipeline: human pairs to RL, with the check at each stage</h1>
+<p class="sub">Click a stage to see its checks. Tick the checks your pipeline has; the right panel shows which measured failure modes are still uncovered. Every number is from a library card named next to it.</p>
+
+<div class="pipe" id="pipe"></div>
+
+<div class="grid">
+  <section class="panel" id="detail"></section>
+  <section class="panel">
+    <h2>Failure-mode coverage</h2>
+    <div class="btns">
+      <button class="b" id="all">Tick all checks</button>
+      <button class="b" id="none">Clear all</button>
+    </div>
+    <div id="cov"></div>
+    <div class="bar"><div id="barfill"></div></div>
+    <table><thead><tr><th>Failure mode</th><th>Measured evidence</th><th>Status</th></tr></thead><tbody id="fm"></tbody></table>
+  </section>
+</div>
+<p class="note">"Covered" means at least one check that targets the failure is ticked. It does not mean the failure cannot occur: each check reduces one error source and is supported by a single study unless stated. Tags: <span class="tag">measured</span> an ablation or controlled comparison exists; <span class="tag">practice</span> a lab or paper does it without a reported number.</p>
+</main>
+
+<script>
+const FAIL = {
+  near:  {name:"Near-tie label noise", ev:"Llama 2 RM 79.1% on 'significantly better' vs 54.5% on 'negligibly better' pairs [bradley-terry-rm]"},
+  pop:   {name:"Rater population mismatch", ev:"Reddit raters skew male, educated, middle-aged [litbench §7]; zh raters agreed more than en [speechjudge §6]"},
+  len:   {name:"Length bias", ev:"65.25% of raw chosen stories longer; RM without rebalancing saturated at 70% [litbench]; +166 words RL - SFT [rlmt-think-chat]"},
+  pos:   {name:"Position bias", ev:"GPT-4 order-consistent on 65.0% [judge-llm-bias]; Claude-3.5-Sonnet chose first ~60% [writing-zero]"},
+  praise:{name:"Self-praise / user praise", ev:"self-praise rate +0.217 (think) [rlmt-think-chat]; 417 vs 58 self-explanation tokens [writing-zero]"},
+  bait:  {name:"Engagement-bait closers", ev:"rate +0.232 with thinking, RL - SFT [rlmt-think-chat Table 9]"},
+  hack:  {name:"Fast lexical-hack spread", ev:"planted 'absolutely' bonus: 1% -> 96% of rollouts by step 70 [rlmt-think-chat Table 8]"},
+  over:  {name:"Over-optimization (proxy up, gold down)", ev:"gold score rises then falls with KL while proxy rises [reward-model-overoptimization]"},
+  key:   {name:"Master-key false positives (reference parts)", ev:"FPR up to 90.9% worst case, Qwen2.5-72B [master-rm-one-token]"},
+  bench: {name:"Hacked policy tops a public LLM-judged benchmark", ev:"8.87, highest WritingBench score, for a 'gibberish' policy [writing-zero §4.3.2]"},
+  seesaw:{name:"Objective seesaw", ev:"creativity-only RL: Collie -6.0, IFEval -5.9 [rubicon-rubric-anchors]"},
+  proxy: {name:"Speech proxy near chance", ev:"UTMOS 53.7%, DNSMOS 57.9% agreement with human naturalness [speechjudge]"},
+  vague: {name:"Vague judge criteria (rubric-free Likert)", ev:"HealthBench 25.5 Likert vs 31.2 per-prompt rubric vs 12.5 generic rubric [rubrics-as-rewards Fig. 2]"},
+  choice:{name:"Judge chosen by public benchmark, not own data", ev:"RewardBench vs PPE Preference Pearson 0.07 [skywork-reward-v2 Fig. 2]"},
+  parse: {name:"Silent judge parse failures", ev:"open-instruct returns 0.0 on invalid judge JSON (judge_utils.py L267-268, f020e9a)"}
+};
+
+const STAGES = [
+ {t:"Human pairs", c:"what is labeled, by whom", checks:[
+   {id:"strength", l:"Pairwise labels with a preference-strength field", ev:"Accuracy by strength: 79.1% vs 54.5% [bradley-terry-rm]", tag:"measured", cov:["near"]},
+   {id:"protocol", l:"Small gold set under a written protocol", ev:"Full protocol +3.2 vs raw human labels +0.4 over seed 71.0 [skywork-reward-v2 Table 6]", tag:"measured", cov:["near"]},
+   {id:"raters", l:"Raters drawn from the target user population", ev:"Rater taste is learned by the RM [litbench §7]; no number for the fix", tag:"practice", cov:["pop"]}
+ ]},
+ {t:"Pair filters", c:"before fitting", checks:[
+   {id:"lenbal", l:"Length rebalancing (chosen longer in half the pairs)", ev:"Unbalanced 1.03M pairs saturated at 70%, length-biased [litbench Fig. 7]", tag:"measured", cov:["len"]},
+   {id:"gap", l:"Minimum signal gap and exposure control", ev:"Upvote gap >= 25%, higher-voted story posted later; lightly filtered 395K pairs saturated at 65% [litbench]", tag:"measured", cov:["near"]}
+ ]},
+ {t:"Judge / RM", c:"BT, GenRM, rubric", checks:[
+   {id:"compare", l:"Compare BT vs GenRM on your own gold set", ev:"Speech: GRM 77.2 vs BTRM 72.7 [speechjudge]; writing: CoT GenRM 72% vs BT ~78% [litbench]", tag:"measured", cov:["choice"]},
+   {id:"rubric", l:"Per-prompt rubric or checklist for the judge", ev:"HealthBench 31.2 rubric vs 25.5 Likert vs 12.5 generic [rubrics-as-rewards]", tag:"measured", cov:["vague"]},
+   {id:"veto", l:"Veto rubric: null reward for user praise and self-praise", ev:"Rubicon reports fewer reward spikes; no number [rubicon-rubric-anchors App. A.1]", tag:"practice", cov:["praise"]},
+   {id:"nomos", l:"Speech: pairwise judge trained on your human A/B labels, not a MOS predictor", ev:"UTMOS 53.7% vs trained GRM 77.2% [speechjudge Tables 2-3]", tag:"measured", cov:["proxy"]}
+ ]},
+ {t:"Calibration", c:"judge vs humans", checks:[
+   {id:"swap", l:"Order swap; count only consistent verdicts", ev:"GPT-4 65.0%, GPT-3.5 46.2%, Claude-v1 23.8% consistency [judge-llm-bias Table 2]", tag:"measured", cov:["pos"]},
+   {id:"lenattack", l:"Verbosity attack test on the judge", ev:"Rephrased-list attack fooled Claude-v1 and GPT-3.5 91.3%, GPT-4 8.7% [judge-llm-bias Table 3]", tag:"measured", cov:["len"]},
+   {id:"keys", l:"Master-key probes for any reference-based part", ev:"Master-RM-7B 0.1% avg FPR after truncated-opener negatives [master-rm-one-token]", tag:"measured", cov:["key"]},
+   {id:"policyval", l:"Human validation on the policy's own outputs", ev:"Humans chose RM-preferred story 57% vs 41% [litbench]", tag:"measured", cov:["pop","over"]}
+ ]},
+ {t:"RL", c:"reward format, order, algorithm", checks:[
+   {id:"brpo", l:"Pairwise vs in-group reference + drop one-sign groups (|sum R|/G > 0.6)", ev:"Length 1,872 -> 1,292; self-explanation 417 -> 58 tokens vs scalar RM [writing-zero Table 3]", tag:"measured", cov:["len","praise"]},
+   {id:"stage", l:"Constraint stage before style stage", ev:"Single-objective runs showed the seesaw [rubicon-rubric-anchors Fig. 2]", tag:"measured", cov:["seesaw"]},
+   {id:"gate", l:"Gate style reward behind constraint and safety checks", ev:"MAI-Thinking-1 style judge applied only after verifiable and safety gates; no ablation [mai-thinking-1]", tag:"practice", cov:["seesaw"]}
+ ]},
+ {t:"Monitor & stop", c:"during the run", checks:[
+   {id:"plant", l:"Planted-hack test at run start", ev:"Bonus of half a reward std reached 96% of rollouts by step 70 [rlmt-think-chat Table 8]", tag:"measured", cov:["hack"]},
+   {id:"deltas", l:"Track RL - SFT deltas: length, bullets, bait, self-praise", ev:"+170 words, +0.232 bait, +0.217 self-praise (think) [rlmt-think-chat Table 9]", tag:"measured", cov:["len","bait","praise"]},
+   {id:"kl", l:"Held-out human-aligned score vs sqrt(KL); stop at its peak", ev:"Proxy keeps rising after gold peaks [reward-model-overoptimization Fig. 1]", tag:"measured", cov:["over"]},
+   {id:"otherjudge", l:"Evaluate with a judge different from the training judge", ev:"In-house Eval RM did not reward the hacked policy that WritingBench ranked first [writing-zero]", tag:"measured", cov:["bench","over"]},
+   {id:"parsecount", l:"Count judge parse failures per step", ev:"Parse failure scored 0.0 becomes a negative advantage in a group (open-instruct f020e9a)", tag:"practice", cov:["parse"]}
+ ]}
+];
+
+let active = 0;
+const ticked = new Set();
+
+function renderPipe(){
+  const el = document.getElementById('pipe'); el.innerHTML = '';
+  STAGES.forEach((s,i)=>{
+    const b = document.createElement('button');
+    b.className = 'stage' + (i===active?' active':'');
+    const n = s.checks.filter(c=>ticked.has(c.id)).length;
+    b.innerHTML = `<div class="n">Stage ${i+1}${i<STAGES.length-1?' &rarr;':''}</div><div class="t">${s.t}</div><div class="c">${s.c}</div><div class="c">${n}/${s.checks.length} checks</div>`;
+    b.onclick = ()=>{active=i; render();};
+    el.appendChild(b);
+  });
+}
+function renderDetail(){
+  const s = STAGES[active];
+  let h = `<h2>Stage ${active+1}: ${s.t}</h2>`;
+  s.checks.forEach(c=>{
+    const covers = c.cov.map(k=>FAIL[k].name).join('; ');
+    h += `<div class="check"><label><input type="checkbox" data-id="${c.id}" ${ticked.has(c.id)?'checked':''}>${c.l}<span class="tag">${c.tag}</span></label>
+      <div class="ev">${c.ev}</div><div class="ev">Targets: ${covers}</div></div>`;
+  });
+  const d = document.getElementById('detail'); d.innerHTML = h;
+  d.querySelectorAll('input').forEach(inp=>inp.onchange = e=>{
+    const id = e.target.dataset.id; e.target.checked ? ticked.add(id) : ticked.delete(id); render();
+  });
+}
+function renderCov(){
+  const covered = new Set();
+  STAGES.forEach(s=>s.checks.forEach(c=>{ if(ticked.has(c.id)) c.cov.forEach(k=>covered.add(k)); }));
+  const keys = Object.keys(FAIL);
+  let rows = '';
+  keys.forEach(k=>{
+    const ok = covered.has(k);
+    rows += `<tr><td>${FAIL[k].name}</td><td>${FAIL[k].ev}</td><td class="st ${ok?'ok':'bad'}">${ok?'covered':'open'}</td></tr>`;
+  });
+  document.getElementById('fm').innerHTML = rows;
+  document.getElementById('cov').textContent = `${covered.size} of ${keys.length} failure modes have at least one targeted check.`;
+  document.getElementById('barfill').style.width = (100*covered.size/keys.length)+'%';
+}
+function render(){ renderPipe(); renderDetail(); renderCov(); }
+document.getElementById('all').onclick = ()=>{ STAGES.forEach(s=>s.checks.forEach(c=>ticked.add(c.id))); render(); };
+document.getElementById('none').onclick = ()=>{ ticked.clear(); render(); };
+render();
+</script>
+</body>
+</html>

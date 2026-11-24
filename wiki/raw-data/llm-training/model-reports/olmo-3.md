@@ -53,8 +53,8 @@ Olmo 3.1 Think 32B, described as the strongest fully-open thinking model release
   about 43% and 41% MFU (§3.2).
 - Dolci Think SFT holds 2,268,468 prompts for the 7B model and 2,253,916 for the 32B; the largest single source
   is Dolci Think OpenThoughts 3+ Math at 752,997 prompts (Table 17).
-- Dolci Think DPO holds 200,000 prompts (Table 19); Dolci-Think-RL holds 104,869 prompts for 7B and 171,950 for
-  32B (Table 20).
+- Dolci Think DPO holds 200,000 prompts (Table 19); Dolci RL holds 104,869 prompts for Think RL and 171,950 for
+  Instruct RL (Table 20 columns are Think RL vs Instruct RL; Table 49 lists 104,869 for both 7B and 32B Think RL; corrected 2026-11-24 per [[olmo-3-rl-pipeline]]).
 - Dolci Instruct SFT holds 2,152,112 prompts and Dolci Instruct DPO 259,922 (Table 30).
 - Cost: about 56 days elapsed from start of training to evaluation of Olmo 3 Think 32B on a cluster of 1,024 H100
   GPUs, which the report prices at $2.75M at $2 per H100-hour; roughly 47 days pretraining including midtraining

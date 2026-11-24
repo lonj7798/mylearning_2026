@@ -1,0 +1,153 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Inference Versus Staleness</title>
+<style>
+:root{
+  --bg:#fbfbfa; --fg:#1d1d1f; --muted:#5f6368; --panel:#ffffff; --line:#c9ccd1;
+  --fixed:#d95f02; --scaled:#1b9e77; --bar:#7570b3; --grid:#e3e5e8; --accent:#1a73e8;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#17181a; --fg:#e8eaed; --muted:#a0a4aa; --panel:#202124; --line:#3c4043;
+    --fixed:#fc8d62; --scaled:#66c2a5; --bar:#a59fd6; --grid:#2e3134; --accent:#8ab4f8;
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#17181a; --fg:#e8eaed; --muted:#a0a4aa; --panel:#202124; --line:#3c4043;
+  --fixed:#fc8d62; --scaled:#66c2a5; --bar:#a59fd6; --grid:#2e3134; --accent:#8ab4f8;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);font:15px/1.5 system-ui,-apple-system,Segoe UI,Roboto,sans-serif}
+main{max-width:980px;margin:0 auto;padding:16px}
+h1{font-size:20px;margin:4px 0 2px}
+h2{font-size:16px;margin:0 0 6px}
+.note{color:var(--muted);font-size:13px;margin:4px 0 10px}
+.panel{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:12px 14px;margin:12px 0}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:10px 18px}
+label{font-size:13px;display:block}
+input[type=range]{width:100%}
+.kv{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:8px;margin-top:10px}
+.kv div{border:1px solid var(--line);border-radius:6px;padding:6px 8px}
+.kv b{display:block;font-size:19px}
+.kv span{color:var(--muted);font-size:12px}
+svg{width:100%;height:auto;display:block}
+.ax text{fill:var(--muted);font-size:11px}
+.ax line{stroke:var(--line)}
+.gl{stroke:var(--grid)}
+.lbl{fill:var(--fg);font-size:12px}
+.small{fill:var(--muted);font-size:11px}
+.seg{display:flex;gap:8px;flex-wrap:wrap}
+.seg button{border:1px solid var(--line);background:var(--panel);color:var(--fg);padding:5px 10px;border-radius:6px;cursor:pointer;font:inherit;font-size:13px}
+.seg button[aria-pressed="true"]{border-color:var(--accent);color:var(--accent);font-weight:600}
+</style>
+</head>
+<body>
+<main>
+<h1>Why more inference at a fixed batch size raises staleness</h1>
+<p class="note">Rocket (p. 7): with more inference servers it takes less time to collect a batch, so in an inference-bound job the time between learner steps Δt shrinks, while a rollout's wall-clock time D is unchanged. The waiting term of staleness is about D / Δt learner steps. Rollout durations are the medians of Rocket Fig. 2. Rocket does not report its step time; the defaults below are Olmo 3's representative step (1,000 s, of which 125 s is training; Olmo 3 report §4.4.3), used only as an example of an inference-bound step. Change them to your own values.</p>
+
+<div class="panel">
+<div class="grid">
+  <div>
+    <label for="k">Inference capacity relative to baseline: <b id="kval"></b></label>
+    <input id="k" type="range" min="1" max="8" step="0.5" value="2">
+  </div>
+  <div>
+    <label>Batch size when capacity changes</label>
+    <div class="seg" role="group">
+      <button id="bFixed" aria-pressed="true">fixed (Rocket's case)</button>
+      <button id="bScaled" aria-pressed="false">scaled with capacity</button>
+    </div>
+  </div>
+  <div>
+    <label for="dt0">Baseline step interval Δt₀ at capacity 1×, seconds: <b id="dt0val"></b></label>
+    <input id="dt0" type="range" min="200" max="3000" step="50" value="1000">
+  </div>
+  <div>
+    <label for="tt">Learner compute per step at baseline batch, seconds: <b id="ttval"></b></label>
+    <input id="tt" type="range" min="25" max="1000" step="25" value="125">
+  </div>
+</div>
+<div class="kv">
+  <div><b id="o-dt"></b><span>step interval Δt = max(Δt₀·b/k, T_train·b), b = batch multiplier</span></div>
+  <div><b id="o-sph"></b><span>learner steps per hour</span></div>
+  <div><b id="o-util"></b><span>learner busy fraction (T_train·b / Δt)</span></div>
+  <div><b id="o-regime"></b><span>regime</span></div>
+</div>
+<p class="note">Model assumptions: inference throughput is proportional to capacity; the learner's per-step time is proportional to batch size; D does not change with capacity (Rocket's "even if the rollout's wall-clock time is unchanged"). Sampler lag adds 0–3 steps on top of every value below when weights refresh every 4 steps (Rocket p. 6).</p>
+</div>
+
+<div class="panel">
+<h2>Staleness accumulated while one rollout runs (D / Δt), by problem type</h2>
+<svg id="bars" viewBox="0 0 940 300" role="img" aria-label="Staleness per problem type"></svg>
+</div>
+
+<div class="panel">
+<h2>Software engineering rollout (93 min median) as capacity grows</h2>
+<svg id="line" viewBox="0 0 940 280" role="img" aria-label="Staleness versus capacity"></svg>
+<p class="note">Orange: batch fixed. Staleness rises in proportion to capacity until Δt reaches the learner's own step time; after that, extra inference no longer shortens Δt (it fills the controller queue instead, which ch-04 §5.3 discusses). Green: batch scaled with capacity. Δt and staleness stay constant until the learner, whose work grows with the batch, becomes the bottleneck.</p>
+</div>
+</main>
+<script>
+(function(){
+const NS="http://www.w3.org/2000/svg";
+function el(n,a,t){const e=document.createElementNS(NS,n);for(const k in a)e.setAttribute(k,a[k]);if(t!==undefined)e.textContent=t;return e;}
+const types=[["Instruction following",2],["Visual Q&A",2],["Math & science",7],["Tool use",12],["Competitive coding",34],["Web research",51],["Web development",58],["Software engineering",93]];
+let scaled=false;
+const kIn=document.getElementById("k"),dIn=document.getElementById("dt0"),tIn=document.getElementById("tt");
+function stepInterval(k,isScaled){const b=isScaled?k:1;const dt0=+dIn.value,tt=+tIn.value;return {dt:Math.max(dt0*b/k,tt*b),busy:tt*b,inf:dt0*b/k};}
+function fmt(x){return x>=100?x.toFixed(0):x>=10?x.toFixed(1):x.toFixed(2);}
+function draw(){
+  const k=+kIn.value; const r=stepInterval(k,scaled);
+  document.getElementById("kval").textContent=k+"×";
+  document.getElementById("dt0val").textContent=dIn.value;
+  document.getElementById("ttval").textContent=tIn.value;
+  document.getElementById("o-dt").textContent=fmt(r.dt)+" s";
+  document.getElementById("o-sph").textContent=fmt(3600/r.dt);
+  document.getElementById("o-util").textContent=Math.round(100*r.busy/r.dt)+"%";
+  document.getElementById("o-regime").textContent=r.inf>=r.busy?"inference-bound":"learner-bound";
+  // bars
+  const b=document.getElementById("bars");b.innerHTML="";
+  const base=stepInterval(1,scaled).dt;
+  const vals=types.map(t=>t[1]*60/r.dt), baseVals=types.map(t=>t[1]*60/base);
+  const max=Math.max(1,...types.map(t=>t[1]*60/Math.min(...[1,2,4,8].map(kk=>stepInterval(kk,false).dt))));
+  const x0=190,W=640;
+  types.forEach((t,i)=>{
+    const y=14+i*34;
+    b.appendChild(el("text",{x:x0-8,y:y+15,"text-anchor":"end",class:"lbl"},t[0]+" ("+t[1]+" min)"));
+    b.appendChild(el("rect",{x:x0,y:y+2,width:Math.max(1,baseVals[i]/max*W),height:7,fill:"var(--muted)",opacity:.45}));
+    b.appendChild(el("rect",{x:x0,y:y+10,width:Math.max(1,vals[i]/max*W),height:12,fill:"var(--bar)"}));
+    b.appendChild(el("text",{x:x0+Math.max(baseVals[i],vals[i])/max*W+6,y:y+20,class:"small"},fmt(vals[i])+" steps (1×: "+fmt(baseVals[i])+")"));
+  });
+  b.appendChild(el("text",{x:x0,y:292,class:"small"},"thin grey bar = capacity 1×; thick bar = current capacity"));
+  // line
+  const L=document.getElementById("line");L.innerHTML="";
+  const lx0=70,lx1=900,ly0=240,ly1=20, ks=[];for(let q=1;q<=8.001;q+=0.25)ks.push(q);
+  const sF=ks.map(q=>93*60/stepInterval(q,false).dt), sS=ks.map(q=>93*60/stepInterval(q,true).dt);
+  const ymax=Math.max(...sF,...sS)*1.1;
+  const X=q=>lx0+(q-1)/7*(lx1-lx0), Y=v=>ly0-v/ymax*(ly0-ly1);
+  const ax=el("g",{class:"ax"});
+  for(let q=1;q<=8;q++){ax.appendChild(el("line",{x1:X(q),y1:ly0,x2:X(q),y2:ly1,class:"gl"}));ax.appendChild(el("text",{x:X(q),y:ly0+16,"text-anchor":"middle"},q+"×"));}
+  const step=ymax>40?10:ymax>15?5:ymax>6?2:1;
+  for(let v=0;v<=ymax;v+=step){ax.appendChild(el("line",{x1:lx0,y1:Y(v),x2:lx1,y2:Y(v),class:"gl"}));ax.appendChild(el("text",{x:lx0-6,y:Y(v)+4,"text-anchor":"end"},v));}
+  ax.appendChild(el("text",{x:(lx0+lx1)/2,y:ly0+34,"text-anchor":"middle"},"inference capacity relative to baseline"));
+  ax.appendChild(el("text",{x:16,y:(ly0+ly1)/2,transform:"rotate(-90 16 "+((ly0+ly1)/2)+")","text-anchor":"middle"},"learner steps during one 93-min rollout"));
+  L.appendChild(ax);
+  const path=(arr,col)=>{let d="";arr.forEach((v,i)=>{d+=(i?"L":"M")+X(ks[i])+" "+Y(v)+" ";});L.appendChild(el("path",{d:d,fill:"none",stroke:col,"stroke-width":2.5}));};
+  path(sF,"var(--fixed)");path(sS,"var(--scaled)");
+  const cur=93*60/r.dt;
+  L.appendChild(el("circle",{cx:X(k),cy:Y(cur),r:6,fill:scaled?"var(--scaled)":"var(--fixed)"}));
+  L.appendChild(el("text",{x:X(k)+10,y:Y(cur)-8,class:"lbl"},fmt(cur)+" steps"));
+}
+function setMode(s){scaled=s;document.getElementById("bFixed").setAttribute("aria-pressed",!s);document.getElementById("bScaled").setAttribute("aria-pressed",s);draw();}
+document.getElementById("bFixed").onclick=()=>setMode(false);
+document.getElementById("bScaled").onclick=()=>setMode(true);
+[kIn,dIn,tIn].forEach(e=>e.addEventListener("input",draw));
+draw();
+})();
+</script>
+</body>
+</html>

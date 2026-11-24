@@ -1,0 +1,177 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Recovery Escalation Ladder</title>
+<style>
+:root{
+  --bg:#ffffff; --fg:#1d2330; --muted:#5b6475; --card:#f4f6fa; --line:#d5dae3;
+  --accent:#2f6fdb; --run:#1f8a4c; --stop:#c0392b; --a2:#8e5bd6; --a3:#d08a1e;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#12151b; --fg:#e4e8ef; --muted:#9aa3b2; --card:#1b2029; --line:#2d3440;
+    --accent:#6ea1ff; --run:#4cc38a; --stop:#ff7b6b; --a2:#b993ff; --a3:#f0b35a;
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#12151b; --fg:#e4e8ef; --muted:#9aa3b2; --card:#1b2029; --line:#2d3440;
+  --accent:#6ea1ff; --run:#4cc38a; --stop:#ff7b6b; --a2:#b993ff; --a3:#f0b35a;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);font:15px/1.5 system-ui,-apple-system,Segoe UI,Roboto,sans-serif}
+main{max-width:1100px;margin:0 auto;padding:20px 16px 40px}
+h1{font-size:1.35rem;margin:0 0 4px}
+p.sub{color:var(--muted);margin:0 0 14px}
+.wrap{display:grid;grid-template-columns:360px 1fr;gap:16px}
+@media (max-width:860px){.wrap{grid-template-columns:1fr}}
+.ladder{display:flex;flex-direction:column-reverse;gap:8px}
+.rung{background:var(--card);border:2px solid var(--line);border-radius:10px;padding:10px 12px;cursor:pointer;text-align:left;color:var(--fg);font:inherit}
+.rung.active{border-color:var(--accent)}
+.rung .lvl{font-size:.78rem;color:var(--muted)}
+.rung .nm{font-weight:700}
+.rung .sm{font-size:.82rem;color:var(--muted)}
+.arrow{font-size:.78rem;color:var(--muted);text-align:center}
+.panel{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:14px}
+.panel h2{font-size:1.05rem;margin:0 0 8px}
+.comp{display:flex;flex-wrap:wrap;gap:6px;margin:6px 0 10px}
+.chip{font-size:.8rem;padding:2px 8px;border-radius:8px;border:1px solid var(--line)}
+.chip.run{color:var(--run);border-color:var(--run)}
+.chip.stop{color:var(--stop);border-color:var(--stop)}
+table{width:100%;border-collapse:collapse;font-size:.88rem;margin-top:6px}
+td,th{padding:6px 4px;border-bottom:1px solid var(--line);text-align:left;vertical-align:top}
+th{color:var(--muted);font-weight:600}
+.num{text-align:right;font-variant-numeric:tabular-nums}
+.ctl{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin:14px 0 4px}
+input[type=range]{flex:1 1 220px}
+.stack{display:flex;height:22px;border-radius:6px;overflow:hidden;border:1px solid var(--line);margin:8px 0}
+.stack div{height:100%}
+.legend{display:flex;gap:12px;flex-wrap:wrap;font-size:.82rem;color:var(--muted)}
+.sw{display:inline-block;width:10px;height:10px;border-radius:2px;margin-right:4px;vertical-align:middle}
+.note{font-size:.82rem;color:var(--muted);margin-top:10px}
+.oss{font-size:.88rem;margin-top:8px}
+.oss li{margin-bottom:4px}
+</style>
+</head>
+<body>
+<main>
+<h1>Recovery escalation ladder (Rocket, MAI Base 2 post)</h1>
+<p class="sub">Bottom rung = smallest scope. Click a rung to see what keeps running, the Table 1 row, and the open-framework counterpart. Source: [[mai-rl-infrastructure]] p. 11–12 and Table 1 (p. 11), "a portion of RL training, assuming 6,000 GPUs".</p>
+
+<div class="wrap">
+  <div>
+    <div class="ladder" id="ladder"></div>
+  </div>
+  <div class="panel" id="detail"></div>
+</div>
+
+<section class="panel" style="margin-top:16px">
+  <h2>Table 1 savings, rescaled by GPU count</h2>
+  <div class="ctl">
+    <label for="gpus">GPUs in the job:</label>
+    <input type="range" id="gpus" min="500" max="20000" step="500" value="6000">
+    <strong id="gpuval">6,000</strong>
+    <button id="reset" style="font:inherit;font-size:.85rem;padding:3px 10px;border-radius:8px;border:1px solid var(--line);background:var(--bg);color:var(--fg);cursor:pointer">Reset to 6,000</button>
+  </div>
+  <div class="stack" id="stack"></div>
+  <div class="legend" id="legend"></div>
+  <table>
+    <thead><tr><th>Event type</th><th class="num">n</th><th class="num">Saved / event (h)</th><th class="num">Time saved (h)</th><th class="num">% of 2,490 h</th><th class="num">GPU-hours saved</th></tr></thead>
+    <tbody id="tbody"></tbody>
+  </table>
+  <p class="note">At 6,000 GPUs the GPU-hours column equals Table 1. At any other value it is hours × GPUs, a derived rescaling that assumes the same event counts and per-event savings, which the post does not claim. The post does not state how the per-event savings were estimated. The runtime-elasticity row is ch-21's mechanism; it is shown here because it shares the table.</p>
+</section>
+</main>
+
+<script>
+const RUNGS = [
+  {lvl:"Rung 1 (smallest)", nm:"Replace one inference replica",
+   sm:"replica unhealthy; fleet above live-fraction threshold",
+   run:["Learner","Controller","Other inference replicas","Rollout store"], stop:["The failed replica","Its in-flight rollouts (dropped)"],
+   text:"Inference recovery replaces one replica (p. 11). In-flight rollouts on it are lost; dropping failed rollouts is Rocket's policy, at the cost of noise or bias in the GRPO baseline (p. 7). If the live fraction of the fleet falls below a threshold (value not stated), the job restarts at cluster level (rung 4).",
+   row:null,
+   oss:["slime: engines failing /health_generate are retired and restarted before the next weight update (fault-tolerance.md L86–90; health_monitor.py L130–154).",
+        "verl v1 async: a group whose rollout finishes with failure is evicted and refilled with one new prompt (v1_async_trainer.md L84–92).",
+        "Rocket v1: request retried mid-flight on another replica; replica self-watchdog; router circuit breaker ([[mai-thinking-1]] Sec. 3.6)."]},
+  {lvl:"Rung 2", nm:"Learner-only recovery",
+   sm:"learner rank failed or stalled",
+   run:["Inference fleet (keeps generating)","Controller (live)","Rollout workers"], stop:["All learner ranks (killed without waiting for NCCL timeouts)"],
+   text:"Pause admission, kill learner ranks without waiting for NCCL timeouts, rebuild, restore the latest checkpoint, reconnect to the live controller: \"roughly five minutes\". Inference keeps running and the run accepts the staleness cost (p. 11).",
+   row:"learner",
+   oss:["slime: ServingCluster is a detached Ray actor that survives the trainer; resubmit train.py to the same Ray cluster; batches after the last checkpoint are replayed (fault-tolerance.md L7–55). Resubmission is manual (L9).",
+        "AReaL, open-instruct: no learner-only scope documented; the whole job restarts (rung 4)."]},
+  {lvl:"Rung 3", nm:"In-job rebuild",
+   sm:"learner-only recovery not sufficient",
+   run:["The Ray job and its allocation"], stop:["Components rebuilt inside the job"],
+   text:"Escalation step after smaller-scope recovery: rebuild within the Ray job instead of requeueing the cluster job (p. 11–12). The post does not list which components are rebuilt in this step.",
+   row:"injob",
+   oss:["No open framework card documents an in-job rebuild distinct from a whole-job restart."]},
+  {lvl:"Rung 4 (largest)", nm:"Cluster requeue",
+   sm:"in-job rebuild failed, or live fraction below threshold",
+   run:["Checkpoints on durable storage"], stop:["Everything: learner, inference, controller, in-flight rollouts"],
+   text:"The job is requeued at cluster level (Kubernetes or Slurm) and restarts from checkpoints (p. 11–12). Table 1 has no row for it: it is the baseline the other rows save against. Ray heads and CPU actors run on CPU-only nodes, \"more stable than GPU nodes in our deployments\" (p. 12), which keeps rungs 1–3 available.",
+   row:null,
+   oss:["AReaL: relaunch ray_main up to recover.retries = 3 times after 10 s (launcher/ray.py L1024–1033).",
+        "verl: resume_mode: auto from the last checkpoint (ppo_trainer.yaml L187); early save before ESI shutdown (L176–181).",
+        "open-instruct: driver raises on a 120 s weight-sync timeout (grpo_fast.py L1854–1855); restart loads checkpoint_state_dir (L395–415).",
+        "OlmoRL: not reported in [[olmo-3-rl-pipeline]]."]}
+];
+
+const ROWS = [
+  {key:"injob",  name:"In-job recovery",   n:21,  per:0.5, h:10.5, color:"var(--a3)"},
+  {key:"learner",name:"Learner recovery",  n:88,  per:2,   h:176,  color:"var(--accent)"},
+  {key:"elastic",name:"Runtime elasticity (ch-21)", n:123, per:2, h:246, color:"var(--a2)"}
+];
+const TOTAL_H = 2490;
+
+let active = 1;
+function fmt(x){ return Math.round(x).toLocaleString('en-US'); }
+
+function renderLadder(){
+  const L = document.getElementById('ladder'); L.innerHTML='';
+  RUNGS.forEach((r,i)=>{
+    const b=document.createElement('button');
+    b.className='rung'+(i===active?' active':'');
+    b.innerHTML=`<div class="lvl">${r.lvl}</div><div class="nm">${r.nm}</div><div class="sm">Trigger: ${r.sm}</div>`;
+    b.onclick=()=>{active=i;renderLadder();renderDetail();};
+    L.appendChild(b);
+    if(i<RUNGS.length-1){ const a=document.createElement('div'); a.className='arrow'; a.textContent='escalate if this fails ↑'; L.appendChild(a); }
+  });
+}
+function renderDetail(){
+  const r=RUNGS[active];
+  let h=`<h2>${r.nm}</h2><p>${r.text}</p>`;
+  h+=`<div><strong>Keeps running</strong></div><div class="comp">${r.run.map(x=>`<span class="chip run">${x}</span>`).join('')}</div>`;
+  h+=`<div><strong>Stopped or lost</strong></div><div class="comp">${r.stop.map(x=>`<span class="chip stop">${x}</span>`).join('')}</div>`;
+  if(r.row){
+    const row=ROWS.find(x=>x.key===r.row);
+    h+=`<div><strong>Table 1 row</strong></div><table><tr><th>n</th><th>Saved / event</th><th>Time saved</th><th>%</th><th>GPU-hours (6,000 GPUs)</th></tr>
+      <tr><td>${row.n}</td><td>${row.per} h</td><td>${row.h} h</td><td>${(100*row.h/TOTAL_H).toFixed(2)}%</td><td>${fmt(row.h*6000)}</td></tr></table>`;
+  } else {
+    h+=`<div><strong>Table 1 row</strong>: none for this rung.</div>`;
+  }
+  h+=`<div style="margin-top:10px"><strong>Open-framework counterpart</strong></div><ul class="oss">${r.oss.map(x=>`<li>${x}</li>`).join('')}</ul>`;
+  document.getElementById('detail').innerHTML=h;
+}
+function renderTable(){
+  const g=+document.getElementById('gpus').value;
+  document.getElementById('gpuval').textContent=fmt(g);
+  let rows='', tot=0;
+  ROWS.forEach(r=>{ tot+=r.h;
+    rows+=`<tr><td>${r.name}</td><td class="num">${r.n}</td><td class="num">${r.per}</td><td class="num">${r.h}</td><td class="num">${(100*r.h/TOTAL_H).toFixed(2)}%</td><td class="num">${fmt(r.h*g)}</td></tr>`;
+  });
+  rows+=`<tr><td><strong>Total estimated savings</strong></td><td></td><td></td><td class="num"><strong>${tot}</strong></td><td class="num"><strong>${(100*tot/TOTAL_H).toFixed(2)}%</strong></td><td class="num"><strong>${fmt(tot*g)}</strong></td></tr>`;
+  rows+=`<tr><td>Overall training time</td><td></td><td></td><td class="num">${TOTAL_H}</td><td class="num">100.00%</td><td class="num">${fmt(TOTAL_H*g)}</td></tr>`;
+  document.getElementById('tbody').innerHTML=rows;
+  const S=document.getElementById('stack'); S.innerHTML='';
+  ROWS.forEach(r=>{ const d=document.createElement('div'); d.style.width=(100*r.h/TOTAL_H)+'%'; d.style.background=r.color; d.title=r.name; S.appendChild(d); });
+  const rest=document.createElement('div'); rest.style.width=(100*(TOTAL_H-tot)/TOTAL_H)+'%'; rest.style.background='var(--line)'; S.appendChild(rest);
+  document.getElementById('legend').innerHTML = ROWS.map(r=>`<span><span class="sw" style="background:${r.color}"></span>${r.name} ${(100*r.h/TOTAL_H).toFixed(2)}%</span>`).join('') + `<span><span class="sw" style="background:var(--line)"></span>rest of the 2,490 h</span>`;
+}
+document.getElementById('gpus').oninput=renderTable;
+document.getElementById('reset').onclick=()=>{document.getElementById('gpus').value=6000;renderTable();};
+renderLadder(); renderDetail(); renderTable();
+</script>
+</body>
+</html>

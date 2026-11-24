@@ -1,0 +1,136 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>IF Reward Pipeline</title>
+<style>
+  :root { --bg:#fafaf8; --panel:#fff; --ink:#1f2328; --muted:#5b6470; --rule:#d9dde3; --pos:#1f7a4d; --neg:#b3261e; --acc:#1d5fa8; --cell:#eef1f5; }
+  @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) { --bg:#16181c; --panel:#1e2126; --ink:#e6e8eb; --muted:#a0a8b3; --rule:#353a42; --pos:#4cc38a; --neg:#f2836b; --acc:#6aa6e8; --cell:#2a2e35; } }
+  :root[data-theme="dark"] { --bg:#16181c; --panel:#1e2126; --ink:#e6e8eb; --muted:#a0a8b3; --rule:#353a42; --pos:#4cc38a; --neg:#f2836b; --acc:#6aa6e8; --cell:#2a2e35; }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--ink); font:14px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif; }
+  main { max-width:1040px; margin:0 auto; padding:20px 16px 40px; }
+  h1 { font-size:19px; margin:0 0 4px; } h2 { font-size:15px; margin:0 0 8px; }
+  p.sub, .note { color:var(--muted); } p.sub { margin:0 0 16px; } .note { font-size:12.5px; }
+  .panel { background:var(--panel); border:1px solid var(--rule); border-radius:8px; padding:16px; margin-bottom:18px; }
+  .flow { display:flex; flex-wrap:wrap; gap:6px; align-items:center; font-size:13px; }
+  .flow span.box { border:1px solid var(--rule); border-radius:6px; padding:4px 8px; background:var(--bg); }
+  .flow span.box.on { border-color:var(--acc); color:var(--acc); font-weight:600; }
+  .scroll { overflow-x:auto; }
+  table { border-collapse:collapse; width:100%; font-size:13px; min-width:640px; }
+  th, td { border-bottom:1px solid var(--rule); padding:6px 8px; text-align:center; }
+  th:first-child, td:first-child { text-align:left; }
+  th { color:var(--muted); font-weight:600; }
+  td.num { font-family:ui-monospace,Menlo,monospace; }
+  button.cell { width:44px; height:28px; border:1px solid var(--rule); border-radius:4px; background:var(--cell); color:var(--ink); cursor:pointer; font:inherit; }
+  button.cell.pass { background:var(--pos); color:#fff; border-color:var(--pos); }
+  button.cell.fail { background:var(--neg); color:#fff; border-color:var(--neg); }
+  input[type=number] { width:56px; font:inherit; color:var(--ink); background:var(--panel); border:1px solid var(--rule); border-radius:4px; padding:2px 4px; }
+  .controls { display:flex; flex-wrap:wrap; gap:12px 24px; margin:4px 0 12px; }
+  .controls label { font-size:13px; }
+  select { font:inherit; color:var(--ink); background:var(--panel); border:1px solid var(--rule); border-radius:6px; padding:3px 8px; }
+  .pos { color:var(--pos); } .neg { color:var(--neg); }
+  ul.ev { margin:0; padding-left:18px; } ul.ev li { margin:4px 0; }
+  code { font-family:ui-monospace,Menlo,monospace; font-size:12.5px; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Instruction-following RL: from constraints to a reward</h1>
+  <p class="sub">The prompt, responses and quality scores below are an illustrative construction. Click a cell to toggle whether a response satisfies a constraint, choose an aggregation rule, and see how rewards and group advantages change. The aggregation rules, the gating formula and α = 7 come from the sources listed at the bottom.</p>
+
+  <section class="panel">
+    <h2>Pipeline</h2>
+    <div class="flow" id="flow">
+      <span class="box">prompt + 1–n constraints</span>→
+      <span class="box">strip &lt;think&gt; (open-instruct L195–205)</span>→
+      <span class="box">checker per constraint → pass/fail</span>→
+      <span class="box on" id="aggBox">aggregate</span>→
+      <span class="box" id="gateBox">quality gate (optional)</span>→
+      <span class="box">group advantage</span>
+    </div>
+    <p class="note" style="margin-top:10px">Illustrative prompt: "Summarize the plan for the customer. (C1) Use at most 50 words. (C2) Include the word <code>refund</code> at least twice. (C3) Do not use commas."</p>
+  </section>
+
+  <section class="panel">
+    <h2>Group of four responses</h2>
+    <div class="controls">
+      <label>Aggregation
+        <select id="agg">
+          <option value="binary">binary: 1 if all satisfied (Olmo 3 report; HAcc)</option>
+          <option value="fraction" selected>fraction satisfied (open-instruct@f020e9a L381; SAcc)</option>
+          <option value="sum">sum over constraints (IFBench Eq. 1)</option>
+        </select></label>
+      <label><input type="checkbox" id="std"> divide advantage by group std (GRPO); off = OlmoRL / Dr. GRPO</label>
+      <label><input type="checkbox" id="gate"> IFBench App. E gating with RM score S, α = 7</label>
+    </div>
+    <div class="scroll">
+    <table>
+      <thead><tr><th>Response</th><th>C1</th><th>C2</th><th>C3</th><th>RM score S (0–10, illustrative)</th><th>V (verifiable)</th><th>Reward</th><th>Advantage</th></tr></thead>
+      <tbody id="tb"></tbody>
+    </table>
+    </div>
+    <p class="note" id="explain"></p>
+  </section>
+
+  <section class="panel">
+    <h2>Measured evidence (from the cards)</h2>
+    <ul class="ev">
+      <li>Pure constraint reward from Tülu-DPO: AlpacaEval 2 33.5 → 21.3; judge score with constraint removed 7 → 6.4 out of 10 (ifbench Table 3, §5).</li>
+      <li>Gated shaping (this figure's checkbox), RM Llama-3.1-Tulu-3-8B-RM, α = 7: IFEval 86.1, IFBench 30, AlpacaEval 2 31.6 (ifbench App. E).</li>
+      <li>Constraints per instance n = 1…6 (Qwen2.5): IFEval 71.2, 79.9, 77.8, 79.5, 79.9, 85.8 (ifbench Table 1).</li>
+      <li>Seen vs unseen types: Tülu 3 8B IFEval 82.4 vs IFEval-OOD 24.3 (tulu-3 Table 31).</li>
+      <li>Reasoning RL length 1k → 8k: hard IF 19.05 → 14.29, math 28.73 → 39.82 (mathif Table 5).</li>
+      <li>No ablation of binary vs fraction vs sum aggregation for IF RL was found in the cards read.</li>
+    </ul>
+  </section>
+</main>
+<script>
+const ALPHA = 7;
+const rows = [
+  {n:"R1", c:[1,1,1], s:8},
+  {n:"R2", c:[1,1,0], s:8},
+  {n:"R3", c:[1,0,1], s:5},
+  {n:"R4", c:[0,0,0], s:3}
+];
+const tb = document.getElementById("tb");
+function fmt(x){ const s=(Math.abs(x)<5e-9?0:x).toFixed(2); return (x>5e-9?"+":"")+s; }
+function verifiable(c, agg){
+  const k=c.reduce((a,b)=>a+b,0), n=c.length;
+  if (agg==="binary") return k===n?1:0;
+  if (agg==="fraction") return k/n;
+  return k;
+}
+function render(){
+  const agg=document.getElementById("agg").value, useStd=document.getElementById("std").checked, gate=document.getElementById("gate").checked;
+  document.getElementById("gateBox").classList.toggle("on", gate);
+  const V=rows.map(r=>verifiable(r.c,agg));
+  const R=V.map((v,i)=>{ if(!gate) return v; const S=rows[i].s; if(v>0 && S>ALPHA) return v+1; if(v>0 && S<=ALPHA) return v-0.5; return v; });
+  const mean=R.reduce((a,b)=>a+b,0)/R.length;
+  const sd=Math.sqrt(R.reduce((a,b)=>a+(b-mean)**2,0)/(R.length-1));
+  const A=R.map(r=> useStd ? (sd>0 ? (r-mean)/(sd+1e-6) : 0) : r-mean);
+  tb.innerHTML="";
+  rows.forEach((r,i)=>{
+    const tr=document.createElement("tr");
+    let h=`<td>${r.n}</td>`;
+    r.c.forEach((v,j)=>{ h+=`<td><button class="cell ${v?"pass":"fail"}" data-i="${i}" data-j="${j}" aria-label="${r.n} C${j+1} ${v?"pass":"fail"}">${v?"pass":"fail"}</button></td>`; });
+    h+=`<td><input type="number" min="0" max="10" step="0.5" value="${r.s}" data-s="${i}" aria-label="${r.n} RM score"></td>`;
+    h+=`<td class="num">${V[i].toFixed(2)}</td><td class="num">${R[i].toFixed(2)}</td><td class="num ${A[i]>0?"pos":(A[i]<0?"neg":"")}">${fmt(A[i])}</td>`;
+    tr.innerHTML=h; tb.appendChild(tr);
+  });
+  tb.querySelectorAll("button.cell").forEach(b=>b.onclick=()=>{ const i=+b.dataset.i, j=+b.dataset.j; rows[i].c[j]=1-rows[i].c[j]; render(); });
+  tb.querySelectorAll("input[data-s]").forEach(inp=>inp.onchange=()=>{ rows[+inp.dataset.s].s=Math.max(0,Math.min(10,+inp.value)); render(); });
+  const zero = R.every(x=>Math.abs(x-R[0])<1e-9);
+  let t = `Group mean reward ${mean.toFixed(3)}${useStd?`, std ${sd.toFixed(3)}`:""}. `;
+  if (zero) t += "All rewards are equal, so every advantage is 0 and this group gives no gradient (it would be dropped by a zero-std filter). ";
+  if (agg==="binary") t += "Binary: any response that misses one constraint gets the same reward as one that misses all of them. ";
+  if (agg==="sum") t += "Sum: reward scale grows with the number of constraints, so without std division prompts with more constraints get larger updates. ";
+  if (gate) t += "Gating: a response with V > 0 gains +1 if S > 7 and loses 0.5 otherwise; V ≤ 0 is unchanged (IFBench App. E).";
+  document.getElementById("explain").textContent=t;
+}
+["agg","std","gate"].forEach(id=>document.getElementById(id).onchange=render);
+render();
+</script>
+</body>
+</html>
