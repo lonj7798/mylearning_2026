@@ -9,7 +9,7 @@
               [[replay-buffer-rlhf]], [[kimi-k1-5]], [[deepswe]], [[r2e-gym]], [[qwen3-coder]],
               [[skyrl-agent]], [[asearcher]], [[agent-lightning]], [[prime-intellect-environments-hub]],
               [[topr-tapered-off-policy-reinforce]], [[asymmetric-reinforce]], [[rls-razor]],
-              [[retaining-by-doing]], [[rlvr-beyond-base-model]]
+              [[retaining-by-doing]], [[rlvr-beyond-base-model]], [[rstar2-agent]], [[deepspeed-chat]], [[zerosearch]], [[slime]]
      figures: figures/async-pipeline.html
      revised: 2026-09 (generality revision)
 -->
@@ -341,6 +341,15 @@ Values are quoted at their loci. Framework defaults, released configs, and publi
 
 ---
 
+## 2026-11 additions: open-lab sources
+
+Library cards added in 2026-11 from Microsoft, Qwen, DeepSeek, and Z.ai sources. Each entry lists the facts this chapter can use, with source locations; the cards in `wiki/raw-data/llm-training/` hold the full extracts.
+
+- **rStar2-Agent** ([[rstar2-agent]]). The rollout scheduler assigns requests by available KV-cache capacity instead of equal static splits, because SGLang evicts half of in-progress rollouts on KV overflow; the isolated code-execution service handles up to 45K tool calls per step at 0.3 s mean latency (§3).
+- **DeepSpeed-Chat** ([[deepspeed-chat]]). More than one actor update per generated batch was "very unstable", so all benchmark runs used `ppo_epochs = generation_batches = 1` (step-3 README; BenckmarkSetting.md).
+- **ZeroSearch** ([[zerosearch]]). 200 steps with ~64,000 search calls cost $586.7 in API fees against $70.8 of simulator GPU time (App. D, Table 8); the simulator GPUs are busy during rollout and idle during policy updates.
+- **slime** ([[slime]]). `--colocate` places rollout and training on the same GPUs and also enables offload for both (`arguments.py` L2141–2156); without it, rollout and training get separate GPU pools (`placement_group.py` L126–137). Fully-async mode keeps in-flight trajectories across weight updates, and the docs ask users to monitor `staleness/mean` and `staleness/max` (`rl-systems.md` L33–43).
+
 ## Connections
 
 - **Previous:** ch-53 — Lab: Evaluation Harness with a Held-Out Suite, Forgetting Report, and Perturbation Robustness. The harness built there is what detects the narrowing this chapter's filters and staleness caps can cause.
@@ -382,3 +391,7 @@ Values are quoted at their loci. Framework defaults, released configs, and publi
 - [[rls-razor]] — the forgetting law, KL-to-base as the predictor, and the oracle-SFT control.
 - [[retaining-by-doing]] — the independent replication that RL forgets less than SFT at comparable target performance.
 - [[rlvr-beyond-base-model]] — pass@k coverage loss after RL, the reason large-k pass@k is on the measurement list.
+- [[rstar2-agent]] — KV-capacity rollout scheduling and an isolated tool service; 2026-11 library card.
+- [[deepspeed-chat]] — one update per generated batch as the stable setting; 2026-11 library card.
+- [[zerosearch]] — cost of a simulated environment versus a paid API; 2026-11 library card.
+- [[slime]] — colocated versus separate placement; fully-async staleness metrics; 2026-11 library card.

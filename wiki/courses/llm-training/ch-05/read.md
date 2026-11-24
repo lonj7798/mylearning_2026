@@ -3,7 +3,7 @@
      kind: content
      title: Distributed Training Choices That Change Batch Size, Sequence Length, and Tokens Seen
      deps: [ch-03, ch-04]
-     sources: [[fsdp-sft]], [[llama-3]], [[llama-3-recipe]], [[deepseek-v3]], [[deepseek-v3-recipe]], [[olmo-3]], [[olmo-core-olmo3-configs]], [[ring-attention]], [[deepspeed-ulysses]], [[large-batch-training-noise-scale]]
+     sources: [[fsdp-sft]], [[llama-3]], [[llama-3-recipe]], [[deepseek-v3]], [[deepseek-v3-recipe]], [[olmo-3]], [[olmo-core-olmo3-configs]], [[ring-attention]], [[deepspeed-ulysses]], [[large-batch-training-noise-scale]], [[deepseek-open-infra]]
      figures: figures/parallelism-layout.html, figures/fsdp-memory.html
      revised: 2026-09 (generality revision)
 -->
@@ -387,6 +387,12 @@ Rows quote published runs. `Status` records reading at the locus on the stated d
 
 ---
 
+## 2026-11 additions: open-lab sources
+
+Library cards added in 2026-11 from Microsoft, Qwen, DeepSeek, and Z.ai sources. Each entry lists the facts this chapter can use, with source locations; the cards in `wiki/raw-data/llm-training/` hold the full extracts.
+
+- **DeepSeek open infrastructure (DualPipe, DeepEP)** ([[deepseek-open-infra]]). The DualPipe reference implementation requires an even number of PP ranks and an even micro-batch count of at least 2 × PP (`dualpipe.py` L332–333), and defers weight-gradient work through `WeightGradStore` so that it fills otherwise idle pipeline slots. The README gives the bubble as (PP/2−1)(F&B+B−3W) against (PP−1)(F+B) for 1F1B, at a cost of 2× parameters and PP+1 activations per device (`DualPipe/README.md` L26–36). The Feb-2025 DeepEP README measured internode MoE dispatch at 43–46 GB/s over ~50 GB/s RDMA NICs in the DeepSeek-V3 pretraining configuration, and its example reserves 24 SMs for communication kernels (README @84d3d6f L15–24, L123). These are the code-level constraints behind the DualPipe and all-to-all statements in §5.4; the micro-batch constraint ties the pipeline schedule to the batch-size decision.
+
 ## Connections
 
 - Previous chapter: [[ch-04]] — *Sequence Packing, Loss Masking, and Chat Templates*. Packing fixes what one sequence contains; this chapter fixes how many such sequences enter one optimizer step.
@@ -411,3 +417,4 @@ Rows quote published runs. `Status` records reading at the locus on the stated d
 - [[ring-attention]] — §4: chapter excerpt with the ring mechanism, the `c = F/B` and `s = 6c` overlap condition, and Table 2.
 - [[deepspeed-ulysses]] — §4: chapter excerpt with the two all-to-all steps, `4Nh/P` versus `4Nh` per-link volume, ZeRO-3 over the combined DP and SP group, reported scaling.
 - [[large-batch-training-noise-scale]] — §2.4: the steps-versus-examples relation, `B_crit`, the `B_simple = tr(Σ)/|G|²` estimator, and the Table 1 range across 8 tasks.
+- [[deepseek-open-infra]] — DualPipe micro-batch constraint, bubble and memory expressions; DeepEP internode bandwidth and reserved SMs; 2026-11 library card.

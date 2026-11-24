@@ -3,7 +3,7 @@
      kind: content
      title: Distillation in Practice B: Prompt Selection, Teacher Sampling, and Quality Filters
      deps: [ch-35, ch-22]
-     sources: [[open-thoughts]], [[openmathreasoning]], [[opencodereasoning]], [[qwen-3]], [[light-r1]], [[limo]], [[s1]], [[magistral]], [[magistral-recipe]], [[glm-4-5]], [[llama-4]], [[kimi-k1-5]], [[acereason-nemotron-1-1]], [[distillation-source-matters]], [[small-models-learnability-gap]], [[capacity-gap-law-distillation]], [[deepdistill]], [[naturalthoughts]], [[phi-4]], [[bespoke-stratos]], [[openr1-recipe]], [[deepseek-r1]], [[deepseek-r1-recipe]], [[deepseek-v3]], [[llama-nemotron]], [[hermes-4]]
+     sources: [[open-thoughts]], [[openmathreasoning]], [[opencodereasoning]], [[qwen-3]], [[light-r1]], [[limo]], [[s1]], [[magistral]], [[magistral-recipe]], [[glm-4-5]], [[llama-4]], [[kimi-k1-5]], [[acereason-nemotron-1-1]], [[distillation-source-matters]], [[small-models-learnability-gap]], [[capacity-gap-law-distillation]], [[deepdistill]], [[naturalthoughts]], [[phi-4]], [[bespoke-stratos]], [[openr1-recipe]], [[deepseek-r1]], [[deepseek-r1-recipe]], [[deepseek-v3]], [[llama-nemotron]], [[hermes-4]], [[phi-4-mini-reasoning]]
      figures: figures/difficulty-filter-explorer.html
      revised: 2026-09 (generality revision)
 -->
@@ -399,6 +399,12 @@ Units: "samples" and "examples" are prompt-response pairs; batch values are sequ
 7. A 30-token question and a training variant differ only in two numbers. Explain which of the 8-, 13-, and 32-gram filters flag it and why Light-R1 adds a digit-insensitive exact match.
 8. A general-purpose 8B student is distilled on 95% math and code reasoning traces. Name three measurements from this chapter that would detect narrowing first, and the source result that motivates each.
 
+## 2026-11 additions: open-lab sources
+
+Library cards added in 2026-11 from Microsoft, Qwen, DeepSeek, and Z.ai sources. Each entry lists the facts this chapter can use, with source locations; the cards in `wiki/raw-data/llm-training/` hold the full extracts.
+
+- **Phi-4-Mini-Reasoning** ([[phi-4-mini-reasoning]]). Questions without traces get ~8 new DeepSeek-R1 rollouts each; a math-verification tool checks answers, and GPT-4o-mini re-checks the rollouts flagged incorrect to reduce false negatives. Each sample is tagged with domain, difficulty (elementary to graduate) and presence of repetitive patterns (§4, Table 2).
+
 ## Connections
 
 - Previous: [[ch-35]] — Distillation in Practice A: Where Labs Insert Teacher Data. That chapter places teacher data in the pipeline; this chapter builds one distillation dataset.
@@ -433,3 +439,4 @@ Units: "samples" and "examples" are prompt-response pairs; batch values are sequ
 - [[deepseek-v3]] — expert data with a reflection-and-verification system prompt; Table 9.
 - [[llama-nemotron]] — "detailed thinking on/off" pairs, data shares, SFT settings by model, distillation upper bound, IFEval drop, RL prompt filter (excerpt; no library card).
 - [[hermes-4]] — task verifiers and judge loop, training units, 30k `</think>` length-control stage (excerpt; no library card).
+- [[phi-4-mini-reasoning]] — teacher re-sampling, verifier false-negative re-check, per-sample tags; 2026-11 library card.

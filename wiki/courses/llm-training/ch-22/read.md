@@ -3,7 +3,7 @@
      kind: content
      title: Quality, Diversity, and Gradient-Based Data Selection
      deps: [ch-21]
-     sources: [[alpagasus]], [[cherry-llm]], [[ifd]], [[superfiltering]], [[deita]], [[qdit-data-diversity]], [[less]], [[prismatic-synthesis]], [[instruction-data-selection-at-scale]], [[long-is-more-for-alignment]], [[rip-rejecting-instruction-preferences]], [[lima]], [[revisiting-superficial-alignment-hypothesis]], [[likelihood-displacement]], [[tulu-3-sft-mix]], [[kto]], [[judge-llm-bias]]
+     sources: [[alpagasus]], [[cherry-llm]], [[ifd]], [[superfiltering]], [[deita]], [[qdit-data-diversity]], [[less]], [[prismatic-synthesis]], [[instruction-data-selection-at-scale]], [[long-is-more-for-alignment]], [[rip-rejecting-instruction-preferences]], [[lima]], [[revisiting-superficial-alignment-hypothesis]], [[likelihood-displacement]], [[tulu-3-sft-mix]], [[kto]], [[judge-llm-bias]], [[rho-1]], [[arena-learning]]
      figures: figures/ifd-scatter.html
      revised: 2026-09 (generality revision)
 -->
@@ -364,6 +364,13 @@ Starting point for a small general-purpose run: for a 7B base model and a mixed-
 7. Using the softmax gradient, explain why a response written by another model makes a weaker DPO rejected sample than a near-policy response, and how RIP avoids this.
 8. Design an evaluation that would test whether G-Vendi predicts general capability beyond math and NLI, and state which confound App. D requires you to control.
 
+## 2026-11 additions: open-lab sources
+
+Library cards added in 2026-11 from Microsoft, Qwen, DeepSeek, and Z.ai sources. Each entry lists the facts this chapter can use, with source locations; the cards in `wiki/raw-data/llm-training/` hold the full extracts.
+
+- **Rho-1** ([[rho-1]]). Cross-reference. Selection at token granularity, by excess loss against a reference model, as opposed to the example-level selection in this chapter; see [[ch-10a]].
+- **Arena Learning** ([[arena-learning]]). Keep only the instructions the target model loses in judged battles against stronger models. At equal size (10K), battle-loss selection scores above INSTAG, IFD and K-Means selection on WizardArena Elo (Table 5; exact values not carried in the library card); the selection drifts toward coding, math and reasoning (Fig. 11). Over three SFT → DPO → PPO iterations WizardLM-β-7B moves 871 → 1274 WizardArena Elo while the selected SFT data shrinks 14.6K → 7.8K (Fig. 8, Table 9).
+
 ## Connections
 
 - Previous: [[ch-21]] — Taxonomy-Driven and Textbook-Style Synthesis (produces the candidate pools that this chapter selects from; generation methods are in [[ch-19]] — Generation Methods: Bootstrap, Evolution, Extraction, Persona, and Rephrasing).
@@ -389,3 +396,5 @@ Starting point for a small general-purpose run: for a 7B base model and a mixed-
 - [[kto]] — loss for unpaired undesirable labels (mentioned as an option only).
 - [[tulu-3-sft-mix]] — Tülu 3 SFT mix construction and size.
 - [[judge-llm-bias]] — verbosity and position biases of LLM judges.
+- [[rho-1]] — token-level selection, for contrast with example-level selection; 2026-11 library card.
+- [[arena-learning]] — battle-loss data selection against INSTAG, IFD and K-Means; shrinking selected set over iterations; 2026-11 library card.

@@ -3,7 +3,7 @@
      kind: content
      title: TRL Internals: SFT, DPO, GRPO, and Distillation Trainers
      deps: [ch-56]
-     sources: [[trl-grpo]], [[trl-grpo-recipe]], [[trl-online-dpo]], [[trl-online-dpo-recipe]], [[trl-ppo]], [[trl-ppo-recipe]], [[gkd-on-policy-distillation]], [[lora-learns-less-forgets-less]], [[hf-alignment-handbook]], [[hf-dpo-zoo]], [[trl-repo-a04ffd3]], [[grpo]], [[dpo]], [[ipo]], [[ppo]], [[dr-grpo]], [[john-schulman-kl-tricks]], [[verl-grpo]], [[openrlhf-ppo]], [[openrlhf-dpo]], [[entropy-logging-patterns]], [[rlhf-instructgpt]]
+     sources: [[trl-grpo]], [[trl-grpo-recipe]], [[trl-online-dpo]], [[trl-online-dpo-recipe]], [[trl-ppo]], [[trl-ppo-recipe]], [[gkd-on-policy-distillation]], [[lora-learns-less-forgets-less]], [[hf-alignment-handbook]], [[hf-dpo-zoo]], [[trl-repo-a04ffd3]], [[grpo]], [[dpo]], [[ipo]], [[ppo]], [[dr-grpo]], [[john-schulman-kl-tricks]], [[verl-grpo]], [[openrlhf-ppo]], [[openrlhf-dpo]], [[entropy-logging-patterns]], [[rlhf-instructgpt]], [[minillm]]
      figures: figures/trl-stack.html, figures/multi-reward-aggregation.html
      excerpts: excerpts/trl-repo-a04ffd3.md, excerpts/lora-learns-less-forgets-less.md, excerpts/gkd-on-policy-distillation.md
      revised: 2026-09 (generality revision)
@@ -515,6 +515,12 @@ All framework rows are **framework defaults at one commit**, which §5.3 of the 
 
 ---
 
+## 2026-11 additions: open-lab sources
+
+Library cards added in 2026-11 from Microsoft, Qwen, DeepSeek, and Z.ai sources. Each entry lists the facts this chapter can use, with source locations; the cards in `wiki/raw-data/llm-training/` hold the full extracts.
+
+- **MiniLLM** ([[minillm]]). TRL's experimental tree contains a `minillm/` trainer (§6.3). The paper's phase-2 settings: LR 5e-6, batch 64, rollout buffer of 256 sentences with 4 inner epochs, clip 0.2, 5,000 steps (App. B.1).
+
 ## Connections
 
 - Previous: **ch-56** — OpenRLHF Internals: PPO, DPO, Ray Orchestration, and Forgetting Controls. Supplies the Ray-based comparison for §1 and §5.2.
@@ -550,3 +556,4 @@ All framework rows are **framework defaults at one commit**, which §5.3 of the 
 - [[rlhf-instructgpt]] — the reference-KL-anchored RLHF pipeline that `beta=0.0` removes.
 - [[verl-grpo]], [[openrlhf-ppo]], [[openrlhf-dpo]] — the same losses in the two frameworks of [[ch-55]] and [[ch-56]].
 - [[entropy-logging-patterns]] — what each framework's entropy metric sums over, needed before comparing TRL numbers with verl or OpenRLHF numbers.
+- [[minillm]] — phase-2 on-policy distillation settings of the method behind TRL's experimental minillm trainer; 2026-11 library card.

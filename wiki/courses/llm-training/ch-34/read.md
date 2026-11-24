@@ -3,7 +3,7 @@
      kind: content
      title: Case Studies B: Generality versus Specialization in Qwen, OLMo, and Phi Reports
      deps: [ch-33]
-     sources: [[qwen-2.5]], [[qwen-2.5-recipe]], [[qwen-long-context-synth]], [[online-merging-optimizer]], [[qwen-3]], [[qwen-3-hybrid-thinking]], [[qwen3-2507-instruct-thinking-split]], [[qwen3-coder]], [[qwen-3-5]], [[qwen-3-5-model-card]], [[olmo-2]], [[olmo-2-tulu-recipe]], [[open-instruct-allenai-recipes-recipe]], [[olmo-3]], [[olmo-3-model-flow]], [[allenai-olmo3-open-instruct-scripts]], [[allenai-olmo3-open-instruct-scripts-recipe]], [[phi-3]], [[phi-4]], [[phi-4-reasoning-sft-rl]], [[gsm1k]], [[emergence-loss-perspective-recipe]], [[tulu-3]], [[llama-3-recipe]], [[smollm-3]], [[smollm3-training-configs]], [[deepseek-v3-recipe]]
+     sources: [[qwen-2.5]], [[qwen-2.5-recipe]], [[qwen-long-context-synth]], [[online-merging-optimizer]], [[qwen-3]], [[qwen-3-hybrid-thinking]], [[qwen3-2507-instruct-thinking-split]], [[qwen3-coder]], [[qwen-3-5]], [[qwen-3-5-model-card]], [[olmo-2]], [[olmo-2-tulu-recipe]], [[open-instruct-allenai-recipes-recipe]], [[olmo-3]], [[olmo-3-model-flow]], [[allenai-olmo3-open-instruct-scripts]], [[allenai-olmo3-open-instruct-scripts-recipe]], [[phi-3]], [[phi-4]], [[phi-4-reasoning-sft-rl]], [[gsm1k]], [[emergence-loss-perspective-recipe]], [[tulu-3]], [[llama-3-recipe]], [[smollm-3]], [[smollm3-training-configs]], [[deepseek-v3-recipe]], [[phi-4-mini-reasoning]]
      figures: figures/lab-compare.html
      revised: 2026-09 (generality revision)
 -->
@@ -399,6 +399,12 @@ Values are as printed; "not reported" lists what was checked. SFT rows give, in 
 7. Phi-4-reasoning-plus selected its RL checkpoint by AIME 2024 and reports AIME 2024. Explain why this makes AIME 2025 the more informative number, and how the same issue applies to Phi-4's AMC evaluation.
 8. OLMo 2 32B's average was unchanged by RLVR while safety fell 6.0 points. Explain why an average can hide this, and write a stage gate that would have flagged it.
 
+## 2026-11 additions: open-lab sources
+
+Library cards added in 2026-11 from Microsoft, Qwen, DeepSeek, and Z.ai sources. Each entry lists the facts this chapter can use, with source locations; the cards in `wiki/raw-data/llm-training/` hold the full extracts.
+
+- **Phi-4-Mini-Reasoning** ([[phi-4-mini-reasoning]]). Evaluation covers math and GPQA-Diamond only; no instruction-following, coding or forgetting measurement is reported (§5). The report therefore cannot show whether the four-stage math recipe kept general ability.
+
 ## Connections
 
 - **Previous and dependency:** [[ch-33]] Case Studies A: How Tülu 3 and Llama 3 Measured and Protected Broad Capability — the Tülu 3 recipe that OLMo 2 and Olmo 3 reuse, and Llama 3's averaging and long-context SFT share.
@@ -441,3 +447,4 @@ Values are as printed; "not reported" lists what was checked. SFT rows give, in 
 - [[smollm-3]] — SmolLM3 library card; not verified, and its SFT details are not used.
 - [[smollm3-training-configs]] — chapter excerpt: released context-extension configs and SmolLM3 blog SFT, APO, and merge statements.
 - [[deepseek-v3-recipe]] — DeepSeek-V3 SFT and context-extension rows.
+- [[phi-4-mini-reasoning]] — math-only evaluation scope of the Phi-4-Mini reasoning variant; 2026-11 library card.

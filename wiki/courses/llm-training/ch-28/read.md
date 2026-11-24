@@ -3,7 +3,7 @@
      kind: content
      title: Long-Context Data Synthesis and Synthetic Evaluation Task Families
      deps: [ch-27, ch-32c]
-     sources: [[needle-in-haystack-data]], [[excerpts/ruler-task-family]], [[ruler]], [[babilong]], [[helmet]], [[nolima]], [[excerpts/longalign-pipeline]], [[longalign]], [[excerpts/longmit-mimg]], [[excerpts/llama3-staged-schedule]], [[llama-3]], [[llama-3-recipe]], [[qwen-long-context-synth]], [[prolong]], [[prolong-recipe]], [[excerpts/artificial-needles-kv-retrieval]], [[in2-film]], [[context-synthesis-short-to-long]], [[nextlong]], [[lost-in-the-middle]], [[pose-synthesis]], [[excerpts/primary-quotes-2026-09]]
+     sources: [[needle-in-haystack-data]], [[excerpts/ruler-task-family]], [[ruler]], [[babilong]], [[helmet]], [[nolima]], [[excerpts/longalign-pipeline]], [[longalign]], [[excerpts/longmit-mimg]], [[excerpts/llama3-staged-schedule]], [[llama-3]], [[llama-3-recipe]], [[qwen-long-context-synth]], [[prolong]], [[prolong-recipe]], [[excerpts/artificial-needles-kv-retrieval]], [[in2-film]], [[context-synthesis-short-to-long]], [[nextlong]], [[lost-in-the-middle]], [[pose-synthesis]], [[excerpts/primary-quotes-2026-09]], [[longwriter]]
      figures: figures/task-family-generator.html, figures/context-extension.html
      revised: 2026-09 (generality revision)
 -->
@@ -315,6 +315,12 @@ A step that decreases log p_y moves z_y down by (1 − p_y) and moves every othe
 7. ProLong's dependency count says one document of length n·d has (n − 1)(d − 1) more spans of length d than n documents of length d. Explain why this argument supports document masking for packed short data rather than contradicting it.
 8. Qwen2.5-1M's offline RL used only pairs of at most 8,192 tokens and improved LongBench-Chat. State what this does and does not show about where long-context ability must be trained, and which additional measurement would be needed to claim no long-context loss.
 
+## 2026-11 additions: open-lab sources
+
+Library cards added in 2026-11 from Microsoft, Qwen, DeepSeek, and Z.ai sources. Each entry lists the facts this chapter can use, with source locations; the cards in `wiki/raw-data/llm-training/` hold the full extracts.
+
+- **LongWriter** ([[longwriter]]). Maximum output length follows the longest SFT outputs: capping GLM-4-9B SFT outputs at 500 / 1,000 / 2,000 words gives models whose maximum output is about 600 / 900 / 1,800 words (§2, Fig. 2). AgentWrite plans paragraphs of 200–1000 words and writes them in order with the earlier text in context; writing the paragraphs in parallel cost 6% Coherence (§3, Table 2). LongWriter-6k = 3k GLM-4 SFT + 3k WildChat instructions with GPT-4o responses of 2k–32k words; removing it dropped S̄ 80.5 → 62.6 (§4.1, Table 4).
+
 ## Connections
 
 - Previous: ch-27 — Agentic Trajectory Data.
@@ -349,3 +355,4 @@ A step that decreases log p_y moves z_y down by (1 − p_y) and moves every othe
 - [[nextlong]] — hard-negative interleaving for continued-training data.
 - [[pose-synthesis]] — PoSE training window, used for correction 30.
 - [[excerpts/primary-quotes-2026-09]] — primary quotes for LongAlpaca, LongChat, Fu et al. 2024, LongRoPE, and SmolTalk, used for corrections and the SmolLM2 observation.
+- [[longwriter]] — output-length ceiling set by SFT data; AgentWrite plan-then-write synthesis; LongWriter-6k ablation; 2026-11 library card.

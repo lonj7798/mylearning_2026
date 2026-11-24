@@ -3,7 +3,7 @@
      kind: content
      title: Domain Mixing: DoReMi, Mixture Laws, and Validation Across Scale
      deps: [ch-12a]
-     sources: [[doremi]], [[data-mixing-laws]], [[regmix]], [[aioli-data-mixing]], [[olmix]], [[llama-3]], [[llama-3-recipe]], [[smollm2]], [[olmo-2]], [[olmo-3]], [[long-context-data-engineering]], [[prolong]], [[prolong-recipe]], [[qwen-long-context-synth]], [[skyladder]], [[to-code-or-not-to-code]], [[data-constrained-scaling]], [[weborganizer]], [[paloma]], [[datadecide]]
+     sources: [[doremi]], [[data-mixing-laws]], [[regmix]], [[aioli-data-mixing]], [[olmix]], [[llama-3]], [[llama-3-recipe]], [[smollm2]], [[olmo-2]], [[olmo-3]], [[long-context-data-engineering]], [[prolong]], [[prolong-recipe]], [[qwen-long-context-synth]], [[skyladder]], [[to-code-or-not-to-code]], [[data-constrained-scaling]], [[weborganizer]], [[paloma]], [[datadecide]], [[deepseek-coder-v2]]
      figures: figures/doremi-reweighting.html
      revised: 2026-09 (generality revision)
 -->
@@ -284,6 +284,12 @@ The sections above show that a mixture decision for one domain changes performan
 7. Using Fu et al. Table 5 and the per-source worked example, explain why global length upsampling raised short-context web loss while per-source upsampling did not, and why ProLong still found a short-context cost for Fu et al.'s mix on Llama-3-8B.
 8. OLMo 3's math-code-thinking mid-training mix raised Math from 57.3 to 60.8 but lowered MC Non-STEM from 77.4 to 69.6. Propose a mixture-search objective that would have found the final mix, and state what held-out evidence would show it generalizes.
 
+## 2026-11 additions: open-lab sources
+
+Library cards added in 2026-11 from Microsoft, Qwen, DeepSeek, and Z.ai sources. Each entry lists the facts this chapter can use, with source locations; the cards in `wiki/raw-data/llm-training/` hold the full extracts.
+
+- **DeepSeek-Coder-V2** ([[deepseek-coder-v2]]). The code share is 821B filtered GitHub + 185B code-related text + 70B web code + 94B recalled GitHub = 1,170B tokens, plus 221B math tokens (§2); the continued-pretraining mix is 60/10/30 code/math/natural language, with the natural language sampled from the DeepSeek-V2 corpus. A 1B ablation at 1T tokens moves HumanEval 30.5 → 36.0 and MBPP 44.6 → 49.0 from the old to the new code corpus (Table 1). No mixture-ratio ablation is reported.
+
 ## Connections
 
 - Previous and dependency: ch-12a — Memorization, Knowledge Acquisition, and Generalization During Pretraining (how exposure frequency within a mixture affects what is retained).
@@ -321,3 +327,4 @@ The sections above show that a mixture decision for one domain changes performan
 - [[weborganizer]] — MMLU-targeted mixture and its effect on non-target tasks.
 - [[paloma]] — macro-averaged per-domain perplexity for measuring breadth.
 - [[datadecide]] — small-scale decision accuracy and its task dependence.
+- [[deepseek-coder-v2]] — code/math/NL mixture, corpus token accounting, 1B corpus ablation; 2026-11 library card.

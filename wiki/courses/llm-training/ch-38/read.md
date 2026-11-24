@@ -3,7 +3,7 @@
      kind: content
      title: KL-Controlled RLHF: PPO, InstructGPT, and the Alignment Tax
      deps: [ch-37]
-     sources: [[ppo]], [[trpo]], [[rlhf-instructgpt]], [[hh-rlhf]], [[mitigating-alignment-tax-rlhf]], [[llama-2]], [[llama-2-recipe]], [[llama-2-ppo]], [[costa-huang-ppo-details]], [[n-implementation-details-rlhf-ppo]], [[kl-control-rlhf]], [[john-schulman-kl-tricks]], [[trl-ppo]], [[trl-ppo-recipe]], [[openrlhf-ppo]], [[reward-model-overoptimization]], [[gpt-4-technical-report]], [[lilianweng-rlhf]]
+     sources: [[ppo]], [[trpo]], [[rlhf-instructgpt]], [[hh-rlhf]], [[mitigating-alignment-tax-rlhf]], [[llama-2]], [[llama-2-recipe]], [[llama-2-ppo]], [[costa-huang-ppo-details]], [[n-implementation-details-rlhf-ppo]], [[kl-control-rlhf]], [[john-schulman-kl-tricks]], [[trl-ppo]], [[trl-ppo-recipe]], [[openrlhf-ppo]], [[reward-model-overoptimization]], [[gpt-4-technical-report]], [[lilianweng-rlhf]], [[deepspeed-chat]], [[chatglm-rlhf]]
      figures: figures/ppo-clip.html
      revised: 2026-09 (generality revision)
 -->
@@ -457,6 +457,13 @@ No false-negative rate is reported for any of these labels in the sources of thi
 7. GPT-4's exam multiple-choice accuracy was 73.7% before and 74.0% after RLHF, while ECE on an MMLU subset rose from 0.007 to 0.074. Explain how a policy-gradient objective on preference rewards can change calibration without changing accuracy. Then explain why the use of two different benchmarks limits this comparison.
 8. Replay of 4× RLHF data underperformed model averaging for OpenLLaMA-3B, while InstructGPT's 8× pretraining mix worked at 175B. Using data coverage and anchor strength, explain how both results can hold.
 
+## 2026-11 additions: open-lab sources
+
+Library cards added in 2026-11 from Microsoft, Qwen, DeepSeek, and Z.ai sources. Each entry lists the facts this chapter can use, with source locations; the cards in `wiki/raw-data/llm-training/` hold the full extracts.
+
+- **DeepSpeed-Chat** ([[deepspeed-chat]]). The pretraining-loss coefficient defaults to 27.8 from InstructGPT; the maintainers report that it destabilized training and was never tuned (step-3 README). No retention benchmarks are reported.
+- **ChatGLM-RLHF** ([[chatglm-rlhf]]). Subtracting the reward of a pre-generated reference response stabilized PPO without reward or advantage normalization (Eq. 5); 32B PPO against SFT in human evaluation: 30% win, 15% loss, 55% tie (Table 4). Prompts whose reward variance over K samples is below ε are dropped (K and ε not reported) (§3.4).
+
 ## Connections
 
 - **Previous:** ch-37 — Policy-Gradient Foundations for Language Models (score-function estimator, baselines, and the actor-critic view that §1-§3 build on).
@@ -490,3 +497,5 @@ No false-negative rate is reported for any of these labels in the sources of thi
 - [[reward-model-overoptimization]] — KL penalty acting like early stopping in the synthetic gold-RM setting.
 - [[gpt-4-technical-report]] — calibration before and after post-training, exam accuracy base versus RLHF (arXiv:2303.08774v6); excerpt in `excerpts/`.
 - [[lilianweng-rlhf]] — tutorial overview of the RLHF pipeline; not used as evidence for any number in this chapter.
+- [[deepspeed-chat]] — untuned InstructGPT pretraining-mix coefficient in an open PPO stack; 2026-11 library card.
+- [[chatglm-rlhf]] — reference-response reward baseline, variance filter, human evaluation; 2026-11 library card.

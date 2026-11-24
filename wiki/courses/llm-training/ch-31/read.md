@@ -3,7 +3,7 @@
      kind: content
      title: Rejection Sampling, Self-Generated Data, Cold Start, and SFT–RL Alternation
      deps: [ch-30c]
-     sources: [[llama-2]], [[llama-2-recipe]], [[llama-3]], [[llama-3-recipe]], [[rejection-sampling-finetuning]], [[rft-scaling-relationship-math]], [[rest-em]], [[star]], [[v-star]], [[raft-reinforce-rej-minimalist]], [[deepseek-r1]], [[deepseek-r1-recipe]], [[glm-4-5]], [[glm-5]], [[swe-gym]], [[kimi-dev]], [[rlvr-beyond-base-model]], [[prorl]]
+     sources: [[llama-2]], [[llama-2-recipe]], [[llama-3]], [[llama-3-recipe]], [[rejection-sampling-finetuning]], [[rft-scaling-relationship-math]], [[rest-em]], [[star]], [[v-star]], [[raft-reinforce-rej-minimalist]], [[deepseek-r1]], [[deepseek-r1-recipe]], [[glm-4-5]], [[glm-5]], [[swe-gym]], [[kimi-dev]], [[rlvr-beyond-base-model]], [[prorl]], [[rstar2-agent]], [[deepseek-prover-v2]]
      figures: figures/iterative-loop.html
      revised: 2026-09 (generality revision)
 -->
@@ -293,6 +293,13 @@ This section uses the four meanings of "negative" from the course standard: (1) 
 7. SWE-Gym's on-policy RSFT lowered SWE-bench Lite from 15.3% to 8.7%, while Kimi-Dev's single-turn RL prior improved later agent SFT. Using §1.2 and §6, explain which properties of the starting policy and task horizon differ between the two settings.
 8. GLM-5 replaces the GRPO advantage with a log-ratio to earlier-stage teachers. Explain why this term can recover skills lost in later stages and why group size 1 is sufficient for it.
 
+## 2026-11 additions: open-lab sources
+
+Library cards added in 2026-11 from Microsoft, Qwen, DeepSeek, and Z.ai sources. Each entry lists the facts this chapter can use, with source locations; the cards in `wiki/raw-data/llm-training/` hold the full extracts.
+
+- **rStar2-Agent** ([[rstar2-agent]]). The cold start is SFT with no reasoning data (function calling, instruction following, chat). It lowers MATH-500 62.0 → 57.4 while raising tool and chat scores, and reasoning is left to RL (§4.1, Table 1).
+- **DeepSeek-Prover-V2** ([[deepseek-prover-v2]]). "Hundreds" of cold-start examples (§2.2) are built from problems the 7B prover fails end to end but whose subgoals are all solved; the composed Lean proof is appended to DeepSeek-V3's chain-of-thought. SFT on DeepSeek-V3-Base uses a constant LR of 5e-6 and a 16,384-token context (§2.3); GRPO then samples 256 problems × 32 proofs per iteration, up to 32,768 tokens.
+
 ## Connections
 
 - **Previous (dependency):** ch-30c — Weight Averaging and Model Merging for Generalist Models. Merging is another way to recover earlier capabilities; §4 and §5.3 give the data-side methods.
@@ -326,3 +333,5 @@ This section uses the four meanings of "negative" from the course standard: (1) 
 - [[rlvr-beyond-base-model]] — pass@k at large k for RLVR versus base models (arXiv:2504.13837v5 Abstract).
 - [[prorl]] — Diminish regime and out-of-distribution gains under prolonged RL.
 - Not cited: the library card `iterative-sft-rl` is unverified and its Llama 2 and Tülu 3 numbers conflict with the primary sources listed above.
+- [[rstar2-agent]] — non-reasoning SFT cold start before agentic RL; 2026-11 library card.
+- [[deepseek-prover-v2]] — cold-start data from composed subgoal proofs; SFT and GRPO settings; 2026-11 library card.

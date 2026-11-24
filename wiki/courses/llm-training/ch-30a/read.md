@@ -3,7 +3,7 @@
      kind: content
      title: Forgetting and Alignment Tax in Fine-Tuning: Measurement and Control
      deps: [ch-30]
-     sources: [[catastrophic-forgetting-continual-finetuning]], [[scaling-laws-forgetting]], [[forgetting-via-implicit-inference]], [[spurious-forgetting]], [[finetuning-new-knowledge-hallucination]], [[finetuning-compromises-safety]], [[shallow-safety-alignment]], [[lora-learns-less-forgets-less]], [[sdft-self-distillation-finetuning]], [[wise-ft]], [[mitigating-alignment-tax-rlhf]], [[retaining-by-doing]], [[rls-razor]], [[rlhf-instructgpt]], [[rlhf-instructgpt-ptx]], [[adding-error-bars-evals]], [[agentic-finetuning-misalignment]], [[xstest]]
+     sources: [[catastrophic-forgetting-continual-finetuning]], [[scaling-laws-forgetting]], [[forgetting-via-implicit-inference]], [[spurious-forgetting]], [[finetuning-new-knowledge-hallucination]], [[finetuning-compromises-safety]], [[shallow-safety-alignment]], [[lora-learns-less-forgets-less]], [[sdft-self-distillation-finetuning]], [[wise-ft]], [[mitigating-alignment-tax-rlhf]], [[retaining-by-doing]], [[rls-razor]], [[rlhf-instructgpt]], [[rlhf-instructgpt-ptx]], [[adding-error-bars-evals]], [[agentic-finetuning-misalignment]], [[xstest]], [[minillm]], [[chatglm-rlhf]]
      figures: figures/paired-forgetting-delta.html
      revised: 2026-09 (generality revision)
 -->
@@ -330,6 +330,13 @@ All rows were read at the stated locus on 2026-09-15.
 6. [[retaining-by-doing]] finds that GRPO without KL forgets about as little as GRPO with KL. Explain why this points to the data source rather than the regularizer, and what [[rls-razor]] would need to show to explain the same result.
 7. Replay of 400M tokens beat model averaging on one benchmark and lost on two others in [[mitigating-alignment-tax-rlhf]]. Explain a cause of this pattern and how a forgetting report would detect it.
 
+## 2026-11 additions: open-lab sources
+
+Library cards added in 2026-11 from Microsoft, Qwen, DeepSeek, and Z.ai sources. Each entry lists the facts this chapter can use, with source locations; the cards in `wiki/raw-data/llm-training/` hold the full extracts.
+
+- **MiniLLM** ([[minillm]]). Removing the pretraining LM loss from distillation lowers zero-shot classification 78.8 → 74.3 for LLaMA-7B (70.2 → 65.7 for OPT-1.3B) while instruction-following scores change by less than 0.5 (App. C.4, Table 7).
+- **ChatGLM-RLHF** ([[chatglm-rlhf]]). After RLHF the model called itself "an AI assistant" instead of "ChatGLM" and produced invalid JSON; the fix is a next-token loss on a small human-annotated task SFT set added to the PPO objective (Eq. 6). No before/after numbers are reported (§3.4).
+
 ## Connections
 
 - **Previous (dependency):** ch-30 — SFT Design Choices and Their Effect on Generalization: Masking, Packing, Templates, Epochs, and Learning Rate. It sets the choices whose cost this chapter measures.
@@ -372,3 +379,5 @@ All rows were read at the stated locus on 2026-09-15.
 - [[adding-error-bars-evals]] — standard error, paired difference, and clustered standard error formulas.
 - [[agentic-finetuning-misalignment]] — safety loss after benign agentic fine-tuning.
 - [[xstest]] — over-refusal measurement on safe prompts that resemble unsafe ones.
+- [[minillm]] — pretraining LM loss as the forgetting control in distillation; 2026-11 library card.
+- [[chatglm-rlhf]] — capability shift after RLHF and the SFT-loss fix; 2026-11 library card.

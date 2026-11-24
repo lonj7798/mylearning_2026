@@ -3,7 +3,7 @@
      kind: content
      title: User Simulators, Trajectory Verification, and Failed Trajectories
      deps: [ch-29c, ch-22]
-     sources: [[tau-bench]], [[tau2-bench]], [[apigen-mt]], [[kimi-k2]], [[userrl]], [[simulator-collapse]], [[simulator-collapse-recipe]], [[lost-in-multi-turn]], [[explorer]], [[agent-early-experience]], [[agent-early-experience-recipe]], [[os-genesis]], [[learning-from-failure-nat]], [[eto-trial-and-error]], [[ipr-step-level-refinement]], [[glm-5]], [[deepswe]], [[deepswe-recipe]], [[openthoughts-agent-glm46-teacher]], [[together-coderforge-agent-trajectories]], [[likelihood-displacement]]
+     sources: [[tau-bench]], [[tau2-bench]], [[apigen-mt]], [[kimi-k2]], [[userrl]], [[simulator-collapse]], [[simulator-collapse-recipe]], [[lost-in-multi-turn]], [[explorer]], [[agent-early-experience]], [[agent-early-experience-recipe]], [[os-genesis]], [[learning-from-failure-nat]], [[eto-trial-and-error]], [[ipr-step-level-refinement]], [[glm-5]], [[deepswe]], [[deepswe-recipe]], [[openthoughts-agent-glm46-teacher]], [[together-coderforge-agent-trajectories]], [[likelihood-displacement]], [[zerosearch]]
      figures: figures/failed-rollout-signal.html
      revised: 2026-09 (generality revision)
 -->
@@ -342,6 +342,12 @@ All rows were checked against the linked card or chapter excerpt on 2026-09-14 o
 7. OpenThoughts-Agent found GLM-4.6 traces better than GPT5 traces for an 8B student. Give two hypotheses that could produce this result and a measurement that separates them.
 8. UserRL's models scored higher with human users than with GPT-4o users, while Lost in Multi-Turn argues that real users would lower scores. Explain how both can hold, and what this means for validating a simulator for a new domain.
 
+## 2026-11 additions: open-lab sources
+
+Library cards added in 2026-11 from Microsoft, Qwen, DeepSeek, and Z.ai sources. Each entry lists the facts this chapter can use, with source locations; the cards in `wiki/raw-data/llm-training/` hold the full extracts.
+
+- **ZeroSearch** ([[zerosearch]]). A simulator of a tool rather than of a user. Qwen-2.5-14B-Instruct is fine-tuned on logged query–document pairs, and a prompt keyword selects useful or noisy output (§3.3, Table 2). With a Qwen-2.5-3B-Base policy, the fine-tuned simulator gives 34.47 average EM, a prompted simulator 31.50, and real Google 32.81 (Table 4). The simulator prompt includes the ground-truth answer, and the paper does not measure that effect; evaluation uses real Google Search.
+
 ## Connections
 
 - Previous: ch-29c — Agentic Environment and Task Synthesis at Scale (environments and tasks that the simulators, verifiers, and failure handling of this chapter operate on).
@@ -373,3 +379,4 @@ All rows were checked against the linked card or chapter excerpt on 2026-09-14 o
 - [[openthoughts-agent-glm46-teacher]] — teacher and task-source ablations for agent SFT.
 - [[together-coderforge-agent-trajectories]] — large test-verified trajectory set, failed-trajectory statistics, decontamination, limitations (chapter excerpt).
 - [[likelihood-displacement]] — mechanism by which a rejected-sample gradient can lower the preferred response's likelihood.
+- [[zerosearch]] — fine-tuned versus prompted simulator; ground-truth leakage in the simulator prompt; 2026-11 library card.

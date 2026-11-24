@@ -3,7 +3,7 @@
      kind: content
      title: Taxonomy-Driven and Textbook-Style Synthesis
      deps: [ch-20]
-     sources: [[glan]], [[nemotron-4-synthetic]], [[nemotron-4-synthetic-recipe]], [[phi-textbooks]], [[phi-1-5]], [[phi-3]], [[phi-4]], [[cosmopedia]], [[hf-cosmopedia]], [[gsm1k]], [[fineweb]], [[mathscale]], [[persona-hub]], [[metamath]]
+     sources: [[glan]], [[nemotron-4-synthetic]], [[nemotron-4-synthetic-recipe]], [[phi-textbooks]], [[phi-1-5]], [[phi-3]], [[phi-4]], [[cosmopedia]], [[hf-cosmopedia]], [[gsm1k]], [[fineweb]], [[mathscale]], [[persona-hub]], [[metamath]], [[tinystories]]
      figures: figures/taxonomy-expansion.html
      revised: 2026-09 (generality revision)
 -->
@@ -360,6 +360,12 @@ Rows dated 2026-09-15 were read in the primary PDFs or blog on that date because
 6. Nemotron-4's General SFT stage included 2% of the code data and still lowered HumanEval. Explain why replay at a small share may not prevent the loss, and what evidence from the same table indicates the loss was recoverable.
 7. Phi-4's refusal training lowered SimpleQA correct answers from 6.8% to 3.0%. Using the softmax gradient, explain why DPO pairs of (refusal > wrong answer) on the first 5 tokens can also remove probability from correct answers.
 
+## 2026-11 additions: open-lab sources
+
+Library cards added in 2026-11 from Microsoft, Qwen, DeepSeek, and Z.ai sources. Each entry lists the facts this chapter can use, with source locations; the cards in `wiki/raw-data/llm-training/` hold the full extracts.
+
+- **TinyStories** ([[tinystories]]). Small-scale textbook-style synthesis. The vocabulary is restricted to ~1,500 words a 3–4-year-old knows, and each generation prompt gets one random verb, noun and adjective plus a random subset of story features, because prompting at high temperature alone produced a "very repetitive dataset" (§2). Models below 10M parameters, or with one transformer block, write coherent multi-paragraph stories, which 125M web-trained models rarely do (§1–2, Fig. 2). The paper reports no ablation against unconstrained prompts and does not give the dataset size.
+
 ## Connections
 
 - Previous: ch-20 — Distillation as Data: Explanation Traces and the R1-Distill Lineage (teacher ceilings apply to GLAN's GPT-4 and GPT-3.5-turbo data and to Phi-4-reasoning's o3-mini traces).
@@ -388,3 +394,4 @@ Rows dated 2026-09-15 were read in the primary PDFs or blog on that date because
 - [[mathscale]] — knowledge-point versus seed ablation and per-topic gaps.
 - [[persona-hub]] — argument that key-point lists are hard to curate beyond narrow domains.
 - [[metamath]] — GSM8K test-set size used in the z-test.
+- [[tinystories]] — vocabulary restriction and random word/feature constraints for diversity; 2026-11 library card.

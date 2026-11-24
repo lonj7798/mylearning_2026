@@ -3,7 +3,7 @@
      kind: content
      title: Reasoning-Trace Synthesis: Chain-of-Thought, Long Chain-of-Thought, and Step-Level Data
      deps: [ch-23]
-     sources: [[openmathinstruct]], [[openmathinstruct-2]], [[openmathinstruct-2-recipe]], [[metamath]], [[mathscale]], [[mammoth]], [[mammoth-2]], [[rstar]], [[rstar-math]], [[s1]], [[limo]], [[step-dpo]], [[lema-learning-from-mistakes]], [[omegaprm]], [[math-shepherd]], [[transferability-of-llm-reasoning]], [[scaling-reasoning-losing-control-mathif]], [[gsm-symbolic]], [[longer-context-deeper-thinking]], [[open-thoughts]], [[front-loading-reasoning]], [[likelihood-displacement]], [[numina-math]], [[quiet-star]]
+     sources: [[openmathinstruct]], [[openmathinstruct-2]], [[openmathinstruct-2-recipe]], [[metamath]], [[mathscale]], [[mammoth]], [[mammoth-2]], [[rstar]], [[rstar-math]], [[s1]], [[limo]], [[step-dpo]], [[lema-learning-from-mistakes]], [[omegaprm]], [[math-shepherd]], [[transferability-of-llm-reasoning]], [[scaling-reasoning-losing-control-mathif]], [[gsm-symbolic]], [[longer-context-deeper-thinking]], [[open-thoughts]], [[front-loading-reasoning]], [[likelihood-displacement]], [[numina-math]], [[quiet-star]], [[rstar2-agent]], [[orca-math]], [[phi-4-mini-reasoning]], [[qwen-prm-lessons]], [[rest-mcts]]
      figures: figures/rstar-mcts.html
      revised: 2026-09 (generality revision)
 -->
@@ -319,6 +319,16 @@ Status "verified 2026-09-15" rows were read in the primary arXiv PDF on that dat
 6. rStar-Math's 90.0 MATH and its policy's 78.4 MATH come from the same training. Which components produce the difference, and which number should be compared with an SFT-only model?
 7. Why do Monte-Carlo hard labels gain false negatives when the completer is weak and false positives when the number of rollouts grows?
 
+## 2026-11 additions: open-lab sources
+
+Library cards added in 2026-11 from Microsoft, Qwen, DeepSeek, and Z.ai sources. Each entry lists the facts this chapter can use, with source locations; the cards in `wiki/raw-data/llm-training/` hold the full extracts.
+
+- **rStar2-Agent** ([[rstar2-agent]]). Successor to rStar and rStar-Math (§5), with search replaced by agentic RL. Qwen3-14B-Base is trained with a Python tool under an answer-only reward. GRPO-RoC samples 32 rollouts per prompt and keeps 16: half of the wrong rollouts, sampled uniformly, and half of the correct rollouts, sampled with probability inversely proportional to a tool-error-plus-format penalty (§2.2.3, Eqs. 4–5). The model reaches 80.6% AIME24 and 69.8% AIME25 in 510 RL steps.
+- **Orca-Math** ([[orca-math]]). Preference pairs come from 4 student samples per problem; a sample is positive if GPT-4 judges its answer equal to the teacher's. Two KTO iterations take Mistral-7B from 79.91 to 86.87 on GSM8K, against 81.50 for an extra SFT epoch (Table 2).
+- **Phi-4-Mini-Reasoning** ([[phi-4-mini-reasoning]]). Cross-reference to §4. LIMO- and s1-style small curated sets lowered MATH-500 for a 3.8B student, 71.8 → 57.8 (LIMO) and → 47.0 (S1K) (Table 1); the s1 and LIMO results in §4 were on 32B models.
+- **Qwen PRM lessons** ([[qwen-prm-lessons]]). Among Qwen2.5-Math-7B-Instruct responses with a correct final answer, the share with a flawed step is 5.1% on GSM8K, 11.9% on MATH, 27.4% on OlympiadBench and 43.4% on Omni-MATH (Fig. 6). Outcome-filtered traces therefore keep wrong steps, more often on hard problems.
+- **ReST-MCTS\*** ([[rest-mcts]]). With only the final answer known, a search tree assigns each step a value v_k (Eqs. 1–2) that combines whether the step can still reach the correct answer and how many steps remain. Initial value data come from 11,554 SciInstruct questions: prefixes of reference solutions get v_k = k/K, and ChatGLM2-generated next steps are treated as wrong, giving 473.4k samples (§4, App. B.1). Compare with rStar-Math (§5) and OmegaPRM (§6).
+
 ## Connections
 
 - Previous: ch-23 — Model Collapse and Verification of Synthetic Data. The verification and self-training risks there apply to self-generated traces in §5 and on-policy data in §7.
@@ -357,3 +367,8 @@ Status "verified 2026-09-15" rows were read in the primary arXiv PDF on that dat
 - [[likelihood-displacement]] — similarity-driven displacement in DPO-style losses.
 - [[numina-math]] — problem source for rStar-Math (named in a correction).
 - [[quiet-star]] — removed section (named in a correction).
+- [[rstar2-agent]] — GRPO-RoC rollout selection and AIME results; successor to rStar-Math; 2026-11 library card.
+- [[orca-math]] — teacher-agreement labels on student samples; KTO iterations versus extra SFT; 2026-11 library card.
+- [[phi-4-mini-reasoning]] — small curated long-CoT sets degrading a 3.8B student; 2026-11 library card.
+- [[qwen-prm-lessons]] — share of correct-answer responses with flawed steps, by benchmark; 2026-11 library card.
+- [[rest-mcts]] — tree-inferred step values and the initial value-data construction; 2026-11 library card.

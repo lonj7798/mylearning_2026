@@ -7,7 +7,7 @@
               [[octothinker]], [[interplay-pretraining-midtraining-rl]], [[midtraining-bridges-distributions]],
               [[mid-training-survey]], [[deepseek-r1]], [[deepseek-r1-recipe]], [[anthropic-model-spec-midtraining]],
               [[anthropic-model-spec-midtraining-recipe]], [[openai-alignment-midtraining-generalization]], [[smollm-3]],
-              [[olmo-midtraining-evidence]]
+              [[olmo-midtraining-evidence]], [[phi-4-mini-reasoning]], [[rho-1]]
      figures: figures/pipeline-stages.html
      revised: 2026-09 (generality revision)
 -->
@@ -430,6 +430,13 @@ All rows are copied from the primary sources at the stated loci. "verified 2026-
 7. The Anthropic MSM study and the OpenAI alignment-midtraining study report different outcomes. List the differences in data, model, and downstream stages, and explain which difference is most likely to account for the different results.
 8. Olmo 3 kept 66% short data during long-context extension and still saw Math fall from 59.8 to 54.4 at 7B. Propose two reasons the short-data share did not prevent the drop, and describe a gate that would detect it before SFT.
 
+## 2026-11 additions: open-lab sources
+
+Library cards added in 2026-11 from Microsoft, Qwen, DeepSeek, and Z.ai sources. Each entry lists the facts this chapter can use, with source locations; the cards in `wiki/raw-data/llm-training/` hold the full extracts.
+
+- **Phi-4-Mini-Reasoning** ([[phi-4-mini-reasoning]]). Distillation as mid-training: ~10M DeepSeek-R1 rollouts over 1.6M samples, packed at 16K, trained until a validation set saturates; +20.0 AIME24 over the base (§3.1, §4, Table 3). Small curated sets hurt this 3.8B model: LIMO lowers MATH-500 71.8 → 57.8 and S1K to 47.0 (Table 1). The four-stage recipe reaches 94.6 MATH-500 and 57.5 AIME24 (Tables 1, 3).
+- **Rho-1** ([[rho-1]]). A reference model trained on OpenWebMath alone (no curated data) still gives +2.4, or +3.3 when intersecting its loss and next-token-entropy scores, with 40% fewer tokens (§3.4, Table 3).
+
 ## Connections
 
 - **Previous:** ch-17 — Lab: Filter and Mixture Ablation with Breadth Measurement.
@@ -454,3 +461,5 @@ All rows are copied from the primary sources at the stated loci. "verified 2026-
 - [[smollm-3]] — SmolLM3 reasoning mid-training (140B tokens), RULER regression, and merge recovery (values read in the official blog; see the excerpt).
 - [[anthropic-model-spec-midtraining]] and [[anthropic-model-spec-midtraining-recipe]] — spec document mid-training before alignment SFT; agentic-misalignment results and budgets.
 - [[openai-alignment-midtraining-generalization]] — alignment and misalignment document mid-training at o4-mini scale, followed by SFT and RLVR; near- vs far-distribution results.
+- [[phi-4-mini-reasoning]] — large-volume distillation as mid-training for a 3.8B model; stage-by-stage scores; 2026-11 library card.
+- [[rho-1]] — self-reference token selection without curated data; 2026-11 library card.

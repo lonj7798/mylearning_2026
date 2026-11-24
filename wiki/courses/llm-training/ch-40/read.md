@@ -3,7 +3,7 @@
      kind: content
      title: Group-Baseline RL: RLOO, GRPO, Dr. GRPO, DAPO, and GSPO
      deps: [ch-42a]
-     sources: [[rloo]], [[rloo-vs-grpo]], [[reinforce-plus-plus]], [[grpo]], [[deepseekmath]], [[dr-grpo]], [[dapo]], [[gspo]], [[vapo]], [[spurious-rewards-rlvr]], [[reinforcement-learning-with-one-training-example]], [[octothinker]], [[nathan-lambert-grpo]], [[deepswe]], [[deepswe-recipe]], [[gigpo-verl-agent]], [[negative-sample-reinforcement]], [[john-schulman-kl-tricks]], [[trl-grpo]], [[verl-grpo]], [[deepseek-r1-recipe]], [[magistral-recipe]], [[asymmetric-reinforce]], [[likelihood-displacement]]
+     sources: [[rloo]], [[rloo-vs-grpo]], [[reinforce-plus-plus]], [[grpo]], [[deepseekmath]], [[dr-grpo]], [[dapo]], [[gspo]], [[vapo]], [[spurious-rewards-rlvr]], [[reinforcement-learning-with-one-training-example]], [[octothinker]], [[nathan-lambert-grpo]], [[deepswe]], [[deepswe-recipe]], [[gigpo-verl-agent]], [[negative-sample-reinforcement]], [[john-schulman-kl-tricks]], [[trl-grpo]], [[verl-grpo]], [[deepseek-r1-recipe]], [[magistral-recipe]], [[asymmetric-reinforce]], [[likelihood-displacement]], [[phi-4-mini-reasoning]], [[slime]]
      figures: figures/group-baseline.html
      revised: 2026-09 (generality revision)
 -->
@@ -403,6 +403,13 @@ Two ways of applying this chapter's algebra when a trajectory has many steps and
 
 ---
 
+## 2026-11 additions: open-lab sources
+
+Library cards added in 2026-11 from Microsoft, Qwen, DeepSeek, and Z.ai sources. Each entry lists the facts this chapter can use, with source locations; the cards in `wiki/raw-data/llm-training/` hold the full extracts.
+
+- **Phi-4-Mini-Reasoning** ([[phi-4-mini-reasoning]]). Three RL fixes for a 3.8B model: keep prompts whose responses have relatively uniform token lengths; for oversampled hard prompts keep all positives plus an equal number of random negatives; anneal temperature 1.0 → 0.6 linearly over the first 50% of steps (§3.4). In the authors' comparison, DAPO's AIME cons@16 dropped over training (§5.5, Fig. 2b).
+- **slime** ([[slime]]). DAPO-style dynamic sampling as a group filter: `check_reward_nonzero_std` drops groups with reward std ≤ 1e-6, and rollout keeps fetching `over_sampling_batch_size` prompts until `rollout_batch_size` groups pass (`dynamic_sampling_filters.py` L9–17; `sglang_rollout.py` L531–571).
+
 ## Connections
 
 - **Previous chapter — ch-42a, Narrow Training, Broad Behaviour Change: Emergent Misalignment, Sycophancy, and Trait Transmission.** Why an objective applied to a narrow slice of behaviour changes the model everywhere; this chapter supplies the gradient mechanism for the RL case.
@@ -442,3 +449,5 @@ Two ways of applying this chapter's algebra when a trajectory has many steps and
 - [[asymmetric-reinforce]] — where the baseline sits relative to the behaviour policy's mean reward, and the collapse observed at `δV ≥ 0`.
 - [[likelihood-displacement]] — the preference-optimization case of the redistribution mechanism used in the negatives section.
 - [[nathan-lambert-grpo]] — practitioner tracking of the length-normalization corrections (Mar 2025); no independent experiment.
+- [[phi-4-mini-reasoning]] — length-uniform prompt selection, reward rebalancing, DAPO comparison; 2026-11 library card.
+- [[slime]] — zero-std group filter with oversampling in code; 2026-11 library card.

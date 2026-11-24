@@ -3,7 +3,7 @@
      kind: content
      title: SFT versus RL Generalization: On-Policy Data, KL to the Base Model, and Output Diversity
      deps: [ch-38, ch-30a]
-     sources: [[sft-memorizes-rl-generalizes]], [[debunk-sft-generalization]], [[rls-razor]], [[retaining-by-doing]], [[rlhf-generalisation-diversity]], [[artificial-hivemind]], [[noveltybench]], [[on-off-policy-rlhf]], [[on-policy-suboptimal-preference-data]], [[rl-finetunes-small-subnetworks]], [[transferability-of-llm-reasoning]], [[transferability-of-llm-reasoning-tables]], [[rlvr-beyond-base-model]], [[rlvr-beyond-base-model-tables]], [[prorl]], [[wolfe-online-vs-offline-rl]], [[john-schulman-kl-tricks]]
+     sources: [[sft-memorizes-rl-generalizes]], [[debunk-sft-generalization]], [[rls-razor]], [[retaining-by-doing]], [[rlhf-generalisation-diversity]], [[artificial-hivemind]], [[noveltybench]], [[on-off-policy-rlhf]], [[on-policy-suboptimal-preference-data]], [[rl-finetunes-small-subnetworks]], [[transferability-of-llm-reasoning]], [[transferability-of-llm-reasoning-tables]], [[rlvr-beyond-base-model]], [[rlvr-beyond-base-model-tables]], [[prorl]], [[wolfe-online-vs-offline-rl]], [[john-schulman-kl-tricks]], [[rstar2-agent]], [[minillm]]
      figures: figures/on-policy-kl-and-passk.html
      revised: 2026-09 (generality revision)
 -->
@@ -344,6 +344,13 @@ All rows were read at the stated locus on 2026-09-15. These are the settings of 
 7. Using the utility_k definition of §7, explain why a model that answers the same question identically ten times can have a high average quality score and a utility₁₀ below 2, and what value of p would hide that failure.
 8. [[debunk-sft-generalization]] closes the instruction-variant gap with prompt diversity but not the difficulty-variant gap, which needs chain-of-thought targets. Explain why the two interventions address different failures, and which one the frozen-prompt hypothesis predicts.
 
+## 2026-11 additions: open-lab sources
+
+Library cards added in 2026-11 from Microsoft, Qwen, DeepSeek, and Z.ai sources. Each entry lists the facts this chapter can use, with source locations; the cards in `wiki/raw-data/llm-training/` hold the full extracts.
+
+- **rStar2-Agent** ([[rstar2-agent]]). RL data is math-only. GPQA-Diamond rises 42.1 → 60.9, while BFCL v3, IFEval and Arena-Hard stay flat (63.1 → 60.8, 83.7 → 83.4, 86.8 → 86.6) (Table 5). RL collapsed after the step-510 peak, and five fixes (temperature 1.2, longer length, 20 turns, higher clip, optimizer reset) failed (§5.3).
+- **MiniLLM** ([[minillm]]). Exposure-bias error stops growing after ~150 tokens for MiniLLM but keeps growing with length for SFT and KD (Fig. 6); SST2 calibration error is 0.099 against 0.191 for KD (Table 2).
+
 ## Connections
 
 - **Previous (dependency):** ch-38 — KL-Controlled RLHF: PPO, InstructGPT, and the Alignment Tax. It supplies the PPO objective and the KL penalty this chapter's comparisons switch on and off.
@@ -385,3 +392,5 @@ All rows were read at the stated locus on 2026-09-15. These are the settings of 
 - [[prorl]] — verified library card: the counter-evidence on pass@k expansion, its Diminish regime, and its recipe ledger.
 - [[wolfe-online-vs-offline-rl]] — excerpt of a secondary review: the online / semi-online / offline axis and the sync period s. Not used for any number.
 - [[john-schulman-kl-tricks]] — k1 and k3 KL estimators referenced in §9.
+- [[rstar2-agent]] — out-of-domain results of math-only agentic RL; post-peak collapse; 2026-11 library card.
+- [[minillm]] — exposure bias and calibration of on-policy distillation versus SFT and KD; 2026-11 library card.

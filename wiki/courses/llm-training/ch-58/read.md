@@ -3,7 +3,7 @@
      kind: content
      title: Choosing and Instrumenting a Post-Training Stack to Measure and Protect General Capability
      deps: [ch-57]
-     sources: [[verl-grpo]], [[verl-ppo-loss]], [[verl-rollout]], [[openrlhf-ppo]], [[openrlhf-dpo]], [[trl-grpo]], [[trl-ppo]], [[trl-online-dpo]], [[entropy-logging-patterns]], [[async-rollout]], [[areal-async-rl]], [[skyrl-agent]], [[gigpo-verl-agent]], [[agent-lightning]], [[intellect-3]], [[thinkingmachines-defeating-nondeterminism]], [[rollout-training-mismatch-tis]]
+     sources: [[verl-grpo]], [[verl-ppo-loss]], [[verl-rollout]], [[openrlhf-ppo]], [[openrlhf-dpo]], [[trl-grpo]], [[trl-ppo]], [[trl-online-dpo]], [[entropy-logging-patterns]], [[async-rollout]], [[areal-async-rl]], [[skyrl-agent]], [[gigpo-verl-agent]], [[agent-lightning]], [[intellect-3]], [[thinkingmachines-defeating-nondeterminism]], [[rollout-training-mismatch-tis]], [[deepspeed-chat]], [[slime]]
      figures: figures/framework-compare.html
      revised: 2026-09 (generality revision)
 -->
@@ -373,6 +373,13 @@ Rows are settings from published runs with their pinned loci, plus framework def
 
 ---
 
+## 2026-11 additions: open-lab sources
+
+Library cards added in 2026-11 from Microsoft, Qwen, DeepSeek, and Z.ai sources. Each entry lists the facts this chapter can use, with source locations; the cards in `wiki/raw-data/llm-training/` hold the full extracts.
+
+- **DeepSpeed-Chat** ([[deepspeed-chat]]). Generation is ≈20% of step-3 PPO compute but dominates wall-clock time (memory-bandwidth bound); the Hybrid Engine switches the actor between inference kernels with TP and ZeRO training, up to 9× generation throughput over HuggingFace; OPT-13B step 3 = 9 h on 8×A100-80GB (§4–5, Table 1). Code defaults (`dschat/rlhf/ppo_trainer.py` L66–71): KL 0.1, reward clip ±5, clip 0.2, γ 1.0, λ 0.95; KL per token, RM score only at the last token (`compute_rewards` L181–194).
+- **slime** ([[slime]]). Megatron arguments pass through directly, and SGLang arguments pass with a `--sglang-` prefix (README L144–148). The repository reports no throughput numbers.
+
 ## Connections
 
 - **ch-54 — Rollout Infrastructure: Off-Policy Data, Asynchronous RL, and Agentic Environments.** The mechanisms this chapter selects between: staleness, partial rollout, environment integration.
@@ -406,3 +413,5 @@ Rows are settings from published runs with their pinned loci, plus framework def
 - [[gigpo-verl-agent]] — verl-agent's step-wise rollout with a memory module, anchor-state grouping, the ALFWorld and WebShop results, and the per-iteration overhead breakdown.
 - [[agent-lightning]] — transition-level training of agents written in external frameworks, cited for the design contrast in §6.
 - [[intellect-3]] — prime-rl's orchestrator/trainer/inference architecture, the verifiers Environments Hub interface, the RL settings and masking thresholds, and the 15-step in-loop evaluation on five benchmarks.
+- [[deepspeed-chat]] — Hybrid Engine throughput and PPO defaults for stack comparison; 2026-11 library card.
+- [[slime]] — Megatron/SGLang argument pass-through and single-side debug modes; 2026-11 library card.

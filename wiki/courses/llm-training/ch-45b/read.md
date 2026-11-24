@@ -3,7 +3,7 @@
      kind: content
      title: Multi-Turn Agentic RL: Observation Masking, Credit Assignment, and Stability
      deps: [ch-45a, ch-29d]
-     sources: [[search-r1]], [[deepswe]], [[deepswe-recipe]], [[loop-appworld]], [[gigpo-verl-agent]], [[turn-level-credit-assignment]], [[sweet-rl]], [[ragen-starpo]], [[simpletir]], [[agentrl]], [[agentrl-recipe]], [[agentgym-rl]], [[agentgym-rl-recipe]], [[skyrl-agent]], [[skyrl-agent-recipe]], [[kimi-researcher]], [[minimax-m2-aligning-to-what]], [[minimax-m2-interleaved-thinking]], [[demystifying-agentic-rl]], [[deepseek-v3.1]], [[glm-5]], [[fission-grpo]], [[grpo]], [[dr-grpo]], [[rloo]], [[ppo]], [[r2e-gym]], [[bfcl]]
+     sources: [[search-r1]], [[deepswe]], [[deepswe-recipe]], [[loop-appworld]], [[gigpo-verl-agent]], [[turn-level-credit-assignment]], [[sweet-rl]], [[ragen-starpo]], [[simpletir]], [[agentrl]], [[agentrl-recipe]], [[agentgym-rl]], [[agentgym-rl-recipe]], [[skyrl-agent]], [[skyrl-agent-recipe]], [[kimi-researcher]], [[minimax-m2-aligning-to-what]], [[minimax-m2-interleaved-thinking]], [[demystifying-agentic-rl]], [[deepseek-v3.1]], [[glm-5]], [[fission-grpo]], [[grpo]], [[dr-grpo]], [[rloo]], [[ppo]], [[r2e-gym]], [[bfcl]], [[rstar2-agent]], [[zerosearch]], [[webrl]]
      figures: figures/rollout-gradient-anatomy.html, figures/gigpo-anchor-grouping.html
      revised: 2026-09 (generality revision)
 -->
@@ -718,6 +718,14 @@ values was tuned below 7B by their sources, and no source reports a small-scale 
    explanations for this result that the reported evidence cannot distinguish, and name the measurement that would
    separate them.
 
+## 2026-11 additions: open-lab sources
+
+Library cards added in 2026-11 from Microsoft, Qwen, DeepSeek, and Z.ai sources. Each entry lists the facts this chapter can use, with source locations; the cards in `wiki/raw-data/llm-training/` hold the full extracts.
+
+- **rStar2-Agent** ([[rstar2-agent]]). Under outcome-only reward, correct trajectories with failed tool calls are still reinforced; with plain GRPO the tool-error share inside correct trajectories levels off near 10% for Qwen3-14B (15% for Qwen2.5-32B) (§2.2.2, Fig. 4). GRPO-RoC keeps the reward answer-only and samples correct rollouts with probability inversely proportional to a tool-error + format penalty.
+- **ZeroSearch** ([[zerosearch]]). Replaces Google during RL rollouts with a fine-tuned 14B simulator: a Qwen-2.5-3B-Base policy reaches 34.47 average EM against 32.81 when trained on real Google (Table 4). Masking simulator document tokens from the policy loss gives 36.07 against 34.53 without the mask (LLaMA-3.2-3B-Base; Table 7). The reward was switched from EM to word-level F1 after the policy produced overly long answers (§3.5). A curriculum that raises the noisy-document share beats a fixed 0.5 by 1.2–1.9 EM (Eq. 1, Table 6). Numbers follow v3 of the paper (REINFORCE default).
+- **WebRL** ([[webrl]]). Llama-3.1-8B on WebArena-Lite: 4.8% → 42.4%, against 30.3% for DigiRL (Table 1). The loss is the squared error between β·log(π_θ/π_ref) and the advantage, with π_ref = the previous-phase policy (Eq. 5); the advantage mixes one-step TD and final reward with λ = 0.5 (Eq. 8); ORM accuracy 80.8% (Table 3). Without replay, REINFORCE with a value baseline overfit each phase and fell below its starting score (§3.7, Fig. 5).
+
 ## Connections
 
 - **Previous:** [[ch-45a]] — Preference-Optimization and RL Stage Recipes Side by Side. That chapter compares the
@@ -771,3 +779,6 @@ values was tuned below 7B by their sources, and no source reports a small-scale 
 - [[r2e-gym]] — the executable SWE environments behind [[deepswe]] and [[skyrl-agent]].
 - [[bfcl]] — the held-out function-calling benchmark used by [[agentrl]] and [[fission-grpo]].
 - [[rlvr-beyond-base-model]] — the pass@k-at-large-k argument used in the generalization measurements.
+- [[rstar2-agent]] — tool errors inside rewarded trajectories; Resample-on-Correct; 2026-11 library card.
+- [[zerosearch]] — simulated search in agentic RL; document-token masking; F1 reward; 2026-11 library card.
+- [[webrl]] — KL-constrained web-agent RL with an ORM and success-only replay; 2026-11 library card.

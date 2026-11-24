@@ -5,7 +5,7 @@
      deps: [ch-47]
      sources: [[gsm1k]], [[gsm-symbolic]], [[reasoning-or-reciting]], [[embers-of-autoregression]], [[ifbench]],
               [[livebench]], [[livecodebench]], [[matharena]], [[leaderboard-illusion]], [[training-on-the-test-task]],
-              [[swe-bench-illusion]], [[adding-error-bars-evals]]
+              [[swe-bench-illusion]], [[adding-error-bars-evals]], [[processbench]]
      figures: figures/benchmark-audit-gap.html
      revised: 2026-09 (generality revision)
 -->
@@ -622,6 +622,12 @@ similarity between generated and gold code is confounded by correct solutions re
    result, and not the ArenaHard result, is the one that bears on general capability, and what a third measurement
    would have to look like to change that reading.
 
+## 2026-11 additions: open-lab sources
+
+Library cards added in 2026-11 from Microsoft, Qwen, DeepSeek, and Z.ai sources. Each entry lists the facts this chapter can use, with source locations; the cards in `wiki/raw-data/llm-training/` hold the full extracts.
+
+- **ProcessBench** ([[processbench]]). Skywork-PRM-7B falls from 70.8 F1 on GSM8K to 21.0 on Omni-MATH; a PRM trained on MATH-only human labels (PRM800K) keeps 44.3 on Omni-MATH (Table 3). A verifier should be tested on problems harder than its training distribution.
+
 ## Connections
 
 - **Previous:** [[ch-47]] — Evaluation Harness and Suite Design for General Capability. That chapter fixes the
@@ -666,3 +672,4 @@ similarity between generated and gold code is confounded by correct solutions re
   confounds the authors state.
 - [[adding-error-bars-evals]] — paired standard errors, confidence intervals, the power formula, and the argument
   against changing sampling temperature to reduce variance.
+- [[processbench]] — PRM F1 drop from GSM8K to Omni-MATH; 2026-11 library card.

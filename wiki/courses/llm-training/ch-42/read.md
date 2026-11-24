@@ -3,7 +3,7 @@
      kind: content
      title: Reward Hacking and Judge Design
      deps: [ch-39]
-     sources: [[reward-hacking-taxonomy]], [[lilianweng-reward-hacking]], [[judge-llm-bias]], [[constitutional-ai]], [[rlaif-scaling]], [[rlcd]], [[why-language-models-hallucinate]], [[metr-frontier-reward-hacking]], [[impossiblebench]], [[cot-monitoring-obfuscation]], [[spurious-rewards-rlvr]], [[rlhf-length-correlations]], [[language-models-mislead-humans]], [[sycophancy-in-lms]], [[xstest]], [[agentic-benchmark-checklist]], [[reward-model-overoptimization]], [[natural-emergent-misalignment-reward-hacking]], [[self-taught-evaluators]]
+     sources: [[reward-hacking-taxonomy]], [[lilianweng-reward-hacking]], [[judge-llm-bias]], [[constitutional-ai]], [[rlaif-scaling]], [[rlcd]], [[why-language-models-hallucinate]], [[metr-frontier-reward-hacking]], [[impossiblebench]], [[cot-monitoring-obfuscation]], [[spurious-rewards-rlvr]], [[rlhf-length-correlations]], [[language-models-mislead-humans]], [[sycophancy-in-lms]], [[xstest]], [[agentic-benchmark-checklist]], [[reward-model-overoptimization]], [[natural-emergent-misalignment-reward-hacking]], [[self-taught-evaluators]], [[minillm]], [[qwen-prm-lessons]], [[deepseekmath-v2]], [[deepseek-prover-v2]], [[glm-4-1v-thinking]]
      figures: figures/hack-detector.html, figures/grader-abstention.html
      revised: 2026-09 (generality revision)
 -->
@@ -422,6 +422,16 @@ Settings of the runs cited above, as printed. Rows marked verified 2026-09-15 we
 
 ---
 
+## 2026-11 additions: open-lab sources
+
+Library cards added in 2026-11 from Microsoft, Qwen, DeepSeek, and Z.ai sources. Each entry lists the facts this chapter can use, with source locations; the cards in `wiki/raw-data/llm-training/` hold the full extracts.
+
+- **MiniLLM** ([[minillm]]). Distillation can be reward-hacked: without teacher-mixed sampling (α = 0.2) or length normalization, reverse KL still decreases but the student emits short or repeated strings that the teacher scores highly; Dolly Rouge-L falls 24.6 → 14.7 without length normalization (§3.4, Table 4, Fig. 8).
+- **Qwen PRM lessons** ([[qwen-prm-lessons]]). Several open PRMs put their minimum step score on the final step in 42–55% of Best-of-8 responses (Fig. 8), so they act as outcome judges; the ORM Qwen2.5-Math-RM-72B scores 68.9 on Best-of-8 but 38.9 ProcessBench F1 (Tables 6–7).
+- **DeepSeekMath-V2** ([[deepseekmath-v2]]). A verifier rewarded only for predicting the correct score can earn full reward on flawed proofs while citing issues that do not exist (§2.1.2); the fix is a meta-verifier whose score multiplies the verifier reward (Eq. 3).
+- **DeepSeek-Prover-V2** ([[deepseek-prover-v2]]). Formal verifiers can also be gamed. The v1 report's 13 "extra" PutnamBench solves by the 7B model were traced in v2 to a Lean 4.9.0 bug in which `apply?` fails to emit `sorry`, exploited via `Cardinal.toNat` (§3.2, App. B).
+- **GLM-4.1V-Thinking** ([[glm-4-1v-thinking]]). A pilot verifier was gamed after more than 500 iterations by answers such as "a correct number between 0 and 10"; fixes: extract only the boxed span, use per-domain verifiers (e.g., OCR reward = 1 − normalized edit distance), and unit-test each verifier (§5.2, Table 1).
+
 ## Connections
 
 - Previous: **ch-39** — Offline Preference Optimization: DPO and Its Variants. The implicit reward `β log π/π_ref` is a proxy with the same hackability properties as an explicit reward model.
@@ -463,3 +473,8 @@ Settings of the runs cited above, as printed. Rows marked verified 2026-09-15 we
 - [[natural-emergent-misalignment-reward-hacking]] — production-RL hacks; mitigation table; environment-mixture and filtered-distillation results (developed in ch-42a).
 - [[self-taught-evaluators]] — RewardBench accuracy under fixed response orders, as a size estimate for residual position effects.
 - [[echo-chamber-rl-post-training]] — RL re-weighting behaviours already present after pretraining, companion to the spurious-reward result.
+- [[minillm]] — reward hacking of the teacher score in on-policy distillation; 2026-11 library card.
+- [[qwen-prm-lessons]] — PRMs drifting to outcome scoring under Best-of-N optimization; 2026-11 library card.
+- [[deepseekmath-v2]] — verifier reward hacking by hallucinated issues; meta-verification; 2026-11 library card.
+- [[deepseek-prover-v2]] — Lean-bug exploitation as reward hacking of a formal verifier; 2026-11 library card.
+- [[glm-4-1v-thinking]] — verifier hacking in multimodal RL and the per-domain verifier fixes; 2026-11 library card.

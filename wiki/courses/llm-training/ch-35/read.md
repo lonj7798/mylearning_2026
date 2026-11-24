@@ -3,7 +3,7 @@
      kind: content
      title: Distillation in Practice A: Where Labs Insert Teacher Data
      deps: [ch-34, ch-20]
-     sources: [[deepseek-r1]], [[deepseek-r1-recipe]], [[deepseek-v3]], [[deepseek-v3-recipe]], [[deepseek-v3.1]], [[deepseek-v3.1-recipe]], [[deepseek-v4-recipe]], [[glm-4-5]], [[glm-4-5-recipe]], [[glm-5]], [[qwen-3]], [[qwen-3-post-training]], [[kimi-k1-5]], [[kimi-k1-5-recipe]], [[kimi-k2]], [[kimi-k2-recipe]], [[llama-nemotron]], [[nemotron-nano-2]], [[phi-4]], [[phi-4-reasoning]], [[magistral]], [[magistral-recipe]], [[gemma-2]], [[gemma-3]], [[llama-4]], [[minitron-approach]], [[mimo-v2-flash]], [[thinkingmachines-on-policy-distillation]], [[smollm-3]], [[smollm-3-midtraining]]
+     sources: [[deepseek-r1]], [[deepseek-r1-recipe]], [[deepseek-v3]], [[deepseek-v3-recipe]], [[deepseek-v3.1]], [[deepseek-v3.1-recipe]], [[deepseek-v4-recipe]], [[glm-4-5]], [[glm-4-5-recipe]], [[glm-5]], [[qwen-3]], [[qwen-3-post-training]], [[kimi-k1-5]], [[kimi-k1-5-recipe]], [[kimi-k2]], [[kimi-k2-recipe]], [[llama-nemotron]], [[nemotron-nano-2]], [[phi-4]], [[phi-4-reasoning]], [[magistral]], [[magistral-recipe]], [[gemma-2]], [[gemma-3]], [[llama-4]], [[minitron-approach]], [[mimo-v2-flash]], [[thinkingmachines-on-policy-distillation]], [[smollm-3]], [[smollm-3-midtraining]], [[phi-4-mini-reasoning]], [[minillm]]
      figures: figures/teacher-data-stage-map.html
      revised: 2026-09 (generality revision)
 -->
@@ -278,6 +278,13 @@ The on-policy objectives in §1.1 are derived step by step in the separate `on-p
 7. Kimi k1.5's long2short DPO rejects correct responses that are 1.5× longer than the chosen one. Explain what this pair construction trains and what risk it creates for problems that need long reasoning.
 8. A lab report leaves the teacher's sampling temperature, the rejection rate, and the SFT learning rate unreported. Explain which conclusions about its distillation stage remain valid and which cannot be drawn.
 
+## 2026-11 additions: open-lab sources
+
+Library cards added in 2026-11 from Microsoft, Qwen, DeepSeek, and Z.ai sources. Each entry lists the facts this chapter can use, with source locations; the cards in `wiki/raw-data/llm-training/` hold the full extracts.
+
+- **Phi-4-Mini-Reasoning** ([[phi-4-mini-reasoning]]). Teacher data enter at three stages: mid-training on the full distilled set, then SFT and Rollout DPO on subsets (§3, §4). Questions without traces get ~8 new DeepSeek-R1 rollouts each; a math-verification tool checks answers and GPT-4o-mini re-checks rejected rollouts to reduce false negatives (§4, Table 2).
+- **MiniLLM** ([[minillm]]). Black-box distillation (SFT on teacher outputs) approximately minimizes forward KL, which is mode-covering for a small student; white-box on-policy reverse KL is mode-seeking (§2.1, Fig. 2). LLaMA-7B DollyEval GPT-4 feedback is 76.4 against 73.6 for sequence-level KD (Table 1); MiniLLM beats SFT, word-level KD and sequence-level KD in 20 of 21 student/test-set cells (count from Table 1).
+
 ## Connections
 
 - **Previous (dependency):** ch-34 — Case Studies B: Generality versus Specialization in Qwen, OLMo, and Phi Reports. Qwen3 and Phi-4-reasoning stage placement is summarized there; errata 6–7 correct two claims.
@@ -315,3 +322,5 @@ The on-policy objectives in §1.1 are derived step by step in the separate `on-p
 - [[mimo-v2-flash]] — domain-teacher SFT data, MOPD objective, Table 7 student versus teacher (chapter excerpt verified against arXiv:2601.02780v2).
 - [[thinkingmachines-on-policy-distillation]] — per-token reverse-KL implementation, compute comparison, forgetting recovery; practitioner evidence (chapter excerpt verified against the blog page).
 - [[smollm-3]] — the SmolLM3 card has no verification section; [[smollm-3-midtraining]] holds the verified extract (35B tokens × 4 epochs of distilled traces, RULER regression, merge repair, Qwen3-32B/0.6B preference pairs).
+- [[phi-4-mini-reasoning]] — distilled data at mid-training, SFT and DPO stages; 2026-11 library card.
+- [[minillm]] — reverse-KL on-policy distillation against SFT, KD and sequence-level KD; 2026-11 library card.

@@ -3,7 +3,7 @@
      kind: content
      title: Negative Samples in Supervised Training: Corrections, Failure Conditioning, Critiques, and Unlikelihood
      deps: [ch-31]
-     sources: [[unlikelihood-training]], [[cringe-loss]], [[chain-of-hindsight]], [[lema-learning-from-mistakes]], [[physics-of-lm-2-2-learning-from-mistakes]], [[critique-fine-tuning]], [[dust-into-gold-negative-distillation]], [[learning-from-failure-nat]], [[orpo]], [[nft-negative-aware-finetuning]], [[redi-reinforcement-distillation]], [[negative-examples-likra]], [[pretraining-with-human-preferences]], [[likelihood-displacement]]
+     sources: [[unlikelihood-training]], [[cringe-loss]], [[chain-of-hindsight]], [[lema-learning-from-mistakes]], [[physics-of-lm-2-2-learning-from-mistakes]], [[critique-fine-tuning]], [[dust-into-gold-negative-distillation]], [[learning-from-failure-nat]], [[orpo]], [[nft-negative-aware-finetuning]], [[redi-reinforcement-distillation]], [[negative-examples-likra]], [[pretraining-with-human-preferences]], [[likelihood-displacement]], [[orca-math]], [[phi-4-mini-reasoning]]
      figures: figures/negative-gradient-explorer.html
      revised: 2026-09 (generality revision)
 -->
@@ -310,6 +310,13 @@ Units: "prompts × samples" counts questions per rollout step times answers per 
 7. NFT attributes 20% of its 32B gain to negatives, while Likra reports up to 10× more gain per negative example. Name the differences in setting that make both results compatible.
 8. An SFT mixture for a general assistant adds 20% failed tool-use trajectories. Which three measurements from this chapter would detect narrowing first, and why?
 
+## 2026-11 additions: open-lab sources
+
+Library cards added in 2026-11 from Microsoft, Qwen, DeepSeek, and Z.ai sources. Each entry lists the facts this chapter can use, with source locations; the cards in `wiki/raw-data/llm-training/` hold the full extracts.
+
+- **Orca-Math** ([[orca-math]]). Using the teacher solution as the only positive costs 2.27 points with both DPO and KTO (Table 3). Dropping questions whose 4 student samples were all correct (and therefore their borrowed negatives) moves DPO 84.23 → 60.73, while KTO is roughly unchanged (85.06 → 85.22 in iteration 2, 86.87 → 85.44 in iteration 3) (Table 4). The paper gives no mechanism for the DPO drop.
+- **Phi-4-Mini-Reasoning** ([[phi-4-mini-reasoning]]). Teacher rollouts with wrong answers, normally discarded by rejection sampling, become the rejected side of DPO pairs; this stage adds +6.7 AIME24 (§3.3, Table 3).
+
 ## Connections
 
 - Previous: [[ch-31]] — Rejection Sampling, Self-Generated Data, Cold Start, and SFT–RL Alternation. Positive-only filtering is the baseline that this chapter extends.
@@ -332,3 +339,5 @@ Units: "prompts × samples" counts questions per rollout step times answers per 
 - [[negative-examples-likra]] — per-example effect of negatives in multiple-choice scoring; near-miss negatives.
 - [[pretraining-with-human-preferences]] — conditional pretraining vs unlikelihood vs filtering.
 - [[likelihood-displacement]] — shared-parameter side effect of push-down, carried to [[ch-43a]].
+- [[orca-math]] — student-generated positives and synthetic negatives ablations; 2026-11 library card.
+- [[phi-4-mini-reasoning]] — rejected teacher rollouts as DPO negatives; 2026-11 library card.

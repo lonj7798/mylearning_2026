@@ -3,7 +3,7 @@
      kind: content
      title: Continual Pretraining Without Forgetting: Replay, Learning-Rate Re-Warming, and Synthetic Continued Pretraining
      deps: [ch-32]
-     sources: [[continual-pretraining-rewarm-replay]], [[paloma]], [[grpo]], [[grpo-recipe]], [[qwen-2-5-coder]], [[qwen-2-5-math]], [[instruction-pretraining]], [[synthetic-continued-pretraining]], [[merging-in-pretraining]], [[cooldown-scaling-beyond-fixed-durations]], [[kimi-k2-5]], [[llama-3]], [[rephrasing-the-web]]
+     sources: [[continual-pretraining-rewarm-replay]], [[paloma]], [[grpo]], [[grpo-recipe]], [[qwen-2-5-coder]], [[qwen-2-5-math]], [[instruction-pretraining]], [[synthetic-continued-pretraining]], [[merging-in-pretraining]], [[cooldown-scaling-beyond-fixed-durations]], [[kimi-k2-5]], [[llama-3]], [[rephrasing-the-web]], [[rho-1]], [[deepseek-coder-v2]]
      figures: figures/replay-tradeoff.html
      revised: 2026-09 (generality revision)
 -->
@@ -337,6 +337,13 @@ Continued pretraining uses next-token loss on every token, so it has no term tha
 6. In the one-dimensional merging example, the merge beats the mean checkpoint in both cases but not the best checkpoint in the second. Explain what property of real training trajectories determines whether PMA beats the latest checkpoint.
 7. A report shows a new-language continued-pretraining run with a stable aggregate validation loss and unchanged MMLU. Describe two forms of forgetting this report could still hide, and the measurement that would expose each.
 
+## 2026-11 additions: open-lab sources
+
+Library cards added in 2026-11 from Microsoft, Qwen, DeepSeek, and Z.ai sources. Each entry lists the facts this chapter can use, with source locations; the cards in `wiki/raw-data/llm-training/` hold the full extracts.
+
+- **Rho-1** ([[rho-1]]). With selective language modeling alone, the loss on unselected tokens rises significantly; the authors observed no adverse effect but suggest adding a general text and code loss to prevent overfitting (App. C).
+- **DeepSeek-Coder-V2** ([[deepseek-coder-v2]]). Continues from an intermediate DeepSeek-V2 checkpoint (4.2T tokens) for 6T more tokens with 30% natural language sampled from the parent corpus (§2, §3.3). Against DeepSeek-V2 Chat: BBH 79.7 → 83.9 and MMLU 78.1 → 79.2, but TriviaQA 86.7 → 82.3 and NaturalQuestions 53.4 → 47.5 (Table 10).
+
 ## Connections
 
 - **Depends on:** ch-32 — Mid-Training: Annealing Data, Stage Gates, and Effects on Later SFT and RL (annealing, stage placement, and decay-phase data).
@@ -359,3 +366,5 @@ Continued pretraining uses next-token loss on every token, so it has no term tha
 - [[kimi-k2-5]] — continuation from a near-end K2 checkpoint, vision injection timing and ratio ablation, text dip-and-recover.
 - [[llama-3]] — Llama 3 code expert continued pretraining on 1T tokens with more than 85% code.
 - [[rephrasing-the-web]] — the rephrasing approach adapted as EntiGraph's Rephrase baseline.
+- [[rho-1]] — rise of unselected-token loss under token selection; 2026-11 library card.
+- [[deepseek-coder-v2]] — continued pretraining from an intermediate checkpoint; knowledge-QA regression; 2026-11 library card.

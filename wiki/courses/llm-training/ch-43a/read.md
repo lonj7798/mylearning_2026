@@ -7,7 +7,7 @@
               [[raft-reinforce-rej-minimalist]], [[negative-sample-reinforcement]], [[nft-negative-aware-finetuning]],
               [[lazy-likelihood-displacement-grpo]], [[asymmetric-reinforce]], [[topr-tapered-off-policy-reinforce]],
               [[negative-preference-optimization]], [[on-policy-suboptimal-preference-data]], [[pmpo-positive-negative-feedback]],
-              [[ngrpo]], [[bcpg-nsa]], [[why-language-models-hallucinate]], [[dapo]], [[entropy-mechanism-llm-rl]]
+              [[ngrpo]], [[bcpg-nsa]], [[why-language-models-hallucinate]], [[dapo]], [[entropy-mechanism-llm-rl]], [[rstar2-agent]], [[orca-math]], [[arena-learning]], [[webrl]]
      figures: figures/negative-gradient-lab.html
      revised: 2026-09 (generality revision)
 -->
@@ -305,6 +305,15 @@ This section applies the course standard to the RL and preference stages; the me
 7. A team reports that adding negatives raised their agent benchmark by 4 points. Which three measurements would you ask for before accepting that negatives caused the gain, and what would each measurement rule out?
 8. A verifier for a customer-support agent marks "I need to check that with a human" as incorrect whenever the gold answer is a policy statement. Trace what a negative advantage on those responses does to the model's distribution, and design a reward change plus a diagnostic that would detect the problem within one run.
 
+## 2026-11 additions: open-lab sources
+
+Library cards added in 2026-11 from Microsoft, Qwen, DeepSeek, and Z.ai sources. Each entry lists the facts this chapter can use, with source locations; the cards in `wiki/raw-data/llm-training/` hold the full extracts.
+
+- **rStar2-Agent** ([[rstar2-agent]]). Wrong rollouts are kept unfiltered to preserve "diverse failure modes" (§2.2.3). DAPO-style overlong filtering removed the negative signal for overlong outputs and increased their share, so truncated rollouts keep reward 0 (§4.3.1).
+- **Orca-Math** ([[orca-math]]). With the teacher solution as the only positive, both DPO and KTO lose 2.27 points (Table 3). Dropping questions whose 4 samples were all correct, and with them the borrowed synthetic negatives, moves DPO 84.23 → 60.73 while KTO is roughly unchanged (Table 4).
+- **Arena Learning** ([[arena-learning]]). Chosen = another model's winning answer, rejected = the target model's own losing answer, so only the rejected side is on-policy (Table 10).
+- **WebRL** ([[webrl]]). Adding failed past trajectories to replay made progress slower and more volatile, because correct actions inside them get negative advantage when the final reward is 0 (App. C, Fig. 16). Replaying successes with actor perplexity in [1/0.95, 1/0.5] gives 31.5 phase-1 success, against 27.9 for low-perplexity only and 23.0 for high-perplexity only (Table 2).
+
 ## Connections
 
 - Previous: [[ch-43]] — Entropy, Output Diversity, and KL Control in RL. Supplies the covariance law and the KL estimators this chapter reads by advantage sign.
@@ -334,3 +343,7 @@ This section applies the course standard to the RL and preference stages; the me
 - [[entropy-mechanism-llm-rl]] — covariance law for entropy change and centered-covariance token selection, used for the four-quadrant table.
 - [[swe-bench-pro]], [[bespoke-stratos]] — measured verifier false negatives from unit tests and answer parsers.
 - [[star]], [[math-shepherd]], [[grpo]], [[dr-grpo]], [[rlvr-beyond-base-model]] — rationalization, step labels from rollouts, the group-baseline advantage, and the pass@k critique referenced in the failure-reuse map and §1.
+- [[rstar2-agent]] — unfiltered negatives and the overlong-filtering failure; 2026-11 library card.
+- [[orca-math]] — negative-sample ablations under DPO and KTO; 2026-11 library card.
+- [[arena-learning]] — on-policy rejected, off-policy chosen pairs; 2026-11 library card.
+- [[webrl]] — failed trajectories in replay; perplexity-window replay ablation; 2026-11 library card.

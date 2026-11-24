@@ -3,7 +3,7 @@
      kind: content
      title: Generation Methods: Bootstrap, Evolution, Extraction, Persona, and Rephrasing
      deps: [ch-18]
-     sources: [[self-instruct]], [[alpaca]], [[evol-instruct]], [[code-evol-instruct]], [[wizardcoder]], [[wizardmath]], [[magpie]], [[persona-hub]], [[prismatic-synthesis]], [[rephrasing-the-web]], [[humpback]], [[tulu-1-how-far-can-camels-go]], [[mammoth]], [[false-promise-imitating-proprietary-llms]], [[length-controlled-alpacaeval]], [[wildchat]], [[lmsys-chat-1m]]
+     sources: [[self-instruct]], [[alpaca]], [[evol-instruct]], [[code-evol-instruct]], [[wizardcoder]], [[wizardmath]], [[magpie]], [[persona-hub]], [[prismatic-synthesis]], [[rephrasing-the-web]], [[humpback]], [[tulu-1-how-far-can-camels-go]], [[mammoth]], [[false-promise-imitating-proprietary-llms]], [[length-controlled-alpacaeval]], [[wildchat]], [[lmsys-chat-1m]], [[orca-math]]
      figures: figures/generation-methods.html
      revised: 2026-09 (generality revision)
 -->
@@ -385,6 +385,12 @@ Rows marked "verified 2026-09-15" were read in the primary PDFs on that date bec
 7. WRAP's Q/A-style model improves the 8-task average by 2.0 points, and two tasks account for 1.9 of it. Why does this matter for a claim of general improvement, and what additional evaluation would separate a style match from a capability gain?
 8. A persona-conditioned dataset has lower pairwise embedding similarity than a seed-conditioned dataset but transfers worse. Explain which kind of variation each dataset contains.
 
+## 2026-11 additions: open-lab sources
+
+Library cards added in 2026-11 from Microsoft, Qwen, DeepSeek, and Z.ai sources. Each entry lists the facts this chapter can use, with source locations; the cards in `wiki/raw-data/llm-training/` hold the full extracts.
+
+- **Orca-Math** ([[orca-math]]). Problems come from two agent flows over 36,217 seed problems. "Ask Me Anything" converts a seed problem into a statement containing its answer and writes one new problem per number in it (120,445 problems); Suggester–Editor runs two rounds of making a problem harder and drops problems whose GPT-4-Turbo answer exceeds 1,800 characters (37,157 problems) (§2).
+
 ## Connections
 
 - Previous: ch-18 — The Synthetic-Data Design Pattern: Generate, Filter, Deduplicate, Verify, Select, Mix. This chapter covers the generate stage and the filters attached to it.
@@ -419,3 +425,4 @@ Rows marked "verified 2026-09-15" were read in the primary PDFs on that date bec
 - [[length-controlled-alpacaeval]] — LC regression, gameability, Arena correlation, truncation attack (extract).
 - [[wildchat]] — dataset statistics, prompt categories, coverage NLL matrix, WildLlama (extract).
 - [[lmsys-chat-1m]] — dataset statistics, topic clusters and caveats, unsafe share, SFT subsets (extract).
+- [[orca-math]] — Ask Me Anything and Suggester–Editor problem generation; 2026-11 library card.

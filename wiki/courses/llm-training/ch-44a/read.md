@@ -3,7 +3,7 @@
      kind: content
      title: Length in RL: Overlong Responses, Length Control, and Long-Context RL
      deps: [ch-44, ch-32b]
-     sources: [[dapo]], [[verl-dapo-overlong-buffer]], [[deepseek-r1]], [[deepseek-r1-recipe]], [[kimi-k1-5]], [[kimi-k1-5-recipe]], [[magistral]], [[magistral-recipe]], [[grpo]], [[dr-grpo]], [[demystifying-long-cot]], [[l1-lcpo]], [[overthinking-o1-like-llms]], [[sky-t1-flash-overthinking]], [[inverse-scaling-test-time-compute]], [[scaling-reasoning-losing-control-mathif]], [[qwenlong-l1]], [[qwenlong-l1-5]], [[loongrl]], [[loongrl-recipe]], [[memagent]], [[spell-self-play-long-context]], [[randomized-yarn]], [[longer-context-deeper-thinking]], [[minimax-01]], [[minimax-01-recipe]], [[allenai-olmo3-open-instruct-scripts]], [[allenai-olmo3-open-instruct-scripts-recipe]], [[nemotron-ultra-recipe]], [[deepswe]], [[demystifying-agentic-rl]], [[rollout-training-mismatch-tis]], [[qwen-long-context-synth]], [[context-length-alone-hurts]], [[ruler]], [[tokenskip]]
+     sources: [[dapo]], [[verl-dapo-overlong-buffer]], [[deepseek-r1]], [[deepseek-r1-recipe]], [[kimi-k1-5]], [[kimi-k1-5-recipe]], [[magistral]], [[magistral-recipe]], [[grpo]], [[dr-grpo]], [[demystifying-long-cot]], [[l1-lcpo]], [[overthinking-o1-like-llms]], [[sky-t1-flash-overthinking]], [[inverse-scaling-test-time-compute]], [[scaling-reasoning-losing-control-mathif]], [[qwenlong-l1]], [[qwenlong-l1-5]], [[loongrl]], [[loongrl-recipe]], [[memagent]], [[spell-self-play-long-context]], [[randomized-yarn]], [[longer-context-deeper-thinking]], [[minimax-01]], [[minimax-01-recipe]], [[allenai-olmo3-open-instruct-scripts]], [[allenai-olmo3-open-instruct-scripts-recipe]], [[nemotron-ultra-recipe]], [[deepswe]], [[demystifying-agentic-rl]], [[rollout-training-mismatch-tis]], [[qwen-long-context-synth]], [[context-length-alone-hurts]], [[ruler]], [[tokenskip]], [[rstar2-agent]], [[deepseek-v3-2]], [[longwriter]]
      figures: figures/length-reward-explorer.html
      revised: 2026-09 (generality revision)
 -->
@@ -622,6 +622,14 @@ not transfer unverified.
 8. A team shortens a reasoning model with length-preference pairs, keeps pass@1 on MATH500, and ships it. State two
    measurements that would reveal a loss the pass@1 number hides, and explain the mechanism each one targets.
 
+## 2026-11 additions: open-lab sources
+
+Library cards added in 2026-11 from Microsoft, Qwen, DeepSeek, and Z.ai sources. Each entry lists the facts this chapter can use, with source locations; the cards in `wiki/raw-data/llm-training/` hold the full extracts.
+
+- **rStar2-Agent** ([[rstar2-agent]]). Response-length limit 8K → 12K → 12K over three stages (Table 2); in stage 1 more than 10% of rollouts were briefly truncated at 8K and the limit was kept (§4.3, Fig. 8).
+- **DeepSeek-V3.2** ([[deepseek-v3-2]]). AIME 2025 is 93.1 (16k output tokens) for V3.2 against 96.0 (23k) for V3.2-Speciale; Codeforces 2386 (42k) against 2701 (77k) (Table 3). V3.2 is "constrained by a length constraint reward model", with stricter token limits for cost and latency (§4.1–4.2).
+- **LongWriter** ([[longwriter]]). Length-aware DPO: chosen = the best of 4 samples by quality plus length score S_l (Eq. 1), rejected = a random other sample; S̄ 80.5 → 84.0 and [4k, 20k) length score 80.3 → 90.3 (§4.2, Table 3).
+
 ## Connections
 
 - **Previous:** [[ch-44]] — Process Supervision and Verifiable Rewards. The reward this chapter reshapes is the verifiable
@@ -683,3 +691,6 @@ not transfer unverified.
 - [[grpo]] — the group-normalized advantage used in the worked examples.
 - [[ruler]] — the synthetic long-context suite used as a length-wise gate.
 - [[context-length-alone-hurts]] — accuracy falling with input length even under perfect retrieval.
+- [[rstar2-agent]] — short staged length limits in agentic RL; 2026-11 library card.
+- [[deepseek-v3-2]] — accuracy versus output tokens under two length-penalty settings; 2026-11 library card.
+- [[longwriter]] — length-following DPO for long outputs; 2026-11 library card.

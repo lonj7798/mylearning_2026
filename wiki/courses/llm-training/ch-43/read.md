@@ -10,7 +10,7 @@
               [[deepswe]], [[deepswe-recipe]], [[kimi-k2-recipe]],
               [[allenai-olmo3-open-instruct-scripts-recipe]], [[rlhf-instructgpt]], [[tulu-3]],
               [[entropy-regularization-ppo]], [[entropy-collapse-ppo]], [[maximum-entropy-rl]],
-              [[nathan-lambert-entropy-rl]], [[openrlhf-entropy-debugging]], [[rlvr-beyond-base-model]]
+              [[nathan-lambert-entropy-rl]], [[openrlhf-entropy-debugging]], [[rlvr-beyond-base-model]], [[phi-4-mini-reasoning]], [[glm-4-1v-thinking]]
      figures: figures/entropy-dynamics.html
      revised: 2026-09 (generality revision)
 -->
@@ -651,6 +651,13 @@ samples is high-variance; `distinct_k` depends on the partitioner and on the sam
 
 ---
 
+## 2026-11 additions: open-lab sources
+
+Library cards added in 2026-11 from Microsoft, Qwen, DeepSeek, and Z.ai sources. Each entry lists the facts this chapter can use, with source locations; the cards in `wiki/raw-data/llm-training/` hold the full extracts.
+
+- **Phi-4-Mini-Reasoning** ([[phi-4-mini-reasoning]]). Temperature is annealed 1.0 → 0.6 linearly over the first 50% of RL steps and then held at 0.6 (§3.4); no ablation is reported. In the authors' comparison, DAPO's AIME cons@16 dropped over training (§5.5, Fig. 2b).
+- **GLM-4.1V-Thinking** ([[glm-4-1v-thinking]]). The final recipe uses no KL loss and no entropy loss (entropy loss produced garbled output and collapse); rollouts use top-p = 1, because top-p 0.9 led to garbled outputs later in training; the batch is kept fixed by oversampling with an EMA of 1/(1 − share of all-correct or all-wrong groups) (§5.3.1–5.3.2).
+
 ## Connections
 
 - Previous: **ch-16 — RL Prompt Distribution: Difficulty Filtering, Domain Breadth, and Prompt Reuse.**
@@ -719,3 +726,5 @@ samples is high-variance; `distinct_k` depends on the partitioner and on the sam
 - [[nathan-lambert-entropy-rl]], [[openrlhf-entropy-debugging]] — practitioner syntheses with no single
   checkable artifact and no verification record. Cited as framing only; their entropy thresholds (0.1 and 0.2
   nats) have no located primary source and are not used in this chapter.
+- [[phi-4-mini-reasoning]] — rollout-temperature annealing for a 3.8B model; 2026-11 library card.
+- [[glm-4-1v-thinking]] — no-KL, no-entropy-loss recipe; top-p = 1; EMA oversampling; 2026-11 library card.

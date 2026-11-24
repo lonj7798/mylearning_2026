@@ -3,7 +3,7 @@
      kind: content
      title: Long-Document Synthesis for Continued Pretraining and Long-Context SFT
      deps: [ch-29, ch-32b, ch-32c]
-     sources: [[llama-3]], [[long-context-llama3]], [[excerpts/llama-3-long-context-sft]], [[qwen-long-context-synth]], [[yi]], [[excerpts/yi-long-context-recitation]], [[chatqa-2]], [[in2-film]], [[hierarchical-million-token-synth]], [[nemotron-nano-2]], [[quest-query-centric-synthesis]], [[nextlong]], [[ultralong-128k-to-4m]], [[prolong]], [[qwenlong-l1-5]], [[loongrl]], [[artificial-needles-real-haystacks]], [[longmit]], [[excerpts/longmit-mimg]], [[context-synthesis-short-to-long]], [[clipper-compression-synth]], [[bootstrap-context-length]], [[smollm-3]], [[excerpts/smollm3-long-context-merge]], [[longcite]], [[nolima]], [[lost-in-the-middle]], [[agentinstruct]]
+     sources: [[llama-3]], [[long-context-llama3]], [[excerpts/llama-3-long-context-sft]], [[qwen-long-context-synth]], [[yi]], [[excerpts/yi-long-context-recitation]], [[chatqa-2]], [[in2-film]], [[hierarchical-million-token-synth]], [[nemotron-nano-2]], [[quest-query-centric-synthesis]], [[nextlong]], [[ultralong-128k-to-4m]], [[prolong]], [[qwenlong-l1-5]], [[loongrl]], [[artificial-needles-real-haystacks]], [[longmit]], [[excerpts/longmit-mimg]], [[context-synthesis-short-to-long]], [[clipper-compression-synth]], [[bootstrap-context-length]], [[smollm-3]], [[excerpts/smollm3-long-context-merge]], [[longcite]], [[nolima]], [[lost-in-the-middle]], [[agentinstruct]], [[longwriter]]
      figures: figures/long-sequence-layouts.html
      revised: 2026-09 (generality revision)
 -->
@@ -400,6 +400,12 @@ Values are quoted from source cards or chapter excerpts; "verified" dates refer 
 7. The Llama 3 long SFT share is 0.11% of examples. Explain why the token share is the relevant quantity for forgetting and compute it from Table 7.
 8. SelfLong's IFEval dropped 11.5 points while GPQA rose 3.6. Propose two causes rooted in the data mixture of §3.5, and state how SmolLM3's merge result suggests a mitigation.
 
+## 2026-11 additions: open-lab sources
+
+Library cards added in 2026-11 from Microsoft, Qwen, DeepSeek, and Z.ai sources. Each entry lists the facts this chapter can use, with source locations; the cards in `wiki/raw-data/llm-training/` hold the full extracts.
+
+- **LongWriter** ([[longwriter]]). Output-side long-context SFT data. Maximum output length follows the longest SFT outputs: capping GLM-4-9B SFT outputs at 500 / 1,000 / 2,000 words gives models whose maximum output is about 600 / 900 / 1,800 words (§2, Fig. 2). AgentWrite plans paragraphs of 200–1000 words and writes them in order with the earlier text in context; parallel writing cost 6% Coherence (§3, Table 2). LongWriter-6k = 3k GLM-4 SFT + 3k WildChat instructions with GPT-4o responses of 2k–32k words; removing it dropped S̄ 80.5 → 62.6 (§4.1, Table 4).
+
 ## Connections
 
 - Previous: [[ch-29]] — Lab: Synthetic Instruction Set with Filter, Deduplication, and Verification (the filter and verification stages applied here to long inputs).
@@ -434,3 +440,4 @@ Values are quoted from source cards or chapter excerpts; "verified" dates refer 
 - [[nolima]] — question–needle lexical overlap and its effect.
 - [[lost-in-the-middle]] — position dependence and closed-book comparison.
 - [[agentinstruct]] — unanswerable reading questions as negative content (short context).
+- [[longwriter]] — long-output SFT data synthesized by plan-then-write; output-length ceiling; 2026-11 library card.

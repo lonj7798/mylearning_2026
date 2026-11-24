@@ -3,7 +3,7 @@
      kind: content
      title: Model-Based Quality Filtering and Benchmark-Targeted Data Selection
      deps: [ch-10]
-     sources: [[fineweb]], [[dclm]], [[nemotron-cc]], [[qurating]], [[weborganizer]], [[perplexity-correlations-data-selection]], [[dsdm]], [[datadecide]], [[datadecide-recipe]], [[training-on-the-test-task]], [[whose-language-counts-quality-filter]], [[smollm2]], [[llama-3]], [[paloma]], [[data-constrained-scaling]], [[signal-and-noise-eval]], [[openhermes-2-5]], [[phi-textbooks]], [[c4]]
+     sources: [[fineweb]], [[dclm]], [[nemotron-cc]], [[qurating]], [[weborganizer]], [[perplexity-correlations-data-selection]], [[dsdm]], [[datadecide]], [[datadecide-recipe]], [[training-on-the-test-task]], [[whose-language-counts-quality-filter]], [[smollm2]], [[llama-3]], [[paloma]], [[data-constrained-scaling]], [[signal-and-noise-eval]], [[openhermes-2-5]], [[phi-textbooks]], [[c4]], [[rho-1]], [[deepseek-coder-v2]]
      figures: figures/selection-tradeoffs.html
      revised: 2026-09 (generality revision)
 -->
@@ -416,6 +416,13 @@ Rows marked 2026-09-15 were read at the stated locus in the primary PDF for this
 6. Perplexity-correlation selection outperformed DCLM's fastText filter on the raw DCLM pool but not on the pre-filtered pool. Explain this with the range of correlation coefficients in each pool, and state what it implies about stacking a benchmark-correlated filter on top of an existing classifier.
 7. DsDm selected data for four epochs while random selection used one. Explain how this difference affects the interpretation of the "2× compute multiplier" as evidence for broad capability.
 
+## 2026-11 additions: open-lab sources
+
+Library cards added in 2026-11 from Microsoft, Qwen, DeepSeek, and Z.ai sources. Each entry lists the facts this chapter can use, with source locations; the cards in `wiki/raw-data/llm-training/` hold the full extracts.
+
+- **Rho-1** ([[rho-1]]). Selection at token level. A reference model trained on 0.5B curated math tokens scores each token, and within each batch the loss is masked for tokens outside the top k% of excess loss L_θ − L_RM (k = 60% at 1.1B, 70% at 7B); the full sequence is still fed forward (§2.2, §3.1). On 15B OpenWebMath tokens the 9-task few-shot math average rises 21.6 → 38.1 (TinyLlama-1.1B) and 55.8 → 66.2 (Mistral-7B) (Table 1). This is selection inside documents that a document-level filter has already kept.
+- **DeepSeek-Coder-V2** ([[deepseek-coder-v2]]). Code and math web recall uses a three-iteration fastText loop: a domain with more than 10% of its pages already collected is marked code- or math-related, and its uncollected URLs are added to the seed (§2). GitHub file rules reused from DeepSeek-Coder: average line length ≤ 100 characters, ≥ 25% alphabetic characters, JSON/YAML kept only at 50–5000 characters.
+
 ## Connections
 
 - **Previous (dependency):** ch-10 — Heuristic Curation Pipelines: CCNet, C4, Dolma, FineWeb. It builds the cleaned pool that model-based filters score.
@@ -458,3 +465,5 @@ Rows marked 2026-09-15 were read at the stated locus in the primary PDF for this
 - [[openhermes-2-5]] — composition of the instruction dataset used as DCLM positives.
 - [[phi-textbooks]] — similarity-split HumanEval evaluation as a detection method.
 - [[c4]] — blocklist-based dialect removal, for contrast with model-based filters.
+- [[rho-1]] — excess-loss token selection, selection ratios, OpenWebMath continual-pretraining results; 2026-11 library card.
+- [[deepseek-coder-v2]] — fastText domain-recall loop and GitHub file filters; 2026-11 library card.

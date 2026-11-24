@@ -3,7 +3,7 @@
      kind: content
      title: Evaluating Agent Generality and Reliability
      deps: [ch-51, ch-45b]
-     sources: [[swe-bench-pro]], [[terminal-bench-2]], [[terminal-bench-trajectories]], [[terminal-bench-trajectories-stats]], [[tau-bench]], [[tau2-bench]], [[bfcl]], [[browsecomp-plus]], [[toolathlon]], [[are-gaia2]], [[holistic-agent-leaderboard]], [[agentic-benchmark-checklist]], [[swe-bench-illusion]], [[swe-rebench]], [[impossiblebench]], [[metr-time-horizon]], [[minimax-m2-aligning-to-what]], [[agent-world]], [[agentgym-rl]]
+     sources: [[swe-bench-pro]], [[terminal-bench-2]], [[terminal-bench-trajectories]], [[terminal-bench-trajectories-stats]], [[tau-bench]], [[tau2-bench]], [[bfcl]], [[browsecomp-plus]], [[toolathlon]], [[are-gaia2]], [[holistic-agent-leaderboard]], [[agentic-benchmark-checklist]], [[swe-bench-illusion]], [[swe-rebench]], [[impossiblebench]], [[metr-time-horizon]], [[minimax-m2-aligning-to-what]], [[agent-world]], [[agentgym-rl]], [[deepseek-v3-2]]
      figures: figures/pass-hat-k.html, figures/harness-coordinates.html
      revised: 2026-09 (generality revision)
 -->
@@ -623,6 +623,12 @@ models; a smaller model on the same protocol will produce wider intervals at the
    Construct the go/no-go argument you would write, naming the statistic from [[ch-51]] you would use and the
    condition under which you would still block the release.
 
+## 2026-11 additions: open-lab sources
+
+Library cards added in 2026-11 from Microsoft, Qwen, DeepSeek, and Z.ai sources. Each entry lists the facts this chapter can use, with source locations; the cards in `wiki/raw-data/llm-training/` hold the full extracts.
+
+- **DeepSeek-V3.2** ([[deepseek-v3-2]]). The same checkpoint scores 46.4 on Terminal Bench 2.0 with Claude Code (thinking), 37.1 with Claude Code (non-thinking), and 39.3 with Terminus (non-thinking) (§4.1, App. C). An agent score needs the harness and the mode reported with it.
+
 ## Connections
 
 - **Previous:** [[ch-51]] — Metric Noise, Confidence Intervals, and Go/No-Go Decisions. That chapter builds the
@@ -676,3 +682,4 @@ models; a smaller model on the same protocol will produce wider intervals at the
 - [[agent-world]] — the held-out arena, the environment-count scaling curve, and the general-ability regression of
   EnvScaler-8B against its own backbone.
 - [[agentgym-rl]] — the in-domain-only scope statement, used as the reporting failure the §9 gate prevents.
+- [[deepseek-v3-2]] — harness and thinking-mode dependence of Terminal Bench 2.0 scores; 2026-11 library card.

@@ -7,7 +7,7 @@
               [[self-correct-rl]], [[rest-em]], [[star]], [[v-star]], [[deepseek-r1]], [[deepseek-r1-recipe]],
               [[open-reasoner-zero]], [[cognitive-behaviors-self-improving-reasoners]], [[dr-grpo]],
               [[rlvr-beyond-base-model]], [[prorl]], [[deepseek-v3.1]], [[agent-early-experience]], [[swe-gym]],
-              [[model-collapse]], [[likelihood-displacement]]
+              [[model-collapse]], [[likelihood-displacement]], [[orca-math]], [[arena-learning]], [[deepseekmath-v2]], [[rest-mcts]]
      figures: figures/self-improve-loop.html
      revised: 2026-09 (generality revision)
 -->
@@ -326,6 +326,15 @@ Agent loops differ in three ways: rewards arrive after many steps, the environme
 7. Two models are trained with the same RLVR recipe; one shows the "aha" language and the other does not. Using the base-model evidence in §7.3, list the measurements you would make before concluding that the recipe caused the difference.
 8. An agent self-improvement loop raises a 7B policy from 7.0% to 10.0% resolution over two iterations but leaves a 32B policy at 19.7%. Give two mechanisms consistent with this, and an experiment that separates them.
 
+## 2026-11 additions: open-lab sources
+
+Library cards added in 2026-11 from Microsoft, Qwen, DeepSeek, and Z.ai sources. Each entry lists the facts this chapter can use, with source locations; the cards in `wiki/raw-data/llm-training/` hold the full extracts.
+
+- **Orca-Math** ([[orca-math]]). Loop: SFT → KTO on SFT-model samples → KTO on KTO-model samples; LR 1e-6 in iteration 2 and 1e-7 in iteration 3 (§3.2, §5).
+- **Arena Learning** ([[arena-learning]]). Each stage (SFT, DPO, PPO) battles on a disjoint data shard, and SFT is retrained from the base model each iteration (Table 1); stronger opponents add 45–55 Elo per stage in iteration 1 (Table 11).
+- **DeepSeekMath-V2** ([[deepseekmath-v2]]). Verifier and generator are trained by GRPO in alternation, and from iteration 2 they are merged by rejection fine-tuning (§3.1); scaled verification (n analyses, m meta-checks, k-vote rule) replaced human labels in the last two iterations (§2.3). The values of n, m and k are not reported.
+- **ReST-MCTS\*** ([[rest-mcts]]). Two rounds of mutual self-training (policy + PRM) give LLaMA-3-8B-Instruct an average of 29.02, against 26.83 for ReST-EM and 27.73 for Self-Rewarding (Table 2). At equal tokens on MATH, round 1 did not beat Self-Consistency, and round 2 reached 48.5% against 42.5% (Fig. 2a).
+
 ## Connections
 
 - Previous chapter: **ch-44b — Multi-Domain RL for General Capability: Non-Verifiable Rewards and Domain Mixing**. The final R1 stage in §7.2 is a multi-domain RL stage; the domain-mixing questions are answered there.
@@ -362,3 +371,7 @@ Agent loops differ in three ways: rewards arrive after many steps, the environme
 - [[swe-gym]] — on-policy self-improvement results for coding agents; numbers read from arXiv:2412.21139v2 §4.2–4.3.
 - [[model-collapse]] — loss of low-probability content under recursive training on model outputs (verified card).
 - [[likelihood-displacement]] — measured cost of the negative gradient in DPO (verified card).
+- [[orca-math]] — SFT-then-iterative-KTO loop; 2026-11 library card.
+- [[arena-learning]] — iterative SFT/DPO/PPO flywheel with disjoint shards; 2026-11 library card.
+- [[deepseekmath-v2]] — alternating verifier/generator training; automated labels replacing human labels; 2026-11 library card.
+- [[rest-mcts]] — mutual policy/PRM self-training against ReST-EM and Self-Rewarding; 2026-11 library card.

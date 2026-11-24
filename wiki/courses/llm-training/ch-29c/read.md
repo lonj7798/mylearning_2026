@@ -3,7 +3,7 @@
      kind: content
      title: Agentic Environment and Task Synthesis at Scale
      deps: [ch-29b, ch-27, ch-32d]
-     sources: [[swe-gym]], [[excerpts/swe-gym-v2-extract]], [[r2e-gym]], [[swe-smith]], [[swe-rebench]], [[glm-5]], [[kimi-k2]], [[agentscaler]], [[toucan-mcp]], [[deepseek-v3.1]], [[webshaper]], [[quest-deep-research]], [[tongyi-deepresearch]], [[agent-data-protocol]], [[agent-world]], [[reasoning-gym]], [[swe-bench-illusion]], [[swe-bench-pro]], [[agentic-benchmark-checklist]], [[browsecomp-plus]]
+     sources: [[swe-gym]], [[excerpts/swe-gym-v2-extract]], [[r2e-gym]], [[swe-smith]], [[swe-rebench]], [[glm-5]], [[kimi-k2]], [[agentscaler]], [[toucan-mcp]], [[deepseek-v3.1]], [[webshaper]], [[quest-deep-research]], [[tongyi-deepresearch]], [[agent-data-protocol]], [[agent-world]], [[reasoning-gym]], [[swe-bench-illusion]], [[swe-bench-pro]], [[agentic-benchmark-checklist]], [[browsecomp-plus]], [[zerosearch]], [[webrl]]
      figures: figures/task-funnels-and-filters.html
      revised: 2026-09 (generality revision)
 -->
@@ -354,6 +354,13 @@ In this stage "negative" appears in all four senses of the course standard: (1) 
 7. GLM-5 scores 77.8 on SWE-bench Verified and 42.1% on SWE-rebench. Explain why this gap alone does not measure contamination and what comparison would.
 8. Agent-World chooses which tasks to synthesize from failures in held-out arena environments and reports gains on MCP-Mark. Explain the conditions under which MCP-Mark remains a valid measure of generality.
 
+## 2026-11 additions: open-lab sources
+
+Library cards added in 2026-11 from Microsoft, Qwen, DeepSeek, and Z.ai sources. Each entry lists the facts this chapter can use, with source locations; the cards in `wiki/raw-data/llm-training/` hold the full extracts.
+
+- **ZeroSearch** ([[zerosearch]]). A simulated search environment. The simulator is Qwen-2.5-14B-Instruct fine-tuned on logged query–document pairs, and a prompt keyword selects useful or noisy output (§3.3, Table 2). With a Qwen-2.5-3B-Base policy, the fine-tuned simulator gives 34.47 average EM, a prompted simulator 31.50, and real Google 32.81 (Table 4). The simulator prompt includes the ground-truth answer, and the paper does not measure the effect of that.
+- **WebRL** ([[webrl]]). Each phase generates 500 new web tasks from failed instructions by Evol-Instruct in-breadth evolution; a task is kept if the critic value at its initial state is in [0.05, 0.75], and tasks GPT-4o judges infeasible are dropped (§2.1, App. B.1).
+
 ## Connections
 
 - Previous: [[ch-29b]] — Long-Conversation and Accumulating-Context Synthesis.
@@ -385,3 +392,5 @@ In this stage "negative" appears in all four senses of the course standard: (1) 
 - [[swe-bench-pro]] — verifier false negatives when task specifications omit interface details.
 - [[agentic-benchmark-checklist]] — do-nothing and shortcut agents that pass flawed graders.
 - [[browsecomp-plus]] — retriever dependence of offline search evaluation.
+- [[zerosearch]] — fine-tuned search simulator as an RL environment; simulator versus real search; 2026-11 library card.
+- [[webrl]] — failure-seeded web-task generation with critic and feasibility filters; 2026-11 library card.

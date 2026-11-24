@@ -3,7 +3,7 @@
      kind: content
      title: Offline Preference Optimization: DPO and Its Variants
      deps: [ch-38a]
-     sources: [[dpo]], [[ipo]], [[kto]], [[simpo]], [[orpo]], [[rpo]], [[likelihood-displacement]], [[learning-dynamics-llm-finetuning]], [[dpo-positive]], [[noise-contrastive-alignment]], [[d2o-negating-negatives]], [[unpacking-dpo-ppo]], [[preference-ranking-accuracy]], [[daa-overoptimization-scaling]], [[likelihood-overoptimisation-daa]], [[on-policy-suboptimal-preference-data]], [[length-controlled-alpacaeval]], [[openrlhf-dpo]], [[openrlhf-dpo-recipe]], [[open-instruct-allenai-recipes-recipe]], [[tulu-3]], [[llama-3-recipe]], [[on-off-policy-rlhf]], [[trl-online-dpo]], [[ultrafeedback]], [[hh-rlhf]], [[pairrm]], [[rlhf-instructgpt]], [[longpo]], [[eto-trial-and-error]]
+     sources: [[dpo]], [[ipo]], [[kto]], [[simpo]], [[orpo]], [[rpo]], [[likelihood-displacement]], [[learning-dynamics-llm-finetuning]], [[dpo-positive]], [[noise-contrastive-alignment]], [[d2o-negating-negatives]], [[unpacking-dpo-ppo]], [[preference-ranking-accuracy]], [[daa-overoptimization-scaling]], [[likelihood-overoptimisation-daa]], [[on-policy-suboptimal-preference-data]], [[length-controlled-alpacaeval]], [[openrlhf-dpo]], [[openrlhf-dpo-recipe]], [[open-instruct-allenai-recipes-recipe]], [[tulu-3]], [[llama-3-recipe]], [[on-off-policy-rlhf]], [[trl-online-dpo]], [[ultrafeedback]], [[hh-rlhf]], [[pairrm]], [[rlhf-instructgpt]], [[longpo]], [[eto-trial-and-error]], [[orca-math]], [[arena-learning]]
      figures: figures/dpo-landscape.html, figures/negative-gradient-squeeze.html
      revised: 2026-09 (generality revision)
 -->
@@ -734,6 +734,13 @@ answers, which is what length control removes.
 
 ---
 
+## 2026-11 additions: open-lab sources
+
+Library cards added in 2026-11 from Microsoft, Qwen, DeepSeek, and Z.ai sources. Each entry lists the facts this chapter can use, with source locations; the cards in `wiki/raw-data/llm-training/` hold the full extracts.
+
+- **Orca-Math** ([[orca-math]]). KTO beats DPO in both iterations on GSM8K: 85.06 vs 84.23, then 86.87 vs 84.91, β = 0.3 (§5, Table 2).
+- **Arena Learning** ([[arena-learning]]). Chosen = another model's winning answer, rejected = the target model's own losing answer, so the chosen side is off-policy; the target model's share of chosen responses rose 1.1K → 1.6K → 2.3K across iterations (Table 10).
+
 ## Connections
 
 - **Previous: ch-38a — SFT versus RL Generalization: On-Policy Data, KL to the Base Model, and Output
@@ -780,3 +787,5 @@ answers, which is what length control removes.
 - [[ultrafeedback]], [[hh-rlhf]], [[pairrm]] — the preference datasets and the ranking model used to build on-policy pairs.
 - [[longpo]], [[eto-trial-and-error]] — pair construction for long context and for agent trajectories.
 - [[rlhf-instructgpt]] — the reward-model-plus-PPO pipeline whose objective this chapter optimizes without RL.
+- [[orca-math]] — KTO versus DPO over two iterations; 2026-11 library card.
+- [[arena-learning]] — off-policy chosen responses from battle winners; 2026-11 library card.

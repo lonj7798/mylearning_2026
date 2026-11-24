@@ -3,7 +3,7 @@
      kind: content
      title: Reward Modeling: Bradley–Terry, Over-Optimization, and Reward-Model Generalization
      deps: [ch-15]
-     sources: [[bradley-terry-rm]], [[reward-model-overoptimization]], [[reward-ensembling]], [[helping-or-herding]], [[warm-weight-averaged-reward-models]], [[pairrm]], [[generative-reward-models]], [[rlaif-scaling]], [[nemotron-4-synthetic]], [[nemotron-4-synthetic-recipe]], [[rewardbench]], [[rm-bench]], [[ppe-reward-model-eval]], [[deepseek-grm]], [[policy-coverage-loss]], [[training-verifiers-to-solve-math-word-problems]], [[v-star]], [[prm800k]], [[west-of-n]], [[dpo]], [[llama-2-recipe]], [[llama-3-recipe]], [[rlhf-instructgpt]], [[rubrics-as-rewards]]
+     sources: [[bradley-terry-rm]], [[reward-model-overoptimization]], [[reward-ensembling]], [[helping-or-herding]], [[warm-weight-averaged-reward-models]], [[pairrm]], [[generative-reward-models]], [[rlaif-scaling]], [[nemotron-4-synthetic]], [[nemotron-4-synthetic-recipe]], [[rewardbench]], [[rm-bench]], [[ppe-reward-model-eval]], [[deepseek-grm]], [[policy-coverage-loss]], [[training-verifiers-to-solve-math-word-problems]], [[v-star]], [[prm800k]], [[west-of-n]], [[dpo]], [[llama-2-recipe]], [[llama-3-recipe]], [[rlhf-instructgpt]], [[rubrics-as-rewards]], [[deepspeed-chat]], [[worldpm]], [[chatglm-rlhf]]
      figures: figures/rm-overopt.html
      revised: 2026-09 (generality revision)
 -->
@@ -467,6 +467,14 @@ All rows are reward-model or verifier training settings as printed. Card rows we
 
 ---
 
+## 2026-11 additions: open-lab sources
+
+Library cards added in 2026-11 from Microsoft, Qwen, DeepSeek, and Z.ai sources. Each entry lists the facts this chapter can use, with source locations; the cards in `wiki/raw-data/llm-training/` hold the full extracts.
+
+- **DeepSpeed-Chat** ([[deepspeed-chat]]). RM loss −log σ(r_c − r_r) is averaged over token positions from the first point where chosen and rejected diverge; the scalar used in PPO is the value at the last non-pad token (`reward_model.py` L106–116).
+- **WorldPM** ([[worldpm]]). Bradley–Terry preference models trained on ~15M StackExchange vote pairs at 1.5B/7B/72B (LR 3e-6, batch 10K, 1 epoch; §3.1.2, App. A.3). Test loss falls as a power law on adversarial sets, improves on objective sets only at 72B, and is flat on subjective sets, which the authors attribute to style preference and annotation noise (§3.2, §3.3, §5). As initialization before fine-tuning on 7K–800K human pairs, it raised most metric cells: 56 of 66 at 7B and 51 of 66 at 72B (count of ↑ markers in Tables 2–3).
+- **ChatGLM-RLHF** ([[chatglm-rlhf]]). Pairs are bucketed by length difference and balanced so the preferred response is the longer one equally often; an extra loss r(y_w)² + r(y_l)² limits score drift (§3.3, Eq. 2). 32B RM test accuracy is 0.65 against ~0.64 for Llama2-70B (Table 5, on different internal test sets).
+
 ## Connections
 
 - Previous: **ch-15** — Human Preference and Instruction Data: Annotation Protocols, Agreement, and Prompt Coverage. Supplies the pairwise labels, agreement rates, and prompt coverage that set the ceiling for §1.
@@ -507,3 +515,6 @@ All rows are reward-model or verifier training settings as printed. Card rows we
 - [[west-of-n]] — best-versus-worst pseudo-preferences, N and filtering ablations (cited at loci in arXiv:2401.12086v2).
 - [[llama-2-recipe]], [[llama-3-recipe]] — RM training rows.
 - [[rubrics-as-rewards]] — pointer for rubric rewards covered in ch-44b.
+- [[deepspeed-chat]] — divergence-point pairwise RM loss in code; 2026-11 library card.
+- [[worldpm]] — preference-model scaling by test-set type; forum-data initialization; 2026-11 library card.
+- [[chatglm-rlhf]] — length-bucket balancing and L2 score regularizer for the RM; 2026-11 library card.

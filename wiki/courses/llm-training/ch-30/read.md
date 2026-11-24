@@ -6,7 +6,7 @@
      sources: [[loss-masking-prompt]], [[loss-masking-regimes]], [[neftune]], [[sequence-packing]], [[sequence-packing-contract]],
               [[hf-alignment-handbook]], [[tulu-3]], [[tulu-3-sft-recipe]], [[open-instruct-allenai-recipes]], [[chat-template-matrix]],
               [[smol-training-playbook]], [[lora-learns-less-forgets-less]], [[lora-without-regret]], [[minimax-m2-interleaved-thinking]],
-              [[glm-5]], [[orpo]], [[qwen-3]], [[llama-3]], [[llama-3-recipe]], [[qwen-2.5-recipe]], [[deepseek-r1]], [[deepseek-r1-recipe]], [[in2-film]]
+              [[glm-5]], [[orpo]], [[qwen-3]], [[llama-3]], [[llama-3-recipe]], [[qwen-2.5-recipe]], [[deepseek-r1]], [[deepseek-r1-recipe]], [[in2-film]], [[longwriter]]
      figures: figures/sft-axes.html
      revised: 2026-09 (generality revision)
 -->
@@ -315,6 +315,12 @@ Starting point for a small general-purpose run: for a base model of about 8B par
 7. Tülu 3 Persona data raised IFEval by 19.2 points and did not raise IFEval-OOD. What does this imply for how SFT settings should be selected and reported?
 8. LoRA forgot less than full fine-tuning on code instruction data, but on Tülu-v2-mix at 2 epochs full fine-tuning forgot less. What properties of the data and training length could explain the difference, and how would you test them?
 
+## 2026-11 additions: open-lab sources
+
+Library cards added in 2026-11 from Microsoft, Qwen, DeepSeek, and Z.ai sources. Each entry lists the facts this chapter can use, with source locations; the cards in `wiki/raw-data/llm-training/` hold the full extracts.
+
+- **LongWriter** ([[longwriter]]). SFT loss is averaged over all target tokens in the batch, not per sequence; the authors report that per-sequence averaging under-weights tokens of long outputs and scored worse on long outputs, without giving numbers (§4.2). Settings: batch 8, LR 1e-5, packing length 32k, 4 epochs.
+
 ## Connections
 
 - Previous: **ch-29e — Instruction Tuning and Generalization to Unseen Tasks** ([[ch-29e]]): data properties that give unseen-task generalization; this chapter varies training settings on such data.
@@ -348,3 +354,4 @@ Starting point for a small general-purpose run: for a base model of about 8B par
 - [[qwen-2.5-recipe]], [[deepseek-r1]], [[deepseek-r1-recipe]] — SFT recipe rows; R1-Zero RL without SFT.
 - [[in2-film]] — Mistral `[INST]` template in a Mistral-based SFT run.
 - [[allenai-tulu-sft-recipe]] — cited only in Corrections; its NEFTune, packing, and optimizer rows are not in the Tülu 3 report.
+- [[longwriter]] — per-token versus per-sequence loss averaging with packing; 2026-11 library card.

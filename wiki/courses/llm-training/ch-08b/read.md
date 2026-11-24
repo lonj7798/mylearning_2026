@@ -3,7 +3,7 @@
      kind: content
      title: Why Next-Token Pretraining Produces General Ability: In-Context Learning, Emergence, and Predictability
      deps: [ch-08a]
-     sources: [[gpt-2-unsupervised-multitask]], [[gpt-3-few-shot]], [[icl-data-distributional-properties]], [[induction-heads]], [[emergent-abilities]], [[emergent-abilities-mirage]], [[emergence-loss-perspective]], [[emergence-loss-perspective-recipe]], [[same-loss-better-downstream]], [[embers-of-autoregression]], [[predicting-downstream-elusive]], [[scaling-laws-unreliable-downstream]], [[phi-textbooks]], [[physics-of-lm-3]]
+     sources: [[gpt-2-unsupervised-multitask]], [[gpt-3-few-shot]], [[icl-data-distributional-properties]], [[induction-heads]], [[emergent-abilities]], [[emergent-abilities-mirage]], [[emergence-loss-perspective]], [[emergence-loss-perspective-recipe]], [[same-loss-better-downstream]], [[embers-of-autoregression]], [[predicting-downstream-elusive]], [[scaling-laws-unreliable-downstream]], [[phi-textbooks]], [[physics-of-lm-3]], [[tinystories]]
      figures: figures/metric-artifact-explorer.html
      revised: 2026-09 (generality revision)
 -->
@@ -395,6 +395,12 @@ Recipe values for the Du et al. runs, including sequence length 2048 and AdamW (
 7. Two checkpoints have the same validation loss, one after longer training. Explain the SGD-noise argument for why the longer-trained one could transfer better, and why this evidence does not yet establish that for autoregressive LLM pretraining.
 8. GPT-4 decodes rot-1 at 0.82 and rot-2 at 0.02. Explain this with the P(input | output) · P(output) decomposition and state what it implies for evaluating whether a base model has learned a procedure.
 
+## 2026-11 additions: open-lab sources
+
+Library cards added in 2026-11 from Microsoft, Qwen, DeepSeek, and Z.ai sources. Each entry lists the facts this chapter can use, with source locations; the cards in `wiki/raw-data/llm-training/` hold the full extracts.
+
+- **TinyStories** ([[tinystories]]). In models of ~1M–35M parameters trained on a synthetic children's-story corpus, grammar emerges before consistency, and consistency before creativity; consistency appears when hidden size grows from 64 to 128 (§3.1). The authors also report that depth matters more for consistency and instruction following, and width more for factual knowledge (§3.1, §8). All scores come from GPT-4 grading, so the ordering is measured at small scale with one grader.
+
 ## Connections
 
 - **Previous (array order):** ch-08a — Scaling Laws and Compute Allocation: From Pretraining Loss to Downstream Capability (dependency; pretraining loss as a function of parameters and tokens, and the downstream prediction problem).
@@ -418,3 +424,4 @@ Recipe values for the Du et al. runs, including sequence length 2048 and AdamW (
 - [[scaling-laws-unreliable-downstream]] — Lourie, Hu, Cho, arXiv 2025-07: 18 of 46 tasks with predictable loss-to-task scaling.
 - [[phi-textbooks]] — Gunasekar et al., arXiv 2023-06: similarity-split HumanEval results for benchmark-shaped training data.
 - [[physics-of-lm-3]] — Allen-Zhu and Li, Part 3.3, arXiv 2024-04: phrasing diversity and extractability of stored knowledge.
+- [[tinystories]] — capability ordering (grammar, consistency, creativity) by hidden size and depth at 1M–35M parameters; 2026-11 library card.

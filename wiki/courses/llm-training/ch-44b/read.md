@@ -3,7 +3,7 @@
      kind: content
      title: Multi-Domain RL for General Capability: Non-Verifiable Rewards and Domain Mixing
      deps: [ch-44a, ch-38a]
-     sources: [[deepseek-r1]], [[deepseek-r1-recipe]], [[qwen-3]], [[qwen-3-general-rl]], [[glm-4-5]], [[glm-4-5-recipe]], [[glm-5]], [[kimi-k2]], [[kimi-k2-recipe]], [[nemotron-cascade]], [[rubrics-as-rewards]], [[rlcf-checklists]], [[deepseek-grm]], [[guru-cross-domain-rl]], [[general-reasoner]], [[nemotron-crossthink]], [[multi-domain-rlvr-data-centric]], [[scaling-reasoning-losing-control-mathif]], [[qwen3-2507-instruct-thinking-split]], [[deliberative-alignment]], [[openai-safe-completions]], [[ifbench]], [[grpo]]
+     sources: [[deepseek-r1]], [[deepseek-r1-recipe]], [[qwen-3]], [[qwen-3-general-rl]], [[glm-4-5]], [[glm-4-5-recipe]], [[glm-5]], [[kimi-k2]], [[kimi-k2-recipe]], [[nemotron-cascade]], [[rubrics-as-rewards]], [[rlcf-checklists]], [[deepseek-grm]], [[guru-cross-domain-rl]], [[general-reasoner]], [[nemotron-crossthink]], [[multi-domain-rlvr-data-centric]], [[scaling-reasoning-losing-control-mathif]], [[qwen3-2507-instruct-thinking-split]], [[deliberative-alignment]], [[openai-safe-completions]], [[ifbench]], [[grpo]], [[worldpm]], [[glm-4-1v-thinking]]
      figures: figures/cascade-stage-tracker.html
      revised: 2026-09 (generality revision)
 -->
@@ -678,6 +678,13 @@ was tuned for the other's data, and no source reports a joint configuration at t
    model into separate Instruct and Thinking checkpoints. State what evidence would be needed to decide
    whether the split was the right response to that trade.
 
+## 2026-11 additions: open-lab sources
+
+Library cards added in 2026-11 from Microsoft, Qwen, DeepSeek, and Z.ai sources. Each entry lists the facts this chapter can use, with source locations; the cards in `wiki/raw-data/llm-training/` hold the full extracts.
+
+- **WorldPM** ([[worldpm]]). A 72B RM initialized from WorldPM, used for GRPO on QwQ-32B, raised in-house Code 56.63 → 64.51 and IF 61.19 → 66.22 against a 72B RM without it (§4.4, Table 4).
+- **GLM-4.1V-Thinking** ([[glm-4-1v-thinking]]). One weak verifier outside STEM stopped STEM reward improvement after step 150 and lowered MMMU, MathVista and AI2D (Fig. 5). GUI-agent-only RL improved all five domains; mixing all domains gave the largest gains on STEM / OCR & Chart / general VQA (+6.6 / +5.2 / +3.4) but not on grounding or GUI agents (§6.3, Fig. 6).
+
 ## Connections
 
 - Previous chapter: [[ch-44a]] — Length in RL: Overlong Responses, Length Control, and Long-Context RL. The
@@ -738,3 +745,5 @@ was tuned for the other's data, and no source reports a joint configuration at t
   mixing result.
 - [[grpo]] — the group-normalized advantage used by almost every recipe in this chapter.
 - [[reward-model-overoptimization]], [[xstest]] — background for the RM-size and over-refusal diagnostics.
+- [[worldpm]] — forum-pretrained RM initialization in a GRPO pipeline; 2026-11 library card.
+- [[glm-4-1v-thinking]] — cross-domain interference from one weak verifier; single-domain versus mixed RL transfer; 2026-11 library card.

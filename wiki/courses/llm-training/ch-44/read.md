@@ -3,7 +3,7 @@
      kind: content
      title: Process Supervision and Verifiable Rewards
      deps: [ch-43a]
-     sources: [[prm800k]], [[let-verify]], [[lets-verify]], [[math-shepherd]], [[omegaprm]], [[qwen-prm-lessons]], [[rl-on-incorrect-synthetic-data]], [[rewarding-progress-pav]], [[rlvr-tulu3-config]], [[ifbench]], [[why-language-models-hallucinate]], [[swe-rl-difflib-reward]], [[deepswe]], [[deepswe-recipe]], [[crossing-the-reward-bridge]], [[transferability-of-llm-reasoning]], [[deepseek-r1]], [[rlvr-beyond-base-model]], [[prorl]], [[spurious-rewards-rlvr]], [[training-verifiers-to-solve-math-word-problems]], [[reward-model-overoptimization]], [[metr-frontier-reward-hacking]], [[natural-emergent-misalignment-reward-hacking]], [[glm-4-5]], [[kimi-k2]], [[deepseek-v3.1]], [[step-dpo]], [[grpo]], [[john-schulman-kl-tricks]], [[rubrics-as-rewards]]
+     sources: [[prm800k]], [[let-verify]], [[lets-verify]], [[math-shepherd]], [[omegaprm]], [[qwen-prm-lessons]], [[rl-on-incorrect-synthetic-data]], [[rewarding-progress-pav]], [[rlvr-tulu3-config]], [[ifbench]], [[why-language-models-hallucinate]], [[swe-rl-difflib-reward]], [[deepswe]], [[deepswe-recipe]], [[crossing-the-reward-bridge]], [[transferability-of-llm-reasoning]], [[deepseek-r1]], [[rlvr-beyond-base-model]], [[prorl]], [[spurious-rewards-rlvr]], [[training-verifiers-to-solve-math-word-problems]], [[reward-model-overoptimization]], [[metr-frontier-reward-hacking]], [[natural-emergent-misalignment-reward-hacking]], [[glm-4-5]], [[kimi-k2]], [[deepseek-v3.1]], [[step-dpo]], [[grpo]], [[john-schulman-kl-tricks]], [[rubrics-as-rewards]], [[processbench]], [[deepseekmath-v2]], [[rest-mcts]]
      figures: figures/prm-vs-orm.html, figures/wrong-answer-rewards.html
      excerpts: excerpts/qwen-prm-lessons.md, excerpts/rewarding-progress-pav.md, excerpts/rl-on-incorrect-synthetic-data.md, excerpts/why-language-models-hallucinate.md, excerpts/crossing-the-reward-bridge.md, excerpts/rlvr-tulu3-config.md, excerpts/swe-rl-difflib-reward.md
      revised: 2026-09 (generality revision)
@@ -456,6 +456,15 @@ Values as printed in the primary sources. Rows marked 2026-09-15 were read in th
 
 ---
 
+## 2026-11 additions: open-lab sources
+
+Library cards added in 2026-11 from Microsoft, Qwen, DeepSeek, and Z.ai sources. Each entry lists the facts this chapter can use, with source locations; the cards in `wiki/raw-data/llm-training/` hold the full extracts.
+
+- **ProcessBench** ([[processbench]]). Measures a step verifier by whether it names the earliest wrong step; the score is the F1 of accuracy on erroneous and on correct solutions (§4.1). Among correct-final-answer solutions, the share with a wrong step rises from 3.5% on GSM8K to 51.8% on Omni-MATH (§3.3, Table 2), so final-answer checks do not measure process correctness. PRMs trained on automatic labels reach at most 42.1 average F1 (Skywork-PRM-7B); a PRM800K-trained PRM reaches 56.5 (Table 3), the same value as the human-label row in §3.2.
+- **Qwen PRM lessons** ([[qwen-prm-lessons]]). Already used in §3. Facts not yet in the chapter: the ORM Qwen2.5-Math-RM-72B scores 68.9 on Best-of-8, above Qwen2.5-Math-PRM-7B (67.6), with 38.9 ProcessBench F1 (Tables 6–7); Qwen2.5-Math-PRM-72B detects 58.1% of ProcessBench cases with a correct answer and an erroneous step (Table 5).
+- **DeepSeekMath-V2** ([[deepseekmath-v2]]). Final-answer rewards cannot score proofs. A generative verifier is trained by GRPO on expert scores {0, 0.5, 1} with reward R_format · R_score, R_score = 1 − |s′ − s| (§2.1.1, Eqs. 1–2), and the reward is then multiplied by a meta-verifier score (Eq. 3), which raised the rated quality of verifier analyses from 0.85 to 0.96 with score accuracy unchanged (§2.1.2).
+- **ReST-MCTS\*** ([[rest-mcts]]). The value model regresses tree-inferred step values with MSE at LR 1e-6 (App. E.1). As a verifier on Mistral-7B: MetaMATH with self-consistency, it scores 87.5 GSM8K / 39.0 MATH500 against 86.3 / 38.3 for Math-Shepherd (Table 3).
+
 ## Connections
 
 - Previous: **ch-43a** — Negative Samples and Negative Gradients: Likelihood Displacement, Squeezing, and Negative Advantages. Supplies the logit-level mechanism used in the negatives section.
@@ -502,3 +511,6 @@ Values as printed in the primary sources. Rows marked 2026-09-15 were read in th
 - [[natural-emergent-misalignment-reward-hacking]], [[metr-frontier-reward-hacking]] — measured exploitation of unit tests and scoring code.
 - [[grpo]], [[john-schulman-kl-tricks]] — group-normalized advantages and the KL estimator family used in §5.
 - [[rubrics-as-rewards]] — pointer for rubric rewards, developed in ch-44b.
+- [[processbench]] — earliest-error benchmark, process errors behind correct answers, PRM F1 by label source; 2026-11 library card.
+- [[deepseekmath-v2]] — generative proof verifier with meta-verification reward; 2026-11 library card.
+- [[rest-mcts]] — regression PRM on tree-inferred values; verifier comparison with Math-Shepherd; 2026-11 library card.

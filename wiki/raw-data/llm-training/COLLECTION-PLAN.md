@@ -456,3 +456,31 @@ Confirmed absent by listing the library directories on 2026-09-18. Grouped by bu
 
 The 2026-09 candidate sweep proposed 617 slugs; 117 were written in this revision and 500 remain unwritten. The groups
 above list the ones the audits marked `must` or that a theme page needed and could not cite.
+
+## 2026-11 open-lab additions (Microsoft, Qwen, DeepSeek, Z.ai)
+
+Twenty-three source cards written and verified on 2026-11-24, then linked from the course chapters' `## 2026-11 additions: open-lab sources` sections. Insight rows were appended to the theme pages listed in [[insights]].
+
+- [x] **P** `papers/rstar2-agent.md` — Microsoft 2025; GRPO-RoC agentic RL with a Python tool, non-reasoning cold start
+- [x] **P** `papers/orca-math.md` — Microsoft 2024; agent-generated math problems, teacher-agreement KTO/DPO pairs
+- [x] **R** `model-reports/phi-4-mini-reasoning.md` — Microsoft 2025; distillation as mid-training, rollout DPO, small-model RLVR fixes
+- [x] **P** `papers/minillm.md` — Gu et al. 2023 (ICLR 2024); reverse-KL on-policy distillation
+- [x] **P** `papers/rho-1.md` — Lin et al. 2024 (NeurIPS 2024); excess-loss token selection
+- [x] **P** `papers/tinystories.md` — Eldan & Li 2023; constrained synthetic corpus for small models
+- [x] **P** `papers/arena-learning.md` — WizardLM team 2024; judged-battle data flywheel, WizardArena
+- [x] **F** `frameworks/deepspeed-chat.md` — Microsoft DeepSpeed 2023; Hybrid Engine, PPO trainer defaults
+- [x] **P** `papers/processbench.md` — Qwen 2024; earliest-error benchmark for step verifiers
+- [x] **P** `papers/worldpm.md` — Qwen 2025; preference-model scaling on forum votes
+- [x] **P** `papers/zerosearch.md` — Tongyi Lab 2025; simulated search engine for RL rollouts
+- [x] **P** `papers/qwen-prm-lessons.md` — Qwen 2025; MC vs judge vs human step labels, Best-of-N bias (library card for the existing ch-44 excerpt)
+- [x] **P** `papers/deepseekmath-v2.md` — DeepSeek 2025; generative proof verifier with meta-verification
+- [x] **R** `model-reports/deepseek-v3-2.md` — DeepSeek 2025; companion to `deepseek-v3.1` for Tables 3–5, harness and length results
+- [x] **P** `papers/deepseek-prover-v2.md` — DeepSeek 2025; subgoal cold start, Lean reward hacking
+- [x] **R** `model-reports/deepseek-coder-v2.md` — DeepSeek 2024; code/math continued pretraining and forgetting check
+- [x] **F** `frameworks/deepseek-open-infra.md` — DeepSeek 2025; DualPipe, DeepEP, profile-data
+- [x] **F** `frameworks/slime.md` — THUDM/Z.ai; Megatron + SGLang RL framework, colocate and fully-async modes
+- [x] **P** `papers/longwriter.md` — Z.ai/THUDM 2024; output-length ceiling, AgentWrite, length-aware DPO
+- [x] **P** `papers/webrl.md` — Z.ai/THUDM 2024; self-evolving curriculum web-agent RL
+- [x] **P** `papers/chatglm-rlhf.md` — Z.ai/THUDM 2024; production RLHF lessons
+- [x] **P** `papers/rest-mcts.md` — THUDM 2024; tree-inferred process rewards, mutual self-training
+- [x] **P** `papers/glm-4-1v-thinking.md` — Z.ai/THUDM 2025; RLCS curriculum, per-domain verifiers, cross-domain RL transfer

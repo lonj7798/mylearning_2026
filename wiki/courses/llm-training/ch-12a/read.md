@@ -3,7 +3,7 @@
      kind: content
      title: Memorization, Knowledge Acquisition, and Generalization During Pretraining
      deps: [ch-12]
-     sources: [[quantifying-memorization]], [[how-much-do-lms-memorize]], [[memorization-without-overfitting]], [[physics-of-lm-3]], [[physics-of-lm-3-recipe]], [[physics-of-lm-3-1-knowledge-storage]], [[physics-of-lm-3-2-knowledge-manipulation]], [[reversal-curse]], [[factual-knowledge-acquisition-pretraining]], [[long-tail-knowledge]], [[influence-functions-generalization]], [[repeated-data-scaling]], [[data-constrained-scaling]], [[deduplicating-training-data]], [[paloma]]
+     sources: [[quantifying-memorization]], [[how-much-do-lms-memorize]], [[memorization-without-overfitting]], [[physics-of-lm-3]], [[physics-of-lm-3-recipe]], [[physics-of-lm-3-1-knowledge-storage]], [[physics-of-lm-3-2-knowledge-manipulation]], [[reversal-curse]], [[factual-knowledge-acquisition-pretraining]], [[long-tail-knowledge]], [[influence-functions-generalization]], [[repeated-data-scaling]], [[data-constrained-scaling]], [[deduplicating-training-data]], [[paloma]], [[rho-1]]
      figures: figures/knowledge-acquisition-explorer.html
      revised: 2026-09 (generality revision)
 -->
@@ -342,6 +342,12 @@ Rows marked 2026-09-15 were read at the stated locus in the primary PDF for this
 6. A lab adds chain-of-thought examples for attribute comparisons to pretraining data and sees no change on a direct-answer benchmark. Explain this result from Result 4 and the hint-accuracy calculation, and propose an evaluation that measures the change the data did produce.
 7. Membership inference fails at chance on a model trained with 200 tokens per parameter. Explain why this does not show that a specific benchmark item was absent from training, and which method from this chapter could give evidence either way.
 
+## 2026-11 additions: open-lab sources
+
+Library cards added in 2026-11 from Microsoft, Qwen, DeepSeek, and Z.ai sources. Each entry lists the facts this chapter can use, with source locations; the cards in `wiki/raw-data/llm-training/` hold the full extracts.
+
+- **Rho-1** ([[rho-1]]). In TinyLlama-1B continual pretraining on 15B OpenWebMath tokens, 51% of tokens are already learned (L→L), 26% show a clear loss drop (H→L), 11% stay hard (H→H) and 12% rise (L→H) (§2.1, Fig. 3). On inspection, many tokens with fluctuating loss in the H→H and L→L groups are noise (§2.1, App. D.2).
+
 ## Connections
 
 - **Previous (dependency):** ch-12 — Deduplication: Exact, Near-Duplicate, and Semantic. It sets duplicate counts, whose memorization effects §2 and §9 quantify.
@@ -373,3 +379,4 @@ Rows marked 2026-09-15 were read at the stated locus in the primary PDF for this
 - [[data-constrained-scaling]] — uniform repetition up to about 4 epochs.
 - [[deduplicating-training-data]] — copied-token rates before and after deduplication, ExactSubstr span length.
 - [[paloma]] — per-domain perplexity as a measurement of coverage.
+- [[rho-1]] — token-level loss-trajectory categories in continual pretraining; 2026-11 library card.

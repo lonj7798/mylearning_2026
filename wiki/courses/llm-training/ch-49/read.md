@@ -3,7 +3,7 @@
      kind: content
      title: Judge Models: Bias, Calibration, and Judge-Specific Overfitting
      deps: [ch-48]
-     sources: [[judge-llm-bias]], [[chatbot-arena]], [[arena-hard-benchbuilder]], [[length-controlled-alpacaeval]], [[lmsys-style-control]], [[null-model-cheating-benchmarks]], [[leaderboard-illusion]], [[self-preference-recognition]], [[rewardbench]], [[rm-bench]], [[ppe-reward-model-eval]], [[self-taught-evaluators]], [[direct-judgement-preference]], [[generative-reward-models]], [[meta-rewarding-lm]]
+     sources: [[judge-llm-bias]], [[chatbot-arena]], [[arena-hard-benchbuilder]], [[length-controlled-alpacaeval]], [[lmsys-style-control]], [[null-model-cheating-benchmarks]], [[leaderboard-illusion]], [[self-preference-recognition]], [[rewardbench]], [[rm-bench]], [[ppe-reward-model-eval]], [[self-taught-evaluators]], [[direct-judgement-preference]], [[generative-reward-models]], [[meta-rewarding-lm]], [[tinystories]], [[arena-learning]], [[processbench]]
      figures: figures/judge-bias.html
      revised: 2026-09 (generality revision)
 -->
@@ -458,6 +458,14 @@ Values below are quoted from the source cards at the loci given. Rows marked `no
 
 ---
 
+## 2026-11 additions: open-lab sources
+
+Library cards added in 2026-11 from Microsoft, Qwen, DeepSeek, and Z.ai sources. Each entry lists the facts this chapter can use, with source locations; the cards in `wiki/raw-data/llm-training/` hold the full extracts.
+
+- **TinyStories** ([[tinystories]]). All quality scores come from GPT-4 grading of ~50 prompts × 10 samples at temperature 1 with one prompt template; no human-agreement check is reported (§3).
+- **Arena Learning** ([[arena-learning]]). Llama3-70B-Instruct judges each pair twice with positions swapped. The offline arena agrees with LMSYS Arena rankings at 98.79% average, against 87.88% for Arena-Hard-v0.1 and 42.95% for MT-Bench (Table 3), and has 99.26% Spearman correlation with a GPT-4 judge (Table 6). The same judge family selects training data and evaluates the models; the paper does not analyse this.
+- **ProcessBench** ([[processbench]]). Prompted critic models locate errors better than PRMs: QwQ-32B-Preview 71.5 and o1-mini 87.9 average F1, against 42.1 for Skywork-PRM-7B; F1 drops with difficulty for every model, e.g. o1-mini 93.2 on GSM8K → 82.4 on Omni-MATH (Table 3).
+
 ## Connections
 
 - **Previous chapter** — [[ch-48]] — Contamination Detection and Its Effect on Reported Scores. Contamination inflates a score because the test item was seen in training; judge-specific overfitting inflates it because the response matched the grader. Both produce non-transferring numbers and need separate detections.
@@ -490,3 +498,6 @@ Values below are quoted from the source cards at the loci given. Rows marked `no
 - [[direct-judgement-preference]] — Wang, Xu et al. 2024 (arXiv:2409.14664). The DPO+SFT judge loss, the three pair types, the hard-negative ablation, and the better-of-two-orders reporting convention.
 - [[generative-reward-models]] — Mahan et al. 2024 (arXiv:2410.12832). GenRM and CoT-GenRM training variants, in-distribution versus RewardBench generalization, and the majority-vote effect.
 - [[meta-rewarding-lm]] — Wu et al. 2024 (arXiv:2407.19594). Judge and meta-judge training, length control at pair selection, and the drift diagnostics (meta-judge bias, positional bias, score compression, human Spearman by iteration).
+- [[tinystories]] — GPT-4 grading without a human-agreement check; 2026-11 library card.
+- [[arena-learning]] — position-swapped LLM judge; offline-online ranking consistency; 2026-11 library card.
+- [[processbench]] — critic LLMs versus PRMs on earliest-error identification; 2026-11 library card.

@@ -3,7 +3,7 @@
      kind: content
      title: Distillation as Data: Explanation Traces and the R1-Distill Lineage
      deps: [ch-19]
-     sources: [[orca]], [[orca-2]], [[distilling-step-by-step]], [[deepseek-r1]], [[deepseek-r1-recipe]], [[deepseek-r1-distill-synth]], [[bespoke-stratos]], [[sky-t1]], [[openr1]], [[openr1-recipe]], [[open-thoughts]], [[scaling-reasoning-losing-control-mathif]], [[scaling-reasoning-losing-control-mathif-recipe]], [[transferability-of-llm-reasoning]], [[gemma-2]], [[qwen-3]], [[qwen-qwq-traces]], [[dolphin]], [[qwen-2.5]], [[anthropic-distillation-attacks-report]], [[teacher-output-licenses]]
+     sources: [[orca]], [[orca-2]], [[distilling-step-by-step]], [[deepseek-r1]], [[deepseek-r1-recipe]], [[deepseek-r1-distill-synth]], [[bespoke-stratos]], [[sky-t1]], [[openr1]], [[openr1-recipe]], [[open-thoughts]], [[scaling-reasoning-losing-control-mathif]], [[scaling-reasoning-losing-control-mathif-recipe]], [[transferability-of-llm-reasoning]], [[gemma-2]], [[qwen-3]], [[qwen-qwq-traces]], [[dolphin]], [[qwen-2.5]], [[anthropic-distillation-attacks-report]], [[teacher-output-licenses]], [[minillm]]
      figures: figures/distill-lineage.html
      revised: 2026-09 (generality revision)
 -->
@@ -421,6 +421,12 @@ where 1[j = y] is 1 for the target token and 0 otherwise. Worked example: p = (0
 7. Explain why discarding failed teacher traces avoids the probability-concentration effect of negative gradients, and what information is lost by discarding.
 8. Orca 2 uses Prompt Erasing. Explain what the student must learn when the strategy instruction is removed, and why its MT-Bench score could still fall below an instruct baseline.
 
+## 2026-11 additions: open-lab sources
+
+Library cards added in 2026-11 from Microsoft, Qwen, DeepSeek, and Z.ai sources. Each entry lists the facts this chapter can use, with source locations; the cards in `wiki/raw-data/llm-training/` hold the full extracts.
+
+- **MiniLLM** ([[minillm]]). Cross-reference. Distillation as data (SFT on teacher outputs) is black-box distillation that approximately minimizes forward KL; MiniLLM is the white-box alternative that minimizes reverse KL on student-sampled responses. Numbers and conditions are in [[ch-35]].
+
 ## Connections
 
 - Previous: **ch-19 — Generation Methods: Bootstrap, Evolution, Extraction, Persona, and Rephrasing.** Covers prompt-side generation and the imitation-versus-capability critique; this chapter covers the response side when a stronger teacher writes the targets.
@@ -458,3 +464,4 @@ where 1[j = y] is 1 for the target token and 0 otherwise. Worked example: p = (0
 - [[qwen-2.5]] — Qwen2.5 license per model size.
 - [[anthropic-distillation-attacks-report]] — terms-of-service violations in distillation from a closed API.
 - [[teacher-output-licenses]] — quoted license statements for R1, Llama 3.1, QwQ, and dataset licenses.
+- [[minillm]] — forward-KL versus reverse-KL framing of distillation (details in ch-35); 2026-11 library card.

@@ -3,7 +3,7 @@
      kind: content
      title: Human Preference and Instruction Data: Annotation Protocols, Agreement, and Prompt Coverage
      deps: [ch-30]
-     sources: [[rlhf-instructgpt]], [[hh-rlhf]], [[lima]], [[wildchat]], [[ultrafeedback-construction]], [[openassistant]], [[rlhf-length-correlations]], [[sycophancy-in-lms]], [[openai-sycophancy-postmortem]], [[chatbot-arena]], [[helpsteer2]], [[prism-alignment]], [[tulu-3-preference-ablations]], [[reward-model-overoptimization]]
+     sources: [[rlhf-instructgpt]], [[hh-rlhf]], [[lima]], [[wildchat]], [[ultrafeedback-construction]], [[openassistant]], [[rlhf-length-correlations]], [[sycophancy-in-lms]], [[openai-sycophancy-postmortem]], [[chatbot-arena]], [[helpsteer2]], [[prism-alignment]], [[tulu-3-preference-ablations]], [[reward-model-overoptimization]], [[worldpm]], [[chatglm-rlhf]]
      figures: figures/annotation-workflow.html
      revised: 2026-09 (generality revision)
 -->
@@ -318,6 +318,13 @@ Values below are data and annotation settings. Optimizer settings for the policy
 6. Explain why expanding UltraFeedback from 64k to 383k pairs by reusing prompts did not improve Tülu 3 8B DPO, using the gradient of the Bradley-Terry loss and the correlation between pairs from the same prompt.
 7. PRISM finds that no model is the top choice for more than 45% of US participants. Explain what this means for a reward model trained on pooled labels, and how you would test whether the pooled policy is worse for some group.
 
+## 2026-11 additions: open-lab sources
+
+Library cards added in 2026-11 from Microsoft, Qwen, DeepSeek, and Z.ai sources. Each entry lists the facts this chapter can use, with source locations; the cards in `wiki/raw-data/llm-training/` hold the full extracts.
+
+- **WorldPM** ([[worldpm]]). The authors state that subjective preference accuracy depends more on annotation strategy than on more preference-pretraining data (§5). Under length and markdown control, results on GPT-4-labeled and Chatbot Arena test sets change substantially while HelpSteer2 results stay stable (Fig. 4).
+- **ChatGLM-RLHF** ([[chatglm-rlhf]]). 221,866 pairwise comparisons labeled on helpfulness (including no unexpected Chinese–English mixing) and safety; cyclic and tie preferences are removed in post-filtering (§3.2, Table 2). In human evaluation the gains concentrate in writing and role-play; math moves +0.02 (Table 4).
+
 ## Connections
 
 - Previous: ch-36 — Lab: SFT Run with Masking Tests, a Forgetting Report, and a Held-Out Evaluation Split.
@@ -349,3 +356,5 @@ Values below are data and annotation settings. Optimizer settings for the policy
 - [[openai-sycophancy-postmortem]] — thumbs-feedback reward and GPT-4o rollback (chapter excerpt from an archived copy of the official post).
 - [[tulu-3-preference-ablations]] — WildChat removal, unique vs duplicated prompts, on-policy candidates, preference mix sizes (chapter excerpt).
 - [[reward-model-overoptimization]] — proxy vs gold reward under optimization (verified library card).
+- [[worldpm]] — annotation strategy versus data scale for subjective preference; style-controlled evaluation; 2026-11 library card.
+- [[chatglm-rlhf]] — production preference-annotation criteria, post-filtering, per-category human evaluation; 2026-11 library card.

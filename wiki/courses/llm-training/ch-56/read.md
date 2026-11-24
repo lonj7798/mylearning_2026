@@ -3,7 +3,7 @@
      kind: content
      title: OpenRLHF Internals: PPO, DPO, Ray Orchestration, and Forgetting Controls
      deps: [ch-55]
-     sources: [[openrlhf-ppo]], [[openrlhf-ppo-recipe]], [[openrlhf-dpo]], [[openrlhf-dpo-recipe]], [[async-rollout]], [[openrlhf-entropy-debugging]], [[rlhf-instructgpt]], [[rls-razor]], [[ring-attention]], [[dpo]], [[tulu-3]], [[verl-ppo-loss]], [[verl-rollout]]
+     sources: [[openrlhf-ppo]], [[openrlhf-ppo-recipe]], [[openrlhf-dpo]], [[openrlhf-dpo-recipe]], [[async-rollout]], [[openrlhf-entropy-debugging]], [[rlhf-instructgpt]], [[rls-razor]], [[ring-attention]], [[dpo]], [[tulu-3]], [[verl-ppo-loss]], [[verl-rollout]], [[deepspeed-chat]]
      figures: figures/openrlhf-ray.html, figures/ring-attention-sharding.html
      revised: 2026-09 (generality revision)
 -->
@@ -668,6 +668,12 @@ harness's greedy number.
 
 ---
 
+## 2026-11 additions: open-lab sources
+
+Library cards added in 2026-11 from Microsoft, Qwen, DeepSeek, and Z.ai sources. Each entry lists the facts this chapter can use, with source locations; the cards in `wiki/raw-data/llm-training/` hold the full extracts.
+
+- **DeepSpeed-Chat** ([[deepspeed-chat]]). Generation is ≈20% of step-3 PPO compute but dominates wall-clock time because it is memory-bandwidth bound; the Hybrid Engine switches the actor between inference kernels with TP and ZeRO training, giving up to 9× generation throughput over HuggingFace; OPT-13B step 3 takes 9 h on 8×A100-80GB (§4–5, Table 1). Code defaults in `dschat/rlhf/ppo_trainer.py` L66–71: KL 0.1, reward clip ±5, clip 0.2, γ 1.0, λ 0.95; the KL term is applied per token and the RM score only at the last token (`compute_rewards` L181–194). These are the defaults to compare with OpenRLHF's PPO settings in this chapter.
+
 ## Connections
 
 - **Previous — ch-55: verl Internals: Losses, Rollouts, Multi-Domain Rewards, and In-Loop Validation.** verl's `use_kl_loss` versus `use_kl_in_reward` is the same switch as `--algo.kl.use_loss`; its dual-clip default of 3.0 contrasts with OpenRLHF's `None`.
@@ -697,3 +703,4 @@ harness's greedy number.
 - [[dpo]] — the DPO objective, implicit reward and gradient that §6's code implements.
 - [[tulu-3]] — the preference-tuning ablation (§5.4.1, Table 18), the evidence that β and the objective variant move a broad average.
 - [[openrlhf-entropy-debugging]] — practitioner triage notes for entropy and KL problems across OpenRLHF, verl and TRL. Source reliability: anecdotal (framework READMEs, issue trackers, community digests); its quantitative claims are not used as evidence in this chapter.
+- [[deepspeed-chat]] — Hybrid Engine, PPO defaults and per-token KL reward shaping in code; 2026-11 library card.

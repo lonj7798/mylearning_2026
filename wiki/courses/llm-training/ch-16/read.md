@@ -3,7 +3,7 @@
      kind: content
      title: RL Prompt Distribution: Difficulty Filtering, Domain Breadth, and Prompt Reuse
      deps: [ch-40]
-     sources: [[rlvr-tulu3]], [[deepseek-r1]], [[kimi-k1-5]], [[dapo]], [[verl-dapo-recipe]], [[magistral]], [[llama-nemotron]], [[olmo-3]], [[skywork-or1-rl-data]], [[deepmath-103k]], [[multi-domain-rlvr-data-centric]], [[reasoning-or-memorization-rl-contamination]], [[replay-buffer-rlhf]], [[trl-grpo]], [[reinforcement-learning-with-one-training-example]], [[rlvr-beyond-base-model]]
+     sources: [[rlvr-tulu3]], [[deepseek-r1]], [[kimi-k1-5]], [[dapo]], [[verl-dapo-recipe]], [[magistral]], [[llama-nemotron]], [[olmo-3]], [[skywork-or1-rl-data]], [[deepmath-103k]], [[multi-domain-rlvr-data-centric]], [[reasoning-or-memorization-rl-contamination]], [[replay-buffer-rlhf]], [[trl-grpo]], [[reinforcement-learning-with-one-training-example]], [[rlvr-beyond-base-model]], [[deepseek-prover-v2]], [[webrl]], [[glm-4-1v-thinking]]
      figures: figures/rollout-passrate.html
      revised: 2026-09 (generality revision)
 -->
@@ -379,6 +379,14 @@ so decreasing `log p_y` removes mass from `y` and redistributes it in proportion
 
 ---
 
+## 2026-11 additions: open-lab sources
+
+Library cards added in 2026-11 from Microsoft, Qwen, DeepSeek, and Z.ai sources. Each entry lists the facts this chapter can use, with source locations; the cards in `wiki/raw-data/llm-training/` hold the full extracts.
+
+- **DeepSeek-Prover-V2** ([[deepseek-prover-v2]]). RL prompts are limited to problems "sufficiently challenging yet solvable" by the SFT model, because binary Lean rewards give no signal otherwise (§2.3). Subgoal lemmas, stated with and without earlier subgoals as premises, enlarge the curriculum (§2.1, Fig. 3).
+- **WebRL** ([[webrl]]). Each phase generates 500 new instructions from failed tasks by Evol-Instruct in-breadth evolution; an instruction is kept if the critic value at its initial state is in [0.05, 0.75], and instructions GPT-4o judges infeasible are dropped (§2.1, App. B.1).
+- **GLM-4.1V-Thinking** ([[glm-4-1v-thinking]]). RLCS grades prompt difficulty offline (pass@k of earlier models merged with human labels) and online (pass@k of current rollouts), and each iteration down-samples prompts that are too easy or too hard; in a pilot, over half the prompts exceeded 90% accuracy after 200 steps (§5.3).
+
 ## Connections
 
 - **Previous chapter:** ch-40 — Group-Baseline RL: RLOO, GRPO, Dr. GRPO, DAPO, and GSPO. Supplies the advantage definition and the clipped objective that this chapter's filters act on.
@@ -410,3 +418,6 @@ so decreasing `log p_y` removes mass from `y` and redistributes it in proportion
 - [[trl-grpo]] — the parent GRPO loss at commit a08e713: how a missing `old_per_token_logps` becomes a ratio of 1, and the logged metrics.
 - [[reinforcement-learning-with-one-training-example]] — the one-example RLVR result and its historical-variance selection rule, read as a limit case. Chapter-local extract: `excerpts/reinforcement-learning-with-one-training-example.md`.
 - [[rlvr-beyond-base-model]] — pass@k at large k as the coverage measurement for RL-trained policies.
+- [[deepseek-prover-v2]] — solvable-by-SFT prompt restriction and subgoal curriculum; 2026-11 library card.
+- [[webrl]] — failure-seeded task generation with a critic-value difficulty band; 2026-11 library card.
+- [[glm-4-1v-thinking]] — offline and online difficulty grading with per-iteration re-weighting (RLCS); 2026-11 library card.
